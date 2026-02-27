@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DAG LAB - Werkkzeug Style</title>
+    <style>
+        :root {
+            /* Visual settings */
+            --bg-color: #1a1a1a;
+            --grid-color: #2a2a2a;
+            --grid-major-color: #3a3a3a;
+            --node-bg: #4a4a4a;
+            --node-border: #000;
+            --node-text: #ddd;
+            --node-selected: #2d7bff;
+            
+            /* Dimensions */
+            --unit-size: 20px; /* 1 Grid Unit = 20px */
+            --canvas-width: 100;
+            --canvas-height: 100;
+
+            /* Grid Line Width Default */
+            --line-w: 0.5px;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Courier New', monospace; /* Technical font */
+            background-color: #111;
+            color: #eee;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Toolbar */
+        #toolbar {
+            height: 40px;
+            background: #222;
+            border-bottom: 1px solid #444;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            gap: 10px;
+            z-index: 100;
+            user-select: none;
+        }
+
+        button {
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 12px;
+        }
+
+        button:hover { background: #444; }
+        button:active { background: #555; }
+
+        /* Main Workspace Layout */
+        #workspace {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            position: relative; /* Anchor for overlays */
+        }
+
+        /* The Scrollable Canvas Wrapper */
+        #canvas-wrapper {
+            flex: 1;
+            position: relative;
+            overflow: scroll; /* Force scrollbars behavior */
+            background-color: var(--bg-color);
+        }
+
+        /* The Actual Grid Surface */
+        #dag-canvas {
+            position: relative;
+            --zoom: 1;
+            --grid-size: calc(var(--unit-size) * var(--zoom));
+            /* 100x100 grid units */
+            width: calc(var(--canvas-width) * var(--unit-size));
+            height: calc(var(--canvas-height) * var(--unit-size));
+            
+            /* CSS Grid Pattern Generation */
+            /* Using --line-w for thin grid lines */
+            background-image: 
+                linear-gradient(var(--grid-color) var(--line-w), transparent var(--line-w)),
+                linear-gradient(90deg, var(--grid-color) var(--line-w), transparent var(--line-w));
+            background-size: var(--grid-size) var(--grid-size);
+        }
+
+        #content-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform-origin: 0 0;
+            transition: transform 0.1s ease-out;
+        }
+
+        /* Selection Box (Rectangular Selection) */
+        #selection-box {
+            position: absolute;
+            background: rgba(160, 160, 160, 0.25);
+            border: 1px solid #f2f2f2;
+            display: none; /* Hidden by default */
+            pointer-events: none; /* Let mouse pass through */
+            z-index: 99;
+        }
+
+        #drop-preview-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .drop-preview {
+            position: absolute;
+            height: var(--unit-size);
+            background: rgba(20, 20, 20, 0.55);
+            border: 1px solid rgba(0, 0, 0, 0.6);
+            box-sizing: border-box;
+        }
+
+        #drop-preview-layer.invalid .drop-preview {
+            background: rgba(120, 0, 0, 0.35);
+            border-color: rgba(220, 40, 40, 0.85);
+        }
+
+        /* Node Styling */
+        .node {
+            position: absolute;
+            height: var(--unit-size);
+            background: var(--node-bg);
+            border: 1px solid var(--node-border);
+            box-sizing: border-box;
+            color: var(--node-text);
+            font-size: 10px;
+            line-height: var(--unit-size);
+            padding: 0 10px; /* Space for handles */
+            text-align: center;
+            user-select: none;
+            overflow: hidden;
+            white-space: nowrap;
+            cursor: pointer;
+            z-index: 2;
+            box-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+        }
+
+        .node.selected {
+            border-color: var(--node-selected);
+            background-color: #5a5a5a;
+            color: #fff;
+            z-index: 5;
+        }
+
+        .node.stacked {
+            border-top-color: transparent;
+        }
+
+        .node.selected.stacked {
+            border-top-color: var(--node-selected);
+        }
+
+        .node.stacked-bottom {
+            box-shadow: none;
+        }
+
+        .node.dragging {
+            opacity: 0.6;
+            z-index: 6;
+            cursor: grabbing;
+        }
+
+        /* Resize Handles */
+        .resize-handle {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 8px;
+            background: transparent;
+            cursor: ew-resize;
+            z-index: 2;
+            opacity: 0;
+            transition: opacity 0.08s ease-out;
+        }
+        
+        .resize-handle:hover {
+            background: rgba(255,255,255,0.4);
+            opacity: 1;
+        }
+
+        .resize-handle.active {
+            background: rgba(255,255,255,0.25);
+            opacity: 1;
+        }
+
+        .resize-handle.left { left: 0; }
+        .resize-handle.right { right: 0; }
+
+        /* Inspector Panel */
+        #inspector {
+            width: 250px;
+            background: #1e1e1e;
+            border-left: 1px solid #444;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            z-index: 100;
+        }
+
+        h3 { margin-top: 0; font-size: 14px; color: var(--node-selected); }
+        .inspector-row { margin-bottom: 8px; font-size: 12px; }
+        .hint { color: #666; font-size: 10px; margin-top: auto; }
+
+        /* Zoom Controls Overlay */
+        .canvas-controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            z-index: 90;
+        }
+        .canvas-controls button {
+            width: 30px;
+            height: 30px;
+            padding: 0;
+            font-weight: bold;
+            font-size: 16px;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+        .canvas-controls button:hover {
+            background: rgba(60,60,60,0.9);
+        }
+
+        .context-menu {
+            position: fixed;
+            display: none;
+            min-width: 160px;
+            background: #1f1f1f;
+            border: 1px solid #444;
+            box-shadow: 0 6px 14px rgba(0,0,0,0.5);
+            z-index: 1000;
+            font-size: 12px;
+            padding: 4px 0;
+        }
+
+        .context-menu-item {
+            padding: 6px 12px;
+            color: #ddd;
+            cursor: default;
+            white-space: nowrap;
+        }
+
+        .context-menu-item.action {
+            cursor: pointer;
+        }
+
+        .context-menu-item.action:hover {
+            background: #333;
+        }
+
+        .context-menu-item.disabled {
+            color: #777;
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- Top Toolbar -->
+    <div id="toolbar">
+        <strong>DAG LAB</strong>
+        <button id="add-node-btn">Add Node (Generator)</button>
+        <button id="add-filter-btn">Add Node (Filter)</button>
+        <div style="flex:1"></div>
+        <span style="font-size: 10px; color: #888;">Shift+Click to multi-select | Drag empty space to Box Select</span>
+    </div>
+
+    <div id="workspace">
+        <!-- Canvas Area -->
+        <div id="canvas-wrapper">
+            <div id="dag-canvas">
+                <div id="content-layer">
+                    <!-- Drop preview for snapping -->
+                    <div id="drop-preview-layer"></div>
+                    <!-- Selection Box -->
+                    <div id="selection-box"></div>
+                    <!-- Nodes will be injected here via JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Zoom Controls -->
+        <div class="canvas-controls">
+            <button id="btn-zoom-in" title="Zoom In">+</button>
+            <button id="btn-zoom-fit" title="Zoom to Fit">⛶</button>
+            <button id="btn-zoom-out" title="Zoom Out">-</button>
+        </div>
+
+        <!-- Inspector -->
+        <div id="inspector">
+            <h3>Inspector</h3>
+            <div id="inspector-content">
+                <div class="inspector-row">Select a node to view details.</div>
+            </div>
+            <div class="hint">
+                <p><strong>Controls:</strong></p>
+                Drag node body to move (snap on release).<br>
+                Drag edges to resize.<br>
+                Drag empty space to box select.<br>
+                Shift+Click to multi-select.<br>
+                Option+Drag to duplicate.<br>
+                Backspace to delete selected nodes.<br>
+                Ctrl+Click for menu.
+            </div>
+        </div>
+    </div>
+
+    <div id="context-menu" class="context-menu" role="menu"></div>
+
+<script>
+    /**
+     * CONFIGURATION & STATE
+     */
+    const UNIT = 20; // Pixels per grid unit
+    const GRID_W = 100;
+    const GRID_H = 100;
+    
+    // Limits
+    const MIN_WIDTH = 3;
+    const MAX_WIDTH = 40;
+
+    // Data State
+    let nodes = [
+        { id: 1, type: 'tex_gen', name: 'Texture', x: 10, y: 10, w: 6 },
+        { id: 2, type: 'filter_blur', name: 'Blur', x: 10, y: 11, w: 6 },
+        { id: 3, type: 'filter_color', name: 'ColorCorrect', x: 11, y: 12, w: 4 },
+        { id: 4, type: 'output', name: 'Screen', x: 10, y: 14, w: 6 }
+    ];
+    let nextId = 5;
+
+    // UI State
+    let selectedNodeIds = new Set(); // Stores IDs of selected nodes
+    let currentZoom = 1.0;
+
+    // Interaction State: General
+    let isDragging = false;
+    let isReturning = false;
+    let isResizing = false;
+    let isBoxSelecting = false;
+    let dragDuplicate = false;
+    let duplicateCreated = false;
+    let dragOriginalSelection = new Set();
+    let dragDuplicateIds = [];
+
+    // Interaction State: Dragging
+    // We store initial positions to allow moving a group relative to start
+    let dragStartMouse = { x: 0, y: 0 }; 
+    let dragStartNodePositions = {}; // Map of id -> {x, y}
+
+    // Interaction State: Resizing
+    let resizeDir = null; // 'left' or 'right'
+    let resizeTargetId = null;
+    let resizeStartMouseX = 0;
+    let resizeStartNodeState = { x: 0, w: 0 };
+
+    // Interaction State: Box Selection
+    let boxSelectStart = { x: 0, y: 0 };
+    let boxSelectCurrent = { x: 0, y: 0 };
+
+    /**
+     * DOM ELEMENTS
+     */
+    const canvasWrapper = document.getElementById('canvas-wrapper');
+    const canvas = document.getElementById('dag-canvas');
+    const contentLayer = document.getElementById('content-layer');
+    const dropPreviewLayer = document.getElementById('drop-preview-layer');
+    const selectionBoxEl = document.getElementById('selection-box');
+    const inspectorContent = document.getElementById('inspector-content');
+    const contextMenu = document.getElementById('context-menu');
+
+    /**
+     * CORE FUNCTIONS
+     */
+
+    function init() {
+        renderGraph();
+        
+        // Toolbar Events
+        document.getElementById('add-node-btn').addEventListener('click', () => addNode('Generator'));
+        document.getElementById('add-filter-btn').addEventListener('click', () => addNode('Filter'));
+        
+        // Zoom Events
+        document.getElementById('btn-zoom-in').addEventListener('click', () => applyZoom(currentZoom + 0.1));
+        document.getElementById('btn-zoom-out').addEventListener('click', () => applyZoom(currentZoom - 0.1));
+        document.getElementById('btn-zoom-fit').addEventListener('click', zoomFit);
+
+        // Canvas Interaction
+        canvas.addEventListener('mousedown', handleMouseDown);
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+        window.addEventListener('keydown', handleKeyDown);
+        canvasWrapper.addEventListener('contextmenu', handleContextMenu);
+        window.addEventListener('mousedown', handleGlobalMouseDown);
+
+        // Zoom to fit on startup (no animation to avoid visual glitch)
+        contentLayer.style.transition = 'none';
+        zoomFit(false);
+        // Force layout, then restore the CSS transition
+        contentLayer.offsetHeight;
+        contentLayer.style.transition = '';
+    }
+
+    /* ZOOM LOGIC */
+    function applyZoom(level) {
+        if(level < 0.2) level = 0.2;
+        if(level > 3.0) level = 3.0;
+        
+        currentZoom = level;
+        contentLayer.style.transform = `scale(${currentZoom})`;
+        canvas.style.setProperty('--zoom', currentZoom);
+    }
+
+    function zoomFit(animated = true) {
+        if (nodes.length === 0) {
+            applyZoom(1);
+            return;
+        }
+
+        let minX = Infinity, minY = Infinity;
+        let maxX = -Infinity, maxY = -Infinity;
+
+        nodes.forEach(n => {
+            if (n.x < minX) minX = n.x;
+            if (n.y < minY) minY = n.y;
+            if (n.x + n.w > maxX) maxX = n.x + n.w;
+            if (n.y + 1 > maxY) maxY = n.y + 1; 
+        });
+
+        const padding = 2;
+        minX -= padding;
+        minY -= padding;
+        maxX += padding;
+        maxY += padding;
+
+        const contentW = (maxX - minX) * UNIT;
+        const contentH = (maxY - minY) * UNIT;
+
+        const viewportW = canvasWrapper.clientWidth;
+        const viewportH = canvasWrapper.clientHeight;
+
+        const scaleX = viewportW / contentW;
+        const scaleY = viewportH / contentH;
+        let newZoom = Math.min(scaleX, scaleY);
+        
+        if (newZoom > 2.0) newZoom = 2.0; 
+        if (newZoom < 0.2) newZoom = 0.2;
+
+        applyZoom(newZoom);
+
+        const centerX = (minX + (maxX - minX) / 2) * UNIT;
+        const centerY = (minY + (maxY - minY) / 2) * UNIT;
+        const scaledCenterX = centerX * newZoom;
+        const scaledCenterY = centerY * newZoom;
+
+        canvasWrapper.scrollTo({
+            left: scaledCenterX - (viewportW / 2),
+            top: scaledCenterY - (viewportH / 2),
+            behavior: animated ? 'smooth' : 'instant'
+        });
+    }
+
+    function addNode(typePrefix) {
+        const wrapperRect = canvasWrapper.getBoundingClientRect();
+        const centerLogicalX = (canvasWrapper.scrollLeft + wrapperRect.width/2) / currentZoom / UNIT;
+        const centerLogicalY = (canvasWrapper.scrollTop + wrapperRect.height/2) / currentZoom / UNIT;
+
+        const newNode = {
+            id: nextId++,
+            type: 'generic',
+            name: `${typePrefix} ${nextId}`,
+            x: Math.floor(centerLogicalX),
+            y: Math.floor(centerLogicalY),
+            w: 4
+        };
+        
+        if(newNode.x < 0) newNode.x = 0;
+        if(newNode.y < 0) newNode.y = 0;
+        
+        nodes.push(newNode);
+        
+        // Select only the new node
+        selectedNodeIds.clear();
+        selectedNodeIds.add(newNode.id);
+        
+        updateInspector();
+        renderGraph();
+    }
+
+    function toggleNodeSelection(id, multiSelect) {
+        if (!multiSelect) {
+            // If dragging an already selected node, don't clear selection yet.
+            // If clicking a new node without shift, clear others.
+            if (!selectedNodeIds.has(id)) {
+                selectedNodeIds.clear();
+                selectedNodeIds.add(id);
+            }
+        } else {
+            if (selectedNodeIds.has(id)) {
+                selectedNodeIds.delete(id);
+            } else {
+                selectedNodeIds.add(id);
+            }
+        }
+        updateInspector();
+        renderGraph();
+    }
+
+    function renderGraph() {
+        // Remove old nodes
+        const existingNodes = document.querySelectorAll('.node');
+        existingNodes.forEach(el => el.remove());
+
+        // Render Nodes (DOM)
+        const useRoundedRows = isDragging || isReturning;
+
+        nodes.forEach(node => {
+            const el = document.createElement('div');
+            const classes = ['node'];
+            if (selectedNodeIds.has(node.id)) classes.push('selected');
+            const nodeRow = useRoundedRows ? Math.round(node.y) : node.y;
+            const hasTopNeighbor = nodes.some(other => {
+                if (other.id === node.id) return false;
+                const otherRow = useRoundedRows ? Math.round(other.y) : other.y;
+                if (otherRow !== nodeRow - 1) return false;
+                return node.x < other.x + other.w && node.x + node.w > other.x;
+            });
+            const hasBottomNeighbor = nodes.some(other => {
+                if (other.id === node.id) return false;
+                const otherRow = useRoundedRows ? Math.round(other.y) : other.y;
+                if (otherRow !== nodeRow + 1) return false;
+                return node.x < other.x + other.w && node.x + node.w > other.x;
+            });
+            if (hasTopNeighbor) classes.push('stacked');
+            if (hasBottomNeighbor) classes.push('stacked-bottom');
+            if ((isDragging || isReturning) && selectedNodeIds.has(node.id)) classes.push('dragging');
+            if (isResizing && resizeTargetId === node.id) classes.push('resizing');
+            el.className = classes.join(' ');
+            el.style.left = `${node.x * UNIT}px`;
+            el.style.top = `${node.y * UNIT}px`;
+            el.style.width = `${node.w * UNIT}px`;
+            el.dataset.id = node.id;
+            
+            const leftActive = isResizing && resizeTargetId === node.id && resizeDir === 'left';
+            const rightActive = isResizing && resizeTargetId === node.id && resizeDir === 'right';
+            el.innerHTML = `
+                <div class="resize-handle left${leftActive ? ' active' : ''}"></div>
+                ${node.name}
+                <div class="resize-handle right${rightActive ? ' active' : ''}"></div>
+            `;
+            contentLayer.appendChild(el);
+        });
+    }
+
+    function updateInspector() {
+        if (selectedNodeIds.size === 0) {
+            inspectorContent.innerHTML = '<div class="inspector-row">Select a node.</div>';
+            return;
+        }
+
+        if (selectedNodeIds.size > 1) {
+            inspectorContent.innerHTML = `
+                <div class="inspector-row"><strong>${selectedNodeIds.size} nodes selected</strong></div>
+                <div class="inspector-row">Drag to move group.</div>
+            `;
+            return;
+        }
+
+        // Single Node
+        const id = selectedNodeIds.values().next().value;
+        const node = nodes.find(n => n.id === id);
+        if(node) {
+            inspectorContent.innerHTML = `
+                <div class="inspector-row"><strong>ID:</strong> ${node.id}</div>
+                <div class="inspector-row"><strong>Name:</strong> ${node.name}</div>
+                <div class="inspector-row"><strong>Pos:</strong> (${node.x}, ${node.y})</div>
+                <div class="inspector-row"><strong>Width:</strong> ${node.w}</div>
+            `;
+        }
+    }
+
+    /**
+     * UTILS
+     */
+    function getCanvasCoordinates(e) {
+        const rect = canvas.getBoundingClientRect();
+        // Calculate position relative to the scaled canvas element
+        // (Visual Coord) / Zoom = Logical Coord
+        return {
+            x: (e.clientX - rect.left) / currentZoom,
+            y: (e.clientY - rect.top) / currentZoom
+        };
+    }
+
+    function handleKeyDown(e) {
+        if (e.key !== 'Backspace') return;
+        if (isDragging || isResizing || isBoxSelecting || isReturning) return;
+
+        const tag = e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
+
+        e.preventDefault();
+        deleteSelectedNodes();
+    }
+
+    function deleteSelectedNodes() {
+        if (selectedNodeIds.size === 0) return;
+        nodes = nodes.filter(n => !selectedNodeIds.has(n.id));
+        selectedNodeIds.clear();
+        renderGraph();
+        updateInspector();
+    }
+
+    function cancelDrag() {
+        if (!isDragging) return;
+
+        if (duplicateCreated) {
+            const duplicatesToRemove = new Set(dragDuplicateIds);
+            nodes = nodes.filter(n => !duplicatesToRemove.has(n.id));
+            selectedNodeIds = new Set(dragOriginalSelection);
+        }
+
+        Object.keys(dragStartNodePositions).forEach(idStr => {
+            const id = parseInt(idStr);
+            const node = nodes.find(n => n.id === id);
+            const startPos = dragStartNodePositions[id];
+            if (node && startPos) {
+                node.x = startPos.x;
+                node.y = startPos.y;
+            }
+        });
+
+        isDragging = false;
+        dragDuplicate = false;
+        duplicateCreated = false;
+        clearDropPreview();
+    }
+
+    function hideContextMenu() {
+        contextMenu.style.display = 'none';
+        contextMenu.innerHTML = '';
+    }
+
+    function showContextMenu(x, y, items) {
+        contextMenu.innerHTML = '';
+        items.forEach(item => {
+            const el = document.createElement('div');
+            el.className = `context-menu-item ${item.action ? 'action' : 'disabled'}`;
+            el.textContent = item.label;
+            if (item.action) {
+                el.addEventListener('click', () => {
+                    item.action();
+                    hideContextMenu();
+                });
+            }
+            contextMenu.appendChild(el);
+        });
+
+        contextMenu.style.display = 'block';
+        contextMenu.style.left = '0px';
+        contextMenu.style.top = '0px';
+
+        const menuW = contextMenu.offsetWidth;
+        const menuH = contextMenu.offsetHeight;
+        const padding = 6;
+        let left = x;
+        let top = y;
+
+        if (left + menuW + padding > window.innerWidth) {
+            left = window.innerWidth - menuW - padding;
+        }
+        if (top + menuH + padding > window.innerHeight) {
+            top = window.innerHeight - menuH - padding;
+        }
+        if (left < padding) left = padding;
+        if (top < padding) top = padding;
+
+        contextMenu.style.left = `${left}px`;
+        contextMenu.style.top = `${top}px`;
+    }
+
+    function handleContextMenu(e) {
+        if (!canvasWrapper.contains(e.target)) return;
+        e.preventDefault();
+
+        cancelDrag();
+
+        if (isBoxSelecting) {
+            isBoxSelecting = false;
+            selectionBoxEl.style.display = 'none';
+        }
+
+        if (isResizing) {
+            isResizing = false;
+            resizeTargetId = null;
+            resizeDir = null;
+        }
+
+        const nodeEl = e.target.closest('.node');
+        if (nodeEl) {
+            const id = parseInt(nodeEl.dataset.id);
+            if (!selectedNodeIds.has(id)) {
+                selectedNodeIds.clear();
+                selectedNodeIds.add(id);
+            }
+            renderGraph();
+            updateInspector();
+        }
+
+        if (nodeEl && selectedNodeIds.size > 0) {
+            const count = selectedNodeIds.size;
+            const label = `Delete ${count} node${count === 1 ? '' : 's'}`;
+            showContextMenu(e.clientX, e.clientY, [
+                { label, action: deleteSelectedNodes }
+            ]);
+        } else {
+            showContextMenu(e.clientX, e.clientY, [
+                { label: 'Empty area', action: null }
+            ]);
+        }
+    }
+
+    function handleGlobalMouseDown(e) {
+        if (contextMenu.style.display === 'none') return;
+        if (!contextMenu.contains(e.target)) {
+            hideContextMenu();
+        }
+    }
+
+    function beginDuplicateDrag() {
+        duplicateCreated = true;
+        dragDuplicateIds = [];
+        const newSelection = new Set();
+        const newStartPositions = {};
+        const newNodes = [];
+
+        dragOriginalSelection.forEach(id => {
+            const node = nodes.find(n => n.id === id);
+            if (!node) return;
+            const clone = { ...node, id: nextId++ };
+            newNodes.push(clone);
+            newSelection.add(clone.id);
+            newStartPositions[clone.id] = { x: clone.x, y: clone.y };
+            dragDuplicateIds.push(clone.id);
+        });
+
+        nodes.push(...newNodes);
+        selectedNodeIds = newSelection;
+        dragStartNodePositions = newStartPositions;
+    }
+
+    function isDropValid(deltaGridX, deltaGridY) {
+        const selectedIds = new Set(selectedNodeIds);
+        let valid = true;
+        selectedNodeIds.forEach(id => {
+            const startPos = dragStartNodePositions[id];
+            const node = nodes.find(n => n.id === id);
+            if (!startPos || !node) return;
+
+            const nextX = startPos.x + deltaGridX;
+            const nextY = startPos.y + deltaGridY;
+
+            if (nextX < 0 || nextY < 0 || nextX + node.w > GRID_W || nextY + 1 > GRID_H) {
+                valid = false;
+                return;
+            }
+
+            nodes.forEach(other => {
+                if (selectedIds.has(other.id)) return;
+                const overlap = (
+                    nextX < other.x + other.w &&
+                    nextX + node.w > other.x &&
+                    nextY < other.y + 1 &&
+                    nextY + 1 > other.y
+                );
+                if (overlap) {
+                    valid = false;
+                }
+            });
+
+            if (!valid) {
+                return;
+            }
+        });
+        return valid;
+    }
+
+    function updateDropPreview(deltaGridX, deltaGridY, isValid) {
+        dropPreviewLayer.innerHTML = '';
+        dropPreviewLayer.style.display = 'block';
+        dropPreviewLayer.classList.toggle('invalid', !isValid);
+
+        selectedNodeIds.forEach(id => {
+            const startPos = dragStartNodePositions[id];
+            const node = nodes.find(n => n.id === id);
+            if (!startPos || !node) return;
+
+            const preview = document.createElement('div');
+            preview.className = 'drop-preview';
+            preview.style.left = `${(startPos.x + deltaGridX) * UNIT}px`;
+            preview.style.top = `${(startPos.y + deltaGridY) * UNIT}px`;
+            preview.style.width = `${node.w * UNIT}px`;
+            dropPreviewLayer.appendChild(preview);
+        });
+    }
+
+    function clearDropPreview() {
+        dropPreviewLayer.style.display = 'none';
+        dropPreviewLayer.classList.remove('invalid');
+        dropPreviewLayer.innerHTML = '';
+    }
+
+    function animateDragReturn(onComplete) {
+        isReturning = true;
+        const duration = 200;
+        const startTime = performance.now();
+        const fromPositions = {};
+
+        selectedNodeIds.forEach(id => {
+            const node = nodes.find(n => n.id === id);
+            if (node) {
+                fromPositions[id] = { x: node.x, y: node.y };
+            }
+        });
+
+        function step(now) {
+            const t = Math.min(1, (now - startTime) / duration);
+            const ease = 1 - Math.pow(1 - t, 2);
+
+            selectedNodeIds.forEach(id => {
+                const node = nodes.find(n => n.id === id);
+                const startPos = dragStartNodePositions[id];
+                const from = fromPositions[id];
+                if (!node || !startPos || !from) return;
+
+                node.x = from.x + (startPos.x - from.x) * ease;
+                node.y = from.y + (startPos.y - from.y) * ease;
+            });
+
+            renderGraph();
+
+            if (t < 1) {
+                requestAnimationFrame(step);
+            } else {
+                selectedNodeIds.forEach(id => {
+                    const node = nodes.find(n => n.id === id);
+                    const startPos = dragStartNodePositions[id];
+                    if (node && startPos) {
+                        node.x = startPos.x;
+                        node.y = startPos.y;
+                    }
+                });
+                isReturning = false;
+                if (onComplete) onComplete();
+                renderGraph();
+                updateInspector();
+            }
+        }
+
+        requestAnimationFrame(step);
+    }
+
+    /**
+     * INTERACTION HANDLERS
+     */
+    function handleMouseDown(e) {
+        if (isReturning) return;
+        if (e.button === 2 || e.ctrlKey) return;
+        const target = e.target;
+        
+        // 1. Resizing (Priority over drag)
+        if (target.classList.contains('resize-handle')) {
+            e.preventDefault();
+            const nodeEl = target.parentElement;
+            const id = parseInt(nodeEl.dataset.id);
+            const node = nodes.find(n => n.id === id);
+            
+            // If resizing a node not currently selected, select it exclusively
+            if (!selectedNodeIds.has(id)) {
+                selectedNodeIds.clear();
+                selectedNodeIds.add(id);
+                renderGraph();
+                updateInspector();
+            }
+
+            resizeTargetId = id;
+            isResizing = true;
+            resizeDir = target.classList.contains('left') ? 'left' : 'right';
+            resizeStartMouseX = e.clientX;
+            resizeStartNodeState = { x: node.x, w: node.w };
+            return;
+        }
+
+        // 2. Dragging Nodes
+        const nodeEl = target.closest('.node');
+        if (nodeEl) {
+            e.preventDefault();
+            const id = parseInt(nodeEl.dataset.id);
+
+            // Handle Selection Logic
+            const isMultiKey = e.shiftKey || e.ctrlKey || e.metaKey;
+            
+            if (isMultiKey) {
+                toggleNodeSelection(id, true);
+            } else {
+                // If clicking an unselected node without shift, select only this one.
+                if (!selectedNodeIds.has(id)) {
+                    selectedNodeIds.clear();
+                    selectedNodeIds.add(id);
+                    updateInspector();
+                    renderGraph();
+                }
+                // If clicking an ALREADY selected node without shift, do nothing yet.
+                // We wait for mouseup to clear others if it was just a click, 
+                // but we keep them selected for dragging now.
+            }
+
+            // Prepare Drag
+            isDragging = true;
+            dragDuplicate = e.altKey;
+            duplicateCreated = false;
+            dragOriginalSelection = new Set(selectedNodeIds);
+            dragDuplicateIds = [];
+            const coords = getCanvasCoordinates(e);
+            dragStartMouse = { x: coords.x, y: coords.y };
+            
+            // Snapshot positions of all selected nodes
+            dragStartNodePositions = {};
+            selectedNodeIds.forEach(selId => {
+                const n = nodes.find(item => item.id === selId);
+                if(n) dragStartNodePositions[selId] = { x: n.x, y: n.y };
+            });
+
+            return;
+        }
+
+        // 3. Empty Canvas Click -> Box Selection
+        if (target === canvas || target === contentLayer) {
+            e.preventDefault(); // Stop text selection
+            
+            // Clear selection unless shift is held
+            if (!e.shiftKey) {
+                selectedNodeIds.clear();
+                updateInspector();
+                renderGraph();
+            }
+
+            isBoxSelecting = true;
+            const coords = getCanvasCoordinates(e);
+            boxSelectStart = { x: coords.x, y: coords.y };
+            boxSelectCurrent = { x: coords.x, y: coords.y };
+            
+            // Show box
+            selectionBoxEl.style.display = 'block';
+            selectionBoxEl.style.left = boxSelectStart.x + 'px';
+            selectionBoxEl.style.top = boxSelectStart.y + 'px';
+            selectionBoxEl.style.width = '0px';
+            selectionBoxEl.style.height = '0px';
+        }
+    }
+
+    function handleMouseMove(e) {
+        // --- DRAGGING LOGIC ---
+        if (isDragging && selectedNodeIds.size > 0) {
+            const coords = getCanvasCoordinates(e);
+            
+            // Calculate delta in Logical Pixels
+            const deltaXpx = coords.x - dragStartMouse.x;
+            const deltaYpx = coords.y - dragStartMouse.y;
+            const dragDistance = Math.abs(deltaXpx) + Math.abs(deltaYpx);
+
+            if (dragDuplicate && !duplicateCreated) {
+                if (dragDistance < 3) {
+                    clearDropPreview();
+                    return;
+                }
+                beginDuplicateDrag();
+            }
+
+            selectedNodeIds.forEach(id => {
+                const node = nodes.find(n => n.id === id);
+                const startPos = dragStartNodePositions[id];
+                if (!node || !startPos) return;
+
+                node.x = startPos.x + (deltaXpx / UNIT);
+                node.y = startPos.y + (deltaYpx / UNIT);
+            });
+
+            const deltaGridX = Math.round(deltaXpx / UNIT);
+            const deltaGridY = Math.round(deltaYpx / UNIT);
+            const validDrop = isDropValid(deltaGridX, deltaGridY);
+            updateDropPreview(deltaGridX, deltaGridY, validDrop);
+
+            renderGraph();
+        }
+
+        // --- RESIZING LOGIC ---
+        if (isResizing && resizeTargetId) {
+            const node = nodes.find(n => n.id === resizeTargetId);
+            
+            // Visual Pixels delta
+            const dxPixelsVisual = e.clientX - resizeStartMouseX;
+            // Logical Units delta
+            const dxUnits = Math.round((dxPixelsVisual / currentZoom) / UNIT);
+
+            if (resizeDir === 'right') {
+                let newWidth = resizeStartNodeState.w + dxUnits;
+
+                if (newWidth < MIN_WIDTH) newWidth = MIN_WIDTH;
+                if (newWidth > MAX_WIDTH) newWidth = MAX_WIDTH;
+                if (node.x + newWidth > GRID_W) newWidth = GRID_W - node.x;
+
+                if (node.w !== newWidth) {
+                    node.w = newWidth;
+                    renderGraph();
+                    updateInspector();
+                }
+            } 
+            else if (resizeDir === 'left') {
+                let newX = resizeStartNodeState.x + dxUnits;
+                let newW = resizeStartNodeState.w - dxUnits;
+
+                // Min/Max Width constraints
+                if (newW < MIN_WIDTH) {
+                    newW = MIN_WIDTH;
+                    newX = resizeStartNodeState.x + (resizeStartNodeState.w - MIN_WIDTH);
+                } else if (newW > MAX_WIDTH) {
+                    newW = MAX_WIDTH;
+                    newX = resizeStartNodeState.x + (resizeStartNodeState.w - MAX_WIDTH);
+                }
+
+                // Grid Boundary 0
+                if (newX < 0) {
+                    newX = 0;
+                    newW = resizeStartNodeState.x + resizeStartNodeState.w; 
+                }
+
+                if (node.x !== newX || node.w !== newW) {
+                    node.x = newX;
+                    node.w = newW;
+                    renderGraph();
+                    updateInspector();
+                }
+            }
+        }
+
+        // --- BOX SELECTION LOGIC ---
+        if (isBoxSelecting) {
+            const coords = getCanvasCoordinates(e);
+            boxSelectCurrent = { x: coords.x, y: coords.y };
+
+            // Calculate Box Geometry (Logical Coordinates)
+            const x = Math.min(boxSelectStart.x, boxSelectCurrent.x);
+            const y = Math.min(boxSelectStart.y, boxSelectCurrent.y);
+            const w = Math.abs(boxSelectCurrent.x - boxSelectStart.x);
+            const h = Math.abs(boxSelectCurrent.y - boxSelectStart.y);
+
+            // Update Visuals
+            selectionBoxEl.style.left = x + 'px';
+            selectionBoxEl.style.top = y + 'px';
+            selectionBoxEl.style.width = w + 'px';
+            selectionBoxEl.style.height = h + 'px';
+
+            // Check Intersections with Nodes
+            // Temporarily selecting nodes visually during drag
+            const currentSelection = new Set();
+            if (e.shiftKey) {
+                // If shift held, keep existing selections
+                selectedNodeIds.forEach(id => currentSelection.add(id));
+            }
+
+            nodes.forEach(node => {
+                // Node Bounds (pixels)
+                const nx = node.x * UNIT;
+                const ny = node.y * UNIT;
+                const nw = node.w * UNIT;
+                const nh = UNIT; // Fixed height 1 unit
+
+                // AABB Intersection Test
+                const isOverlapping = (
+                    x < nx + nw &&
+                    x + w > nx &&
+                    y < ny + nh &&
+                    y + h > ny
+                );
+
+                if (isOverlapping) {
+                    currentSelection.add(node.id);
+                }
+            });
+
+            // Update state just to show highlighting
+            selectedNodeIds = currentSelection;
+            renderGraph();
+            updateInspector();
+        }
+    }
+
+    function handleMouseUp(e) {
+        const wasResizing = isResizing;
+        if (isDragging && !isResizing && !isBoxSelecting) {
+            // If we didn't actually move the mouse (much), treat it as a click correction.
+            // i.e., I selected a group, but clicked one node without dragging -> select just that node.
+            // (Standard behavior in file explorers).
+            const coords = getCanvasCoordinates(e);
+            const deltaXpx = coords.x - dragStartMouse.x;
+            const deltaYpx = coords.y - dragStartMouse.y;
+            const dist = Math.abs(deltaXpx) + Math.abs(deltaYpx);
+            const deltaGridX = Math.round(deltaXpx / UNIT);
+            const deltaGridY = Math.round(deltaYpx / UNIT);
+
+            if (dragDuplicate && !duplicateCreated && dist >= 3) {
+                beginDuplicateDrag();
+            }
+
+            const shouldCheckDrop = dist >= 3 || duplicateCreated;
+            const validDrop = shouldCheckDrop ? isDropValid(deltaGridX, deltaGridY) : false;
+
+            isDragging = false;
+            
+            if (dist < 3 && !duplicateCreated) {
+                Object.keys(dragStartNodePositions).forEach(idStr => {
+                    const id = parseInt(idStr);
+                    const node = nodes.find(n => n.id === id);
+                    const startPos = dragStartNodePositions[id];
+                    if (node && startPos) {
+                        node.x = startPos.x;
+                        node.y = startPos.y;
+                    }
+                });
+                if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                    // Determine which node was under mouse
+                    const target = e.target.closest('.node');
+                    if (target) {
+                        const id = parseInt(target.dataset.id);
+                        if (!selectedNodeIds.has(id)) {
+                            selectedNodeIds.clear();
+                            selectedNodeIds.add(id);
+                        }
+                    }
+                }
+                renderGraph();
+                updateInspector();
+            } else if (validDrop) {
+                Object.keys(dragStartNodePositions).forEach(idStr => {
+                    const id = parseInt(idStr);
+                    const node = nodes.find(n => n.id === id);
+                    const startPos = dragStartNodePositions[id];
+                    if (node && startPos) {
+                        node.x = startPos.x + deltaGridX;
+                        node.y = startPos.y + deltaGridY;
+                    }
+                });
+                renderGraph();
+                updateInspector();
+            } else {
+                if (duplicateCreated) {
+                    const duplicatesToRemove = new Set(dragDuplicateIds);
+                    animateDragReturn(() => {
+                        nodes = nodes.filter(n => !duplicatesToRemove.has(n.id));
+                        selectedNodeIds = new Set(dragOriginalSelection);
+                    });
+                } else {
+                    animateDragReturn();
+                }
+            }
+
+            clearDropPreview();
+            dragDuplicate = false;
+            duplicateCreated = false;
+        }
+        isResizing = false;
+        resizeTargetId = null;
+        resizeDir = null;
+
+        if (isBoxSelecting) {
+            isBoxSelecting = false;
+            selectionBoxEl.style.display = 'none';
+        }
+
+        if (wasResizing) {
+            renderGraph();
+            updateInspector();
+        }
+    }
+
+    // Start
+    init();
+
+</script>
+</body>
+</html>
