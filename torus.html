@@ -419,6 +419,11 @@ let score = 0, nextType = 0, nextShape = 0, fireMode = -1;
 const SHAPES = ['Cube','Cylinder','Dodeca','Sphere','Tetra','Stella','Cross','Gt.Icosa'];
 const cubes = [], stuckCubes = [], carves = [];
 
+// FPS walker state
+let fpsTheta = 0;    // major angle (around ring)
+let fpsPhi = Math.PI / 2;  // minor angle (around tube), start at top
+const fpsKeys = { w: false, a: false, s: false, d: false };
+
 function fire() {
     if (cubes.length > 50) return;
     const type = fireMode >= 0 ? fireMode : nextType;
@@ -447,7 +452,9 @@ addEventListener('keydown', e => {
     else if (e.key === '2') setFireMode(0);
     else if (e.key === '3') setFireMode(1);
     else if (e.key === '4') setFireMode(2);
+    if ('wasd'.includes(e.key)) fpsKeys[e.key] = true;
 });
+addEventListener('keyup', e => { if ('wasd'.includes(e.key)) fpsKeys[e.key] = false; });
 canvas.addEventListener('click', fire);
 canvas.addEventListener('touchstart', e => { e.preventDefault(); fire(); });
 
@@ -605,16 +612,56 @@ function frame(t) {
     drawScene(0, halfW, new Float32Array(extPos), invRot3, invRot3, tr(0, 0, -7), asp);
 
     // ── Right half: FPS view ──
-    const theta = t * 0.5;
-    const ct = Math.cos(theta), st = Math.sin(theta);
-    const fpsCamPos = new Float32Array([ct, st, 0.55]);
-    const fpsCamMat = new Float32Array([ct, st, 0, 0, 0, 1, st, -ct, 0]);
+    // Update walker position from WASD
+    const fpsSpd = 2.0;
+    if (fpsKeys.w) fpsTheta += fpsSpd * dt;
+    if (fpsKeys.s) fpsTheta -= fpsSpd * dt;
+    if (fpsKeys.a) fpsPhi += fpsSpd * dt;
+    if (fpsKeys.d) fpsPhi -= fpsSpd * dt;
+
+    // Torus parametric position and frame
+    const R = 1.0, r = 0.4, h = 0.15;
+    const cT = Math.cos(fpsTheta), sT = Math.sin(fpsTheta);
+    const cP = Math.cos(fpsPhi), sP = Math.sin(fpsPhi);
+
+    // Surface point
+    const sx = (R + r * cP) * cT;
+    const sy = (R + r * cP) * sT;
+    const sz = r * sP;
+
+    // Outward normal
+    const nx = cP * cT, ny = cP * sT, nz = sP;
+
+    // Eye = surface + h * normal
+    const ex = sx + h * nx, ey = sy + h * ny, ez = sz + h * nz;
+
+    // Forward tangent (along ring)
+    const fx = -sT, fy = cT, fz = 0;
+
+    // Right = cross(forward, normal), then normalize
+    let rx = fy * nz - fz * ny;
+    let ry = fz * nx - fx * nz;
+    let rz = fx * ny - fy * nx;
+    const rl = Math.sqrt(rx * rx + ry * ry + rz * rz) || 1;
+    rx /= rl; ry /= rl; rz /= rl;
+
+    // Up = normal (already unit)
+    const ux = nx, uy = ny, uz = nz;
+
+    // Camera mat3 for raymarcher: columns are [right, up, -forward]
+    const fpsCamPos = new Float32Array([ex, ey, ez]);
+    const fpsCamMat = new Float32Array([
+        rx, ry, rz,
+        ux, uy, uz,
+        -fx, -fy, -fz
+    ]);
 
     // FPS view matrix for meshes (world space)
-    const [cwx, cwy, cwz] = xfm(fwdRot, ct, st, 0.55);
-    const [rwx, rwy, rwz] = xfm(fwdRot, ct, st, 0);
-    const [uwx, uwy, uwz] = xfm(fwdRot, 0, 0, 1);
-    const [fwx, fwy, fwz] = xfm(fwdRot, st, -ct, 0);
+    // Transform local axes through fwdRot, then build R^T * T(-pos)
+    const [cwx, cwy, cwz] = xfm(fwdRot, ex, ey, ez);
+    const [rwx, rwy, rwz] = xfm(fwdRot, rx, ry, rz);
+    const [uwx, uwy, uwz] = xfm(fwdRot, ux, uy, uz);
+    const [fwx, fwy, fwz] = xfm(fwdRot, -fx, -fy, -fz);
     const ftx = -(rwx*cwx + rwy*cwy + rwz*cwz);
     const fty = -(uwx*cwx + uwy*cwy + uwz*cwz);
     const ftz = -(fwx*cwx + fwy*cwy + fwz*cwz);
