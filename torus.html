@@ -82,11 +82,10 @@ function rY(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array
 function rZ(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c,s,0,0, -s,c,0,0, 0,0,1,0, 0,0,0,1]); }
 function tr(x, y, z) { return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, x,y,z,1]); }
 function nm3(m) { return new Float32Array([m[0],m[1],m[2], m[4],m[5],m[6], m[8],m[9],m[10]]); }
-// Apply rotation part of mat4 to a vec3
 function xfm(m, x, y, z) { return [m[0]*x + m[4]*y + m[8]*z, m[1]*x + m[5]*y + m[9]*z, m[2]*x + m[6]*y + m[10]*z]; }
 
 // Game
-const TR = 1.0, Tr = 0.4, CSPD = 6;
+const TR = 1.0, Tr = 0.4, CUBE_H = 0.125, CSPD = 6;
 let score = 0;
 const cubes = [];
 
@@ -94,10 +93,10 @@ function fire() {
     if (cubes.length > 50) return;
     cubes.push({
         x: 0, y: 0, z: 6,
-        vx: (Math.random() - 0.5) * 2.0,
-        vy: (Math.random() - 0.5) * 2.0,
+        vx: (Math.random() - 0.5) * 0.5,
+        vy: (Math.random() - 0.5) * 0.5,
         vz: -CSPD,
-        bouncing: false, passed: false, nearTorus: false,
+        bouncing: false, passed: false, throughHole: false,
         spin: Math.random() * 6.28
     });
 }
@@ -106,6 +105,16 @@ canvas.addEventListener('click', fire);
 canvas.addEventListener('touchstart', e => { e.preventDefault(); fire(); });
 
 function torusSDF(px, py, pz) { const q = Math.sqrt(px * px + py * py) - TR; return Math.sqrt(q * q + pz * pz) - Tr; }
+
+// SDF gradient in local space (surface normal direction)
+function sdfNormal(x, y, z) {
+    const e = 0.01;
+    const gx = torusSDF(x + e, y, z) - torusSDF(x - e, y, z);
+    const gy = torusSDF(x, y + e, z) - torusSDF(x, y - e, z);
+    const gz = torusSDF(x, y, z + e) - torusSDF(x, y, z - e);
+    const len = Math.sqrt(gx * gx + gy * gy + gz * gz) || 1;
+    return [gx / len, gy / len, gz / len];
+}
 
 let msgTimer = 0;
 function showMsg(txt, col) {
@@ -120,10 +129,10 @@ function frame(t) {
     t *= 0.001; const dt = Math.min(t - prev, 0.05); prev = t;
     const asp = canvas.width / canvas.height;
 
-    // Torus rotation angles
+    // Torus rotation
     const tAX = t * 0.7, tAY = t * 1.1;
-    // Inverse rotation: undo Y then X
     const invRot = m4(rY(-tAY), rX(-tAX));
+    const fwdRot = m4(rX(tAX), rY(tAY));
 
     // Update cubes
     for (let i = cubes.length - 1; i >= 0; i--) {
@@ -132,24 +141,42 @@ function frame(t) {
         c.spin += dt * (c.bouncing ? 14 : 5);
         if (c.bouncing) c.vy -= 5 * dt;
 
-        // Collision zone: torus can extend up to R+r in any direction after rotation
-        if (!c.bouncing && !c.passed && Math.abs(c.z) < TR + Tr + 0.2) {
+        if (!c.bouncing && !c.passed) {
+            // Transform cube position to torus-local space
             const [lx, ly, lz] = xfm(invRot, c.x, c.y, c.z);
             const sdf = torusSDF(lx, ly, lz);
-            if (sdf < 0.5) c.nearTorus = true;
-            if (sdf < 0.13) {
+
+            // Hole check: cube center is inside the hole cylinder in local space
+            // Hole = cylinder along local Z, radius = R - r, bounded by disk thickness
+            const dAxis = Math.sqrt(lx * lx + ly * ly);
+            if (dAxis < TR - Tr - CUBE_H && Math.abs(lz) < Tr + CUBE_H) {
+                c.throughHole = true;
+            }
+
+            // Hit check: cube surface touches torus surface
+            if (sdf < CUBE_H) {
                 c.bouncing = true;
-                const len = Math.sqrt(c.x * c.x + c.y * c.y) || 0.1;
-                c.vx = (c.x / len) * 3 + (Math.random() - 0.5) * 2;
-                c.vy = (c.y / len) * 3 + 1 + (Math.random() - 0.5) * 2;
-                c.vz = 3 + Math.random() * 2;
+                // Compute bounce via SDF gradient (surface normal)
+                const [nx, ny, nz] = sdfNormal(lx, ly, lz);
+                // Transform normal to world space
+                const [wnx, wny, wnz] = xfm(fwdRot, nx, ny, nz);
+                // Reflect velocity and dampen
+                const dot = c.vx * wnx + c.vy * wny + c.vz * wnz;
+                c.vx = (c.vx - 2 * dot * wnx) * 0.5;
+                c.vy = (c.vy - 2 * dot * wny) * 0.5;
+                c.vz = (c.vz - 2 * dot * wnz) * 0.5;
+                // Push out of surface
+                c.x += wnx * 0.2; c.y += wny * 0.2; c.z += wnz * 0.2;
                 showMsg('BONK!', '#ff4444');
             }
         }
-        if (!c.bouncing && !c.passed && c.z < -(TR + Tr + 0.3)) {
+
+        // Cube has cleared the torus
+        if (!c.bouncing && !c.passed && c.z < -(TR + Tr + 0.5)) {
             c.passed = true;
-            if (c.nearTorus) { score++; scEl.textContent = score; showMsg('SCORE!', '#44ff44'); }
+            if (c.throughHole) { score++; scEl.textContent = score; showMsg('SCORE!', '#44ff44'); }
         }
+
         if (c.z > 12 || c.z < -12 || Math.abs(c.x) > 10 || Math.abs(c.y) > 10) cubes.splice(i, 1);
     }
 
