@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Triangle Game of Life</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: #111;
+    color: #ddd;
+    font-family: system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+#controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    background: #1a1a2e;
+    border-bottom: 1px solid #333;
+    flex-wrap: wrap;
+    z-index: 10;
+    min-height: 44px;
+}
+button {
+    background: #2a2a4a;
+    color: #ddd;
+    border: 1px solid #444;
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+button:hover { background: #3a3a5a; }
+button.active { background: #e94560; border-color: #e94560; }
+select {
+    background: #2a2a4a;
+    color: #ddd;
+    border: 1px solid #444;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+}
+.sep { width: 1px; height: 24px; background: #444; }
+.group { display: flex; align-items: center; gap: 5px; }
+label { font-size: 12px; color: #888; }
+#info { font-size: 12px; color: #888; margin-left: auto; }
+canvas { flex: 1; display: block; cursor: crosshair; }
+</style>
+</head>
+<body>
+<div id="controls">
+    <button id="playBtn" title="Space">&#9654; Play</button>
+    <button id="stepBtn" title="N">Step</button>
+    <button id="clearBtn" title="C">Clear</button>
+    <button id="randomBtn" title="R">Random</button>
+    <div class="sep"></div>
+    <div class="group">
+        <label>Speed:</label>
+        <button id="slowerBtn" title="[">&#8722;</button>
+        <span id="speedVal" style="font-size:12px;min-width:50px;text-align:center">5 gen/s</span>
+        <button id="fasterBtn" title="]">+</button>
+    </div>
+    <div class="sep"></div>
+    <div class="group">
+        <label>Size:</label>
+        <button id="smallerBtn">&#8722;</button>
+        <span id="sizeVal" style="font-size:12px;min-width:30px;text-align:center">28</span>
+        <button id="biggerBtn">+</button>
+    </div>
+    <div class="sep"></div>
+    <div class="group">
+        <label>Rule:</label>
+        <select id="ruleSelect">
+            <option value="B2/S12" selected>B2/S12 (standard)</option>
+            <option value="B2/S2">B2/S2 (fragile)</option>
+            <option value="B12/S12">B12/S12 (expansive)</option>
+        </select>
+    </div>
+    <span id="info">Gen 0 | Pop 0</span>
+</div>
+<canvas id="canvas"></canvas>
+
+<script>
+"use strict";
+
+// --- State ---
+let grid = [];
+let rows = 0, cols = 0;
+let generation = 0;
+let population = 0;
+let running = false;
+let speed = 5;          // generations per second
+let sideLen = 28;       // triangle side length in pixels
+let birthSet = new Set([2]);
+let surviveSet = new Set([1, 2]);
+let drawMode = null;    // null, 'draw', 'erase'
+let lastDrawCell = null;
+let animFrameId = null;
+let lastStepTime = 0;
+
+// --- DOM ---
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+// --- Grid management ---
+function makeGrid(r, c) {
+    const g = new Array(r);
+    for (let i = 0; i < r; i++) g[i] = new Uint8Array(c);
+    return g;
+}
+
+function resizeToCanvas() {
+    const h = sideLen * Math.sqrt(3) / 2;
+    const newCols = Math.floor(canvas.width / (sideLen / 2)) - 1;
+    const newRows = Math.floor(canvas.height / h);
+    if (newCols < 2 || newRows < 2) return;
+
+    const oldGrid = grid;
+    const oldRows = rows, oldCols = cols;
+    rows = newRows;
+    cols = newCols;
+    grid = makeGrid(rows, cols);
+
+    // Copy over old data
+    const cpR = Math.min(oldRows, rows);
+    const cpC = Math.min(oldCols, cols);
+    for (let r = 0; r < cpR; r++) {
+        for (let c = 0; c < cpC; c++) {
+            grid[r][c] = oldGrid[r] ? (oldGrid[r][c] || 0) : 0;
+        }
+    }
+    countPopulation();
+}
+
+function clearGrid() {
+    for (let r = 0; r < rows; r++) grid[r].fill(0);
+    generation = 0;
+    population = 0;
+    updateInfo();
+}
+
+function randomize() {
+    for (let r = 0; r < rows; r++)
+        for (let c = 0; c < cols; c++)
+            grid[r][c] = Math.random() < 0.3 ? 1 : 0;
+    generation = 0;
+    countPopulation();
+    updateInfo();
+}
+
+function countPopulation() {
+    population = 0;
+    for (let r = 0; r < rows; r++)
+        for (let c = 0; c < cols; c++)
+            population += grid[r][c];
+}
+
+// --- Triangle geometry ---
+function triHeight() {
+    return sideLen * Math.sqrt(3) / 2;
+}
+
+function isUpPointing(r, c) {
+    return (r + c) % 2 === 0;
+}
+
+function triVertices(r, c) {
+    const s = sideLen;
+    const h = triHeight();
+    const x0 = c * s / 2;
+    if (isUpPointing(r, c)) {
+        return [
+            x0, (r + 1) * h,       // bottom-left
+            x0 + s / 2, r * h,     // top
+            x0 + s, (r + 1) * h    // bottom-right
+        ];
+    } else {
+        return [
+            x0, r * h,             // top-left
+            x0 + s / 2, (r + 1) * h, // bottom
+            x0 + s, r * h          // top-right
+        ];
+    }
+}
+
+function pointInTriangle(px, py, v) {
+    const [x1, y1, x2, y2, x3, y3] = v;
+    const d1 = (px - x2) * (y1 - y2) - (x1 - x2) * (py - y2);
+    const d2 = (px - x3) * (y2 - y3) - (x2 - x3) * (py - y3);
+    const d3 = (px - x1) * (y3 - y1) - (x3 - x1) * (py - y1);
+    const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+    const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+    return !(hasNeg && hasPos);
+}
+
+function pixelToCell(px, py) {
+    const h = triHeight();
+    const r = Math.floor(py / h);
+    const cApprox = Math.floor(2 * px / sideLen);
+
+    // Check a few candidate columns
+    for (let dc = -1; dc <= 2; dc++) {
+        const c = cApprox + dc;
+        if (r < 0 || r >= rows || c < 0 || c >= cols) continue;
+        const v = triVertices(r, c);
+        if (pointInTriangle(px, py, v)) return { r, c };
+    }
+    return null;
+}
+
+// --- Neighbors ---
+function getNeighborCount(r, c) {
+    let count = 0;
+    const up = isUpPointing(r, c);
+    // Left and right neighbors (same row)
+    if (c > 0) count += grid[r][c - 1];
+    if (c < cols - 1) count += grid[r][c + 1];
+    // Vertical neighbor
+    if (up) {
+        if (r + 1 < rows) count += grid[r + 1][c];
+    } else {
+        if (r - 1 >= 0) count += grid[r - 1][c];
+    }
+    return count;
+}
+
+// --- Game step ---
+function step() {
+    const newGrid = makeGrid(rows, cols);
+    let pop = 0;
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const n = getNeighborCount(r, c);
+            const alive = grid[r][c];
+            let next = 0;
+            if (alive) {
+                next = surviveSet.has(n) ? 1 : 0;
+            } else {
+                next = birthSet.has(n) ? 1 : 0;
+            }
+            newGrid[r][c] = next;
+            pop += next;
+        }
+    }
+    grid = newGrid;
+    generation++;
+    population = pop;
+    updateInfo();
+}
+
+// --- Rendering ---
+function render() {
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, w, h);
+
+    const th = triHeight();
+    const s = sideLen;
+
+    // Draw all triangles
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const alive = grid[r][c];
+            const v = triVertices(r, c);
+
+            ctx.beginPath();
+            ctx.moveTo(v[0], v[1]);
+            ctx.lineTo(v[2], v[3]);
+            ctx.lineTo(v[4], v[5]);
+            ctx.closePath();
+
+            if (alive) {
+                ctx.fillStyle = isUpPointing(r, c) ? '#00e5ff' : '#00c8e0';
+                ctx.fill();
+                ctx.strokeStyle = '#008fa8';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            } else {
+                ctx.fillStyle = isUpPointing(r, c) ? '#1a1a2e' : '#181828';
+                ctx.fill();
+                ctx.strokeStyle = '#2a2a3e';
+                ctx.lineWidth = 0.5;
+                ctx.stroke();
+            }
+        }
+    }
+}
+
+// --- UI ---
+function updateInfo() {
+    document.getElementById('info').textContent = `Gen ${generation} | Pop ${population}`;
+}
+
+function updateSpeedLabel() {
+    document.getElementById('speedVal').textContent = speed + ' gen/s';
+}
+
+function updateSizeLabel() {
+    document.getElementById('sizeVal').textContent = sideLen;
+}
+
+function setRunning(val) {
+    running = val;
+    const btn = document.getElementById('playBtn');
+    if (running) {
+        btn.textContent = '⏸ Pause';
+        btn.classList.add('active');
+    } else {
+        btn.textContent = '▶ Play';
+        btn.classList.remove('active');
+    }
+}
+
+function parseRule(str) {
+    const m = str.match(/B([0-3]*)\/?S([0-3]*)/i);
+    if (!m) return;
+    birthSet = new Set(m[1].split('').map(Number));
+    surviveSet = new Set(m[2].split('').map(Number));
+}
+
+// --- Input ---
+function getCanvasPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+canvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const pos = getCanvasPos(e);
+    const cell = pixelToCell(pos.x, pos.y);
+    if (!cell) return;
+
+    // Toggle first cell, then paint in that mode
+    const wasAlive = grid[cell.r][cell.c];
+    drawMode = wasAlive ? 'erase' : 'draw';
+    grid[cell.r][cell.c] = wasAlive ? 0 : 1;
+    population += wasAlive ? -1 : 1;
+    lastDrawCell = cell.r + ',' + cell.c;
+    updateInfo();
+    render();
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    if (!drawMode) return;
+    const pos = getCanvasPos(e);
+    const cell = pixelToCell(pos.x, pos.y);
+    if (!cell) return;
+
+    const key = cell.r + ',' + cell.c;
+    if (key === lastDrawCell) return;
+    lastDrawCell = key;
+
+    const target = drawMode === 'draw' ? 1 : 0;
+    if (grid[cell.r][cell.c] !== target) {
+        grid[cell.r][cell.c] = target;
+        population += target ? 1 : -1;
+        updateInfo();
+        render();
+    }
+});
+
+window.addEventListener('mouseup', () => {
+    drawMode = null;
+    lastDrawCell = null;
+});
+
+// Touch support
+canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    const pos = getCanvasPos(t);
+    const cell = pixelToCell(pos.x, pos.y);
+    if (!cell) return;
+    const wasAlive = grid[cell.r][cell.c];
+    drawMode = wasAlive ? 'erase' : 'draw';
+    grid[cell.r][cell.c] = wasAlive ? 0 : 1;
+    population += wasAlive ? -1 : 1;
+    lastDrawCell = cell.r + ',' + cell.c;
+    updateInfo();
+    render();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (!drawMode) return;
+    const t = e.touches[0];
+    const pos = getCanvasPos(t);
+    const cell = pixelToCell(pos.x, pos.y);
+    if (!cell) return;
+    const key = cell.r + ',' + cell.c;
+    if (key === lastDrawCell) return;
+    lastDrawCell = key;
+    const target = drawMode === 'draw' ? 1 : 0;
+    if (grid[cell.r][cell.c] !== target) {
+        grid[cell.r][cell.c] = target;
+        population += target ? 1 : -1;
+        updateInfo();
+        render();
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchend', () => {
+    drawMode = null;
+    lastDrawCell = null;
+});
+
+// Keyboard
+window.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'SELECT') return;
+    switch (e.key) {
+        case ' ': e.preventDefault(); setRunning(!running); break;
+        case 'n': case 'N': step(); render(); break;
+        case 'c': case 'C': clearGrid(); render(); break;
+        case 'r': case 'R': randomize(); render(); break;
+        case '[': speed = Math.max(1, speed - 1); updateSpeedLabel(); break;
+        case ']': speed = Math.min(60, speed + 1); updateSpeedLabel(); break;
+    }
+});
+
+// Button handlers
+document.getElementById('playBtn').addEventListener('click', () => setRunning(!running));
+document.getElementById('stepBtn').addEventListener('click', () => { step(); render(); });
+document.getElementById('clearBtn').addEventListener('click', () => { clearGrid(); render(); });
+document.getElementById('randomBtn').addEventListener('click', () => { randomize(); render(); });
+document.getElementById('slowerBtn').addEventListener('click', () => {
+    speed = Math.max(1, speed - 1); updateSpeedLabel();
+});
+document.getElementById('fasterBtn').addEventListener('click', () => {
+    speed = Math.min(60, speed + 1); updateSpeedLabel();
+});
+document.getElementById('smallerBtn').addEventListener('click', () => {
+    sideLen = Math.max(10, sideLen - 4);
+    updateSizeLabel(); resizeToCanvas(); render();
+});
+document.getElementById('biggerBtn').addEventListener('click', () => {
+    sideLen = Math.min(80, sideLen + 4);
+    updateSizeLabel(); resizeToCanvas(); render();
+});
+document.getElementById('ruleSelect').addEventListener('change', (e) => {
+    parseRule(e.target.value);
+});
+
+// --- Canvas resize ---
+function fitCanvas() {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const controlsH = document.getElementById('controls').offsetHeight;
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight - controlsH;
+    resizeToCanvas();
+    render();
+}
+
+window.addEventListener('resize', fitCanvas);
+
+// --- Main loop ---
+function gameLoop(timestamp) {
+    if (running) {
+        const interval = 1000 / speed;
+        if (timestamp - lastStepTime >= interval) {
+            step();
+            render();
+            lastStepTime = timestamp;
+        }
+    }
+    animFrameId = requestAnimationFrame(gameLoop);
+}
+
+// --- Init ---
+parseRule('B2/S12');
+updateSpeedLabel();
+updateSizeLabel();
+fitCanvas();
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
