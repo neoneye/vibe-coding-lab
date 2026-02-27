@@ -155,25 +155,31 @@ vec2 sceneFull(vec3 p){
   float matId=0.0;
   float d=td;
 
-  // Stuck cubes (union)
-  for(int i=0;i<XMS;i++){
-    if(i>=uNStk)break;
-    float sd=shapeSDF(p-uStuck[i].xyz,uStuck[i].w,.125);
-    if(sd<d){ d=sd; matId=1.0; }
+  // Stuck & carves only need evaluation near torus surface
+  if(td<1.0){
+    for(int i=0;i<XMS;i++){
+      if(i>=uNStk)break;
+      float sd=shapeSDF(p-uStuck[i].xyz,uStuck[i].w,.125);
+      if(sd<d){ d=sd; matId=1.0; }
+    }
+    for(int i=0;i<XMC;i++){
+      if(i>=uNCrv)break;
+      float cd=shapeSDF(p-uCarves[i].xyz,uCarves[i].w,.14);
+      if(-cd>d){ d=max(d,-cd); matId=2.0; }
+    }
   }
 
-  // Carves (CSG subtraction from torus+stuck)
-  for(int i=0;i<XMC;i++){
-    if(i>=uNCrv)break;
-    float cd=shapeSDF(p-uCarves[i].xyz,uCarves[i].w,.14);
-    if(-cd>d){ d=max(d,-cd); matId=2.0; }
-  }
-
-  // Flying cubes (union)
+  // Flying cubes with bounding sphere pre-check
   for(int i=0;i<XMF;i++){
     if(i>=uNFly)break;
-    float fd=shapeSDF(p-uFlying[i].xyz,uFlying[i].w,.125);
-    if(fd<d){ d=fd; matId=3.0+float(i); }
+    vec3 dp=p-uFlying[i].xyz;
+    float bd=length(dp);
+    if(bd<0.5){
+      float fd=shapeSDF(dp,uFlying[i].w,.125);
+      if(fd<d){ d=fd; matId=3.0+float(i); }
+    } else {
+      d=min(d,bd-0.2);
+    }
   }
 
   return vec2(d,matId);
@@ -181,12 +187,14 @@ vec2 sceneFull(vec3 p){
 
 float sceneD(vec3 p){ return sceneFull(p).x; }
 
+// Forward-difference normal (3 evals instead of 6)
 vec3 calcNormal(vec3 p){
+  float d0=sceneD(p);
   vec2 e=vec2(.001,0);
   return normalize(vec3(
-    sceneD(p+e.xyy)-sceneD(p-e.xyy),
-    sceneD(p+e.yxy)-sceneD(p-e.yxy),
-    sceneD(p+e.yyx)-sceneD(p-e.yyx)));
+    sceneD(p+e.xyy)-d0,
+    sceneD(p+e.yxy)-d0,
+    sceneD(p+e.yyx)-d0));
 }
 
 // Cosine-weighted hemisphere sample
@@ -254,16 +262,23 @@ void main(){
   // Transform to torus local space
   vec3 lro=uInvRot*ro, lrd=uInvRot*rd;
 
+  // Bounding sphere early-out (radius 2.5 covers torus + stuck cubes)
+  float b=dot(lro,lrd), c=dot(lro,lro)-6.25;
+  float disc=b*b-c;
+  if(disc<0.0){ gl_FragColor=vec4(pow(sky(lrd)/(sky(lrd)+1.0),vec3(1.0/2.2)),1); return; }
+  float bSq=sqrt(disc), tNear=max(-b-bSq,0.0), tFar=-b+bSq;
+  if(tFar<0.0){ gl_FragColor=vec4(pow(sky(lrd)/(sky(lrd)+1.0),vec3(1.0/2.2)),1); return; }
+
   vec3 col=vec3(0);
   vec3 throughput=vec3(1);
 
   vec3 rayO=lro, rayD=lrd;
 
-  for(int bounce=0;bounce<3;bounce++){
+  for(int bounce=0;bounce<2;bounce++){
     // Raymarch
     float t=0.0, d=1.0;
     vec2 hit;
-    for(int i=0;i<64;i++){
+    for(int i=0;i<48;i++){
       hit=sceneFull(rayO+rayD*t);
       d=hit.x;
       if(d<.001||t>20.0) break;
@@ -292,7 +307,7 @@ void main(){
     vec3 shadowO=p+n*.002;
     float shadow=1.0;
     float st=0.0;
-    for(int i=0;i<32;i++){
+    for(int i=0;i<16;i++){
       float sd=sceneD(shadowO+uSunDir*st);
       if(sd<.001){ shadow=0.0; break; }
       if(st>20.0) break;
