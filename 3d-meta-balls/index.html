@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Metaballs SDF</title>
+<style>
+  * { margin: 0; padding: 0; }
+  body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+  canvas { display: block; cursor: crosshair; }
+  #hud { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    color: #888; font: 14px/1.4 monospace; text-align: center; pointer-events: none; }
+
+  /* Material panel */
+  #panel {
+    position: fixed; top: 20px; right: 20px;
+    width: 220px; padding: 16px;
+    background: rgba(20, 18, 30, 0.85);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    backdrop-filter: blur(10px);
+    color: #ccc; font: 13px/1.6 monospace;
+    display: none;
+    z-index: 10;
+    user-select: none;
+  }
+  #panel h3 {
+    margin: 0 0 10px; font-size: 14px; color: #fff;
+    border-bottom: 1px solid rgba(255,255,255,0.15);
+    padding-bottom: 8px;
+  }
+  #panel label {
+    display: flex; justify-content: space-between; align-items: center;
+    margin: 6px 0; font-size: 12px;
+  }
+  #panel input[type="range"] {
+    width: 120px; cursor: pointer;
+    accent-color: #8af;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">WASD: move &nbsp;|&nbsp; Space: up &nbsp;|&nbsp; Alt+drag: look &nbsp;|&nbsp; Click: select shape</div>
+
+<div id="panel">
+  <h3 id="panel-title">Shape</h3>
+  <label>Size <input type="range" id="sl-size" min="0.3" max="2.0" step="0.01" value="1.0"></label>
+  <label>Transparency <input type="range" id="sl-opacity" min="0" max="1" step="0.01" value="0"></label>
+  <label>Bump <input type="range" id="sl-bump" min="0" max="1" step="0.01" value="0"></label>
+  <label>Glossiness <input type="range" id="sl-gloss" min="0" max="1" step="0.01" value="0.5"></label>
+  <label>SSS <input type="range" id="sl-sss" min="0" max="1" step="0.01" value="0.3"></label>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl');
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── Shaders ──────────────────────────────────────────────
+
+const vsrc = `
+attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+`;
+
+const fsrc = `
+precision highp float;
+
+uniform vec2 u_resolution;
+uniform float u_time;
+uniform vec3 u_balls[3];   // xyz position in world space
+uniform float u_radii[3];
+uniform vec3 u_torus;      // torus center
+uniform float u_torusR;    // torus major radius
+uniform float u_torusr;    // torus tube radius
+uniform mat3 u_camRot;     // camera rotation matrix
+uniform vec3 u_camPos;     // camera position in world space
+uniform float u_opacity[4];
+uniform float u_bump[4];
+uniform float u_gloss[4];
+uniform float u_sss[4];
+
+// ── SDF primitives ──
+
+float sdSphere(vec3 p, vec3 c, float r) {
+  return length(p - c) - r;
+}
+
+float sdTorus(vec3 p, vec3 c, float R, float r) {
+  vec3 q = p - c;
+  vec2 t = vec2(length(q.xz) - R, q.y);
+  return length(t) - r;
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float smin_c(float a, float b, float k, out float blend) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  blend = h;
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// Ground plane
+float sdPlane(vec3 p) {
+  return p.y + 2.0;
+}
+
+// ── 3D noise for bump mapping ──
+
+float hash3(vec3 p) {
+  p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+  p += dot(p, p.yxz + 33.33);
+  return fract((p.x + p.y) * p.z);
+}
+
+float noise3d(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(mix(hash3(i), hash3(i + vec3(1,0,0)), f.x),
+        mix(hash3(i + vec3(0,1,0)), hash3(i + vec3(1,1,0)), f.x), f.y),
+    mix(mix(hash3(i + vec3(0,0,1)), hash3(i + vec3(1,0,1)), f.x),
+        mix(hash3(i + vec3(0,1,1)), hash3(i + vec3(1,1,1)), f.x), f.y),
+    f.z);
+}
+
+vec3 bumpNormal(vec3 p, vec3 n, float strength) {
+  if (strength < 0.001) return n;
+  float sc = 8.0;
+  float e = 0.02;
+  float nx = noise3d(p * sc + vec3(e,0,0)) - noise3d(p * sc - vec3(e,0,0));
+  float ny = noise3d(p * sc + vec3(0,e,0)) - noise3d(p * sc - vec3(0,e,0));
+  float nz = noise3d(p * sc + vec3(0,0,e)) - noise3d(p * sc - vec3(0,0,e));
+  vec3 grad = vec3(nx, ny, nz) / (2.0 * e);
+  return normalize(n + grad * strength * 0.5);
+}
+
+// ── Scene ──
+
+vec4 scene(vec3 p) {
+  float d0 = sdSphere(p, u_balls[0], u_radii[0]);
+  float d1 = sdSphere(p, u_balls[1], u_radii[1]);
+  float d2 = sdSphere(p, u_balls[2], u_radii[2]);
+  float d3 = sdTorus(p, u_torus, u_torusR, u_torusr);
+
+  float k = 1.2;
+  float h1;
+  float d01 = smin_c(d0, d1, k, h1);
+  float h2;
+  float d012 = smin_c(d01, d2, k, h2);
+  float h3;
+  float d = smin_c(d012, d3, k, h3);
+
+  return vec4(d, h1, h2, h3);
+}
+
+float sceneDist(vec3 p) {
+  return scene(p).x;
+}
+
+vec3 calcNormal(vec3 p) {
+  vec2 e = vec2(0.001, 0.0);
+  return normalize(vec3(
+    sceneDist(p + e.xyy) - sceneDist(p - e.xyy),
+    sceneDist(p + e.yxy) - sceneDist(p - e.yxy),
+    sceneDist(p + e.yyx) - sceneDist(p - e.yyx)
+  ));
+}
+
+// Soft shadow
+float softShadow(vec3 ro, vec3 rd, float mint, float maxt, float w) {
+  float res = 1.0;
+  float t = mint;
+  for (int i = 0; i < 32; i++) {
+    float h = sceneDist(ro + rd * t);
+    res = min(res, h / (w * t));
+    t += clamp(h, 0.02, 0.5);
+    if (res < -1.0 || t > maxt) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+// Ambient occlusion
+float calcAO(vec3 p, vec3 n) {
+  float occ = 0.0;
+  float sca = 1.0;
+  for (int i = 0; i < 5; i++) {
+    float h = 0.01 + 0.12 * float(i);
+    float d = sceneDist(p + n * h);
+    occ += (h - d) * sca;
+    sca *= 0.95;
+  }
+  return clamp(1.0 - 3.0 * occ, 0.0, 1.0);
+}
+
+// Blend a per-shape property using smin weights
+float blendProp(float p0, float p1, float p2, float p3, float h1, float h2, float h3) {
+  float v01  = mix(p1, p0, h1);
+  float v012 = mix(p2, v01, h2);
+  return mix(p3, v012, h3);
+}
+
+// Shade a surface hit (full lighting)
+vec3 shade(vec3 p, vec3 rd, vec3 n, vec4 info) {
+  float h1 = info.y, h2 = info.z, h3 = info.w;
+
+  // Blend material properties
+  float bumpStr = blendProp(u_bump[0], u_bump[1], u_bump[2], u_bump[3], h1, h2, h3);
+  float glossVal = blendProp(u_gloss[0], u_gloss[1], u_gloss[2], u_gloss[3], h1, h2, h3);
+  float sssVal  = blendProp(u_sss[0],  u_sss[1],  u_sss[2],  u_sss[3],  h1, h2, h3);
+
+  // Apply bump mapping
+  n = bumpNormal(p, n, bumpStr);
+
+  // Shape colors
+  vec3 col0 = vec3(1.0, 0.25, 0.15);
+  vec3 col1 = vec3(0.15, 0.85, 0.35);
+  vec3 col2 = vec3(0.15, 0.35, 1.0);
+  vec3 col3 = vec3(1.0, 0.75, 0.1);  // torus: gold
+
+  vec3 col01  = mix(col1, col0, h1);
+  vec3 col012 = mix(col2, col01, h2);
+  vec3 matCol = mix(col3, col012, h3);
+
+  // Lighting
+  vec3 lightDir = normalize(vec3(0.6, 0.8, -0.4));
+  vec3 lightCol = vec3(1.0, 0.95, 0.85);
+
+  float diff = max(dot(n, lightDir), 0.0);
+
+  // Glossiness: map 0-1 to specular exponent 4-128
+  float specExp = mix(4.0, 128.0, glossVal);
+  float spec = pow(max(dot(reflect(-lightDir, n), -rd), 0.0), specExp);
+
+  // Fresnel
+  float fresnel = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+
+  float sha = softShadow(p + n * 0.01, lightDir, 0.02, 10.0, 0.1);
+  float ao = calcAO(p, n);
+
+  // Subsurface scattering with blended strength
+  float sss = max(dot(rd, lightDir), 0.0) * sssVal;
+
+  vec3 ambient = vec3(0.12, 0.10, 0.18) * ao;
+  return ambient * matCol
+      + diff * sha * lightCol * matCol * 0.8
+      + sss * matCol * 0.4
+      + spec * sha * lightCol * 0.5
+      + fresnel * vec3(0.3, 0.35, 0.5) * 0.4;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
+
+  vec3 rd = normalize(u_camRot * vec3(uv, 1.5));
+  vec3 bgCol = mix(vec3(0.02, 0.02, 0.06), vec3(0.08, 0.06, 0.12), uv.y + 0.5);
+
+  // Front-to-back compositing across up to 3 transparency layers
+  vec3 accCol = vec3(0.0);
+  float remaining = 1.0;
+  vec3 roCur = u_camPos;
+
+  for (int layer = 0; layer < 3; layer++) {
+    if (remaining < 0.01) break;
+
+    // Raymarch (128 steps for primary, 64 for secondary)
+    float t = 0.0;
+    vec4 info;
+    bool hit = false;
+    for (int i = 0; i < 128; i++) {
+      if (layer > 0 && i >= 64) break;
+      vec3 p = roCur + rd * t;
+      info = scene(p);
+      if (abs(info.x) < 0.001) { hit = true; break; }
+      if (t > 40.0) break;
+      t += info.x * 0.8;
+    }
+
+    if (!hit) break;
+
+    vec3 p = roCur + rd * t;
+    vec3 n = calcNormal(p);
+    float h1 = info.y, h2 = info.z, h3 = info.w;
+    float opacityVal = blendProp(u_opacity[0], u_opacity[1], u_opacity[2], u_opacity[3], h1, h2, h3);
+    vec3 surfCol = shade(p, rd, n, info);
+
+    // Accumulate: this layer's contribution = its opacity * remaining transparency
+    accCol += surfCol * opacityVal * remaining;
+    remaining *= (1.0 - opacityVal);
+
+    // Fully opaque — no need to look further
+    if (remaining < 0.01) break;
+
+    // Skip through interior to exit the back face
+    float skipT = 0.02;
+    float prevD = -1.0;
+    for (int i = 0; i < 48; i++) {
+      float d = sceneDist(p + rd * skipT);
+      // Stop once SDF is clearly positive and increasing (past back face)
+      if (d > 0.2 && d > prevD) break;
+      if (d > 0.0) prevD = d;
+      skipT += max(0.05, abs(d));
+    }
+    roCur = p + rd * skipT;
+  }
+
+  // Background fills whatever transparency remains
+  accCol += bgCol * remaining;
+
+  // Tone mapping + gamma
+  vec3 col = accCol;
+  col = col / (1.0 + col);
+  col = pow(col, vec3(0.4545));
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+// ── GL setup ─────────────────────────────────────────────
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, vsrc));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fsrc));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+  console.error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const uRes = gl.getUniformLocation(prog, 'u_resolution');
+const uTime = gl.getUniformLocation(prog, 'u_time');
+const uCamRot = gl.getUniformLocation(prog, 'u_camRot');
+const uCamPos = gl.getUniformLocation(prog, 'u_camPos');
+const uBalls = [];
+const uRadii = [];
+for (let i = 0; i < 3; i++) {
+  uBalls.push(gl.getUniformLocation(prog, `u_balls[${i}]`));
+  uRadii.push(gl.getUniformLocation(prog, `u_radii[${i}]`));
+}
+const uTorus = gl.getUniformLocation(prog, 'u_torus');
+const uTorusR = gl.getUniformLocation(prog, 'u_torusR');
+const uTorusr = gl.getUniformLocation(prog, 'u_torusr');
+
+// Material uniform locations
+const uOpacity = [], uBump = [], uGloss = [], uSss = [];
+for (let i = 0; i < 4; i++) {
+  uOpacity.push(gl.getUniformLocation(prog, `u_opacity[${i}]`));
+  uBump.push(gl.getUniformLocation(prog, `u_bump[${i}]`));
+  uGloss.push(gl.getUniformLocation(prog, `u_gloss[${i}]`));
+  uSss.push(gl.getUniformLocation(prog, `u_sss[${i}]`));
+}
+
+// ── State ────────────────────────────────────────────────
+
+// Shape positions in world space (r = bounding radius for drag hit-test)
+const balls = [
+  { x: -1.8, y:  0.2, z: 0.0, r: 1.0, size: 1.0, opacity: 0.9, bump: 0.5, gloss: 0.5, sss: 0.3 },
+  { x:  1.5, y: -0.2, z: 0.5, r: 0.8, size: 1.0, opacity: 0.9, bump: 0.5, gloss: 0.5, sss: 0.3 },
+  { x:  0.0, y:  1.0, z:-0.5, r: 0.9, size: 1.0, opacity: 0.9, bump: 0.5, gloss: 0.5, sss: 0.3 },
+  { x:  0.0, y: -0.5, z: 0.0, r: 1.8, type: 'torus', R: 1.2, tr: 0.35, size: 1.0, opacity: 0.9, bump: 0.5, gloss: 0.5, sss: 0.3 },
+];
+
+// FPS camera
+let camPos = [0, 0, 8];       // start where orbit cam was
+let camYaw = Math.PI;          // facing origin
+let camPitch = 0;              // look straight ahead
+const moveSpeed = 0.08;
+const lookSensitivity = 0.002;
+
+// Held keys
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  keys[e.key.toLowerCase()] = true;
+  if (['w','a','s','d',' '].includes(e.key.toLowerCase()))
+    e.preventDefault();
+});
+window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+// ── Selection + UI panel ─────────────────────────────────
+
+let selectedIdx = -1;
+const shapeNames = ['Sphere 1', 'Sphere 2', 'Sphere 3', 'Torus'];
+
+const panel = document.getElementById('panel');
+const panelTitle = document.getElementById('panel-title');
+const slSize = document.getElementById('sl-size');
+const slOpacity = document.getElementById('sl-opacity');
+const slBump = document.getElementById('sl-bump');
+const slGloss = document.getElementById('sl-gloss');
+const slSss = document.getElementById('sl-sss');
+
+function updatePanel() {
+  if (selectedIdx < 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  panelTitle.textContent = shapeNames[selectedIdx];
+  const b = balls[selectedIdx];
+  slSize.value = b.size;
+  slOpacity.value = 1.0 - b.opacity;
+  slBump.value = b.bump;
+  slGloss.value = b.gloss;
+  slSss.value = b.sss;
+}
+
+slSize.addEventListener('input', () => {
+  if (selectedIdx >= 0) balls[selectedIdx].size = parseFloat(slSize.value);
+});
+slOpacity.addEventListener('input', () => {
+  if (selectedIdx >= 0) balls[selectedIdx].opacity = 1.0 - parseFloat(slOpacity.value);
+});
+slBump.addEventListener('input', () => {
+  if (selectedIdx >= 0) balls[selectedIdx].bump = parseFloat(slBump.value);
+});
+slGloss.addEventListener('input', () => {
+  if (selectedIdx >= 0) balls[selectedIdx].gloss = parseFloat(slGloss.value);
+});
+slSss.addEventListener('input', () => {
+  if (selectedIdx >= 0) balls[selectedIdx].sss = parseFloat(slSss.value);
+});
+
+// ── Mouse dragging (projects onto camera-aligned plane) ──
+
+let dragging = -1;
+let dragPlaneNormal = [0,0,0];
+let dragPlaneD = 0;
+let dragOffset = [0,0,0];
+
+function getCamMatrix() {
+  const cy = Math.cos(camYaw), sy = Math.sin(camYaw);
+  const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
+  const fw = [sy * cp, sp, cy * cp];
+  const right = normalize3(cross3(fw, [0, 1, 0]));
+  const up = cross3(right, fw);
+  return { pos: camPos, fw, right, up };
+}
+
+function normalize3(v) {
+  const l = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+  return [v[0]/l, v[1]/l, v[2]/l];
+}
+
+function cross3(a, b) {
+  return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+}
+
+function dot3(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+
+function sub3(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function add3(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+function scale3(a, s) { return [a[0]*s, a[1]*s, a[2]*s]; }
+
+function screenToRay(mx, my) {
+  const w = window.innerWidth, h = window.innerHeight;
+  const aspect = w / h;
+  const uvx = (mx / w - 0.5) * aspect;
+  const uvy = -(my / h - 0.5);
+  const cam = getCamMatrix();
+  const dir = normalize3(add3(add3(scale3(cam.right, uvx), scale3(cam.up, uvy)), scale3(cam.fw, 1.5)));
+  return { origin: cam.pos, dir };
+}
+
+function rayPlaneIntersect(ro, rd, n, d) {
+  const denom = dot3(rd, n);
+  if (Math.abs(denom) < 1e-6) return -1;
+  return -(dot3(ro, n) + d) / denom;
+}
+
+// ── Alt+drag for mouse look ──────────────────────────────
+
+let altLooking = false;
+canvas.addEventListener('mousedown', (e) => {
+  if (e.altKey) { altLooking = true; e.preventDefault(); }
+});
+window.addEventListener('mouseup', () => { altLooking = false; });
+canvas.addEventListener('mousemove', (e) => {
+  if (!altLooking) return;
+  camYaw   -= e.movementX * lookSensitivity;
+  camPitch -= e.movementY * lookSensitivity;
+  const limit = 89 * Math.PI / 180;
+  camPitch = Math.max(-limit, Math.min(limit, camPitch));
+});
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.altKey) return; // Alt+drag is for looking, not shape picking
+  const ray = screenToRay(e.clientX, e.clientY);
+  let bestT = Infinity, bestIdx = -1;
+  for (let i = 0; i < balls.length; i++) {
+    const bc = [balls[i].x, balls[i].y, balls[i].z];
+    const oc = sub3(ray.origin, bc);
+    const b = dot3(oc, ray.dir);
+    const hitR = balls[i].r * balls[i].size;
+    const c = dot3(oc, oc) - hitR * hitR * 3.0; // generous hit zone
+    const disc = b * b - c;
+    if (disc > 0) {
+      const t = -b - Math.sqrt(disc);
+      if (t > 0 && t < bestT) { bestT = t; bestIdx = i; }
+    }
+  }
+  if (bestIdx >= 0) {
+    selectedIdx = bestIdx;
+    updatePanel();
+    dragging = bestIdx;
+    const cam = getCamMatrix();
+    dragPlaneNormal = cam.fw;
+    const bc = [balls[bestIdx].x, balls[bestIdx].y, balls[bestIdx].z];
+    dragPlaneD = -dot3(bc, dragPlaneNormal);
+    const hitP = add3(ray.origin, scale3(ray.dir, bestT));
+    dragOffset = sub3(bc, hitP);
+    canvas.setPointerCapture(e.pointerId);
+  } else {
+    selectedIdx = -1;
+    updatePanel();
+  }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (dragging < 0) return;
+  const ray = screenToRay(e.clientX, e.clientY);
+  const t = rayPlaneIntersect(ray.origin, ray.dir, dragPlaneNormal, dragPlaneD);
+  if (t > 0) {
+    const hitP = add3(ray.origin, scale3(ray.dir, t));
+    const newP = add3(hitP, dragOffset);
+    balls[dragging].x = newP[0];
+    balls[dragging].y = newP[1];
+    balls[dragging].z = newP[2];
+  }
+});
+
+canvas.addEventListener('pointerup', () => { dragging = -1; });
+
+// ── Render loop ──────────────────────────────────────────
+
+function frame(t) {
+  // WASD + Space/Shift movement
+  const cam = getCamMatrix();
+  const fwXZ = normalize3([cam.fw[0], 0, cam.fw[2]]); // forward on XZ plane
+  const rightXZ = normalize3([cam.right[0], 0, cam.right[2]]);
+  if (keys['w']) camPos = add3(camPos, scale3(fwXZ, moveSpeed));
+  if (keys['s']) camPos = add3(camPos, scale3(fwXZ, -moveSpeed));
+  if (keys['a']) camPos = add3(camPos, scale3(rightXZ, -moveSpeed));
+  if (keys['d']) camPos = add3(camPos, scale3(rightXZ, moveSpeed));
+  if (keys[' ']) camPos[1] += moveSpeed;
+
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+  gl.uniform1f(uTime, t * 0.001);
+
+  // Camera (single source of truth from getCamMatrix)
+  const { pos, fw, right, up } = getCamMatrix();
+
+  // Column-major 3x3 rotation matrix for GLSL
+  gl.uniformMatrix3fv(uCamRot, false, new Float32Array([
+    right[0], right[1], right[2],
+    up[0],    up[1],    up[2],
+    fw[0],    fw[1],    fw[2]
+  ]));
+  gl.uniform3f(uCamPos, pos[0], pos[1], pos[2]);
+
+  // Sphere uniforms (size multiplier applied to radii)
+  for (let i = 0; i < 3; i++) {
+    gl.uniform3f(uBalls[i], balls[i].x, balls[i].y, balls[i].z);
+    gl.uniform1f(uRadii[i], balls[i].r * balls[i].size);
+  }
+
+  // Torus (4th shape, size multiplier on both radii)
+  const torus = balls[3];
+  gl.uniform3f(uTorus, torus.x, torus.y, torus.z);
+  gl.uniform1f(uTorusR, torus.R * torus.size);
+  gl.uniform1f(uTorusr, torus.tr * torus.size);
+
+  // Material uniforms
+  for (let i = 0; i < 4; i++) {
+    gl.uniform1f(uOpacity[i], balls[i].opacity);
+    gl.uniform1f(uBump[i], balls[i].bump);
+    gl.uniform1f(uGloss[i], balls[i].gloss);
+    gl.uniform1f(uSss[i], balls[i].sss);
+  }
+
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
