@@ -402,8 +402,108 @@ function makeGreatIcosa(size) {
     return { p: buf(new Float32Array(p), gl.ARRAY_BUFFER), n: buf(new Float32Array(n), gl.ARRAY_BUFFER),
         i: buf(new Uint16Array(idx), gl.ELEMENT_ARRAY_BUFFER), c: idx.length };
 }
+function makePacman(radius, stacks, slices, mouthHalf) {
+    const p = [], n = [], idx = [];
+    const cosM = Math.cos(mouthHalf);
+    // Sphere vertices, skipping mouth region
+    // mouth faces +X in model space
+    const kept = []; // [stack][slice] -> vertex index or -1
+    for (let i = 0; i <= stacks; i++) {
+        kept.push([]);
+        const phi = Math.PI * i / stacks, sp = Math.sin(phi), cp = Math.cos(phi);
+        for (let j = 0; j <= slices; j++) {
+            const theta = 2 * Math.PI * j / slices, st = Math.sin(theta), ct = Math.cos(theta);
+            const nx = sp * ct, ny = cp, nz = sp * st;
+            // direction from origin to this vertex is (nx,ny,nz), mouth axis is +X=(1,0,0)
+            // dot = nx; vertex inside mouth cone if nx > cosM
+            if (nx > cosM && sp > 0.01) { kept[i].push(-1); continue; }
+            kept[i].push(p.length / 3);
+            p.push(radius * nx, radius * ny, radius * nz);
+            n.push(nx, ny, nz);
+        }
+    }
+    // Sphere triangles (only where all 3 vertices exist)
+    for (let i = 0; i < stacks; i++) for (let j = 0; j < slices; j++) {
+        const a = kept[i][j], b = kept[i+1][j], c = kept[i][j+1], d = kept[i+1][j+1];
+        if (a >= 0 && b >= 0 && c >= 0) idx.push(a, b, c);
+        if (c >= 0 && b >= 0 && d >= 0) idx.push(c, b, d);
+    }
+    // Lip fans: find boundary ring of mouth (vertices at edge of cone)
+    // Upper lip: from origin outward to boundary on upper hemisphere
+    // Lower lip: from origin outward to boundary on lower hemisphere
+    const originIdx = p.length / 3;
+    p.push(0, 0, 0); n.push(1, 0, 0); // origin vertex, normal toward mouth
+    // Collect boundary vertices around the mouth edge
+    const boundary = [];
+    for (let i = 0; i <= stacks; i++) {
+        const phi = Math.PI * i / stacks, sp = Math.sin(phi), cp = Math.cos(phi);
+        for (let j = 0; j <= slices; j++) {
+            const theta = 2 * Math.PI * j / slices, st = Math.sin(theta), ct = Math.cos(theta);
+            const nx = sp * ct, ny = cp, nz = sp * st;
+            if (nx > cosM && sp > 0.01) {
+                // Check if neighbor is kept -> this is a boundary
+                const neighbors = [[i-1,j],[i+1,j],[i,j-1],[i,j+1]];
+                for (const [ni,nj] of neighbors) {
+                    if (ni >= 0 && ni <= stacks && nj >= 0 && nj <= slices && kept[ni] && kept[ni][nj] >= 0) {
+                        boundary.push({ phi, theta, nx, ny, nz });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // Sort boundary by angle around mouth axis (+X)
+    boundary.sort((a, b) => Math.atan2(a.nz, a.ny) - Math.atan2(b.nz, b.ny));
+    // Add boundary vertices and create fan triangles
+    const bStart = p.length / 3;
+    for (const bv of boundary) {
+        p.push(radius * bv.nx, radius * bv.ny, radius * bv.nz);
+        // lip normal: perpendicular to mouth axis in the plane of origin-vertex
+        const lnx = 0, lny = bv.ny, lnz = bv.nz;
+        const ll = Math.sqrt(lny*lny + lnz*lnz) || 1;
+        n.push(lnx, lny/ll, lnz/ll);
+    }
+    for (let k = 0; k < boundary.length - 1; k++) {
+        // Upper lip (ny > 0) or lower lip: fan from origin
+        idx.push(originIdx, bStart + k, bStart + k + 1);
+    }
+    if (boundary.length > 1) idx.push(originIdx, bStart + boundary.length - 1, bStart);
+
+    const buf = (d, t) => { const b = gl.createBuffer(); gl.bindBuffer(t, b); gl.bufferData(t, d, gl.STATIC_DRAW); return b; };
+    return { p: buf(new Float32Array(p), gl.ARRAY_BUFFER), n: buf(new Float32Array(n), gl.ARRAY_BUFFER),
+        i: buf(new Uint16Array(idx), gl.ELEMENT_ARRAY_BUFFER), c: idx.length };
+}
 // 0=Cube, 1=Cylinder, 2=Dodecahedron, 3=Sphere, 4=Tetrahedron, 5=StellatedOcta, 6=Cross, 7=GreatIcosa
 const meshes = [makeCube(0.25), makeCylinder(0.1, 0.125, 16), makeDodecahedron(0.25), makeSphere(0.125, 12, 16), makeTetrahedron(0.25), makeStellatedOcta(0.25), makeCross(0.25), makeGreatIcosa(0.25)];
+const pacmanMesh = makePacman(0.2, 16, 24, Math.PI / 6);
+const pacEyeMesh = makeSphere(0.035, 8, 10);
+function makeMouthStrip(pacRadius, segments, halfWidth, curveAmount) {
+    const p = [], n = [], idx = [], thick = 0.012, yBase = -0.06;
+    for (let i = 0; i <= segments; i++) {
+        const t = (i / segments) * 2 - 1, z = t * halfWidth;
+        const yMid = yBase + curveAmount * (1 - t * t);
+        for (let side = -1; side <= 1; side += 2) {
+            const y = yMid + side * thick;
+            const x = Math.sqrt(Math.max(pacRadius * pacRadius - y * y - z * z, 0.001)) + 0.003;
+            p.push(x, y, z);
+            const nl = Math.sqrt(x*x + y*y + z*z) || 1;
+            n.push(x/nl, y/nl, z/nl);
+        }
+    }
+    for (let i = 0; i < segments; i++) {
+        const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+        idx.push(a, c, b, b, c, d);
+    }
+    const buf = (d, t) => { const b = gl.createBuffer(); gl.bindBuffer(t, b); gl.bufferData(t, d, gl.STATIC_DRAW); return b; };
+    return { p: buf(new Float32Array(p), gl.ARRAY_BUFFER), n: buf(new Float32Array(n), gl.ARRAY_BUFFER),
+        i: buf(new Uint16Array(idx), gl.ELEMENT_ARRAY_BUFFER), c: idx.length };
+}
+const mouthMeshes = [
+    makeMouthStrip(0.2, 12, 0.07, 0.0),    // 0: neutral
+    makeMouthStrip(0.2, 12, 0.07, 0.04),   // 1: happy (smile)
+    makeMouthStrip(0.2, 12, 0.07, -0.04),  // 2: sad (frown)
+];
+let pacExpression = 0, pacExprTimer = 0;
 
 // ── Matrix math (column-major) ──
 function persp(fov, asp, n, f) { const t = 1 / Math.tan(fov / 2), nf = 1 / (n - f); return new Float32Array([t / asp,0,0,0, 0,t,0,0, 0,0,(f + n) * nf,-1, 0,0,2 * f * n * nf,0]); }
@@ -563,6 +663,8 @@ let prev = 0;
 function frame(t) {
     t *= 0.001; const dt = Math.min(t - prev, 0.05); prev = t;
 
+    if (pacExprTimer > 0) { pacExprTimer -= dt; if (pacExprTimer <= 0) pacExpression = 0; }
+
     const tAX = t * 0.7, tAY = t * 1.1;
     const invRot = m4(rY(-tAY), rX(-tAX));
     const fwdRot = m4(rX(tAX), rY(tAY));
@@ -584,7 +686,7 @@ function frame(t) {
                 if (c.type === 0) {
                     stuckCubes.push({ lx, ly, lz, shape: c.shape, spin: c.spin });
                     if (stuckCubes.length > MS) stuckCubes.shift();
-                    cubes.splice(i, 1); showMsg('STUCK!', '#ff6644'); continue;
+                    cubes.splice(i, 1); showMsg('STUCK!', '#ff6644'); pacExpression = 2; pacExprTimer = 1.5; continue;
                 }
                 if (c.type === 2) {
                     carves.push({ lx, ly, lz, shape: c.shape });
@@ -593,7 +695,7 @@ function frame(t) {
                         const dx = stuckCubes[j].lx - lx, dy = stuckCubes[j].ly - ly, dz = stuckCubes[j].lz - lz;
                         if (Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz)) < 0.2) stuckCubes.splice(j, 1);
                     }
-                    cubes.splice(i, 1); showMsg('CARVED!', '#4488ff'); continue;
+                    cubes.splice(i, 1); showMsg('CARVED!', '#4488ff'); pacExpression = 1; pacExprTimer = 1.5; continue;
                 }
                 c.bouncing = true;
                 const [nx, ny, nz] = sdfNormal(lx, ly, lz);
@@ -601,13 +703,13 @@ function frame(t) {
                 const dot = c.vx * wnx + c.vy * wny + c.vz * wnz;
                 c.vx = (c.vx - 2 * dot * wnx) * 0.5; c.vy = (c.vy - 2 * dot * wny) * 0.5; c.vz = (c.vz - 2 * dot * wnz) * 0.5;
                 c.x += wnx * 0.2; c.y += wny * 0.2; c.z += wnz * 0.2;
-                showMsg('BONK!', '#66ff44');
+                showMsg('BONK!', '#66ff44'); pacExpression = 1; pacExprTimer = 1.0;
             }
         }
 
         if (!c.bouncing && !c.passed && c.z < -(TR + Tr + 0.5)) {
             c.passed = true;
-            if (c.throughHole) { score++; scEl.textContent = score; showMsg('SCORE!', '#44ff44'); }
+            if (c.throughHole) { score++; scEl.textContent = score; showMsg('SCORE!', '#44ff44'); pacExpression = 1; pacExprTimer = 2.0; }
         }
         if (c.z > 12 || c.z < -12 || Math.abs(c.x) > 10 || Math.abs(c.y) > 10) cubes.splice(i, 1);
     }
@@ -623,12 +725,7 @@ function frame(t) {
     const asp = halfW / canvas.height;
     const invRot3 = nm3(invRot);
 
-    // ── Left half: Exterior view ──
-    const extPos = xfm(invRot, 0, 0, 7);
-    drawScene(0, halfW, new Float32Array(extPos), invRot3, invRot3, tr(0, 0, -7), asp);
-
-    // ── Right half: FPS view ──
-    // Update walker position from WASD (relative to yaw direction)
+    // ── Compute FPS walker position/orientation (needed for pacman in left view) ──
     const fpsSpd = 2.0;
     const cY = Math.cos(fpsYaw), sY = Math.sin(fpsYaw);
     if (fpsKeys.w) { fpsTheta += cY * fpsSpd * dt; fpsPhi -= sY * fpsSpd * dt; }
@@ -636,45 +733,33 @@ function frame(t) {
     if (fpsKeys.a) { fpsTheta += sY * fpsSpd * dt; fpsPhi += cY * fpsSpd * dt; }
     if (fpsKeys.d) { fpsTheta -= sY * fpsSpd * dt; fpsPhi -= cY * fpsSpd * dt; }
 
-    // Torus parametric position and frame
     const R = 1.0, r = 0.4, h = 0.15;
     const cT = Math.cos(fpsTheta), sT = Math.sin(fpsTheta);
     const cP = Math.cos(fpsPhi), sP = Math.sin(fpsPhi);
 
-    // Surface point
     const sx = (R + r * cP) * cT;
     const sy = (R + r * cP) * sT;
     const sz = r * sP;
 
-    // Outward normal
     const nx = cP * cT, ny = cP * sT, nz = sP;
-
-    // Eye = surface + h * normal
     const ex = sx + h * nx, ey = sy + h * ny, ez = sz + h * nz;
 
-    // Forward tangent (along ring)
     const fx = -sT, fy = cT, fz = 0;
-
-    // Right = cross(forward, normal), then normalize
     let rx = fy * nz - fz * ny;
     let ry = fz * nx - fx * nz;
     let rz = fx * ny - fy * nx;
     const rl = Math.sqrt(rx * rx + ry * ry + rz * rz) || 1;
     rx /= rl; ry /= rl; rz /= rl;
 
-    // Up = normal (already unit)
     const ux = nx, uy = ny, uz = nz;
 
-    // Apply yaw (rotate forward/right around normal)
     const cYaw = Math.cos(fpsYaw), sYaw = Math.sin(fpsYaw);
     const lfx = cYaw*fx + sYaw*rx, lfy = cYaw*fy + sYaw*ry, lfz = cYaw*fz + sYaw*rz;
     const lrx = -sYaw*fx + cYaw*rx, lry = -sYaw*fy + cYaw*ry, lrz = -sYaw*fz + cYaw*rz;
-    // Apply pitch (rotate forward/up around right)
     const cPit = Math.cos(fpsPitch), sPit = Math.sin(fpsPitch);
     const cfx = cPit*lfx + sPit*ux, cfy = cPit*lfy + sPit*uy, cfz = cPit*lfz + sPit*uz;
     const cux = -sPit*lfx + cPit*ux, cuy = -sPit*lfy + cPit*uy, cuz = -sPit*lfz + cPit*uz;
 
-    // Camera mat3 for raymarcher: columns are [right, up, -forward]
     const fpsCamPos = new Float32Array([ex, ey, ez]);
     const fpsCamMat = new Float32Array([
         lrx, lry, lrz,
@@ -682,8 +767,6 @@ function frame(t) {
         -cfx, -cfy, -cfz
     ]);
 
-    // FPS view matrix for meshes (world space)
-    // Transform local axes through fwdRot, then build R^T * T(-pos)
     const [cwx, cwy, cwz] = xfm(fwdRot, ex, ey, ez);
     const [rwx, rwy, rwz] = xfm(fwdRot, lrx, lry, lrz);
     const [uwx, uwy, uwz] = xfm(fwdRot, cux, cuy, cuz);
@@ -698,6 +781,56 @@ function frame(t) {
         ftx, fty, ftz, 1
     ]);
 
+    // ── Left half: Exterior view ──
+    const extPos = xfm(invRot, 0, 0, 7);
+    drawScene(0, halfW, new Float32Array(extPos), invRot3, invRot3, tr(0, 0, -7), asp);
+
+    // ── Draw pacman on left panel (viewport/scissor still set for left half) ──
+    {
+        const proj = persp(Math.PI / 4, asp, 0.1, 100);
+        // Model matrix: +X=forward, +Y=normal, +Z=right
+        const pacR = 0.2;
+        const px = sx + pacR * nx, py = sy + pacR * ny, pz = sz + pacR * nz;
+        const pacLocal = new Float32Array([
+            lfx, lfy, lfz, 0,
+            nx,  ny,  nz,  0,
+            lrx, lry, lrz, 0,
+            px,  py,  pz,  1
+        ]);
+        const pacMV = m4(tr(0, 0, -7), m4(fwdRot, pacLocal));
+
+        gl.useProgram(meshProg);
+        gl.disable(gl.CULL_FACE);
+        gl.uniformMatrix4fv(mU('uProj'), false, proj);
+
+        const drawPart = (mesh, ox, oy, oz, r, g, b) => {
+            const mv = (ox === 0 && oy === 0 && oz === 0) ? pacMV : m4(pacMV, tr(ox, oy, oz));
+            gl.uniformMatrix4fv(mU('uMV'), false, mv);
+            gl.uniformMatrix3fv(mU('uNMat'), false, nm3(mv));
+            gl.uniform4f(mU('uTint'), r, g, b, 1);
+            gl.bindBuffer(gl.ARRAY_BUFFER, mesh.p);
+            gl.enableVertexAttribArray(mAP);
+            gl.vertexAttribPointer(mAP, 3, gl.FLOAT, false, 0, 0);
+            gl.bindBuffer(gl.ARRAY_BUFFER, mesh.n);
+            gl.enableVertexAttribArray(mAN);
+            gl.vertexAttribPointer(mAN, 3, gl.FLOAT, false, 0, 0);
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.i);
+            gl.drawElements(gl.TRIANGLES, mesh.c, gl.UNSIGNED_SHORT, 0);
+        };
+
+        // Body (yellow)
+        drawPart(pacmanMesh, 0, 0, 0, 1.0, 0.85, 0.0);
+        // Eyes (white) - upper-front, offset left/right
+        drawPart(pacEyeMesh, 0.15, 0.09, -0.08, 1, 1, 1);
+        drawPart(pacEyeMesh, 0.15, 0.09,  0.08, 1, 1, 1);
+        // Mouth (dark) - expression driven by game events
+        drawPart(mouthMeshes[pacExpression], 0, 0, 0, 0.15, 0.05, 0.0);
+
+        gl.disableVertexAttribArray(mAP);
+        gl.disableVertexAttribArray(mAN);
+    }
+
+    // ── Right half: FPS view ──
     drawScene(halfW, halfW, fpsCamPos, fpsCamMat, invRot3, fpsView, asp);
 
     gl.disable(gl.SCISSOR_TEST);
