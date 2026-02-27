@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>1D Blur with Rotate</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; padding: 20px; min-height: 100vh; }
+  h1 { margin-bottom: 16px; font-size: 1.4em; color: #c8c8ff; }
+  .controls { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; margin-bottom: 16px; background: #16213e; padding: 14px 20px; border-radius: 8px; }
+  .control-group { display: flex; align-items: center; gap: 8px; }
+  label { font-size: 0.9em; white-space: nowrap; }
+  input[type="range"] { width: 180px; accent-color: #7b68ee; }
+  .value { min-width: 28px; text-align: right; font-variant-numeric: tabular-nums; color: #aaa; }
+  input[type="file"] { font-size: 0.85em; }
+  canvas { border: 1px solid #333; border-radius: 4px; max-width: 95vw; background: #111; }
+  .timing { font-size: 0.8em; color: #888; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>1D Blur with Rotate</h1>
+<div class="controls">
+  <div class="control-group">
+    <label for="fileInput">Image:</label>
+    <input type="file" id="fileInput" accept="image/*">
+  </div>
+  <div class="control-group">
+    <label for="radiusSlider">Radius:</label>
+    <input type="range" id="radiusSlider" min="0" max="100" value="5">
+    <span class="value" id="radiusValue">5</span>
+  </div>
+  <div class="control-group">
+    <label for="iterSlider">Iterations:</label>
+    <input type="range" id="iterSlider" min="1" max="8" value="1">
+    <span class="value" id="iterValue">1</span>
+  </div>
+  <div class="control-group">
+    <label><input type="checkbox" id="wrapX"> Wrap X</label>
+  </div>
+  <div class="control-group">
+    <label><input type="checkbox" id="wrapY"> Wrap Y</label>
+  </div>
+</div>
+<canvas id="canvas"></canvas>
+<div class="timing" id="timing"></div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const radiusSlider = document.getElementById('radiusSlider');
+const iterSlider = document.getElementById('iterSlider');
+const radiusValue = document.getElementById('radiusValue');
+const iterValue = document.getElementById('iterValue');
+const fileInput = document.getElementById('fileInput');
+const wrapXCheck = document.getElementById('wrapX');
+const wrapYCheck = document.getElementById('wrapY');
+const timingEl = document.getElementById('timing');
+
+let sourceImage = null;
+let pendingFrame = 0;
+
+// Load a default placeholder
+canvas.width = 400;
+canvas.height = 300;
+ctx.fillStyle = '#222';
+ctx.fillRect(0, 0, 400, 300);
+ctx.fillStyle = '#666';
+ctx.font = '18px system-ui';
+ctx.textAlign = 'center';
+ctx.fillText('Upload an image to begin', 200, 150);
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    sourceImage = img;
+    canvas.width = img.width;
+    canvas.height = img.height;
+    applyBlur();
+  };
+  img.src = URL.createObjectURL(file);
+});
+
+radiusSlider.addEventListener('input', () => {
+  radiusValue.textContent = radiusSlider.value;
+  scheduleBlur();
+});
+
+iterSlider.addEventListener('input', () => {
+  iterValue.textContent = iterSlider.value;
+  scheduleBlur();
+});
+
+wrapXCheck.addEventListener('change', scheduleBlur);
+wrapYCheck.addEventListener('change', scheduleBlur);
+
+function scheduleBlur() {
+  if (pendingFrame) cancelAnimationFrame(pendingFrame);
+  pendingFrame = requestAnimationFrame(applyBlur);
+}
+
+function applyBlur() {
+  pendingFrame = 0;
+  if (!sourceImage) return;
+
+  const w = sourceImage.width;
+  const h = sourceImage.height;
+  const radius = parseInt(radiusSlider.value);
+  const iterations = parseInt(iterSlider.value);
+  const wrapX = wrapXCheck.checked;
+  const wrapY = wrapYCheck.checked;
+
+  // Draw source image to canvas and grab pixels
+  ctx.drawImage(sourceImage, 0, 0);
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const pixels = imageData.data;
+
+  const t0 = performance.now();
+
+  // Work with separate channel arrays for easier manipulation during rotation
+  let r = new Float32Array(w * h);
+  let g = new Float32Array(w * h);
+  let b = new Float32Array(w * h);
+  let a = new Float32Array(w * h);
+
+  // Unpack
+  for (let i = 0; i < w * h; i++) {
+    r[i] = pixels[i * 4];
+    g[i] = pixels[i * 4 + 1];
+    b[i] = pixels[i * 4 + 2];
+    a[i] = pixels[i * 4 + 3];
+  }
+
+  let curW = w;
+  let curH = h;
+
+  for (let iter = 0; iter < iterations; iter++) {
+    // Step 1: 1D horizontal blur (X-axis)
+    horizontalBlur(r, g, b, a, curW, curH, radius, wrapX);
+
+    // Step 2: Rotate 90° CW → dimensions swap
+    [r, g, b, a, curW, curH] = rotateCW(r, g, b, a, curW, curH);
+
+    // Step 3: 1D horizontal blur (effectively Y-axis in original orientation)
+    horizontalBlur(r, g, b, a, curW, curH, radius, wrapY);
+
+    // Step 4: Rotate 90° CCW → back to original dimensions
+    [r, g, b, a, curW, curH] = rotateCCW(r, g, b, a, curW, curH);
+  }
+
+  // Pack back
+  for (let i = 0; i < w * h; i++) {
+    pixels[i * 4]     = Math.round(r[i]);
+    pixels[i * 4 + 1] = Math.round(g[i]);
+    pixels[i * 4 + 2] = Math.round(b[i]);
+    pixels[i * 4 + 3] = Math.round(a[i]);
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+
+  const elapsed = (performance.now() - t0).toFixed(1);
+  timingEl.textContent = `${elapsed} ms — ${w}×${h} — radius ${radius}, ${iterations} iteration${iterations > 1 ? 's' : ''}`;
+}
+
+// In-place horizontal box blur using sliding window
+function horizontalBlur(r, g, b, a, w, h, radius, wrap) {
+  if (radius === 0) return;
+
+  const diam = radius * 2 + 1;
+  const inv = 1.0 / diam;
+  const tmpR = new Float32Array(w);
+  const tmpG = new Float32Array(w);
+  const tmpB = new Float32Array(w);
+  const tmpA = new Float32Array(w);
+
+  // Index helper: clamp or wrap
+  const ix = wrap
+    ? (k) => ((k % w) + w) % w
+    : (k) => Math.min(Math.max(k, 0), w - 1);
+
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+
+    // Compute initial window sum (centered at x=0)
+    let sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+    for (let k = -radius; k <= radius; k++) {
+      const idx = row + ix(k);
+      sumR += r[idx];
+      sumG += g[idx];
+      sumB += b[idx];
+      sumA += a[idx];
+    }
+
+    tmpR[0] = sumR * inv;
+    tmpG[0] = sumG * inv;
+    tmpB[0] = sumB * inv;
+    tmpA[0] = sumA * inv;
+
+    for (let x = 1; x < w; x++) {
+      const addIdx = row + ix(x + radius);
+      const remIdx = row + ix(x - radius - 1);
+
+      sumR += r[addIdx] - r[remIdx];
+      sumG += g[addIdx] - g[remIdx];
+      sumB += b[addIdx] - b[remIdx];
+      sumA += a[addIdx] - a[remIdx];
+
+      tmpR[x] = sumR * inv;
+      tmpG[x] = sumG * inv;
+      tmpB[x] = sumB * inv;
+      tmpA[x] = sumA * inv;
+    }
+
+    // Write back
+    for (let x = 0; x < w; x++) {
+      r[row + x] = tmpR[x];
+      g[row + x] = tmpG[x];
+      b[row + x] = tmpB[x];
+      a[row + x] = tmpA[x];
+    }
+  }
+}
+
+// Rotate 90° clockwise: (x, y) in WxH → (H-1-y, x) in HxW
+function rotateCW(r, g, b, a, w, h) {
+  const newW = h;
+  const newH = w;
+  const n = w * h;
+  const nr = new Float32Array(n);
+  const ng = new Float32Array(n);
+  const nb = new Float32Array(n);
+  const na = new Float32Array(n);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const srcIdx = y * w + x;
+      const dstIdx = x * newW + (h - 1 - y);
+      nr[dstIdx] = r[srcIdx];
+      ng[dstIdx] = g[srcIdx];
+      nb[dstIdx] = b[srcIdx];
+      na[dstIdx] = a[srcIdx];
+    }
+  }
+
+  return [nr, ng, nb, na, newW, newH];
+}
+
+// Rotate 90° counter-clockwise: (x, y) in WxH → (y, W-1-x) in HxW
+function rotateCCW(r, g, b, a, w, h) {
+  const newW = h;
+  const newH = w;
+  const n = w * h;
+  const nr = new Float32Array(n);
+  const ng = new Float32Array(n);
+  const nb = new Float32Array(n);
+  const na = new Float32Array(n);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const srcIdx = y * w + x;
+      const dstIdx = (w - 1 - x) * newW + y;
+      nr[dstIdx] = r[srcIdx];
+      ng[dstIdx] = g[srcIdx];
+      nb[dstIdx] = b[srcIdx];
+      na[dstIdx] = a[srcIdx];
+    }
+  }
+
+  return [nr, ng, nb, na, newW, newH];
+}
+</script>
+</body>
+</html>
