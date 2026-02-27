@@ -423,6 +423,7 @@ const cubes = [], stuckCubes = [], carves = [];
 let fpsTheta = 0;    // major angle (around ring)
 let fpsPhi = Math.PI / 2;  // minor angle (around tube), start at top
 const fpsKeys = { w: false, a: false, s: false, d: false };
+let fpsYaw = 0, fpsPitch = 0;
 
 function fire() {
     if (cubes.length > 50) return;
@@ -455,8 +456,22 @@ addEventListener('keydown', e => {
     if ('wasd'.includes(e.key)) fpsKeys[e.key] = true;
 });
 addEventListener('keyup', e => { if ('wasd'.includes(e.key)) fpsKeys[e.key] = false; });
-canvas.addEventListener('click', fire);
+canvas.addEventListener('click', e => {
+    if (document.pointerLockElement !== canvas) {
+        const rect = canvas.getBoundingClientRect();
+        if (e.clientX - rect.left > rect.width / 2) canvas.requestPointerLock();
+    }
+    fire();
+});
 canvas.addEventListener('touchstart', e => { e.preventDefault(); fire(); });
+document.addEventListener('mousemove', e => {
+    if (document.pointerLockElement === canvas) {
+        const sens = 0.003;
+        fpsYaw += e.movementX * sens;
+        fpsPitch -= e.movementY * sens;
+        fpsPitch = Math.max(-1.4, Math.min(1.4, fpsPitch));
+    }
+});
 
 function torusSDF(px, py, pz) { const q = Math.sqrt(px * px + py * py) - TR; return Math.sqrt(q * q + pz * pz) - Tr; }
 
@@ -612,12 +627,13 @@ function frame(t) {
     drawScene(0, halfW, new Float32Array(extPos), invRot3, invRot3, tr(0, 0, -7), asp);
 
     // ── Right half: FPS view ──
-    // Update walker position from WASD
+    // Update walker position from WASD (relative to yaw direction)
     const fpsSpd = 2.0;
-    if (fpsKeys.w) fpsTheta += fpsSpd * dt;
-    if (fpsKeys.s) fpsTheta -= fpsSpd * dt;
-    if (fpsKeys.a) fpsPhi += fpsSpd * dt;
-    if (fpsKeys.d) fpsPhi -= fpsSpd * dt;
+    const cY = Math.cos(fpsYaw), sY = Math.sin(fpsYaw);
+    if (fpsKeys.w) { fpsTheta += cY * fpsSpd * dt; fpsPhi -= sY * fpsSpd * dt; }
+    if (fpsKeys.s) { fpsTheta -= cY * fpsSpd * dt; fpsPhi += sY * fpsSpd * dt; }
+    if (fpsKeys.a) { fpsTheta += sY * fpsSpd * dt; fpsPhi += cY * fpsSpd * dt; }
+    if (fpsKeys.d) { fpsTheta -= sY * fpsSpd * dt; fpsPhi -= cY * fpsSpd * dt; }
 
     // Torus parametric position and frame
     const R = 1.0, r = 0.4, h = 0.15;
@@ -648,20 +664,29 @@ function frame(t) {
     // Up = normal (already unit)
     const ux = nx, uy = ny, uz = nz;
 
+    // Apply yaw (rotate forward/right around normal)
+    const cYaw = Math.cos(fpsYaw), sYaw = Math.sin(fpsYaw);
+    const lfx = cYaw*fx + sYaw*rx, lfy = cYaw*fy + sYaw*ry, lfz = cYaw*fz + sYaw*rz;
+    const lrx = -sYaw*fx + cYaw*rx, lry = -sYaw*fy + cYaw*ry, lrz = -sYaw*fz + cYaw*rz;
+    // Apply pitch (rotate forward/up around right)
+    const cPit = Math.cos(fpsPitch), sPit = Math.sin(fpsPitch);
+    const cfx = cPit*lfx + sPit*ux, cfy = cPit*lfy + sPit*uy, cfz = cPit*lfz + sPit*uz;
+    const cux = -sPit*lfx + cPit*ux, cuy = -sPit*lfy + cPit*uy, cuz = -sPit*lfz + cPit*uz;
+
     // Camera mat3 for raymarcher: columns are [right, up, -forward]
     const fpsCamPos = new Float32Array([ex, ey, ez]);
     const fpsCamMat = new Float32Array([
-        rx, ry, rz,
-        ux, uy, uz,
-        -fx, -fy, -fz
+        lrx, lry, lrz,
+        cux, cuy, cuz,
+        -cfx, -cfy, -cfz
     ]);
 
     // FPS view matrix for meshes (world space)
     // Transform local axes through fwdRot, then build R^T * T(-pos)
     const [cwx, cwy, cwz] = xfm(fwdRot, ex, ey, ez);
-    const [rwx, rwy, rwz] = xfm(fwdRot, rx, ry, rz);
-    const [uwx, uwy, uwz] = xfm(fwdRot, ux, uy, uz);
-    const [fwx, fwy, fwz] = xfm(fwdRot, -fx, -fy, -fz);
+    const [rwx, rwy, rwz] = xfm(fwdRot, lrx, lry, lrz);
+    const [uwx, uwy, uwz] = xfm(fwdRot, cux, cuy, cuz);
+    const [fwx, fwy, fwz] = xfm(fwdRot, -cfx, -cfy, -cfz);
     const ftx = -(rwx*cwx + rwy*cwy + rwz*cwz);
     const fty = -(uwx*cwx + uwy*cwy + uwz*cwz);
     const ftz = -(fwx*cwx + fwy*cwy + fwz*cwz);
