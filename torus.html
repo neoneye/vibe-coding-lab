@@ -38,7 +38,7 @@ canvas { display:block }
 <script>
 const canvas = document.getElementById('c'), gl = canvas.getContext('webgl');
 const msgEl = document.getElementById('msg'), scEl = document.getElementById('sc'), nsEl = document.getElementById('ns');
-function resize() { canvas.width = innerWidth; canvas.height = innerHeight; gl.viewport(0, 0, canvas.width, canvas.height); }
+function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
 addEventListener('resize', resize); resize();
 
 // Extensions
@@ -72,6 +72,8 @@ precision highp float;
 varying vec2 vUV;
 uniform float uAsp,uTanFov;
 uniform mat3 uInvRot;
+uniform vec3 uCamPos;
+uniform mat3 uCamMat;
 const int XMC=${MC},XMS=${MS};
 uniform vec4 uCarves[${MC}];
 uniform int uNCrv;
@@ -143,20 +145,19 @@ float scene(vec3 p){
 void main(){
   vec3 rd=normalize(vec3(vUV.x*uAsp*uTanFov,vUV.y*uTanFov,-1.0));
   float rdZ=rd.z;
-  vec3 ro=vec3(0,0,7);
-  vec3 lro=uInvRot*ro, lrd=uInvRot*rd;
+  vec3 lro=uCamPos, lrd=uCamMat*rd;
   float b=dot(lro,lrd), c=dot(lro,lro)-6.25;
   float disc=b*b-c;
-  if(disc<0.0) discard;
+  if(disc<0.0){gl_FragColor=vec4(0.0,0.2,0.4,1.0);return;}
   float sq=sqrt(disc), tN=max(-b-sq,0.0), tF=-b+sq;
-  if(tF<0.0) discard;
+  if(tF<0.0){gl_FragColor=vec4(0.0,0.2,0.4,1.0);return;}
   float t=tN, d=1.0;
   for(int i=0;i<96;i++){
     d=scene(lro+lrd*t);
     if(d<.001||t>tF) break;
     t+=d;
   }
-  if(d>.001) discard;
+  if(d>.001){gl_FragColor=vec4(0.0,0.2,0.4,1.0);return;}
   vec3 p=lro+lrd*t;
   vec2 e=vec2(.001,0);
   vec3 n=normalize(vec3(
@@ -469,10 +470,75 @@ function showMsg(txt, col) {
 
 // ── Render ──
 gl.enable(gl.DEPTH_TEST);
+
+const rmAP = gl.getAttribLocation(rmProg, 'aPos');
+const mAP = gl.getAttribLocation(meshProg, 'aPos');
+const mAN = gl.getAttribLocation(meshProg, 'aNorm');
+
+function drawScene(vx, vw, camPos3, camMat3, invRot3, viewMat, asp) {
+    gl.viewport(vx, 0, vw, canvas.height);
+    gl.scissor(vx, 0, vw, canvas.height);
+
+    const proj = persp(Math.PI / 4, asp, 0.1, 100);
+
+    // ── Pass 1: Raymarched torus (solid CSG) ──
+    gl.useProgram(rmProg);
+    gl.disable(gl.CULL_FACE);
+    gl.depthFunc(gl.LESS);
+
+    gl.uniform1f(rmU('uAsp'), asp);
+    gl.uniform1f(rmU('uTanFov'), Math.tan(Math.PI / 8));
+    gl.uniformMatrix3fv(rmU('uInvRot'), false, invRot3);
+    gl.uniform3fv(rmU('uCamPos'), camPos3);
+    gl.uniformMatrix3fv(rmU('uCamMat'), false, camMat3);
+
+    const cd = new Float32Array(MC * 4);
+    for (let i = 0; i < carves.length; i++) { cd[i*4] = carves[i].lx; cd[i*4+1] = carves[i].ly; cd[i*4+2] = carves[i].lz; cd[i*4+3] = carves[i].shape; }
+    gl.uniform4fv(rmU('uCarves[0]'), cd);
+    gl.uniform1i(rmU('uNCrv'), carves.length);
+
+    const sd = new Float32Array(MS * 4);
+    for (let i = 0; i < stuckCubes.length; i++) { sd[i*4] = stuckCubes[i].lx; sd[i*4+1] = stuckCubes[i].ly; sd[i*4+2] = stuckCubes[i].lz; sd[i*4+3] = stuckCubes[i].shape; }
+    gl.uniform4fv(rmU('uStuck[0]'), sd);
+    gl.uniform1i(rmU('uNStk'), stuckCubes.length);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.enableVertexAttribArray(rmAP);
+    gl.vertexAttribPointer(rmAP, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.disableVertexAttribArray(rmAP);
+
+    // ── Pass 2: Flying cubes (mesh) ──
+    gl.useProgram(meshProg);
+    gl.disable(gl.CULL_FACE);
+    gl.uniformMatrix4fv(mU('uProj'), false, proj);
+
+    for (const c of cubes) {
+        let cm = m4(viewMat, tr(c.x, c.y, c.z));
+        cm = m4(cm, rX(c.spin)); cm = m4(cm, rY(c.spin * 1.3));
+        gl.uniformMatrix4fv(mU('uMV'), false, cm);
+        gl.uniformMatrix3fv(mU('uNMat'), false, nm3(cm));
+        if (c.type === 0) gl.uniform4f(mU('uTint'), 0.9, 0.15, 0.1, 1);
+        else if (c.type === 2) gl.uniform4f(mU('uTint'), 0.2, 0.4, 1.0, 1);
+        else gl.uniform4f(mU('uTint'), c.bouncing ? 0.5 : 0.15, c.bouncing ? 0.9 : 0.8, 0.2, 1);
+
+        const mesh = meshes[c.shape];
+        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.p);
+        gl.enableVertexAttribArray(mAP);
+        gl.vertexAttribPointer(mAP, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.n);
+        gl.enableVertexAttribArray(mAN);
+        gl.vertexAttribPointer(mAN, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.i);
+        gl.drawElements(gl.TRIANGLES, mesh.c, gl.UNSIGNED_SHORT, 0);
+    }
+    gl.disableVertexAttribArray(mAP);
+    gl.disableVertexAttribArray(mAN);
+}
+
 let prev = 0;
 function frame(t) {
     t *= 0.001; const dt = Math.min(t - prev, 0.05); prev = t;
-    const asp = canvas.width / canvas.height;
 
     const tAX = t * 0.7, tAY = t * 1.1;
     const invRot = m4(rY(-tAY), rX(-tAX));
@@ -523,66 +589,45 @@ function frame(t) {
         if (c.z > 12 || c.z < -12 || Math.abs(c.x) > 10 || Math.abs(c.y) > 10) cubes.splice(i, 1);
     }
 
-    // Draw
-    gl.clearColor(0.0, 0.2, 0.4, 1.0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    const proj = persp(Math.PI / 4, asp, 0.1, 100);
+    // Clear full framebuffer
+    gl.enable(gl.SCISSOR_TEST);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.scissor(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0.0, 0.2, 0.4, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    // ── Pass 1: Raymarched torus (solid CSG) ──
-    gl.useProgram(rmProg);
-    gl.disable(gl.CULL_FACE);
-    gl.depthFunc(gl.LESS);
+    const halfW = canvas.width / 2;
+    const asp = halfW / canvas.height;
+    const invRot3 = nm3(invRot);
 
-    gl.uniform1f(rmU('uAsp'), asp);
-    gl.uniform1f(rmU('uTanFov'), Math.tan(Math.PI / 8));
-    gl.uniformMatrix3fv(rmU('uInvRot'), false, nm3(invRot));
+    // ── Left half: Exterior view ──
+    const extPos = xfm(invRot, 0, 0, 7);
+    drawScene(0, halfW, new Float32Array(extPos), invRot3, invRot3, tr(0, 0, -7), asp);
 
-    const cd = new Float32Array(MC * 4);
-    for (let i = 0; i < carves.length; i++) { cd[i*4] = carves[i].lx; cd[i*4+1] = carves[i].ly; cd[i*4+2] = carves[i].lz; cd[i*4+3] = carves[i].shape; }
-    gl.uniform4fv(rmU('uCarves[0]'), cd);
-    gl.uniform1i(rmU('uNCrv'), carves.length);
+    // ── Right half: FPS view ──
+    const theta = t * 0.5;
+    const ct = Math.cos(theta), st = Math.sin(theta);
+    const fpsCamPos = new Float32Array([ct, st, 0.55]);
+    const fpsCamMat = new Float32Array([ct, st, 0, 0, 0, 1, st, -ct, 0]);
 
-    const sd = new Float32Array(MS * 4);
-    for (let i = 0; i < stuckCubes.length; i++) { sd[i*4] = stuckCubes[i].lx; sd[i*4+1] = stuckCubes[i].ly; sd[i*4+2] = stuckCubes[i].lz; sd[i*4+3] = stuckCubes[i].shape; }
-    gl.uniform4fv(rmU('uStuck[0]'), sd);
-    gl.uniform1i(rmU('uNStk'), stuckCubes.length);
+    // FPS view matrix for meshes (world space)
+    const [cwx, cwy, cwz] = xfm(fwdRot, ct, st, 0.55);
+    const [rwx, rwy, rwz] = xfm(fwdRot, ct, st, 0);
+    const [uwx, uwy, uwz] = xfm(fwdRot, 0, 0, 1);
+    const [fwx, fwy, fwz] = xfm(fwdRot, st, -ct, 0);
+    const ftx = -(rwx*cwx + rwy*cwy + rwz*cwz);
+    const fty = -(uwx*cwx + uwy*cwy + uwz*cwz);
+    const ftz = -(fwx*cwx + fwy*cwy + fwz*cwz);
+    const fpsView = new Float32Array([
+        rwx, uwx, fwx, 0,
+        rwy, uwy, fwy, 0,
+        rwz, uwz, fwz, 0,
+        ftx, fty, ftz, 1
+    ]);
 
-    const rmAP = gl.getAttribLocation(rmProg, 'aPos');
-    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-    gl.enableVertexAttribArray(rmAP);
-    gl.vertexAttribPointer(rmAP, 2, gl.FLOAT, false, 0, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    gl.disableVertexAttribArray(rmAP);
+    drawScene(halfW, halfW, fpsCamPos, fpsCamMat, invRot3, fpsView, asp);
 
-    // ── Pass 2: Flying cubes (mesh) ──
-    gl.useProgram(meshProg);
-    gl.disable(gl.CULL_FACE);
-    gl.uniformMatrix4fv(mU('uProj'), false, proj);
-
-    const mAP = gl.getAttribLocation(meshProg, 'aPos');
-    const mAN = gl.getAttribLocation(meshProg, 'aNorm');
-
-    for (const c of cubes) {
-        let cm = tr(0, 0, -7); cm = m4(cm, tr(c.x, c.y, c.z));
-        cm = m4(cm, rX(c.spin)); cm = m4(cm, rY(c.spin * 1.3));
-        gl.uniformMatrix4fv(mU('uMV'), false, cm);
-        gl.uniformMatrix3fv(mU('uNMat'), false, nm3(cm));
-        if (c.type === 0) gl.uniform4f(mU('uTint'), 0.9, 0.15, 0.1, 1);
-        else if (c.type === 2) gl.uniform4f(mU('uTint'), 0.2, 0.4, 1.0, 1);
-        else gl.uniform4f(mU('uTint'), c.bouncing ? 0.5 : 0.15, c.bouncing ? 0.9 : 0.8, 0.2, 1);
-
-        const mesh = meshes[c.shape];
-        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.p);
-        gl.enableVertexAttribArray(mAP);
-        gl.vertexAttribPointer(mAP, 3, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.n);
-        gl.enableVertexAttribArray(mAN);
-        gl.vertexAttribPointer(mAN, 3, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.i);
-        gl.drawElements(gl.TRIANGLES, mesh.c, gl.UNSIGNED_SHORT, 0);
-    }
-    gl.disableVertexAttribArray(mAP);
-    gl.disableVertexAttribArray(mAN);
-
+    gl.disable(gl.SCISSOR_TEST);
     requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
