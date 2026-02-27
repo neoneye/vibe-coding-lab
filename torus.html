@@ -86,18 +86,19 @@ function xfm(m, x, y, z) { return [m[0]*x + m[4]*y + m[8]*z, m[1]*x + m[5]*y + m
 
 // Game
 const TR = 1.0, Tr = 0.4, CUBE_H = 0.125, CSPD = 6;
-let score = 0;
-const cubes = [];
+let score = 0, nextType = 0;
+const cubes = [], stuckCubes = [];
 
 function fire() {
     if (cubes.length > 50) return;
+    const type = nextType; nextType = 1 - nextType; // 0=red(sticky), 1=green(bouncy)
     cubes.push({
         x: 0, y: 0, z: 6,
         vx: (Math.random() - 0.5) * 0.5,
         vy: (Math.random() - 0.5) * 0.5,
         vz: -CSPD,
         bouncing: false, passed: false, throughHole: false,
-        spin: Math.random() * 6.28
+        type, spin: Math.random() * 6.28
     });
 }
 addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); fire(); } });
@@ -155,19 +156,24 @@ function frame(t) {
 
             // Hit check: cube surface touches torus surface
             if (sdf < CUBE_H) {
+                if (c.type === 0) {
+                    // Red: stick to torus surface
+                    stuckCubes.push({ lx, ly, lz, spin: c.spin });
+                    if (stuckCubes.length > 200) stuckCubes.shift();
+                    cubes.splice(i, 1);
+                    showMsg('STUCK!', '#ff6644');
+                    continue;
+                }
+                // Green: bounce off
                 c.bouncing = true;
-                // Compute bounce via SDF gradient (surface normal)
                 const [nx, ny, nz] = sdfNormal(lx, ly, lz);
-                // Transform normal to world space
                 const [wnx, wny, wnz] = xfm(fwdRot, nx, ny, nz);
-                // Reflect velocity and dampen
                 const dot = c.vx * wnx + c.vy * wny + c.vz * wnz;
                 c.vx = (c.vx - 2 * dot * wnx) * 0.5;
                 c.vy = (c.vy - 2 * dot * wny) * 0.5;
                 c.vz = (c.vz - 2 * dot * wnz) * 0.5;
-                // Push out of surface
                 c.x += wnx * 0.2; c.y += wny * 0.2; c.z += wnz * 0.2;
-                showMsg('BONK!', '#ff4444');
+                showMsg('BONK!', '#66ff44');
             }
         }
 
@@ -192,13 +198,25 @@ function frame(t) {
     gl.uniform4f(U('uTint'), 0, 0, 0, 0);
     drawMesh(torusMesh);
 
-    // Cubes
+    // Stuck cubes (rotate with torus)
+    for (const sc of stuckCubes) {
+        let cm = tr(0, 0, -7); cm = m4(cm, rX(tAX)); cm = m4(cm, rY(tAY));
+        cm = m4(cm, tr(sc.lx, sc.ly, sc.lz));
+        cm = m4(cm, rX(sc.spin)); cm = m4(cm, rY(sc.spin * 0.7));
+        gl.uniformMatrix4fv(U('uMV'), false, cm);
+        gl.uniformMatrix3fv(U('uNMat'), false, nm3(cm));
+        gl.uniform4f(U('uTint'), 0.9, 0.15, 0.1, 1);
+        drawMesh(cubeMesh);
+    }
+
+    // Flying cubes
     for (const c of cubes) {
         let cm = tr(0, 0, -7); cm = m4(cm, tr(c.x, c.y, c.z));
         cm = m4(cm, rX(c.spin)); cm = m4(cm, rY(c.spin * 1.3));
         gl.uniformMatrix4fv(U('uMV'), false, cm);
         gl.uniformMatrix3fv(U('uNMat'), false, nm3(cm));
-        gl.uniform4f(U('uTint'), c.bouncing ? 0.9 : 0.2, c.bouncing ? 0.25 : 0.5, c.bouncing ? 0.1 : 1, 1);
+        if (c.type === 0) gl.uniform4f(U('uTint'), 0.9, 0.15, 0.1, 1);
+        else gl.uniform4f(U('uTint'), c.bouncing ? 0.5 : 0.15, c.bouncing ? 0.9 : 0.8, 0.2, 1);
         drawMesh(cubeMesh);
     }
 
