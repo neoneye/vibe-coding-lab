@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Microphone FFT Visualizer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #111;
+    color: #eee;
+    font-family: system-ui, -apple-system, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 12px; font-weight: 400; }
+  #startBtn {
+    background: #2a6;
+    color: #fff;
+    border: none;
+    padding: 12px 32px;
+    font-size: 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 16px;
+    transition: background 0.2s;
+  }
+  #startBtn:hover { background: #3b7; }
+  #startBtn:disabled { background: #555; cursor: default; }
+  canvas {
+    border: 1px solid #333;
+    border-radius: 4px;
+    display: block;
+  }
+  #info {
+    margin-top: 8px;
+    font-size: 0.85rem;
+    color: #888;
+  }
+  #labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 4px;
+  }
+  #transcript-box {
+    width: 100%;
+    max-width: 1200px;
+    margin-top: 16px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 12px 16px;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+  #transcript-box h2 {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #888;
+    margin-bottom: 8px;
+  }
+  .transcript-entry {
+    margin-bottom: 6px;
+    line-height: 1.4;
+    font-size: 0.9rem;
+  }
+  .transcript-entry .time {
+    color: #666;
+    font-size: 0.8rem;
+    margin-right: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  .transcript-entry.final { color: #ddd; }
+  .transcript-entry.interim { color: #7af; font-style: italic; }
+  .no-support { color: #f66; font-size: 0.9rem; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<h1>Microphone FFT — Last 10 Seconds</h1>
+<button id="startBtn">Start Microphone</button>
+<canvas id="canvas"></canvas>
+<div id="labels"></div>
+<div id="info"></div>
+<div id="transcript-box">
+  <h2>Transcript</h2>
+  <div id="transcript"></div>
+</div>
+
+<script>
+const HISTORY_SECONDS = 10;
+const FFT_SIZE = 2048;
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const infoEl = document.getElementById('info');
+const labelsEl = document.getElementById('labels');
+
+// Responsive canvas sizing
+function sizeCanvas() {
+  const w = Math.min(window.innerWidth - 40, 1200);
+  const h = Math.round(w * 0.35);
+  canvas.width = w;
+  canvas.height = h;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+}
+sizeCanvas();
+window.addEventListener('resize', sizeCanvas);
+
+let audioCtx, analyser, dataArray, stream;
+let columns = [];       // each entry is a Uint8Array snapshot of frequency data
+let lastColumnTime = 0;
+let running = false;
+
+startBtn.addEventListener('click', async () => {
+  if (running) return;
+  startBtn.disabled = true;
+  startBtn.textContent = 'Listening...';
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioCtx = new AudioContext();
+    const source = audioCtx.createMediaStreamSource(stream);
+
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = FFT_SIZE;
+    analyser.smoothingTimeConstant = 0.3;
+    analyser.minDecibels = -90;
+    analyser.maxDecibels = -10;
+    source.connect(analyser);
+
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
+    running = true;
+
+    const nyquist = audioCtx.sampleRate / 2;
+    infoEl.textContent = `Sample rate: ${audioCtx.sampleRate} Hz | FFT bins: ${analyser.frequencyBinCount} | Range: 0–${nyquist} Hz`;
+    labelsEl.innerHTML = `<span>-${HISTORY_SECONDS}s</span><span>-${HISTORY_SECONDS/2}s</span><span>now</span>`;
+
+    startSpeechRecognition();
+    requestAnimationFrame(draw);
+  } catch (e) {
+    startBtn.disabled = false;
+    startBtn.textContent = 'Start Microphone';
+    alert('Microphone access denied or unavailable.\n' + e.message);
+  }
+});
+
+// --- Speech Recognition ---
+const transcriptEl = document.getElementById('transcript');
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition;
+let interimEl = null;
+let startTime;
+
+function formatTime(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+}
+
+function startSpeechRecognition() {
+  if (!SpeechRecognition) {
+    transcriptEl.innerHTML = '<div class="no-support">Speech recognition not supported in this browser. Use Chrome or Edge.</div>';
+    return;
+  }
+
+  startTime = Date.now();
+  recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  recognition.onresult = (event) => {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      const text = result[0].transcript.trim();
+      if (!text) continue;
+
+      const elapsed = formatTime(Date.now() - startTime);
+
+      if (result.isFinal) {
+        // Remove interim element if present
+        if (interimEl) { interimEl.remove(); interimEl = null; }
+        const div = document.createElement('div');
+        div.className = 'transcript-entry final';
+        div.innerHTML = `<span class="time">${elapsed}</span>${escapeHTML(text)}`;
+        transcriptEl.appendChild(div);
+        transcriptEl.parentElement.scrollTop = transcriptEl.parentElement.scrollHeight;
+      } else {
+        // Update or create interim element
+        if (!interimEl) {
+          interimEl = document.createElement('div');
+          interimEl.className = 'transcript-entry interim';
+          transcriptEl.appendChild(interimEl);
+        }
+        interimEl.innerHTML = `<span class="time">${elapsed}</span>${escapeHTML(text)}...`;
+        transcriptEl.parentElement.scrollTop = transcriptEl.parentElement.scrollHeight;
+      }
+    }
+  };
+
+  recognition.onerror = (event) => {
+    if (event.error === 'no-speech') return; // normal, just restart
+    console.warn('Speech recognition error:', event.error);
+  };
+
+  // Auto-restart when it stops (browser stops after silence)
+  recognition.onend = () => {
+    if (running) {
+      try { recognition.start(); } catch (e) { /* already started */ }
+    }
+  };
+
+  recognition.start();
+}
+
+function escapeHTML(str) {
+  const el = document.createElement('span');
+  el.textContent = str;
+  return el.innerHTML;
+}
+
+// Map intensity 0–255 to a color
+function intensityColor(v) {
+  // black → blue → cyan → green → yellow → red → white
+  if (v < 43)  return `rgb(0, 0, ${Math.round(v * 5.9)})`;
+  if (v < 86)  { const t = (v - 43) / 43; return `rgb(0, ${Math.round(t * 255)}, 255)`; }
+  if (v < 128) { const t = (v - 86) / 42; return `rgb(0, 255, ${Math.round(255 * (1 - t))})`; }
+  if (v < 170) { const t = (v - 128) / 42; return `rgb(${Math.round(t * 255)}, 255, 0)`; }
+  if (v < 213) { const t = (v - 170) / 43; return `rgb(255, ${Math.round(255 * (1 - t))}, 0)`; }
+  { const t = (v - 213) / 42; return `rgb(255, ${Math.round(t * 255)}, ${Math.round(t * 255)})`; }
+}
+
+// Pre-build a 256-entry color lookup for speed
+const colorLUT = new Array(256);
+for (let i = 0; i < 256; i++) colorLUT[i] = intensityColor(i);
+
+function draw() {
+  if (!running) return;
+  requestAnimationFrame(draw);
+
+  const w = canvas.width;
+  const h = canvas.height;
+  const now = performance.now();
+
+  // Target: one column per pixel, covering HISTORY_SECONDS
+  const msPerColumn = (HISTORY_SECONDS * 1000) / w;
+
+  if (now - lastColumnTime >= msPerColumn) {
+    analyser.getByteFrequencyData(dataArray);
+    // Store a copy of the frequency data
+    columns.push(new Uint8Array(dataArray));
+    lastColumnTime = now;
+
+    // Trim to max columns
+    while (columns.length > w) columns.shift();
+  }
+
+  // Draw spectrogram
+  const numBins = dataArray.length;
+  // Only show up to ~8 kHz for a more useful view
+  const maxFreq = 8000;
+  const nyquist = audioCtx.sampleRate / 2;
+  const usableBins = Math.min(numBins, Math.ceil((maxFreq / nyquist) * numBins));
+  const binHeight = h / usableBins;
+
+  // Clear
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+
+  // Draw columns right-aligned (newest on the right)
+  const startX = w - columns.length;
+  for (let x = 0; x < columns.length; x++) {
+    const col = columns[x];
+    for (let bin = 0; bin < usableBins; bin++) {
+      const val = col[bin];
+      if (val === 0) continue; // skip black — already cleared
+      const y = h - (bin + 1) * binHeight;
+      ctx.fillStyle = colorLUT[val];
+      ctx.fillRect(startX + x, y, 1, Math.ceil(binHeight));
+    }
+  }
+
+  // Draw frequency scale on the right edge
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(w - 52, 0, 52, h);
+  ctx.font = '11px system-ui';
+  ctx.fillStyle = '#999';
+  ctx.textAlign = 'right';
+  const freqStep = 1000;
+  for (let f = 0; f <= maxFreq; f += freqStep) {
+    const y = h - (f / maxFreq) * h;
+    ctx.fillText(f >= 1000 ? (f / 1000) + ' kHz' : f + ' Hz', w - 6, y + 4);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w - 54, y);
+    ctx.stroke();
+  }
+
+  // Playhead line
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.beginPath();
+  ctx.moveTo(w - 1, 0);
+  ctx.lineTo(w - 1, h);
+  ctx.stroke();
+}
+</script>
+</body>
+</html>
