@@ -149,7 +149,9 @@ float shapeSDF(vec3 p,float type,float sz){
   if(type<4.5) return sdTetrahedron(p,sz);
   if(type<5.5) return min(sdTetrahedron(p,sz),sdTetrahedron(-p,sz));
   if(type<6.5) return min(min(sdBox(p,vec3(sz,sz*.35,sz*.35)),sdBox(p,vec3(sz*.35,sz,sz*.35))),sdBox(p,vec3(sz*.35,sz*.35,sz)));
-  return max(-sdIcosahedron(p,sz*.55),sdSphere(p,sz));
+  if(type<7.5) return max(-sdIcosahedron(p,sz*.55),sdSphere(p,sz));
+  if(type<8.5) return max(sdDodecahedron(p,sz*.9),sdIcosahedron(p,sz*.8));
+  return sdIcosahedron(p,sz*.7);
 }
 float scene(vec3 p){
   float d=sdTorus(p);
@@ -429,6 +431,89 @@ function makeGreatIcosa(size) {
     return { p: buf(new Float32Array(p), gl.ARRAY_BUFFER), n: buf(new Float32Array(n), gl.ARRAY_BUFFER),
         i: buf(new Uint16Array(idx), gl.ELEMENT_ARRAY_BUFFER), c: idx.length };
 }
+function makeIcosidodecahedron(size) {
+    const phi = (1+Math.sqrt(5))/2, s = size * 0.9;
+    const icoRaw = [];
+    for (let s1=-1;s1<=1;s1+=2) for (let s2=-1;s2<=1;s2+=2) {
+        icoRaw.push([0,s1,s2*phi]); icoRaw.push([s1,s2*phi,0]); icoRaw.push([s2*phi,0,s1]);
+    }
+    const icoV = icoRaw.map(v=>{const l=Math.sqrt(v[0]**2+v[1]**2+v[2]**2);return v.map(c=>c/l);});
+    const dist2=(a,b)=>(a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2;
+    let minD=Infinity;
+    for(let i=0;i<12;i++) for(let j=i+1;j<12;j++) minD=Math.min(minD,dist2(icoV[i],icoV[j]));
+    const thresh=minD*1.5, edges=[], edgeMap={};
+    for(let i=0;i<12;i++) for(let j=i+1;j<12;j++) if(dist2(icoV[i],icoV[j])<thresh){
+        edgeMap[i+','+j]=edges.length; edges.push([i,j]);
+    }
+    const V=edges.map(([a,b])=>[(icoV[a][0]+icoV[b][0])/2*s,(icoV[a][1]+icoV[b][1])/2*s,(icoV[a][2]+icoV[b][2])/2*s]);
+    const icoFaces=[];
+    for(let i=0;i<12;i++) for(let j=i+1;j<12;j++) for(let k=j+1;k<12;k++)
+        if(dist2(icoV[i],icoV[j])<thresh&&dist2(icoV[j],icoV[k])<thresh&&dist2(icoV[i],icoV[k])<thresh)
+            icoFaces.push([i,j,k]);
+    const p=[],n=[],idx=[];
+    function addTri(va,vb,vc){
+        const e1=[vb[0]-va[0],vb[1]-va[1],vb[2]-va[2]],e2=[vc[0]-va[0],vc[1]-va[1],vc[2]-va[2]];
+        let nx=e1[1]*e2[2]-e1[2]*e2[1],ny=e1[2]*e2[0]-e1[0]*e2[2],nz=e1[0]*e2[1]-e1[1]*e2[0];
+        const len=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;nx/=len;ny/=len;nz/=len;
+        const cx=(va[0]+vb[0]+vc[0])/3,cy=(va[1]+vb[1]+vc[1])/3,cz=(va[2]+vb[2]+vc[2])/3;
+        const base=p.length/3;
+        if(nx*cx+ny*cy+nz*cz>=0){p.push(...va,...vb,...vc);n.push(nx,ny,nz,nx,ny,nz,nx,ny,nz);}
+        else{p.push(...va,...vc,...vb);n.push(-nx,-ny,-nz,-nx,-ny,-nz,-nx,-ny,-nz);}
+        idx.push(base,base+1,base+2);
+    }
+    icoFaces.forEach(([i,j,k])=>{
+        const ge=(a,b)=>edgeMap[Math.min(a,b)+','+Math.max(a,b)];
+        addTri(V[ge(i,j)],V[ge(j,k)],V[ge(i,k)]);
+    });
+    for(let v=0;v<12;v++){
+        const ring=[];
+        edges.forEach(([a,b],ei)=>{if(a===v||b===v)ring.push(ei);});
+        const vn=icoV[v];
+        const proj=ring.map(ei=>{const mp=V[ei],d=mp[0]*vn[0]+mp[1]*vn[1]+mp[2]*vn[2];
+            return[mp[0]-d*vn[0],mp[1]-d*vn[1],mp[2]-d*vn[2]];});
+        const ul=Math.sqrt(proj[0][0]**2+proj[0][1]**2+proj[0][2]**2)||1;
+        const u=[proj[0][0]/ul,proj[0][1]/ul,proj[0][2]/ul];
+        const w=[vn[1]*u[2]-vn[2]*u[1],vn[2]*u[0]-vn[0]*u[2],vn[0]*u[1]-vn[1]*u[0]];
+        const order=ring.map((ei,i)=>({ei,ang:Math.atan2(
+            proj[i][0]*w[0]+proj[i][1]*w[1]+proj[i][2]*w[2],
+            proj[i][0]*u[0]+proj[i][1]*u[1]+proj[i][2]*u[2])}));
+        order.sort((a,b)=>a.ang-b.ang);
+        const sorted=order.map(o=>o.ei);
+        for(let i=1;i<sorted.length-1;i++) addTri(V[sorted[0]],V[sorted[i]],V[sorted[i+1]]);
+    }
+    const buf=(d,t)=>{const b=gl.createBuffer();gl.bindBuffer(t,b);gl.bufferData(t,d,gl.STATIC_DRAW);return b;};
+    return{p:buf(new Float32Array(p),gl.ARRAY_BUFFER),n:buf(new Float32Array(n),gl.ARRAY_BUFFER),
+        i:buf(new Uint16Array(idx),gl.ELEMENT_ARRAY_BUFFER),c:idx.length};
+}
+function makeSmallStellatedDodeca(size) {
+    const phi=(1+Math.sqrt(5))/2, ip=1/phi, s=size*0.35;
+    const dodV=[[1,1,1],[1,1,-1],[1,-1,1],[1,-1,-1],[-1,1,1],[-1,1,-1],[-1,-1,1],[-1,-1,-1],
+        [0,ip,phi],[0,ip,-phi],[0,-ip,phi],[0,-ip,-phi],[ip,phi,0],[ip,-phi,0],[-ip,phi,0],[-ip,-phi,0],
+        [phi,0,ip],[phi,0,-ip],[-phi,0,ip],[-phi,0,-ip]].map(v=>v.map(c=>c*s));
+    const F=[[0,8,10,2,16],[0,16,17,1,12],[0,12,14,4,8],[1,17,3,11,9],[1,9,5,14,12],[2,10,6,15,13],
+        [2,13,3,17,16],[3,13,15,7,11],[4,14,5,19,18],[4,18,6,10,8],[5,9,11,7,19],[6,18,19,7,15]];
+    const p=[],n=[],idx=[];
+    F.forEach(f=>{
+        let cx=0,cy=0,cz=0;
+        for(let k=0;k<5;k++){cx+=dodV[f[k]][0];cy+=dodV[f[k]][1];cz+=dodV[f[k]][2];}
+        cx/=5;cy/=5;cz/=5;
+        const tip=[cx*phi,cy*phi,cz*phi];
+        for(let k=0;k<5;k++){
+            const a=tip,b=dodV[f[k]],c=dodV[f[(k+1)%5]];
+            const e1=[b[0]-a[0],b[1]-a[1],b[2]-a[2]],e2=[c[0]-a[0],c[1]-a[1],c[2]-a[2]];
+            let nx=e1[1]*e2[2]-e1[2]*e2[1],ny=e1[2]*e2[0]-e1[0]*e2[2],nz=e1[0]*e2[1]-e1[1]*e2[0];
+            const len=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;nx/=len;ny/=len;nz/=len;
+            const fcx=(a[0]+b[0]+c[0])/3,fcy=(a[1]+b[1]+c[1])/3,fcz=(a[2]+b[2]+c[2])/3;
+            const base=p.length/3;
+            if(nx*fcx+ny*fcy+nz*fcz>=0){p.push(...a,...b,...c);n.push(nx,ny,nz,nx,ny,nz,nx,ny,nz);}
+            else{p.push(...a,...c,...b);n.push(-nx,-ny,-nz,-nx,-ny,-nz,-nx,-ny,-nz);}
+            idx.push(base,base+1,base+2);
+        }
+    });
+    const buf=(d,t)=>{const b=gl.createBuffer();gl.bindBuffer(t,b);gl.bufferData(t,d,gl.STATIC_DRAW);return b;};
+    return{p:buf(new Float32Array(p),gl.ARRAY_BUFFER),n:buf(new Float32Array(n),gl.ARRAY_BUFFER),
+        i:buf(new Uint16Array(idx),gl.ELEMENT_ARRAY_BUFFER),c:idx.length};
+}
 function makePacman(radius, stacks, slices, mouthHalf) {
     const p = [], n = [], idx = [];
     const cosM = Math.cos(mouthHalf);
@@ -501,7 +586,7 @@ function makePacman(radius, stacks, slices, mouthHalf) {
         i: buf(new Uint16Array(idx), gl.ELEMENT_ARRAY_BUFFER), c: idx.length };
 }
 // 0=Cube, 1=Cylinder, 2=Dodecahedron, 3=Sphere, 4=Tetrahedron, 5=StellatedOcta, 6=Cross, 7=GreatIcosa
-const meshes = [makeCube(0.25), makeCylinder(0.1, 0.125, 16), makeDodecahedron(0.25), makeSphere(0.125, 12, 16), makeTetrahedron(0.25), makeStellatedOcta(0.25), makeCross(0.25), makeGreatIcosa(0.25)];
+const meshes = [makeCube(0.25), makeCylinder(0.1, 0.125, 16), makeDodecahedron(0.25), makeSphere(0.125, 12, 16), makeTetrahedron(0.25), makeStellatedOcta(0.25), makeCross(0.25), makeGreatIcosa(0.25), makeIcosidodecahedron(0.25), makeSmallStellatedDodeca(0.25)];
 const pacmanMesh = makePacman(0.2, 16, 24, Math.PI / 6);
 const pacEyeMesh = makeSphere(0.035, 8, 10);
 function makeMouthStrip(pacRadius, segments, halfWidth, curveAmount) {
@@ -544,7 +629,7 @@ function xfm(m, x, y, z) { return [m[0]*x + m[4]*y + m[8]*z, m[1]*x + m[5]*y + m
 // ── Game ──
 const TR = 1.0, Tr = 0.4, CUBE_H = 0.125, CSPD = 6;
 let score = 0, nextType = 0, nextShape = 0, fireMode = -1;
-const SHAPES = ['Cube','Cylinder','Dodeca','Sphere','Tetra','Stella','Cross','Gt.Icosa'];
+const SHAPES = ['Cube','Cylinder','Dodeca','Sphere','Tetra','Stella','Cross','Gt.Icosa','IcoDodeca','StarDodeca'];
 const cubes = [], stuckCubes = [], carves = [];
 
 // FPS walker state
@@ -557,7 +642,7 @@ function fire() {
     if (cubes.length > 50) return;
     const type = fireMode >= 0 ? fireMode : nextType;
     if (fireMode < 0) nextType = (nextType + 1) % 3;
-    const shape = nextShape; nextShape = (nextShape + 1) % 8;
+    const shape = nextShape; nextShape = (nextShape + 1) % 10;
     nsEl.textContent = SHAPES[nextShape];
     cubes.push({
         x: 0, y: 0, z: 6,
