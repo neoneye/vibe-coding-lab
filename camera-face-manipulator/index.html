@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Face Manipulator</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #111;
+            color: #ddd;
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 16px;
+        }
+        h1 { font-size: 1.4rem; margin-bottom: 8px; }
+        #status {
+            color: #fa0;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+        }
+        .wrap {
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        canvas {
+            border: 2px solid #333;
+            border-radius: 8px;
+            max-width: 100%;
+            height: auto;
+        }
+        .panel {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 16px;
+            min-width: 180px;
+        }
+        .panel h3 {
+            font-size: 0.95rem;
+            margin: 14px 0 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #333;
+        }
+        .panel h3:first-child { margin-top: 0; }
+        .panel h3.eyes { color: #8f8; }
+        .panel h3.mouth { color: #f88; }
+        .panel label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 0;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .hint {
+            color: #666;
+            font-size: 0.8rem;
+            margin-top: 14px;
+            border-top: 1px solid #333;
+            padding-top: 10px;
+            line-height: 1.4;
+        }
+        kbd {
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 1px 5px;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>Camera Face Manipulator</h1>
+    <div id="status">Loading face detection model...</div>
+    <div class="wrap">
+        <canvas id="canvas" width="640" height="480"></canvas>
+        <div class="panel">
+            <h3 class="eyes">Eyes</h3>
+            <label><input type="checkbox" id="eyeSwap" checked> Swap Left / Right</label>
+            <label><input type="checkbox" id="eyeFlipX" checked> Flip X (mirror)</label>
+            <label><input type="checkbox" id="eyeFlipY"> Flip Y</label>
+            <h3 class="mouth">Mouth</h3>
+            <label><input type="checkbox" id="mouthFlipX" checked> Flip X (mirror)</label>
+            <label><input type="checkbox" id="mouthFlipY"> Flip Y</label>
+            <div class="hint">
+                Hold <kbd>Space</kbd> to hide overlay
+            </div>
+        </div>
+    </div>
+    <video id="video" autoplay playsinline hidden></video>
+
+    <script type="module">
+    // MediaPipe face landmark indices
+    const L_EYE = [33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246];
+    const R_EYE = [362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398];
+    const LIPS  = [61,146,91,181,84,17,314,405,321,375,291,308,324,318,402,317,
+                   14,87,178,88,95,78,191,80,81,82,13,312,311,310,415];
+    const NOSE  = [1,2,98,327,168];
+
+    const video    = document.getElementById('video');
+    const canvas   = document.getElementById('canvas');
+    const ctx      = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+
+    let spaceHeld = false;
+
+    // Reusable temp canvases
+    const tmpA = document.createElement('canvas');
+    const tmpACtx = tmpA.getContext('2d');
+    const tmpB = document.createElement('canvas');
+    const tmpBCtx = tmpB.getContext('2d');
+    const tmpC = document.createElement('canvas');
+    const tmpCCtx = tmpC.getContext('2d');
+
+    // ---- Helpers ----
+
+    function bbox(lm, idx, W, H, pad) {
+        let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+        for (const i of idx) {
+            const px = lm[i].x * W, py = lm[i].y * H;
+            if (px < x1) x1 = px;
+            if (py < y1) y1 = py;
+            if (px > x2) x2 = px;
+            if (py > y2) y2 = py;
+        }
+        const x = Math.max(0, Math.floor(x1 - pad));
+        const y = Math.max(0, Math.floor(y1 - pad));
+        const w = Math.min(W - x, Math.ceil(x2 - x1 + pad * 2));
+        const h = Math.min(H - y, Math.ceil(y2 - y1 + pad * 2));
+        return { x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
+    }
+
+    function copyRegion(tc, tctx, src, b) {
+        tc.width  = b.w;
+        tc.height = b.h;
+        tctx.drawImage(src, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
+    }
+
+    function pasteRegion(dctx, src, b, fx, fy) {
+        dctx.save();
+        dctx.beginPath();
+        dctx.ellipse(b.cx, b.cy, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+        dctx.clip();
+        dctx.translate(b.cx, b.cy);
+        dctx.scale(fx ? -1 : 1, fy ? -1 : 1);
+        dctx.drawImage(src, -b.w / 2, -b.h / 2, b.w, b.h);
+        dctx.restore();
+    }
+
+    function drawOverlay(lm, W, H) {
+        ctx.lineWidth = 2;
+
+        // Eyes
+        ctx.strokeStyle = 'rgba(0,255,120,0.5)';
+        for (const idx of [L_EYE, R_EYE]) {
+            const b = bbox(lm, idx, W, H, 8);
+            ctx.beginPath();
+            ctx.ellipse(b.cx, b.cy, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        // Nose
+        ctx.strokeStyle = 'rgba(100,180,255,0.4)';
+        const nb = bbox(lm, NOSE, W, H, 5);
+        ctx.beginPath();
+        ctx.ellipse(nb.cx, nb.cy, nb.w / 2, nb.h / 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Mouth
+        ctx.strokeStyle = 'rgba(255,100,100,0.5)';
+        const mb = bbox(lm, LIPS, W, H, 5);
+        ctx.beginPath();
+        ctx.ellipse(mb.cx, mb.cy, mb.w / 2, mb.h / 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Labels
+        ctx.font = '11px system-ui';
+        ctx.fillStyle = 'rgba(0,255,120,0.6)';
+        const lb = bbox(lm, L_EYE, W, H, 8);
+        const rb = bbox(lm, R_EYE, W, H, 8);
+        ctx.fillText('L', lb.cx - 4, lb.y - 4);
+        ctx.fillText('R', rb.cx - 4, rb.y - 4);
+        ctx.fillStyle = 'rgba(100,180,255,0.5)';
+        ctx.fillText('nose', nb.cx - 12, nb.y - 4);
+        ctx.fillStyle = 'rgba(255,100,100,0.6)';
+        ctx.fillText('mouth', mb.cx - 14, mb.y - 4);
+    }
+
+    // ---- Init ----
+
+    try {
+        const { FaceLandmarker, FilesetResolver } = await import(
+            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+        );
+
+        const resolver = await FilesetResolver.forVisionTasks(
+            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+        );
+
+        const faceLandmarker = await FaceLandmarker.createFromOptions(resolver, {
+            baseOptions: {
+                modelAssetPath:
+                    "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                delegate: "GPU"
+            },
+            runningMode: "VIDEO",
+            numFaces: 1
+        });
+
+        statusEl.textContent = "Starting camera...";
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" }
+        });
+        video.srcObject = stream;
+        await video.play();
+
+        canvas.width  = video.videoWidth;
+        canvas.height = video.videoHeight;
+        statusEl.style.display = 'none';
+
+        // ---- Render loop ----
+
+        let lastT = -1;
+
+        function loop() {
+            if (video.currentTime !== lastT) {
+                lastT = video.currentTime;
+                const W = canvas.width, H = canvas.height;
+
+                // Draw mirrored video
+                ctx.save();
+                ctx.translate(W, 0);
+                ctx.scale(-1, 1);
+                ctx.drawImage(video, 0, 0, W, H);
+                ctx.restore();
+
+                // Detect face
+                const res = faceLandmarker.detectForVideo(video, performance.now());
+                if (res.faceLandmarks?.length > 0) {
+                    // Mirror landmarks to match the mirrored canvas
+                    const lm = res.faceLandmarks[0].map(p => ({
+                        x: 1 - p.x,
+                        y: p.y,
+                        z: p.z
+                    }));
+
+                    // Read settings
+                    const eSwap = document.getElementById('eyeSwap').checked;
+                    const eFX   = document.getElementById('eyeFlipX').checked;
+                    const eFY   = document.getElementById('eyeFlipY').checked;
+                    const mFX   = document.getElementById('mouthFlipX').checked;
+                    const mFY   = document.getElementById('mouthFlipY').checked;
+
+                    const ePad = 18;
+
+                    // ---- Eyes ----
+                    if (eSwap || eFX || eFY) {
+                        const lb = bbox(lm, L_EYE, W, H, ePad);
+                        const rb = bbox(lm, R_EYE, W, H, ePad);
+
+                        copyRegion(tmpA, tmpACtx, canvas, lb);
+                        copyRegion(tmpB, tmpBCtx, canvas, rb);
+
+                        if (eSwap) {
+                            // Right eye content → left position, left → right
+                            pasteRegion(ctx, tmpB, lb, eFX, eFY);
+                            pasteRegion(ctx, tmpA, rb, eFX, eFY);
+                        } else {
+                            pasteRegion(ctx, tmpA, lb, eFX, eFY);
+                            pasteRegion(ctx, tmpB, rb, eFX, eFY);
+                        }
+                    }
+
+                    // ---- Mouth ----
+                    if (mFX || mFY) {
+                        const mb = bbox(lm, LIPS, W, H, 12);
+                        copyRegion(tmpC, tmpCCtx, canvas, mb);
+                        pasteRegion(ctx, tmpC, mb, mFX, mFY);
+                    }
+
+                    // ---- Overlay ----
+                    if (!spaceHeld) {
+                        drawOverlay(lm, W, H);
+                    }
+                }
+            }
+            requestAnimationFrame(loop);
+        }
+
+        requestAnimationFrame(loop);
+
+    } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+        console.error(err);
+    }
+
+    // ---- Keyboard ----
+
+    document.addEventListener('keydown', e => {
+        if (e.code === 'Space') { e.preventDefault(); spaceHeld = true; }
+    });
+    document.addEventListener('keyup', e => {
+        if (e.code === 'Space') spaceHeld = false;
+    });
+    </script>
+</body>
+</html>
