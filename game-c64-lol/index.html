@@ -79,11 +79,37 @@ const ACRONYMS = [
 const BASKET_START_W = 110;
 const BASKET_MIN_W = 40;
 const BASKET_SHRINK = 2;
-const BASKETS = [
-  { x: 20,  w: BASKET_START_W, cat: 'laugh', label: 'LAUGH', color: C64.green },
-  { x: 185, w: BASKET_START_W, cat: 'other', label: 'OTHER', color: C64.lightBlue },
-  { x: 350, w: BASKET_START_W, cat: 'rude',  label: 'RUDE',  color: C64.lightRed },
+// Basket category cycle — repeats infinitely as wagons wrap
+const BASKET_CATS = [
+  { cat: 'laugh', label: 'LAUGH', color: C64.green },
+  { cat: 'other', label: 'OTHER', color: C64.lightBlue },
+  { cat: 'rude',  label: 'RUDE',  color: C64.lightRed },
 ];
+const BASKETS = [
+  { sx: 20,  vx: 0, w: BASKET_START_W, catIdx: 0 },
+  { sx: 185, vx: 0, w: BASKET_START_W, catIdx: 1 },
+  { sx: 350, vx: 0, w: BASKET_START_W, catIdx: 2 },
+];
+// Helper to get category info for a basket
+function basketCat(b) { return BASKET_CATS[((b.catIdx % 3) + 3) % 3]; }
+
+const ROPE_LENGTHS = [40, 55, 45]; // ropes: 0→1, 1→2, 2→0 (wrapping)
+const ROPE_STIFFNESS = 0.03;
+const ROPE_DAMPING = 0.97;
+const W = 480; // screen wrap width (matches canvas)
+
+// Shortest signed distance on a wrapping axis
+function wrapDist(from, to) {
+  let d = to - from;
+  if (d > W / 2) d -= W;
+  if (d < -W / 2) d += W;
+  return d;
+}
+
+// Wrap a position into [0, W)
+function wrapX(x) {
+  return ((x % W) + W) % W;
+}
 
 // Game state
 let score = 0;
@@ -110,12 +136,10 @@ const BELT_Y = 60;
 const BASKET_Y = 336;
 
 // Belt movement state
-let beltOffset = 0;       // current horizontal offset of the belt
 let beltVelocity = 0;     // current velocity (pixels per frame)
-const BELT_ACCEL = 0.35;  // acceleration per frame when key held
-const BELT_FRICTION = 0.96; // friction multiplier each frame
-const BELT_MAX_SPEED = 6; // max belt speed
-const BELT_TOTAL_WIDTH = canvas.width; // wrap distance
+const BELT_ACCEL = 0.15;  // acceleration per frame when key held
+const BELT_FRICTION = 0.94; // friction multiplier each frame
+const BELT_MAX_SPEED = 3; // max belt speed
 
 // Keyboard state
 const keysDown = {};
@@ -135,15 +159,19 @@ window.addEventListener('keyup', (e) => {
 
 function spawnItem() {
   const def = ACRONYMS[Math.floor(Math.random() * ACRONYMS.length)];
+  const itemW = Math.max(def.text.length * 14 + 16, 50);
+  const margin = 10;
+  const halfW = itemW / 2;
+  const cx = margin + halfW + Math.random() * (canvas.width - margin * 2 - itemW);
   fallingItems.push({
     text: def.text,
     cat: def.cat,
     points: def.points,
     meaning: def.meaning,
-    x: Math.random() * (canvas.width - 60) + 30,
+    x: cx - halfW,
     y: -20,
     vy: 0.5 + level * 0.08,
-    w: Math.max(def.text.length * 14 + 16, 50),
+    w: itemW,
     h: 28,
   });
 }
@@ -225,18 +253,10 @@ function drawTextCenter(text, y, color, size) {
   drawText(text, (canvas.width - w) / 2, y, color, size);
 }
 
-function getBasketScreenX(b) {
-  // Compute the wrapped screen X for a basket
-  let sx = ((b.x + beltOffset) % BELT_TOTAL_WIDTH + BELT_TOTAL_WIDTH) % BELT_TOTAL_WIDTH;
-  // If the basket would be partially off the right edge, allow negative wrap
-  if (sx + b.w > BELT_TOTAL_WIDTH) sx -= BELT_TOTAL_WIDTH;
-  return sx;
-}
 
-function drawWheel(cx, cy, radius) {
+function drawWheel(cx, cy, radius, rotAngle) {
   const spokeCount = 4;
-  // Wheel rotation based on belt movement
-  const angle = beltOffset * 0.08;
+  const angle = rotAngle;
   // Outer rim
   ctx.beginPath();
   ctx.arc(Math.round(cx), Math.round(cy), radius, 0, Math.PI * 2);
@@ -265,39 +285,40 @@ function drawWheel(cx, cy, radius) {
 }
 
 function drawBasketAt(bx, by, b) {
+  const bc = basketCat(b);
   const wallW = 3;
   const h = 50;
   const wheelRadius = 7;
   const wheelY = by + h + wheelRadius;
-  const innerColor = b.color === C64.green ? '#003311' : b.color === C64.lightBlue ? '#001133' : '#330011';
+  const rotAngle = b.sx * 0.08;
+  const innerColor = bc.color === C64.green ? '#003311' : bc.color === C64.lightBlue ? '#001133' : '#330011';
   // Wheels (draw behind bucket)
-  drawWheel(bx + 14, wheelY, wheelRadius);
-  drawWheel(bx + b.w - 14, wheelY, wheelRadius);
+  drawWheel(bx + 14, wheelY, wheelRadius, rotAngle);
+  drawWheel(bx + b.w - 14, wheelY, wheelRadius, rotAngle);
   // Axle bar connecting to bucket
   drawPixelRect(bx + 12, by + h, 3, wheelRadius, C64.grey);
   drawPixelRect(bx + b.w - 15, by + h, 3, wheelRadius, C64.grey);
   // Left wall
-  drawPixelRect(bx, by, wallW, h, b.color);
+  drawPixelRect(bx, by, wallW, h, bc.color);
   // Right wall
-  drawPixelRect(bx + b.w - wallW, by, wallW, h, b.color);
+  drawPixelRect(bx + b.w - wallW, by, wallW, h, bc.color);
   // Bottom wall
-  drawPixelRect(bx, by + h - wallW, b.w, wallW, b.color);
+  drawPixelRect(bx, by + h - wallW, b.w, wallW, bc.color);
   // Inner area (open top)
   drawPixelRect(bx + wallW, by, b.w - wallW * 2, h - wallW, innerColor);
   // Label
   ctx.font = 'bold 12px monospace';
-  const tw = ctx.measureText(b.label).width;
-  drawText(b.label, bx + (b.w - tw) / 2, by + 28, b.color, 12);
+  const tw = ctx.measureText(bc.label).width;
+  drawText(bc.label, bx + (b.w - tw) / 2, by + 28, bc.color, 12);
 }
 
 function drawBasket(b) {
   const by = BASKET_Y;
-  const sx = getBasketScreenX(b);
-  // Draw at primary position
+  const sx = b.sx;
   drawBasketAt(sx, by, b);
-  // Draw wrapped copy if partially off-screen
-  if (sx < 0) drawBasketAt(sx + BELT_TOTAL_WIDTH, by, b);
-  if (sx + b.w > BELT_TOTAL_WIDTH) drawBasketAt(sx - BELT_TOTAL_WIDTH, by, b);
+  // Draw wrapped copy if partially off either edge
+  if (sx + b.w > W) drawBasketAt(sx - W, by, b);
+  if (sx < 0) drawBasketAt(sx + W, by, b);
 }
 
 function drawItem(item) {
@@ -381,14 +402,15 @@ function drawGameOver() {
 
 function checkBasketDrop(item) {
   for (const b of BASKETS) {
-    const sx = getBasketScreenX(b);
-    // Check primary and wrapped positions
+    const bc = basketCat(b);
+    const sx = b.sx;
     const itemCenterX = item.x + item.w / 2;
-    const hitPrimary = itemCenterX > sx && itemCenterX < sx + b.w;
-    const hitWrapLeft = itemCenterX > sx + BELT_TOTAL_WIDTH && itemCenterX < sx + b.w + BELT_TOTAL_WIDTH;
-    const hitWrapRight = itemCenterX > sx - BELT_TOTAL_WIDTH && itemCenterX < sx + b.w - BELT_TOTAL_WIDTH;
-    if (hitPrimary || hitWrapLeft || hitWrapRight) {
-      if (item.cat === b.cat) {
+    // Check hit at primary position and wrapped copy
+    const hit = (itemCenterX > sx && itemCenterX < sx + b.w) ||
+                (itemCenterX > sx - W && itemCenterX < sx + b.w - W) ||
+                (itemCenterX > sx + W && itemCenterX < sx + b.w + W);
+    if (hit) {
+      if (item.cat === bc.cat) {
         // Correct basket!
         combo++;
         if (combo > bestCombo) bestCombo = combo;
@@ -398,16 +420,12 @@ function checkBasketDrop(item) {
         const label = `+${pts}` + (combo > 1 ? ` x${combo}` : '');
         flashMsg = label + (combo > 1 ? ' COMBO!' : item.text === 'LOL' ? ' LOL!!!' : '!');
         flashTimer = 45;
-        // Rising score popup
         const cx = item.x + item.w / 2;
-        successAnims.push({ x: cx, y: BASKET_Y - 10, text: label, life: 60, color: b.color });
-        // Star burst particles
-        addSuccessParticles(cx, BASKET_Y, b.color);
-        // Show meaning
+        successAnims.push({ x: cx, y: BASKET_Y - 10, text: label, life: 60, color: bc.color });
+        addSuccessParticles(cx, BASKET_Y, bc.color);
         meaningText = `${item.text} = ${item.meaning}`;
         meaningTimer = 120;
-        meaningColor = b.color;
-        // Shrink this bucket (gets harder)
+        meaningColor = bc.color;
         b.w = Math.max(BASKET_MIN_W, b.w - BASKET_SHRINK);
         // Level up every 300 points
         const newLevel = Math.floor(score / 500) + 1;
@@ -490,7 +508,7 @@ function update() {
     if (successAnims[i].life <= 0) successAnims.splice(i, 1);
   }
 
-  // Belt momentum physics
+  // Belt momentum
   if (keysDown['ArrowLeft'])  beltVelocity -= BELT_ACCEL;
   if (keysDown['ArrowRight']) beltVelocity += BELT_ACCEL;
   beltVelocity *= BELT_FRICTION;
@@ -498,9 +516,49 @@ function update() {
     beltVelocity = Math.sign(beltVelocity) * BELT_MAX_SPEED;
   }
   if (Math.abs(beltVelocity) < 0.01) beltVelocity = 0;
-  beltOffset += beltVelocity;
-  // Wrap offset to stay in range
-  beltOffset = ((beltOffset % BELT_TOTAL_WIDTH) + BELT_TOTAL_WIDTH) % BELT_TOTAL_WIDTH;
+
+  // Only the lead wagon gets belt velocity
+  // Pulling left: leftmost leads. Pulling right: rightmost leads.
+  const sorted = [...BASKETS].sort((a, b) => a.sx - b.sx);
+  const lead = beltVelocity <= 0 ? sorted[0] : sorted[sorted.length - 1];
+  lead.vx += beltVelocity * 0.5;
+  lead.sx += beltVelocity;
+
+  // Elastic ropes in a loop: 0→1, 1→2, 2→0
+  const ropePairs = [[0, 1], [1, 2], [2, 0]];
+  for (let r = 0; r < ropePairs.length; r++) {
+    const a = BASKETS[ropePairs[r][0]];
+    const b = BASKETS[ropePairs[r][1]];
+    // Gap from right edge of a to left edge of b, with wrapping
+    const gap = wrapDist(a.sx + a.w, b.sx);
+    const stretch = gap - ROPE_LENGTHS[r];
+    const force = stretch * ROPE_STIFFNESS;
+    a.vx += force;
+    b.vx -= force;
+  }
+
+  // Apply velocities with damping, then wrap positions
+  for (const b of BASKETS) {
+    b.vx *= ROPE_DAMPING;
+    b.sx += b.vx;
+    b.sx = wrapX(b.sx);
+  }
+
+  // Collision: prevent overlap using wrap-aware distance
+  for (const [i, j] of ropePairs) {
+    const a = BASKETS[i];
+    const b = BASKETS[j];
+    const gap = wrapDist(a.sx + a.w, b.sx);
+    if (gap < 0) {
+      // Overlap — push apart
+      const push = -gap * 0.5;
+      a.sx = wrapX(a.sx - push);
+      b.sx = wrapX(b.sx + push);
+      const tmpV = a.vx;
+      a.vx = b.vx * 0.5;
+      b.vx = tmpV * 0.5;
+    }
+  }
 
   if (lives <= 0) {
     gameState = 'gameover';
@@ -519,11 +577,38 @@ function draw() {
   ctx.fillStyle = C64.blue;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Conveyor belt lines (scroll with belt)
+  // Conveyor belt lines (scroll with middle basket)
   ctx.fillStyle = C64.darkGrey;
   for (let x = -20; x < canvas.width + 20; x += 20) {
-    const offset = ((beltOffset * 2) % 20 + 20) % 20;
+    const offset = ((BASKETS[1].sx * 2) % 20 + 20) % 20;
     ctx.fillRect(x + offset, BELT_Y - 2, 12, 4);
+  }
+
+  // Elastic ropes between all baskets (loop: 0→1, 1→2, 2→0)
+  const ropeY = BASKET_Y + 25;
+  const ropeDraw = [[0, 1], [1, 2], [2, 0]];
+  ctx.strokeStyle = C64.brown;
+  ctx.lineWidth = 2;
+  for (const [i, j] of ropeDraw) {
+    const a = BASKETS[i];
+    const b = BASKETS[j];
+    const x1 = a.sx + a.w;
+    const gap = wrapDist(x1, b.sx);
+    const x2 = x1 + gap;
+    const sag = Math.max(0, Math.abs(gap) * 0.15);
+    // Draw rope at primary position and shifted copies so it's always visible
+    for (const shift of [-W, 0, W]) {
+      const sx1 = x1 + shift;
+      const sx2 = x2 + shift;
+      // Skip if entirely off-screen
+      const minX = Math.min(sx1, sx2);
+      const maxX = Math.max(sx1, sx2);
+      if (maxX < -20 || minX > W + 20) continue;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(sx1), Math.round(ropeY));
+      ctx.quadraticCurveTo(Math.round((sx1 + sx2) / 2), Math.round(ropeY + sag), Math.round(sx2), Math.round(ropeY));
+      ctx.stroke();
+    }
   }
 
   // Baskets
@@ -600,12 +685,13 @@ function resetGame() {
   flashMsg = '';
   flashTimer = 0;
   frameCount = 0;
-  beltOffset = 0;
   beltVelocity = 0;
   meaningText = '';
   meaningTimer = 0;
   successAnims = [];
-  BASKETS.forEach(b => b.w = BASKET_START_W);
+  BASKETS[0].sx = 20;  BASKETS[0].vx = 0; BASKETS[0].w = BASKET_START_W; BASKETS[0].catIdx = 0;
+  BASKETS[1].sx = 185; BASKETS[1].vx = 0; BASKETS[1].w = BASKET_START_W; BASKETS[1].catIdx = 1;
+  BASKETS[2].sx = 350; BASKETS[2].vx = 0; BASKETS[2].w = BASKET_START_W; BASKETS[2].catIdx = 2;
 }
 
 // Input handling — click/tap or any key to start
