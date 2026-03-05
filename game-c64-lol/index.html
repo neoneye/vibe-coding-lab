@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LOL Sorter - C64 Edition</title>
+<style>
+@font-face {
+  font-family: 'C64';
+  src: url('data:application/font-woff;base64,') format('woff');
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #40318d;
+  display: flex; justify-content: center; align-items: center;
+  min-height: 100vh;
+  font-family: monospace;
+  overflow: hidden;
+}
+canvas {
+  image-rendering: pixelated;
+  border: 8px solid #7869c4;
+}
+</style>
+</head>
+<body>
+<canvas id="game" width="480" height="400"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// C64 color palette
+const C64 = {
+  black:      '#000000',
+  white:      '#ffffff',
+  red:        '#880000',
+  cyan:       '#aaffee',
+  purple:     '#cc44cc',
+  green:      '#00cc55',
+  blue:       '#0000aa',
+  yellow:     '#eeee77',
+  orange:     '#dd8855',
+  brown:      '#664400',
+  lightRed:   '#ff7777',
+  darkGrey:   '#333333',
+  grey:       '#777777',
+  lightGreen: '#aaff66',
+  lightBlue:  '#0088ff',
+  lightGrey:  '#bbbbbb',
+};
+
+// Acronym definitions with categories
+const ACRONYMS = [
+  // Laughing - HIGH points (green basket)
+  { text: 'LOL',   cat: 'laugh', points: 100 },
+  { text: 'ROFL',  cat: 'laugh', points: 80 },
+  { text: 'LMAO',  cat: 'laugh', points: 70 },
+  { text: 'LMFAO', cat: 'laugh', points: 60 },
+  { text: 'ROTFL', cat: 'laugh', points: 50 },
+  { text: 'HAHA',  cat: 'laugh', points: 40 },
+  { text: 'KEK',   cat: 'laugh', points: 35 },
+  { text: 'XD',    cat: 'laugh', points: 30 },
+  // Greetings - MEDIUM points (cyan basket)
+  { text: 'BRB',   cat: 'other', points: 10 },
+  { text: 'AFK',   cat: 'other', points: 10 },
+  { text: 'TTYL',  cat: 'other', points: 10 },
+  { text: 'GTG',   cat: 'other', points: 10 },
+  { text: 'IMO',   cat: 'other', points: 10 },
+  { text: 'TBH',   cat: 'other', points: 10 },
+  { text: 'SMH',   cat: 'other', points: 10 },
+  { text: 'FWIW',  cat: 'other', points: 10 },
+  // Negative - LOSE points (red basket, or penalty if wrong basket)
+  { text: 'STFU',  cat: 'rude', points: -20 },
+  { text: 'WTF',   cat: 'rude', points: -15 },
+  { text: 'GTFO',  cat: 'rude', points: -20 },
+  { text: 'FFS',   cat: 'rude', points: -10 },
+];
+
+const BASKETS = [
+  { x: 20,  w: 80, cat: 'laugh', label: 'LAUGH', color: C64.green },
+  { x: 200, w: 80, cat: 'other', label: 'OTHER', color: C64.lightBlue },
+  { x: 380, w: 80, cat: 'rude',  label: 'RUDE',  color: C64.lightRed },
+];
+
+// Game state
+let score = 0;
+let lives = 5;
+let level = 1;
+let gameState = 'title'; // title, playing, gameover
+let fallingItems = [];
+let spawnTimer = 0;
+let spawnInterval = 90;
+let particles = [];
+let flashMsg = '';
+let flashTimer = 0;
+let combo = 0;
+let bestCombo = 0;
+let frameCount = 0;
+let highScore = parseInt(localStorage.getItem('lolsorter_hi') || '0');
+
+// Conveyor belt
+const BELT_Y = 60;
+const BASKET_Y = 336;
+
+// Belt movement state
+let beltOffset = 0;       // current horizontal offset of the belt
+let beltVelocity = 0;     // current velocity (pixels per frame)
+const BELT_ACCEL = 0.35;  // acceleration per frame when key held
+const BELT_FRICTION = 0.96; // friction multiplier each frame
+const BELT_MAX_SPEED = 6; // max belt speed
+const BELT_TOTAL_WIDTH = canvas.width; // wrap distance
+
+// Keyboard state
+const keysDown = {};
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    keysDown[e.key] = true;
+  }
+  if (gameState === 'title' || gameState === 'gameover') {
+    resetGame();
+    gameState = 'playing';
+  }
+});
+window.addEventListener('keyup', (e) => {
+  keysDown[e.key] = false;
+});
+
+function spawnItem() {
+  const def = ACRONYMS[Math.floor(Math.random() * ACRONYMS.length)];
+  fallingItems.push({
+    text: def.text,
+    cat: def.cat,
+    points: def.points,
+    x: Math.random() * (canvas.width - 60) + 30,
+    y: -20,
+    vy: 0.5 + level * 0.15,
+    w: Math.max(def.text.length * 14 + 16, 50),
+    h: 28,
+  });
+}
+
+function addParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: (Math.random() - 0.5) * 6 - 2,
+      life: 30 + Math.random() * 20,
+      color,
+      size: 2 + Math.random() * 3,
+    });
+  }
+}
+
+function addExplosion(x, y) {
+  // Big burst of multi-colored particles
+  const colors = [C64.red, C64.orange, C64.yellow, C64.lightRed, C64.white];
+  for (let i = 0; i < 40; i++) {
+    const angle = (Math.PI * 2 * i) / 40 + Math.random() * 0.3;
+    const speed = 2 + Math.random() * 5;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 2,
+      life: 40 + Math.random() * 30,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      size: 3 + Math.random() * 4,
+    });
+  }
+}
+
+function drawPixelRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+}
+
+function drawText(text, x, y, color, size) {
+  ctx.fillStyle = color;
+  ctx.font = `bold ${size || 14}px monospace`;
+  ctx.fillText(text, Math.round(x), Math.round(y));
+}
+
+function drawTextCenter(text, y, color, size) {
+  ctx.font = `bold ${size || 14}px monospace`;
+  const w = ctx.measureText(text).width;
+  drawText(text, (canvas.width - w) / 2, y, color, size);
+}
+
+function getBasketScreenX(b) {
+  // Compute the wrapped screen X for a basket
+  let sx = ((b.x + beltOffset) % BELT_TOTAL_WIDTH + BELT_TOTAL_WIDTH) % BELT_TOTAL_WIDTH;
+  // If the basket would be partially off the right edge, allow negative wrap
+  if (sx + b.w > BELT_TOTAL_WIDTH) sx -= BELT_TOTAL_WIDTH;
+  return sx;
+}
+
+function drawWheel(cx, cy, radius) {
+  const spokeCount = 4;
+  // Wheel rotation based on belt movement
+  const angle = beltOffset * 0.08;
+  // Outer rim
+  ctx.beginPath();
+  ctx.arc(Math.round(cx), Math.round(cy), radius, 0, Math.PI * 2);
+  ctx.fillStyle = C64.grey;
+  ctx.fill();
+  // Inner hub
+  ctx.beginPath();
+  ctx.arc(Math.round(cx), Math.round(cy), radius - 2, 0, Math.PI * 2);
+  ctx.fillStyle = C64.darkGrey;
+  ctx.fill();
+  // Spokes
+  ctx.strokeStyle = C64.lightGrey;
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < spokeCount; i++) {
+    const a = angle + (Math.PI * 2 * i) / spokeCount;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(cx), Math.round(cy));
+    ctx.lineTo(Math.round(cx + Math.cos(a) * (radius - 1)), Math.round(cy + Math.sin(a) * (radius - 1)));
+    ctx.stroke();
+  }
+  // Center dot
+  ctx.beginPath();
+  ctx.arc(Math.round(cx), Math.round(cy), 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = C64.lightGrey;
+  ctx.fill();
+}
+
+function drawBasketAt(bx, by, b) {
+  const wallW = 3;
+  const h = 50;
+  const wheelRadius = 7;
+  const wheelY = by + h + wheelRadius;
+  const innerColor = b.color === C64.green ? '#003311' : b.color === C64.lightBlue ? '#001133' : '#330011';
+  // Wheels (draw behind bucket)
+  drawWheel(bx + 14, wheelY, wheelRadius);
+  drawWheel(bx + b.w - 14, wheelY, wheelRadius);
+  // Axle bar connecting to bucket
+  drawPixelRect(bx + 12, by + h, 3, wheelRadius, C64.grey);
+  drawPixelRect(bx + b.w - 15, by + h, 3, wheelRadius, C64.grey);
+  // Left wall
+  drawPixelRect(bx, by, wallW, h, b.color);
+  // Right wall
+  drawPixelRect(bx + b.w - wallW, by, wallW, h, b.color);
+  // Bottom wall
+  drawPixelRect(bx, by + h - wallW, b.w, wallW, b.color);
+  // Inner area (open top)
+  drawPixelRect(bx + wallW, by, b.w - wallW * 2, h - wallW, innerColor);
+  // Label
+  ctx.font = 'bold 12px monospace';
+  const tw = ctx.measureText(b.label).width;
+  drawText(b.label, bx + (b.w - tw) / 2, by + 28, b.color, 12);
+}
+
+function drawBasket(b) {
+  const by = BASKET_Y;
+  const sx = getBasketScreenX(b);
+  // Draw at primary position
+  drawBasketAt(sx, by, b);
+  // Draw wrapped copy if partially off-screen
+  if (sx < 0) drawBasketAt(sx + BELT_TOTAL_WIDTH, by, b);
+  if (sx + b.w > BELT_TOTAL_WIDTH) drawBasketAt(sx - BELT_TOTAL_WIDTH, by, b);
+}
+
+function drawItem(item) {
+  const bgColor = item.cat === 'laugh' ? C64.green : item.cat === 'other' ? C64.lightBlue : C64.lightRed;
+  drawPixelRect(item.x, item.y, item.w, item.h, bgColor);
+  drawPixelRect(item.x + 2, item.y + 2, item.w - 4, item.h - 4, C64.black);
+  ctx.font = 'bold 14px monospace';
+  const tw = ctx.measureText(item.text).width;
+  drawText(item.text, item.x + (item.w - tw) / 2, item.y + 19, C64.white, 14);
+}
+
+function drawScanlines() {
+  ctx.fillStyle = 'rgba(0,0,0,0.08)';
+  for (let y = 0; y < canvas.height; y += 3) {
+    ctx.fillRect(0, y, canvas.width, 1);
+  }
+}
+
+function drawTitle() {
+  ctx.fillStyle = C64.blue;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const flicker = Math.sin(frameCount * 0.05) * 0.3 + 0.7;
+
+  drawTextCenter('*** LOL SORTER ***', 80, C64.lightBlue, 24);
+  drawTextCenter('C64 EDITION', 110, C64.cyan, 16);
+
+  drawTextCenter('SORT THE ACRONYMS INTO', 160, C64.lightGrey, 13);
+  drawTextCenter('THE CORRECT BASKETS!', 178, C64.lightGrey, 13);
+
+  drawTextCenter('LAUGH = HIGH POINTS', 210, C64.green, 13);
+  drawTextCenter('LOL = MAX POINTS!', 228, C64.yellow, 13);
+  drawTextCenter('OTHER = SOME POINTS', 246, C64.lightBlue, 13);
+  drawTextCenter('RUDE = NEGATIVE!', 264, C64.lightRed, 13);
+  drawTextCenter('MISS BUCKET = BOOM! HALF SCORE!', 282, C64.orange, 13);
+
+  if (highScore > 0) {
+    drawTextCenter(`HIGH SCORE: ${highScore}`, 300, C64.yellow, 14);
+  }
+
+  const alpha = flicker;
+  ctx.globalAlpha = alpha;
+  drawTextCenter('PRESS ANY KEY TO START', 340, C64.white, 16);
+  ctx.globalAlpha = 1;
+
+  drawTextCenter('ARROW KEYS MOVE THE BELT', 370, C64.grey, 11);
+  drawScanlines();
+}
+
+function drawHUD() {
+  // Top bar
+  drawPixelRect(0, 0, canvas.width, 30, C64.darkGrey);
+  drawText(`SCORE: ${score}`, 10, 20, C64.yellow, 14);
+  drawText(`LIVES: ${'*'.repeat(lives)}`, 170, 20, C64.lightRed, 14);
+  drawText(`LVL: ${level}`, 350, 20, C64.cyan, 14);
+  if (combo > 1) {
+    drawText(`x${combo}`, 430, 20, C64.lightGreen, 14);
+  }
+}
+
+function drawGameOver() {
+  ctx.fillStyle = C64.black;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawTextCenter('GAME OVER', 100, C64.lightRed, 28);
+  drawTextCenter(`FINAL SCORE: ${score}`, 160, C64.yellow, 18);
+  drawTextCenter(`BEST COMBO: x${bestCombo}`, 190, C64.lightGreen, 14);
+
+  if (score >= highScore && score > 0) {
+    const flicker = Math.sin(frameCount * 0.1) > 0;
+    if (flicker) drawTextCenter('*** NEW HIGH SCORE! ***', 230, C64.cyan, 16);
+  }
+
+  const flicker2 = Math.sin(frameCount * 0.05) * 0.3 + 0.7;
+  ctx.globalAlpha = flicker2;
+  drawTextCenter('CLICK TO PLAY AGAIN', 300, C64.white, 16);
+  ctx.globalAlpha = 1;
+
+  drawScanlines();
+}
+
+function checkBasketDrop(item) {
+  for (const b of BASKETS) {
+    const sx = getBasketScreenX(b);
+    // Check primary and wrapped positions
+    const itemCenterX = item.x + item.w / 2;
+    const hitPrimary = itemCenterX > sx && itemCenterX < sx + b.w;
+    const hitWrapLeft = itemCenterX > sx + BELT_TOTAL_WIDTH && itemCenterX < sx + b.w + BELT_TOTAL_WIDTH;
+    const hitWrapRight = itemCenterX > sx - BELT_TOTAL_WIDTH && itemCenterX < sx + b.w - BELT_TOTAL_WIDTH;
+    if (hitPrimary || hitWrapLeft || hitWrapRight) {
+      if (item.cat === b.cat) {
+        // Correct basket!
+        combo++;
+        if (combo > bestCombo) bestCombo = combo;
+        const multiplier = Math.min(combo, 5);
+        const pts = Math.abs(item.points) * multiplier;
+        score += pts;
+        flashMsg = `+${pts}` + (combo > 1 ? ` x${combo} COMBO!` : item.text === 'LOL' ? ' LOL!!!' : '!');
+        flashTimer = 45;
+        addParticles(item.x + item.w / 2, BASKET_Y, b.color, 15);
+        // Level up every 300 points
+        const newLevel = Math.floor(score / 300) + 1;
+        if (newLevel > level) {
+          level = newLevel;
+          spawnInterval = Math.max(30, 90 - level * 5);
+          flashMsg = `LEVEL ${level}!`;
+          flashTimer = 60;
+        }
+      } else {
+        // Wrong basket
+        combo = 0;
+        lives--;
+        const penalty = 20;
+        score = Math.max(0, score - penalty);
+        flashMsg = `WRONG! -${penalty}`;
+        flashTimer = 45;
+        addParticles(item.x + item.w / 2, BASKET_Y, C64.red, 10);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function update() {
+  if (gameState !== 'playing') return;
+
+  frameCount++;
+  spawnTimer++;
+  if (spawnTimer >= spawnInterval) {
+    spawnTimer = 0;
+    spawnItem();
+  }
+
+  // Update falling items
+  for (let i = fallingItems.length - 1; i >= 0; i--) {
+    const item = fallingItems[i];
+    item.y += item.vy;
+
+    // Check if item overlaps a bucket (bucket top at BASKET_Y, 50px tall)
+    if (!item.caught && item.y + item.h >= BASKET_Y && item.y < BASKET_Y + 50) {
+      const landed = checkBasketDrop(item);
+      if (landed) {
+        fallingItems.splice(i, 1);
+        continue;
+      }
+    }
+
+    // Hit the bottom of the screen - explosion!
+    if (item.y + item.h >= canvas.height) {
+      combo = 0;
+      const halfScore = Math.floor(score / 2);
+      const lost = score - halfScore;
+      score = halfScore;
+      flashMsg = `BOOM! SCORE HALVED! -${lost}`;
+      flashTimer = 60;
+      addExplosion(item.x + item.w / 2, canvas.height - 10);
+      fallingItems.splice(i, 1);
+    }
+  }
+
+  // Update particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.15;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  if (flashTimer > 0) flashTimer--;
+
+  // Belt momentum physics
+  if (keysDown['ArrowLeft'])  beltVelocity -= BELT_ACCEL;
+  if (keysDown['ArrowRight']) beltVelocity += BELT_ACCEL;
+  beltVelocity *= BELT_FRICTION;
+  if (Math.abs(beltVelocity) > BELT_MAX_SPEED) {
+    beltVelocity = Math.sign(beltVelocity) * BELT_MAX_SPEED;
+  }
+  if (Math.abs(beltVelocity) < 0.01) beltVelocity = 0;
+  beltOffset += beltVelocity;
+  // Wrap offset to stay in range
+  beltOffset = ((beltOffset % BELT_TOTAL_WIDTH) + BELT_TOTAL_WIDTH) % BELT_TOTAL_WIDTH;
+
+  if (lives <= 0) {
+    gameState = 'gameover';
+    if (score > highScore) {
+      highScore = score;
+      localStorage.setItem('lolsorter_hi', String(highScore));
+    }
+  }
+}
+
+function draw() {
+  if (gameState === 'title') { drawTitle(); return; }
+  if (gameState === 'gameover') { drawGameOver(); return; }
+
+  // Background
+  ctx.fillStyle = C64.blue;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Conveyor belt lines (scroll with belt)
+  ctx.fillStyle = C64.darkGrey;
+  for (let x = -20; x < canvas.width + 20; x += 20) {
+    const offset = ((beltOffset * 2) % 20 + 20) % 20;
+    ctx.fillRect(x + offset, BELT_Y - 2, 12, 4);
+  }
+
+  // Baskets
+  BASKETS.forEach(drawBasket);
+
+  // Items
+  fallingItems.forEach(drawItem);
+
+  // Particles
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life / 50;
+    drawPixelRect(p.x, p.y, p.size, p.size, p.color);
+  });
+  ctx.globalAlpha = 1;
+
+  // Flash message
+  if (flashTimer > 0) {
+    const alpha = flashTimer / 45;
+    ctx.globalAlpha = alpha;
+    const isNeg = flashMsg.includes('WRONG') || flashMsg.includes('BOOM');
+    drawTextCenter(flashMsg, 200, isNeg ? C64.lightRed : C64.yellow, 20);
+    ctx.globalAlpha = 1;
+  }
+
+  // HUD
+  drawHUD();
+  drawScanlines();
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+function resetGame() {
+  score = 0;
+  lives = 5;
+  level = 1;
+  combo = 0;
+  bestCombo = 0;
+  fallingItems = [];
+  particles = [];
+  spawnTimer = 0;
+  spawnInterval = 90;
+  flashMsg = '';
+  flashTimer = 0;
+  frameCount = 0;
+  beltOffset = 0;
+  beltVelocity = 0;
+}
+
+// Input handling — click/tap or any key to start
+function onStart() {
+  if (gameState === 'title' || gameState === 'gameover') {
+    resetGame();
+    gameState = 'playing';
+  }
+}
+canvas.addEventListener('mousedown', onStart);
+canvas.addEventListener('touchstart', onStart, { passive: false });
+
+// Scale canvas to fit
+function resize() {
+  const maxW = window.innerWidth - 32;
+  const maxH = window.innerHeight - 32;
+  const scale = Math.min(maxW / canvas.width, maxH / canvas.height, 2);
+  canvas.style.width = (canvas.width * scale) + 'px';
+  canvas.style.height = (canvas.height * scale) + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+gameLoop();
+</script>
+</body>
+</html>
