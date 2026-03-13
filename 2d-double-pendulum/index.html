@@ -183,6 +183,22 @@
     </div>
   </div>
 
+  <div class="group">
+    <h3>Audio</h3>
+    <div class="param">
+      <label>Volume <span id="v_vol">0.4</span></label>
+      <input type="range" id="vol" min="0" max="1" step="0.01" value="0.4">
+    </div>
+    <div class="param">
+      <label>Base note <span id="v_base">220</span> Hz</label>
+      <input type="range" id="base" min="55" max="440" step="1" value="220">
+    </div>
+    <div class="param">
+      <label>Reverb <span id="v_rev">0.4</span></label>
+      <input type="range" id="rev" min="0" max="0.9" step="0.05" value="0.4">
+    </div>
+  </div>
+
   <div class="buttons">
     <button id="btnPause">Pause</button>
     <button id="btnReset">Reset</button>
@@ -190,6 +206,9 @@
   <div class="buttons">
     <button id="btnTrail" class="active">Trail</button>
     <button id="btnHeat" class="active">Heatmap</button>
+  </div>
+  <div class="buttons">
+    <button id="btnSound">Sound On</button>
   </div>
 </div>
 
@@ -344,6 +363,156 @@ $('btnHeat').addEventListener('click', () => {
   $('btnHeat').classList.toggle('active', showHeat);
 });
 
+// === Audio Synth ===
+let audioCtx = null, soundOn = false;
+let osc1, osc2, gain1, gain2, masterGain, panner, filter, convolver, reverbGain, dryGain;
+
+// Pentatonic scale quantization for musical output
+const SCALE_RATIOS = [1, 9/8, 5/4, 3/2, 5/3, 2]; // major pentatonic
+
+function quantizeToScale(freq, baseFreq) {
+  // Find which octave and scale degree is closest
+  let octave = 0;
+  let f = freq;
+  while (f > baseFreq * 2) { f /= 2; octave++; }
+  while (f < baseFreq) { f *= 2; octave--; }
+  const ratio = f / baseFreq;
+  let closest = SCALE_RATIOS[0], minDist = Math.abs(ratio - SCALE_RATIOS[0]);
+  for (let i = 1; i < SCALE_RATIOS.length; i++) {
+    const dist = Math.abs(ratio - SCALE_RATIOS[i]);
+    if (dist < minDist) { minDist = dist; closest = SCALE_RATIOS[i]; }
+  }
+  return baseFreq * closest * Math.pow(2, octave);
+}
+
+function createReverb(ctx, duration) {
+  const rate = ctx.sampleRate;
+  const len = rate * duration;
+  const buf = ctx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
+    }
+  }
+  return buf;
+}
+
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  // Oscillator 1 - sine (warm, deep tone for upper arm)
+  osc1 = audioCtx.createOscillator();
+  osc1.type = 'sine';
+  osc1.frequency.value = 220;
+  gain1 = audioCtx.createGain();
+  gain1.gain.value = 0;
+  osc1.connect(gain1);
+
+  // Oscillator 2 - triangle (brighter, for lower arm)
+  osc2 = audioCtx.createOscillator();
+  osc2.type = 'triangle';
+  osc2.frequency.value = 330;
+  gain2 = audioCtx.createGain();
+  gain2.gain.value = 0;
+  osc2.connect(gain2);
+
+  // Filter - swept by momentum
+  filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 800;
+  filter.Q.value = 5;
+
+  // Stereo panner
+  panner = audioCtx.createStereoPanner();
+  panner.pan.value = 0;
+
+  // Master gain
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.4;
+
+  // Reverb via convolver
+  convolver = audioCtx.createConvolver();
+  convolver.buffer = createReverb(audioCtx, 2.5);
+  reverbGain = audioCtx.createGain();
+  reverbGain.gain.value = 0.4;
+  dryGain = audioCtx.createGain();
+  dryGain.gain.value = 0.7;
+
+  // Routing: oscs → filter → panner → dry/wet → master → out
+  gain1.connect(filter);
+  gain2.connect(filter);
+  filter.connect(panner);
+
+  panner.connect(dryGain);
+  panner.connect(convolver);
+  convolver.connect(reverbGain);
+
+  dryGain.connect(masterGain);
+  reverbGain.connect(masterGain);
+  masterGain.connect(audioCtx.destination);
+
+  osc1.start();
+  osc2.start();
+}
+
+function updateAudio(p, L1, L2) {
+  if (!audioCtx || !soundOn) return;
+  const t = audioCtx.currentTime;
+  const baseFreq = parseFloat($('base').value);
+  const vol = parseFloat($('vol').value);
+  const rev = parseFloat($('rev').value);
+
+  // Map θ1 to frequency: angle drives pitch across ~2 octaves
+  const normTh1 = (Math.sin(th1) + 1) / 2; // 0..1
+  const normTh2 = (Math.sin(th2) + 1) / 2;
+  const rawF1 = baseFreq * (0.5 + normTh1 * 1.5);
+  const rawF2 = baseFreq * 1.5 * (0.5 + normTh2 * 1.5);
+  const f1 = quantizeToScale(rawF1, baseFreq);
+  const f2 = quantizeToScale(rawF2, baseFreq);
+
+  // Smooth frequency transitions
+  osc1.frequency.setTargetAtTime(f1, t, 0.05);
+  osc2.frequency.setTargetAtTime(f2, t, 0.05);
+
+  // Volume from angular velocity (louder when moving fast)
+  const v1 = Math.min(1, Math.abs(w1) / 12);
+  const v2 = Math.min(1, Math.abs(w2) / 12);
+  gain1.gain.setTargetAtTime(v1 * 0.5, t, 0.03);
+  gain2.gain.setTargetAtTime(v2 * 0.4, t, 0.03);
+
+  // Filter cutoff from total momentum
+  const mom = Math.abs(w1) + Math.abs(w2);
+  const cutoff = 200 + Math.min(mom / 20, 1) * 3800;
+  filter.frequency.setTargetAtTime(cutoff, t, 0.04);
+
+  // Stereo pan from x-position of tip
+  const tipX = L1 * Math.sin(th1) + L2 * Math.sin(th2);
+  const maxX = L1 + L2;
+  const pan = Math.max(-1, Math.min(1, tipX / maxX));
+  panner.pan.setTargetAtTime(pan, t, 0.03);
+
+  // Master volume & reverb
+  masterGain.gain.setTargetAtTime(vol, t, 0.05);
+  reverbGain.gain.setTargetAtTime(rev, t, 0.05);
+  dryGain.gain.setTargetAtTime(1 - rev * 0.5, t, 0.05);
+}
+
+$('btnSound').addEventListener('click', () => {
+  if (!audioCtx) initAudio();
+  soundOn = !soundOn;
+  $('btnSound').textContent = soundOn ? 'Sound Off' : 'Sound On';
+  $('btnSound').classList.toggle('active', soundOn);
+  if (audioCtx) {
+    if (soundOn) {
+      audioCtx.resume();
+    } else {
+      gain1.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+      gain2.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+    }
+  }
+});
+
 // Main loop
 let lastTime = null;
 function frame(ts) {
@@ -372,6 +541,8 @@ function frame(ts) {
     trail.push({ x: x2, y: y2, vx, vy, mom: Math.sqrt(vx*vx+vy*vy), t: simTime });
     const cutoff = simTime - p.heatWindow;
     while (trail.length > 0 && trail[0].t < cutoff) trail.shift();
+
+    updateAudio(p, L1, L2);
   }
 
   // Clear
