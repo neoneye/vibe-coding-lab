@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Double Pendulum Simulator</title>
+<title>Pendulum Simulator</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -113,7 +113,12 @@
 </head>
 <body>
 <div id="sidebar">
-  <h1>Double Pendulum</h1>
+  <h1 id="title">Double Pendulum</h1>
+
+  <div class="buttons">
+    <button id="btnDouble" class="active">Double</button>
+    <button id="btnTriple">Triple</button>
+  </div>
 
   <div class="group">
     <h3>Pendulum 1 (upper)</h3>
@@ -132,7 +137,7 @@
   </div>
 
   <div class="group">
-    <h3>Pendulum 2 (lower)</h3>
+    <h3 id="pend2Label">Pendulum 2 (lower)</h3>
     <div class="param">
       <label>Mass <span id="v_m2">2.0</span> kg</label>
       <input type="range" id="m2" min="0.5" max="10" step="0.1" value="2">
@@ -144,6 +149,22 @@
     <div class="param">
       <label>Start angle <span id="v_a2">150</span>&deg;</label>
       <input type="range" id="a2" min="0" max="360" step="1" value="150">
+    </div>
+  </div>
+
+  <div class="group" id="pend3Group" style="display:none;">
+    <h3>Pendulum 3 (lower)</h3>
+    <div class="param">
+      <label>Mass <span id="v_m3">2.0</span> kg</label>
+      <input type="range" id="m3" min="0.5" max="10" step="0.1" value="2">
+    </div>
+    <div class="param">
+      <label>Length <span id="v_l3">1.0</span></label>
+      <input type="range" id="l3" min="0.3" max="2" step="0.05" value="1">
+    </div>
+    <div class="param">
+      <label>Start angle <span id="v_a3">180</span>&deg;</label>
+      <input type="range" id="a3" min="0" max="360" step="1" value="180">
     </div>
   </div>
 
@@ -217,17 +238,23 @@ const ctx = canvas.getContext('2d');
 // State
 let paused = false, showTrail = true, showSpectro = true;
 let simTime = 0;
-let th1, th2, w1, w2;
-let trail = []; // for pendulum trail drawing
-let angleHistory = []; // {t, a1, a2, w1, w2} for spectrogram
+let numPendulums = 2;
+let th = [], w = [];
+let trail = [];
+let angleHistory = [];
 let W = 0, H = 0;
+
+// Pendulum colors: red, blue, green
+const PEND_COLORS = [
+  { fill: '#ee4444', glow: '#ee4444', stroke: '#ff6666', rgb: [255, 60, 40] },
+  { fill: '#4488ff', glow: '#4488ff', stroke: '#66aaff', rgb: [50, 130, 255] },
+  { fill: '#44cc66', glow: '#44cc66', stroke: '#66ee88', rgb: [50, 200, 100] },
+];
 
 function params() {
   return {
-    m1: parseFloat($('m1').value),
-    m2: parseFloat($('m2').value),
-    l1: parseFloat($('l1').value),
-    l2: parseFloat($('l2').value),
+    m: [parseFloat($('m1').value), parseFloat($('m2').value), parseFloat($('m3').value)],
+    l: [parseFloat($('l1').value), parseFloat($('l2').value), parseFloat($('l3').value)],
     g: parseFloat($('g').value),
     damp: parseFloat($('damp').value),
     elas: parseFloat($('elas').value),
@@ -248,46 +275,118 @@ document.querySelectorAll('input[type=range]').forEach(inp => {
 });
 
 function resetSim() {
-  th1 = parseFloat($('a1').value) * Math.PI / 180;
-  th2 = parseFloat($('a2').value) * Math.PI / 180;
-  w1 = 0; w2 = 0;
+  th = []; w = [];
+  for (let i = 0; i < numPendulums; i++) {
+    th[i] = parseFloat($('a' + (i + 1)).value) * Math.PI / 180;
+    w[i] = 0;
+  }
   simTime = 0;
   trail = [];
   angleHistory = [];
 }
 resetSim();
 
-// Double pendulum equations of motion
-function derivs(t1, t2, o1, o2, p) {
-  const { m1, m2, l1, l2, g, damp, elas } = p;
-  const L1 = l1 * elas, L2 = l2 * elas;
-  const d = t2 - t1;
-  const sd = Math.sin(d), cd = Math.cos(d);
-  const M = m1 + m2;
-  const den1 = M * L1 - m2 * L1 * cd * cd;
-  const den2 = (L2 / L1) * den1;
-  const do1 = (m2 * L1 * o1 * o1 * sd * cd
-    + m2 * g * Math.sin(t2) * cd
-    + m2 * L2 * o2 * o2 * sd
-    - M * g * Math.sin(t1)) / den1 - damp * o1;
-  const do2 = (-m2 * L2 * o2 * o2 * sd * cd
-    + M * (g * Math.sin(t1) * cd - L1 * o1 * o1 * sd - g * Math.sin(t2))) / den2 - damp * o2;
-  return [o1, o2, do1, do2];
+// === Mode toggle ===
+function setMode(n) {
+  numPendulums = n;
+  $('btnDouble').classList.toggle('active', n === 2);
+  $('btnTriple').classList.toggle('active', n === 3);
+  $('pend3Group').style.display = n === 3 ? '' : 'none';
+  $('pend2Label').textContent = n === 3 ? 'Pendulum 2 (middle)' : 'Pendulum 2 (lower)';
+  $('title').textContent = n === 3 ? 'Triple Pendulum' : 'Double Pendulum';
+  resetSim();
+}
+$('btnDouble').addEventListener('click', () => setMode(2));
+$('btnTriple').addEventListener('click', () => setMode(3));
+
+// === General n-pendulum physics ===
+// Solves M * alpha = f where M is the mass matrix
+// M_ij = A_ij * cos(th_i - th_j), A_ij = sum_{k>=max(i,j)} m_k * L_i * L_j
+// f_i = -sum_{j!=i} A_ij * sin(th_i - th_j) * w_j^2 - g * (sum_{k>=i} m_k) * L_i * sin(th_i) - damp * w_i
+function computeAccelerations(thArr, wArr, p) {
+  const n = thArr.length;
+  const { g, damp, elas } = p;
+  const m = p.m.slice(0, n);
+  const L = p.l.slice(0, n).map(li => li * elas);
+
+  const M = [], f = [];
+  for (let i = 0; i < n; i++) {
+    M[i] = [];
+    for (let j = 0; j < n; j++) {
+      let Aij = 0;
+      for (let k = Math.max(i, j); k < n; k++) Aij += m[k];
+      Aij *= L[i] * L[j];
+      M[i][j] = Aij * Math.cos(thArr[i] - thArr[j]);
+    }
+    let fi = 0;
+    for (let j = 0; j < n; j++) {
+      if (j === i) continue;
+      let Aij = 0;
+      for (let k = Math.max(i, j); k < n; k++) Aij += m[k];
+      Aij *= L[i] * L[j];
+      fi -= Aij * Math.sin(thArr[i] - thArr[j]) * wArr[j] * wArr[j];
+    }
+    let mSum = 0;
+    for (let k = i; k < n; k++) mSum += m[k];
+    fi -= g * mSum * L[i] * Math.sin(thArr[i]);
+    fi -= damp * wArr[i];
+    f[i] = fi;
+  }
+  return solveLinear(M, f, n);
 }
 
-// RK4
+function solveLinear(M, f, n) {
+  const A = [];
+  for (let i = 0; i < n; i++) A[i] = [...M[i], f[i]];
+  for (let col = 0; col < n; col++) {
+    let maxRow = col, maxVal = Math.abs(A[col][col]);
+    for (let row = col + 1; row < n; row++) {
+      if (Math.abs(A[row][col]) > maxVal) { maxVal = Math.abs(A[row][col]); maxRow = row; }
+    }
+    [A[col], A[maxRow]] = [A[maxRow], A[col]];
+    for (let row = col + 1; row < n; row++) {
+      const fac = A[row][col] / A[col][col];
+      for (let j = col; j <= n; j++) A[row][j] -= fac * A[col][j];
+    }
+  }
+  const x = new Array(n);
+  for (let i = n - 1; i >= 0; i--) {
+    x[i] = A[i][n];
+    for (let j = i + 1; j < n; j++) x[i] -= A[i][j] * x[j];
+    x[i] /= A[i][i];
+  }
+  return x;
+}
+
+// RK4 integrator
 function step(dt, p) {
-  const k1 = derivs(th1, th2, w1, w2, p);
-  const k2 = derivs(th1+dt/2*k1[0], th2+dt/2*k1[1], w1+dt/2*k1[2], w2+dt/2*k1[3], p);
-  const k3 = derivs(th1+dt/2*k2[0], th2+dt/2*k2[1], w1+dt/2*k2[2], w2+dt/2*k2[3], p);
-  const k4 = derivs(th1+dt*k3[0], th2+dt*k3[1], w1+dt*k3[2], w2+dt*k3[3], p);
-  th1 += dt/6*(k1[0]+2*k2[0]+2*k3[0]+k4[0]);
-  th2 += dt/6*(k1[1]+2*k2[1]+2*k3[1]+k4[1]);
-  w1  += dt/6*(k1[2]+2*k2[2]+2*k3[2]+k4[2]);
-  w2  += dt/6*(k1[3]+2*k2[3]+2*k3[3]+k4[3]);
+  const n = numPendulums;
+  function derivs(thA, wA) {
+    const alpha = computeAccelerations(thA, wA, p);
+    return { dth: wA.slice(), dw: alpha };
+  }
+  const k1 = derivs(th, w);
+  const k2 = derivs(th.map((t, i) => t + dt / 2 * k1.dth[i]), w.map((v, i) => v + dt / 2 * k1.dw[i]));
+  const k3 = derivs(th.map((t, i) => t + dt / 2 * k2.dth[i]), w.map((v, i) => v + dt / 2 * k2.dw[i]));
+  const k4 = derivs(th.map((t, i) => t + dt * k3.dth[i]), w.map((v, i) => v + dt * k3.dw[i]));
+  for (let i = 0; i < n; i++) {
+    th[i] += dt / 6 * (k1.dth[i] + 2 * k2.dth[i] + 2 * k3.dth[i] + k4.dth[i]);
+    w[i] += dt / 6 * (k1.dw[i] + 2 * k2.dw[i] + 2 * k3.dw[i] + k4.dw[i]);
+  }
 }
 
-// Normalize angle to [0, 360)
+// Compute chain positions: [{x,y}] from pivot (index 0) to each mass
+function getPositions(thArr, L) {
+  const pos = [{ x: 0, y: 0 }];
+  for (let i = 0; i < thArr.length; i++) {
+    pos.push({
+      x: pos[i].x + L[i] * Math.sin(thArr[i]),
+      y: pos[i].y + L[i] * Math.cos(thArr[i])
+    });
+  }
+  return pos;
+}
+
 function normAngle(a) {
   return ((a * 180 / Math.PI) % 360 + 360) % 360;
 }
@@ -295,10 +394,8 @@ function normAngle(a) {
 // Resize
 function resize() {
   const rect = canvas.parentElement.getBoundingClientRect();
-  W = rect.width;
-  H = rect.height;
-  canvas.width = W;
-  canvas.height = H;
+  W = rect.width; H = rect.height;
+  canvas.width = W; canvas.height = H;
 }
 window.addEventListener('resize', resize);
 resize();
@@ -321,7 +418,7 @@ $('btnSpectro').addEventListener('click', () => {
 
 // === Audio Synth ===
 let audioCtx = null, soundOn = false;
-let osc1, osc2, gain1, gain2, masterGain, panner, filter, convolver, reverbGain, dryGain;
+let oscs = [], gains = [], masterGain, panner, filter, convolver, reverbGain, dryGain;
 
 const SCALE_RATIOS = [1, 9/8, 5/4, 3/2, 5/3, 2];
 
@@ -343,48 +440,65 @@ function createReverb(actx, duration) {
   const buf = actx.createBuffer(2, len, rate);
   for (let ch = 0; ch < 2; ch++) {
     const data = buf.getChannelData(ch);
-    for (let i = 0; i < len; i++) data[i] = (Math.random()*2-1) * Math.pow(1-i/len, 2.5);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
   }
   return buf;
 }
 
 function initAudio() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  osc1 = audioCtx.createOscillator(); osc1.type = 'sine'; osc1.frequency.value = 220;
-  gain1 = audioCtx.createGain(); gain1.gain.value = 0; osc1.connect(gain1);
-  osc2 = audioCtx.createOscillator(); osc2.type = 'triangle'; osc2.frequency.value = 330;
-  gain2 = audioCtx.createGain(); gain2.gain.value = 0; osc2.connect(gain2);
+  const types = ['sine', 'triangle', 'sine'];
+  const freqs = [220, 330, 440];
+  oscs = []; gains = [];
+  for (let i = 0; i < 3; i++) {
+    const osc = audioCtx.createOscillator();
+    osc.type = types[i]; osc.frequency.value = freqs[i];
+    const gain = audioCtx.createGain(); gain.gain.value = 0;
+    osc.connect(gain);
+    oscs.push(osc); gains.push(gain);
+  }
   filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 800; filter.Q.value = 5;
   panner = audioCtx.createStereoPanner(); panner.pan.value = 0;
   masterGain = audioCtx.createGain(); masterGain.gain.value = 0.4;
   convolver = audioCtx.createConvolver(); convolver.buffer = createReverb(audioCtx, 2.5);
   reverbGain = audioCtx.createGain(); reverbGain.gain.value = 0.4;
   dryGain = audioCtx.createGain(); dryGain.gain.value = 0.7;
-  gain1.connect(filter); gain2.connect(filter); filter.connect(panner);
+  for (const g of gains) g.connect(filter);
+  filter.connect(panner);
   panner.connect(dryGain); panner.connect(convolver); convolver.connect(reverbGain);
   dryGain.connect(masterGain); reverbGain.connect(masterGain); masterGain.connect(audioCtx.destination);
-  osc1.start(); osc2.start();
+  for (const osc of oscs) osc.start();
 }
 
-function updateAudio(p, L1, L2) {
+function updateAudio(p, L) {
   if (!audioCtx || !soundOn) return;
   const t = audioCtx.currentTime;
   const baseFreq = parseFloat($('base').value);
   const vol = parseFloat($('vol').value);
   const rev = parseFloat($('rev').value);
-  const normTh1 = (Math.sin(th1)+1)/2, normTh2 = (Math.sin(th2)+1)/2;
-  const f1 = quantizeToScale(baseFreq*(0.5+normTh1*1.5), baseFreq);
-  const f2 = quantizeToScale(baseFreq*1.5*(0.5+normTh2*1.5), baseFreq);
-  osc1.frequency.setTargetAtTime(f1, t, 0.05);
-  osc2.frequency.setTargetAtTime(f2, t, 0.05);
-  gain1.gain.setTargetAtTime(Math.min(1,Math.abs(w1)/12)*0.5, t, 0.03);
-  gain2.gain.setTargetAtTime(Math.min(1,Math.abs(w2)/12)*0.4, t, 0.03);
-  filter.frequency.setTargetAtTime(200+Math.min((Math.abs(w1)+Math.abs(w2))/20,1)*3800, t, 0.04);
-  const tipX = L1*Math.sin(th1)+L2*Math.sin(th2);
-  panner.pan.setTargetAtTime(Math.max(-1,Math.min(1,tipX/(L1+L2))), t, 0.03);
+  const n = numPendulums;
+  const freqMult = [1, 1.5, 2];
+  const gainMult = [0.5, 0.4, 0.3];
+  for (let i = 0; i < 3; i++) {
+    if (i < n) {
+      const norm = (Math.sin(th[i]) + 1) / 2;
+      const f = quantizeToScale(baseFreq * freqMult[i] * (0.5 + norm * 1.5), baseFreq);
+      oscs[i].frequency.setTargetAtTime(f, t, 0.05);
+      gains[i].gain.setTargetAtTime(Math.min(1, Math.abs(w[i]) / 12) * gainMult[i], t, 0.03);
+    } else {
+      gains[i].gain.setTargetAtTime(0, t, 0.03);
+    }
+  }
+  let wSum = 0;
+  for (let i = 0; i < n; i++) wSum += Math.abs(w[i]);
+  filter.frequency.setTargetAtTime(200 + Math.min(wSum / (n * 10), 1) * 3800, t, 0.04);
+  const totalLen = L.reduce((a, b) => a + b, 0);
+  const pos = getPositions(th, L);
+  const tipX = pos[n].x;
+  panner.pan.setTargetAtTime(Math.max(-1, Math.min(1, tipX / totalLen)), t, 0.03);
   masterGain.gain.setTargetAtTime(vol, t, 0.05);
   reverbGain.gain.setTargetAtTime(rev, t, 0.05);
-  dryGain.gain.setTargetAtTime(1-rev*0.5, t, 0.05);
+  dryGain.gain.setTargetAtTime(1 - rev * 0.5, t, 0.05);
 }
 
 $('btnSound').addEventListener('click', () => {
@@ -394,126 +508,86 @@ $('btnSound').addEventListener('click', () => {
   $('btnSound').classList.toggle('active', soundOn);
   if (audioCtx) {
     if (soundOn) audioCtx.resume();
-    else { gain1.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05); gain2.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05); }
+    else { for (const g of gains) g.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05); }
   }
 });
 
 // === Spectrogram drawing ===
 function drawSpectrogram(p) {
+  const n = numPendulums;
   const spectroH = Math.floor(H * 0.32);
   const spectroY = H - spectroH;
-  const plotLeft = 40;
-  const plotRight = W - 10;
-  const plotTop = spectroY + 20;
-  const plotBottom = H - 20;
-  const plotW = plotRight - plotLeft;
-  const plotH = plotBottom - plotTop;
+  const plotLeft = 40, plotRight = W - 10;
+  const plotTop = spectroY + 20, plotBottom = H - 20;
+  const plotW = plotRight - plotLeft, plotH = plotBottom - plotTop;
 
-  // Background
   ctx.fillStyle = '#0e0e18';
   ctx.fillRect(0, spectroY, W, spectroH);
-  ctx.strokeStyle = '#1a1a2e';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, spectroY);
-  ctx.lineTo(W, spectroY);
-  ctx.stroke();
+  ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, spectroY); ctx.lineTo(W, spectroY); ctx.stroke();
 
-  // Axes
-  ctx.strokeStyle = '#2a2a44';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#2a2a44'; ctx.lineWidth = 1;
   ctx.strokeRect(plotLeft, plotTop, plotW, plotH);
 
-  // Y-axis labels (angle 0-360)
-  ctx.fillStyle = '#556677';
-  ctx.font = '10px sans-serif';
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#556677'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   for (let deg = 0; deg <= 360; deg += 90) {
     const y = plotBottom - (deg / 360) * plotH;
     ctx.fillText(deg + '\u00b0', plotLeft - 4, y);
     if (deg > 0 && deg < 360) {
-      ctx.strokeStyle = '#1a1a2e';
-      ctx.beginPath();
-      ctx.moveTo(plotLeft, y);
-      ctx.lineTo(plotRight, y);
-      ctx.stroke();
+      ctx.strokeStyle = '#1a1a2e'; ctx.beginPath();
+      ctx.moveTo(plotLeft, y); ctx.lineTo(plotRight, y); ctx.stroke();
     }
   }
 
-  // X-axis: time
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   const win = p.spectroWindow;
-  const tEnd = simTime;
-  const tStart = tEnd - win;
-
-  // Time grid lines
+  const tEnd = simTime, tStart = tEnd - win;
   const timeStep = win <= 10 ? 1 : win <= 30 ? 5 : 10;
   const firstTick = Math.ceil(tStart / timeStep) * timeStep;
   for (let t = firstTick; t <= tEnd; t += timeStep) {
     const x = plotLeft + ((t - tStart) / win) * plotW;
     if (x < plotLeft || x > plotRight) continue;
-    ctx.strokeStyle = '#1a1a2e';
-    ctx.beginPath();
-    ctx.moveTo(x, plotTop);
-    ctx.lineTo(x, plotBottom);
-    ctx.stroke();
-    ctx.fillStyle = '#556677';
-    ctx.fillText(t.toFixed(0) + 's', x, plotBottom + 3);
+    ctx.strokeStyle = '#1a1a2e'; ctx.beginPath();
+    ctx.moveTo(x, plotTop); ctx.lineTo(x, plotBottom); ctx.stroke();
+    ctx.fillStyle = '#556677'; ctx.fillText(t.toFixed(0) + 's', x, plotBottom + 3);
   }
 
-  // Title
-  ctx.fillStyle = '#667788';
-  ctx.font = '10px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#667788'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText('Angle vs Time', plotLeft, spectroY + 4);
 
   // Legend
   ctx.textAlign = 'right';
-  ctx.fillStyle = '#ff4444';
-  ctx.fillText('\u25cf \u03b81', plotRight - 50, spectroY + 4);
-  ctx.fillStyle = '#4488ff';
-  ctx.fillText('\u25cf \u03b82', plotRight, spectroY + 4);
+  const labels = ['\u03b81', '\u03b82', '\u03b83'];
+  const legendColors = ['#ff4444', '#4488ff', '#44cc66'];
+  for (let i = n - 1; i >= 0; i--) {
+    ctx.fillStyle = legendColors[i];
+    ctx.fillText('\u25cf ' + labels[i], plotRight - (n - 1 - i) * 50, spectroY + 4);
+  }
 
   if (angleHistory.length < 2) return;
 
-  // Clip to plot area
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(plotLeft, plotTop, plotW, plotH);
-  ctx.clip();
+  ctx.beginPath(); ctx.rect(plotLeft, plotTop, plotW, plotH); ctx.clip();
 
-  // Draw scatter dots with momentum-based brightness
-  // Find max angular velocity for brightness scaling
   let maxW = 1;
   for (const pt of angleHistory) {
-    const aw = Math.abs(pt.w1) + Math.abs(pt.w2);
+    let aw = 0;
+    for (let i = 0; i < n; i++) aw += Math.abs(pt.ws[i]);
     if (aw > maxW) maxW = aw;
   }
 
   for (const pt of angleHistory) {
     if (pt.t < tStart) continue;
     const x = plotLeft + ((pt.t - tStart) / win) * plotW;
-
-    // Pendulum 1 - red, brightness from |w1|
-    const b1 = 0.2 + 0.8 * Math.min(1, Math.abs(pt.w1) / (maxW * 0.5));
-    const a1deg = pt.a1;
-    const y1 = plotBottom - (a1deg / 360) * plotH;
-    ctx.fillStyle = `rgba(${Math.round(255*b1)}, ${Math.round(60*b1)}, ${Math.round(40*b1)}, ${0.3 + b1 * 0.6})`;
-    ctx.beginPath();
-    ctx.arc(x, y1, 1.5 + b1, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Pendulum 2 - blue, brightness from |w2|
-    const b2 = 0.2 + 0.8 * Math.min(1, Math.abs(pt.w2) / (maxW * 0.5));
-    const a2deg = pt.a2;
-    const y2 = plotBottom - (a2deg / 360) * plotH;
-    ctx.fillStyle = `rgba(${Math.round(50*b2)}, ${Math.round(130*b2)}, ${Math.round(255*b2)}, ${0.3 + b2 * 0.6})`;
-    ctx.beginPath();
-    ctx.arc(x, y2, 1.5 + b2, 0, Math.PI * 2);
-    ctx.fill();
+    for (let i = 0; i < n; i++) {
+      const b = 0.2 + 0.8 * Math.min(1, Math.abs(pt.ws[i]) / (maxW * 0.5));
+      const y = plotBottom - (pt.angles[i] / 360) * plotH;
+      const [r, g, bl] = PEND_COLORS[i].rgb;
+      ctx.fillStyle = `rgba(${Math.round(r * b)}, ${Math.round(g * b)}, ${Math.round(bl * b)}, ${0.3 + b * 0.6})`;
+      ctx.beginPath(); ctx.arc(x, y, 1.5 + b, 0, Math.PI * 2); ctx.fill();
+    }
   }
 
   ctx.restore();
@@ -528,33 +602,36 @@ function frame(ts) {
   lastTime = ts;
 
   const p = params();
-  const L1 = p.l1 * p.elas;
-  const L2 = p.l2 * p.elas;
+  const n = numPendulums;
+  const L = p.l.slice(0, n).map(li => li * p.elas);
 
   // Physics
   if (!paused) {
     const dtSim = dtReal * p.speed;
-    const n = Math.max(1, Math.ceil(dtSim / 0.002));
-    const h = dtSim / n;
-    for (let i = 0; i < n; i++) {
+    const steps = Math.max(1, Math.ceil(dtSim / 0.002));
+    const h = dtSim / steps;
+    for (let i = 0; i < steps; i++) {
       step(h, p);
       simTime += h;
     }
-    const x2 = L1 * Math.sin(th1) + L2 * Math.sin(th2);
-    const y2 = L1 * Math.cos(th1) + L2 * Math.cos(th2);
-    const vx = L1 * w1 * Math.cos(th1) + L2 * w2 * Math.cos(th2);
-    const vy = -L1 * w1 * Math.sin(th1) - L2 * w2 * Math.sin(th2);
-    trail.push({ x: x2, y: y2, vx, vy, mom: Math.sqrt(vx*vx+vy*vy), t: simTime });
+    const pos = getPositions(th, L);
+    const tip = pos[n];
+    // Velocity of tip
+    let vx = 0, vy = 0;
+    for (let i = 0; i < n; i++) {
+      vx += L[i] * w[i] * Math.cos(th[i]);
+      vy -= L[i] * w[i] * Math.sin(th[i]);
+    }
+    const mom = Math.sqrt(vx * vx + vy * vy);
+    trail.push({ x: tip.x, y: tip.y, vx, vy, mom, t: simTime });
 
-    // Record angles for spectrogram
-    angleHistory.push({ t: simTime, a1: normAngle(th1), a2: normAngle(th2), w1, w2 });
+    angleHistory.push({ t: simTime, angles: th.map(normAngle), ws: w.slice() });
 
-    // Prune to window
     const cutoff = simTime - p.spectroWindow;
     while (trail.length > 0 && trail[0].t < cutoff) trail.shift();
     while (angleHistory.length > 0 && angleHistory[0].t < cutoff) angleHistory.shift();
 
-    updateAudio(p, L1, L2);
+    updateAudio(p, L);
   }
 
   // Clear
@@ -564,16 +641,17 @@ function frame(ts) {
   const pendH = showSpectro ? H * 0.65 : H;
   const cx = W / 2;
   const cy = pendH * 0.45;
-  const scale = Math.min(W, pendH) / (2 * (L1 + L2) + 0.5) * 0.6;
+  const totalLen = L.reduce((a, b) => a + b, 0);
+  const scale = Math.min(W, pendH) / (2 * totalLen + 0.5) * 0.6;
 
-  // --- Trail ---
+  // Trail
   if (showTrail && trail.length > 1) {
     ctx.lineWidth = 1.5;
     for (let i = 1; i < trail.length; i++) {
-      const pt = trail[i], prev = trail[i-1];
+      const pt = trail[i], prev = trail[i - 1];
       const age = (simTime - pt.t) / p.spectroWindow;
       const alpha = Math.max(0, (1 - age) * 0.7);
-      const hue = ((Math.atan2(pt.vy, pt.vx) / (2*Math.PI) + 1) % 1) * 360;
+      const hue = ((Math.atan2(pt.vy, pt.vx) / (2 * Math.PI) + 1) % 1) * 360;
       ctx.strokeStyle = `hsla(${hue}, 80%, 60%, ${alpha})`;
       ctx.beginPath();
       ctx.moveTo(cx + prev.x * scale, cy + prev.y * scale);
@@ -582,54 +660,50 @@ function frame(ts) {
     }
   }
 
-  // --- Pendulum ---
-  const x1 = L1 * Math.sin(th1);
-  const y1 = L1 * Math.cos(th1);
-  const x2 = x1 + L2 * Math.sin(th2);
-  const y2 = y1 + L2 * Math.cos(th2);
-  const sx1 = cx + x1 * scale, sy1 = cy + y1 * scale;
-  const sx2 = cx + x2 * scale, sy2 = cy + y2 * scale;
+  // Pendulum
+  const pos = getPositions(th, L);
 
   // Rods
-  ctx.strokeStyle = '#8899aa';
-  ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(sx1, sy1); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(sx1, sy1); ctx.lineTo(sx2, sy2); ctx.stroke();
+  ctx.strokeStyle = '#8899aa'; ctx.lineWidth = 3;
+  for (let i = 0; i < n; i++) {
+    const from = pos[i], to = pos[i + 1];
+    ctx.beginPath();
+    ctx.moveTo(cx + from.x * scale, cy + from.y * scale);
+    ctx.lineTo(cx + to.x * scale, cy + to.y * scale);
+    ctx.stroke();
+  }
 
   // Pivot
   ctx.fillStyle = '#667788';
-  ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2); ctx.fill();
 
-  // Mass 1
-  const r1 = 8 + p.m1 * 2.5;
-  ctx.fillStyle = '#ee4444';
-  ctx.shadowColor = '#ee4444';
-  ctx.shadowBlur = 12;
-  ctx.beginPath(); ctx.arc(sx1, sy1, r1, 0, Math.PI*2); ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = '#ff6666'; ctx.lineWidth = 2; ctx.stroke();
-
-  // Mass 2
-  const r2 = 8 + p.m2 * 2.5;
-  ctx.fillStyle = '#4488ff';
-  ctx.shadowColor = '#4488ff';
-  ctx.shadowBlur = 12;
-  ctx.beginPath(); ctx.arc(sx2, sy2, r2, 0, Math.PI*2); ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = '#66aaff'; ctx.lineWidth = 2; ctx.stroke();
+  // Masses
+  for (let i = 0; i < n; i++) {
+    const mx = cx + pos[i + 1].x * scale;
+    const my = cy + pos[i + 1].y * scale;
+    const r = 8 + p.m[i] * 2.5;
+    const c = PEND_COLORS[i];
+    ctx.fillStyle = c.fill;
+    ctx.shadowColor = c.glow; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.arc(mx, my, r, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = c.stroke; ctx.lineWidth = 2; ctx.stroke();
+  }
 
   // Info overlay
-  const ke = 0.5*p.m1*(L1*w1)**2 + 0.5*p.m2*((L1*w1)**2 + (L2*w2)**2);
-  $('info').innerHTML =
-    `t = ${simTime.toFixed(1)}s<br>` +
-    `\u03b81 = ${normAngle(th1).toFixed(1)}\u00b0<br>` +
-    `\u03b82 = ${normAngle(th2).toFixed(1)}\u00b0<br>` +
-    `KE \u2248 ${ke.toFixed(1)}`;
-
-  // --- Spectrogram ---
-  if (showSpectro) {
-    drawSpectrogram(p);
+  let info = `t = ${simTime.toFixed(1)}s<br>`;
+  for (let i = 0; i < n; i++) info += `\u03b8${i + 1} = ${normAngle(th[i]).toFixed(1)}\u00b0<br>`;
+  let ke = 0;
+  for (let i = 0; i < n; i++) {
+    let vx = 0, vy = 0;
+    for (let j = 0; j <= i; j++) { vx += L[j] * w[j] * Math.cos(th[j]); vy += L[j] * w[j] * Math.sin(th[j]); }
+    ke += 0.5 * p.m[i] * (vx * vx + vy * vy);
   }
+  info += `KE \u2248 ${ke.toFixed(1)}`;
+  $('info').innerHTML = info;
+
+  // Spectrogram
+  if (showSpectro) drawSpectrogram(p);
 }
 
 requestAnimationFrame(frame);
