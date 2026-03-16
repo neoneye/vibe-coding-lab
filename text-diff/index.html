@@ -143,21 +143,22 @@ textarea::placeholder { color: #585b70; }
 
 /* Side-by-side view */
 .side-by-side {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
   height: 100%;
-}
-
-.side-by-side.hidden { display: none; }
-
-.diff-pane {
   overflow: auto;
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   font-size: 13px;
   line-height: 1.6;
 }
 
-.diff-pane-left { border-right: 1px solid #313244; }
+.side-by-side.hidden { display: none; }
+
+.diff-table .side-divider {
+  width: 1px;
+  min-width: 1px;
+  max-width: 1px;
+  padding: 0;
+  background: #313244;
+}
 
 /* Unified view */
 .unified-view {
@@ -271,17 +272,6 @@ table.diff-table {
 .stats-bar .removed { color: #f38ba8; }
 .stats-bar .changed { color: #fab387; }
 
-/* Sync scrolling indicator */
-.scroll-sync-label {
-  font-size: 12px;
-  color: #a6adc8;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.scroll-sync-label input { accent-color: #cba6f7; }
-
 /* Drop zone styling */
 textarea.drag-over {
   background: #252540;
@@ -298,9 +288,6 @@ textarea.drag-over {
       <button class="active" data-view="side">Side by Side</button>
       <button data-view="unified">Unified</button>
     </div>
-    <label class="scroll-sync-label" id="syncLabel" style="display:none;">
-      <input type="checkbox" id="syncScroll" checked> Sync scroll
-    </label>
     <button class="primary" id="diffBtn">Compare</button>
     <button id="swapBtn">Swap</button>
     <button id="clearBtn">Clear</button>
@@ -328,10 +315,7 @@ textarea.drag-over {
 
 <div class="diff-area hidden" id="diffArea">
   <div class="stats-bar" id="statsBar"></div>
-  <div class="side-by-side" id="sideView">
-    <div class="diff-pane diff-pane-left" id="paneLeft"></div>
-    <div class="diff-pane diff-pane-right" id="paneRight"></div>
-  </div>
+  <div class="side-by-side" id="sideView"></div>
   <div class="unified-view hidden" id="unifiedView"></div>
 </div>
 
@@ -599,26 +583,31 @@ function computeAndRender() {
   document.getElementById('inputArea').classList.add('hidden');
   document.getElementById('diffArea').classList.remove('hidden');
   document.getElementById('viewToggle').style.display = '';
-  document.getElementById('syncLabel').style.display = '';
 }
 
 function renderSideBySide(groups, aLines, bLines) {
-  let leftHtml = '<table class="diff-table">';
-  let rightHtml = '<table class="diff-table">';
+  let html = '<table class="diff-table"><colgroup>' +
+    '<col style="width:50px"><col style="width:calc(50% - 51px)">' +
+    '<col style="width:1px">' +
+    '<col style="width:50px"><col style="width:calc(50% - 51px)">' +
+    '</colgroup>';
+
+  function sideRow(lNum, lContent, lCls, rNum, rContent, rCls) {
+    return `<tr><td class="line-num ${lCls}">${lNum}</td><td class="line-content ${lCls}">${lContent}</td>` +
+      `<td class="side-divider"></td>` +
+      `<td class="line-num ${rCls}">${rNum}</td><td class="line-content ${rCls}">${rContent}</td></tr>`;
+  }
 
   for (const g of groups) {
     if (g.type === 'equal') {
-      leftHtml += lineRow(g.aIdx + 1, esc(aLines[g.aIdx]), '');
-      rightHtml += lineRow(g.bIdx + 1, esc(bLines[g.bIdx]), '');
+      html += sideRow(g.aIdx + 1, esc(aLines[g.aIdx]), '', g.bIdx + 1, esc(bLines[g.bIdx]), '');
     } else if (g.type === 'removed') {
       for (const idx of g.aIdxs) {
-        leftHtml += lineRow(idx + 1, esc(aLines[idx]), 'line-removed');
-        rightHtml += lineRow('', '&nbsp;', '');
+        html += sideRow(idx + 1, esc(aLines[idx]), 'line-removed', '', '&nbsp;', '');
       }
     } else if (g.type === 'added') {
       for (const idx of g.bIdxs) {
-        leftHtml += lineRow('', '&nbsp;', '');
-        rightHtml += lineRow(idx + 1, esc(bLines[idx]), 'line-added');
+        html += sideRow('', '&nbsp;', '', idx + 1, esc(bLines[idx]), 'line-added');
       }
     } else if (g.type === 'changed') {
       const maxLen = Math.max(g.aIdxs.length, g.bIdxs.length);
@@ -627,24 +616,18 @@ function renderSideBySide(groups, aLines, bLines) {
         const bIdx = g.bIdxs[i];
         if (aIdx !== undefined && bIdx !== undefined) {
           const cd = charDiff(aLines[aIdx], bLines[bIdx]);
-          leftHtml += lineRow(aIdx + 1, renderCharHighlight(cd.old), 'line-changed-old');
-          rightHtml += lineRow(bIdx + 1, renderCharHighlight(cd.new), 'line-changed-new');
+          html += sideRow(aIdx + 1, renderCharHighlight(cd.old), 'line-changed-old', bIdx + 1, renderCharHighlight(cd.new), 'line-changed-new');
         } else if (aIdx !== undefined) {
-          leftHtml += lineRow(aIdx + 1, esc(aLines[aIdx]), 'line-removed');
-          rightHtml += lineRow('', '&nbsp;', '');
+          html += sideRow(aIdx + 1, esc(aLines[aIdx]), 'line-removed', '', '&nbsp;', '');
         } else {
-          leftHtml += lineRow('', '&nbsp;', '');
-          rightHtml += lineRow(bIdx + 1, esc(bLines[bIdx]), 'line-added');
+          html += sideRow('', '&nbsp;', '', bIdx + 1, esc(bLines[bIdx]), 'line-added');
         }
       }
     }
   }
 
-  leftHtml += '</table>';
-  rightHtml += '</table>';
-
-  document.getElementById('paneLeft').innerHTML = leftHtml;
-  document.getElementById('paneRight').innerHTML = rightHtml;
+  html += '</table>';
+  document.getElementById('sideView').innerHTML = html;
 }
 
 function renderUnified(groups, aLines, bLines) {
@@ -708,7 +691,6 @@ document.getElementById('diffBtn').addEventListener('click', () => {
     document.getElementById('inputArea').classList.remove('hidden');
     document.getElementById('diffArea').classList.add('hidden');
     document.getElementById('viewToggle').style.display = 'none';
-    document.getElementById('syncLabel').style.display = 'none';
     btn.textContent = 'Compare';
   }
 });
@@ -781,24 +763,6 @@ document.getElementById('viewToggle').addEventListener('click', (e) => {
   document.getElementById('sideView').classList.toggle('hidden', view !== 'side');
   document.getElementById('unifiedView').classList.toggle('hidden', view !== 'unified');
 });
-
-// Sync scroll for side-by-side
-const paneL = document.getElementById('paneLeft');
-const paneR = document.getElementById('paneRight');
-let syncing = false;
-
-function syncHandler(source, target) {
-  return () => {
-    if (syncing || !document.getElementById('syncScroll').checked) return;
-    syncing = true;
-    target.scrollTop = source.scrollTop;
-    target.scrollLeft = source.scrollLeft;
-    syncing = false;
-  };
-}
-
-paneL.addEventListener('scroll', syncHandler(paneL, paneR));
-paneR.addEventListener('scroll', syncHandler(paneR, paneL));
 
 // Keyboard shortcut: Ctrl/Cmd+Enter to compare
 document.addEventListener('keydown', (e) => {
