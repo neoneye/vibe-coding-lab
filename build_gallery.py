@@ -54,11 +54,11 @@ def find_projects():
             continue
         if not os.path.isfile(os.path.join(subdir, "index.html")):
             continue
-        # Find screenshot (screenshot1.jpg, .jpeg, .png, .webp)
+        # Find screenshot (screenshot1.jpg, .jpeg, .png, .webp, .gif)
         screenshots = globmod.glob(os.path.join(subdir, "screenshot1.*"))
         screenshot = None
         for s in screenshots:
-            if s.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+            if s.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
                 screenshot = os.path.basename(s)
                 break
         projects.append({"dir": entry, "screenshot": screenshot})
