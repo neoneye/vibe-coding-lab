@@ -207,6 +207,10 @@
       </div>
     </div>
     <div class="param">
+      <label>Duty cycle <span id="v_duty">0.50</span></label>
+      <input type="range" id="duty" min="0.05" max="0.95" step="0.01" value="0.50">
+    </div>
+    <div class="param">
       <label>Volume <span id="v_vol">0.4</span></label>
       <input type="range" id="vol" min="0" max="1" step="0.01" value="0.4">
     </div>
@@ -427,6 +431,7 @@ $('btnSpectro').addEventListener('click', () => {
 // === Audio Synth ===
 let audioCtx = null, soundOn = false;
 let waveType = 'sine';
+let dutyCycle = 0.5;
 let oscs = [], gains = [], masterGain, panner, filter, convolver, reverbGain, dryGain;
 
 const SCALE_RATIOS = [1, 9/8, 5/4, 3/2, 5/3, 2];
@@ -454,18 +459,53 @@ function createReverb(actx, duration) {
   return buf;
 }
 
+function buildWave(actx, type, duty) {
+  const N = 64, S = 4096;
+  const wave = new Float32Array(S);
+  for (let i = 0; i < S; i++) {
+    const p = i / S;
+    if (type === 'sine') {
+      const m = p < duty ? 0.5 * p / duty : 0.5 + 0.5 * (p - duty) / (1 - duty);
+      wave[i] = Math.sin(2 * Math.PI * m);
+    } else if (type === 'sawtooth') {
+      wave[i] = p < duty ? -1 + 2 * p / duty : 1 - 2 * (p - duty) / (1 - duty);
+    } else {
+      wave[i] = p < duty ? 1 : -1;
+    }
+  }
+  const real = new Float32Array(N + 1);
+  const imag = new Float32Array(N + 1);
+  for (let n = 1; n <= N; n++) {
+    let cr = 0, ci = 0;
+    for (let i = 0; i < S; i++) {
+      const a = 2 * Math.PI * n * i / S;
+      cr += wave[i] * Math.cos(a);
+      ci += wave[i] * Math.sin(a);
+    }
+    real[n] = 2 * cr / S;
+    imag[n] = 2 * ci / S;
+  }
+  return actx.createPeriodicWave(real, imag, { disableNormalization: false });
+}
+
+function updateWaveforms() {
+  if (!audioCtx) return;
+  const pw = buildWave(audioCtx, waveType, dutyCycle);
+  for (const osc of oscs) osc.setPeriodicWave(pw);
+}
+
 function initAudio() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const types = [waveType, waveType, waveType];
   const freqs = [220, 330, 440];
   oscs = []; gains = [];
   for (let i = 0; i < 3; i++) {
     const osc = audioCtx.createOscillator();
-    osc.type = types[i]; osc.frequency.value = freqs[i];
+    osc.frequency.value = freqs[i];
     const gain = audioCtx.createGain(); gain.gain.value = 0;
     osc.connect(gain);
     oscs.push(osc); gains.push(gain);
   }
+  updateWaveforms();
   filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 800; filter.Q.value = 5;
   panner = audioCtx.createStereoPanner(); panner.pan.value = 0;
   masterGain = audioCtx.createGain(); masterGain.gain.value = 0.4;
@@ -527,11 +567,15 @@ function setWaveType(type) {
   $('btnWaveSine').classList.toggle('active', type === 'sine');
   $('btnWaveSaw').classList.toggle('active', type === 'sawtooth');
   $('btnWaveSquare').classList.toggle('active', type === 'square');
-  for (const osc of oscs) osc.type = type;
+  updateWaveforms();
 }
 $('btnWaveSine').addEventListener('click', () => setWaveType('sine'));
 $('btnWaveSaw').addEventListener('click', () => setWaveType('sawtooth'));
 $('btnWaveSquare').addEventListener('click', () => setWaveType('square'));
+$('duty').addEventListener('input', () => {
+  dutyCycle = parseFloat($('duty').value);
+  updateWaveforms();
+});
 
 // === Spectrogram drawing ===
 function drawSpectrogram(p) {
