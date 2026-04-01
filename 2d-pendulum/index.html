@@ -255,6 +255,7 @@ let numPendulums = 2;
 let th = [], w = [];
 let trail = [];
 let angleHistory = [];
+let lengthHistory = [];
 let W = 0, H = 0;
 
 // Pendulum colors: red, blue, green
@@ -296,6 +297,7 @@ function resetSim() {
   simTime = 0;
   trail = [];
   angleHistory = [];
+  lengthHistory = [];
 }
 resetSim();
 
@@ -579,26 +581,59 @@ $('duty').addEventListener('input', () => {
 });
 
 // === Spectrogram drawing ===
+function drawTimeAxis(plotLeft, plotRight, plotBottom, win, tStart, tEnd) {
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const timeStep = win <= 10 ? 1 : win <= 30 ? 5 : 10;
+  const firstTick = Math.ceil(tStart / timeStep) * timeStep;
+  for (let t = firstTick; t <= tEnd; t += timeStep) {
+    const x = plotLeft + ((t - tStart) / win) * (plotRight - plotLeft);
+    if (x < plotLeft || x > plotRight) continue;
+    ctx.fillStyle = '#556677'; ctx.fillText(t.toFixed(0) + 's', x, plotBottom + 3);
+  }
+}
+
+function drawTimeGrid(plotLeft, plotRight, plotTop, plotBottom, win, tStart, tEnd) {
+  const timeStep = win <= 10 ? 1 : win <= 30 ? 5 : 10;
+  const firstTick = Math.ceil(tStart / timeStep) * timeStep;
+  for (let t = firstTick; t <= tEnd; t += timeStep) {
+    const x = plotLeft + ((t - tStart) / win) * (plotRight - plotLeft);
+    if (x < plotLeft || x > plotRight) continue;
+    ctx.strokeStyle = '#1a1a2e'; ctx.beginPath();
+    ctx.moveTo(x, plotTop); ctx.lineTo(x, plotBottom); ctx.stroke();
+  }
+}
+
 function drawSpectrogram(p) {
   const n = numPendulums;
-  const spectroH = Math.floor(H * 0.32);
+  const spectroH = Math.floor(H * 0.50);
   const spectroY = H - spectroH;
   const plotLeft = 40, plotRight = W - 10;
-  const plotTop = spectroY + 20, plotBottom = H - 20;
-  const plotW = plotRight - plotLeft, plotH = plotBottom - plotTop;
+  const chartGap = 14;
+  const halfH = Math.floor((spectroH - chartGap - 40) / 2);
 
+  // Angle chart region
+  const aTop = spectroY + 20, aBottom = aTop + halfH;
+  // Length chart region
+  const lTop = aBottom + chartGap + 16, lBottom = lTop + halfH;
+
+  const plotW = plotRight - plotLeft;
+  const win = p.spectroWindow;
+  const tEnd = simTime, tStart = tEnd - win;
+
+  // Background
   ctx.fillStyle = '#0e0e18';
   ctx.fillRect(0, spectroY, W, spectroH);
   ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, spectroY); ctx.lineTo(W, spectroY); ctx.stroke();
 
+  // === Angle vs Time chart ===
   ctx.strokeStyle = '#2a2a44'; ctx.lineWidth = 1;
-  ctx.strokeRect(plotLeft, plotTop, plotW, plotH);
+  ctx.strokeRect(plotLeft, aTop, plotW, halfH);
 
   ctx.fillStyle = '#556677'; ctx.font = '10px sans-serif';
   ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   for (let deg = 0; deg <= 360; deg += 90) {
-    const y = plotBottom - (deg / 360) * plotH;
+    const y = aBottom - (deg / 360) * halfH;
     ctx.fillText(deg + '\u00b0', plotLeft - 4, y);
     if (deg > 0 && deg < 360) {
       ctx.strokeStyle = '#1a1a2e'; ctx.beginPath();
@@ -606,18 +641,7 @@ function drawSpectrogram(p) {
     }
   }
 
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  const win = p.spectroWindow;
-  const tEnd = simTime, tStart = tEnd - win;
-  const timeStep = win <= 10 ? 1 : win <= 30 ? 5 : 10;
-  const firstTick = Math.ceil(tStart / timeStep) * timeStep;
-  for (let t = firstTick; t <= tEnd; t += timeStep) {
-    const x = plotLeft + ((t - tStart) / win) * plotW;
-    if (x < plotLeft || x > plotRight) continue;
-    ctx.strokeStyle = '#1a1a2e'; ctx.beginPath();
-    ctx.moveTo(x, plotTop); ctx.lineTo(x, plotBottom); ctx.stroke();
-    ctx.fillStyle = '#556677'; ctx.fillText(t.toFixed(0) + 's', x, plotBottom + 3);
-  }
+  drawTimeGrid(plotLeft, plotRight, aTop, aBottom, win, tStart, tEnd);
 
   ctx.fillStyle = '#667788'; ctx.font = '10px sans-serif';
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
@@ -632,31 +656,76 @@ function drawSpectrogram(p) {
     ctx.fillText('\u25cf ' + labels[i], plotRight - (n - 1 - i) * 50, spectroY + 4);
   }
 
-  if (angleHistory.length < 2) return;
+  if (angleHistory.length >= 2) {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(plotLeft, aTop, plotW, halfH); ctx.clip();
 
-  ctx.save();
-  ctx.beginPath(); ctx.rect(plotLeft, plotTop, plotW, plotH); ctx.clip();
+    let maxW = 1;
+    for (const pt of angleHistory) {
+      let aw = 0;
+      for (let i = 0; i < n; i++) aw += Math.abs(pt.ws[i]);
+      if (aw > maxW) maxW = aw;
+    }
 
-  let maxW = 1;
-  for (const pt of angleHistory) {
-    let aw = 0;
-    for (let i = 0; i < n; i++) aw += Math.abs(pt.ws[i]);
-    if (aw > maxW) maxW = aw;
+    for (const pt of angleHistory) {
+      if (pt.t < tStart) continue;
+      const x = plotLeft + ((pt.t - tStart) / win) * plotW;
+      for (let i = 0; i < n; i++) {
+        const b = 0.2 + 0.8 * Math.min(1, Math.abs(pt.ws[i]) / (maxW * 0.5));
+        const y = aBottom - (pt.angles[i] / 360) * halfH;
+        const [r, g, bl] = PEND_COLORS[i].rgb;
+        ctx.fillStyle = `rgba(${Math.round(r * b)}, ${Math.round(g * b)}, ${Math.round(bl * b)}, ${0.3 + b * 0.6})`;
+        ctx.beginPath(); ctx.arc(x, y, 1.5 + b, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.restore();
   }
 
-  for (const pt of angleHistory) {
-    if (pt.t < tStart) continue;
-    const x = plotLeft + ((pt.t - tStart) / win) * plotW;
-    for (let i = 0; i < n; i++) {
-      const b = 0.2 + 0.8 * Math.min(1, Math.abs(pt.ws[i]) / (maxW * 0.5));
-      const y = plotBottom - (pt.angles[i] / 360) * plotH;
-      const [r, g, bl] = PEND_COLORS[i].rgb;
-      ctx.fillStyle = `rgba(${Math.round(r * b)}, ${Math.round(g * b)}, ${Math.round(bl * b)}, ${0.3 + b * 0.6})`;
-      ctx.beginPath(); ctx.arc(x, y, 1.5 + b, 0, Math.PI * 2); ctx.fill();
+  // === Absolute Length vs Time chart ===
+  const L = p.l.slice(0, n).map(li => li * p.elas);
+  const maxLen = L.reduce((a, b) => a + b, 0);
+
+  ctx.strokeStyle = '#2a2a44'; ctx.lineWidth = 1;
+  ctx.strokeRect(plotLeft, lTop, plotW, halfH);
+
+  ctx.fillStyle = '#556677'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  const lenSteps = 4;
+  for (let i = 0; i <= lenSteps; i++) {
+    const val = (i / lenSteps) * maxLen;
+    const y = lBottom - (i / lenSteps) * halfH;
+    ctx.fillText(val.toFixed(1), plotLeft - 4, y);
+    if (i > 0 && i < lenSteps) {
+      ctx.strokeStyle = '#1a1a2e'; ctx.beginPath();
+      ctx.moveTo(plotLeft, y); ctx.lineTo(plotRight, y); ctx.stroke();
     }
   }
 
-  ctx.restore();
+  drawTimeGrid(plotLeft, plotRight, lTop, lBottom, win, tStart, tEnd);
+  drawTimeAxis(plotLeft, plotRight, lBottom, win, tStart, tEnd);
+
+  ctx.fillStyle = '#667788'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText('Absolute Length vs Time', plotLeft, lTop - 14);
+
+  if (lengthHistory.length >= 2) {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(plotLeft, lTop, plotW, halfH); ctx.clip();
+
+    ctx.strokeStyle = '#ffaa44'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let started = false;
+    for (const pt of lengthHistory) {
+      if (pt.t < tStart) continue;
+      const x = plotLeft + ((pt.t - tStart) / win) * plotW;
+      const y = lBottom - (pt.len / maxLen) * halfH;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    ctx.restore();
+  }
 }
 
 // Main loop
@@ -693,9 +762,13 @@ function frame(ts) {
 
     angleHistory.push({ t: simTime, angles: th.map(normAngle), ws: w.slice() });
 
+    const absLen = Math.sqrt(tip.x * tip.x + tip.y * tip.y);
+    lengthHistory.push({ t: simTime, len: absLen });
+
     const cutoff = simTime - p.spectroWindow;
     while (trail.length > 0 && trail[0].t < cutoff) trail.shift();
     while (angleHistory.length > 0 && angleHistory[0].t < cutoff) angleHistory.shift();
+    while (lengthHistory.length > 0 && lengthHistory[0].t < cutoff) lengthHistory.shift();
 
     updateAudio(p, L);
   }
@@ -704,7 +777,7 @@ function frame(ts) {
   ctx.fillStyle = '#0a0a0f';
   ctx.fillRect(0, 0, W, H);
 
-  const pendH = showSpectro ? H * 0.65 : H;
+  const pendH = showSpectro ? H * 0.48 : H;
   const cx = W / 2;
   const cy = pendH * 0.45;
   const totalLen = L.reduce((a, b) => a + b, 0);
