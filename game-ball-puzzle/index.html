@@ -80,6 +80,21 @@ window.addEventListener('keyup', e => {
   }
 });
 
+// ── Physics State ──
+const physics = {
+  velocity: new THREE.Vector3(0, 0, 0),
+  grounded: false,
+  tiltX: 0,      // current world tilt on X axis (forward/back)
+  tiltZ: 0,      // current world tilt on Z axis (left/right)
+  gravity: -20,
+  maxTilt: 0.09,  // ~5 degrees in radians
+  tiltSpeed: 0.003,
+  tiltDamping: 0.92,
+  friction: 0.98,
+  jumpForce: 8,
+  fallThreshold: -20
+};
+
 // ── Ball ──
 const ballRadius = 0.5;
 const ballGeo = new THREE.SphereGeometry(ballRadius, 24, 24);
@@ -185,6 +200,128 @@ const goalLight = new THREE.PointLight(0xffdd44, 1, 8);
 goalLight.position.set(levelData.goal.x, levelData.goal.y + 2, levelData.goal.z);
 world.add(goalLight);
 
+// ── Physics Update ──
+function updatePhysics(dt) {
+  // Clamp dt to avoid physics explosions on tab-switch
+  dt = Math.min(dt, 0.05);
+
+  // ── Tilt ──
+  if (keys.up)    physics.tiltX += physics.tiltSpeed;
+  if (keys.down)  physics.tiltX -= physics.tiltSpeed;
+  if (keys.left)  physics.tiltZ -= physics.tiltSpeed;
+  if (keys.right) physics.tiltZ += physics.tiltSpeed;
+
+  // Damping when keys not pressed
+  if (!keys.up && !keys.down)  physics.tiltX *= physics.tiltDamping;
+  if (!keys.left && !keys.right) physics.tiltZ *= physics.tiltDamping;
+
+  // Clamp tilt
+  physics.tiltX = Math.max(-physics.maxTilt, Math.min(physics.maxTilt, physics.tiltX));
+  physics.tiltZ = Math.max(-physics.maxTilt, Math.min(physics.maxTilt, physics.tiltZ));
+
+  // Apply tilt to world group
+  world.rotation.x = physics.tiltX;
+  world.rotation.z = physics.tiltZ;
+
+  // ── Gravity (affected by tilt) ──
+  // Tilt creates a horizontal gravity component
+  const gravX = Math.sin(physics.tiltZ) * -physics.gravity * 0.5;
+  const gravZ = Math.sin(physics.tiltX) * physics.gravity * 0.5;
+
+  physics.velocity.x += gravX * dt;
+  physics.velocity.z += gravZ * dt;
+  physics.velocity.y += physics.gravity * dt;
+
+  // ── Friction ──
+  if (physics.grounded) {
+    physics.velocity.x *= physics.friction;
+    physics.velocity.z *= physics.friction;
+  }
+
+  // ── Jump ──
+  if (keys.space && physics.grounded) {
+    physics.velocity.y = physics.jumpForce;
+    physics.grounded = false;
+    keys.space = false; // consume the press
+  }
+
+  // ── Move Ball ──
+  ball.position.x += physics.velocity.x * dt;
+  ball.position.y += physics.velocity.y * dt;
+  ball.position.z += physics.velocity.z * dt;
+
+  // ── Visual spin ──
+  ball.rotation.x += physics.velocity.z * dt * 2;
+  ball.rotation.z -= physics.velocity.x * dt * 2;
+
+  // ── Collision Detection ──
+  physics.grounded = false;
+
+  for (const plat of platforms) {
+    // Check if ball is within platform XZ bounds (with ball radius margin)
+    const onPlatX = ball.position.x + ballRadius > plat.minX && ball.position.x - ballRadius < plat.maxX;
+    const onPlatZ = ball.position.z + ballRadius > plat.minZ && ball.position.z - ballRadius < plat.maxZ;
+
+    if (onPlatX && onPlatZ) {
+      // Landing on top
+      const topY = plat.topY + ballRadius;
+      if (ball.position.y <= topY && ball.position.y > topY - 1.0 && physics.velocity.y <= 0) {
+        ball.position.y = topY;
+        physics.velocity.y = 0;
+        physics.grounded = true;
+      }
+    }
+
+    // ── Bumper Collisions ──
+    if (ball.position.y > plat.topY && ball.position.y < plat.topY + 0.9) {
+      const bumperBounce = 0.6;
+
+      if (plat.bumpers.includes('left') && onPlatZ) {
+        const edge = plat.minX + 0.2;
+        if (ball.position.x - ballRadius < edge && ball.position.x > plat.minX - ballRadius) {
+          ball.position.x = edge + ballRadius;
+          physics.velocity.x = Math.abs(physics.velocity.x) * bumperBounce;
+        }
+      }
+      if (plat.bumpers.includes('right') && onPlatZ) {
+        const edge = plat.maxX - 0.2;
+        if (ball.position.x + ballRadius > edge && ball.position.x < plat.maxX + ballRadius) {
+          ball.position.x = edge - ballRadius;
+          physics.velocity.x = -Math.abs(physics.velocity.x) * bumperBounce;
+        }
+      }
+      if (plat.bumpers.includes('front') && onPlatX) {
+        const edge = plat.maxZ - 0.2;
+        if (ball.position.z + ballRadius > edge && ball.position.z < plat.maxZ + ballRadius) {
+          ball.position.z = edge - ballRadius;
+          physics.velocity.z = -Math.abs(physics.velocity.z) * bumperBounce;
+        }
+      }
+      if (plat.bumpers.includes('back') && onPlatX) {
+        const edge = plat.minZ + 0.2;
+        if (ball.position.z - ballRadius < edge && ball.position.z > plat.minZ - ballRadius) {
+          ball.position.z = edge + ballRadius;
+          physics.velocity.z = Math.abs(physics.velocity.z) * bumperBounce;
+        }
+      }
+    }
+  }
+
+  // ── Fall Detection ──
+  if (ball.position.y < physics.fallThreshold) {
+    return 'fell';
+  }
+
+  // ── Goal Detection ──
+  const dx = ball.position.x - levelData.goal.x;
+  const dz = ball.position.z - levelData.goal.z;
+  if (Math.sqrt(dx * dx + dz * dz) < 1.2 && physics.grounded) {
+    return 'goal';
+  }
+
+  return null;
+}
+
 // ── Resize ──
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -192,15 +329,20 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ── Render Loop (placeholder) ──
-function animate() {
+// ── Game Loop ──
+let lastTime = 0;
+
+function animate(time) {
   requestAnimationFrame(animate);
-  ball.rotation.x += 0.01;
-  ball.rotation.z += 0.005;
+  const dt = lastTime ? (time - lastTime) / 1000 : 0.016;
+  lastTime = time;
+
   goalMesh.rotation.y += 0.02;
+  updatePhysics(dt);
+
   renderer.render(scene, camera);
 }
-animate();
+animate(0);
 </script>
 </body>
 </html>
