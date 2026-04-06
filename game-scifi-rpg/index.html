@@ -44,6 +44,63 @@ function consumePress(key) {
   return false;
 }
 
+// ── Audio ──
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function playTone(freq, duration, type, vol, decay) {
+  const ctx = ensureAudio();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type || 'square';
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+  if (decay) osc.frequency.exponentialRampToValueAtTime(decay, ctx.currentTime + duration);
+  gain.gain.setValueAtTime(vol || 0.15, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + duration);
+}
+
+function playNoise(duration, vol) {
+  const ctx = ensureAudio();
+  const bufSize = ctx.sampleRate * duration;
+  const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+  const src = ctx.createBufferSource();
+  const gain = ctx.createGain();
+  src.buffer = buf;
+  gain.gain.setValueAtTime(vol || 0.1, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  src.connect(gain);
+  gain.connect(ctx.destination);
+  src.start();
+}
+
+const sfx = {
+  menuMove() { playTone(800, 0.05, 'square', 0.08); },
+  menuSelect() { playTone(600, 0.08, 'square', 0.1); playTone(900, 0.1, 'square', 0.1); },
+  attack() { playNoise(0.15, 0.15); playTone(200, 0.15, 'sawtooth', 0.12, 80); },
+  magic() { playTone(400, 0.3, 'sine', 0.12, 1200); playTone(800, 0.25, 'sine', 0.08, 200); },
+  hit() { playNoise(0.1, 0.12); playTone(150, 0.12, 'square', 0.1, 60); },
+  heal() { playTone(500, 0.1, 'sine', 0.1); setTimeout(() => playTone(700, 0.1, 'sine', 0.1), 80); setTimeout(() => playTone(900, 0.15, 'sine', 0.1), 160); },
+  flee() { playTone(400, 0.15, 'square', 0.1, 200); },
+  fleeFail() { playTone(300, 0.1, 'square', 0.1, 100); playTone(200, 0.15, 'square', 0.1); },
+  victory() { playTone(523, 0.15, 'square', 0.12); setTimeout(() => playTone(659, 0.15, 'square', 0.12), 150); setTimeout(() => playTone(784, 0.25, 'square', 0.12), 300); },
+  defeat() { playTone(300, 0.2, 'sawtooth', 0.1, 100); setTimeout(() => playTone(200, 0.3, 'sawtooth', 0.1, 60), 250); },
+  battleStart() { playTone(200, 0.1, 'square', 0.1); playTone(400, 0.15, 'square', 0.12, 600); },
+  chest() { playTone(600, 0.1, 'sine', 0.1); setTimeout(() => playTone(800, 0.1, 'sine', 0.1), 100); setTimeout(() => playTone(1000, 0.2, 'sine', 0.12), 200); },
+  levelUp() { playTone(440, 0.12, 'square', 0.1); setTimeout(() => playTone(554, 0.12, 'square', 0.1), 120); setTimeout(() => playTone(659, 0.12, 'square', 0.1), 240); setTimeout(() => playTone(880, 0.25, 'square', 0.12), 360); },
+  stun() { playTone(150, 0.2, 'sine', 0.1, 80); },
+  gameStart() { playTone(330, 0.1, 'square', 0.1); setTimeout(() => playTone(440, 0.1, 'square', 0.1), 100); setTimeout(() => playTone(660, 0.2, 'square', 0.12), 200); },
+};
+
 // ── State Machine ──
 let currentState = null;
 const states = {};
@@ -75,6 +132,7 @@ states.TITLE = {
       player.dir = 1; player.walkTime = 0;
       player.inventory = []; player.gear = [];
       player.level = 1;
+      sfx.gameStart();
       changeState('EXPLORE', { levelIndex: 0 });
     }
   },
@@ -546,6 +604,7 @@ states.EXPLORE = {
         levelChest.lootName = ITEM_TYPES[key].name;
       }
       levelChest.showTimer = 2;
+      sfx.chest();
     }
 
     // Level exit
@@ -696,6 +755,7 @@ let battleStartTimer = 0;
 states.BATTLE_START = {
   enter(data) {
     battleStartTimer = 0;
+    sfx.battleStart();
     battleEnemyRef = data.enemy;
     const etype = ENEMY_TYPES[data.enemy.type];
     battleEnemy = { ...etype, currentHp: etype.hp };
@@ -736,6 +796,7 @@ states.BATTLE = {
       return;
     }
     if (player.hp <= 0) {
+      sfx.defeat();
       changeState('GAME_OVER');
       return;
     }
@@ -749,15 +810,17 @@ states.BATTLE = {
     if (playerEffects.stun > 0) {
       playerEffects.stun--;
       addBattleLog('You are stunned!');
+      sfx.stun();
       battleAnim = { type: 'playerHit', timer: 0.5 };
       setTimeout(() => { battleAnim = null; battleTurn = 'enemy'; }, 500);
       return;
     }
 
     if (battleMenu.subMenu === null) {
-      if (consumePress('ArrowLeft')) battleMenu.top = (battleMenu.top - 1 + 4) % 4;
-      if (consumePress('ArrowRight')) battleMenu.top = (battleMenu.top + 1) % 4;
+      if (consumePress('ArrowLeft')) { battleMenu.top = (battleMenu.top - 1 + 4) % 4; sfx.menuMove(); }
+      if (consumePress('ArrowRight')) { battleMenu.top = (battleMenu.top + 1) % 4; sfx.menuMove(); }
       if (consumePress('Enter')) {
+        sfx.menuSelect();
         if (battleMenu.top === 0) { doPlayerAttack(); }
         else if (battleMenu.top === 1) { battleMenu.subMenu = 'magic'; battleMenu.sub = 0; }
         else if (battleMenu.top === 2) { battleMenu.subMenu = 'items'; battleMenu.sub = 0; }
@@ -765,6 +828,7 @@ states.BATTLE = {
       }
     } else {
       if (consumePress('Escape')) {
+        sfx.menuMove();
         battleMenu.subMenu = null;
         battleMenu.sub = -1;
         return;
@@ -776,9 +840,10 @@ states.BATTLE = {
         battleMenu.sub = -1;
         return;
       }
-      if (consumePress('ArrowUp')) battleMenu.sub = (battleMenu.sub - 1 + list.length) % list.length;
-      if (consumePress('ArrowDown')) battleMenu.sub = (battleMenu.sub + 1) % list.length;
+      if (consumePress('ArrowUp')) { battleMenu.sub = (battleMenu.sub - 1 + list.length) % list.length; sfx.menuMove(); }
+      if (consumePress('ArrowDown')) { battleMenu.sub = (battleMenu.sub + 1) % list.length; sfx.menuMove(); }
       if (consumePress('Enter')) {
+        sfx.menuSelect();
         if (battleMenu.subMenu === 'magic') { doPlayerMagic(battleMenu.sub); }
         else { doPlayerItem(battleMenu.sub); }
       }
@@ -796,6 +861,7 @@ function doPlayerAttack() {
     player.hp = Math.max(0, player.hp - dmg);
     addBattleLog('Confused! Hit yourself for ' + dmg + '!');
     addFloatingNumber('-' + dmg, 180, 240, '#f4f');
+    sfx.hit();
     playerEffects.confuse--;
     battleAnim = { type: 'playerHit', timer: 0.5 };
     setTimeout(() => { battleAnim = null; battleTurn = 'enemy'; }, 500);
@@ -808,6 +874,7 @@ function doPlayerAttack() {
   battleEnemy.currentHp = Math.max(0, battleEnemy.currentHp - dmg);
   addBattleLog('Attack! ' + dmg + ' damage!');
   addFloatingNumber('-' + dmg, 600, 240, '#ff4');
+  sfx.attack();
   battleAnim = { type: 'playerAttack', timer: 0.5 };
   setTimeout(() => { battleAnim = null; battleTurn = 'enemy'; }, 500);
 }
@@ -840,6 +907,7 @@ function doPlayerMagic(index) {
     addBattleLog('Defense boosted for 3 turns!');
   }
 
+  sfx.magic();
   battleAnim = { type: 'magic', timer: 0.6 };
   setTimeout(() => { battleAnim = null; battleTurn = 'enemy'; }, 600);
 }
@@ -854,10 +922,12 @@ function doPlayerItem(index) {
     player.hp = Math.min(player.maxHp, player.hp + item.value);
     addBattleLog('Used ' + item.name + '! +' + item.value + ' HP');
     addFloatingNumber('+' + item.value, 180, 240, '#0f0');
+    sfx.heal();
   } else if (item.type === 'mp') {
     player.mp = Math.min(player.maxMp, player.mp + item.value);
     addBattleLog('Used ' + item.name + '! +' + item.value + ' MP');
     addFloatingNumber('+' + item.value, 180, 240, '#48f');
+    sfx.heal();
   } else if (item.type === 'buff') {
     playerEffects.attackBoost = true;
     addBattleLog('Used ' + item.name + '! ATK boosted!');
@@ -873,9 +943,11 @@ function doPlayerItem(index) {
 function doFlee() {
   if (Math.random() < 0.6) {
     addBattleLog('Escaped!');
+    sfx.flee();
     setTimeout(() => { changeState('EXPLORE', { levelIndex: player.level - 1, returning: true }); }, 600);
   } else {
     addBattleLog('Failed to flee!');
+    sfx.fleeFail();
     battleTurn = 'enemy';
   }
 }
@@ -884,6 +956,7 @@ function doEnemyTurn() {
   if (enemyEffects.stun > 0) {
     enemyEffects.stun--;
     addBattleLog(battleEnemy.name + ' is stunned!');
+    sfx.stun();
     battleAnim = { type: 'enemyStun', timer: 0.5 };
     setTimeout(() => { battleAnim = null; battleTurn = 'player'; decrementPlayerEffects(); }, 500);
     return;
@@ -912,6 +985,7 @@ function doEnemyTurn() {
         player.hp = Math.max(0, player.hp - dmg);
         addBattleLog(battleEnemy.name + ' uses ' + special.name + '! ' + dmg + ' damage!');
         addFloatingNumber('-' + dmg, 180, 240, '#f44');
+        sfx.hit();
         if (special.effect === 'stun') playerEffects.stun = 1;
         if (special.effect === 'confuse') playerEffects.confuse = 2;
       } else {
@@ -919,6 +993,7 @@ function doEnemyTurn() {
         player.hp = Math.max(0, player.hp - dmg);
         addBattleLog(battleEnemy.name + ' attacks! ' + dmg + ' damage!');
         addFloatingNumber('-' + dmg, 180, 240, '#f44');
+        sfx.hit();
       }
 
       battleAnim = { type: 'enemyAttack', timer: 0.5 };
@@ -946,6 +1021,7 @@ states.BATTLE_END = {
   enter(data) {
     battleEndTimer = 0;
     battleEnemyRef.alive = false;
+    sfx.victory();
 
     battleLoot = null;
     if (Math.random() < 0.4) {
@@ -1004,6 +1080,7 @@ states.LEVEL_TRANSITION = {
   enter(data) {
     transTimer = 0;
     player.level = data.nextLevel + 1;
+    sfx.levelUp();
   },
   update(dt) {
     transTimer += dt;
