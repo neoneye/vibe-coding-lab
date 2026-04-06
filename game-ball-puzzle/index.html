@@ -185,50 +185,60 @@ ball.add(botLidPivot);
 
 // Blink state
 const blink = {
-  facingTimer: 0,        // how long iris has faced camera
-  facingThreshold: 3.0,  // seconds before blinking starts
-  isFacingMode: false,   // true once we've been facing long enough
-  nextBlinkIn: 0,        // countdown to next blink
+  nextBlinkIn: Infinity,  // don't blink until first keypress
   blinkPhase: 'none',    // 'none', 'closing', 'closed', 'opening'
   blinkTime: 0,          // time within current blink phase
   closeDuration: 0.12,
   closedDuration: 0.06,
   openDuration: 0.15,
-  lidProgress: 0         // 0 = open, 1 = closed
+  lidProgress: 0,        // 0 = open, 1 = closed
+  startDelay: 0          // delay before game starts (for blink to play)
 };
 
+function triggerBlink() {
+  if (blink.blinkPhase === 'none') {
+    blink.blinkPhase = 'closing';
+    blink.blinkTime = 0;
+  }
+}
+
 function scheduleNextBlink() {
-  blink.nextBlinkIn = 10 + (Math.random() * 4 - 2);
+  blink.nextBlinkIn = 3 + (Math.random() * 4 - 2);
+}
+
+function updateEyeStare() {
+  // Direction from ball center to camera, in world space
+  const ballWorld = new THREE.Vector3();
+  ball.getWorldPosition(ballWorld);
+  const worldDir = camera.position.clone().sub(ballWorld).normalize();
+
+  // Convert direction to ball's local space
+  const localDir = worldDir.clone();
+  const worldQuat = ball.getWorldQuaternion(new THREE.Quaternion());
+  localDir.applyQuaternion(worldQuat.clone().invert());
+
+  // Position iris and pupil on sphere surface toward camera
+  iris.position.copy(localDir).multiplyScalar(ballRadius * 0.98);
+  pupil.position.copy(localDir).multiplyScalar(ballRadius * 0.99);
+
+  // Orient discs to face outward: rotate default (0,0,1) normal to match localDir
+  const faceQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), localDir);
+  iris.quaternion.copy(faceQuat);
+  pupil.quaternion.copy(faceQuat);
+
+  // Ensure lids are fully hidden
+  topLidPivot.visible = false;
+  botLidPivot.visible = false;
+  blink.lidProgress = 0;
+  blink.blinkPhase = 'none';
 }
 
 function updateBlink(dt) {
-  // Check if iris faces camera
-  const irisWorldDir = new THREE.Vector3(0, 0, 1);
-  irisWorldDir.applyQuaternion(ball.getWorldQuaternion(new THREE.Quaternion()));
-  const ballWorldPos = new THREE.Vector3();
-  ball.getWorldPosition(ballWorldPos);
-  const toCamera = camera.position.clone().sub(ballWorldPos).normalize();
-  const dot = irisWorldDir.dot(toCamera);
-
-  if (dot > 0.3) {
-    blink.facingTimer += dt;
-    if (!blink.isFacingMode && blink.facingTimer >= blink.facingThreshold) {
-      blink.isFacingMode = true;
-      scheduleNextBlink();
-    }
-  } else {
-    blink.facingTimer = 0;
-    blink.isFacingMode = false;
-    blink.blinkPhase = 'none';
-    blink.lidProgress = 0;
-  }
-
   // Blink countdown
-  if (blink.isFacingMode && blink.blinkPhase === 'none') {
+  if (blink.blinkPhase === 'none') {
     blink.nextBlinkIn -= dt;
     if (blink.nextBlinkIn <= 0) {
-      blink.blinkPhase = 'closing';
-      blink.blinkTime = 0;
+      triggerBlink();
     }
   }
 
@@ -765,6 +775,12 @@ function startGame() {
   gameState = 'PLAYING';
   hideMessage();
   resetBall();
+  // Reset iris/pupil to default forward position and orientation
+  iris.position.set(0, 0, ballRadius * 0.98);
+  iris.quaternion.set(0, 0, 0, 1);
+  pupil.position.set(0, 0, ballRadius * 0.99);
+  pupil.quaternion.set(0, 0, 0, 1);
+  scheduleNextBlink();
 }
 
 function winGame() {
@@ -806,13 +822,29 @@ function animate(time) {
   // Update splat particles
   updateSplatParticles(dt);
 
-  // Blink
-  updateBlink(dt);
+  if (gameState === 'READY') {
+    // Stare at camera, no blinking
+    updateEyeStare();
+  } else {
+    // Blink only during gameplay
+    updateBlink(dt);
+  }
 
   if (gameState === 'READY') {
     // Wait for any key
     const anyKey = keys.left || keys.right || keys.up || keys.down || keys.space;
-    if (anyKey) startGame();
+    if (anyKey && !blink.startDelay) {
+      triggerBlink();
+      blink.startDelay = 0.3; // delay start so blink is visible
+    }
+    if (blink.startDelay > 0) {
+      blink.startDelay -= dt;
+      updateBlink(dt);
+      if (blink.startDelay <= 0) {
+        blink.startDelay = 0;
+        startGame();
+      }
+    }
   }
 
   if (gameState === 'PLAYING') {
