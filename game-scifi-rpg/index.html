@@ -522,33 +522,34 @@ states.EXPLORE = {
 
     allEnemiesDefeated = levelEnemies.every(e => !e.alive);
 
+    // Handle Enter key for chest and exit
+    const enterPressed = consumePress('Enter');
+
     // Interact with chest
-    if (consumePress('Enter') && levelChest && !levelChest.opened) {
-      if (Math.abs(player.x - levelChest.x) < 40) {
-        levelChest.opened = true;
-        const gearKey = LEVEL_CHEST_GEAR[player.level - 1];
-        if (gearKey && !player.gear.includes(gearKey)) {
-          const gear = GEAR_TYPES[gearKey];
-          player.gear.push(gearKey);
-          if (gear.set) {
-            player[gear.stat] = gear.value;
-          } else {
-            player[gear.stat] += gear.value;
-          }
-          if (gear.stat === 'maxHp') player.hp += gear.value;
-          levelChest.lootName = gear.name;
+    if (enterPressed && levelChest && !levelChest.opened && Math.abs(player.x - levelChest.x) < 40) {
+      levelChest.opened = true;
+      const gearKey = LEVEL_CHEST_GEAR[player.level - 1];
+      if (gearKey && !player.gear.includes(gearKey)) {
+        const gear = GEAR_TYPES[gearKey];
+        player.gear.push(gearKey);
+        if (gear.set) {
+          player[gear.stat] = gear.value;
         } else {
-          const itemKeys = Object.keys(ITEM_TYPES);
-          const key = itemKeys[Math.floor(Math.random() * itemKeys.length)];
-          player.inventory.push({ ...ITEM_TYPES[key] });
-          levelChest.lootName = ITEM_TYPES[key].name;
+          player[gear.stat] += gear.value;
         }
-        levelChest.showTimer = 2;
+        if (gear.stat === 'maxHp') player.hp += gear.value;
+        levelChest.lootName = gear.name;
+      } else {
+        const itemKeys = Object.keys(ITEM_TYPES);
+        const key = itemKeys[Math.floor(Math.random() * itemKeys.length)];
+        player.inventory.push({ ...ITEM_TYPES[key] });
+        levelChest.lootName = ITEM_TYPES[key].name;
       }
+      levelChest.showTimer = 2;
     }
 
     // Level exit
-    if (consumePress('Enter') && allEnemiesDefeated && player.x > lvl.exitX - 40) {
+    if (enterPressed && allEnemiesDefeated && player.x > lvl.exitX - 40) {
       changeState('LEVEL_TRANSITION', { nextLevel: player.level });
       return;
     }
@@ -744,6 +745,15 @@ states.BATTLE = {
       return;
     }
 
+    // Player stun: skip turn
+    if (playerEffects.stun > 0) {
+      playerEffects.stun--;
+      addBattleLog('You are stunned!');
+      battleAnim = { type: 'playerHit', timer: 0.5 };
+      setTimeout(() => { battleAnim = null; battleTurn = 'enemy'; }, 500);
+      return;
+    }
+
     if (battleMenu.subMenu === null) {
       if (consumePress('ArrowLeft')) battleMenu.top = (battleMenu.top - 1 + 4) % 4;
       if (consumePress('ArrowRight')) battleMenu.top = (battleMenu.top + 1) % 4;
@@ -881,6 +891,7 @@ function doEnemyTurn() {
 
   const actions = battleEnemy.boss ? (battleEnemy.actionsPerTurn || 1) : 1;
   let delay = 0;
+  battleAnim = { type: 'enemyAttack', timer: 0.5 }; // synchronous guard against re-entry
 
   for (let a = 0; a < actions; a++) {
     setTimeout(() => {
@@ -923,6 +934,7 @@ function doEnemyTurn() {
 }
 
 function decrementPlayerEffects() {
+  if (playerEffects.stun > 0) playerEffects.stun--;
   if (playerEffects.defenseBoost > 0) playerEffects.defenseBoost--;
   if (playerEffects.confuse > 0) playerEffects.confuse--;
 }
@@ -1172,6 +1184,7 @@ function renderBattleScene(ctx) {
   if (playerEffects.attackBoost) { ctx.fillStyle = '#fa0'; ctx.fillText('ATK\u2191', statusX, 438); statusX += 45; }
   if (playerEffects.defenseBoost > 0) { ctx.fillStyle = '#4fa'; ctx.fillText('DEF\u2191' + playerEffects.defenseBoost, statusX, 438); statusX += 50; }
   if (playerEffects.confuse > 0) { ctx.fillStyle = '#f4f'; ctx.fillText('CONFUSED', statusX, 438); statusX += 70; }
+  if (playerEffects.stun > 0) { ctx.fillStyle = '#ff4'; ctx.fillText('STUNNED', statusX, 438); statusX += 65; }
 
   ctx.font = '12px monospace';
   for (let i = 0; i < battleLog.length; i++) {
@@ -1257,7 +1270,7 @@ function gameLoop(time) {
     ctx.beginPath();
     ctx.rect(0, 0, VW, VH);
     ctx.clip();
-    state.render(ctx);
+    states[currentState].render(ctx); // re-read after update in case state changed
     ctx.restore();
   }
 
