@@ -95,18 +95,79 @@ const physics = {
   fallThreshold: -20
 };
 
-// ── Ball ──
+// ── Eyeball ──
 const ballRadius = 0.5;
-const ballGeo = new THREE.SphereGeometry(ballRadius, 24, 24);
-const ballMat = new THREE.MeshPhongMaterial({
-  color: 0xcc2222,
-  specular: 0xff6666,
-  shininess: 60,
-  flatShading: false
-});
-const ball = new THREE.Mesh(ballGeo, ballMat);
-ball.castShadow = true;
+
+// Eyeball group
+const ball = new THREE.Group();
 ball.position.set(0, 1, 0);
+
+// White of the eye
+const eyeGeo = new THREE.SphereGeometry(ballRadius, 24, 24);
+const eyeMat = new THREE.MeshPhongMaterial({
+  color: 0xf0e8e0,
+  specular: 0xffffff,
+  shininess: 80
+});
+const eyeMesh = new THREE.Mesh(eyeGeo, eyeMat);
+eyeMesh.castShadow = true;
+ball.add(eyeMesh);
+
+// Iris (colored disc on the surface)
+const irisRadius = 0.22;
+const irisGeo = new THREE.CircleGeometry(irisRadius, 24);
+const irisMat = new THREE.MeshPhongMaterial({
+  color: 0x2266aa,
+  specular: 0x4488cc,
+  shininess: 40
+});
+const iris = new THREE.Mesh(irisGeo, irisMat);
+iris.position.set(0, 0, ballRadius * 0.98);
+ball.add(iris);
+
+// Pupil (smaller black disc)
+const pupilGeo = new THREE.CircleGeometry(0.1, 20);
+const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+const pupil = new THREE.Mesh(pupilGeo, pupilMat);
+pupil.position.set(0, 0, ballRadius * 0.99);
+ball.add(pupil);
+
+// Red veins (thin lines on the eyeball)
+const veinMat = new THREE.LineBasicMaterial({ color: 0xcc4444, transparent: true, opacity: 0.4 });
+for (let i = 0; i < 6; i++) {
+  const curve = new THREE.QuadraticBezierCurve3(
+    new THREE.Vector3(
+      Math.cos(i * 1.05 + 0.5) * 0.15,
+      Math.sin(i * 1.05 + 0.5) * 0.15,
+      ballRadius * 0.6
+    ),
+    new THREE.Vector3(
+      Math.cos(i * 1.05 + 0.3) * 0.35,
+      Math.sin(i * 1.05 + 0.3) * 0.35,
+      ballRadius * 0.85
+    ),
+    new THREE.Vector3(
+      Math.cos(i * 1.05) * 0.48,
+      Math.sin(i * 1.05) * 0.48,
+      ballRadius * 0.15
+    )
+  );
+  const veinGeo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(8));
+  const vein = new THREE.Line(veinGeo, veinMat);
+  ball.add(vein);
+}
+
+// ── Wet Trail ──
+const trailMarks = [];
+const maxTrailMarks = 120;
+const trailGeo = new THREE.CircleGeometry(0.3, 8);
+const trailMatTemplate = new THREE.MeshBasicMaterial({
+  color: 0x88aacc,
+  transparent: true,
+  opacity: 0.35,
+  depthWrite: false
+});
+let trailTimer = 0;
 
 // ── World Group (tilts as a unit) ──
 const world = new THREE.Group();
@@ -275,6 +336,36 @@ function updatePhysics(dt) {
   ball.rotation.x += physics.velocity.z * dt * 2;
   ball.rotation.z -= physics.velocity.x * dt * 2;
 
+  // ── Wet trail ──
+  trailTimer += dt;
+  if (physics.grounded && trailTimer > 0.03) {
+    trailTimer = 0;
+    const mark = new THREE.Mesh(trailGeo, trailMatTemplate.clone());
+    mark.rotation.x = -Math.PI / 2;
+    mark.position.set(ball.position.x, ball.position.y - ballRadius + 0.02, ball.position.z);
+    mark.userData.age = 0;
+    mark.userData.maxAge = 3.0;
+    world.add(mark);
+    trailMarks.push(mark);
+    // Remove oldest if too many
+    if (trailMarks.length > maxTrailMarks) {
+      const old = trailMarks.shift();
+      world.remove(old);
+      old.material.dispose();
+    }
+  }
+  // Fade trail marks
+  for (let i = trailMarks.length - 1; i >= 0; i--) {
+    const m = trailMarks[i];
+    m.userData.age += dt;
+    m.material.opacity = 0.35 * (1 - m.userData.age / m.userData.maxAge);
+    if (m.userData.age >= m.userData.maxAge) {
+      world.remove(m);
+      m.material.dispose();
+      trailMarks.splice(i, 1);
+    }
+  }
+
   // ── Collision Detection ──
   physics.grounded = false;
 
@@ -386,6 +477,12 @@ function resetBall() {
   physics.grounded = false;
   world.rotation.x = 0;
   world.rotation.z = 0;
+  // Clear trail
+  for (const m of trailMarks) {
+    world.remove(m);
+    m.material.dispose();
+  }
+  trailMarks.length = 0;
 }
 
 function startGame() {
