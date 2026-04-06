@@ -166,6 +166,69 @@ function drawStickFigure(ctx, x, y, color, s, walkPhase, dir) {
   ctx.stroke();
 }
 
+// ── Enemy Types ──
+const ENEMY_TYPES = {
+  patrol_drone: {
+    name: 'Patrol Drone', hp: 30, attack: 8, defense: 2,
+    color: '#f44', specials: [], xpLabel: 'LV.1'
+  },
+  security_bot: {
+    name: 'Security Bot', hp: 50, attack: 12, defense: 5,
+    color: '#f84', specials: [{ name: 'Shield Bash', damage: 10, effect: 'stun', chance: 0.3 }],
+    xpLabel: 'LV.2'
+  },
+  fire_turret: {
+    name: 'Fire Turret', hp: 40, attack: 15, defense: 3,
+    color: '#f64', specials: [{ name: 'Flame Burst', damage: 22, effect: null, chance: 0.25 }],
+    xpLabel: 'LV.3'
+  },
+  psi_lurker: {
+    name: 'Psi Lurker', hp: 45, attack: 10, defense: 4,
+    color: '#a4f', specials: [{ name: 'Mind Scramble', damage: 8, effect: 'confuse', chance: 0.3 }],
+    xpLabel: 'LV.3'
+  },
+  xenomorph: {
+    name: 'Xenomorph', hp: 60, attack: 18, defense: 6,
+    color: '#f4a', specials: [{ name: 'Acid Spit', damage: 20, effect: null, chance: 0.3 }],
+    xpLabel: 'LV.4'
+  },
+  commander_ai: {
+    name: 'Commander AI', hp: 150, attack: 20, defense: 10,
+    color: '#fff', boss: true, actionsPerTurn: 2,
+    specials: [
+      { name: 'Shield Bash', damage: 10, effect: 'stun', chance: 0.2 },
+      { name: 'Flame Burst', damage: 22, effect: null, chance: 0.2 },
+      { name: 'Mind Scramble', damage: 8, effect: 'confuse', chance: 0.2 },
+      { name: 'Acid Spit', damage: 20, effect: null, chance: 0.2 },
+    ],
+    xpLabel: 'BOSS'
+  },
+};
+
+// ── Spells ──
+const SPELLS = [
+  { name: 'EMP Blast', cost: 10, damage: 18, effect: 'stun', effectChance: 0.5, type: 'tech' },
+  { name: 'Plasma Surge', cost: 20, damage: 35, effect: null, effectChance: 0, type: 'tech' },
+  { name: 'Psi Shield', cost: 15, damage: 0, effect: 'defenseBoost', effectChance: 1, type: 'psionic' },
+  { name: 'Mind Drain', cost: 12, damage: 15, mpRestore: 10, effect: null, effectChance: 0, type: 'psionic' },
+];
+
+// ── Items ──
+const ITEM_TYPES = {
+  nano_kit: { name: 'Nano Kit', desc: 'Restore 50 HP', type: 'heal', value: 50 },
+  energy_cell: { name: 'Energy Cell', desc: 'Restore 30 MP', type: 'mp', value: 30 },
+  stim_pack: { name: 'Stim Pack', desc: 'Boost ATK this battle', type: 'buff', effect: 'attackBoost' },
+  emp_grenade: { name: 'EMP Grenade', desc: 'Stun enemy', type: 'stun', effect: 'stun' },
+};
+
+// ── Gear ──
+const GEAR_TYPES = {
+  laser_blade: { name: 'Laser Blade', desc: '+5 Attack', stat: 'attack', value: 5 },
+  reflex_armor: { name: 'Reflex Armor', desc: '+3 Defense', stat: 'defense', value: 3 },
+  psi_amplifier: { name: 'Psi Amplifier', desc: '1.5x Magic', stat: 'magicMult', value: 1.5, set: true },
+  nano_core: { name: 'Nano Core', desc: '+30 Max HP', stat: 'maxHp', value: 30 },
+};
+
 // ── Level Data ──
 const LEVELS = [
   { // Level 1: Space Station Corridor
@@ -208,6 +271,29 @@ const LEVELS = [
   },
 ];
 
+// ── Battle State ──
+let battleEnemy = null;
+let battleEnemyRef = null;
+let battleMenu = { top: 0, sub: -1, subMenu: null };
+let battleTurn = 'player';
+let battleLog = [];
+let battleAnim = null;
+let playerEffects = { stun: 0, confuse: 0, attackBoost: false, defenseBoost: 0 };
+let enemyEffects = { stun: 0 };
+let battleLoot = null;
+
+const BATTLE_MENU_ITEMS = ['Attack', 'Magic', 'Items', 'Flee'];
+
+function calcDamage(atk, def) {
+  const base = Math.max(1, atk - def);
+  const variance = base * 0.15;
+  return Math.round(base + (Math.random() * variance * 2 - variance));
+}
+
+function addBattleLog(text) {
+  battleLog.push({ text, timer: 2 });
+}
+
 // ── Explore State ──
 let camera = { x: 0 };
 let levelEnemies = [];
@@ -217,24 +303,26 @@ let allEnemiesDefeated = false;
 states.EXPLORE = {
   enter(data) {
     const lvl = LEVELS[data.levelIndex];
-    camera.x = 0;
-    player.x = 100;
-    player.y = lvl.floors[0].y;
-    player.vy = 0;
-    player.vx = 0;
-    player.walkTime = 0;
+    if (!data.returning) {
+      camera.x = 0;
+      player.x = 100;
+      player.y = lvl.floors[0].y;
+      player.vy = 0;
+      player.vx = 0;
+      player.walkTime = 0;
 
-    // Spawn enemies
-    levelEnemies = lvl.enemies.map(e => ({
-      ...e, alive: true, hp: 0,
-      dir: 1, walkTime: Math.random() * 10,
-      currentX: e.x,
-    }));
+      levelEnemies = lvl.enemies.map(e => ({
+        ...e, alive: true,
+        dir: 1, walkTime: Math.random() * 10,
+        currentX: e.x,
+      }));
 
-    // Spawn chest
-    levelChest = lvl.chestX ? { x: lvl.chestX, opened: false } : null;
-
-    allEnemiesDefeated = false;
+      levelChest = lvl.chestX ? { x: lvl.chestX, opened: false } : null;
+      allEnemiesDefeated = false;
+    } else {
+      // Returning from fled battle -- move player slightly away
+      player.x += player.dir * 60;
+    }
   },
 
   update(dt) {
@@ -427,6 +515,488 @@ states.EXPLORE = {
     renderHUD(ctx);
   }
 };
+
+// ── BATTLE_START State ──
+let battleStartTimer = 0;
+
+states.BATTLE_START = {
+  enter(data) {
+    battleStartTimer = 0;
+    battleEnemyRef = data.enemy;
+    const etype = ENEMY_TYPES[data.enemy.type];
+    battleEnemy = { ...etype, currentHp: etype.hp };
+    battleMenu = { top: 0, sub: -1, subMenu: null };
+    battleTurn = 'player';
+    battleLog = [];
+    battleAnim = null;
+    battleLoot = null;
+    playerEffects = { stun: 0, confuse: 0, attackBoost: false, defenseBoost: 0 };
+    enemyEffects = { stun: 0 };
+  },
+  update(dt) {
+    battleStartTimer += dt;
+    if (battleStartTimer > 0.6) changeState('BATTLE');
+  },
+  render(ctx) {
+    const t = battleStartTimer / 0.6;
+    const lvl = LEVELS[player.level - 1];
+    ctx.fillStyle = lvl.bg;
+    ctx.fillRect(0, 0, VW, VH);
+    ctx.fillStyle = `rgba(255,255,255,${1 - t})`;
+    ctx.fillRect(0, 0, VW, VH);
+  }
+};
+
+// ── BATTLE State ──
+states.BATTLE = {
+  enter() {},
+
+  update(dt) {
+    battleLog = battleLog.filter(l => { l.timer -= dt; return l.timer > 0; });
+
+    if (battleAnim) return;
+
+    if (battleEnemy.currentHp <= 0) {
+      changeState('BATTLE_END', { won: true });
+      return;
+    }
+    if (player.hp <= 0) {
+      changeState('GAME_OVER');
+      return;
+    }
+
+    if (battleTurn === 'enemy') {
+      doEnemyTurn();
+      return;
+    }
+
+    if (battleMenu.subMenu === null) {
+      if (consumePress('ArrowLeft')) battleMenu.top = (battleMenu.top - 1 + 4) % 4;
+      if (consumePress('ArrowRight')) battleMenu.top = (battleMenu.top + 1) % 4;
+      if (consumePress('Enter')) {
+        if (battleMenu.top === 0) { doPlayerAttack(); }
+        else if (battleMenu.top === 1) { battleMenu.subMenu = 'magic'; battleMenu.sub = 0; }
+        else if (battleMenu.top === 2) { battleMenu.subMenu = 'items'; battleMenu.sub = 0; }
+        else if (battleMenu.top === 3) { doFlee(); }
+      }
+    } else {
+      if (consumePress('Escape')) {
+        battleMenu.subMenu = null;
+        battleMenu.sub = -1;
+        return;
+      }
+      const list = battleMenu.subMenu === 'magic' ? SPELLS : player.inventory;
+      if (list.length === 0) {
+        addBattleLog('Nothing available!');
+        battleMenu.subMenu = null;
+        battleMenu.sub = -1;
+        return;
+      }
+      if (consumePress('ArrowUp')) battleMenu.sub = (battleMenu.sub - 1 + list.length) % list.length;
+      if (consumePress('ArrowDown')) battleMenu.sub = (battleMenu.sub + 1) % list.length;
+      if (consumePress('Enter')) {
+        if (battleMenu.subMenu === 'magic') { doPlayerMagic(battleMenu.sub); }
+        else { doPlayerItem(battleMenu.sub); }
+      }
+    }
+  },
+
+  render(ctx) {
+    renderBattleScene(ctx);
+  }
+};
+
+function doPlayerAttack() {
+  if (playerEffects.confuse > 0 && Math.random() < 0.5) {
+    const dmg = calcDamage(player.attack, player.defense);
+    player.hp = Math.max(0, player.hp - dmg);
+    addBattleLog('Confused! Hit yourself for ' + dmg + '!');
+    playerEffects.confuse--;
+    battleAnim = { type: 'playerHit', timer: 0.5 };
+    setTimeout(() => { battleAnim = null; battleTurn = 'enemy'; }, 500);
+    return;
+  }
+
+  let atk = player.attack;
+  if (playerEffects.attackBoost) atk = Math.floor(atk * 1.5);
+  const dmg = calcDamage(atk, battleEnemy.defense);
+  battleEnemy.currentHp = Math.max(0, battleEnemy.currentHp - dmg);
+  addBattleLog('Attack! ' + dmg + ' damage!');
+  battleAnim = { type: 'playerAttack', timer: 0.5 };
+  setTimeout(() => { battleAnim = null; battleTurn = 'enemy'; }, 500);
+}
+
+function doPlayerMagic(index) {
+  const spell = SPELLS[index];
+  if (player.mp < spell.cost) {
+    addBattleLog('Not enough MP!');
+    return;
+  }
+  player.mp -= spell.cost;
+  battleMenu.subMenu = null;
+
+  if (spell.damage > 0) {
+    let dmg = Math.round(spell.damage * player.magicMult);
+    battleEnemy.currentHp = Math.max(0, battleEnemy.currentHp - dmg);
+    addBattleLog(spell.name + '! ' + dmg + ' damage!');
+  }
+  if (spell.mpRestore) {
+    player.mp = Math.min(player.maxMp, player.mp + spell.mpRestore);
+    addBattleLog('Restored ' + spell.mpRestore + ' MP!');
+  }
+  if (spell.effect === 'stun' && Math.random() < spell.effectChance) {
+    enemyEffects.stun = 1;
+    addBattleLog('Enemy stunned!');
+  }
+  if (spell.effect === 'defenseBoost') {
+    playerEffects.defenseBoost = 3;
+    addBattleLog('Defense boosted for 3 turns!');
+  }
+
+  battleAnim = { type: 'magic', timer: 0.6 };
+  setTimeout(() => { battleAnim = null; battleTurn = 'enemy'; }, 600);
+}
+
+function doPlayerItem(index) {
+  if (player.inventory.length === 0) return;
+  const item = player.inventory[index];
+  player.inventory.splice(index, 1);
+  battleMenu.subMenu = null;
+
+  if (item.type === 'heal') {
+    player.hp = Math.min(player.maxHp, player.hp + item.value);
+    addBattleLog('Used ' + item.name + '! +' + item.value + ' HP');
+  } else if (item.type === 'mp') {
+    player.mp = Math.min(player.maxMp, player.mp + item.value);
+    addBattleLog('Used ' + item.name + '! +' + item.value + ' MP');
+  } else if (item.type === 'buff') {
+    playerEffects.attackBoost = true;
+    addBattleLog('Used ' + item.name + '! ATK boosted!');
+  } else if (item.type === 'stun') {
+    enemyEffects.stun = 1;
+    addBattleLog('Used ' + item.name + '! Enemy stunned!');
+  }
+
+  battleAnim = { type: 'item', timer: 0.4 };
+  setTimeout(() => { battleAnim = null; battleTurn = 'enemy'; }, 400);
+}
+
+function doFlee() {
+  if (Math.random() < 0.6) {
+    addBattleLog('Escaped!');
+    setTimeout(() => { changeState('EXPLORE', { levelIndex: player.level - 1, returning: true }); }, 600);
+  } else {
+    addBattleLog('Failed to flee!');
+    battleTurn = 'enemy';
+  }
+}
+
+function doEnemyTurn() {
+  if (enemyEffects.stun > 0) {
+    enemyEffects.stun--;
+    addBattleLog(battleEnemy.name + ' is stunned!');
+    battleAnim = { type: 'enemyStun', timer: 0.5 };
+    setTimeout(() => { battleAnim = null; battleTurn = 'player'; decrementPlayerEffects(); }, 500);
+    return;
+  }
+
+  const actions = battleEnemy.boss ? (battleEnemy.actionsPerTurn || 1) : 1;
+  let delay = 0;
+
+  for (let a = 0; a < actions; a++) {
+    setTimeout(() => {
+      if (player.hp <= 0) return;
+      let useSpecial = false;
+      let special = null;
+      if (battleEnemy.specials.length > 0) {
+        for (const s of battleEnemy.specials) {
+          if (Math.random() < s.chance) { useSpecial = true; special = s; break; }
+        }
+      }
+
+      let def = player.defense;
+      if (playerEffects.defenseBoost > 0) def = Math.floor(def * 2);
+
+      if (useSpecial) {
+        const dmg = calcDamage(special.damage, def);
+        player.hp = Math.max(0, player.hp - dmg);
+        addBattleLog(battleEnemy.name + ' uses ' + special.name + '! ' + dmg + ' damage!');
+        if (special.effect === 'stun') playerEffects.stun = 1;
+        if (special.effect === 'confuse') playerEffects.confuse = 2;
+      } else {
+        const dmg = calcDamage(battleEnemy.attack, def);
+        player.hp = Math.max(0, player.hp - dmg);
+        addBattleLog(battleEnemy.name + ' attacks! ' + dmg + ' damage!');
+      }
+
+      battleAnim = { type: 'enemyAttack', timer: 0.5 };
+    }, delay);
+    delay += 600;
+  }
+
+  setTimeout(() => {
+    battleAnim = null;
+    decrementPlayerEffects();
+    battleTurn = 'player';
+  }, delay);
+}
+
+function decrementPlayerEffects() {
+  if (playerEffects.defenseBoost > 0) playerEffects.defenseBoost--;
+  if (playerEffects.confuse > 0) playerEffects.confuse--;
+}
+
+// ── BATTLE_END State ──
+let battleEndTimer = 0;
+
+states.BATTLE_END = {
+  enter(data) {
+    battleEndTimer = 0;
+    battleEnemyRef.alive = false;
+
+    battleLoot = null;
+    if (Math.random() < 0.4) {
+      const itemKeys = Object.keys(ITEM_TYPES);
+      const key = itemKeys[Math.floor(Math.random() * itemKeys.length)];
+      battleLoot = { ...ITEM_TYPES[key] };
+      player.inventory.push(battleLoot);
+    }
+  },
+  update(dt) {
+    battleEndTimer += dt;
+    if (consumePress('Enter') && battleEndTimer > 0.5) {
+      changeState('EXPLORE', { levelIndex: player.level - 1, returning: true });
+    }
+  },
+  render(ctx) {
+    renderBattleScene(ctx);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, VW, VH);
+
+    ctx.fillStyle = '#0f0';
+    ctx.font = 'bold 32px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('VICTORY!', VW / 2, 160);
+
+    if (battleLoot) {
+      ctx.fillStyle = '#fa0';
+      ctx.font = '18px monospace';
+      ctx.fillText('Loot: ' + battleLoot.name, VW / 2, 210);
+    } else {
+      ctx.fillStyle = '#888';
+      ctx.font = '18px monospace';
+      ctx.fillText('No loot dropped', VW / 2, 210);
+    }
+
+    ctx.fillStyle = '#3af';
+    ctx.font = '14px monospace';
+    ctx.fillText('Press ENTER to continue', VW / 2, 280);
+    ctx.textAlign = 'left';
+  }
+};
+
+// ── LEVEL_TRANSITION State ──
+let transTimer = 0;
+
+states.LEVEL_TRANSITION = {
+  enter(data) {
+    transTimer = 0;
+    player.level = data.nextLevel + 1;
+  },
+  update(dt) {
+    transTimer += dt;
+    if (consumePress('Enter') && transTimer > 0.5) {
+      if (player.level > LEVELS.length) {
+        changeState('VICTORY');
+      } else {
+        changeState('EXPLORE', { levelIndex: player.level - 1 });
+      }
+    }
+  },
+  render(ctx) {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, VW, VH);
+    ctx.fillStyle = '#3af';
+    ctx.font = 'bold 28px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Level ' + player.level, VW / 2, 180);
+    if (player.level <= LEVELS.length) {
+      ctx.fillStyle = '#fff';
+      ctx.font = '18px monospace';
+      ctx.fillText(LEVELS[player.level - 1].name, VW / 2, 220);
+    }
+    ctx.fillStyle = '#888';
+    ctx.font = '14px monospace';
+    ctx.fillText('Press ENTER', VW / 2, 300);
+    ctx.textAlign = 'left';
+  }
+};
+
+// ── GAME_OVER State ──
+states.GAME_OVER = {
+  enter() {},
+  update(dt) {
+    if (consumePress('Enter')) changeState('TITLE');
+  },
+  render(ctx) {
+    ctx.fillStyle = '#1a0000';
+    ctx.fillRect(0, 0, VW, VH);
+    ctx.fillStyle = '#f44';
+    ctx.font = 'bold 40px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', VW / 2, 180);
+    ctx.fillStyle = '#888';
+    ctx.font = '16px monospace';
+    ctx.fillText('Press ENTER to return to title', VW / 2, 240);
+    ctx.textAlign = 'left';
+  }
+};
+
+// ── VICTORY State ──
+states.VICTORY = {
+  enter() {},
+  update(dt) {
+    if (consumePress('Enter')) changeState('TITLE');
+  },
+  render(ctx) {
+    ctx.fillStyle = '#0a0a2a';
+    ctx.fillRect(0, 0, VW, VH);
+    ctx.fillStyle = '#0f0';
+    ctx.font = 'bold 40px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('YOU WIN!', VW / 2, 160);
+    ctx.fillStyle = '#3af';
+    ctx.font = '18px monospace';
+    ctx.fillText('The station is secure.', VW / 2, 210);
+    ctx.fillStyle = '#888';
+    ctx.font = '14px monospace';
+    ctx.fillText('Press ENTER for title screen', VW / 2, 280);
+    ctx.textAlign = 'left';
+  }
+};
+
+// ── Battle Rendering ──
+function renderBattleScene(ctx) {
+  const lvl = LEVELS[player.level - 1];
+
+  ctx.fillStyle = lvl.bg;
+  ctx.fillRect(0, 0, VW, VH);
+
+  ctx.strokeStyle = lvl.accent;
+  ctx.globalAlpha = 0.15;
+  const floorY = 320;
+  for (let gx = 0; gx < VW; gx += 40) {
+    ctx.beginPath(); ctx.moveTo(gx, floorY); ctx.lineTo(gx, VH); ctx.stroke();
+  }
+  for (let gy = floorY; gy < VH; gy += 20) {
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(VW, gy); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.strokeStyle = lvl.accent;
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(VW, floorY); ctx.stroke();
+
+  const pAnim = battleAnim && battleAnim.type === 'playerAttack' ? 0.5 : 0;
+  drawStickFigure(ctx, 180, floorY, '#0f0', 2.5, pAnim, 1);
+
+  if (battleAnim && battleAnim.type === 'enemyAttack') {
+    ctx.fillStyle = 'rgba(255,0,0,0.3)';
+    ctx.fillRect(130, floorY - 100, 100, 100);
+  }
+
+  if (battleEnemy.currentHp > 0) {
+    drawStickFigure(ctx, 600, floorY, battleEnemy.color, 2.5, 0, -1);
+
+    if (battleAnim && (battleAnim.type === 'playerAttack' || battleAnim.type === 'magic')) {
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.fillRect(550, floorY - 100, 100, 100);
+    }
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(battleEnemy.name + ' ' + battleEnemy.xpLabel, 600, floorY - 100);
+
+    ctx.fillStyle = '#300';
+    ctx.fillRect(540, floorY - 90, 120, 8);
+    ctx.fillStyle = '#f44';
+    ctx.fillRect(540, floorY - 90, 120 * (battleEnemy.currentHp / battleEnemy.hp), 8);
+    ctx.textAlign = 'left';
+  }
+
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 350, VW, 100);
+  ctx.strokeStyle = lvl.accent;
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, 350); ctx.lineTo(VW, 350); ctx.stroke();
+
+  const menuY = 372;
+  const menuW = 120;
+  const menuStartX = (VW - 4 * menuW - 30) / 2;
+  const symbols = ['\u2694', '\u2727', '\u25C6', '\u21BA'];
+  const colors = [lvl.accent, '#a4f', '#4fa', '#888'];
+
+  for (let i = 0; i < 4; i++) {
+    const mx = menuStartX + i * (menuW + 10);
+    const selected = battleMenu.top === i && battleMenu.subMenu === null;
+    ctx.fillStyle = selected ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)';
+    ctx.fillRect(mx, menuY - 14, menuW, 28);
+    ctx.strokeStyle = selected ? '#fff' : colors[i];
+    ctx.strokeRect(mx, menuY - 14, menuW, 28);
+    ctx.fillStyle = selected ? '#fff' : colors[i];
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(symbols[i] + ' ' + BATTLE_MENU_ITEMS[i], mx + menuW / 2, menuY + 4);
+  }
+  ctx.textAlign = 'left';
+
+  if (battleMenu.subMenu === 'magic') {
+    renderSubMenu(ctx, SPELLS.map(s => s.name + ' (' + s.cost + 'MP)'), battleMenu.sub, menuStartX + menuW + 10, 340);
+  } else if (battleMenu.subMenu === 'items') {
+    const names = player.inventory.map(i => i.name);
+    renderSubMenu(ctx, names.length > 0 ? names : ['(empty)'], battleMenu.sub, menuStartX + 2 * (menuW + 10), 340);
+  }
+
+  ctx.fillStyle = '#0f0';
+  ctx.font = '11px monospace';
+  ctx.fillText('HP ' + player.hp + '/' + player.maxHp + '  MP ' + player.mp + '/' + player.maxMp, 16, 438);
+
+  let statusX = 200;
+  ctx.font = '10px monospace';
+  if (playerEffects.attackBoost) { ctx.fillStyle = '#fa0'; ctx.fillText('ATK\u2191', statusX, 438); statusX += 45; }
+  if (playerEffects.defenseBoost > 0) { ctx.fillStyle = '#4fa'; ctx.fillText('DEF\u2191' + playerEffects.defenseBoost, statusX, 438); statusX += 50; }
+  if (playerEffects.confuse > 0) { ctx.fillStyle = '#f4f'; ctx.fillText('CONFUSED', statusX, 438); statusX += 70; }
+
+  ctx.font = '12px monospace';
+  for (let i = 0; i < battleLog.length; i++) {
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(1, battleLog[i].timer)})`;
+    ctx.textAlign = 'right';
+    ctx.fillText(battleLog[i].text, VW - 16, 438 - i * 16);
+  }
+  ctx.textAlign = 'left';
+}
+
+function renderSubMenu(ctx, items, selected, x, bottomY) {
+  const h = items.length * 24 + 10;
+  const y = bottomY - h;
+  ctx.fillStyle = 'rgba(0,0,0,0.9)';
+  ctx.fillRect(x, y, 180, h);
+  ctx.strokeStyle = '#3af';
+  ctx.strokeRect(x, y, 180, h);
+
+  for (let i = 0; i < items.length; i++) {
+    const iy = y + 8 + i * 24;
+    if (i === selected) {
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.fillRect(x + 2, iy - 4, 176, 22);
+    }
+    ctx.fillStyle = i === selected ? '#fff' : '#aaa';
+    ctx.font = '12px monospace';
+    ctx.fillText((i === selected ? '> ' : '  ') + items[i], x + 8, iy + 12);
+  }
+}
 
 function renderHUD(ctx) {
   // HP Bar
