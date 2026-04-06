@@ -166,6 +166,300 @@ function drawStickFigure(ctx, x, y, color, s, walkPhase, dir) {
   ctx.stroke();
 }
 
+// ── Level Data ──
+const LEVELS = [
+  { // Level 1: Space Station Corridor
+    name: 'Space Station Corridor', width: 3500,
+    bg: '#0a0a2a', accent: '#3af', floorColor: '#1a1a3a',
+    floors: [{ x: 0, y: 380, w: 3500 }],
+    exitX: 3400,
+    enemies: [
+      { type: 'patrol_drone', x: 600, patrolL: 500, patrolR: 800 },
+      { type: 'patrol_drone', x: 1200, patrolL: 1100, patrolR: 1400 },
+      { type: 'patrol_drone', x: 2000, patrolL: 1800, patrolR: 2200 },
+      { type: 'patrol_drone', x: 2800, patrolL: 2600, patrolR: 3000 },
+    ],
+    chestX: 1600,
+    decorations: [
+      { type: 'pipe', x: 200, y: 100, h: 280 },
+      { type: 'pipe', x: 800, y: 50, h: 330 },
+      { type: 'light', x: 400, y: 340 },
+      { type: 'light', x: 1000, y: 340 },
+      { type: 'light', x: 1600, y: 340 },
+      { type: 'light', x: 2200, y: 340 },
+      { type: 'light', x: 2800, y: 340 },
+      { type: 'crate', x: 1400, y: 345 },
+      { type: 'crate', x: 1430, y: 345 },
+      { type: 'crate', x: 1415, y: 310 },
+      { type: 'terminal', x: 2400, y: 330 },
+    ],
+    stars: Array.from({ length: 40 }, (_, i) => ({
+      x: (i * 191 + 33) % 3500,
+      y: (i * 83 + 17) % 200,
+      s: 1 + (i % 3),
+      bright: i % 4 === 0,
+    })),
+    farBuildings: [
+      { x: 100, w: 80, h: 120 }, { x: 500, w: 50, h: 160 },
+      { x: 900, w: 90, h: 100 }, { x: 1300, w: 60, h: 140 },
+      { x: 1800, w: 70, h: 130 }, { x: 2300, w: 100, h: 110 },
+      { x: 2700, w: 55, h: 150 }, { x: 3100, w: 80, h: 90 },
+    ],
+  },
+];
+
+// ── Explore State ──
+let camera = { x: 0 };
+let levelEnemies = [];
+let levelChest = null;
+let allEnemiesDefeated = false;
+
+states.EXPLORE = {
+  enter(data) {
+    const lvl = LEVELS[data.levelIndex];
+    camera.x = 0;
+    player.x = 100;
+    player.y = lvl.floors[0].y;
+    player.vy = 0;
+    player.vx = 0;
+    player.walkTime = 0;
+
+    // Spawn enemies
+    levelEnemies = lvl.enemies.map(e => ({
+      ...e, alive: true, hp: 0,
+      dir: 1, walkTime: Math.random() * 10,
+      currentX: e.x,
+    }));
+
+    // Spawn chest
+    levelChest = lvl.chestX ? { x: lvl.chestX, opened: false } : null;
+
+    allEnemiesDefeated = false;
+  },
+
+  update(dt) {
+    const lvl = LEVELS[player.level - 1];
+    const speed = 180;
+    const gravity = 900;
+    const jumpForce = -350;
+    const floorY = lvl.floors[0].y;
+
+    // Player movement
+    let moving = false;
+    if (keys['ArrowLeft']) { player.vx = -speed; player.dir = -1; moving = true; }
+    else if (keys['ArrowRight']) { player.vx = speed; player.dir = 1; moving = true; }
+    else { player.vx = 0; }
+
+    if (moving) player.walkTime += dt * 4;
+    else player.walkTime = 0;
+
+    // Jump
+    if (consumePress('ArrowUp') && player.y >= floorY) {
+      player.vy = jumpForce;
+    }
+
+    // Gravity
+    player.vy += gravity * dt;
+    player.y += player.vy * dt;
+    if (player.y >= floorY) { player.y = floorY; player.vy = 0; }
+
+    // Horizontal movement
+    player.x += player.vx * dt;
+    player.x = Math.max(20, Math.min(lvl.width - 20, player.x));
+
+    // Camera follows player with slight lead
+    const targetCamX = player.x - VW / 2 + player.dir * 60;
+    camera.x += (targetCamX - camera.x) * 4 * dt;
+    camera.x = Math.max(0, Math.min(lvl.width - VW, camera.x));
+
+    // Enemy patrol
+    for (const e of levelEnemies) {
+      if (!e.alive) continue;
+      e.currentX += e.dir * 40 * dt;
+      e.walkTime += dt * 3;
+      if (e.currentX > e.patrolR) { e.currentX = e.patrolR; e.dir = -1; }
+      if (e.currentX < e.patrolL) { e.currentX = e.patrolL; e.dir = 1; }
+
+      // Collision with player
+      if (Math.abs(player.x - e.currentX) < 25 && player.y >= floorY - 10) {
+        changeState('BATTLE_START', { enemy: e });
+        return;
+      }
+    }
+
+    allEnemiesDefeated = levelEnemies.every(e => !e.alive);
+
+    // Interact with chest
+    if (consumePress('Enter') && levelChest && !levelChest.opened) {
+      if (Math.abs(player.x - levelChest.x) < 40) {
+        levelChest.opened = true;
+        // Loot handled in Task 4
+      }
+    }
+
+    // Level exit
+    if (consumePress('Enter') && allEnemiesDefeated && player.x > lvl.exitX - 40) {
+      changeState('LEVEL_TRANSITION', { nextLevel: player.level });
+      return;
+    }
+  },
+
+  render(ctx) {
+    const lvl = LEVELS[player.level - 1];
+    const cx = camera.x;
+
+    // Background
+    ctx.fillStyle = lvl.bg;
+    ctx.fillRect(0, 0, VW, VH);
+
+    // Far layer: stars
+    for (const s of lvl.stars) {
+      const sx = s.x - cx * 0.2;
+      if (sx < -10 || sx > VW + 10) continue;
+      ctx.fillStyle = s.bright ? lvl.accent : '#668';
+      ctx.globalAlpha = 0.4 + (s.s - 1) * 0.2;
+      ctx.fillRect(sx, s.y, s.s, s.s);
+    }
+    ctx.globalAlpha = 1;
+
+    // Far layer: buildings silhouettes
+    for (const b of lvl.farBuildings) {
+      const bx = b.x - cx * 0.2;
+      if (bx < -b.w || bx > VW + 10) continue;
+      ctx.fillStyle = lvl.bg === '#0a0a2a' ? '#111133' : '#222';
+      ctx.fillRect(bx, lvl.floors[0].y - b.h, b.w, b.h);
+      ctx.strokeStyle = lvl.accent;
+      ctx.globalAlpha = 0.3;
+      ctx.strokeRect(bx, lvl.floors[0].y - b.h, b.w, b.h);
+      ctx.globalAlpha = 1;
+    }
+
+    // Near layer: decorations
+    for (const d of lvl.decorations) {
+      const dx = d.x - cx * 0.6;
+      if (dx < -100 || dx > VW + 100) continue;
+      ctx.globalAlpha = 0.6;
+      if (d.type === 'pipe') {
+        ctx.strokeStyle = lvl.accent;
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(dx, d.y); ctx.lineTo(dx, d.y + d.h); ctx.stroke();
+        ctx.lineWidth = 2;
+      } else if (d.type === 'light') {
+        ctx.fillStyle = lvl.accent;
+        ctx.fillRect(dx - 15, d.y, 30, 3);
+        ctx.globalAlpha = 0.15;
+        ctx.fillRect(dx - 20, d.y + 3, 40, 40);
+      } else if (d.type === 'crate') {
+        ctx.fillStyle = '#2a2a2a';
+        ctx.fillRect(dx, d.y, 30, 35);
+        ctx.strokeStyle = lvl.accent;
+        ctx.strokeRect(dx, d.y, 30, 35);
+      } else if (d.type === 'terminal') {
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(dx, d.y, 20, 50);
+        ctx.fillStyle = lvl.accent;
+        ctx.fillRect(dx + 3, d.y + 5, 14, 10);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Floor
+    ctx.fillStyle = lvl.floorColor;
+    ctx.fillRect(0, lvl.floors[0].y, VW, VH - lvl.floors[0].y);
+    ctx.strokeStyle = lvl.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, lvl.floors[0].y); ctx.lineTo(VW, lvl.floors[0].y); ctx.stroke();
+
+    // Floor detail lines
+    ctx.globalAlpha = 0.2;
+    ctx.strokeStyle = lvl.accent;
+    for (let fx = -cx % 80; fx < VW; fx += 80) {
+      ctx.beginPath(); ctx.moveTo(fx, lvl.floors[0].y + 10); ctx.lineTo(fx + 40, lvl.floors[0].y + 10); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Chest
+    if (levelChest) {
+      const chX = levelChest.x - cx;
+      if (chX > -30 && chX < VW + 30) {
+        ctx.fillStyle = levelChest.opened ? '#555' : '#fa0';
+        ctx.fillRect(chX - 12, lvl.floors[0].y - 20, 24, 20);
+        ctx.strokeStyle = levelChest.opened ? '#777' : '#ff0';
+        ctx.strokeRect(chX - 12, lvl.floors[0].y - 20, 24, 20);
+        if (!levelChest.opened) {
+          ctx.fillStyle = '#ff0';
+          ctx.font = '10px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText('?', chX, lvl.floors[0].y - 6);
+          ctx.textAlign = 'left';
+        }
+      }
+    }
+
+    // Exit indicator
+    if (allEnemiesDefeated) {
+      const ex = lvl.exitX - cx;
+      if (ex > -30 && ex < VW + 30) {
+        ctx.fillStyle = lvl.accent;
+        ctx.globalAlpha = 0.5 + Math.sin(Date.now() / 200) * 0.3;
+        ctx.font = 'bold 14px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('EXIT >', ex, lvl.floors[0].y - 30);
+        ctx.textAlign = 'left';
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Enemies
+    for (const e of levelEnemies) {
+      if (!e.alive) continue;
+      const ex = e.currentX - cx;
+      if (ex < -30 || ex > VW + 30) continue;
+      const eColor = '#f44';
+      drawStickFigure(ctx, ex, lvl.floors[0].y, eColor, 1.5, e.walkTime, e.dir);
+    }
+
+    // Player
+    const px = player.x - cx;
+    drawStickFigure(ctx, px, player.y, '#0f0', 1.8, player.walkTime, player.dir);
+
+    // HUD
+    renderHUD(ctx);
+  }
+};
+
+function renderHUD(ctx) {
+  // HP Bar
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(10, 10, 160, 40);
+  ctx.strokeStyle = '#3af';
+  ctx.strokeRect(10, 10, 160, 40);
+
+  ctx.fillStyle = '#0f0';
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText('HP', 16, 26);
+  ctx.fillStyle = '#300';
+  ctx.fillRect(40, 15, 120, 12);
+  ctx.fillStyle = '#0f0';
+  ctx.fillRect(40, 15, 120 * (player.hp / player.maxHp), 12);
+
+  // MP Bar
+  ctx.fillStyle = '#48f';
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText('MP', 16, 42);
+  ctx.fillStyle = '#003';
+  ctx.fillRect(40, 31, 120, 12);
+  ctx.fillStyle = '#48f';
+  ctx.fillRect(40, 31, 120 * (player.mp / player.maxMp), 12);
+
+  // Level indicator
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('Level ' + player.level, VW - 16, 26);
+  ctx.textAlign = 'left';
+}
+
 // ── Game Loop ──
 let lastTime = 0;
 function gameLoop(time) {
