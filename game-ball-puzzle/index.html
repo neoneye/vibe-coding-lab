@@ -318,6 +318,10 @@ const levelData = {
     { x: 3, y: 0, z: -21, w: 1.5, h: 0.5, d: 7, bumpers: [] },
     { x: 6, y: 0, z: -27, w: 6, h: 0.5, d: 6, bumpers: ['left','right','front','back'] },
   ],
+  pistons: [
+    // Two pistons at entrance of platform 3, push from left/right
+    { x: 0, y: 0.25, z: -12.8, gap: 3.0, closedGap: 0.4, closeSpeed: 0.15, openSpeed: 1.2, pause: 5.0 }
+  ],
   gears: [
     { x: -1.5, y: 0.25, z: -15, radius: 0.8, speed: 2.0 },
     { x: 1.5, y: 0.25, z: -15, radius: 0.8, speed: -2.0 },
@@ -490,6 +494,107 @@ levelData.gears.forEach(g => {
   world.add(gearGroup);
   gears.push({ group: gearGroup, data: g });
 });
+
+// ── Pistons ──
+const pistonMat = new THREE.MeshPhongMaterial({
+  color: 0x777777,
+  specular: 0xbbbbbb,
+  shininess: 70,
+  flatShading: true
+});
+const pistonAccentMat = new THREE.MeshPhongMaterial({
+  color: 0xcc4444,
+  flatShading: true
+});
+
+const pistons = [];
+
+levelData.pistons.forEach(p => {
+  // Left piston (moves right to crush)
+  const leftGroup = new THREE.Group();
+  const leftHead = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 1.2), pistonMat);
+  leftGroup.add(leftHead);
+  // Danger stripe on crushing face
+  const leftStripe = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.7, 1.1), pistonAccentMat);
+  leftStripe.position.x = 0.41;
+  leftGroup.add(leftStripe);
+  // Arm/rail
+  const leftArm = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.2, 0.2), pistonMat);
+  leftArm.position.x = -1.1;
+  leftGroup.add(leftArm);
+  // Housing
+  const leftHousing = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.0, 1.4), pistonMat);
+  leftHousing.position.x = -2.0;
+  leftGroup.add(leftHousing);
+  leftGroup.position.set(p.x - p.gap / 2, p.y + 0.4, p.z);
+  world.add(leftGroup);
+
+  // Right piston (moves left to crush)
+  const rightGroup = new THREE.Group();
+  const rightHead = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 1.2), pistonMat);
+  rightGroup.add(rightHead);
+  const rightStripe = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.7, 1.1), pistonAccentMat);
+  rightStripe.position.x = -0.41;
+  rightGroup.add(rightStripe);
+  const rightArm = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.2, 0.2), pistonMat);
+  rightArm.position.x = 1.1;
+  rightGroup.add(rightArm);
+  const rightHousing = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.0, 1.4), pistonMat);
+  rightHousing.position.x = 2.0;
+  rightGroup.add(rightHousing);
+  rightGroup.position.set(p.x + p.gap / 2, p.y + 0.4, p.z);
+  world.add(rightGroup);
+
+  pistons.push({
+    data: p,
+    left: leftGroup,
+    right: rightGroup,
+    timer: 0,
+    phase: 'pause', // 'pause', 'closing', 'closed_hold', 'opening'
+    progress: 0      // 0 = open, 1 = closed
+  });
+});
+
+function updatePistons(dt) {
+  for (const piston of pistons) {
+    const p = piston.data;
+    const halfOpen = p.gap / 2;
+    const halfClosed = p.closedGap / 2;
+
+    if (piston.phase === 'pause') {
+      piston.timer += dt;
+      if (piston.timer >= p.pause) {
+        piston.phase = 'closing';
+        piston.timer = 0;
+      }
+    } else if (piston.phase === 'closing') {
+      piston.timer += dt;
+      piston.progress = Math.min(1, piston.timer / p.closeSpeed);
+      if (piston.progress >= 1) {
+        piston.phase = 'closed_hold';
+        piston.timer = 0;
+      }
+    } else if (piston.phase === 'closed_hold') {
+      piston.timer += dt;
+      if (piston.timer >= 0.15) {
+        piston.phase = 'opening';
+        piston.timer = 0;
+      }
+    } else if (piston.phase === 'opening') {
+      piston.timer += dt;
+      piston.progress = Math.max(0, 1 - piston.timer / p.openSpeed);
+      if (piston.progress <= 0) {
+        piston.phase = 'pause';
+        piston.timer = 0;
+      }
+    }
+
+    // Position pistons based on progress
+    const currentHalf = halfOpen + (halfClosed - halfOpen) * piston.progress;
+    piston.left.position.x = p.x - currentHalf;
+    piston.right.position.x = p.x + currentHalf;
+  }
+}
 
 // ── Splat Particles ──
 const splatParticles = [];
@@ -704,6 +809,18 @@ function updatePhysics(dt) {
     return 'fell';
   }
 
+  // ── Piston Collision ──
+  for (const piston of pistons) {
+    const p = piston.data;
+    const halfGap = (p.gap / 2) + ((p.closedGap / 2) - (p.gap / 2)) * piston.progress;
+    const inZ = Math.abs(ball.position.z - p.z) < 0.7;
+    const inY = ball.position.y < p.y + 1.2;
+    const inX = Math.abs(ball.position.x - p.x) < halfGap + ballRadius * 0.8;
+    if (inZ && inY && inX && piston.progress > 0.85) {
+      return 'splat';
+    }
+  }
+
   // ── Gear Collision ──
   for (const gear of gears) {
     const gdx = ball.position.x - gear.data.x;
@@ -827,6 +944,9 @@ function animate(time) {
   for (const gear of gears) {
     gear.group.rotation.y += gear.data.speed * dt;
   }
+
+  // Animate pistons
+  updatePistons(dt);
 
   // Update splat particles
   updateSplatParticles(dt);
