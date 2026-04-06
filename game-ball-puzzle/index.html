@@ -157,6 +157,122 @@ for (let i = 0; i < 6; i++) {
   ball.add(vein);
 }
 
+// ── Eyelids (pac-man style sphere caps) ──
+const lidMat = new THREE.MeshPhongMaterial({
+  color: 0xd4a88c,
+  specular: 0x442222,
+  shininess: 20,
+  side: THREE.DoubleSide
+});
+
+const lidR = ballRadius * 1.03;
+
+// Top eyelid: upper hemisphere that rotates down to cover front
+const topLidPivot = new THREE.Group();
+const topLidGeo = new THREE.SphereGeometry(lidR, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+const topLid = new THREE.Mesh(topLidGeo, lidMat);
+topLidPivot.add(topLid);
+topLidPivot.visible = false;
+ball.add(topLidPivot);
+
+// Bottom eyelid: lower hemisphere that rotates up to cover front
+const botLidPivot = new THREE.Group();
+const botLidGeo = new THREE.SphereGeometry(lidR, 24, 12, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+const botLid = new THREE.Mesh(botLidGeo, lidMat);
+botLidPivot.add(botLid);
+botLidPivot.visible = false;
+ball.add(botLidPivot);
+
+// Blink state
+const blink = {
+  facingTimer: 0,        // how long iris has faced camera
+  facingThreshold: 3.0,  // seconds before blinking starts
+  isFacingMode: false,   // true once we've been facing long enough
+  nextBlinkIn: 0,        // countdown to next blink
+  blinkPhase: 'none',    // 'none', 'closing', 'closed', 'opening'
+  blinkTime: 0,          // time within current blink phase
+  closeDuration: 0.12,
+  closedDuration: 0.06,
+  openDuration: 0.15,
+  lidProgress: 0         // 0 = open, 1 = closed
+};
+
+function scheduleNextBlink() {
+  blink.nextBlinkIn = 10 + (Math.random() * 4 - 2);
+}
+
+function updateBlink(dt) {
+  // Check if iris faces camera
+  const irisWorldDir = new THREE.Vector3(0, 0, 1);
+  irisWorldDir.applyQuaternion(ball.getWorldQuaternion(new THREE.Quaternion()));
+  const ballWorldPos = new THREE.Vector3();
+  ball.getWorldPosition(ballWorldPos);
+  const toCamera = camera.position.clone().sub(ballWorldPos).normalize();
+  const dot = irisWorldDir.dot(toCamera);
+
+  if (dot > 0.3) {
+    blink.facingTimer += dt;
+    if (!blink.isFacingMode && blink.facingTimer >= blink.facingThreshold) {
+      blink.isFacingMode = true;
+      scheduleNextBlink();
+    }
+  } else {
+    blink.facingTimer = 0;
+    blink.isFacingMode = false;
+    blink.blinkPhase = 'none';
+    blink.lidProgress = 0;
+  }
+
+  // Blink countdown
+  if (blink.isFacingMode && blink.blinkPhase === 'none') {
+    blink.nextBlinkIn -= dt;
+    if (blink.nextBlinkIn <= 0) {
+      blink.blinkPhase = 'closing';
+      blink.blinkTime = 0;
+    }
+  }
+
+  // Animate blink
+  if (blink.blinkPhase === 'closing') {
+    blink.blinkTime += dt;
+    blink.lidProgress = Math.min(1, blink.blinkTime / blink.closeDuration);
+    if (blink.blinkTime >= blink.closeDuration) {
+      blink.blinkPhase = 'closed';
+      blink.blinkTime = 0;
+    }
+  } else if (blink.blinkPhase === 'closed') {
+    blink.blinkTime += dt;
+    blink.lidProgress = 1;
+    if (blink.blinkTime >= blink.closedDuration) {
+      blink.blinkPhase = 'opening';
+      blink.blinkTime = 0;
+    }
+  } else if (blink.blinkPhase === 'opening') {
+    blink.blinkTime += dt;
+    blink.lidProgress = Math.max(0, 1 - blink.blinkTime / blink.openDuration);
+    if (blink.blinkTime >= blink.openDuration) {
+      blink.blinkPhase = 'none';
+      blink.lidProgress = 0;
+      scheduleNextBlink();
+    }
+  }
+
+  // Apply lid position — pac-man jaw rotation
+  // Open angle: how far back the lids rotate when open (PI/2 = fully behind eye)
+  const openAngle = Math.PI / 2;
+  if (blink.lidProgress > 0) {
+    topLidPivot.visible = true;
+    botLidPivot.visible = true;
+    // Top lid: rotates from -openAngle (open) toward 0 (closed, covering iris)
+    topLidPivot.rotation.x = -openAngle * (1 - blink.lidProgress);
+    // Bottom lid: rotates from +openAngle (open) toward 0 (closed)
+    botLidPivot.rotation.x = openAngle * (1 - blink.lidProgress);
+  } else {
+    topLidPivot.visible = false;
+    botLidPivot.visible = false;
+  }
+}
+
 // ── Wet Trail ──
 const trailMarks = [];
 const maxTrailMarks = 120;
@@ -689,6 +805,9 @@ function animate(time) {
 
   // Update splat particles
   updateSplatParticles(dt);
+
+  // Blink
+  updateBlink(dt);
 
   if (gameState === 'READY') {
     // Wait for any key
