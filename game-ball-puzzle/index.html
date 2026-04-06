@@ -183,6 +183,11 @@ const levelData = {
     { x: 3, y: 0, z: -21, w: 1.5, h: 0.5, d: 7, bumpers: [] },
     { x: 6, y: 0, z: -27, w: 6, h: 0.5, d: 6, bumpers: ['left','right','front','back'] },
   ],
+  gears: [
+    { x: -1.5, y: 0.25, z: -15, radius: 0.8, speed: 2.0 },
+    { x: 1.5, y: 0.25, z: -15, radius: 0.8, speed: -2.0 },
+    { x: 4.5, y: 0.25, z: -26, radius: 0.7, speed: 3.0 },
+  ],
   start: { x: 0, y: 1, z: 0 },
   goal: { x: 6, y: 0.5, z: -27 }
 };
@@ -281,6 +286,142 @@ const voidPlane = new THREE.Mesh(voidGeo, voidMat);
 voidPlane.rotation.x = -Math.PI / 2;
 voidPlane.position.y = -25;
 world.add(voidPlane);
+
+// ── Grinding Gears ──
+const gearMat = new THREE.MeshPhongMaterial({
+  color: 0x666666,
+  specular: 0x999999,
+  shininess: 60,
+  flatShading: true
+});
+const gearTeethMat = new THREE.MeshPhongMaterial({
+  color: 0x888888,
+  specular: 0xaaaaaa,
+  shininess: 40,
+  flatShading: true
+});
+const gearBloodMat = new THREE.MeshPhongMaterial({
+  color: 0x881111,
+  specular: 0x440000,
+  shininess: 20,
+  flatShading: true
+});
+
+const gears = [];
+
+levelData.gears.forEach(g => {
+  const gearGroup = new THREE.Group();
+  gearGroup.position.set(g.x, g.y, g.z);
+
+  // Main gear disc
+  const discGeo = new THREE.CylinderGeometry(g.radius, g.radius, 0.15, 16);
+  const disc = new THREE.Mesh(discGeo, gearMat);
+  disc.castShadow = true;
+  gearGroup.add(disc);
+
+  // Gear teeth
+  const teethCount = 10;
+  for (let i = 0; i < teethCount; i++) {
+    const angle = (i / teethCount) * Math.PI * 2;
+    const toothGeo = new THREE.BoxGeometry(0.18, 0.2, 0.12);
+    const tooth = new THREE.Mesh(toothGeo, gearTeethMat);
+    tooth.position.set(
+      Math.cos(angle) * (g.radius + 0.08),
+      0,
+      Math.sin(angle) * (g.radius + 0.08)
+    );
+    tooth.rotation.y = -angle;
+    tooth.castShadow = true;
+    gearGroup.add(tooth);
+  }
+
+  // Blood stains on gear
+  for (let i = 0; i < 4; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = Math.random() * g.radius * 0.7;
+    const stainGeo = new THREE.CircleGeometry(0.06 + Math.random() * 0.08, 6);
+    const stain = new THREE.Mesh(stainGeo, gearBloodMat);
+    stain.position.set(Math.cos(angle) * dist, 0.08, Math.sin(angle) * dist);
+    stain.rotation.x = -Math.PI / 2;
+    gearGroup.add(stain);
+  }
+
+  // Axle
+  const axleGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.6, 8);
+  const axle = new THREE.Mesh(axleGeo, gearMat);
+  axle.position.y = -0.15;
+  gearGroup.add(axle);
+
+  world.add(gearGroup);
+  gears.push({ group: gearGroup, data: g });
+});
+
+// ── Splat Particles ──
+const splatParticles = [];
+const splatGeo = new THREE.SphereGeometry(0.08, 6, 6);
+const splatColors = [0xcc0000, 0x990000, 0xff2222, 0xf0e8e0, 0x880000];
+
+function spawnSplat(pos) {
+  for (let i = 0; i < 30; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: splatColors[Math.floor(Math.random() * splatColors.length)],
+      transparent: true,
+      opacity: 1.0
+    });
+    const size = 0.05 + Math.random() * 0.12;
+    const geo = new THREE.SphereGeometry(size, 5, 5);
+    const p = new THREE.Mesh(geo, mat);
+    p.position.copy(pos);
+    const vel = new THREE.Vector3(
+      (Math.random() - 0.5) * 8,
+      Math.random() * 6 + 2,
+      (Math.random() - 0.5) * 8
+    );
+    p.userData.vel = vel;
+    p.userData.age = 0;
+    p.userData.maxAge = 1.5 + Math.random();
+    world.add(p);
+    splatParticles.push(p);
+  }
+  // Blood splat on surface
+  for (let i = 0; i < 8; i++) {
+    const splatMark = new THREE.Mesh(
+      new THREE.CircleGeometry(0.15 + Math.random() * 0.3, 8),
+      new THREE.MeshBasicMaterial({ color: 0x880000, transparent: true, opacity: 0.7, depthWrite: false })
+    );
+    splatMark.rotation.x = -Math.PI / 2;
+    splatMark.position.set(
+      pos.x + (Math.random() - 0.5) * 1.5,
+      pos.y - ballRadius + 0.03,
+      pos.z + (Math.random() - 0.5) * 1.5
+    );
+    splatMark.userData.age = 0;
+    splatMark.userData.maxAge = 4.0;
+    world.add(splatMark);
+    splatParticles.push(splatMark);
+  }
+}
+
+function updateSplatParticles(dt) {
+  for (let i = splatParticles.length - 1; i >= 0; i--) {
+    const p = splatParticles[i];
+    p.userData.age += dt;
+    if (p.userData.vel) {
+      p.userData.vel.y += physics.gravity * 0.5 * dt;
+      p.position.x += p.userData.vel.x * dt;
+      p.position.y += p.userData.vel.y * dt;
+      p.position.z += p.userData.vel.z * dt;
+    }
+    const life = 1 - p.userData.age / p.userData.maxAge;
+    p.material.opacity = Math.max(0, life);
+    if (p.userData.age >= p.userData.maxAge) {
+      world.remove(p);
+      p.material.dispose();
+      p.geometry.dispose();
+      splatParticles.splice(i, 1);
+    }
+  }
+}
 
 // ── Physics Update ──
 function updatePhysics(dt) {
@@ -424,6 +565,17 @@ function updatePhysics(dt) {
     return 'fell';
   }
 
+  // ── Gear Collision ──
+  for (const gear of gears) {
+    const gdx = ball.position.x - gear.data.x;
+    const gdz = ball.position.z - gear.data.z;
+    const gDist = Math.sqrt(gdx * gdx + gdz * gdz);
+    const hitRadius = gear.data.radius + ballRadius * 0.6;
+    if (gDist < hitRadius && ball.position.y < gear.data.y + 0.5) {
+      return 'splat';
+    }
+  }
+
   // ── Goal Detection ──
   const dx = ball.position.x - levelData.goal.x;
   const dz = ball.position.z - levelData.goal.z;
@@ -470,6 +622,7 @@ function hideMessage() {
 }
 
 function resetBall() {
+  ball.visible = true;
   ball.position.set(levelData.start.x, levelData.start.y, levelData.start.z);
   physics.velocity.set(0, 0, 0);
   physics.tiltX = 0;
@@ -483,6 +636,13 @@ function resetBall() {
     m.material.dispose();
   }
   trailMarks.length = 0;
+  // Clear splat particles
+  for (const p of splatParticles) {
+    world.remove(p);
+    p.material.dispose();
+    p.geometry.dispose();
+  }
+  splatParticles.length = 0;
 }
 
 function startGame() {
@@ -522,6 +682,14 @@ function animate(time) {
 
   goalMesh.rotation.y += 0.02;
 
+  // Spin gears
+  for (const gear of gears) {
+    gear.group.rotation.y += gear.data.speed * dt;
+  }
+
+  // Update splat particles
+  updateSplatParticles(dt);
+
   if (gameState === 'READY') {
     // Wait for any key
     const anyKey = keys.left || keys.right || keys.up || keys.down || keys.space;
@@ -532,6 +700,12 @@ function animate(time) {
     const result = updatePhysics(dt);
     if (result === 'fell') gameOver();
     if (result === 'goal') winGame();
+    if (result === 'splat') {
+      spawnSplat(ball.position.clone());
+      ball.visible = false;
+      gameState = 'GAMEOVER';
+      showMessage('SPLAT! Press R to restart', '#cc0000');
+    }
   }
 
   if ((gameState === 'WIN' || gameState === 'GAMEOVER') && keys.r) {
