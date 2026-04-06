@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sci-Fi Stick RPG</title>
+<style>
+body { margin: 0; overflow: hidden; background: #000; }
+canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+// ── Canvas Setup ──
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const VW = 800, VH = 450;
+let scale = 1, offsetX = 0, offsetY = 0;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const sx = canvas.width / VW, sy = canvas.height / VH;
+  scale = Math.min(sx, sy);
+  offsetX = (canvas.width - VW * scale) / 2;
+  offsetY = (canvas.height - VH * scale) / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Input ──
+const keys = {};
+const justPressed = {};
+window.addEventListener('keydown', e => {
+  if (!keys[e.key]) justPressed[e.key] = true;
+  keys[e.key] = true;
+  e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+function consumePress(key) {
+  if (justPressed[key]) { justPressed[key] = false; return true; }
+  return false;
+}
+
+// ── State Machine ──
+let currentState = null;
+const states = {};
+
+function changeState(name, data) {
+  currentState = name;
+  if (states[name].enter) states[name].enter(data);
+}
+
+// ── Game State ──
+const player = {
+  hp: 100, maxHp: 100, mp: 50, maxMp: 50,
+  attack: 15, defense: 5, magicMult: 1,
+  x: 100, y: 0, vx: 0, vy: 0, dir: 1, walkTime: 0,
+  inventory: [], gear: [],
+  level: 1
+};
+
+// ── TITLE State ──
+states.TITLE = {
+  enter() {},
+  update(dt) {
+    if (consumePress('Enter')) {
+      // Reset player for new game
+      player.hp = 100; player.maxHp = 100;
+      player.mp = 50; player.maxMp = 50;
+      player.attack = 15; player.defense = 5; player.magicMult = 1;
+      player.x = 100; player.y = 0; player.vx = 0; player.vy = 0;
+      player.dir = 1; player.walkTime = 0;
+      player.inventory = []; player.gear = [];
+      player.level = 1;
+      changeState('EXPLORE', { levelIndex: 0 });
+    }
+  },
+  render(ctx) {
+    ctx.fillStyle = '#0a0a2a';
+    ctx.fillRect(0, 0, VW, VH);
+
+    // Stars
+    for (let i = 0; i < 60; i++) {
+      const sx = (i * 137 + 50) % VW;
+      const sy = (i * 97 + 30) % (VH - 100);
+      ctx.fillStyle = i % 3 === 0 ? '#3af' : '#fff';
+      ctx.globalAlpha = 0.3 + (i % 5) * 0.15;
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+
+    // Title
+    ctx.fillStyle = '#3af';
+    ctx.font = 'bold 48px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('STICK QUEST', VW / 2, 140);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '20px monospace';
+    ctx.fillText('A Sci-Fi Adventure', VW / 2, 180);
+
+    // Stick figure preview
+    drawStickFigure(ctx, VW / 2, 280, '#0f0', 2, 0, 1);
+
+    // Prompt
+    const blink = Math.sin(Date.now() / 300) > 0;
+    if (blink) {
+      ctx.fillStyle = '#3af';
+      ctx.font = '18px monospace';
+      ctx.fillText('Press ENTER to start', VW / 2, 380);
+    }
+
+    ctx.textAlign = 'left';
+  }
+};
+
+// ── Stick Figure Drawing ──
+// x, y = feet position; color; size scale; walkPhase (0-1); dir (1=right, -1=left)
+function drawStickFigure(ctx, x, y, color, s, walkPhase, dir) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+
+  const headR = 6 * s;
+  const bodyLen = 18 * s;
+  const limbLen = 14 * s;
+
+  const headY = y - bodyLen - headR * 2 - limbLen;
+  const shoulderY = headY + headR * 2;
+  const hipY = shoulderY + bodyLen;
+
+  // Head
+  ctx.beginPath();
+  ctx.arc(x, headY, headR, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Body
+  ctx.beginPath();
+  ctx.moveTo(x, shoulderY);
+  ctx.lineTo(x, hipY);
+  ctx.stroke();
+
+  // Arms
+  const armSwing = Math.sin(walkPhase * Math.PI * 2) * 0.4;
+  ctx.beginPath();
+  ctx.moveTo(x, shoulderY + 4 * s);
+  ctx.lineTo(x + Math.sin(armSwing) * limbLen * dir, shoulderY + 4 * s + Math.cos(armSwing) * limbLen);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x, shoulderY + 4 * s);
+  ctx.lineTo(x - Math.sin(armSwing) * limbLen * dir, shoulderY + 4 * s + Math.cos(armSwing) * limbLen);
+  ctx.stroke();
+
+  // Legs
+  const legSwing = Math.sin(walkPhase * Math.PI * 2) * 0.5;
+  ctx.beginPath();
+  ctx.moveTo(x, hipY);
+  ctx.lineTo(x + Math.sin(legSwing) * limbLen * 0.7, hipY + Math.cos(legSwing) * limbLen);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x, hipY);
+  ctx.lineTo(x - Math.sin(legSwing) * limbLen * 0.7, hipY + Math.cos(legSwing) * limbLen);
+  ctx.stroke();
+}
+
+// ── Game Loop ──
+let lastTime = 0;
+function gameLoop(time) {
+  const dt = Math.min((time - lastTime) / 1000, 0.05);
+  lastTime = time;
+
+  const state = states[currentState];
+  if (state) {
+    state.update(dt);
+
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+    ctx.beginPath();
+    ctx.rect(0, 0, VW, VH);
+    ctx.clip();
+    state.render(ctx);
+    ctx.restore();
+  }
+
+  Object.keys(justPressed).forEach(k => justPressed[k] = false);
+  requestAnimationFrame(gameLoop);
+}
+
+// ── Start ──
+changeState('TITLE');
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
