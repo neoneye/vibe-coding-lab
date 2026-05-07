@@ -63,7 +63,7 @@ Best-feasible container dimensions are remembered. If shrinking makes the system
 
 ### Mode B objective coupling
 
-Maintain a current count `n`. Initial `n = floor(W · H)`. If energy stays positive for ~10k steps, drop to `n − 1` (remove a random square). If energy reaches 0 and stays 0 for ~5k steps, try `n + 1` (add a square at a random feasible-looking spot). Best feasible `n` is remembered and shown.
+Maintain a current count `n`. Initial `n = floor(W · H)`. If energy stays positive for ~10k steps, drop to `n − 1` (remove a random square). If energy reaches 0 and stays 0 for ~5k steps, try `n + 1` by adding a new square at a uniformly random position and angle inside the container; annealing then tries to relax the (likely) overlap back to zero. Best feasible `n` is remembered and shown.
 
 ## Rendering
 
@@ -72,7 +72,7 @@ Single `<canvas>` element, sized responsively (container drawn with ~20px margin
 1. Clear canvas (white background).
 2. Stroke the container rectangle (1px black).
 3. For each square: `ctx.save(); ctx.translate(cx, cy); ctx.rotate(θ); ctx.strokeRect(-0.5*scale, -0.5*scale, scale, scale); ctx.restore();` — black outline, no fill.
-4. The "best so far" layout is stored separately and rendered as a faint grey overlay if it differs from the current state. (Optional; if it adds clutter, drop it.)
+4. The current state is the only thing rendered. The "best so far" container dimensions are tracked numerically and shown in the status line; no ghost overlay is drawn. (Keeps the canvas clean.)
 
 A status line below the canvas shows:
 
