@@ -303,16 +303,162 @@
       runTests();
     }
 
-    // === Tab toggle ===
+    // === Renderer ===
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function render(state) {
+      const cssW = canvas.clientWidth;
+      const cssH = canvas.clientHeight;
+      ctx.clearRect(0, 0, cssW, cssH);
+
+      const margin = 20;
+      const { w, h } = state.container;
+      const scale = Math.min((cssW - 2 * margin) / w, (cssH - 2 * margin) / h);
+      const ox = (cssW - w * scale) / 2;
+      const oy = (cssH - h * scale) / 2;
+
+      // container
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(ox, oy, w * scale, h * scale);
+
+      // squares
+      ctx.lineWidth = 1;
+      for (const s of state.squares) {
+        ctx.save();
+        ctx.translate(ox + s.x * scale, oy + s.y * scale);
+        ctx.rotate(s.theta);
+        ctx.strokeRect(-0.5 * scale, -0.5 * scale, scale, scale);
+        ctx.restore();
+      }
+    }
+
+    // === State ===
+
+    function makeInitialState(mode, params) {
+      if (mode === 'min') {
+        const n = params.n;
+        const side = initialContainerSide(n);
+        const w = side, h = side; // shape handled later
+        return {
+          mode: 'min',
+          shape: params.shape,
+          container: { w, h },
+          squares: initSquares(n, w, h),
+          best: null,
+          iter: 0,
+          T: 1.0,
+        };
+      } else {
+        const w = params.w, h = params.h;
+        const n = Math.max(1, Math.floor(w * h));
+        return {
+          mode: 'max',
+          container: { w, h },
+          squares: initSquares(n, w, h),
+          best: null,
+          iter: 0,
+          T: 1.0,
+        };
+      }
+    }
+
+    let state = makeInitialState('min', { n: 11, shape: 'square' });
+    let running = false;
+    let rafId = null;
+
+    function tick() {
+      if (!running) return;
+      // (annealing happens here in a later task)
+      state.iter++;
+      render(state);
+      updateStatus();
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function updateStatus() {
+      const { w, h } = state.container;
+      const e = computeEnergy(state.squares, state.container);
+      status.textContent =
+        `mode=${state.mode}  n=${state.squares.length}  ` +
+        `container=${w.toFixed(3)}×${h.toFixed(3)}  ` +
+        `area=${(w * h).toFixed(3)}  energy=${e.toFixed(4)}  ` +
+        `iter=${state.iter}  T=${state.T.toFixed(4)}`;
+    }
+
+    // === Controls ===
+
     const tabs = document.querySelectorAll('.tab');
     const panelMin = document.getElementById('controls-min');
     const panelMax = document.getElementById('controls-max');
+    let currentMode = 'min';
+
     function setMode(mode) {
+      currentMode = mode;
       tabs.forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
       panelMin.classList.toggle('hidden', mode !== 'min');
       panelMax.classList.toggle('hidden', mode !== 'max');
+      doReset();
     }
     tabs.forEach(t => t.addEventListener('click', () => setMode(t.dataset.mode)));
+
+    function readParams() {
+      if (currentMode === 'min') {
+        const n = Math.max(1, parseInt(document.getElementById('input-n').value, 10) || 1);
+        const shape = document.querySelector('input[name="shape"]:checked').value;
+        return { n, shape };
+      } else {
+        const w = Math.max(0.1, parseFloat(document.getElementById('input-w').value) || 1);
+        const h = Math.max(0.1, parseFloat(document.getElementById('input-h').value) || 1);
+        return { w, h };
+      }
+    }
+
+    function doReset() {
+      running = false;
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+      state = makeInitialState(currentMode, readParams());
+      render(state);
+      updateStatus();
+    }
+
+    function doRun() {
+      if (running) return;
+      running = true;
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function doStop() {
+      running = false;
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+    }
+
+    document.getElementById('btn-run').addEventListener('click', doRun);
+    document.getElementById('btn-stop').addEventListener('click', doStop);
+    document.getElementById('btn-reset').addEventListener('click', doReset);
+
+    document.getElementById('input-n').addEventListener('change', doReset);
+    document.querySelectorAll('input[name="shape"]').forEach(r =>
+      r.addEventListener('change', doReset));
+    document.getElementById('input-w').addEventListener('change', doReset);
+    document.getElementById('input-h').addEventListener('change', doReset);
+
+    // Initial render
+    render(state);
+    updateStatus();
   </script>
 </body>
 </html>
