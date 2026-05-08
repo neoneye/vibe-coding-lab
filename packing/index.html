@@ -458,6 +458,64 @@
       state.lastEnergy = computeEnergy(state.squares, state.container);
     }
 
+    const SHRINK_FACTOR = 0.998;
+    const RECOVER_BUDGET = 10000;
+
+    function recordBestIfFeasible(state) {
+      if (state.mode !== 'min') return;
+      if (state.lastEnergy > 1e-9) return;
+      const { w, h } = state.container;
+      const area = w * h;
+      if (state.best === null || area < state.best.area) {
+        state.best = {
+          area,
+          w, h,
+          squares: state.squares.map(s => ({ x: s.x, y: s.y, theta: s.theta })),
+        };
+        state.stuckSince = state.iter;
+      }
+    }
+
+    function shrinkIfFeasible(state) {
+      if (state.mode !== 'min') return;
+      if (state.lastEnergy > 1e-9) return;
+      if (state.shape === 'square') {
+        const ns = state.container.w * SHRINK_FACTOR;
+        state.container.w = ns;
+        state.container.h = ns;
+      } else {
+        // shrink longer side
+        if (state.container.w >= state.container.h) {
+          state.container.w *= SHRINK_FACTOR;
+        } else {
+          state.container.h *= SHRINK_FACTOR;
+        }
+      }
+    }
+
+    function maybeRecover(state) {
+      if (state.mode !== 'min') return;
+      if (state.best === null) return;
+      if (state.lastEnergy <= 1e-9) {
+        state.stuckSince = state.iter;
+        return;
+      }
+      if (state.iter - (state.stuckSince ?? 0) > RECOVER_BUDGET) {
+        // restore best feasible
+        state.container.w = state.best.w;
+        state.container.h = state.best.h;
+        for (let i = 0; i < state.squares.length; i++) {
+          state.squares[i].x = state.best.squares[i].x;
+          state.squares[i].y = state.best.squares[i].y;
+          state.squares[i].theta = state.best.squares[i].theta;
+        }
+        state.lastEnergy = 0;
+        state.stuckSince = state.iter;
+        // bump T to encourage exploration after restore
+        state.T = Math.max(state.T, 0.05);
+      }
+    }
+
     function stepsForSpeed(speed) {
       // speed: 0..100 → steps per frame: 1..~5000 (log scale)
       const t = speed / 100;
@@ -472,7 +530,12 @@
       if (!running) return;
       const speed = parseInt(document.getElementById('input-speed').value, 10);
       const steps = stepsForSpeed(speed);
-      for (let i = 0; i < steps; i++) annealStep(state);
+      for (let i = 0; i < steps; i++) {
+        annealStep(state);
+        recordBestIfFeasible(state);
+        shrinkIfFeasible(state);
+        maybeRecover(state);
+      }
       render(state);
       updateStatus();
       rafId = requestAnimationFrame(tick);
@@ -481,10 +544,20 @@
     function updateStatus() {
       const { w, h } = state.container;
       const e = state.lastEnergy ?? computeEnergy(state.squares, state.container);
+      const feasible = e <= 1e-9 ? '✓' : '✗';
+      let bestStr = 'best=—';
+      if (state.best) {
+        if (state.mode === 'min' && state.shape === 'square') {
+          bestStr = `best: side=${state.best.w.toFixed(3)} area=${state.best.area.toFixed(3)}`;
+        } else if (state.mode === 'min') {
+          bestStr = `best: w=${state.best.w.toFixed(3)} h=${state.best.h.toFixed(3)} area=${state.best.area.toFixed(3)}`;
+        }
+      }
+      const fill = state.squares.length / (w * h);
       status.textContent =
+        `${bestStr}  fill=${(fill * 100).toFixed(1)}%\n` +
         `mode=${state.mode}  n=${state.squares.length}  ` +
-        `container=${w.toFixed(3)}×${h.toFixed(3)}  ` +
-        `area=${(w * h).toFixed(3)}  energy=${e.toFixed(4)}  ` +
+        `cur=${w.toFixed(3)}×${h.toFixed(3)}  e=${e.toFixed(4)} ${feasible}  ` +
         `iter=${state.iter}  T=${state.T.toFixed(4)}`;
     }
 
