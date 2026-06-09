@@ -1654,6 +1654,129 @@ SnakeTests.add("bot works in two-player mode", () => {
   assert(playerIsAlive(env.gameState.player1), `p1 died: ${env.gameState.player1.causesOfDeath}`);
   assert(playerIsAlive(env.gameState.player2), `p2 died: ${env.gameState.player2.causesOfDeath}`);
 });
+
+// ---------------------------------------------------------------------------
+// Path/space toolkit for the Hybrid bot. All searches are timing-aware: a
+// snake body cell counts as passable if it will have vacated by the time the
+// head arrives there. Cells are visited once (a snake cannot wait in place),
+// which is the standard approximation — it is exactly what makes flood fill
+// meaningful for trap detection.
+// ---------------------------------------------------------------------------
+
+// Map posKey → step at which the cell becomes free. fifo.array is tail-first,
+// so index i vacates at step i+1; pending growth delays every vacation.
+// frozen=true marks a dead snake: an obstacle that never vacates.
+function vacateMap(body, growth = 0, frozen = false) {
+  const map = new Map();
+  body.fifo.array.forEach((part, i) => {
+    const step = frozen ? Infinity : i + 1 + growth;
+    const key = posKey(part.position);
+    map.set(key, Math.max(map.get(key) ?? 0, step));
+  });
+  return map;
+}
+
+function passableAt(level, vacateMaps, pos, step) {
+  const key = posKey(pos);
+  if (!level.emptyPositionSet.has(key)) return false;
+  for (const map of vacateMaps) {
+    if ((map.get(key) ?? 0) > step) return false;
+  }
+  return true;
+}
+
+// BFS from start (arrival step 0) to target. Returns [start..target] or null.
+function bfsPath(level, vacateMaps, start, target) {
+  if (posEq(start, target)) return [start];
+  const visited = new Map([[posKey(start), null]]); // posKey → parent posKey
+  const positions = new Map([[posKey(start), start]]);
+  let frontier = [start];
+  let step = 0;
+  while (frontier.length > 0) {
+    step++;
+    const next = [];
+    for (const p of frontier) {
+      for (const d of Object.values(DIRECTION_DELTA)) {
+        const q = offsetBy(p, d.dx, d.dy);
+        const qk = posKey(q);
+        if (visited.has(qk) || !passableAt(level, vacateMaps, q, step)) continue;
+        visited.set(qk, posKey(p));
+        positions.set(qk, q);
+        if (posEq(q, target)) {
+          const path = [];
+          for (let k = qk; k !== null; k = visited.get(k)) path.push(positions.get(k));
+          return path.reverse();
+        }
+        next.push(q);
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+
+// Number of cells reachable from start (start itself not counted).
+function floodFillCount(level, vacateMaps, start) {
+  const visited = new Set([posKey(start)]);
+  let frontier = [start];
+  let step = 0;
+  let count = 0;
+  while (frontier.length > 0) {
+    step++;
+    const next = [];
+    for (const p of frontier) {
+      for (const d of Object.values(DIRECTION_DELTA)) {
+        const q = offsetBy(p, d.dx, d.dy);
+        const qk = posKey(q);
+        if (visited.has(qk) || !passableAt(level, vacateMaps, q, step)) continue;
+        visited.add(qk);
+        count++;
+        next.push(q);
+      }
+    }
+    frontier = next;
+  }
+  return count;
+}
+
+// Can the head still reach the snake's own tail cell? The escape criterion:
+// while the tail is reachable the snake can always keep following it.
+function tailReachable(level, body, growth, otherVacateMaps) {
+  const tail = body.fifo.array[0].position;
+  const maps = [vacateMap(body, growth), ...otherVacateMaps];
+  return bfsPath(level, maps, body.head.position, tail) !== null;
+}
+
+SnakeTests.add("toolkit: vacate timing on own body", () => {
+  // bodyCreate(.., right, 4) occupies x=1..5 at y=5; tail (1,5) frees at step 1.
+  const body = bodyCreate({ x: 5, y: 5 }, "right", 4);
+  const lv = getLevel("Level 0");
+  const maps = [vacateMap(body, 0)];
+  assert(!passableAt(lv, maps, { x: 4, y: 5 }, 1), "mid-body blocked early");
+  assert(passableAt(lv, maps, { x: 4, y: 5 }, 4), "mid-body free once vacated");
+  assert(passableAt(lv, maps, { x: 1, y: 5 }, 1), "tail frees next step");
+  assert(!passableAt(lv, maps, { x: 0, y: 5 }, 9), "wall never passable");
+});
+SnakeTests.add("toolkit: bfsPath routes around the body in time", () => {
+  const body = bodyCreate({ x: 5, y: 5 }, "right", 4);
+  const lv = getLevel("Level 0");
+  const path = bfsPath(lv, [vacateMap(body, 0)], body.head.position, { x: 1, y: 5 });
+  assert(path, "tail is reachable");
+  assertEq(path[0], { x: 5, y: 5 });
+  assertEq(path[path.length - 1], { x: 1, y: 5 });
+  for (let i = 1; i < path.length; i++) assertEq(manhattan(path[i - 1], path[i]), 1);
+  assert(tailReachable(lv, body, 0, []));
+});
+SnakeTests.add("toolkit: flood fill sees through a vacating body but not a frozen one", () => {
+  // Snake spans the full row y=5 (x=1..7): the board is split while it stands.
+  const body = bodyCreate({ x: 7, y: 5 }, "right", 6);
+  const lv = getLevel("Level 0");
+  const north = { x: 4, y: 7 };
+  const aliveCount = floodFillCount(lv, [vacateMap(body, 0)], north);
+  const frozenCount = floodFillCount(lv, [vacateMap(body, 0, true)], north);
+  assert(frozenCount < aliveCount, `frozen ${frozenCount} < alive ${aliveCount}`);
+  assertEq(frozenCount, 13, "north pocket: 2 rows x 7 minus start");
+});
 </script>
 
 <script>
