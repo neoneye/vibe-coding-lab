@@ -1638,7 +1638,456 @@ SnakeTests.add("bot works in two-player mode", () => {
 
 <script>
 "use strict";
-// UI layer: rendering, input, worker, game loop. Built up in later tasks.
+// UI layer: rendering, input, worker, game loop.
+
+// --------------------------------------------------------------------------
+// Web Worker hosting the MCTS bot. Source = the shared-code script block plus
+// glue, loaded via a Blob URL so the page works when opened from file://.
+// The bots' search trees live here across ticks (tree reuse); after undo the
+// tree simply fails to match and is rebuilt, same as Swift's failed-reuse path.
+// --------------------------------------------------------------------------
+const WORKER_GLUE = `
+const bots = { player1: new Bot6(), player2: new Bot6() };
+self.onmessage = (e) => {
+  const msg = e.data;
+  if (msg.type === "reset") {
+    bots.player1 = new Bot6();
+    bots.player2 = new Bot6();
+    return;
+  }
+  if (msg.type === "compute") {
+    const level = getLevel(msg.levelName);
+    bots[msg.playerKey] = bots[msg.playerKey].compute(level, msg.player, msg.oppositePlayer, msg.foodPosition);
+    const bot = bots[msg.playerKey];
+    self.postMessage({
+      type: "result",
+      playerKey: msg.playerKey,
+      serial: msg.serial,
+      movement: bot.plannedMovement,
+      plannedPath: bot.plannedPath,
+    });
+  }
+};
+`;
+
+function createBotWorker(onResult) {
+  const source = document.getElementById("shared-code").textContent + "\n" + WORKER_GLUE;
+  const worker = new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })));
+  worker.onmessage = (e) => onResult(e.data);
+  return worker;
+}
+
+// --------------------------------------------------------------------------
+// App state
+// --------------------------------------------------------------------------
+const PLAYER_COLOR = { player1: "#34c759", player2: "#0a84ff" };
+const DEAD_COLOR = "#5a5a5e";
+const AUTO_STEP_MS = 150; // pacing for bot-vs-bot games; JS computes are fast
+
+const app = {
+  env: null,
+  showPath: true,
+  paused: false,
+  requestSerial: 0,
+  inflight: { player1: null, player2: null }, // serial of in-flight compute
+  pendingHuman: { player1: "dontMove", player2: "dontMove" },
+  stepOnceRequested: false,
+  lastStepTime: 0,
+  gameOverMessage: null,
+};
+
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+const statusEl = document.getElementById("status");
+const worker = createBotWorker(onBotResult);
+
+// --------------------------------------------------------------------------
+// Game lifecycle
+// --------------------------------------------------------------------------
+function newGame() {
+  const levelName = document.getElementById("levelSelect").value;
+  const role1 = document.getElementById("role1").value;
+  const role2 = document.getElementById("role2").value;
+  app.env = new GameEnvironment(gameStateCreate(levelName, role1, role2));
+  app.env.reset();
+  app.requestSerial++;
+  app.inflight = { player1: null, player2: null };
+  app.pendingHuman = { player1: "dontMove", player2: "dontMove" };
+  app.stepOnceRequested = false;
+  app.gameOverMessage = null;
+  app.paused = false;
+  worker.postMessage({ type: "reset" });
+  requestBotMoves();
+  render();
+  updateStatus();
+  updateButtons();
+}
+
+function requestBotMoves() {
+  const gs = app.env.gameState;
+  for (const [key, opp] of [["player1", "player2"], ["player2", "player1"]]) {
+    const p = gs[key];
+    if (p.role !== "bot" || !playerIsAlive(p) || p.pendingMovement !== "dontMove") continue;
+    if (app.inflight[key] !== null) continue;
+    app.inflight[key] = app.requestSerial;
+    worker.postMessage({
+      type: "compute",
+      serial: app.requestSerial,
+      playerKey: key,
+      levelName: gs.levelName,
+      player: p,
+      oppositePlayer: gs[opp],
+      foodPosition: gs.foodPosition,
+    });
+  }
+  updateStatus();
+}
+
+function onBotResult(msg) {
+  if (msg.type !== "result") return;
+  if (app.inflight[msg.playerKey] !== msg.serial) return; // stale (undo/restart)
+  app.inflight[msg.playerKey] = null;
+  app.env.setPendingMovement(msg.playerKey, msg.movement, msg.plannedPath);
+  render();
+  updateStatus();
+  tryStep();
+}
+
+function botsAreReady() {
+  for (const key of ["player1", "player2"]) {
+    const p = app.env.gameState[key];
+    if (p.role === "bot" && playerIsAlive(p) && p.pendingMovement === "dontMove") return false;
+  }
+  return true;
+}
+
+function tryStep() {
+  const env = app.env;
+  if (!env || app.gameOverMessage) return;
+  if (env.stepControlMode === "reachedTheEnd") return finishGame();
+  if (!botsAreReady()) return;
+
+  if (env.stepControlMode === "stepRequiresHumanInput") {
+    // Port of IngameViewModel.step_humanVsAny: apply the humans' last
+    // keypresses, suppress moves that would collide, and only step when no
+    // living human is left waiting.
+    let gs = env.gameState;
+    for (const key of ["player1", "player2"]) {
+      if (playerIsAliveAndHuman(gs[key]) && app.pendingHuman[key] !== "dontMove") {
+        gs = gsUpdatePlayer(gs, key, playerUpdate(gs[key], { pendingMovement: app.pendingHuman[key] }));
+      }
+    }
+    gs = preventHumanCollisions(gs);
+    if (isWaitingForHumanInput(gs)) { updateStatus(); return; }
+    const action = { player1: gs.player1.pendingMovement, player2: gs.player2.pendingMovement };
+    app.pendingHuman = { player1: "dontMove", player2: "dontMove" };
+    env.step(action);
+    afterStep();
+    return;
+  }
+
+  // Bots-only: auto-step with pacing, or single-step while paused.
+  if (app.paused && !app.stepOnceRequested) return;
+  const elapsed = Date.now() - app.lastStepTime;
+  if (!app.stepOnceRequested && elapsed < AUTO_STEP_MS) {
+    setTimeout(tryStep, AUTO_STEP_MS - elapsed);
+    return;
+  }
+  app.stepOnceRequested = false;
+  app.lastStepTime = Date.now();
+  env.step({ player1: "dontMove", player2: "dontMove" });
+  afterStep();
+}
+
+function afterStep() {
+  render();
+  if (app.env.stepControlMode === "reachedTheEnd") return finishGame();
+  requestBotMoves();
+  updateStatus();
+}
+
+function finishGame() {
+  if (app.gameOverMessage) return;
+  const gs = app.env.gameState;
+  const causeText = {
+    collisionWithWall: "hit a wall",
+    collisionWithItself: "ran into itself",
+    collisionWithOpponent: "ran into the opponent",
+    stuckInALoop: "got stuck in a loop",
+    noMoreFood: "ran out of food",
+  };
+  const parts = [];
+  const dead = [];
+  for (const [key, label] of [["player1", "Player 1"], ["player2", "Player 2"]]) {
+    const p = gs[key];
+    if (p.isInstalled && p.causesOfDeath.length > 0) {
+      dead.push(key);
+      parts.push(`${label} ${p.causesOfDeath.map((c) => causeText[c] ?? c).join(" and ")}`);
+    }
+  }
+  const bothNoMoreFood = dead.length === 2
+    && gs.player1.causesOfDeath.includes("noMoreFood")
+    && gs.player2.causesOfDeath.includes("noMoreFood");
+  let message;
+  if (bothNoMoreFood || (dead.length === 1 && gs[dead[0]].causesOfDeath.includes("noMoreFood") && !gs[dead[0] === "player1" ? "player2" : "player1"].isInstalled)) {
+    message = "All food eaten — game complete!";
+  } else {
+    const winner = ["player1", "player2"].find((k) => playerIsAlive(gs[k]) && gs[k].isInstalled);
+    const installedCount = ["player1", "player2"].filter((k) => gs[k].isInstalled).length;
+    const ending = winner ? `. ${winner === "player1" ? "Player 1" : "Player 2"} wins!`
+      : installedCount === 2 ? ". Draw." : ". Game over.";
+    message = parts.join(". ") + ending;
+  }
+  app.gameOverMessage = message;
+  render();
+  updateStatus();
+}
+
+// --------------------------------------------------------------------------
+// Undo / pause / path toggle
+// --------------------------------------------------------------------------
+function doUndo() {
+  if (!app.env) return;
+  app.paused = true; // Swift undo() stops auto-stepping
+  const gs = app.env.undo();
+  if (!gs) { updateButtons(); return; }
+  app.requestSerial++; // drop in-flight computes from the undone future
+  app.inflight = { player1: null, player2: null };
+  app.pendingHuman = { player1: "dontMove", player2: "dontMove" };
+  app.gameOverMessage = null;
+  // The restored state usually still carries the bots' pending movements and
+  // planned paths (as in Swift); only the very first state needs a recompute.
+  requestBotMoves();
+  render();
+  updateStatus();
+  updateButtons();
+}
+
+function togglePause() {
+  if (!app.env || app.env.stepControlMode !== "stepAutonomous") return;
+  app.paused = !app.paused;
+  updateButtons();
+  updateStatus();
+  if (!app.paused) tryStep();
+}
+
+function singleStep() {
+  if (!app.env || app.env.stepControlMode !== "stepAutonomous") return;
+  app.paused = true;
+  app.stepOnceRequested = true;
+  updateButtons();
+  tryStep();
+}
+
+function togglePath() {
+  app.showPath = !app.showPath;
+  updateButtons();
+  render();
+}
+
+// --------------------------------------------------------------------------
+// Rendering
+// --------------------------------------------------------------------------
+function tileSize(level) {
+  const maxW = window.innerWidth - 24;
+  const maxH = window.innerHeight - document.getElementById("hud").offsetHeight - 60;
+  return Math.max(8, Math.floor(Math.min(maxW / level.size.x, maxH / level.size.y)));
+}
+
+function render() {
+  if (!app.env) return;
+  const gs = app.env.gameState;
+  const level = gsLevel(gs);
+  const tile = tileSize(level);
+  canvas.width = level.size.x * tile;
+  canvas.height = level.size.y * tile;
+  // Grid y is bottom-up; canvas y is top-down.
+  const cx = (p) => p.x * tile + tile / 2;
+  const cy = (p) => (level.size.y - 1 - p.y) * tile + tile / 2;
+
+  ctx.fillStyle = "#101012";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < level.size.y; y++) {
+    for (let x = 0; x < level.size.x; x++) {
+      const p = { x, y };
+      if (level.wallSet.has(posKey(p))) {
+        ctx.fillStyle = "#3a3a40";
+        ctx.fillRect(p.x * tile, (level.size.y - 1 - y) * tile, tile, tile);
+      } else {
+        ctx.fillStyle = (x + y) % 2 === 0 ? "#1c1c1e" : "#202024";
+        ctx.fillRect(p.x * tile, (level.size.y - 1 - y) * tile, tile, tile);
+      }
+    }
+  }
+
+  if (gs.foodPosition) {
+    ctx.fillStyle = "#ff453a";
+    ctx.beginPath();
+    ctx.arc(cx(gs.foodPosition), cy(gs.foodPosition), tile * 0.32, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  for (const key of ["player1", "player2"]) {
+    const p = gs[key];
+    if (!p.isInstalled) continue;
+    drawSnake(p, playerIsAlive(p) ? PLAYER_COLOR[key] : DEAD_COLOR, tile, cx, cy);
+  }
+
+  if (app.showPath) {
+    for (const key of ["player1", "player2"]) {
+      const p = gs[key];
+      if (p.role !== "bot" || !playerIsAlive(p)) continue;
+      drawPlannedPath(p.botPlannedPath, gs.foodPosition, PLAYER_COLOR[key], tile, cx, cy);
+    }
+  }
+}
+
+function drawSnake(player, color, tile, cx, cy) {
+  const positions = bodyPositionArray(player.snakeBody);
+  if (positions.length === 0) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = tile * 0.62;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx(positions[0]), cy(positions[0]));
+  for (let i = 1; i < positions.length; i++) ctx.lineTo(cx(positions[i]), cy(positions[i]));
+  if (positions.length === 1) ctx.lineTo(cx(positions[0]) + 0.1, cy(positions[0]));
+  ctx.stroke();
+  // Food still in the stomach bulges the body.
+  ctx.fillStyle = color;
+  for (const part of player.snakeBody.fifo.array) {
+    if (part.content !== "food") continue;
+    ctx.beginPath();
+    ctx.arc(cx(part.position), cy(part.position), tile * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Eye marks the head.
+  const head = player.snakeBody.head;
+  ctx.fillStyle = "#101012";
+  ctx.beginPath();
+  ctx.arc(cx(head.position), cy(head.position), tile * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Port of AppShared/IngameView/PlannedPathView.swift: the segment leading to
+// the food is high confidence (thick, bright); anything past the simulated
+// food pickup is speculative (thin, 30% opacity).
+function drawPlannedPath(path, foodPosition, color, tile, cx, cy) {
+  if (!path || path.length < 2) return;
+  let highConfidenceCount = 0;
+  for (let i = 0; i < path.length; i++) {
+    if (foodPosition && posEq(path[i], foodPosition)) { highConfidenceCount = i; break; }
+  }
+  const leftEnd = Math.min(highConfidenceCount + 1, path.length);
+  const rightBegin = Math.min(highConfidenceCount, path.length);
+  const stroke = (positions, width, alpha, cap) => {
+    if (positions.length < 2) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = cap;
+    ctx.lineJoin = cap === "round" ? "round" : "miter";
+    ctx.beginPath();
+    ctx.moveTo(cx(positions[0]), cy(positions[0]));
+    for (let i = 1; i < positions.length; i++) ctx.lineTo(cx(positions[i]), cy(positions[i]));
+    ctx.stroke();
+    ctx.restore();
+  };
+  stroke(path.slice(rightBegin), 1, 0.3, "square");                       // low confidence
+  stroke(path.slice(0, leftEnd), Math.max(tile * 0.3, 1), 1, "round");    // high confidence
+}
+
+// --------------------------------------------------------------------------
+// Status + buttons
+// --------------------------------------------------------------------------
+function updateStatus() {
+  if (!app.env) return;
+  const gs = app.env.gameState;
+  const bits = [`Step ${gs.numberOfSteps}`];
+  for (const [key, label] of [["player1", "P1"], ["player2", "P2"]]) {
+    if (gs[key].isInstalled) bits.push(`${label} length ${bodyLength(gs[key].snakeBody)}`);
+  }
+  if (app.gameOverMessage) {
+    statusEl.innerHTML = `${bits.join(" · ")} · <span class="gameover">${app.gameOverMessage}</span> Press Enter to restart.`;
+    return;
+  }
+  const thinking = app.inflight.player1 !== null || app.inflight.player2 !== null;
+  if (thinking) bits.push("AI thinking…");
+  else if (app.env.stepControlMode === "stepRequiresHumanInput") bits.push("waiting for input");
+  else if (app.paused) bits.push("paused");
+  statusEl.textContent = bits.join(" · ");
+}
+
+function updateButtons() {
+  document.getElementById("btnPause").textContent = app.paused ? "Resume" : "Pause";
+  document.getElementById("btnPath").classList.toggle("active", app.showPath);
+  const autonomous = app.env && app.env.stepControlMode === "stepAutonomous";
+  document.getElementById("btnPause").disabled = !autonomous;
+  document.getElementById("btnStep").disabled = !autonomous;
+}
+
+// --------------------------------------------------------------------------
+// Input
+// --------------------------------------------------------------------------
+const KEY_DIRECTION_P1 = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+const KEY_DIRECTION_P2 = { w: "up", s: "down", a: "left", d: "right" };
+
+document.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (key in KEY_DIRECTION_P1 || key === " ") e.preventDefault();
+
+  if (key === "Enter") return newGame();
+  if (key === "z") return doUndo();
+  if (key === " ") return togglePause();
+  if (key === "p") return togglePath();
+  if (!app.env || app.gameOverMessage) return;
+
+  const route = (playerKey, direction) => {
+    const p = app.env.gameState[playerKey];
+    if (!playerIsAliveAndHuman(p)) return;
+    app.pendingHuman[playerKey] = headMoveTowardDirection(p.snakeBody.head, direction);
+    tryStep();
+  };
+  if (key in KEY_DIRECTION_P1) route("player1", KEY_DIRECTION_P1[key]);
+  if (key in KEY_DIRECTION_P2) route("player2", KEY_DIRECTION_P2[key]);
+});
+
+document.getElementById("btnRestart").addEventListener("click", newGame);
+document.getElementById("btnUndo").addEventListener("click", doUndo);
+document.getElementById("btnPause").addEventListener("click", togglePause);
+document.getElementById("btnStep").addEventListener("click", singleStep);
+document.getElementById("btnPath").addEventListener("click", togglePath);
+document.getElementById("levelSelect").addEventListener("change", newGame);
+document.getElementById("role1").addEventListener("change", newGame);
+document.getElementById("role2").addEventListener("change", newGame);
+window.addEventListener("resize", render);
+
+// --------------------------------------------------------------------------
+// Boot
+// --------------------------------------------------------------------------
+for (const name of LEVEL_NAMES) {
+  const option = document.createElement("option");
+  option.value = name;
+  option.textContent = name;
+  document.getElementById("levelSelect").appendChild(option);
+}
+
+if (new URLSearchParams(location.search).get("test") === "1") {
+  document.getElementById("hud").style.display = "none";
+  canvas.style.display = "none";
+  const report = document.createElement("div");
+  report.id = "testreport";
+  document.body.appendChild(report);
+  const lines = [];
+  const ok = SnakeTests.run((s) => lines.push(s), (s) => lines.push(s));
+  report.textContent = lines.join("\n");
+  report.style.color = ok ? "#34c759" : "#ff453a";
+} else {
+  newGame();
+}
 </script>
 </body>
 </html>
