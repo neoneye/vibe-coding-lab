@@ -1852,10 +1852,152 @@ class HybridBot {
     return { movement: best.movement, path };
   }
 
-  // Placeholder until the minimax lands: play solo-style with the live
-  // opponent treated as a timed obstacle.
+  // Two-player: fixed-depth paranoid alpha-beta (8 plies, me/opponent
+  // alternating to approximate simultaneous movement). The engine's
+  // simultaneous head-on rule (both heads on one cell = mutual death) is not
+  // representable sequentially, so my-ply moves into a cell the opponent's
+  // head can also reach this round score as near-death "head-on risk" —
+  // avoided unless every alternative is certain death.
   computeDuel(level, player, oppositePlayer, foodPosition) {
-    return this.computeSolo(level, player, oppositePlayer, foodPosition);
+    const DEPTH = 8;
+    const DEATH = 1e9, HEAD_ON = 9e8;
+
+    const search = (myBody, oppBody, food, ply, alpha, beta) => {
+      if (ply === DEPTH) {
+        return { score: this.evaluateDuel(level, myBody, oppBody, food), line: [] };
+      }
+      const myTurn = ply % 2 === 0;
+      const mover = myTurn ? myBody : oppBody;
+      const other = myTurn ? oppBody : myBody;
+      const otherPositions = bodyPositionSet(other);
+      const otherNextCells = new Set();
+      if (myTurn) {
+        for (const m of HYBRID_MOVES) {
+          otherNextCells.add(posKey(headSimulateTick(other.head, m).position));
+        }
+      }
+      let best = null;
+      for (const movement of HYBRID_MOVES) {
+        const newHead = headSimulateTick(mover.head, movement);
+        const key = posKey(newHead.position);
+        const eats = food !== null && posEq(newHead.position, food);
+        const moved = bodyStateForTick(mover, movement, eats ? "eat" : "doNothing");
+        const died = !level.emptyPositionSet.has(key)
+          || bodyIsEatingItself(moved)
+          || otherPositions.has(key);
+        const headOnRisk = myTurn && !died && otherNextCells.has(key);
+        let score, line;
+        if (died) {
+          score = myTurn ? -DEATH + ply : DEATH - ply;
+          line = myTurn ? [newHead.position] : [];
+        } else if (headOnRisk) {
+          score = -HEAD_ON + ply;
+          line = [newHead.position];
+        } else {
+          const r = search(
+            myTurn ? moved : myBody,
+            myTurn ? oppBody : moved,
+            eats ? null : food,
+            ply + 1, alpha, beta
+          );
+          score = r.score;
+          line = myTurn ? [newHead.position, ...r.line] : r.line;
+        }
+        if (best === null || (myTurn ? score > best.score : score < best.score)) {
+          best = { score, line };
+        }
+        if (myTurn) alpha = Math.max(alpha, score); else beta = Math.min(beta, score);
+        if (alpha >= beta) break;
+      }
+      return best;
+    };
+
+    const body = player.snakeBody;
+    const oppBody = oppositePlayer.snakeBody;
+    const oppMaps = [vacateMap(oppBody, 0)];
+    const rootMoves = [];
+    for (const movement of HYBRID_MOVES) {
+      const newHead = headSimulateTick(body.head, movement);
+      const key = posKey(newHead.position);
+      const eats = foodPosition !== null && foodPosition !== undefined && posEq(newHead.position, foodPosition);
+      const moved = bodyStateForTick(body, movement, eats ? "eat" : "doNothing");
+      const died = !level.emptyPositionSet.has(key)
+        || bodyIsEatingItself(moved)
+        || bodyPositionSet(oppBody).has(key);
+      let score, line;
+      if (died) {
+        score = -DEATH;
+        line = [newHead.position];
+      } else {
+        const oppNext = new Set(HYBRID_MOVES.map((m) => posKey(headSimulateTick(oppBody.head, m).position)));
+        if (oppNext.has(key)) {
+          score = -HEAD_ON;
+          line = [newHead.position];
+        } else {
+          const r = search(moved, oppBody, eats ? null : foodPosition ?? null, 1, -Infinity, Infinity);
+          score = r.score;
+          line = [newHead.position, ...r.line];
+        }
+      }
+      rootMoves.push({ movement, score, line, moved, died });
+    }
+    // Veto: when some move provably keeps the tail escape, never pick one that doesn't.
+    const escaping = rootMoves.filter((m) => !m.died && tailReachable(level, m.moved, 0, oppMaps));
+    const pool = escaping.length > 0 ? escaping : rootMoves;
+    let best = pool[0];
+    for (const m of pool) if (m.score > best.score) best = m;
+    return { movement: best.movement, path: [body.head.position, ...best.line] };
+  }
+
+  // Leaf evaluation: length difference, Voronoi territory (per-cell compare
+  // of BFS distance maps), food race, and a trapped-space penalty.
+  evaluateDuel(level, myBody, oppBody, food) {
+    let score = (bodyLength(myBody) - bodyLength(oppBody)) * 10000;
+
+    const obstacles = new Set([...bodyPositionSet(myBody), ...bodyPositionSet(oppBody)]);
+    const distanceMap = (start) => {
+      const dist = new Map([[posKey(start), 0]]);
+      let frontier = [start];
+      let d = 0;
+      while (frontier.length > 0) {
+        d++;
+        const next = [];
+        for (const p of frontier) {
+          for (const delta of Object.values(DIRECTION_DELTA)) {
+            const q = offsetBy(p, delta.dx, delta.dy);
+            const qk = posKey(q);
+            if (dist.has(qk) || !level.emptyPositionSet.has(qk) || obstacles.has(qk)) continue;
+            dist.set(qk, d);
+            next.push(q);
+          }
+        }
+        frontier = next;
+      }
+      return dist;
+    };
+    const myDist = distanceMap(myBody.head.position);
+    const oppDist = distanceMap(oppBody.head.position);
+    let territory = 0;
+    for (const key of level.emptyPositionSet) {
+      if (obstacles.has(key)) continue;
+      const md = myDist.get(key), od = oppDist.get(key);
+      if (md !== undefined && (od === undefined || md < od)) territory++;
+      else if (od !== undefined && (md === undefined || od < md)) territory--;
+    }
+    score += territory * 10;
+
+    if (food) {
+      const fk = posKey(food);
+      const md = myDist.get(fk), od = oppDist.get(fk);
+      if (md !== undefined && (od === undefined || md < od)) score += 2000;
+    }
+
+    const myLen = bodyLength(myBody);
+    const area = floodFillCount(level,
+      [vacateMap(myBody, 0), vacateMap(oppBody, 0, true)], myBody.head.position);
+    if (area < myLen) score -= (myLen - area) * 1000;
+
+    return score;
   }
 }
 
@@ -1974,6 +2116,27 @@ SnakeTests.add("hybrid: refuses food in a sealed-off pocket", () => {
     posEq(newHead.position, gs.foodPosition) ? "eat" : "doNothing");
   assert(tailReachable(gsLevel(gs), next, 0, [vacateMap(oppBody, 0, true)]),
     `bot chose ${bot.plannedMovement} which loses its escape`);
+});
+SnakeTests.add("hybrid: avoids a simultaneous head-on", () => {
+  // Heads facing each other, 2 cells apart: moveForward = mutual death.
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", len: 3 },
+    p2: { pos: { x: 5, y: 4 }, dir: "left", len: 3 },
+    food: { x: 4, y: 7 },
+  });
+  gs = gsUpdatePlayer(gs, "player1", playerUpdate(gs.player1, { role: "botHybrid" }));
+  gs = gsUpdatePlayer(gs, "player2", playerUpdate(gs.player2, { role: "botMonteCarlo" }));
+  const bot = new HybridBot().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
+  assert(bot.plannedMovement !== "moveForward", `bot chose ${bot.plannedMovement}`);
+});
+SnakeTests.add("hybrid: duel vs monte carlo runs clean and deterministic", () => {
+  const a = runBotGame({ role1: "botHybrid", role2: "botMonteCarlo", ticks: 20 });
+  const b = runBotGame({ role1: "botHybrid", role2: "botMonteCarlo", ticks: 20 });
+  assertEq(a.movements, b.movements);
+  assert(a.env.gameState.numberOfSteps > 0);
+  const path = a.bots.player1.plannedPath;
+  assert(path.length >= 2, "duel planned path present");
+  for (let i = 1; i < path.length; i++) assertEq(manhattan(path[i - 1], path[i]), 1, `gap at ${i}`);
 });
 </script>
 
