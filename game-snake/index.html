@@ -63,12 +63,14 @@
   <label>Level <select id="levelSelect"></select></label>
   <label>Player 1 <select id="role1">
     <option value="human">Human (arrows)</option>
-    <option value="bot">Bot — Monte Carlo 2</option>
+    <option value="botMonteCarlo">Bot — Monte Carlo 2</option>
+    <option value="botHybrid">Bot — Hybrid</option>
     <option value="none">Off</option>
   </select></label>
   <label>Player 2 <select id="role2">
     <option value="human">Human (WASD)</option>
-    <option value="bot" selected>Bot — Monte Carlo 2</option>
+    <option value="botMonteCarlo" selected>Bot — Monte Carlo 2</option>
+    <option value="botHybrid">Bot — Hybrid</option>
     <option value="none">Off</option>
   </select></label>
   <button id="btnRestart" title="Enter">Restart</button>
@@ -763,7 +765,7 @@ function playerCreate(id, role, snakeBody) {
   return {
     id, // "player1" | "player2"
     isInstalled: role !== "none",
-    role, // "human" | "bot" | "none"
+    role, // "human" | "botMonteCarlo" | "botHybrid" | "none"
     snakeBody,
     pendingMovement: "dontMove",
     pendingAct: "doNothing",
@@ -773,6 +775,7 @@ function playerCreate(id, role, snakeBody) {
 }
 function playerIsAlive(p) { return p.isInstalled && p.causesOfDeath.length === 0; }
 function playerIsAliveAndHuman(p) { return playerIsAlive(p) && p.role === "human"; }
+function playerIsBot(p) { return p.role === "botMonteCarlo" || p.role === "botHybrid"; }
 function playerUpdate(p, changes) { return { ...p, ...changes }; }
 function playerKill(p, causeOfDeath) {
   if (p.causesOfDeath.includes(causeOfDeath)) return p;
@@ -942,7 +945,7 @@ class StuckDetector {
   }
   reset() { this.history = []; this._rebuild(); }
   killBotIfStuckInLoop(player) {
-    if (!playerIsAlive(player) || player.role !== "bot") return player;
+    if (!playerIsAlive(player) || !playerIsBot(player)) return player;
     this.append(player.snakeBody);
     return this.isStuck ? playerKill(player, "stuckInALoop") : player;
   }
@@ -1028,7 +1031,7 @@ SnakeTests.add("food placement is deterministic and avoids snakes", () => {
 });
 SnakeTests.add("stuck detector kills bot repeating states", () => {
   const detector = new StuckDetector();
-  let player = playerCreate("player1", "bot", bodyCreate({ x: 4, y: 4 }, "right", 2));
+  let player = playerCreate("player1", "botMonteCarlo", bodyCreate({ x: 4, y: 4 }, "right", 2));
   // Cycle through the same 4 body states until flagged stuck.
   const states = [];
   let b = player.snakeBody;
@@ -1095,7 +1098,7 @@ class GameEnvironment {
     let botCount = 0, nonBotCount = 0;
     for (const p of [this.gameState.player1, this.gameState.player2]) {
       if (!playerIsAlive(p)) continue;
-      if (p.role === "bot") botCount++; else nonBotCount++;
+      if (playerIsBot(p)) botCount++; else nonBotCount++;
     }
     if (botCount + nonBotCount === 0) return "reachedTheEnd";
     return nonBotCount > 0 ? "stepRequiresHumanInput" : "stepAutonomous";
@@ -1572,17 +1575,25 @@ class Bot6 {
 }
 
 // --- bot tests ---------------------------------------------------------------
-function runBotGame({ levelName = "Level 0", twoPlayer = false, ticks }) {
-  const env = new GameEnvironment(gameStateCreate(levelName, "bot", twoPlayer ? "bot" : "none"));
+// Maps a role string to the class implementing it (worker + tests + tournament).
+function botForRole(role) {
+  if (role === "botMonteCarlo") return new Bot6();
+  if (role === "botHybrid") return new HybridBot();
+  return null;
+}
+
+function runBotGame({ levelName = "Level 0", role1 = "botMonteCarlo", role2 = "none", twoPlayer = false, ticks }) {
+  if (twoPlayer && role2 === "none") role2 = "botMonteCarlo";
+  const env = new GameEnvironment(gameStateCreate(levelName, role1, role2));
   env.reset();
-  const bots = { player1: new Bot6(), player2: new Bot6() };
+  const bots = { player1: botForRole(role1), player2: botForRole(role2) };
   const movements = [];
   for (let i = 0; i < ticks; i++) {
     if (env.stepControlMode === "reachedTheEnd") break;
     const gs = env.gameState;
     const action = { player1: "dontMove", player2: "dontMove" };
     for (const [key, opp] of [["player1", "player2"], ["player2", "player1"]]) {
-      if (gs[key].role !== "bot" || !playerIsAlive(gs[key])) continue;
+      if (!playerIsBot(gs[key]) || !playerIsAlive(gs[key])) continue;
       bots[key] = bots[key].compute(gsLevel(gs), gs[key], gs[opp], gs.foodPosition);
       action[key] = bots[key].plannedMovement;
       env.setPendingMovement(key, action[key], bots[key].plannedPath);
@@ -1600,7 +1611,7 @@ SnakeTests.add("bot is deterministic", () => {
   assertEq(a.env.gameState.player1.snakeBody, b.env.gameState.player1.snakeBody);
 });
 SnakeTests.add("bot plannedPath is contiguous from head", () => {
-  const gs = gameStateCreate("Level 0", "bot", "none");
+  const gs = gameStateCreate("Level 0", "botMonteCarlo", "none");
   const bot = new Bot6().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
   const path = bot.plannedPath;
   assert(path.length >= 2, `path too short: ${path.length}`);
@@ -1622,10 +1633,18 @@ SnakeTests.add("bot avoids certain death", () => {
     p1: { pos: { x: 1, y: 4 }, dir: "left", len: 2, },
     food: { x: 7, y: 7 },
   });
-  gs = gsUpdatePlayer(gs, "player1", playerUpdate(gs.player1, { role: "bot" }));
+  gs = gsUpdatePlayer(gs, "player1", playerUpdate(gs.player1, { role: "botMonteCarlo" }));
   gs = gsUpdatePlayer(gs, "player2", playerUpdate(playerCreate("player2", "none", gs.player2.snakeBody), {}));
   const bot = new Bot6().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
   assert(bot.plannedMovement !== "moveForward", `bot chose ${bot.plannedMovement}`);
+});
+SnakeTests.add("role plumbing accepts both bot types", () => {
+  const gs = gameStateCreate("Level 0", "botHybrid", "botMonteCarlo");
+  assert(playerIsBot(gs.player1) && playerIsBot(gs.player2));
+  assert(!playerIsAliveAndHuman(gs.player1));
+  const env = new GameEnvironment(gs);
+  env.reset();
+  assertEq(env.stepControlMode, "stepAutonomous");
 });
 SnakeTests.add("bot works in two-player mode", () => {
   const { env } = runBotGame({ twoPlayer: true, ticks: 10 });
@@ -1648,18 +1667,22 @@ SnakeTests.add("bot works in two-player mode", () => {
 // tree simply fails to match and is rebuilt, same as Swift's failed-reuse path.
 // --------------------------------------------------------------------------
 const WORKER_GLUE = `
-const bots = { player1: new Bot6(), player2: new Bot6() };
+const bots = { player1: null, player2: null }; // { role, bot }
 self.onmessage = (e) => {
   const msg = e.data;
   if (msg.type === "reset") {
-    bots.player1 = new Bot6();
-    bots.player2 = new Bot6();
+    bots.player1 = null;
+    bots.player2 = null;
     return;
   }
   if (msg.type === "compute") {
     const level = getLevel(msg.levelName);
-    bots[msg.playerKey] = bots[msg.playerKey].compute(level, msg.player, msg.oppositePlayer, msg.foodPosition);
-    const bot = bots[msg.playerKey];
+    if (!bots[msg.playerKey] || bots[msg.playerKey].role !== msg.role) {
+      bots[msg.playerKey] = { role: msg.role, bot: botForRole(msg.role) };
+    }
+    const entry = bots[msg.playerKey];
+    entry.bot = entry.bot.compute(level, msg.player, msg.oppositePlayer, msg.foodPosition);
+    const bot = entry.bot;
     self.postMessage({
       type: "result",
       playerKey: msg.playerKey,
@@ -1732,13 +1755,14 @@ function requestBotMoves() {
   const gs = app.env.gameState;
   for (const [key, opp] of [["player1", "player2"], ["player2", "player1"]]) {
     const p = gs[key];
-    if (p.role !== "bot" || !playerIsAlive(p) || p.pendingMovement !== "dontMove") continue;
+    if (!playerIsBot(p) || !playerIsAlive(p) || p.pendingMovement !== "dontMove") continue;
     if (app.inflight[key] !== null) continue;
     app.inflight[key] = app.requestSerial;
     worker.postMessage({
       type: "compute",
       serial: app.requestSerial,
       playerKey: key,
+      role: p.role,
       levelName: gs.levelName,
       player: p,
       oppositePlayer: gs[opp],
@@ -1761,7 +1785,7 @@ function onBotResult(msg) {
 function botsAreReady() {
   for (const key of ["player1", "player2"]) {
     const p = app.env.gameState[key];
-    if (p.role === "bot" && playerIsAlive(p) && p.pendingMovement === "dontMove") return false;
+    if (playerIsBot(p) && playerIsAlive(p) && p.pendingMovement === "dontMove") return false;
   }
   return true;
 }
@@ -1958,7 +1982,7 @@ function render() {
   if (app.showPath) {
     for (const key of ["player1", "player2"]) {
       const p = gs[key];
-      if (p.role !== "bot" || !playerIsAlive(p)) continue;
+      if (!playerIsBot(p) || !playerIsAlive(p)) continue;
       drawPlannedPath(p.botPlannedPath, gs.foodPosition, PLAYER_COLOR[key], tile, cx, cy);
     }
   }
