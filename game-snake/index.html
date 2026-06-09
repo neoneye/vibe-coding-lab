@@ -108,6 +108,82 @@ function assertEq(actual, expected, msg) {
 }
 
 SnakeTests.add("smoke", () => assertEq(1 + 1, 2));
+
+// ---------------------------------------------------------------------------
+// LCRNG — port of EngineShared/Common/SeededGenerator.swift.
+// Same constants as Swift, so a given seed produces the same raw sequence.
+// ---------------------------------------------------------------------------
+const U64_MASK = 0xFFFFFFFFFFFFFFFFn;
+const LCRNG_MUL = 2862933555777941757n;
+const LCRNG_ADD = 3037000493n;
+
+class LCRNG {
+  constructor(seed) { this.seed = BigInt(seed) & U64_MASK; }
+  next() {
+    this.seed = (LCRNG_MUL * this.seed + LCRNG_ADD) & U64_MASK;
+    return this.seed;
+  }
+  // Derived helpers. Deterministic, but not bit-identical to Swift stdlib's
+  // randomElement/shuffle — cross-language replay parity is a non-goal.
+  randomInt(n) { return Number(this.next() % BigInt(n)); }
+  pickIndex(arrayLength) { return this.randomInt(arrayLength); }
+  shuffle(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+      const j = this.randomInt(i + 1);
+      [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Positions. Plain {x, y} objects, origin bottom-left as in Swift.
+// ---------------------------------------------------------------------------
+function posKey(p) { return `${p.x},${p.y}`; }
+function posEq(a, b) { return a !== null && b !== null && a !== undefined && b !== undefined && a.x === b.x && a.y === b.y; }
+function manhattan(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
+function offsetBy(p, dx, dy) { return { x: p.x + dx, y: p.y + dy }; }
+// Sort order matching Swift IntVec2 Comparable: by y, then by x.
+function posCompare(a, b) { return a.y - b.y || a.x - b.x; }
+
+// ---------------------------------------------------------------------------
+// Fifo — port of EngineShared/Snake/SnakeFifo.swift, immutable flavor.
+// `append` keeps capacity (drops from the front), `appendAndGrow` raises it.
+// ---------------------------------------------------------------------------
+const Fifo = {
+  fromArray(array) { return { capacity: array.length, array: array.slice() }; },
+  _purged(capacity, array) {
+    const diff = array.length - capacity;
+    return { capacity, array: diff >= 1 ? array.slice(diff) : array };
+  },
+  append(fifo, item) {
+    return this._purged(fifo.capacity, [...fifo.array, item]);
+  },
+  appendAndGrow(fifo, item) {
+    return this._purged(fifo.capacity + 1, [...fifo.array, item]);
+  },
+  map(fifo, transform) {
+    return { capacity: fifo.capacity, array: fifo.array.map(transform) };
+  },
+};
+
+SnakeTests.add("lcrng sequence from seed 0", () => {
+  const rng = new LCRNG(0n);
+  assertEq(rng.next().toString(), "3037000493");
+  const expected2 = ((LCRNG_MUL * 3037000493n + LCRNG_ADD) & U64_MASK).toString();
+  assertEq(rng.next().toString(), expected2);
+});
+SnakeTests.add("lcrng helpers are deterministic", () => {
+  const a = new LCRNG(7n), b = new LCRNG(7n);
+  assertEq(a.shuffle([1, 2, 3, 4, 5]), b.shuffle([1, 2, 3, 4, 5]));
+  assertEq(a.randomInt(10), b.randomInt(10));
+});
+SnakeTests.add("fifo append keeps capacity, appendAndGrow grows", () => {
+  const f0 = Fifo.fromArray([1, 2, 3]);
+  assertEq(Fifo.append(f0, 4).array, [2, 3, 4]);
+  assertEq(Fifo.appendAndGrow(f0, 4).array, [1, 2, 3, 4]);
+  assertEq(f0.array, [1, 2, 3], "original untouched");
+});
 </script>
 
 <script>
