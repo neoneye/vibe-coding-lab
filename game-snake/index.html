@@ -1055,6 +1055,166 @@ SnakeTests.add("preventHumanCollisions converts deadly move to dontMove", () => 
   assertEq(gs.player1.pendingMovement, "dontMove");
   assert(isWaitingForHumanInput(gs));
 });
+
+// ---------------------------------------------------------------------------
+// GameEnvironment — port of EngineShared/Environment/GameEnvironmentInteractive.swift.
+// Bot moves are injected from outside (the worker) via setPendingMovement;
+// the Swift computeNextBotMovement step happens asynchronously in the UI layer.
+// ---------------------------------------------------------------------------
+class GameEnvironment {
+  constructor(initialGameState) {
+    this.initialGameState = initialGameState;
+    this.gameState = initialGameState;
+    this.previousGameStates = [];
+    this.stuck1 = new StuckDetector();
+    this.stuck2 = new StuckDetector();
+  }
+
+  reset() {
+    this.stuck1.reset();
+    this.stuck2.reset();
+    this.previousGameStates = [];
+    this.gameState = placeNewFood(this.initialGameState);
+    return this.gameState;
+  }
+
+  undo() {
+    let gs = this.previousGameStates.pop();
+    if (!gs) return null;
+    gs = gsClearPendingForHumans(gs);
+    gs = placeNewFood(gs);
+    this.stuck1.undo();
+    this.stuck2.undo();
+    this.gameState = gs;
+    return gs;
+  }
+
+  // "reachedTheEnd" | "stepRequiresHumanInput" | "stepAutonomous"
+  get stepControlMode() {
+    let botCount = 0, nonBotCount = 0;
+    for (const p of [this.gameState.player1, this.gameState.player2]) {
+      if (!playerIsAlive(p)) continue;
+      if (p.role === "bot") botCount++; else nonBotCount++;
+    }
+    if (botCount + nonBotCount === 0) return "reachedTheEnd";
+    return nonBotCount > 0 ? "stepRequiresHumanInput" : "stepAutonomous";
+  }
+
+  // action: { player1: movement, player2: movement }
+  step(action) {
+    const oldGameState = this.gameState;
+    let gs = gsUpdate(oldGameState, { numberOfSteps: oldGameState.numberOfSteps + 1 });
+
+    for (const key of ["player1", "player2"]) {
+      const p = gs[key];
+      if (playerIsAliveAndHuman(p)) {
+        if (action[key] === "dontMove") return oldGameState; // human action required
+        gs = gsUpdatePlayer(gs, key, playerUpdate(p, { pendingMovement: action[key] }));
+      }
+    }
+
+    gs = detectCollision(gs);
+
+    let collisionCheckAfterEating = false;
+    for (const [key, stuck] of [["player1", this.stuck1], ["player2", this.stuck2]]) {
+      let p = gs[key];
+      if (!playerIsAlive(p)) continue;
+      const opponent = gs[key === "player1" ? "player2" : "player1"];
+      if (p.pendingAct === "eat") collisionCheckAfterEating = true;
+      p = playerUpdate(p, { snakeBody: bodyStateForTick(p.snakeBody, p.pendingMovement, p.pendingAct) });
+      p = playerClearPending(p);
+      // Stuck-loop kill is skipped when the opponent is a living human (Swift line 124):
+      // a human opponent legitimately forces repetitive defensive play.
+      if (!playerIsAliveAndHuman(opponent)) p = stuck.killBotIfStuckInLoop(p);
+      gs = gsUpdatePlayer(gs, key, p);
+    }
+
+    // When one player eats and grows, the other player's head can now overlap
+    // the 1-cell-longer tail — GameEnvironmentInteractive.swift:148-167.
+    if (collisionCheckAfterEating && playerIsAlive(gs.player1) && playerIsAlive(gs.player2)) {
+      const positions1 = bodyPositionSet(gs.player1.snakeBody);
+      const positions2 = bodyPositionSet(gs.player2.snakeBody);
+      if (positions2.has(posKey(gs.player1.snakeBody.head.position))) {
+        gs = gsUpdatePlayer(gs, "player1", playerKill(oldGameState.player1, "collisionWithOpponent"));
+      }
+      if (positions1.has(posKey(gs.player2.snakeBody.head.position))) {
+        gs = gsUpdatePlayer(gs, "player2", playerKill(oldGameState.player2, "collisionWithOpponent"));
+      }
+    }
+
+    gs = placeNewFood(gs);
+
+    this.previousGameStates.push(oldGameState);
+    this.gameState = gs;
+    return gs;
+  }
+
+  setPendingMovement(playerKey, movement, plannedPath) {
+    const p = this.gameState[playerKey];
+    this.gameState = gsUpdatePlayer(this.gameState, playerKey, playerUpdate(p, {
+      pendingMovement: movement,
+      botPlannedPath: plannedPath ?? p.botPlannedPath,
+    }));
+    return this.gameState;
+  }
+}
+
+SnakeTests.add("step applies simultaneous movement and counts steps", () => {
+  const env = new GameEnvironment(createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right" },
+    p2: { pos: { x: 6, y: 6 }, dir: "left" },
+    food: { x: 7, y: 7 },
+  }));
+  env.reset();
+  const gs = env.step({ player1: "moveForward", player2: "moveForward" });
+  assertEq(gs.numberOfSteps, 1);
+  assertEq(gs.player1.snakeBody.head.position, { x: 4, y: 4 });
+  assertEq(gs.player2.snakeBody.head.position, { x: 5, y: 6 });
+  assertEq(gs.player1.pendingMovement, "dontMove", "pending cleared");
+});
+SnakeTests.add("step grows the eater and spawns new food", () => {
+  const env = new GameEnvironment(createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", len: 2 },
+    p2: { pos: { x: 6, y: 6 }, dir: "left", len: 2 },
+    food: { x: 4, y: 4 },
+  }));
+  env.reset();
+  const before = bodyLength(env.gameState.player1.snakeBody);
+  const gs = env.step({ player1: "moveForward", player2: "moveForward" });
+  assertEq(bodyLength(gs.player1.snakeBody), before + 1);
+  assert(gs.foodPosition, "new food spawned");
+  assert(!posEq(gs.foodPosition, { x: 4, y: 4 }), "food moved");
+});
+SnakeTests.add("tail collision after opponent eats (collisionCheckAfterEating)", () => {
+  // p1 eats and grows; p2 moves onto the cell where p1's tail WAS —
+  // without the post-eat check p2 would survive; with it p2 dies.
+  // p1: tail (2,4)..head (3,4) eating food at (4,4). After eating, tail stays at (2,4).
+  // p2: head at (2,5) moving down onto (2,4).
+  const env = new GameEnvironment(createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", len: 1 },
+    p2: { pos: { x: 2, y: 5 }, dir: "down", len: 1 },
+    food: { x: 4, y: 4 },
+  }));
+  env.reset();
+  const gs = env.step({ player1: "moveForward", player2: "moveForward" });
+  assert(playerIsAlive(gs.player1), "eater survives");
+  assert(!playerIsAlive(gs.player2), "opponent died on grown tail");
+  assert(gs.player2.causesOfDeath.includes("collisionWithOpponent"));
+});
+SnakeTests.add("undo restores previous state and clears human pending input", () => {
+  const env = new GameEnvironment(createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right" },
+    p2: { pos: { x: 6, y: 6 }, dir: "left" },
+    food: { x: 7, y: 7 },
+  }));
+  const initial = env.reset();
+  env.step({ player1: "moveForward", player2: "moveForward" });
+  const undone = env.undo();
+  assertEq(undone.player1.snakeBody, initial.player1.snakeBody);
+  assertEq(undone.numberOfSteps, 0);
+  assertEq(undone.player1.pendingMovement, "dontMove");
+  assertEq(env.undo(), null, "history exhausted");
+});
 </script>
 
 <script>
