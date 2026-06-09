@@ -1,0 +1,2097 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snake MCTS — port of SwiftSnakeEngine</title>
+<style>
+  :root {
+    --bg: #1c1c1e;
+    --panel: #2c2c2e;
+    --text: #e5e5ea;
+    --muted: #8e8e93;
+    --p1: #34c759;
+    --p2: #0a84ff;
+  }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  #hud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    padding: 10px;
+  }
+  #hud select, #hud button {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid #3a3a3c;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 14px;
+  }
+  #hud button:hover { border-color: var(--muted); cursor: pointer; }
+  #hud button.active { border-color: var(--p1); color: var(--p1); }
+  #hud label { color: var(--muted); font-size: 13px; }
+  #status {
+    min-height: 22px;
+    font-size: 14px;
+    color: var(--muted);
+    padding: 0 10px 6px;
+  }
+  #status .gameover { color: #ff453a; font-weight: 600; }
+  #board { display: block; }
+  #testreport {
+    font-family: ui-monospace, monospace;
+    white-space: pre-wrap;
+    padding: 16px;
+  }
+</style>
+</head>
+<body>
+<div id="hud">
+  <label>Level <select id="levelSelect"></select></label>
+  <label>Player 1 <select id="role1">
+    <option value="human">Human (arrows)</option>
+    <option value="bot">Bot — Monte Carlo 2</option>
+    <option value="none">Off</option>
+  </select></label>
+  <label>Player 2 <select id="role2">
+    <option value="human">Human (WASD)</option>
+    <option value="bot" selected>Bot — Monte Carlo 2</option>
+    <option value="none">Off</option>
+  </select></label>
+  <button id="btnRestart" title="Enter">Restart</button>
+  <button id="btnUndo" title="Z">Undo</button>
+  <button id="btnPause" title="Space">Pause</button>
+  <button id="btnStep" title="single step (bots only)">Step</button>
+  <button id="btnPath" title="P">Show AI path</button>
+</div>
+<div id="status"></div>
+<canvas id="board"></canvas>
+
+<script id="shared-code">
+"use strict";
+// Pure game engine + MCTS bot, ported from SwiftSnakeEngine (MIT, Simon Strandgaard).
+// This block must not touch the DOM: it also runs inside a Web Worker and in Node (test.mjs).
+
+// ---------------------------------------------------------------------------
+// Test registry. Runs via `node test.mjs` or by opening index.html?test=1
+// ---------------------------------------------------------------------------
+const SnakeTests = {
+  tests: [],
+  add(name, fn) { this.tests.push({ name, fn }); },
+  run(log = console.log, error = console.error) {
+    let failures = 0;
+    for (const { name, fn } of this.tests) {
+      try { fn(); log(`ok - ${name}`); }
+      catch (e) { failures++; error(`FAIL - ${name}: ${e.message}`); }
+    }
+    log(`${this.tests.length - failures}/${this.tests.length} passed`);
+    return failures === 0;
+  },
+};
+function assert(cond, msg) { if (!cond) throw new Error(msg || "assertion failed"); }
+function assertEq(actual, expected, msg) {
+  const a = JSON.stringify(actual), e = JSON.stringify(expected);
+  if (a !== e) throw new Error(`${msg || "assertEq"}: ${a} !== ${e}`);
+}
+
+SnakeTests.add("smoke", () => assertEq(1 + 1, 2));
+
+// ---------------------------------------------------------------------------
+// LCRNG — port of EngineShared/Common/SeededGenerator.swift.
+// Same constants as Swift, so a given seed produces the same raw sequence.
+// ---------------------------------------------------------------------------
+const U64_MASK = 0xFFFFFFFFFFFFFFFFn;
+const LCRNG_MUL = 2862933555777941757n;
+const LCRNG_ADD = 3037000493n;
+
+class LCRNG {
+  constructor(seed) { this.seed = BigInt(seed) & U64_MASK; }
+  next() {
+    this.seed = (LCRNG_MUL * this.seed + LCRNG_ADD) & U64_MASK;
+    return this.seed;
+  }
+  // Derived helpers. Deterministic, but not bit-identical to Swift stdlib's
+  // randomElement/shuffle — cross-language replay parity is a non-goal.
+  randomInt(n) { return Number(this.next() % BigInt(n)); }
+  pickIndex(arrayLength) { return this.randomInt(arrayLength); }
+  shuffle(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+      const j = this.randomInt(i + 1);
+      [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Positions. Plain {x, y} objects, origin bottom-left as in Swift.
+// ---------------------------------------------------------------------------
+function posKey(p) { return `${p.x},${p.y}`; }
+function posEq(a, b) { return a !== null && b !== null && a !== undefined && b !== undefined && a.x === b.x && a.y === b.y; }
+function manhattan(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
+function offsetBy(p, dx, dy) { return { x: p.x + dx, y: p.y + dy }; }
+// Sort order matching Swift IntVec2 Comparable: by y, then by x.
+function posCompare(a, b) { return a.y - b.y || a.x - b.x; }
+
+// ---------------------------------------------------------------------------
+// Fifo — port of EngineShared/Snake/SnakeFifo.swift, immutable flavor.
+// `append` keeps capacity (drops from the front), `appendAndGrow` raises it.
+// ---------------------------------------------------------------------------
+const Fifo = {
+  fromArray(array) { return { capacity: array.length, array: array.slice() }; },
+  _purged(capacity, array) {
+    const diff = array.length - capacity;
+    return { capacity, array: diff >= 1 ? array.slice(diff) : array };
+  },
+  append(fifo, item) {
+    return this._purged(fifo.capacity, [...fifo.array, item]);
+  },
+  appendAndGrow(fifo, item) {
+    return this._purged(fifo.capacity + 1, [...fifo.array, item]);
+  },
+  map(fifo, transform) {
+    return { capacity: fifo.capacity, array: fifo.array.map(transform) };
+  },
+};
+
+SnakeTests.add("lcrng sequence from seed 0", () => {
+  const rng = new LCRNG(0n);
+  assertEq(rng.next().toString(), "3037000493");
+  const expected2 = ((LCRNG_MUL * 3037000493n + LCRNG_ADD) & U64_MASK).toString();
+  assertEq(rng.next().toString(), expected2);
+});
+SnakeTests.add("lcrng helpers are deterministic", () => {
+  const a = new LCRNG(7n), b = new LCRNG(7n);
+  assertEq(a.shuffle([1, 2, 3, 4, 5]), b.shuffle([1, 2, 3, 4, 5]));
+  assertEq(a.randomInt(10), b.randomInt(10));
+});
+SnakeTests.add("fifo append keeps capacity, appendAndGrow grows", () => {
+  const f0 = Fifo.fromArray([1, 2, 3]);
+  assertEq(Fifo.append(f0, 4).array, [2, 3, 4]);
+  assertEq(Fifo.appendAndGrow(f0, 4).array, [1, 2, 3, 4]);
+  assertEq(f0.array, [1, 2, 3], "original untouched");
+});
+
+// ---------------------------------------------------------------------------
+// SnakeHead — port of EngineShared/Snake/SnakeHead.swift + SnakeHeadDirection.swift
+// ---------------------------------------------------------------------------
+const ROTATED_CCW = { up: "left", left: "down", down: "right", right: "up" };
+const ROTATED_CW = { up: "right", right: "down", down: "left", left: "up" };
+const DIRECTION_DELTA = {
+  up: { dx: 0, dy: 1 },
+  down: { dx: 0, dy: -1 },
+  left: { dx: -1, dy: 0 },
+  right: { dx: 1, dy: 0 },
+};
+
+function headSimulateTick(head, movement) {
+  if (movement === "dontMove") return head;
+  let direction = head.direction;
+  if (movement === "moveCCW") direction = ROTATED_CCW[direction];
+  if (movement === "moveCW") direction = ROTATED_CW[direction];
+  const d = DIRECTION_DELTA[direction];
+  return { position: offsetBy(head.position, d.dx, d.dy), direction };
+}
+
+// Best movement to approach newPosition; null if it is behind the snake.
+// Port of SnakeHead.moveToward(_:) — SnakeHead.swift:72-124.
+function headMoveTowardPosition(head, newPosition) {
+  const dx = head.position.x - newPosition.x;
+  const dy = head.position.y - newPosition.y;
+  const dxx = dx * dx, dyy = dy * dy;
+  if (dxx === 0 && dyy === 0) return "dontMove";
+  switch (head.direction) {
+    case "up":
+      if (dy < 0 && dyy >= dxx) return "moveForward";
+      if (dx > 0) return "moveCCW";
+      if (dx < 0) return "moveCW";
+      break;
+    case "down":
+      if (dy > 0 && dyy >= dxx) return "moveForward";
+      if (dx > 0) return "moveCW";
+      if (dx < 0) return "moveCCW";
+      break;
+    case "left":
+      if (dx > 0 && dxx >= dyy) return "moveForward";
+      if (dy > 0) return "moveCCW";
+      if (dy < 0) return "moveCW";
+      break;
+    case "right":
+      if (dx < 0 && dxx >= dyy) return "moveForward";
+      if (dy > 0) return "moveCW";
+      if (dy < 0) return "moveCCW";
+      break;
+  }
+  return null;
+}
+
+// Arrow-key style input: a direction. Reversal yields "dontMove".
+function headMoveTowardDirection(head, direction) {
+  const d = DIRECTION_DELTA[direction];
+  return headMoveTowardPosition(head, offsetBy(head.position, d.dx, d.dy)) ?? "dontMove";
+}
+
+// ---------------------------------------------------------------------------
+// SnakeBody — port of EngineShared/Snake/SnakeBody.swift.
+// fifo.array runs tail-first; the last element is the head.
+// Each part: { position, content } where content is "empty" | "food".
+// ---------------------------------------------------------------------------
+function bodyStateForTick(body, movement, act) {
+  if (movement === "dontMove") return body;
+  const newHead = headSimulateTick(body.head, movement);
+  const part = { position: newHead.position, content: act === "eat" ? "food" : "empty" };
+  const fifo = act === "eat" ? Fifo.appendAndGrow(body.fifo, part) : Fifo.append(body.fifo, part);
+  return { fifo, head: newHead };
+}
+
+// Port of SnakeBody.create(position:headDirection:length:) — SnakeBody.swift:117-149.
+// Starts `length` cells behind `position` and ticks forward, growing each step,
+// then clears the stomach. Yields length+1 body parts like the Swift original.
+function bodyCreate(position, headDirection, length) {
+  const n = length;
+  let dx = 0, dy = 0;
+  if (headDirection === "up") dy = -n;
+  if (headDirection === "down") dy = n;
+  if (headDirection === "left") dx = n;
+  if (headDirection === "right") dx = -n;
+  const startPosition = offsetBy(position, dx, dy);
+  let body = {
+    fifo: Fifo._purged(1, [{ position: startPosition, content: "empty" }]),
+    head: { position: startPosition, direction: headDirection },
+  };
+  for (let i = 0; i < n; i++) {
+    body = bodyStateForTick(body, "moveForward", "eat");
+  }
+  return bodyClearStomach(body);
+}
+
+function bodyClearStomach(body) {
+  return {
+    fifo: Fifo.map(body.fifo, (p) => ({ position: p.position, content: "empty" })),
+    head: body.head,
+  };
+}
+
+function bodyPositionArray(body) { return body.fifo.array.map((p) => p.position); }
+function bodyPositionSet(body) { return new Set(bodyPositionArray(body).map(posKey)); }
+function bodyWithoutHeadPositionSet(body) {
+  const arr = body.fifo.array;
+  if (arr.length === 0) return new Set();
+  return new Set(arr.slice(0, -1).map((p) => posKey(p.position)));
+}
+function bodyIsEatingItself(body) {
+  return bodyWithoutHeadPositionSet(body).has(posKey(body.head.position));
+}
+function bodyLength(body) { return body.fifo.array.length; }
+
+SnakeTests.add("head simulateTick", () => {
+  const h = { position: { x: 5, y: 5 }, direction: "up" };
+  assertEq(headSimulateTick(h, "moveForward"), { position: { x: 5, y: 6 }, direction: "up" });
+  assertEq(headSimulateTick(h, "moveCCW"), { position: { x: 4, y: 5 }, direction: "left" });
+  assertEq(headSimulateTick(h, "moveCW"), { position: { x: 6, y: 5 }, direction: "right" });
+  assertEq(headSimulateTick(h, "dontMove"), h);
+});
+SnakeTests.add("head moveToward direction blocks reversal", () => {
+  const h = { position: { x: 5, y: 5 }, direction: "up" };
+  assertEq(headMoveTowardDirection(h, "down"), "dontMove");
+  assertEq(headMoveTowardDirection(h, "left"), "moveCCW");
+  assertEq(headMoveTowardDirection(h, "right"), "moveCW");
+  assertEq(headMoveTowardDirection(h, "up"), "moveForward");
+});
+SnakeTests.add("body create extends backward from head", () => {
+  const b = bodyCreate({ x: 5, y: 5 }, "right", 4);
+  assertEq(b.head.position, { x: 5, y: 5 });
+  assertEq(b.head.direction, "right");
+  assertEq(bodyPositionArray(b), [{x:1,y:5},{x:2,y:5},{x:3,y:5},{x:4,y:5},{x:5,y:5}]);
+});
+SnakeTests.add("body eat grows, plain move keeps length", () => {
+  const b = bodyCreate({ x: 5, y: 5 }, "right", 2);
+  const grown = bodyStateForTick(b, "moveForward", "eat");
+  assertEq(bodyLength(grown), bodyLength(b) + 1);
+  assert(!bodyIsEatingItself(grown));
+  const moved = bodyStateForTick(b, "moveForward", "doNothing");
+  assertEq(bodyLength(moved), bodyLength(b));
+  assertEq(moved.head.position, { x: 6, y: 5 });
+});
+// ---------------------------------------------------------------------------
+// Level data — the 12 CSV files from EngineShared/Level/SnakeLevels.bundle,
+// embedded verbatim. Format: header row = UUID; grid rows top-to-bottom with
+// tokens W (wall), F (food), P{1|2}{U|L|D|R}{len} (player spawn), C{n} (cluster).
+// A cell may hold several space-separated tokens.
+// ---------------------------------------------------------------------------
+const LEVEL_CSV = {
+"Level 0": `e9943132-5ebf-41a1-895b-a278cfc1adef,,,,,,,,
+W,W,W,W,W,W,W,W,W
+W,,,,,,P1R4,,W
+W,,,,,,,,W
+W,,,,,,,,W
+W,,,,F,,,,W
+W,,,,,,,,W
+W,,,,,,,,W
+W,,P2L4,,,,,,W
+W,W,W,W,W,W,W,W,W`,
+"Level 1": `e707f8d1-3699-4778-b158-04197f775862,,,,,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,P1R2,,,,F,,,,P2L2,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,,,,,,,,,,,,,,,,,,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 2": `83a7d7e9-daf4-4e32-8f5f-b776d577c242,,,,,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,C3,C3,C3,C3,C3,C3,C2,C2,C2,C2,C2,C1,C1,C1,C1,C1,C1,W
+W,C3,C3,C3,C3,C3,C3,C2,C2,C2,C2,C2,C1,C1,C1,C1,C1,C1,W
+W,C3,C3,C3,C3,C3,C3,C2,C2,C2,C2,C2,C1 P2L2,C1,C1,C1,C1,C1,W
+W,C3,C3,C3,C3,C3,C3,C2,C2,C2,C2,C2,C1,C1,C1,C1,C1,C1,W
+W,C3,C3,C3,C3,C3,C3,C2,C2,C2,C2,C2,C1,C1,C1,C1,C1,C1,W
+W,C3,C3,C3,C3,C3,C3,C2,C2,C2,C2,C2,W,W,W,W,W,W,W
+W,C4,C4,C4,C4,C4,C4,C5,C5,C5,C5,C5,C6,C6,C6,C6,C6,C6,W
+W,C4,C4,C4,C4,C4,C4,C5,C5,C5,C5,C5,C6,C6,C6,C6,C6,C6,W
+W,C4,C4,C4,C4,C4,C4,C5,C5,C5 F,C5,C5,C6,C6,C6,C6,C6,C6,W
+W,C4,C4,C4,C4,C4,C4,C5,C5,C5,C5,C5,C6,C6,C6,C6,C6,C6,W
+W,C4,C4,C4,C4,C4,C4,C5,C5,C5,C5,C5,C6,C6,C6,C6,C6,C6,W
+W,W,W,W,W,W,W,C8,C8,C8,C8,C8,C7,C7,C7,C7,C7,C7,W
+W,C9,C9,C9,C9,C9,C9,C8,C8,C8,C8,C8,C7,C7,C7,C7,C7,C7,W
+W,C9,C9,C9,C9,C9,C9,C8,C8,C8,C8,C8,C7,C7,C7,C7,C7,C7,W
+W,C9,C9,C9,C9,C9,C9 P1R2,C8,C8,C8,C8,C8,C7,C7,C7,C7,C7,C7,W
+W,C9,C9,C9,C9,C9,C9,C8,C8,C8,C8,C8,C7,C7,C7,C7,C7,C7,W
+W,C9,C9,C9,C9,C9,C9,C8,C8,C8,C8,C8,C7,C7,C7,C7,C7,C7,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 3": `5962c7cb-91e2-48ce-a720-3c4dab3403a4,,,,,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,C1,C1,C1,C1,C2,C2,C2,C2,C2,C2,C2,C2,C2,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C2,C2,C2,C2,C2 P1R2,C2,C2,C2,C2,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C2,C2,C2,C2,C2,C2,C2,C2,C2,C3,C3,C3,C3,W
+W,C1,C1,C1,W,W,W,W,W,W,W,W,W,W,W,C3,C3,C3,W
+W,C8,C8,C8,W,W,W,W,W,W,W,W,W,W,W,C4,C4,C4,W
+W,C8,C8,C8,W,W,W,W,W,W,W,W,W,W,W,C4,C4,C4,W
+W,C8,C8,C8,W,W,W,W,W,W,W,W,W,W,W,C4,C4,C4,W
+W,C8,C8,C8,W,W,W,W,W,W,W,W,W,W,W,C4,C4,C4,W
+W,C8,C8,C8,W,W,W,W,W,W,W,W,W,W,W,C4,C4 F,C4,W
+W,C8,C8,C8,W,W,W,W,W,W,W,W,W,W,W,C4,C4,C4,W
+W,C8,C8,C8,W,W,W,W,W,W,W,W,W,W,W,C4,C4,C4,W
+W,C8,C8,C8,W,W,W,W,W,W,W,W,W,W,W,C4,C4,C4,W
+W,C8,C8,C8,W,W,W,W,W,W,W,W,W,W,W,C4,C4,C4,W
+W,C7,C7,C7,W,W,W,W,W,W,W,W,W,W,W,C5,C5,C5,W
+W,C7,C7,C7,C7,C6,C6,C6,C6,C6,C6,C6,C6,C6,C5,C5,C5,C5,W
+W,C7,C7,C7,C7,C6,C6,C6,C6,C6 P2R2,C6,C6,C6,C6,C5,C5,C5,C5,W
+W,C7,C7,C7,C7,C6,C6,C6,C6,C6,C6,C6,C6,C6,C5,C5,C5,C5,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 4": `8fe620d5-6f9f-4ed9-9d51-36957c4ff6cf,,,,,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1 P1R2,C1,C1,C1,C1,W,C2,C2,C2,C2 P2L2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1 F,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,C1,C1,C1,C1,C1,C1,C1,C1,W,C2,C2,C2,C2,C2,C2,C2,C2,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 5": `d850ac21-6082-47db-ad35-c9d0c2b9fc81,,,,,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,C1,C1,C1,C1,C2,C2,C2,C2,C2 P2L2,C2,C2,C2,C2,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C2,C2,C2,C2,C2,C2,C2,C2,C2,C3,C3,C3,C3,W
+W,C1,C1,W,W,W,W,W,W,W,W,W,W,W,W,W,C3,C3,W
+W,C1,C1,W,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,W,C3,C3,W
+W,C8,C8,W,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,W,C4,C4,W
+W,C8,C8,W,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,W,C4,C4,W
+W,C8,C8,W,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,W,C4,C4,W
+W,C8,C8,W,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,W,C4,C4,W
+W,C8,C8,W,C9,C9,C9,C9,C9,W,C9,C9,C9,C9,C9,W,C4,C4,W
+W,C8,C8,W,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,W,C4,C4,W
+W,C8,C8,W,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,W,C4,C4,W
+W,C8,C8,W,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,W,C4,C4,W
+W,C8,C8,W,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,C9,W,C4,C4,W
+W,C7,C7,W,C9,C9,C9,C9,C9,C9 P1R2,C9,C9,C9,C9,C9 F,W,C5,C5,W
+W,C7,C7,W,W,W,W,W,W,W,W,W,W,W,W,W,C5,C5,W
+W,C7,C7,C7,C7,C6,C6,C6,C6,C6,C6,C6,C6,C6,C5,C5,C5,C5,W
+W,C7,C7,C7,C7,C6,C6,C6,C6,C6,C6,C6,C6,C6,C5,C5,C5,C5,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 6": `cdeeadf2-31c9-48f4-852f-778b58086dd0,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,C2,C2,C2,W,C1,C1,C1,C1,C1,C1,C1,C1,C1,W
+W,C2,W,C2,W,C1,C1,C1,C1,C1,C1,C1,C1,C1,W
+W,C2,C2 P2L8,C2,C1,C1,C1,C1,C1,C1,C1,C1,C1,C1,W
+W,C2,W,W,W,W,W,W,W,W,W,C1,W,C1,W
+W,C4,W,C3,C3,C3,C3,C3,C3,C3,C3,C3,W,C1,W
+W,C4,W,C4,W,W,W,W,W,W,W,W,W,C5,W
+W,C4,C4,C4,C4,C4,C4,C4,C4,C4,C4,C5,C5 P1R8,C5,W
+W,C4,C4,C4,C4,C4,C4,C4,C4,C4,W,C5,W,C5 F,W
+W,C4,C4,C4,C4,C4,C4,C4,C4,C4,W,C5,C5,C5,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 7": `f4c3d5f1-8335-4934-b41e-0367ff7d131f,,,,,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,C1,C1,C1,C1,C1,C1,C1,C2,C2,C2,C2,C3,C3,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C1,C1,C1,C2,C2,C2,C2,C3,C3,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C1,C1,C1,C2,C2,C2,C2,C3,C3,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C1,C1,C1,C2,C2,C2,C2,C3,C3,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C1,C1,C1,C2,C2,C2,W,C3,C3,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C1,C1,C1,C2,C2,C2 P2D4,C2,C3,C3,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C1,C1,C1,W,W,C8,W,C3,C3,C3,C3,C3,C3,W
+W,C1,C1,C1,C1,C1,C1,C1,C7,W,C8,C8,C3,C3,C3,C3,C3,C3,W
+W,W,W,W,W,W,W,W,C7,W,C8,W,W,W,W,W,W,W,W
+W,C6,C6,C6,C6,C6,C6,C7,C7,W,C8,C4,C4,C4,C4,C4,C4,C4,W
+W,C6,C6,C6,C6,C6,C6,W,C7,W,W,C4,C4,C4,C4,C4,C4,C4,W
+W,C6,C6,C6,C6,C6,C6,C5,C5 P1U4,C5,C5,C4,C4,C4,C4,C4,C4,C4,W
+W,C6,C6,C6,C6,C6,C6,W,C5,C5,C5,C4,C4,C4,C4,C4,C4,C4,W
+W,C6,C6,C6,C6,C6,C6,C5,C5,C5,C5,C4,C4,C4,C4,C4,C4,C4,W
+W,C6,C6,C6,C6,C6,C6,C5,C5,C5,C5,C4,C4,C4,C4,C4,C4,C4,W
+W,C6,C6,C6,C6,C6,C6,C5,C5,C5,C5,C4,C4,C4,C4,C4,C4 F,C4,W
+W,C6,C6,C6,C6,C6,C6,C5,C5,C5,C5,C4,C4,C4,C4,C4,C4,C4,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 8": `9d6c3700-a460-48fd-92fd-a319fff0f9e9,,,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,C4,C4,C4,C3,C3,C3,C3,W,C2,C2,C2,C1,C1,C1,C1,W
+W,C4,C4,C4 P2L4,C3,C3,C3,C3,W,C2,C2,C2,C1,C1,C1,C1,W
+W,C4,C4,W,W,W,C3,C3,C2,C2,C2,W,C1,C1,C1,C1,W
+W,C4,C4,C5,C5,W,C3,C3,C2,C2,C2,W,C1,C1,C1,C1,W
+W,W,W,C5,C5,W,W,W,W,W,W,W,W,W,W,W,W
+W,C6,C6,C5,C5,W,C7,C7,C8,C8,C8,W,C9,C9,C9,C9 F,W
+W,C6,C6,W,W,W,C7,C7,C8,C8,C8,W,C9,C9,C9,C9,W
+W,C6,C6,C6,C7,C7,C7,C7,W,C8,C8,C8,C9,C9,C9,C9,W
+W,C6,C6,C6,C7,C7,C7,C7,W,C8,C8,C8,C9,C9,C9,C9 P1R4,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 9": `2b99ea2d-3115-4584-850b-9d2ef07cf9ce,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,C1,C1,C1,C2,C2,C2,C2,C3,C3,C3,C4,C4,C4,W
+W,C1,C1,W,C2,C2,C2,W,C3,C3,C3,W,C4,C4,W
+W,C1,W,W,W,C2,W,W,W,C3,W,W,W,C4,W
+W,C6,C6,W,C7,C7,C7,W,C8,C8,C8,W,C5,C5,W
+W,C6,C6,C6,C7,C7,C7,C9,C8,C8,C8 P2L3,C5,C5,C5,W
+W,W,W,C10,C11,W,C9,C9 F,C9,W,C13,C12,W,W,W
+W,C10,C10,C10,C11,C11,C15,W,C14,C13,C13,C12,C12,C12,W
+W,C10,C10,C10,C11 P1R3,W,C15,C14,C14,W,C13,C12,C12,C12,W
+W,W,W,W,C11,C11,C15,W,C14,C13,C13,W,W,W,W
+W,W,W,W,C11,W,C15,C15,C14,W,C13,W,W,W,W
+W,W,W,W,C11,C11,C15,W,C14,C13,C13,W,W,W,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 10": `f2b13b27-d1c0-4e2b-ad79-5ff4fcf1a696,,,,,,,,,,,,,,,,,,
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W
+W,C1,C1,C2,C2 P1R3,C3,C3,C3,C3,W,C7,C7,C7,C7,C8,C8,C9,C9,W
+W,C1,W,W,C2,W,W,W,C3,W,C7,W,W,W,C8,W,W,C9,W
+W,C1,C1,C2,C2,C2,C4,C4,C4,C4,C4,C4,C4,C8,C8,C8,C9,C9,W
+W,C1,W,W,C2,W,C5,W,W,W,W,W,C6,W,C8,W,W,C9,W
+W,C1,C1,C2,C2,W,C5,C5,C5,W,C6,C6,C6,W,C8,C8,C9,C9,W
+W,W,W,W,C10,W,W,W,C16,W,C16,W,W,W,C11,W,W,W,W
+W,W,W,W,C10,W,C14,C14,C16,C16 F,C16,C15,C15,W,C11,W,W,W,W
+W,W,W,W,C10,W,C14,W,W,W,W,W,C15,W,C11,W,W,W,W
+W,C12,C12,C10,C10,C14,C14,W,C17,C17,C17,W,C15,C15,C11,C11,C13,C13,W
+W,C12,W,W,C10,W,W,W,C17,C17,C17,W,W,W,C11,W,W,C13,W
+W,C12,C12,C10,C10,C17,C17,C17,C17,C17,C17,C17,C17,C11,C11 P2L3,C11,C13,C13,W
+W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W`,
+"Level 11": `88688ca9-d723-41ba-adb4-854196dfca2f,,,,,,
+W,W,W,W,W,W,W
+W,C1,C1,C1,C1 P1R3,C1,W
+W,C1,C1,C1,C1,C1,W
+W,W,W,C1,C1,C1,W
+W,C2,C2,W,C1,C1,W
+W,C2,C2,C2,W,C1,W
+W,C2,C2,C2 F,C2,C2,W
+W,C3,W,C2,C2,C2,W
+W,C3,C3,W,C2,C2,W
+W,C3,C3,C3,W,W,W
+W,C3,C3,C3,C3,C3,W
+W,C3,C3 P2L3,C3,C3,C3,W
+W,W,W,W,W,W,W`,
+};
+
+SnakeTests.add("body detects eating itself", () => {
+  // length-5 snake curls into itself: up, left, down → head lands on its body
+  let b = bodyCreate({ x: 5, y: 5 }, "right", 5);
+  b = bodyStateForTick(b, "moveCCW", "doNothing");   // up
+  b = bodyStateForTick(b, "moveCCW", "doNothing");   // left
+  b = bodyStateForTick(b, "moveCCW", "doNothing");   // down → onto own body
+  assert(bodyIsEatingItself(b));
+});
+
+// ---------------------------------------------------------------------------
+// Level parsing — port of EngineShared/Level/SnakeLevel+Load.swift and
+// SnakeLevelBuilder.swift. CSV rows are REVERSED so the origin is bottom-left.
+// Cluster distances: per cluster, find the empty cell nearest the bounding-box
+// center; BFS path length between those cells; adjacent cluster pairs are
+// skipped (manhattan is more precise there); -1 = no route.
+// BFS replaces Swift's A* (ComputeShortestPath) — only the path length is
+// consumed, and BFS on an unweighted grid is exact.
+// ---------------------------------------------------------------------------
+function clusterPairKey(a, b) { return a < b ? `${a}-${b}` : `${b}-${a}`; }
+
+function parseLevel(csvText) {
+  const allRows = csvText.split("\n").map((line) => line.split(","));
+  const id = allRows[0][0];
+  const rows = allRows.slice(1).reverse();
+  const height = rows.length;
+  const width = rows[0].length;
+  if (height < 3 || width < 3) throw new Error("level too small");
+
+  const wallSet = new Set();
+  const clusters = new Map(); // posKey -> cluster id (unassigned cells default to 0)
+  let initialFoodPosition = { x: 0, y: 0 };
+  let player1Body = null;
+  let player2Body = null;
+
+  for (let y = 0; y < height; y++) {
+    if (rows[y].length !== width) throw new Error("inconsistent column count");
+    for (let x = 0; x < width; x++) {
+      const position = { x, y };
+      for (const token of rows[y][x].split(" ").filter(Boolean)) {
+        const c0 = token[0];
+        if (c0 === "W") {
+          wallSet.add(posKey(position));
+        } else if (c0 === "F") {
+          initialFoodPosition = position;
+        } else if (c0 === "P") {
+          const direction = { U: "up", L: "left", D: "down", R: "right" }[token[2]] ?? "right";
+          const length = parseInt(token[3], 10) || 2;
+          const body = bodyCreate(position, direction, length);
+          if (token[1] === "1") player1Body = body;
+          if (token[1] === "2") player2Body = body;
+        } else if (c0 === "C") {
+          clusters.set(posKey(position), parseInt(token.slice(1), 10));
+        }
+      }
+    }
+  }
+
+  // Empty positions in the same order Swift builds them: y outer, x inner.
+  const emptyPositionArray = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!wallSet.has(`${x},${y}`)) emptyPositionArray.push({ x, y });
+    }
+  }
+  const emptyPositionSet = new Set(emptyPositionArray.map(posKey));
+
+  const level = {
+    id,
+    size: { x: width, y: height },
+    wallSet,
+    clusters,
+    emptyPositionArray,
+    emptyPositionSet,
+    initialFoodPosition,
+    player1Body,
+    player2Body,
+    distanceBetweenClusters: new Map(),
+  };
+  level.distanceBetweenClusters = computeDistancesBetweenClusters(level);
+  return level;
+}
+
+function levelClusterAt(level, position) { return level.clusters.get(posKey(position)) ?? 0; }
+function levelIsWall(level, position) {
+  const { x, y } = position;
+  if (x < 0 || y < 0 || x >= level.size.x || y >= level.size.y) return true;
+  return level.wallSet.has(posKey(position));
+}
+
+function bfsPathLength(level, start, target) {
+  if (posEq(start, target)) return 0;
+  const visited = new Set([posKey(start)]);
+  let frontier = [start];
+  let distance = 0;
+  while (frontier.length > 0) {
+    distance++;
+    const next = [];
+    for (const p of frontier) {
+      for (const d of Object.values(DIRECTION_DELTA)) {
+        const q = offsetBy(p, d.dx, d.dy);
+        const k = posKey(q);
+        if (visited.has(k) || !level.emptyPositionSet.has(k)) continue;
+        if (posEq(q, target)) return distance;
+        visited.add(k);
+        next.push(q);
+      }
+    }
+    frontier = next;
+  }
+  return -1; // no route
+}
+
+function computeDistancesBetweenClusters(level) {
+  const result = new Map();
+  // Bounding box per cluster over empty cells (cluster 0 included, as in Swift).
+  const boxes = new Map();
+  for (const p of level.emptyPositionArray) {
+    const c = levelClusterAt(level, p);
+    const box = boxes.get(c);
+    if (!box) boxes.set(c, { minX: p.x, maxX: p.x, minY: p.y, maxY: p.y });
+    else {
+      box.minX = Math.min(box.minX, p.x); box.maxX = Math.max(box.maxX, p.x);
+      box.minY = Math.min(box.minY, p.y); box.maxY = Math.max(box.maxY, p.y);
+    }
+  }
+  if (boxes.size < 2) return result;
+
+  // Representative cell per cluster: empty cell nearest the box center.
+  const centers = new Map();
+  for (const [c, box] of boxes) {
+    centers.set(c, { x: Math.floor((box.minX + box.maxX) / 2), y: Math.floor((box.minY + box.maxY) / 2) });
+  }
+  const nearestCell = new Map();
+  const nearestDist = new Map();
+  for (const p of level.emptyPositionArray) {
+    const c = levelClusterAt(level, p);
+    const d = manhattan(p, centers.get(c));
+    if (d < (nearestDist.get(c) ?? Infinity)) {
+      nearestDist.set(c, d);
+      nearestCell.set(c, p);
+    }
+  }
+
+  // Adjacent cluster pairs (touching via 4-neighbour empty cells) are skipped.
+  const adjacent = new Set();
+  for (const p of level.emptyPositionArray) {
+    const c = levelClusterAt(level, p);
+    for (const d of Object.values(DIRECTION_DELTA)) {
+      const q = offsetBy(p, d.dx, d.dy);
+      if (!level.emptyPositionSet.has(posKey(q))) continue;
+      const c2 = levelClusterAt(level, q);
+      if (c2 !== c) adjacent.add(clusterPairKey(c, c2));
+    }
+  }
+
+  const clusterIds = [...boxes.keys()].sort((a, b) => a - b);
+  for (const c0 of clusterIds) {
+    for (const c1 of clusterIds) {
+      if (c0 >= c1) continue;
+      const key = clusterPairKey(c0, c1);
+      if (adjacent.has(key) || result.has(key)) continue;
+      const pathLength = bfsPathLength(level, nearestCell.get(c0), nearestCell.get(c1));
+      // Swift stores plannedPath.count (cells incl. endpoints); BFS returns edges.
+      result.set(key, pathLength < 0 ? -1 : pathLength + 1);
+    }
+  }
+  return result;
+}
+
+// Port of SnakeLevel.estimateDistance — SnakeLevel.swift:64-84.
+function levelEstimateDistance(level, position0, position1) {
+  const c0 = levelClusterAt(level, position0);
+  const c1 = levelClusterAt(level, position1);
+  if (c0 === c1) return manhattan(position0, position1);
+  const distance = level.distanceBetweenClusters.get(clusterPairKey(c0, c1));
+  if (distance === undefined) return manhattan(position0, position1); // neighbouring clusters
+  if (distance < 0) return Infinity; // no route
+  return distance * 10;
+}
+
+const levelCache = new Map();
+function getLevel(name) {
+  if (!levelCache.has(name)) levelCache.set(name, parseLevel(LEVEL_CSV[name]));
+  return levelCache.get(name);
+}
+const LEVEL_NAMES = Object.keys(LEVEL_CSV);
+
+SnakeTests.add("level 0 parses", () => {
+  const lv = getLevel("Level 0");
+  assertEq(lv.size, { x: 9, y: 9 });
+  // P1R4 is on csv grid row 1 (0-based, below the wall row) ⇒ y = 9-1-1 = 7... rows
+  // exclude the UUID header, so grid row index 1 maps to y = height-1-1.
+  assertEq(lv.player1Body.head.direction, "right");
+  assertEq(lv.player1Body.head.position, { x: 6, y: 7 });
+  assertEq(lv.player2Body.head.direction, "left");
+  assertEq(lv.player2Body.head.position, { x: 2, y: 1 });
+  assertEq(lv.initialFoodPosition, { x: 4, y: 4 });
+  assert(lv.wallSet.has("0,0"));
+  assert(!lv.wallSet.has("4,4"));
+  assertEq(lv.emptyPositionArray.length, 7 * 7);
+});
+SnakeTests.add("all 12 levels parse", () => {
+  assertEq(LEVEL_NAMES.length, 12);
+  for (const name of LEVEL_NAMES) {
+    const lv = getLevel(name);
+    assert(lv.size.x >= 3 && lv.size.y >= 3, name);
+    assert(lv.emptyPositionArray.length > 0, name);
+    assert(lv.player1Body !== null, `${name} has player1`);
+    assert(lv.player2Body !== null, `${name} has player2`);
+  }
+});
+SnakeTests.add("estimateDistance: same cluster manhattan, cross-cluster scaled", () => {
+  const lv0 = getLevel("Level 0"); // no clusters → manhattan everywhere
+  assertEq(levelEstimateDistance(lv0, { x: 1, y: 1 }, { x: 4, y: 5 }), 7);
+  const lv5 = getLevel("Level 5"); // clusters C1..C9
+  assert(lv5.distanceBetweenClusters.size > 0, "level 5 has cluster distances");
+  // C8 (left corridor) to C4 (right corridor) are non-adjacent: scaled distance
+  const d = levelEstimateDistance(lv5, { x: 1, y: 8 }, { x: 17, y: 8 });
+  assert(Number.isFinite(d) && d > manhattan({ x: 1, y: 8 }, { x: 17, y: 8 }), `got ${d}`);
+});
+
+// ---------------------------------------------------------------------------
+// Player — port of EngineShared/Snake/SnakePlayer.swift.
+// Pure data so it serializes to the worker. Deviation from Swift: the bot's
+// search tree lives in the worker (keyed by player), not on the player object;
+// only plannedMovement/plannedPath cross the boundary (stored as botPlannedPath).
+// ---------------------------------------------------------------------------
+function playerCreate(id, role, snakeBody) {
+  return {
+    id, // "player1" | "player2"
+    isInstalled: role !== "none",
+    role, // "human" | "bot" | "none"
+    snakeBody,
+    pendingMovement: "dontMove",
+    pendingAct: "doNothing",
+    causesOfDeath: [],
+    botPlannedPath: [],
+  };
+}
+function playerIsAlive(p) { return p.isInstalled && p.causesOfDeath.length === 0; }
+function playerIsAliveAndHuman(p) { return playerIsAlive(p) && p.role === "human"; }
+function playerUpdate(p, changes) { return { ...p, ...changes }; }
+function playerKill(p, causeOfDeath) {
+  if (p.causesOfDeath.includes(causeOfDeath)) return p;
+  return { ...p, causesOfDeath: [...p.causesOfDeath, causeOfDeath] };
+}
+function playerClearPending(p) { return { ...p, pendingMovement: "dontMove", pendingAct: "doNothing" }; }
+
+// ---------------------------------------------------------------------------
+// GameState — port of EngineShared/Snake/SnakeGameState.swift (+Create).
+// Immutable; foodRngSeed is a decimal string so it survives JSON/postMessage.
+// ---------------------------------------------------------------------------
+function gameStateCreate(levelName, role1, role2) {
+  const level = getLevel(levelName);
+  return {
+    levelName,
+    foodPosition: level.initialFoodPosition,
+    player1: playerCreate("player1", role1, level.player1Body),
+    player2: playerCreate("player2", role2, level.player2Body),
+    foodRngSeed: "0",
+    numberOfSteps: 0,
+  };
+}
+function gsLevel(gs) { return getLevel(gs.levelName); }
+function gsUpdate(gs, changes) { return { ...gs, ...changes }; }
+function gsUpdatePlayer(gs, playerKey, player) { return { ...gs, [playerKey]: player }; }
+function gsClearPendingForHumans(gs) {
+  const clear = (p) => (p.role === "human" ? playerClearPending(p) : p);
+  return { ...gs, player1: clear(gs.player1), player2: clear(gs.player2) };
+}
+
+// ---------------------------------------------------------------------------
+// Collision detection — port of EngineShared/Snake/SnakeCollisionDetector.swift.
+// Speculatively ticks both bodies with their pending movements, then checks in
+// the Swift order: wall → head-to-head (mutual death) → head into opponent →
+// self-eat → food-eaten flags.
+// ---------------------------------------------------------------------------
+function runCollisionDetector(level, foodPosition, player1, player2) {
+  const tick = (p) =>
+    bodyStateForTick(p.snakeBody, playerIsAlive(p) ? p.pendingMovement : "dontMove", "doNothing");
+  const body1 = tick(player1);
+  const body2 = tick(player2);
+  const r = {
+    player1Alive: playerIsAlive(player1),
+    player2Alive: playerIsAlive(player2),
+    player1EatsFood: false,
+    player2EatsFood: false,
+    collisionType1: "noCollision",
+    collisionType2: "noCollision",
+  };
+  if (!player1.isInstalled && !player2.isInstalled) return r;
+  if (!r.player1Alive && !r.player2Alive) return r;
+
+  if (player1.isInstalled && r.player1Alive && levelIsWall(level, body1.head.position)) {
+    r.player1Alive = false; r.collisionType1 = "collisionWithWall";
+  }
+  if (player2.isInstalled && r.player2Alive && levelIsWall(level, body2.head.position)) {
+    r.player2Alive = false; r.collisionType2 = "collisionWithWall";
+  }
+  if (!r.player1Alive && !r.player2Alive) return r;
+
+  if (player1.isInstalled && player2.isInstalled && r.player1Alive && r.player2Alive
+      && posEq(body1.head.position, body2.head.position)) {
+    r.player1Alive = false; r.collisionType1 = "collisionWithOpponent";
+    r.player2Alive = false; r.collisionType2 = "collisionWithOpponent";
+    return r;
+  }
+
+  if (player1.isInstalled && player2.isInstalled) {
+    const positions1 = bodyPositionSet(body1);
+    const positions2 = bodyPositionSet(body2);
+    if (r.player1Alive && positions2.has(posKey(body1.head.position))) {
+      r.player1Alive = false; r.collisionType1 = "collisionWithOpponent";
+    }
+    if (r.player2Alive && positions1.has(posKey(body2.head.position))) {
+      r.player2Alive = false; r.collisionType2 = "collisionWithOpponent";
+    }
+  }
+  if (!r.player1Alive && !r.player2Alive) return r;
+
+  if (player1.isInstalled && r.player1Alive && bodyIsEatingItself(body1)) {
+    r.player1Alive = false; r.collisionType1 = "collisionWithItself";
+  }
+  if (player2.isInstalled && r.player2Alive && bodyIsEatingItself(body2)) {
+    r.player2Alive = false; r.collisionType2 = "collisionWithItself";
+  }
+  if (!r.player1Alive && !r.player2Alive) return r;
+
+  if (foodPosition) {
+    if (player1.isInstalled && r.player1Alive && posEq(body1.head.position, foodPosition)) r.player1EatsFood = true;
+    if (player2.isInstalled && r.player2Alive && posEq(body2.head.position, foodPosition)) r.player2EatsFood = true;
+  }
+  return r;
+}
+
+// Port of SnakeGameState.detectCollision() — SnakeCollisionDetector.swift:183-229.
+function detectCollision(gs) {
+  const alive1 = playerIsAlive(gs.player1);
+  const alive2 = playerIsAlive(gs.player2);
+  if (!alive1 && !alive2) return gs;
+  const r = runCollisionDetector(gsLevel(gs), gs.foodPosition, gs.player1, gs.player2);
+  let out = gs;
+  if (alive1 && !r.player1Alive) out = gsUpdatePlayer(out, "player1", playerKill(out.player1, r.collisionType1));
+  if (alive2 && !r.player2Alive) out = gsUpdatePlayer(out, "player2", playerKill(out.player2, r.collisionType2));
+  if (r.player1EatsFood) {
+    out = gsUpdate(out, { foodPosition: null });
+    out = gsUpdatePlayer(out, "player1", playerUpdate(out.player1, { pendingAct: "eat" }));
+  }
+  if (r.player2EatsFood) {
+    out = gsUpdate(out, { foodPosition: null });
+    out = gsUpdatePlayer(out, "player2", playerUpdate(out.player2, { pendingAct: "eat" }));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Food placement — port of EngineShared/Snake/SnakeFoodGenerator.swift.
+// Deterministic via the seed carried in the game state.
+// ---------------------------------------------------------------------------
+function placeNewFood(gs) {
+  if (gs.foodPosition) return gs;
+  const taken = new Set();
+  if (gs.player1.isInstalled) for (const k of bodyPositionSet(gs.player1.snakeBody)) taken.add(k);
+  if (gs.player2.isInstalled) for (const k of bodyPositionSet(gs.player2.snakeBody)) taken.add(k);
+  const candidates = gsLevel(gs).emptyPositionArray.filter((p) => !taken.has(posKey(p)));
+  const rng = new LCRNG(BigInt(gs.foodRngSeed));
+  if (candidates.length === 0) {
+    let out = gsUpdate(gs, { foodRngSeed: rng.seed.toString() });
+    out = gsUpdatePlayer(out, "player1", playerKill(out.player1, "noMoreFood"));
+    out = gsUpdatePlayer(out, "player2", playerKill(out.player2, "noMoreFood"));
+    return out;
+  }
+  const position = candidates[rng.pickIndex(candidates.length)];
+  return gsUpdate(gs, { foodPosition: position, foodRngSeed: rng.seed.toString() });
+}
+
+// ---------------------------------------------------------------------------
+// Stuck-in-a-loop detection — port of EngineShared/Snake/StuckSnakeDetector.swift.
+// Repeated body state: score += 2; fresh state: score -= 1; stuck at score >= 5.
+// Only bots are killed by this (humans find it annoying — Swift comment).
+// ---------------------------------------------------------------------------
+class StuckDetector {
+  constructor() { this.history = []; this._rebuild(); }
+  _rebuild() {
+    this.seen = new Set();
+    this.score = 0;
+    this.isStuck = false;
+    for (const key of this.history) this._appendKey(key);
+  }
+  _appendKey(key) {
+    if (!this.seen.has(key)) {
+      this.seen.add(key);
+      this.score = this.score > 1 ? this.score - 1 : 0;
+      return;
+    }
+    this.score += 2;
+    if (this.score >= 5) this.isStuck = true;
+  }
+  append(body) {
+    const key = JSON.stringify([bodyPositionArray(body), body.head.direction]);
+    this.history.push(key);
+    this._appendKey(key);
+  }
+  undo() {
+    if (this.history.length === 0) return;
+    this.history.pop();
+    this._rebuild();
+  }
+  reset() { this.history = []; this._rebuild(); }
+  killBotIfStuckInLoop(player) {
+    if (!playerIsAlive(player) || player.role !== "bot") return player;
+    this.append(player.snakeBody);
+    return this.isStuck ? playerKill(player, "stuckInALoop") : player;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Human-input helpers — ports of SnakeGameState+PreventHumanCollisions.swift
+// and +IsWaitingForHumanInput.swift. A human movement that would collide is
+// converted to dontMove, so an illegal keypress just keeps the snake waiting.
+// ---------------------------------------------------------------------------
+function preventHumanCollisions(gs) {
+  let out = gs;
+  for (const key of ["player1", "player2"]) {
+    const p = out[key];
+    if (!playerIsAliveAndHuman(p) || p.pendingMovement === "dontMove") continue;
+    const r = runCollisionDetector(gsLevel(out), out.foodPosition, out.player1, out.player2);
+    const alive = key === "player1" ? r.player1Alive : r.player2Alive;
+    if (!alive) out = gsUpdatePlayer(out, key, playerUpdate(p, { pendingMovement: "dontMove" }));
+  }
+  return out;
+}
+function isWaitingForHumanInput(gs) {
+  return (playerIsAliveAndHuman(gs.player1) && gs.player1.pendingMovement === "dontMove")
+      || (playerIsAliveAndHuman(gs.player2) && gs.player2.pendingMovement === "dontMove");
+}
+
+// --- test helper -----------------------------------------------------------
+function createGameStateForTest({ levelName = "Level 0", p1, p2, food } = {}) {
+  let gs = gameStateCreate(levelName, p1?.role ?? "human", p2?.role ?? "human");
+  const place = (key, spec) => {
+    if (!spec) return;
+    let player = gs[key];
+    if (spec.pos) player = playerUpdate(player, { snakeBody: bodyCreate(spec.pos, spec.dir, spec.len ?? 2) });
+    if (spec.move) player = playerUpdate(player, { pendingMovement: spec.move });
+    gs = gsUpdatePlayer(gs, key, player);
+  };
+  place("player1", p1);
+  place("player2", p2);
+  if (food !== undefined) gs = gsUpdate(gs, { foodPosition: food });
+  return gs;
+}
+
+SnakeTests.add("head-on collision kills both", () => {
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", move: "moveForward" },
+    p2: { pos: { x: 5, y: 4 }, dir: "left", move: "moveForward" },
+    food: null,
+  });
+  gs = detectCollision(gs);
+  assert(!playerIsAlive(gs.player1) && !playerIsAlive(gs.player2));
+  assert(gs.player1.causesOfDeath.includes("collisionWithOpponent"));
+  assert(gs.player2.causesOfDeath.includes("collisionWithOpponent"));
+});
+SnakeTests.add("wall collision kills", () => {
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 7, y: 4 }, dir: "right", move: "moveForward" }, // wall at x=8
+    p2: { pos: { x: 2, y: 1 }, dir: "left", move: "moveForward" },
+    food: null,
+  });
+  gs = detectCollision(gs);
+  assert(gs.player1.causesOfDeath.includes("collisionWithWall"));
+  assert(playerIsAlive(gs.player2));
+});
+SnakeTests.add("eating clears food and sets pendingAct", () => {
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", move: "moveForward" },
+    p2: { pos: { x: 6, y: 6 }, dir: "left", move: "moveForward" },
+    food: { x: 4, y: 4 },
+  });
+  gs = detectCollision(gs);
+  assertEq(gs.foodPosition, null);
+  assertEq(gs.player1.pendingAct, "eat");
+  assertEq(gs.player2.pendingAct, "doNothing");
+});
+SnakeTests.add("food placement is deterministic and avoids snakes", () => {
+  const gs = gsUpdate(createGameStateForTest({ food: null }), { foodRngSeed: "42" });
+  const a = placeNewFood(gs), b = placeNewFood(gs);
+  assertEq(a.foodPosition, b.foodPosition);
+  assert(a.foodPosition, "food was placed");
+  assert(a.foodRngSeed !== gs.foodRngSeed, "seed advanced");
+  assert(!bodyPositionSet(a.player1.snakeBody).has(posKey(a.foodPosition)));
+  assert(!bodyPositionSet(a.player2.snakeBody).has(posKey(a.foodPosition)));
+});
+SnakeTests.add("stuck detector kills bot repeating states", () => {
+  const detector = new StuckDetector();
+  let player = playerCreate("player1", "bot", bodyCreate({ x: 4, y: 4 }, "right", 2));
+  // Cycle through the same 4 body states until flagged stuck.
+  const states = [];
+  let b = player.snakeBody;
+  for (const mv of ["moveCW", "moveCW", "moveCW", "moveCW"]) {
+    b = bodyStateForTick(b, mv, "doNothing");
+    states.push(b);
+  }
+  let killed = null;
+  for (let round = 0; round < 5 && !killed; round++) {
+    for (const body of states) {
+      const result = detector.killBotIfStuckInLoop(playerUpdate(player, { snakeBody: body }));
+      if (!playerIsAlive(result)) { killed = result; break; }
+    }
+  }
+  assert(killed, "bot was killed for being stuck");
+  assert(killed.causesOfDeath.includes("stuckInALoop"));
+});
+SnakeTests.add("preventHumanCollisions converts deadly move to dontMove", () => {
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 7, y: 4 }, dir: "right", move: "moveForward" }, // would hit wall
+    p2: { pos: { x: 2, y: 1 }, dir: "left" },
+    food: null,
+  });
+  gs = preventHumanCollisions(gs);
+  assertEq(gs.player1.pendingMovement, "dontMove");
+  assert(isWaitingForHumanInput(gs));
+});
+
+// ---------------------------------------------------------------------------
+// GameEnvironment — port of EngineShared/Environment/GameEnvironmentInteractive.swift.
+// Bot moves are injected from outside (the worker) via setPendingMovement;
+// the Swift computeNextBotMovement step happens asynchronously in the UI layer.
+// ---------------------------------------------------------------------------
+class GameEnvironment {
+  constructor(initialGameState) {
+    this.initialGameState = initialGameState;
+    this.gameState = initialGameState;
+    this.previousGameStates = [];
+    this.stuck1 = new StuckDetector();
+    this.stuck2 = new StuckDetector();
+  }
+
+  reset() {
+    this.stuck1.reset();
+    this.stuck2.reset();
+    this.previousGameStates = [];
+    this.gameState = placeNewFood(this.initialGameState);
+    return this.gameState;
+  }
+
+  undo() {
+    let gs = this.previousGameStates.pop();
+    if (!gs) return null;
+    gs = gsClearPendingForHumans(gs);
+    gs = placeNewFood(gs);
+    this.stuck1.undo();
+    this.stuck2.undo();
+    this.gameState = gs;
+    return gs;
+  }
+
+  // "reachedTheEnd" | "stepRequiresHumanInput" | "stepAutonomous"
+  get stepControlMode() {
+    let botCount = 0, nonBotCount = 0;
+    for (const p of [this.gameState.player1, this.gameState.player2]) {
+      if (!playerIsAlive(p)) continue;
+      if (p.role === "bot") botCount++; else nonBotCount++;
+    }
+    if (botCount + nonBotCount === 0) return "reachedTheEnd";
+    return nonBotCount > 0 ? "stepRequiresHumanInput" : "stepAutonomous";
+  }
+
+  // action: { player1: movement, player2: movement }
+  step(action) {
+    const oldGameState = this.gameState;
+    let gs = gsUpdate(oldGameState, { numberOfSteps: oldGameState.numberOfSteps + 1 });
+
+    for (const key of ["player1", "player2"]) {
+      const p = gs[key];
+      if (playerIsAliveAndHuman(p)) {
+        if (action[key] === "dontMove") return oldGameState; // human action required
+        gs = gsUpdatePlayer(gs, key, playerUpdate(p, { pendingMovement: action[key] }));
+      }
+    }
+
+    gs = detectCollision(gs);
+
+    let collisionCheckAfterEating = false;
+    for (const [key, stuck] of [["player1", this.stuck1], ["player2", this.stuck2]]) {
+      let p = gs[key];
+      if (!playerIsAlive(p)) continue;
+      const opponent = gs[key === "player1" ? "player2" : "player1"];
+      if (p.pendingAct === "eat") collisionCheckAfterEating = true;
+      p = playerUpdate(p, { snakeBody: bodyStateForTick(p.snakeBody, p.pendingMovement, p.pendingAct) });
+      p = playerClearPending(p);
+      // Stuck-loop kill is skipped when the opponent is a living human (Swift line 124):
+      // a human opponent legitimately forces repetitive defensive play.
+      if (!playerIsAliveAndHuman(opponent)) p = stuck.killBotIfStuckInLoop(p);
+      gs = gsUpdatePlayer(gs, key, p);
+    }
+
+    // When one player eats and grows, the other player's head can now overlap
+    // the 1-cell-longer tail — GameEnvironmentInteractive.swift:148-167.
+    if (collisionCheckAfterEating && playerIsAlive(gs.player1) && playerIsAlive(gs.player2)) {
+      const positions1 = bodyPositionSet(gs.player1.snakeBody);
+      const positions2 = bodyPositionSet(gs.player2.snakeBody);
+      if (positions2.has(posKey(gs.player1.snakeBody.head.position))) {
+        gs = gsUpdatePlayer(gs, "player1", playerKill(oldGameState.player1, "collisionWithOpponent"));
+      }
+      if (positions1.has(posKey(gs.player2.snakeBody.head.position))) {
+        gs = gsUpdatePlayer(gs, "player2", playerKill(oldGameState.player2, "collisionWithOpponent"));
+      }
+    }
+
+    gs = placeNewFood(gs);
+
+    this.previousGameStates.push(oldGameState);
+    this.gameState = gs;
+    return gs;
+  }
+
+  setPendingMovement(playerKey, movement, plannedPath) {
+    const p = this.gameState[playerKey];
+    this.gameState = gsUpdatePlayer(this.gameState, playerKey, playerUpdate(p, {
+      pendingMovement: movement,
+      botPlannedPath: plannedPath ?? p.botPlannedPath,
+    }));
+    return this.gameState;
+  }
+}
+
+SnakeTests.add("step applies simultaneous movement and counts steps", () => {
+  const env = new GameEnvironment(createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right" },
+    p2: { pos: { x: 6, y: 6 }, dir: "left" },
+    food: { x: 7, y: 7 },
+  }));
+  env.reset();
+  const gs = env.step({ player1: "moveForward", player2: "moveForward" });
+  assertEq(gs.numberOfSteps, 1);
+  assertEq(gs.player1.snakeBody.head.position, { x: 4, y: 4 });
+  assertEq(gs.player2.snakeBody.head.position, { x: 5, y: 6 });
+  assertEq(gs.player1.pendingMovement, "dontMove", "pending cleared");
+});
+SnakeTests.add("step grows the eater and spawns new food", () => {
+  const env = new GameEnvironment(createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", len: 2 },
+    p2: { pos: { x: 6, y: 6 }, dir: "left", len: 2 },
+    food: { x: 4, y: 4 },
+  }));
+  env.reset();
+  const before = bodyLength(env.gameState.player1.snakeBody);
+  const gs = env.step({ player1: "moveForward", player2: "moveForward" });
+  assertEq(bodyLength(gs.player1.snakeBody), before + 1);
+  assert(gs.foodPosition, "new food spawned");
+  assert(!posEq(gs.foodPosition, { x: 4, y: 4 }), "food moved");
+});
+SnakeTests.add("tail collision after opponent eats (collisionCheckAfterEating)", () => {
+  // p1 eats and grows; p2 moves onto the cell where p1's tail WAS —
+  // without the post-eat check p2 would survive; with it p2 dies.
+  // p1: tail (2,4)..head (3,4) eating food at (4,4). After eating, tail stays at (2,4).
+  // p2: head at (2,5) moving down onto (2,4).
+  const env = new GameEnvironment(createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", len: 1 },
+    p2: { pos: { x: 2, y: 5 }, dir: "down", len: 1 },
+    food: { x: 4, y: 4 },
+  }));
+  env.reset();
+  const gs = env.step({ player1: "moveForward", player2: "moveForward" });
+  assert(playerIsAlive(gs.player1), "eater survives");
+  assert(!playerIsAlive(gs.player2), "opponent died on grown tail");
+  assert(gs.player2.causesOfDeath.includes("collisionWithOpponent"));
+});
+SnakeTests.add("undo restores previous state and clears human pending input", () => {
+  const env = new GameEnvironment(createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right" },
+    p2: { pos: { x: 6, y: 6 }, dir: "left" },
+    food: { x: 7, y: 7 },
+  }));
+  const initial = env.reset();
+  env.step({ player1: "moveForward", player2: "moveForward" });
+  const undone = env.undo();
+  assertEq(undone.player1.snakeBody, initial.player1.snakeBody);
+  assertEq(undone.numberOfSteps, 0);
+  assertEq(undone.player1.pendingMovement, "dontMove");
+  assertEq(env.undo(), null, "history exhausted");
+});
+
+// ---------------------------------------------------------------------------
+// SnakeBot6 "Monte Carlo 2" — port of EngineShared/Bot/SnakeBot6.swift.
+// A deterministic Monte-Carlo tree search over alternating move nodes and
+// simulated food drops. The tree is kept between ticks and the subtree
+// matching what actually happened is reattached under a fresh root.
+// Node kinds: root, leaf, food, foodChoice, move, moveChoice, kill.
+// ---------------------------------------------------------------------------
+function makeNode(kind, props = {}) {
+  return { kind, parent: null, isBest: false, ...props };
+}
+
+function nodeChildren(node) {
+  switch (node.kind) {
+    case "food": case "move": return node.choices;
+    case "leaf": return [];
+    default: return node.child ? [node.child] : [];
+  }
+}
+
+function forEachNode(root, fn) {
+  const stack = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    fn(node);
+    stack.push(...nodeChildren(node));
+  }
+}
+
+// Scenario utility ordering — SnakeBot6.swift:502-544 (`mycompare`).
+// True when lhs is the better scenario:
+// survival > longer move sequence > more foods eaten > shorter food distance.
+function scenarioCompare(lhs, rhs) {
+  if (lhs.certainDeath && !rhs.certainDeath) return false;
+  if (!lhs.certainDeath && rhs.certainDeath) return true;
+  if (lhs.movements.length !== rhs.movements.length) return lhs.movements.length > rhs.movements.length;
+  if (lhs.numberOfFoodsEaten !== rhs.numberOfFoodsEaten) return lhs.numberOfFoodsEaten > rhs.numberOfFoodsEaten;
+  return lhs.distanceToFood < rhs.distanceToFood;
+}
+
+// Port of BuildTreeVisitor — SnakeBot6.swift:552-1114.
+class TreeBuilder {
+  constructor(level, player, oppositePlayer, foodPosition, seed) {
+    this.level = level;
+    this.player = [player, oppositePlayer];
+    this.foodPosition = foodPosition;
+    this.numberOfMoves = [0, 0];
+    this.numberOfFoodsEaten = 0;
+    this.movements = [];
+    this.scenarios = [];
+    this.rng = new LCRNG(seed);
+  }
+
+  bestScenario() {
+    if (this.scenarios.length === 0) return null;
+    return this.scenarios.reduce((best, s) => (scenarioCompare(s, best) ? s : best));
+  }
+
+  appendScenario(node, certainDeath) {
+    this.scenarios.push({
+      destinationNode: node,
+      movements: [...this.movements],
+      certainDeath,
+      numberOfFoodsEaten: this.numberOfFoodsEaten,
+      distanceToFood: this.foodPosition
+        ? levelEstimateDistance(this.level, this.player[0].snakeBody.head.position, this.foodPosition)
+        : Infinity,
+    });
+  }
+
+  visit(node) {
+    switch (node.kind) {
+      case "root": return this.processChildNode(node, 0); // player A moves first
+      case "leaf": return this.appendScenario(node, false);
+      case "food": return this.visitFood(node);
+      case "foodChoice": return this.visitFoodChoice(node);
+      case "move": return this.visitMove(node);
+      case "moveChoice": return this.visitMoveChoice(node);
+      case "kill": return this.visitKill(node);
+      default: throw new Error(`unknown node kind ${node.kind}`);
+    }
+  }
+
+  // Simulated food drop. Branching limit tables ported verbatim from
+  // SnakeBot6.swift:660-716 — wide early (16 drops at the start of a
+  // 1-player game), narrowing with depth and with foods already eaten.
+  visitFood(node) {
+    const originalNumberOfFoodsEaten = this.numberOfFoodsEaten;
+    const newNumberOfFoodsEaten = originalNumberOfFoodsEaten + 1;
+    const isTwoPlayer = this.player[1].isInstalled;
+
+    const taken = new Set();
+    for (const p of this.player) {
+      if (!p.isInstalled) continue;
+      for (const k of bodyPositionSet(p.snakeBody)) taken.add(k);
+    }
+
+    let limit = 6;
+    const numberOfMoves = this.numberOfMoves[0];
+    if (originalNumberOfFoodsEaten <= 1) {
+      if (numberOfMoves <= 3) limit = 16;
+      else if (numberOfMoves <= 4) limit = 6;
+      else if (numberOfMoves <= 5) limit = 4;
+      else if (numberOfMoves <= 6) limit = 3;
+      else limit = 2;
+    } else if (originalNumberOfFoodsEaten <= 2) limit = 6;
+    else if (originalNumberOfFoodsEaten <= 3) limit = 4;
+    else if (originalNumberOfFoodsEaten <= 4) limit = 3;
+    else if (originalNumberOfFoodsEaten <= 6) limit = 2;
+    else limit = 1;
+    if (isTwoPlayer) {
+      if (originalNumberOfFoodsEaten <= 1) limit = numberOfMoves <= 3 ? 6 : 3;
+      else limit = numberOfMoves <= 3 ? 2 : 1;
+    }
+
+    const newChoices = [];
+    // Keep previous-iteration choices that are still reachable.
+    for (const choice of node.choices) {
+      const k = posKey(choice.position);
+      if (!this.level.emptyPositionSet.has(k) || taken.has(k)) continue;
+      newChoices.push(choice);
+      taken.add(k);
+    }
+    // Fill with seeded-random picks from the sorted free positions, so the
+    // bot is deterministic (Swift trades speed for reproducibility here).
+    const freePositions = this.level.emptyPositionArray
+      .filter((p) => !taken.has(posKey(p)))
+      .sort(posCompare);
+    while (newChoices.length < limit && freePositions.length > 0) {
+      const index = this.rng.pickIndex(freePositions.length);
+      const choice = makeNode("foodChoice", { position: freePositions[index], child: null });
+      choice.parent = node;
+      newChoices.push(choice);
+      freePositions.splice(index, 1);
+    }
+    newChoices.sort((a, b) => posCompare(a.position, b.position));
+    node.choices = newChoices;
+
+    for (const choice of newChoices) {
+      this.numberOfFoodsEaten = newNumberOfFoodsEaten;
+      this.visit(choice);
+    }
+    this.numberOfFoodsEaten = originalNumberOfFoodsEaten;
+  }
+
+  visitFoodChoice(node) {
+    const originalFoodPosition = this.foodPosition;
+    this.foodPosition = node.position;
+    this.processChildNode(node, 0); // after eating, player A moves first
+    this.foodPosition = originalFoodPosition;
+  }
+
+  // Expansion — SnakeBot6.swift:781-884. Wall moves are pruned outright; the
+  // previously-best child is always revisited; the rest are shuffled and
+  // capped at 3/2/1 branches by depth.
+  visitMove(node) {
+    const playerId = node.playerId;
+    const originalNumberOfMoves = this.numberOfMoves[playerId];
+    const newNumberOfMoves = originalNumberOfMoves + 1;
+    this.numberOfMoves[playerId] = newNumberOfMoves;
+    try {
+      if (node.needsExploringPermanentObstacles) {
+        node.needsExploringPermanentObstacles = false;
+        const currentHead = this.player[playerId].snakeBody.head;
+        node.choices = [];
+        for (const movement of ["moveCCW", "moveForward", "moveCW"]) {
+          const newHead = headSimulateTick(currentHead, movement);
+          if (!this.level.emptyPositionSet.has(posKey(newHead.position))) continue;
+          const choice = makeNode("moveChoice", { playerId, movement, position: newHead.position, child: null });
+          choice.parent = node;
+          node.choices.push(choice);
+        }
+      }
+
+      const bestNode = node.choices.find((c) => c.isBest);
+      let nonBest = node.choices.filter((c) => !c.isBest);
+      const limit = newNumberOfMoves < 3 ? 3 : newNumberOfMoves < 5 ? 2 : 1;
+      this.rng.shuffle(nonBest);
+      nonBest = nonBest.slice(0, limit);
+
+      if (bestNode) this.visit(bestNode);
+      for (const choice of nonBest) this.visit(choice);
+    } finally {
+      this.numberOfMoves[playerId] = originalNumberOfMoves;
+    }
+  }
+
+  // Simulate one move — SnakeBot6.swift:886-1012.
+  visitMoveChoice(node) {
+    const playerId = node.playerId;
+    const originalPlayer = this.player[playerId];
+    const originalFoodPosition = this.foodPosition;
+    const originalMovements = this.movements;
+    if (playerId === 0) this.movements = [...this.movements, node.movement];
+    try {
+      const originalSnakeBody = originalPlayer.snakeBody;
+
+      const killVia = (cause) => {
+        // Reuse an existing KillNode subtree, otherwise replace the child.
+        let killNode = node.child && node.child.kind === "kill" ? node.child : null;
+        if (!killNode) {
+          killNode = makeNode("kill", { playerId, cause, child: null });
+          node.child = killNode;
+          killNode.parent = node;
+        }
+        killNode.cause = cause;
+        killNode.playerId = playerId;
+        this.visit(killNode);
+      };
+
+      if (posEq(node.position, originalFoodPosition)) {
+        const newSnakeBody = bodyStateForTick(originalSnakeBody, node.movement, "eat");
+        this.player[playerId] = playerUpdate(originalPlayer, { snakeBody: newSnakeBody });
+        this.foodPosition = null;
+        if (bodyIsEatingItself(newSnakeBody)) return killVia("collisionWithSelf");
+        let foodNode = node.child && node.child.kind === "food" ? node.child : null;
+        if (!foodNode) {
+          foodNode = makeNode("food", { choices: [] });
+          node.child = foodNode;
+          foodNode.parent = node;
+        }
+        return this.visit(foodNode);
+      }
+
+      const newSnakeBody = bodyStateForTick(originalSnakeBody, node.movement, "doNothing");
+      if (bodyIsEatingItself(newSnakeBody)) {
+        this.player[playerId] = playerUpdate(originalPlayer, { snakeBody: newSnakeBody });
+        this.foodPosition = null; // faithful to Swift (line 971)
+        return killVia("collisionWithSelf");
+      }
+
+      const opponentPlayerId = this.nextInstalledPlayerId(playerId);
+      if (opponentPlayerId !== playerId) {
+        const opponent = this.player[opponentPlayerId];
+        if (bodyPositionSet(opponent.snakeBody).has(posKey(node.position))) {
+          // Swift always replaces with a fresh KillNode here (line 997).
+          const killNode = makeNode("kill", { playerId, cause: "collisionWithOpponent", child: null });
+          node.child = killNode;
+          killNode.parent = node;
+          return this.visit(killNode);
+        }
+      }
+
+      this.player[playerId] = playerUpdate(originalPlayer, { snakeBody: newSnakeBody });
+      this.foodPosition = originalFoodPosition;
+      this.processChildNode(node, this.nextAlivePlayerId(playerId));
+    } finally {
+      this.player[playerId] = originalPlayer;
+      this.foodPosition = originalFoodPosition;
+      this.movements = originalMovements;
+    }
+  }
+
+  visitKill(node) {
+    // Player 0 dead → certain-death scenario, stop simulating.
+    // Player 1 dead → still a (non-fatal) outcome for player 0.
+    this.appendScenario(node, node.playerId === 0);
+  }
+
+  nextInstalledPlayerId(playerId) {
+    if (!this.player[1].isInstalled) return 0;
+    return (playerId + 1) % 2;
+  }
+
+  nextAlivePlayerId(playerId) {
+    if (!this.player[1].isInstalled) return 0;
+    let id = (playerId + 1) % 2;
+    if (playerIsAlive(this.player[id])) return id;
+    id = (id + 1) % 2;
+    if (playerIsAlive(this.player[id])) return id;
+    return 0;
+  }
+
+  // SnakeBot6.swift:1080-1113. Depth limit: deep (37) single-player,
+  // narrow (17) in two-player games where each ply costs twice as much.
+  processChildNode(node, playerId) {
+    if (node.child && node.child.kind !== "leaf") return this.visit(node.child);
+    const limit = this.player[1].isInstalled ? 17 : 37;
+    const child = this.numberOfMoves[playerId] < limit
+      ? makeNode("move", { playerId, choices: [], needsExploringPermanentObstacles: true })
+      : makeNode("leaf");
+    node.child = child;
+    child.parent = node;
+    this.visit(child);
+  }
+}
+
+class Bot6 {
+  constructor(iteration = 0, plannedMovement = "dontMove", plannedPath = [], previousRoot = null) {
+    this.iteration = iteration;
+    this.plannedMovement = plannedMovement;
+    this.plannedPath = plannedPath;
+    this.previousRoot = previousRoot;
+  }
+
+  // Port of SnakeBot6.compute — SnakeBot6.swift:33-251. Returns a NEW Bot6.
+  compute(level, player, oppositePlayer, foodPosition) {
+    if (!playerIsAlive(player)) return new Bot6();
+
+    const root = makeNode("root", { child: null });
+
+    // Reattach the subtree matching what actually happened since last tick.
+    if (this.previousRoot) {
+      let subtree = this.previousRoot.child;
+      for (const [moveNodePlayerId, p] of [[0, player], [1, oppositePlayer]]) {
+        if (subtree && subtree.kind === "move" && subtree.playerId === moveNodePlayerId) {
+          const findKey = posKey(p.snakeBody.head.position);
+          const match = subtree.choices.find((c) => posKey(c.position) === findKey);
+          subtree = match ? match.child : null;
+        }
+      }
+      if (subtree && subtree.kind === "food") {
+        if (foodPosition) {
+          // Pick the simulated food drop nearest the actual food.
+          let best = null, bestDistance = Infinity;
+          for (const choice of subtree.choices) {
+            const d = levelEstimateDistance(level, choice.position, foodPosition);
+            if (d < bestDistance) { bestDistance = d; best = choice; }
+          }
+          subtree = best && best.child && best.child.kind === "move" ? best.child : null;
+        } else {
+          subtree = null;
+        }
+      }
+      if (subtree) {
+        root.child = subtree;
+        subtree.parent = root;
+      }
+    }
+
+    const seed = BigInt(this.iteration * 100);
+    const builder = new TreeBuilder(level, player, oppositePlayer, foodPosition, seed);
+    builder.visit(root);
+
+    // Best-node flags steered this build; clear them and re-flag the new best
+    // path so the NEXT iteration prioritizes it.
+    forEachNode(root, (n) => { n.isBest = false; });
+
+    const scenario = builder.bestScenario();
+    if (!scenario) {
+      return new Bot6(this.iteration + 1, "moveForward", [], null);
+    }
+    for (let n = scenario.destinationNode; n; n = n.parent) n.isBest = true;
+
+    const bestMovement = scenario.movements[0] ?? "moveForward";
+    let head = player.snakeBody.head;
+    const plannedPath = [head.position];
+    for (const movement of scenario.movements) {
+      head = headSimulateTick(head, movement);
+      plannedPath.push(head.position);
+    }
+    return new Bot6(this.iteration + 1, bestMovement, plannedPath, root);
+  }
+}
+
+// --- bot tests ---------------------------------------------------------------
+function runBotGame({ levelName = "Level 0", twoPlayer = false, ticks }) {
+  const env = new GameEnvironment(gameStateCreate(levelName, "bot", twoPlayer ? "bot" : "none"));
+  env.reset();
+  const bots = { player1: new Bot6(), player2: new Bot6() };
+  const movements = [];
+  for (let i = 0; i < ticks; i++) {
+    if (env.stepControlMode === "reachedTheEnd") break;
+    const gs = env.gameState;
+    const action = { player1: "dontMove", player2: "dontMove" };
+    for (const [key, opp] of [["player1", "player2"], ["player2", "player1"]]) {
+      if (gs[key].role !== "bot" || !playerIsAlive(gs[key])) continue;
+      bots[key] = bots[key].compute(gsLevel(gs), gs[key], gs[opp], gs.foodPosition);
+      action[key] = bots[key].plannedMovement;
+      env.setPendingMovement(key, action[key], bots[key].plannedPath);
+    }
+    env.step(action);
+    movements.push(action.player1);
+  }
+  return { env, bots, movements };
+}
+
+SnakeTests.add("bot is deterministic", () => {
+  const a = runBotGame({ ticks: 15 });
+  const b = runBotGame({ ticks: 15 });
+  assertEq(a.movements, b.movements);
+  assertEq(a.env.gameState.player1.snakeBody, b.env.gameState.player1.snakeBody);
+});
+SnakeTests.add("bot plannedPath is contiguous from head", () => {
+  const gs = gameStateCreate("Level 0", "bot", "none");
+  const bot = new Bot6().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
+  const path = bot.plannedPath;
+  assert(path.length >= 2, `path too short: ${path.length}`);
+  assertEq(path[0], gs.player1.snakeBody.head.position);
+  for (let i = 1; i < path.length; i++) {
+    assertEq(manhattan(path[i - 1], path[i]), 1, `path gap at ${i}`);
+  }
+});
+SnakeTests.add("bot survives and eats on Level 0 single player", () => {
+  const { env } = runBotGame({ ticks: 60 });
+  const p1 = env.gameState.player1;
+  assert(playerIsAlive(p1), `bot died: ${p1.causesOfDeath}`);
+  assert(bodyLength(p1.snakeBody) > bodyLength(getLevel("Level 0").player1Body),
+    "bot ate at least one food");
+});
+SnakeTests.add("bot avoids certain death", () => {
+  // Head at (1,4) facing left: forward is the wall at x=0. CCW/CW survive.
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 1, y: 4 }, dir: "left", len: 2, },
+    food: { x: 7, y: 7 },
+  });
+  gs = gsUpdatePlayer(gs, "player1", playerUpdate(gs.player1, { role: "bot" }));
+  gs = gsUpdatePlayer(gs, "player2", playerUpdate(playerCreate("player2", "none", gs.player2.snakeBody), {}));
+  const bot = new Bot6().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
+  assert(bot.plannedMovement !== "moveForward", `bot chose ${bot.plannedMovement}`);
+});
+SnakeTests.add("bot works in two-player mode", () => {
+  const { env } = runBotGame({ twoPlayer: true, ticks: 10 });
+  assertEq(env.gameState.numberOfSteps, 10);
+  // Both bots produced paths; no crash. Survival isn't asserted at tick 10 —
+  // but on Level 0 with 10 ticks neither bot should have died.
+  assert(playerIsAlive(env.gameState.player1), `p1 died: ${env.gameState.player1.causesOfDeath}`);
+  assert(playerIsAlive(env.gameState.player2), `p2 died: ${env.gameState.player2.causesOfDeath}`);
+});
+</script>
+
+<script>
+"use strict";
+// UI layer: rendering, input, worker, game loop.
+
+// --------------------------------------------------------------------------
+// Web Worker hosting the MCTS bot. Source = the shared-code script block plus
+// glue, loaded via a Blob URL so the page works when opened from file://.
+// The bots' search trees live here across ticks (tree reuse); after undo the
+// tree simply fails to match and is rebuilt, same as Swift's failed-reuse path.
+// --------------------------------------------------------------------------
+const WORKER_GLUE = `
+const bots = { player1: new Bot6(), player2: new Bot6() };
+self.onmessage = (e) => {
+  const msg = e.data;
+  if (msg.type === "reset") {
+    bots.player1 = new Bot6();
+    bots.player2 = new Bot6();
+    return;
+  }
+  if (msg.type === "compute") {
+    const level = getLevel(msg.levelName);
+    bots[msg.playerKey] = bots[msg.playerKey].compute(level, msg.player, msg.oppositePlayer, msg.foodPosition);
+    const bot = bots[msg.playerKey];
+    self.postMessage({
+      type: "result",
+      playerKey: msg.playerKey,
+      serial: msg.serial,
+      movement: bot.plannedMovement,
+      plannedPath: bot.plannedPath,
+    });
+  }
+};
+`;
+
+function createBotWorker(onResult) {
+  const source = document.getElementById("shared-code").textContent + "\n" + WORKER_GLUE;
+  const worker = new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })));
+  worker.onmessage = (e) => onResult(e.data);
+  worker.onerror = (e) => {
+    console.error("bot worker error:", e.message);
+    statusEl.innerHTML = `<span class="gameover">Bot worker failed: ${e.message ?? "unknown error"}</span>`;
+  };
+  return worker;
+}
+
+// --------------------------------------------------------------------------
+// App state
+// --------------------------------------------------------------------------
+const PLAYER_COLOR = { player1: "#34c759", player2: "#0a84ff" };
+const DEAD_COLOR = "#5a5a5e";
+const AUTO_STEP_MS = 150; // pacing for bot-vs-bot games; JS computes are fast
+
+const app = {
+  env: null,
+  showPath: true,
+  paused: false,
+  requestSerial: 0,
+  inflight: { player1: null, player2: null }, // serial of in-flight compute
+  pendingHuman: { player1: "dontMove", player2: "dontMove" },
+  stepOnceRequested: false,
+  lastStepTime: 0,
+  gameOverMessage: null,
+};
+
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+const statusEl = document.getElementById("status");
+const worker = createBotWorker(onBotResult);
+
+// --------------------------------------------------------------------------
+// Game lifecycle
+// --------------------------------------------------------------------------
+function newGame() {
+  const levelName = document.getElementById("levelSelect").value;
+  const role1 = document.getElementById("role1").value;
+  const role2 = document.getElementById("role2").value;
+  app.env = new GameEnvironment(gameStateCreate(levelName, role1, role2));
+  app.env.reset();
+  app.requestSerial++;
+  app.inflight = { player1: null, player2: null };
+  app.pendingHuman = { player1: "dontMove", player2: "dontMove" };
+  app.stepOnceRequested = false;
+  app.gameOverMessage = null;
+  app.paused = false;
+  worker.postMessage({ type: "reset" });
+  requestBotMoves();
+  render();
+  updateStatus();
+  updateButtons();
+}
+
+function requestBotMoves() {
+  const gs = app.env.gameState;
+  for (const [key, opp] of [["player1", "player2"], ["player2", "player1"]]) {
+    const p = gs[key];
+    if (p.role !== "bot" || !playerIsAlive(p) || p.pendingMovement !== "dontMove") continue;
+    if (app.inflight[key] !== null) continue;
+    app.inflight[key] = app.requestSerial;
+    worker.postMessage({
+      type: "compute",
+      serial: app.requestSerial,
+      playerKey: key,
+      levelName: gs.levelName,
+      player: p,
+      oppositePlayer: gs[opp],
+      foodPosition: gs.foodPosition,
+    });
+  }
+  updateStatus();
+}
+
+function onBotResult(msg) {
+  if (msg.type !== "result") return;
+  if (app.inflight[msg.playerKey] !== msg.serial) return; // stale (undo/restart)
+  app.inflight[msg.playerKey] = null;
+  app.env.setPendingMovement(msg.playerKey, msg.movement, msg.plannedPath);
+  render();
+  updateStatus();
+  tryStep();
+}
+
+function botsAreReady() {
+  for (const key of ["player1", "player2"]) {
+    const p = app.env.gameState[key];
+    if (p.role === "bot" && playerIsAlive(p) && p.pendingMovement === "dontMove") return false;
+  }
+  return true;
+}
+
+function tryStep() {
+  const env = app.env;
+  if (!env || app.gameOverMessage) return;
+  if (env.stepControlMode === "reachedTheEnd") return finishGame();
+  if (!botsAreReady()) return;
+
+  if (env.stepControlMode === "stepRequiresHumanInput") {
+    // Port of IngameViewModel.step_humanVsAny: apply the humans' last
+    // keypresses, suppress moves that would collide, and only step when no
+    // living human is left waiting.
+    let gs = env.gameState;
+    for (const key of ["player1", "player2"]) {
+      if (playerIsAliveAndHuman(gs[key]) && app.pendingHuman[key] !== "dontMove") {
+        gs = gsUpdatePlayer(gs, key, playerUpdate(gs[key], { pendingMovement: app.pendingHuman[key] }));
+      }
+    }
+    gs = preventHumanCollisions(gs);
+    if (isWaitingForHumanInput(gs)) { updateStatus(); return; }
+    const action = { player1: gs.player1.pendingMovement, player2: gs.player2.pendingMovement };
+    app.pendingHuman = { player1: "dontMove", player2: "dontMove" };
+    env.step(action);
+    afterStep();
+    return;
+  }
+
+  // Bots-only: auto-step with pacing, or single-step while paused.
+  if (app.paused && !app.stepOnceRequested) return;
+  const elapsed = Date.now() - app.lastStepTime;
+  if (!app.stepOnceRequested && elapsed < AUTO_STEP_MS) {
+    setTimeout(tryStep, AUTO_STEP_MS - elapsed);
+    return;
+  }
+  app.stepOnceRequested = false;
+  app.lastStepTime = Date.now();
+  env.step({ player1: "dontMove", player2: "dontMove" });
+  afterStep();
+}
+
+function afterStep() {
+  render();
+  if (app.env.stepControlMode === "reachedTheEnd") return finishGame();
+  requestBotMoves();
+  updateStatus();
+}
+
+function finishGame() {
+  if (app.gameOverMessage) return;
+  const gs = app.env.gameState;
+  const causeText = {
+    collisionWithWall: "hit a wall",
+    collisionWithItself: "ran into itself",
+    collisionWithOpponent: "ran into the opponent",
+    stuckInALoop: "got stuck in a loop",
+    noMoreFood: "ran out of food",
+  };
+  const parts = [];
+  const dead = [];
+  for (const [key, label] of [["player1", "Player 1"], ["player2", "Player 2"]]) {
+    const p = gs[key];
+    if (p.isInstalled && p.causesOfDeath.length > 0) {
+      dead.push(key);
+      parts.push(`${label} ${p.causesOfDeath.map((c) => causeText[c] ?? c).join(" and ")}`);
+    }
+  }
+  const bothNoMoreFood = dead.length === 2
+    && gs.player1.causesOfDeath.includes("noMoreFood")
+    && gs.player2.causesOfDeath.includes("noMoreFood");
+  let message;
+  if (bothNoMoreFood || (dead.length === 1 && gs[dead[0]].causesOfDeath.includes("noMoreFood") && !gs[dead[0] === "player1" ? "player2" : "player1"].isInstalled)) {
+    message = "All food eaten — game complete!";
+  } else {
+    const winner = ["player1", "player2"].find((k) => playerIsAlive(gs[k]) && gs[k].isInstalled);
+    const installedCount = ["player1", "player2"].filter((k) => gs[k].isInstalled).length;
+    const ending = winner ? `. ${winner === "player1" ? "Player 1" : "Player 2"} wins!`
+      : installedCount === 2 ? ". Draw." : ". Game over.";
+    message = parts.join(". ") + ending;
+  }
+  app.gameOverMessage = message;
+  render();
+  updateStatus();
+}
+
+// --------------------------------------------------------------------------
+// Undo / pause / path toggle
+// --------------------------------------------------------------------------
+function doUndo() {
+  if (!app.env) return;
+  app.paused = true; // Swift undo() stops auto-stepping
+  const gs = app.env.undo();
+  if (!gs) { updateButtons(); return; }
+  app.requestSerial++; // drop in-flight computes from the undone future
+  app.inflight = { player1: null, player2: null };
+  app.pendingHuman = { player1: "dontMove", player2: "dontMove" };
+  app.gameOverMessage = null;
+  // The restored state usually still carries the bots' pending movements and
+  // planned paths (as in Swift); only the very first state needs a recompute.
+  requestBotMoves();
+  render();
+  updateStatus();
+  updateButtons();
+}
+
+function togglePause() {
+  if (!app.env || app.env.stepControlMode !== "stepAutonomous") return;
+  app.paused = !app.paused;
+  updateButtons();
+  updateStatus();
+  if (!app.paused) tryStep();
+}
+
+function singleStep() {
+  if (!app.env || app.env.stepControlMode !== "stepAutonomous") return;
+  app.paused = true;
+  app.stepOnceRequested = true;
+  updateButtons();
+  tryStep();
+}
+
+function togglePath() {
+  app.showPath = !app.showPath;
+  updateButtons();
+  render();
+}
+
+// --------------------------------------------------------------------------
+// Rendering
+// --------------------------------------------------------------------------
+function tileSize(level) {
+  const maxW = window.innerWidth - 24;
+  const maxH = window.innerHeight - document.getElementById("hud").offsetHeight - 60;
+  return Math.max(8, Math.floor(Math.min(maxW / level.size.x, maxH / level.size.y)));
+}
+
+function render() {
+  if (!app.env) return;
+  const gs = app.env.gameState;
+  const level = gsLevel(gs);
+  const tile = tileSize(level);
+  canvas.width = level.size.x * tile;
+  canvas.height = level.size.y * tile;
+  // Grid y is bottom-up; canvas y is top-down.
+  const cx = (p) => p.x * tile + tile / 2;
+  const cy = (p) => (level.size.y - 1 - p.y) * tile + tile / 2;
+
+  ctx.fillStyle = "#101012";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < level.size.y; y++) {
+    for (let x = 0; x < level.size.x; x++) {
+      const p = { x, y };
+      if (level.wallSet.has(posKey(p))) {
+        ctx.fillStyle = "#3a3a40";
+        ctx.fillRect(p.x * tile, (level.size.y - 1 - y) * tile, tile, tile);
+      } else {
+        ctx.fillStyle = (x + y) % 2 === 0 ? "#1c1c1e" : "#202024";
+        ctx.fillRect(p.x * tile, (level.size.y - 1 - y) * tile, tile, tile);
+      }
+    }
+  }
+
+  if (gs.foodPosition) {
+    ctx.fillStyle = "#ff453a";
+    ctx.beginPath();
+    ctx.arc(cx(gs.foodPosition), cy(gs.foodPosition), tile * 0.32, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  for (const key of ["player1", "player2"]) {
+    const p = gs[key];
+    if (!p.isInstalled) continue;
+    drawSnake(p, playerIsAlive(p) ? PLAYER_COLOR[key] : DEAD_COLOR, tile, cx, cy);
+  }
+
+  if (app.showPath) {
+    for (const key of ["player1", "player2"]) {
+      const p = gs[key];
+      if (p.role !== "bot" || !playerIsAlive(p)) continue;
+      drawPlannedPath(p.botPlannedPath, gs.foodPosition, PLAYER_COLOR[key], tile, cx, cy);
+    }
+  }
+}
+
+function drawSnake(player, color, tile, cx, cy) {
+  const positions = bodyPositionArray(player.snakeBody);
+  if (positions.length === 0) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = tile * 0.62;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx(positions[0]), cy(positions[0]));
+  for (let i = 1; i < positions.length; i++) ctx.lineTo(cx(positions[i]), cy(positions[i]));
+  if (positions.length === 1) ctx.lineTo(cx(positions[0]) + 0.1, cy(positions[0]));
+  ctx.stroke();
+  // Food still in the stomach bulges the body.
+  ctx.fillStyle = color;
+  for (const part of player.snakeBody.fifo.array) {
+    if (part.content !== "food") continue;
+    ctx.beginPath();
+    ctx.arc(cx(part.position), cy(part.position), tile * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Eye marks the head.
+  const head = player.snakeBody.head;
+  ctx.fillStyle = "#101012";
+  ctx.beginPath();
+  ctx.arc(cx(head.position), cy(head.position), tile * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Port of AppShared/IngameView/PlannedPathView.swift: the segment leading to
+// the food is high confidence (thick, bright); anything past the simulated
+// food pickup is speculative (thin, 30% opacity).
+function drawPlannedPath(path, foodPosition, color, tile, cx, cy) {
+  if (!path || path.length < 2) return;
+  let highConfidenceCount = 0;
+  for (let i = 0; i < path.length; i++) {
+    if (foodPosition && posEq(path[i], foodPosition)) { highConfidenceCount = i; break; }
+  }
+  const leftEnd = Math.min(highConfidenceCount + 1, path.length);
+  const rightBegin = Math.min(highConfidenceCount, path.length);
+  const stroke = (positions, width, alpha, cap) => {
+    if (positions.length < 2) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = cap;
+    ctx.lineJoin = cap === "round" ? "round" : "miter";
+    ctx.beginPath();
+    ctx.moveTo(cx(positions[0]), cy(positions[0]));
+    for (let i = 1; i < positions.length; i++) ctx.lineTo(cx(positions[i]), cy(positions[i]));
+    ctx.stroke();
+    ctx.restore();
+  };
+  stroke(path.slice(rightBegin), 1, 0.3, "square");                       // low confidence
+  stroke(path.slice(0, leftEnd), Math.max(tile * 0.3, 1), 1, "round");    // high confidence
+}
+
+// --------------------------------------------------------------------------
+// Status + buttons
+// --------------------------------------------------------------------------
+function updateStatus() {
+  if (!app.env) return;
+  const gs = app.env.gameState;
+  const bits = [`Step ${gs.numberOfSteps}`];
+  for (const [key, label] of [["player1", "P1"], ["player2", "P2"]]) {
+    if (gs[key].isInstalled) bits.push(`${label} length ${bodyLength(gs[key].snakeBody)}`);
+  }
+  if (app.gameOverMessage) {
+    statusEl.innerHTML = `${bits.join(" · ")} · <span class="gameover">${app.gameOverMessage}</span> Press Enter to restart.`;
+    return;
+  }
+  const thinking = app.inflight.player1 !== null || app.inflight.player2 !== null;
+  if (thinking) bits.push("AI thinking…");
+  else if (app.env.stepControlMode === "stepRequiresHumanInput") bits.push("waiting for input");
+  else if (app.paused) bits.push("paused");
+  statusEl.textContent = bits.join(" · ");
+}
+
+function updateButtons() {
+  document.getElementById("btnPause").textContent = app.paused ? "Resume" : "Pause";
+  document.getElementById("btnPath").classList.toggle("active", app.showPath);
+  const autonomous = app.env && app.env.stepControlMode === "stepAutonomous";
+  document.getElementById("btnPause").disabled = !autonomous;
+  document.getElementById("btnStep").disabled = !autonomous;
+}
+
+// --------------------------------------------------------------------------
+// Input
+// --------------------------------------------------------------------------
+const KEY_DIRECTION_P1 = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+const KEY_DIRECTION_P2 = { w: "up", s: "down", a: "left", d: "right" };
+
+document.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (key in KEY_DIRECTION_P1 || key === " ") e.preventDefault();
+
+  if (key === "Enter") return newGame();
+  if (key === "z") return doUndo();
+  if (key === " ") return togglePause();
+  if (key === "p") return togglePath();
+  if (!app.env || app.gameOverMessage) return;
+
+  const route = (playerKey, direction) => {
+    const p = app.env.gameState[playerKey];
+    if (!playerIsAliveAndHuman(p)) return;
+    app.pendingHuman[playerKey] = headMoveTowardDirection(p.snakeBody.head, direction);
+    tryStep();
+  };
+  if (key in KEY_DIRECTION_P1) route("player1", KEY_DIRECTION_P1[key]);
+  if (key in KEY_DIRECTION_P2) route("player2", KEY_DIRECTION_P2[key]);
+});
+
+document.getElementById("btnRestart").addEventListener("click", newGame);
+document.getElementById("btnUndo").addEventListener("click", doUndo);
+document.getElementById("btnPause").addEventListener("click", togglePause);
+document.getElementById("btnStep").addEventListener("click", singleStep);
+document.getElementById("btnPath").addEventListener("click", togglePath);
+document.getElementById("levelSelect").addEventListener("change", newGame);
+document.getElementById("role1").addEventListener("change", newGame);
+document.getElementById("role2").addEventListener("change", newGame);
+window.addEventListener("resize", render);
+
+// --------------------------------------------------------------------------
+// Boot
+// --------------------------------------------------------------------------
+for (const name of LEVEL_NAMES) {
+  const option = document.createElement("option");
+  option.value = name;
+  option.textContent = name;
+  document.getElementById("levelSelect").appendChild(option);
+}
+
+if (new URLSearchParams(location.search).get("test") === "1") {
+  document.getElementById("hud").style.display = "none";
+  canvas.style.display = "none";
+  const report = document.createElement("div");
+  report.id = "testreport";
+  document.body.appendChild(report);
+  const lines = [];
+  const ok = SnakeTests.run((s) => lines.push(s), (s) => lines.push(s));
+  report.textContent = lines.join("\n");
+  report.style.color = ok ? "#34c759" : "#ff453a";
+} else {
+  newGame();
+}
+</script>
+</body>
+</html>
