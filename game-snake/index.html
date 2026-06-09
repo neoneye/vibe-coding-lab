@@ -184,6 +184,156 @@ SnakeTests.add("fifo append keeps capacity, appendAndGrow grows", () => {
   assertEq(Fifo.appendAndGrow(f0, 4).array, [1, 2, 3, 4]);
   assertEq(f0.array, [1, 2, 3], "original untouched");
 });
+
+// ---------------------------------------------------------------------------
+// SnakeHead — port of EngineShared/Snake/SnakeHead.swift + SnakeHeadDirection.swift
+// ---------------------------------------------------------------------------
+const ROTATED_CCW = { up: "left", left: "down", down: "right", right: "up" };
+const ROTATED_CW = { up: "right", right: "down", down: "left", left: "up" };
+const DIRECTION_DELTA = {
+  up: { dx: 0, dy: 1 },
+  down: { dx: 0, dy: -1 },
+  left: { dx: -1, dy: 0 },
+  right: { dx: 1, dy: 0 },
+};
+
+function headSimulateTick(head, movement) {
+  if (movement === "dontMove") return head;
+  let direction = head.direction;
+  if (movement === "moveCCW") direction = ROTATED_CCW[direction];
+  if (movement === "moveCW") direction = ROTATED_CW[direction];
+  const d = DIRECTION_DELTA[direction];
+  return { position: offsetBy(head.position, d.dx, d.dy), direction };
+}
+
+// Best movement to approach newPosition; null if it is behind the snake.
+// Port of SnakeHead.moveToward(_:) — SnakeHead.swift:72-124.
+function headMoveTowardPosition(head, newPosition) {
+  const dx = head.position.x - newPosition.x;
+  const dy = head.position.y - newPosition.y;
+  const dxx = dx * dx, dyy = dy * dy;
+  if (dxx === 0 && dyy === 0) return "dontMove";
+  switch (head.direction) {
+    case "up":
+      if (dy < 0 && dyy >= dxx) return "moveForward";
+      if (dx > 0) return "moveCCW";
+      if (dx < 0) return "moveCW";
+      break;
+    case "down":
+      if (dy > 0 && dyy >= dxx) return "moveForward";
+      if (dx > 0) return "moveCW";
+      if (dx < 0) return "moveCCW";
+      break;
+    case "left":
+      if (dx > 0 && dxx >= dyy) return "moveForward";
+      if (dy > 0) return "moveCCW";
+      if (dy < 0) return "moveCW";
+      break;
+    case "right":
+      if (dx < 0 && dxx >= dyy) return "moveForward";
+      if (dy > 0) return "moveCW";
+      if (dy < 0) return "moveCCW";
+      break;
+  }
+  return null;
+}
+
+// Arrow-key style input: a direction. Reversal yields "dontMove".
+function headMoveTowardDirection(head, direction) {
+  const d = DIRECTION_DELTA[direction];
+  return headMoveTowardPosition(head, offsetBy(head.position, d.dx, d.dy)) ?? "dontMove";
+}
+
+// ---------------------------------------------------------------------------
+// SnakeBody — port of EngineShared/Snake/SnakeBody.swift.
+// fifo.array runs tail-first; the last element is the head.
+// Each part: { position, content } where content is "empty" | "food".
+// ---------------------------------------------------------------------------
+function bodyStateForTick(body, movement, act) {
+  if (movement === "dontMove") return body;
+  const newHead = headSimulateTick(body.head, movement);
+  const part = { position: newHead.position, content: act === "eat" ? "food" : "empty" };
+  const fifo = act === "eat" ? Fifo.appendAndGrow(body.fifo, part) : Fifo.append(body.fifo, part);
+  return { fifo, head: newHead };
+}
+
+// Port of SnakeBody.create(position:headDirection:length:) — SnakeBody.swift:117-149.
+// Starts `length` cells behind `position` and ticks forward, growing each step,
+// then clears the stomach. Yields length+1 body parts like the Swift original.
+function bodyCreate(position, headDirection, length) {
+  const n = length;
+  let dx = 0, dy = 0;
+  if (headDirection === "up") dy = -n;
+  if (headDirection === "down") dy = n;
+  if (headDirection === "left") dx = n;
+  if (headDirection === "right") dx = -n;
+  const startPosition = offsetBy(position, dx, dy);
+  let body = {
+    fifo: Fifo._purged(1, [{ position: startPosition, content: "empty" }]),
+    head: { position: startPosition, direction: headDirection },
+  };
+  for (let i = 0; i < n; i++) {
+    body = bodyStateForTick(body, "moveForward", "eat");
+  }
+  return bodyClearStomach(body);
+}
+
+function bodyClearStomach(body) {
+  return {
+    fifo: Fifo.map(body.fifo, (p) => ({ position: p.position, content: "empty" })),
+    head: body.head,
+  };
+}
+
+function bodyPositionArray(body) { return body.fifo.array.map((p) => p.position); }
+function bodyPositionSet(body) { return new Set(bodyPositionArray(body).map(posKey)); }
+function bodyWithoutHeadPositionSet(body) {
+  const arr = body.fifo.array;
+  if (arr.length === 0) return new Set();
+  return new Set(arr.slice(0, -1).map((p) => posKey(p.position)));
+}
+function bodyIsEatingItself(body) {
+  return bodyWithoutHeadPositionSet(body).has(posKey(body.head.position));
+}
+function bodyLength(body) { return body.fifo.array.length; }
+
+SnakeTests.add("head simulateTick", () => {
+  const h = { position: { x: 5, y: 5 }, direction: "up" };
+  assertEq(headSimulateTick(h, "moveForward"), { position: { x: 5, y: 6 }, direction: "up" });
+  assertEq(headSimulateTick(h, "moveCCW"), { position: { x: 4, y: 5 }, direction: "left" });
+  assertEq(headSimulateTick(h, "moveCW"), { position: { x: 6, y: 5 }, direction: "right" });
+  assertEq(headSimulateTick(h, "dontMove"), h);
+});
+SnakeTests.add("head moveToward direction blocks reversal", () => {
+  const h = { position: { x: 5, y: 5 }, direction: "up" };
+  assertEq(headMoveTowardDirection(h, "down"), "dontMove");
+  assertEq(headMoveTowardDirection(h, "left"), "moveCCW");
+  assertEq(headMoveTowardDirection(h, "right"), "moveCW");
+  assertEq(headMoveTowardDirection(h, "up"), "moveForward");
+});
+SnakeTests.add("body create extends backward from head", () => {
+  const b = bodyCreate({ x: 5, y: 5 }, "right", 4);
+  assertEq(b.head.position, { x: 5, y: 5 });
+  assertEq(b.head.direction, "right");
+  assertEq(bodyPositionArray(b), [{x:1,y:5},{x:2,y:5},{x:3,y:5},{x:4,y:5},{x:5,y:5}]);
+});
+SnakeTests.add("body eat grows, plain move keeps length", () => {
+  const b = bodyCreate({ x: 5, y: 5 }, "right", 2);
+  const grown = bodyStateForTick(b, "moveForward", "eat");
+  assertEq(bodyLength(grown), bodyLength(b) + 1);
+  assert(!bodyIsEatingItself(grown));
+  const moved = bodyStateForTick(b, "moveForward", "doNothing");
+  assertEq(bodyLength(moved), bodyLength(b));
+  assertEq(moved.head.position, { x: 6, y: 5 });
+});
+SnakeTests.add("body detects eating itself", () => {
+  // length-5 snake curls into itself: up, left, down → head lands on its body
+  let b = bodyCreate({ x: 5, y: 5 }, "right", 5);
+  b = bodyStateForTick(b, "moveCCW", "doNothing");   // up
+  b = bodyStateForTick(b, "moveCCW", "doNothing");   // left
+  b = bodyStateForTick(b, "moveCCW", "doNothing");   // down → onto own body
+  assert(bodyIsEatingItself(b));
+});
 </script>
 
 <script>
