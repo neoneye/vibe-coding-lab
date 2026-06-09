@@ -1215,6 +1215,425 @@ SnakeTests.add("undo restores previous state and clears human pending input", ()
   assertEq(undone.player1.pendingMovement, "dontMove");
   assertEq(env.undo(), null, "history exhausted");
 });
+
+// ---------------------------------------------------------------------------
+// SnakeBot6 "Monte Carlo 2" — port of EngineShared/Bot/SnakeBot6.swift.
+// A deterministic Monte-Carlo tree search over alternating move nodes and
+// simulated food drops. The tree is kept between ticks and the subtree
+// matching what actually happened is reattached under a fresh root.
+// Node kinds: root, leaf, food, foodChoice, move, moveChoice, kill.
+// ---------------------------------------------------------------------------
+function makeNode(kind, props = {}) {
+  return { kind, parent: null, isBest: false, ...props };
+}
+
+function nodeChildren(node) {
+  switch (node.kind) {
+    case "food": case "move": return node.choices;
+    case "leaf": return [];
+    default: return node.child ? [node.child] : [];
+  }
+}
+
+function forEachNode(root, fn) {
+  const stack = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    fn(node);
+    stack.push(...nodeChildren(node));
+  }
+}
+
+// Scenario utility ordering — SnakeBot6.swift:502-544 (`mycompare`).
+// True when lhs is the better scenario:
+// survival > longer move sequence > more foods eaten > shorter food distance.
+function scenarioCompare(lhs, rhs) {
+  if (lhs.certainDeath && !rhs.certainDeath) return false;
+  if (!lhs.certainDeath && rhs.certainDeath) return true;
+  if (lhs.movements.length !== rhs.movements.length) return lhs.movements.length > rhs.movements.length;
+  if (lhs.numberOfFoodsEaten !== rhs.numberOfFoodsEaten) return lhs.numberOfFoodsEaten > rhs.numberOfFoodsEaten;
+  return lhs.distanceToFood < rhs.distanceToFood;
+}
+
+// Port of BuildTreeVisitor — SnakeBot6.swift:552-1114.
+class TreeBuilder {
+  constructor(level, player, oppositePlayer, foodPosition, seed) {
+    this.level = level;
+    this.player = [player, oppositePlayer];
+    this.foodPosition = foodPosition;
+    this.numberOfMoves = [0, 0];
+    this.numberOfFoodsEaten = 0;
+    this.movements = [];
+    this.scenarios = [];
+    this.rng = new LCRNG(seed);
+  }
+
+  bestScenario() {
+    if (this.scenarios.length === 0) return null;
+    return this.scenarios.reduce((best, s) => (scenarioCompare(s, best) ? s : best));
+  }
+
+  appendScenario(node, certainDeath) {
+    this.scenarios.push({
+      destinationNode: node,
+      movements: [...this.movements],
+      certainDeath,
+      numberOfFoodsEaten: this.numberOfFoodsEaten,
+      distanceToFood: this.foodPosition
+        ? levelEstimateDistance(this.level, this.player[0].snakeBody.head.position, this.foodPosition)
+        : Infinity,
+    });
+  }
+
+  visit(node) {
+    switch (node.kind) {
+      case "root": return this.processChildNode(node, 0); // player A moves first
+      case "leaf": return this.appendScenario(node, false);
+      case "food": return this.visitFood(node);
+      case "foodChoice": return this.visitFoodChoice(node);
+      case "move": return this.visitMove(node);
+      case "moveChoice": return this.visitMoveChoice(node);
+      case "kill": return this.visitKill(node);
+      default: throw new Error(`unknown node kind ${node.kind}`);
+    }
+  }
+
+  // Simulated food drop. Branching limit tables ported verbatim from
+  // SnakeBot6.swift:660-716 — wide early (16 drops at the start of a
+  // 1-player game), narrowing with depth and with foods already eaten.
+  visitFood(node) {
+    const originalNumberOfFoodsEaten = this.numberOfFoodsEaten;
+    const newNumberOfFoodsEaten = originalNumberOfFoodsEaten + 1;
+    const isTwoPlayer = this.player[1].isInstalled;
+
+    const taken = new Set();
+    for (const p of this.player) {
+      if (!p.isInstalled) continue;
+      for (const k of bodyPositionSet(p.snakeBody)) taken.add(k);
+    }
+
+    let limit = 6;
+    const numberOfMoves = this.numberOfMoves[0];
+    if (originalNumberOfFoodsEaten <= 1) {
+      if (numberOfMoves <= 3) limit = 16;
+      else if (numberOfMoves <= 4) limit = 6;
+      else if (numberOfMoves <= 5) limit = 4;
+      else if (numberOfMoves <= 6) limit = 3;
+      else limit = 2;
+    } else if (originalNumberOfFoodsEaten <= 2) limit = 6;
+    else if (originalNumberOfFoodsEaten <= 3) limit = 4;
+    else if (originalNumberOfFoodsEaten <= 4) limit = 3;
+    else if (originalNumberOfFoodsEaten <= 6) limit = 2;
+    else limit = 1;
+    if (isTwoPlayer) {
+      if (originalNumberOfFoodsEaten <= 1) limit = numberOfMoves <= 3 ? 6 : 3;
+      else limit = numberOfMoves <= 3 ? 2 : 1;
+    }
+
+    const newChoices = [];
+    // Keep previous-iteration choices that are still reachable.
+    for (const choice of node.choices) {
+      const k = posKey(choice.position);
+      if (!this.level.emptyPositionSet.has(k) || taken.has(k)) continue;
+      newChoices.push(choice);
+      taken.add(k);
+    }
+    // Fill with seeded-random picks from the sorted free positions, so the
+    // bot is deterministic (Swift trades speed for reproducibility here).
+    const freePositions = this.level.emptyPositionArray
+      .filter((p) => !taken.has(posKey(p)))
+      .sort(posCompare);
+    while (newChoices.length < limit && freePositions.length > 0) {
+      const index = this.rng.pickIndex(freePositions.length);
+      const choice = makeNode("foodChoice", { position: freePositions[index], child: null });
+      choice.parent = node;
+      newChoices.push(choice);
+      freePositions.splice(index, 1);
+    }
+    newChoices.sort((a, b) => posCompare(a.position, b.position));
+    node.choices = newChoices;
+
+    for (const choice of newChoices) {
+      this.numberOfFoodsEaten = newNumberOfFoodsEaten;
+      this.visit(choice);
+    }
+    this.numberOfFoodsEaten = originalNumberOfFoodsEaten;
+  }
+
+  visitFoodChoice(node) {
+    const originalFoodPosition = this.foodPosition;
+    this.foodPosition = node.position;
+    this.processChildNode(node, 0); // after eating, player A moves first
+    this.foodPosition = originalFoodPosition;
+  }
+
+  // Expansion — SnakeBot6.swift:781-884. Wall moves are pruned outright; the
+  // previously-best child is always revisited; the rest are shuffled and
+  // capped at 3/2/1 branches by depth.
+  visitMove(node) {
+    const playerId = node.playerId;
+    const originalNumberOfMoves = this.numberOfMoves[playerId];
+    const newNumberOfMoves = originalNumberOfMoves + 1;
+    this.numberOfMoves[playerId] = newNumberOfMoves;
+    try {
+      if (node.needsExploringPermanentObstacles) {
+        node.needsExploringPermanentObstacles = false;
+        const currentHead = this.player[playerId].snakeBody.head;
+        node.choices = [];
+        for (const movement of ["moveCCW", "moveForward", "moveCW"]) {
+          const newHead = headSimulateTick(currentHead, movement);
+          if (!this.level.emptyPositionSet.has(posKey(newHead.position))) continue;
+          const choice = makeNode("moveChoice", { playerId, movement, position: newHead.position, child: null });
+          choice.parent = node;
+          node.choices.push(choice);
+        }
+      }
+
+      const bestNode = node.choices.find((c) => c.isBest);
+      let nonBest = node.choices.filter((c) => !c.isBest);
+      const limit = newNumberOfMoves < 3 ? 3 : newNumberOfMoves < 5 ? 2 : 1;
+      this.rng.shuffle(nonBest);
+      nonBest = nonBest.slice(0, limit);
+
+      if (bestNode) this.visit(bestNode);
+      for (const choice of nonBest) this.visit(choice);
+    } finally {
+      this.numberOfMoves[playerId] = originalNumberOfMoves;
+    }
+  }
+
+  // Simulate one move — SnakeBot6.swift:886-1012.
+  visitMoveChoice(node) {
+    const playerId = node.playerId;
+    const originalPlayer = this.player[playerId];
+    const originalFoodPosition = this.foodPosition;
+    const originalMovements = this.movements;
+    if (playerId === 0) this.movements = [...this.movements, node.movement];
+    try {
+      const originalSnakeBody = originalPlayer.snakeBody;
+
+      const killVia = (cause) => {
+        // Reuse an existing KillNode subtree, otherwise replace the child.
+        let killNode = node.child && node.child.kind === "kill" ? node.child : null;
+        if (!killNode) {
+          killNode = makeNode("kill", { playerId, cause, child: null });
+          node.child = killNode;
+          killNode.parent = node;
+        }
+        killNode.cause = cause;
+        killNode.playerId = playerId;
+        this.visit(killNode);
+      };
+
+      if (posEq(node.position, originalFoodPosition)) {
+        const newSnakeBody = bodyStateForTick(originalSnakeBody, node.movement, "eat");
+        this.player[playerId] = playerUpdate(originalPlayer, { snakeBody: newSnakeBody });
+        this.foodPosition = null;
+        if (bodyIsEatingItself(newSnakeBody)) return killVia("collisionWithSelf");
+        let foodNode = node.child && node.child.kind === "food" ? node.child : null;
+        if (!foodNode) {
+          foodNode = makeNode("food", { choices: [] });
+          node.child = foodNode;
+          foodNode.parent = node;
+        }
+        return this.visit(foodNode);
+      }
+
+      const newSnakeBody = bodyStateForTick(originalSnakeBody, node.movement, "doNothing");
+      if (bodyIsEatingItself(newSnakeBody)) {
+        this.player[playerId] = playerUpdate(originalPlayer, { snakeBody: newSnakeBody });
+        this.foodPosition = null; // faithful to Swift (line 971)
+        return killVia("collisionWithSelf");
+      }
+
+      const opponentPlayerId = this.nextInstalledPlayerId(playerId);
+      if (opponentPlayerId !== playerId) {
+        const opponent = this.player[opponentPlayerId];
+        if (bodyPositionSet(opponent.snakeBody).has(posKey(node.position))) {
+          // Swift always replaces with a fresh KillNode here (line 997).
+          const killNode = makeNode("kill", { playerId, cause: "collisionWithOpponent", child: null });
+          node.child = killNode;
+          killNode.parent = node;
+          return this.visit(killNode);
+        }
+      }
+
+      this.player[playerId] = playerUpdate(originalPlayer, { snakeBody: newSnakeBody });
+      this.foodPosition = originalFoodPosition;
+      this.processChildNode(node, this.nextAlivePlayerId(playerId));
+    } finally {
+      this.player[playerId] = originalPlayer;
+      this.foodPosition = originalFoodPosition;
+      this.movements = originalMovements;
+    }
+  }
+
+  visitKill(node) {
+    // Player 0 dead → certain-death scenario, stop simulating.
+    // Player 1 dead → still a (non-fatal) outcome for player 0.
+    this.appendScenario(node, node.playerId === 0);
+  }
+
+  nextInstalledPlayerId(playerId) {
+    if (!this.player[1].isInstalled) return 0;
+    return (playerId + 1) % 2;
+  }
+
+  nextAlivePlayerId(playerId) {
+    if (!this.player[1].isInstalled) return 0;
+    let id = (playerId + 1) % 2;
+    if (playerIsAlive(this.player[id])) return id;
+    id = (id + 1) % 2;
+    if (playerIsAlive(this.player[id])) return id;
+    return 0;
+  }
+
+  // SnakeBot6.swift:1080-1113. Depth limit: deep (37) single-player,
+  // narrow (17) in two-player games where each ply costs twice as much.
+  processChildNode(node, playerId) {
+    if (node.child && node.child.kind !== "leaf") return this.visit(node.child);
+    const limit = this.player[1].isInstalled ? 17 : 37;
+    const child = this.numberOfMoves[playerId] < limit
+      ? makeNode("move", { playerId, choices: [], needsExploringPermanentObstacles: true })
+      : makeNode("leaf");
+    node.child = child;
+    child.parent = node;
+    this.visit(child);
+  }
+}
+
+class Bot6 {
+  constructor(iteration = 0, plannedMovement = "dontMove", plannedPath = [], previousRoot = null) {
+    this.iteration = iteration;
+    this.plannedMovement = plannedMovement;
+    this.plannedPath = plannedPath;
+    this.previousRoot = previousRoot;
+  }
+
+  // Port of SnakeBot6.compute — SnakeBot6.swift:33-251. Returns a NEW Bot6.
+  compute(level, player, oppositePlayer, foodPosition) {
+    if (!playerIsAlive(player)) return new Bot6();
+
+    const root = makeNode("root", { child: null });
+
+    // Reattach the subtree matching what actually happened since last tick.
+    if (this.previousRoot) {
+      let subtree = this.previousRoot.child;
+      for (const [moveNodePlayerId, p] of [[0, player], [1, oppositePlayer]]) {
+        if (subtree && subtree.kind === "move" && subtree.playerId === moveNodePlayerId) {
+          const findKey = posKey(p.snakeBody.head.position);
+          const match = subtree.choices.find((c) => posKey(c.position) === findKey);
+          subtree = match ? match.child : null;
+        }
+      }
+      if (subtree && subtree.kind === "food") {
+        if (foodPosition) {
+          // Pick the simulated food drop nearest the actual food.
+          let best = null, bestDistance = Infinity;
+          for (const choice of subtree.choices) {
+            const d = levelEstimateDistance(level, choice.position, foodPosition);
+            if (d < bestDistance) { bestDistance = d; best = choice; }
+          }
+          subtree = best && best.child && best.child.kind === "move" ? best.child : null;
+        } else {
+          subtree = null;
+        }
+      }
+      if (subtree) {
+        root.child = subtree;
+        subtree.parent = root;
+      }
+    }
+
+    const seed = BigInt(this.iteration * 100);
+    const builder = new TreeBuilder(level, player, oppositePlayer, foodPosition, seed);
+    builder.visit(root);
+
+    // Best-node flags steered this build; clear them and re-flag the new best
+    // path so the NEXT iteration prioritizes it.
+    forEachNode(root, (n) => { n.isBest = false; });
+
+    const scenario = builder.bestScenario();
+    if (!scenario) {
+      return new Bot6(this.iteration + 1, "moveForward", [], null);
+    }
+    for (let n = scenario.destinationNode; n; n = n.parent) n.isBest = true;
+
+    const bestMovement = scenario.movements[0] ?? "moveForward";
+    let head = player.snakeBody.head;
+    const plannedPath = [head.position];
+    for (const movement of scenario.movements) {
+      head = headSimulateTick(head, movement);
+      plannedPath.push(head.position);
+    }
+    return new Bot6(this.iteration + 1, bestMovement, plannedPath, root);
+  }
+}
+
+// --- bot tests ---------------------------------------------------------------
+function runBotGame({ levelName = "Level 0", twoPlayer = false, ticks }) {
+  const env = new GameEnvironment(gameStateCreate(levelName, "bot", twoPlayer ? "bot" : "none"));
+  env.reset();
+  const bots = { player1: new Bot6(), player2: new Bot6() };
+  const movements = [];
+  for (let i = 0; i < ticks; i++) {
+    if (env.stepControlMode === "reachedTheEnd") break;
+    const gs = env.gameState;
+    const action = { player1: "dontMove", player2: "dontMove" };
+    for (const [key, opp] of [["player1", "player2"], ["player2", "player1"]]) {
+      if (gs[key].role !== "bot" || !playerIsAlive(gs[key])) continue;
+      bots[key] = bots[key].compute(gsLevel(gs), gs[key], gs[opp], gs.foodPosition);
+      action[key] = bots[key].plannedMovement;
+      env.setPendingMovement(key, action[key], bots[key].plannedPath);
+    }
+    env.step(action);
+    movements.push(action.player1);
+  }
+  return { env, bots, movements };
+}
+
+SnakeTests.add("bot is deterministic", () => {
+  const a = runBotGame({ ticks: 15 });
+  const b = runBotGame({ ticks: 15 });
+  assertEq(a.movements, b.movements);
+  assertEq(a.env.gameState.player1.snakeBody, b.env.gameState.player1.snakeBody);
+});
+SnakeTests.add("bot plannedPath is contiguous from head", () => {
+  const gs = gameStateCreate("Level 0", "bot", "none");
+  const bot = new Bot6().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
+  const path = bot.plannedPath;
+  assert(path.length >= 2, `path too short: ${path.length}`);
+  assertEq(path[0], gs.player1.snakeBody.head.position);
+  for (let i = 1; i < path.length; i++) {
+    assertEq(manhattan(path[i - 1], path[i]), 1, `path gap at ${i}`);
+  }
+});
+SnakeTests.add("bot survives and eats on Level 0 single player", () => {
+  const { env } = runBotGame({ ticks: 60 });
+  const p1 = env.gameState.player1;
+  assert(playerIsAlive(p1), `bot died: ${p1.causesOfDeath}`);
+  assert(bodyLength(p1.snakeBody) > bodyLength(getLevel("Level 0").player1Body),
+    "bot ate at least one food");
+});
+SnakeTests.add("bot avoids certain death", () => {
+  // Head at (1,4) facing left: forward is the wall at x=0. CCW/CW survive.
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 1, y: 4 }, dir: "left", len: 2, },
+    food: { x: 7, y: 7 },
+  });
+  gs = gsUpdatePlayer(gs, "player1", playerUpdate(gs.player1, { role: "bot" }));
+  gs = gsUpdatePlayer(gs, "player2", playerUpdate(playerCreate("player2", "none", gs.player2.snakeBody), {}));
+  const bot = new Bot6().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
+  assert(bot.plannedMovement !== "moveForward", `bot chose ${bot.plannedMovement}`);
+});
+SnakeTests.add("bot works in two-player mode", () => {
+  const { env } = runBotGame({ twoPlayer: true, ticks: 10 });
+  assertEq(env.gameState.numberOfSteps, 10);
+  // Both bots produced paths; no crash. Survival isn't asserted at tick 10 —
+  // but on Level 0 with 10 ticks neither bot should have died.
+  assert(playerIsAlive(env.gameState.player1), `p1 died: ${env.gameState.player1.causesOfDeath}`);
+  assert(playerIsAlive(env.gameState.player2), `p2 died: ${env.gameState.player2.causesOfDeath}`);
+});
 </script>
 
 <script>
