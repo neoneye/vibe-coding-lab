@@ -24,6 +24,7 @@ step, and **undo** lets you backtrack out of certain death — that's the puzzle
 | Space | Pause/resume (bot-vs-bot) |
 | Enter | Restart |
 | P | Toggle AI path overlay |
+| M | Toggle music |
 
 ## Development
 
