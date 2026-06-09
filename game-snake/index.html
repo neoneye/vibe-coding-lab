@@ -751,6 +751,310 @@ SnakeTests.add("estimateDistance: same cluster manhattan, cross-cluster scaled",
   const d = levelEstimateDistance(lv5, { x: 1, y: 8 }, { x: 17, y: 8 });
   assert(Number.isFinite(d) && d > manhattan({ x: 1, y: 8 }, { x: 17, y: 8 }), `got ${d}`);
 });
+
+// ---------------------------------------------------------------------------
+// Player — port of EngineShared/Snake/SnakePlayer.swift.
+// Pure data so it serializes to the worker. Deviation from Swift: the bot's
+// search tree lives in the worker (keyed by player), not on the player object;
+// only plannedMovement/plannedPath cross the boundary (stored as botPlannedPath).
+// ---------------------------------------------------------------------------
+function playerCreate(id, role, snakeBody) {
+  return {
+    id, // "player1" | "player2"
+    isInstalled: role !== "none",
+    role, // "human" | "bot" | "none"
+    snakeBody,
+    pendingMovement: "dontMove",
+    pendingAct: "doNothing",
+    causesOfDeath: [],
+    botPlannedPath: [],
+  };
+}
+function playerIsAlive(p) { return p.isInstalled && p.causesOfDeath.length === 0; }
+function playerIsAliveAndHuman(p) { return playerIsAlive(p) && p.role === "human"; }
+function playerUpdate(p, changes) { return { ...p, ...changes }; }
+function playerKill(p, causeOfDeath) {
+  if (p.causesOfDeath.includes(causeOfDeath)) return p;
+  return { ...p, causesOfDeath: [...p.causesOfDeath, causeOfDeath] };
+}
+function playerClearPending(p) { return { ...p, pendingMovement: "dontMove", pendingAct: "doNothing" }; }
+
+// ---------------------------------------------------------------------------
+// GameState — port of EngineShared/Snake/SnakeGameState.swift (+Create).
+// Immutable; foodRngSeed is a decimal string so it survives JSON/postMessage.
+// ---------------------------------------------------------------------------
+function gameStateCreate(levelName, role1, role2) {
+  const level = getLevel(levelName);
+  return {
+    levelName,
+    foodPosition: level.initialFoodPosition,
+    player1: playerCreate("player1", role1, level.player1Body),
+    player2: playerCreate("player2", role2, level.player2Body),
+    foodRngSeed: "0",
+    numberOfSteps: 0,
+  };
+}
+function gsLevel(gs) { return getLevel(gs.levelName); }
+function gsUpdate(gs, changes) { return { ...gs, ...changes }; }
+function gsUpdatePlayer(gs, playerKey, player) { return { ...gs, [playerKey]: player }; }
+function gsClearPendingForHumans(gs) {
+  const clear = (p) => (p.role === "human" ? playerClearPending(p) : p);
+  return { ...gs, player1: clear(gs.player1), player2: clear(gs.player2) };
+}
+
+// ---------------------------------------------------------------------------
+// Collision detection — port of EngineShared/Snake/SnakeCollisionDetector.swift.
+// Speculatively ticks both bodies with their pending movements, then checks in
+// the Swift order: wall → head-to-head (mutual death) → head into opponent →
+// self-eat → food-eaten flags.
+// ---------------------------------------------------------------------------
+function runCollisionDetector(level, foodPosition, player1, player2) {
+  const tick = (p) =>
+    bodyStateForTick(p.snakeBody, playerIsAlive(p) ? p.pendingMovement : "dontMove", "doNothing");
+  const body1 = tick(player1);
+  const body2 = tick(player2);
+  const r = {
+    player1Alive: playerIsAlive(player1),
+    player2Alive: playerIsAlive(player2),
+    player1EatsFood: false,
+    player2EatsFood: false,
+    collisionType1: "noCollision",
+    collisionType2: "noCollision",
+  };
+  if (!player1.isInstalled && !player2.isInstalled) return r;
+  if (!r.player1Alive && !r.player2Alive) return r;
+
+  if (player1.isInstalled && r.player1Alive && levelIsWall(level, body1.head.position)) {
+    r.player1Alive = false; r.collisionType1 = "collisionWithWall";
+  }
+  if (player2.isInstalled && r.player2Alive && levelIsWall(level, body2.head.position)) {
+    r.player2Alive = false; r.collisionType2 = "collisionWithWall";
+  }
+  if (!r.player1Alive && !r.player2Alive) return r;
+
+  if (player1.isInstalled && player2.isInstalled && r.player1Alive && r.player2Alive
+      && posEq(body1.head.position, body2.head.position)) {
+    r.player1Alive = false; r.collisionType1 = "collisionWithOpponent";
+    r.player2Alive = false; r.collisionType2 = "collisionWithOpponent";
+    return r;
+  }
+
+  if (player1.isInstalled && player2.isInstalled) {
+    const positions1 = bodyPositionSet(body1);
+    const positions2 = bodyPositionSet(body2);
+    if (r.player1Alive && positions2.has(posKey(body1.head.position))) {
+      r.player1Alive = false; r.collisionType1 = "collisionWithOpponent";
+    }
+    if (r.player2Alive && positions1.has(posKey(body2.head.position))) {
+      r.player2Alive = false; r.collisionType2 = "collisionWithOpponent";
+    }
+  }
+  if (!r.player1Alive && !r.player2Alive) return r;
+
+  if (player1.isInstalled && r.player1Alive && bodyIsEatingItself(body1)) {
+    r.player1Alive = false; r.collisionType1 = "collisionWithItself";
+  }
+  if (player2.isInstalled && r.player2Alive && bodyIsEatingItself(body2)) {
+    r.player2Alive = false; r.collisionType2 = "collisionWithItself";
+  }
+  if (!r.player1Alive && !r.player2Alive) return r;
+
+  if (foodPosition) {
+    if (player1.isInstalled && r.player1Alive && posEq(body1.head.position, foodPosition)) r.player1EatsFood = true;
+    if (player2.isInstalled && r.player2Alive && posEq(body2.head.position, foodPosition)) r.player2EatsFood = true;
+  }
+  return r;
+}
+
+// Port of SnakeGameState.detectCollision() — SnakeCollisionDetector.swift:183-229.
+function detectCollision(gs) {
+  const alive1 = playerIsAlive(gs.player1);
+  const alive2 = playerIsAlive(gs.player2);
+  if (!alive1 && !alive2) return gs;
+  const r = runCollisionDetector(gsLevel(gs), gs.foodPosition, gs.player1, gs.player2);
+  let out = gs;
+  if (alive1 && !r.player1Alive) out = gsUpdatePlayer(out, "player1", playerKill(out.player1, r.collisionType1));
+  if (alive2 && !r.player2Alive) out = gsUpdatePlayer(out, "player2", playerKill(out.player2, r.collisionType2));
+  if (r.player1EatsFood) {
+    out = gsUpdate(out, { foodPosition: null });
+    out = gsUpdatePlayer(out, "player1", playerUpdate(out.player1, { pendingAct: "eat" }));
+  }
+  if (r.player2EatsFood) {
+    out = gsUpdate(out, { foodPosition: null });
+    out = gsUpdatePlayer(out, "player2", playerUpdate(out.player2, { pendingAct: "eat" }));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Food placement — port of EngineShared/Snake/SnakeFoodGenerator.swift.
+// Deterministic via the seed carried in the game state.
+// ---------------------------------------------------------------------------
+function placeNewFood(gs) {
+  if (gs.foodPosition) return gs;
+  const taken = new Set();
+  if (gs.player1.isInstalled) for (const k of bodyPositionSet(gs.player1.snakeBody)) taken.add(k);
+  if (gs.player2.isInstalled) for (const k of bodyPositionSet(gs.player2.snakeBody)) taken.add(k);
+  const candidates = gsLevel(gs).emptyPositionArray.filter((p) => !taken.has(posKey(p)));
+  const rng = new LCRNG(BigInt(gs.foodRngSeed));
+  if (candidates.length === 0) {
+    let out = gsUpdate(gs, { foodRngSeed: rng.seed.toString() });
+    out = gsUpdatePlayer(out, "player1", playerKill(out.player1, "noMoreFood"));
+    out = gsUpdatePlayer(out, "player2", playerKill(out.player2, "noMoreFood"));
+    return out;
+  }
+  const position = candidates[rng.pickIndex(candidates.length)];
+  return gsUpdate(gs, { foodPosition: position, foodRngSeed: rng.seed.toString() });
+}
+
+// ---------------------------------------------------------------------------
+// Stuck-in-a-loop detection — port of EngineShared/Snake/StuckSnakeDetector.swift.
+// Repeated body state: score += 2; fresh state: score -= 1; stuck at score >= 5.
+// Only bots are killed by this (humans find it annoying — Swift comment).
+// ---------------------------------------------------------------------------
+class StuckDetector {
+  constructor() { this.history = []; this._rebuild(); }
+  _rebuild() {
+    this.seen = new Set();
+    this.score = 0;
+    this.isStuck = false;
+    for (const key of this.history) this._appendKey(key);
+  }
+  _appendKey(key) {
+    if (!this.seen.has(key)) {
+      this.seen.add(key);
+      this.score = this.score > 1 ? this.score - 1 : 0;
+      return;
+    }
+    this.score += 2;
+    if (this.score >= 5) this.isStuck = true;
+  }
+  append(body) {
+    const key = JSON.stringify([bodyPositionArray(body), body.head.direction]);
+    this.history.push(key);
+    this._appendKey(key);
+  }
+  undo() {
+    if (this.history.length === 0) return;
+    this.history.pop();
+    this._rebuild();
+  }
+  reset() { this.history = []; this._rebuild(); }
+  killBotIfStuckInLoop(player) {
+    if (!playerIsAlive(player) || player.role !== "bot") return player;
+    this.append(player.snakeBody);
+    return this.isStuck ? playerKill(player, "stuckInALoop") : player;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Human-input helpers — ports of SnakeGameState+PreventHumanCollisions.swift
+// and +IsWaitingForHumanInput.swift. A human movement that would collide is
+// converted to dontMove, so an illegal keypress just keeps the snake waiting.
+// ---------------------------------------------------------------------------
+function preventHumanCollisions(gs) {
+  let out = gs;
+  for (const key of ["player1", "player2"]) {
+    const p = out[key];
+    if (!playerIsAliveAndHuman(p) || p.pendingMovement === "dontMove") continue;
+    const r = runCollisionDetector(gsLevel(out), out.foodPosition, out.player1, out.player2);
+    const alive = key === "player1" ? r.player1Alive : r.player2Alive;
+    if (!alive) out = gsUpdatePlayer(out, key, playerUpdate(p, { pendingMovement: "dontMove" }));
+  }
+  return out;
+}
+function isWaitingForHumanInput(gs) {
+  return (playerIsAliveAndHuman(gs.player1) && gs.player1.pendingMovement === "dontMove")
+      || (playerIsAliveAndHuman(gs.player2) && gs.player2.pendingMovement === "dontMove");
+}
+
+// --- test helper -----------------------------------------------------------
+function createGameStateForTest({ levelName = "Level 0", p1, p2, food } = {}) {
+  let gs = gameStateCreate(levelName, p1?.role ?? "human", p2?.role ?? "human");
+  const place = (key, spec) => {
+    if (!spec) return;
+    let player = gs[key];
+    if (spec.pos) player = playerUpdate(player, { snakeBody: bodyCreate(spec.pos, spec.dir, spec.len ?? 2) });
+    if (spec.move) player = playerUpdate(player, { pendingMovement: spec.move });
+    gs = gsUpdatePlayer(gs, key, player);
+  };
+  place("player1", p1);
+  place("player2", p2);
+  if (food !== undefined) gs = gsUpdate(gs, { foodPosition: food });
+  return gs;
+}
+
+SnakeTests.add("head-on collision kills both", () => {
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", move: "moveForward" },
+    p2: { pos: { x: 5, y: 4 }, dir: "left", move: "moveForward" },
+    food: null,
+  });
+  gs = detectCollision(gs);
+  assert(!playerIsAlive(gs.player1) && !playerIsAlive(gs.player2));
+  assert(gs.player1.causesOfDeath.includes("collisionWithOpponent"));
+  assert(gs.player2.causesOfDeath.includes("collisionWithOpponent"));
+});
+SnakeTests.add("wall collision kills", () => {
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 7, y: 4 }, dir: "right", move: "moveForward" }, // wall at x=8
+    p2: { pos: { x: 2, y: 1 }, dir: "left", move: "moveForward" },
+    food: null,
+  });
+  gs = detectCollision(gs);
+  assert(gs.player1.causesOfDeath.includes("collisionWithWall"));
+  assert(playerIsAlive(gs.player2));
+});
+SnakeTests.add("eating clears food and sets pendingAct", () => {
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", move: "moveForward" },
+    p2: { pos: { x: 6, y: 6 }, dir: "left", move: "moveForward" },
+    food: { x: 4, y: 4 },
+  });
+  gs = detectCollision(gs);
+  assertEq(gs.foodPosition, null);
+  assertEq(gs.player1.pendingAct, "eat");
+  assertEq(gs.player2.pendingAct, "doNothing");
+});
+SnakeTests.add("food placement is deterministic and avoids snakes", () => {
+  const gs = gsUpdate(createGameStateForTest({ food: null }), { foodRngSeed: "42" });
+  const a = placeNewFood(gs), b = placeNewFood(gs);
+  assertEq(a.foodPosition, b.foodPosition);
+  assert(a.foodPosition, "food was placed");
+  assert(a.foodRngSeed !== gs.foodRngSeed, "seed advanced");
+  assert(!bodyPositionSet(a.player1.snakeBody).has(posKey(a.foodPosition)));
+  assert(!bodyPositionSet(a.player2.snakeBody).has(posKey(a.foodPosition)));
+});
+SnakeTests.add("stuck detector kills bot repeating states", () => {
+  const detector = new StuckDetector();
+  let player = playerCreate("player1", "bot", bodyCreate({ x: 4, y: 4 }, "right", 2));
+  // Cycle through the same 4 body states until flagged stuck.
+  const states = [];
+  let b = player.snakeBody;
+  for (const mv of ["moveCW", "moveCW", "moveCW", "moveCW"]) {
+    b = bodyStateForTick(b, mv, "doNothing");
+    states.push(b);
+  }
+  let killed = null;
+  for (let round = 0; round < 5 && !killed; round++) {
+    for (const body of states) {
+      const result = detector.killBotIfStuckInLoop(playerUpdate(player, { snakeBody: body }));
+      if (!playerIsAlive(result)) { killed = result; break; }
+    }
+  }
+  assert(killed, "bot was killed for being stuck");
+  assert(killed.causesOfDeath.includes("stuckInALoop"));
+});
+SnakeTests.add("preventHumanCollisions converts deadly move to dontMove", () => {
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 7, y: 4 }, dir: "right", move: "moveForward" }, // would hit wall
+    p2: { pos: { x: 2, y: 1 }, dir: "left" },
+    food: null,
+  });
+  gs = preventHumanCollisions(gs);
+  assertEq(gs.player1.pendingMovement, "dontMove");
+  assert(isWaitingForHumanInput(gs));
+});
 </script>
 
 <script>
