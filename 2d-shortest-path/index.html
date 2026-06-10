@@ -328,7 +328,50 @@ const BNW = (() => {
     }
   }
 
-  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle, findNegativeCycle, elimNeg, sccsOfView, fixDagEdges, ballAround, lowDiamDecomposition };
+  // BNW Algorithm 1. Requires wbase(e) >= -2B on the view; ensures
+  // wbase(e) + psi(u) - psi(v) >= -B afterwards (throws NegativeCycleError if a
+  // negative cycle makes that impossible). All recursion levels of one round
+  // share ctx.wbase, ctx.psi and B; only delta shrinks.
+  function scaleDown(ctx, verts, edgeIdxs, delta, B, depth) {
+    const { nGlobal, edges, wbase, psi } = ctx;
+    const bump = ei => (wbase[ei] < 0 ? wbase[ei] + B : wbase[ei]);
+    const wB = ei => bump(ei) + psi[edges[ei].from] - psi[edges[ei].to];
+    if (ctx.stats) { ctx.stats.calls++; if (depth > ctx.stats.maxDepth) ctx.stats.maxDepth = depth; }
+    if (!edgeIdxs.some(ei => wB(ei) < 0)) {
+      if (depth === 0 && ctx.roundTrace) { ctx.roundTrace.clusters = [verts.slice()]; ctx.roundTrace.cuts = []; }
+      return;
+    }
+    if (delta > 2 && verts.length > 1) {
+      const d = Math.max(1, (delta * B) / 2);
+      const wNN = ei => Math.max(0, bump(ei));
+      const cuts = [];
+      lowDiamDecomposition(ctx, verts, edgeIdxs, wNN, d, cuts);
+      const cutSet = new Set(cuts);
+      const kept = edgeIdxs.filter(ei => !cutSet.has(ei));
+      const { comps, compOf } = sccsOfView(nGlobal, edges, verts, kept);
+      for (const comp of comps) {
+        if (comp.length <= 1) continue;
+        const inComp = new Set(comp);
+        const intra = edgeIdxs.filter(ei => inComp.has(edges[ei].from) && inComp.has(edges[ei].to));
+        if (!intra.some(ei => wB(ei) < 0)) continue;
+        scaleDown(ctx, comp, intra, Math.floor(delta / 2), B, depth + 1);
+      }
+      fixDagEdges(nGlobal, edges, kept, comps, compOf, wB, psi);
+      if (depth === 0 && ctx.roundTrace) {
+        ctx.roundTrace.clusters = comps.map(c => c.slice());
+        ctx.roundTrace.cuts = cuts.slice();
+      }
+    } else if (depth === 0 && ctx.roundTrace) {
+      ctx.roundTrace.clusters = [verts.slice()]; ctx.roundTrace.cuts = [];
+    }
+    const wRed = ei => wbase[ei] + psi[edges[ei].from] - psi[edges[ei].to];
+    const res = elimNeg(nGlobal, edges, verts, edgeIdxs, wRed);
+    if (res.negativeCycle) throw new NegativeCycleError(res.negativeCycle);
+    for (const v of verts) psi[v] += res.dist[v];
+    if (ctx.stats) ctx.stats.elimNegPasses += res.passes;
+  }
+
+  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle, findNegativeCycle, elimNeg, sccsOfView, fixDagEdges, ballAround, lowDiamDecomposition, scaleDown };
 })();
 if (typeof globalThis !== 'undefined') globalThis.BNW = BNW;
 </script>

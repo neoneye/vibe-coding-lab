@@ -183,6 +183,37 @@ check('NegativeCycleError exported', typeof BNW.NegativeCycleError === 'function
   }
 }
 
+// ---------- Task 7: scaleDown ----------
+{
+  for (let seed = 1; seed <= 60; seed++) {
+    const g = BNW.generateGraph({ n: 4 + (seed % 30), avgDegree: 2.7, seed });
+    const allV = Array.from({ length: g.n }, (_, i) => i);
+    const allE = Array.from({ length: g.edges.length }, (_, i) => i);
+    const wbase = g.edges.map(e => e.weight);
+    let mn = 0; for (const w of wbase) if (w < mn) mn = w;
+    let B = 1; while (2 * B < -mn) B *= 2;
+    const psi = new Array(g.n).fill(0);
+    const ctx = { nGlobal: g.n, edges: g.edges, wbase, psi, rng: BNW.mulberry32(seed) };
+    BNW.scaleDown(ctx, allV, allE, g.n, B, 0);
+    const ok = allE.every(ei => wbase[ei] + psi[g.edges[ei].from] - psi[g.edges[ei].to] >= -B);
+    check(`scaleDown ${seed}: reduced weights >= -B`, ok, { B });
+  }
+  // negative cycle: must throw NegativeCycleError
+  {
+    const g = BNW.generateGraph({ n: 10, avgDegree: 2.7, seed: 99 });
+    BNW.plantNegativeCycle(g, { seed: 99, len: 3 });
+    const allV = Array.from({ length: g.n }, (_, i) => i);
+    const allE = Array.from({ length: g.edges.length }, (_, i) => i);
+    const wbase = g.edges.map(e => e.weight);
+    let mn = 0; for (const w of wbase) if (w < mn) mn = w;
+    let B = 1; while (2 * B < -mn) B *= 2;
+    const ctx = { nGlobal: g.n, edges: g.edges, wbase, psi: new Array(g.n).fill(0), rng: BNW.mulberry32(1) };
+    let threw = null;
+    try { BNW.scaleDown(ctx, allV, allE, g.n, B, 0); } catch (e) { threw = e; }
+    check('scaleDown: throws NegativeCycleError', threw instanceof BNW.NegativeCycleError);
+  }
+}
+
 // ---------- summary ----------
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
