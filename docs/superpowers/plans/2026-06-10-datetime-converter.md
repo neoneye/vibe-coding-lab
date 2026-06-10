@@ -1,0 +1,990 @@
+# Datetime Converter (worldtimebuddy-style) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A standalone `datetime-converter/index.html` showing 24 hours on the x-axis with one row per timezone (worldtimebuddy-style), with add/remove/reorder, hover/click-to-pin column highlighting, auto 24h/AM-PM per zone, and localStorage persistence.
+
+**Architecture:** All pure logic (timezone math via `Intl`, grid computation, formatting, state parsing, zone search) lives in a `<script id="shared-code">` block inside `index.html`, exposed as `TimeGrid` plus a `TimeGridTests` runner. `test.mjs` extracts that block and runs the tests in Node (same pattern as `game-snake`). A second script block holds the DOM rendering and event wiring.
+
+**Tech Stack:** Vanilla JS, `Intl.DateTimeFormat` / `Intl.supportedValuesOf`, no dependencies. Spec: `docs/superpowers/specs/2026-06-10-datetime-converter-design.md`.
+
+**Files:**
+- Create: `datetime-converter/index.html` (everything: CSS, shared-code logic, UI script)
+- Create: `datetime-converter/test.mjs` (Node test harness, extraction-based)
+
+**Conventions for all tasks:**
+- Run tests with: `cd /Users/neoneye/git/vibe-coding-lab/datetime-converter && node test.mjs`
+- Commit from repo root `/Users/neoneye/git/vibe-coding-lab`.
+- "Add to shared-code" means: add functions inside the `TimeGrid` IIFE, add them to its `return {...}` object, and append test lines inside `TimeGridTests.run()` before the failure-reporting lines.
+
+---
+
+### Task 1: Scaffold with test harness, `dayPart`, `formatHourLabel`
+
+**Files:**
+- Create: `datetime-converter/test.mjs`
+- Create: `datetime-converter/index.html`
+
+- [ ] **Step 1: Write `test.mjs`**
+
+```js
+// Runs the TimeGridTests embedded in index.html's shared-code script block.
+// Usage: node test.mjs
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.html"), "utf8");
+const m = html.match(/<script id="shared-code">([\s\S]*?)<\/script>/);
+if (!m) {
+  console.error("shared-code block not found");
+  process.exit(1);
+}
+const ok = new Function(`${m[1]}; return TimeGridTests.run();`)();
+process.exit(ok ? 0 : 1);
+```
+
+- [ ] **Step 2: Write `index.html` skeleton with failing tests**
+
+The `TimeGrid` IIFE returns an empty object for now; tests reference `TimeGrid.dayPart` / `TimeGrid.formatHourLabel`, so the run fails.
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Time Zone Converter</title>
+<style>
+/* styles added in Task 6 */
+</style>
+</head>
+<body>
+<main id="grid"></main>
+<script id="shared-code">
+"use strict";
+const TimeGrid = (() => {
+  return {};
+})();
+
+const TimeGridTests = {
+  run() {
+    const failures = [];
+    const eq = (name, actual, expected) => {
+      const a = JSON.stringify(actual);
+      const e = JSON.stringify(expected);
+      if (a !== e) failures.push(`${name}: expected ${e}, got ${a}`);
+    };
+
+    // dayPart
+    eq("dayPart 0 is night", TimeGrid.dayPart(0), "night");
+    eq("dayPart 6 is night", TimeGrid.dayPart(6), "night");
+    eq("dayPart 7 is shoulder", TimeGrid.dayPart(7), "shoulder");
+    eq("dayPart 8 is work", TimeGrid.dayPart(8), "work");
+    eq("dayPart 17 is work", TimeGrid.dayPart(17), "work");
+    eq("dayPart 18 is shoulder", TimeGrid.dayPart(18), "shoulder");
+    eq("dayPart 21 is shoulder", TimeGrid.dayPart(21), "shoulder");
+    eq("dayPart 22 is night", TimeGrid.dayPart(22), "night");
+
+    // formatHourLabel
+    eq("label 0 24h", TimeGrid.formatHourLabel(0, 0, "24h"), "0");
+    eq("label 13 24h", TimeGrid.formatHourLabel(13, 0, "24h"), "13");
+    eq("label 5:30 24h", TimeGrid.formatHourLabel(5, 30, "24h"), "5:30");
+    eq("label 0 ampm", TimeGrid.formatHourLabel(0, 0, "ampm"), "12am");
+    eq("label 12 ampm", TimeGrid.formatHourLabel(12, 0, "ampm"), "12pm");
+    eq("label 13:30 ampm", TimeGrid.formatHourLabel(13, 30, "ampm"), "1:30pm");
+
+    if (failures.length) console.error(failures.join("\n"));
+    console.log(failures.length ? `FAIL: ${failures.length} failure(s)` : "PASS: all TimeGrid tests");
+    return failures.length === 0;
+  },
+};
+</script>
+<script>
+// UI wiring added in Tasks 6-8
+</script>
+</body>
+</html>
+```
+
+- [ ] **Step 3: Run tests, verify FAIL**
+
+Run: `cd /Users/neoneye/git/vibe-coding-lab/datetime-converter && node test.mjs`
+Expected: nonzero exit — `TypeError: TimeGrid.dayPart is not a function` (the eq calls invoke missing functions).
+
+- [ ] **Step 4: Implement `dayPart` and `formatHourLabel`**
+
+Inside the `TimeGrid` IIFE, before `return`:
+
+```js
+  // Cell tint: night dark, morning/evening medium, working hours light.
+  function dayPart(hour) {
+    if (hour >= 8 && hour <= 17) return "work";
+    if (hour === 7 || (hour >= 18 && hour <= 21)) return "shoulder";
+    return "night";
+  }
+
+  // Compact label for an hour cell, e.g. "13", "5:30", "1:30pm".
+  function formatHourLabel(hour, minute, format) {
+    const mm = minute ? ":" + String(minute).padStart(2, "0") : "";
+    if (format === "24h") return `${hour}${mm}`;
+    const h12 = hour % 12 === 0 ? 12 : hour % 12;
+    return `${h12}${mm}${hour < 12 ? "am" : "pm"}`;
+  }
+```
+
+And change the return to: `return { dayPart, formatHourLabel };`
+
+- [ ] **Step 5: Run tests, verify PASS**
+
+Run: `node test.mjs` — Expected: `PASS: all TimeGrid tests`, exit 0.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add datetime-converter/index.html datetime-converter/test.mjs
+git commit -m "feat(datetime-converter): scaffold with test harness, dayPart and hour labels"
+```
+
+---
+
+### Task 2: Timezone math (`wallClock`, offsets, zoned midnight, display labels)
+
+**Files:**
+- Modify: `datetime-converter/index.html` (shared-code block)
+
+- [ ] **Step 1: Add failing tests**
+
+Append inside `TimeGridTests.run()`:
+
+```js
+    // wallClock
+    eq("wallClock UTC", TimeGrid.wallClock("UTC", Date.UTC(2026, 5, 10, 12, 34)),
+      { year: 2026, month: 6, day: 10, hour: 12, minute: 34 });
+    eq("wallClock Copenhagen summer (+2)", TimeGrid.wallClock("Europe/Copenhagen", Date.UTC(2026, 5, 10, 12, 0)),
+      { year: 2026, month: 6, day: 10, hour: 14, minute: 0 });
+    eq("wallClock LA summer (-7)", TimeGrid.wallClock("America/Los_Angeles", Date.UTC(2026, 5, 10, 1, 0)),
+      { year: 2026, month: 6, day: 9, hour: 18, minute: 0 });
+
+    // zoneOffsetMinutes
+    eq("offset UTC", TimeGrid.zoneOffsetMinutes("UTC", Date.UTC(2026, 5, 10)), 0);
+    eq("offset CPH winter", TimeGrid.zoneOffsetMinutes("Europe/Copenhagen", Date.UTC(2026, 0, 15)), 60);
+    eq("offset CPH summer", TimeGrid.zoneOffsetMinutes("Europe/Copenhagen", Date.UTC(2026, 5, 15)), 120);
+    eq("offset LA summer", TimeGrid.zoneOffsetMinutes("America/Los_Angeles", Date.UTC(2026, 5, 15)), -420);
+    eq("offset Kolkata", TimeGrid.zoneOffsetMinutes("Asia/Kolkata", Date.UTC(2026, 5, 15)), 330);
+
+    // zonedMidnightInstant: local midnight of the local day containing the instant
+    eq("midnight CPH summer", TimeGrid.zonedMidnightInstant("Europe/Copenhagen", Date.UTC(2026, 5, 10, 12, 0)),
+      Date.UTC(2026, 5, 9, 22, 0));
+    eq("midnight CPH winter", TimeGrid.zonedMidnightInstant("Europe/Copenhagen", Date.UTC(2026, 0, 15, 12, 0)),
+      Date.UTC(2026, 0, 14, 23, 0));
+    eq("midnight UTC", TimeGrid.zonedMidnightInstant("UTC", Date.UTC(2026, 5, 10, 12, 0)),
+      Date.UTC(2026, 5, 10, 0, 0));
+
+    // display labels
+    eq("offsetLabel UTC", TimeGrid.offsetLabel("UTC", Date.UTC(2026, 5, 10)), "UTC+0");
+    eq("offsetLabel CPH summer", TimeGrid.offsetLabel("Europe/Copenhagen", Date.UTC(2026, 5, 10)), "UTC+2");
+    eq("offsetLabel LA summer", TimeGrid.offsetLabel("America/Los_Angeles", Date.UTC(2026, 5, 10)), "UTC-7");
+    eq("offsetLabel Kolkata", TimeGrid.offsetLabel("Asia/Kolkata", Date.UTC(2026, 5, 10)), "UTC+5:30");
+    eq("monthDayLabel", TimeGrid.monthDayLabel("UTC", Date.UTC(2026, 5, 10, 12)), "Jun 10");
+    eq("currentTimeLabel 24h", TimeGrid.currentTimeLabel("UTC", Date.UTC(2026, 5, 10, 9, 5), "24h"), "9:05");
+    eq("currentTimeLabel ampm", TimeGrid.currentTimeLabel("UTC", Date.UTC(2026, 5, 10, 14, 5), "ampm"), "2:05pm");
+```
+
+- [ ] **Step 2: Run tests, verify FAIL** — `node test.mjs`, expected TypeError on `TimeGrid.wallClock`.
+
+- [ ] **Step 3: Implement**
+
+Inside the IIFE:
+
+```js
+  const wallClockFormatters = new Map();
+  function wallClockFormatter(zoneId) {
+    let f = wallClockFormatters.get(zoneId);
+    if (!f) {
+      f = new Intl.DateTimeFormat("en-US", {
+        timeZone: zoneId, year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+      });
+      wallClockFormatters.set(zoneId, f);
+    }
+    return f;
+  }
+
+  // Local wall-clock components of an absolute instant in a zone.
+  function wallClock(zoneId, instantMs) {
+    const p = {};
+    for (const part of wallClockFormatter(zoneId).formatToParts(instantMs)) p[part.type] = part.value;
+    return { year: +p.year, month: +p.month, day: +p.day, hour: +p.hour, minute: +p.minute };
+  }
+
+  function zoneOffsetMinutes(zoneId, instantMs) {
+    const t = instantMs - (instantMs % 60000); // whole minute, so wallClock truncation is exact
+    const w = wallClock(zoneId, t);
+    return (Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute) - t) / 60000;
+  }
+
+  // Instant at which the zone's wall clock reads y-mo-d 00:00. Iterates to
+  // converge across DST offsets.
+  function zonedTimeToInstant(zoneId, y, mo, d) {
+    const target = Date.UTC(y, mo - 1, d);
+    let guess = target;
+    for (let i = 0; i < 3; i++) {
+      const next = target - zoneOffsetMinutes(zoneId, guess) * 60000;
+      if (next === guess) break;
+      guess = next;
+    }
+    return guess;
+  }
+
+  function zonedMidnightInstant(zoneId, instantMs) {
+    const w = wallClock(zoneId, instantMs);
+    return zonedTimeToInstant(zoneId, w.year, w.month, w.day);
+  }
+
+  function offsetLabel(zoneId, instantMs) {
+    const off = zoneOffsetMinutes(zoneId, instantMs);
+    const sign = off < 0 ? "-" : "+";
+    const abs = Math.abs(off);
+    const m = abs % 60;
+    return `UTC${sign}${Math.floor(abs / 60)}${m ? ":" + String(m).padStart(2, "0") : ""}`;
+  }
+
+  function monthDayLabel(zoneId, instantMs) {
+    return new Intl.DateTimeFormat("en-US", { timeZone: zoneId, month: "short", day: "numeric" }).format(instantMs);
+  }
+
+  function zoneAbbreviation(zoneId, instantMs) {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: zoneId, timeZoneName: "short" }).formatToParts(instantMs);
+    const p = parts.find((x) => x.type === "timeZoneName");
+    return p ? p.value : "";
+  }
+
+  // Full current time for the row label, e.g. "14:05" or "2:05pm".
+  function currentTimeLabel(zoneId, instantMs, format) {
+    const w = wallClock(zoneId, instantMs);
+    const mm = String(w.minute).padStart(2, "0");
+    if (format === "24h") return `${w.hour}:${mm}`;
+    const h12 = w.hour % 12 === 0 ? 12 : w.hour % 12;
+    return `${h12}:${mm}${w.hour < 12 ? "am" : "pm"}`;
+  }
+```
+
+Extend the return object:
+
+```js
+  return {
+    dayPart, formatHourLabel, wallClock, zoneOffsetMinutes, zonedMidnightInstant,
+    offsetLabel, monthDayLabel, zoneAbbreviation, currentTimeLabel,
+  };
+```
+
+- [ ] **Step 4: Run tests, verify PASS** — `node test.mjs` → `PASS: all TimeGrid tests`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add datetime-converter/index.html
+git commit -m "feat(datetime-converter): timezone math via Intl with DST-safe zoned midnight"
+```
+
+---
+
+### Task 3: Format classification (`zoneUses12Hour`, `resolveFormat`, `cityName`)
+
+**Files:**
+- Modify: `datetime-converter/index.html` (shared-code block)
+
+- [ ] **Step 1: Add failing tests**
+
+```js
+    // 12-hour classification
+    eq("12h LA", TimeGrid.zoneUses12Hour("America/Los_Angeles"), true);
+    eq("12h NYC", TimeGrid.zoneUses12Hour("America/New_York"), true);
+    eq("12h Indiana", TimeGrid.zoneUses12Hour("America/Indiana/Indianapolis"), true);
+    eq("12h Sydney", TimeGrid.zoneUses12Hour("Australia/Sydney"), true);
+    eq("12h Manila", TimeGrid.zoneUses12Hour("Asia/Manila"), true);
+    eq("24h Copenhagen", TimeGrid.zoneUses12Hour("Europe/Copenhagen"), false);
+    eq("24h UTC", TimeGrid.zoneUses12Hour("UTC"), false);
+    eq("24h Sao Paulo", TimeGrid.zoneUses12Hour("America/Sao_Paulo"), false);
+
+    // resolveFormat
+    eq("resolve auto LA", TimeGrid.resolveFormat("America/Los_Angeles", "auto"), "ampm");
+    eq("resolve auto CPH", TimeGrid.resolveFormat("Europe/Copenhagen", "auto"), "24h");
+    eq("resolve override 24h", TimeGrid.resolveFormat("America/Los_Angeles", "24h"), "24h");
+    eq("resolve override ampm", TimeGrid.resolveFormat("Europe/Copenhagen", "ampm"), "ampm");
+
+    // cityName
+    eq("cityName LA", TimeGrid.cityName("America/Los_Angeles"), "Los Angeles");
+    eq("cityName UTC", TimeGrid.cityName("UTC"), "UTC");
+    eq("cityName Indiana", TimeGrid.cityName("America/Indiana/Indianapolis"), "Indianapolis");
+```
+
+- [ ] **Step 2: Run tests, verify FAIL** — TypeError on `TimeGrid.zoneUses12Hour`.
+
+- [ ] **Step 3: Implement**
+
+```js
+  // Zones in countries that customarily use the 12-hour clock (US, Canada,
+  // Australia, NZ, Philippines, India, Pakistan, Bangladesh, Sri Lanka,
+  // Saudi Arabia, Egypt). Pragmatic list of common zones, not exhaustive.
+  const TWELVE_HOUR_EXACT = new Set([
+    "America/New_York", "America/Detroit", "America/Chicago", "America/Denver",
+    "America/Phoenix", "America/Boise", "America/Los_Angeles", "America/Anchorage",
+    "America/Juneau", "America/Sitka", "America/Nome", "America/Yakutat",
+    "America/Adak", "America/Menominee", "America/Metlakatla", "Pacific/Honolulu",
+    "America/St_Johns", "America/Halifax", "America/Moncton", "America/Toronto",
+    "America/Winnipeg", "America/Regina", "America/Edmonton", "America/Vancouver",
+    "America/Whitehorse", "America/Dawson", "America/Iqaluit", "America/Yellowknife",
+    "Asia/Manila", "Asia/Kolkata", "Asia/Karachi", "Asia/Dhaka", "Asia/Colombo",
+    "Asia/Riyadh", "Africa/Cairo", "Pacific/Auckland",
+  ]);
+  const TWELVE_HOUR_PREFIXES = ["America/Indiana/", "America/Kentucky/", "America/North_Dakota/", "Australia/"];
+
+  function zoneUses12Hour(zoneId) {
+    return TWELVE_HOUR_EXACT.has(zoneId) || TWELVE_HOUR_PREFIXES.some((p) => zoneId.startsWith(p));
+  }
+
+  function resolveFormat(zoneId, override) {
+    if (override === "24h" || override === "ampm") return override;
+    return zoneUses12Hour(zoneId) ? "ampm" : "24h";
+  }
+
+  function cityName(zoneId) {
+    return zoneId.split("/").pop().replace(/_/g, " ");
+  }
+```
+
+Add `zoneUses12Hour, resolveFormat, cityName` to the return object.
+
+- [ ] **Step 4: Run tests, verify PASS** — `node test.mjs`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add datetime-converter/index.html
+git commit -m "feat(datetime-converter): 12-hour zone classification and format resolution"
+```
+
+---
+
+### Task 4: `computeGrid`
+
+**Files:**
+- Modify: `datetime-converter/index.html` (shared-code block)
+
+- [ ] **Step 1: Add failing tests**
+
+```js
+    // computeGrid: ref UTC, summer 2026-06-10 12:00Z
+    {
+      const g = TimeGrid.computeGrid(["UTC", "Europe/Copenhagen", "America/Los_Angeles"], Date.UTC(2026, 5, 10, 12, 0), "auto");
+      eq("grid 24 columns", g.columns.length, 24);
+      eq("grid col0 is UTC midnight", g.columns[0], Date.UTC(2026, 5, 10, 0, 0));
+      eq("grid nowCol", g.nowCol, 12);
+      eq("grid ref hours 0..23", g.rows[0].cells.map((c) => c.hour),
+        [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]);
+      eq("grid CPH first cell hour", g.rows[1].cells[0].hour, 2);
+      eq("grid LA first cell hour (prev day)", g.rows[2].cells[0].hour, 17);
+      eq("grid LA date change at col 7", g.rows[2].cells[7].dateLabel, "Jun 10");
+      eq("grid LA no date label col 6", g.rows[2].cells[6].dateLabel, null);
+      eq("grid LA format auto=ampm", g.rows[2].format, "ampm");
+      eq("grid LA col0 label", g.rows[2].cells[0].label, "5pm");
+      eq("grid CPH format auto=24h", g.rows[1].format, "24h");
+      eq("grid ref no date label at col 0", g.rows[0].cells[0].dateLabel, null);
+      eq("grid cell part work", g.rows[0].cells[9].part, "work");
+      eq("grid cell part night", g.rows[0].cells[2].part, "night");
+    }
+
+    // computeGrid: DST spring-forward day in ref zone (Europe 2026-03-29, 02:00 CET -> 03:00 CEST)
+    {
+      const g = TimeGrid.computeGrid(["Europe/Copenhagen"], Date.UTC(2026, 2, 29, 12, 0), "auto");
+      eq("dst col0 is CPH midnight", g.columns[0], Date.UTC(2026, 2, 28, 23, 0));
+      eq("dst hour sequence skips 2", g.rows[0].cells.slice(0, 5).map((c) => c.hour), [0, 1, 3, 4, 5]);
+      eq("dst last cell rolls to next day", g.rows[0].cells[23].hour, 0);
+      eq("dst last cell date label", g.rows[0].cells[23].dateLabel, "Mar 30");
+      eq("dst nowCol", g.nowCol, 13);
+    }
+
+    // computeGrid: half-hour zone
+    {
+      const g = TimeGrid.computeGrid(["UTC", "Asia/Kolkata"], Date.UTC(2026, 5, 10, 12, 0), "auto");
+      eq("kolkata col0", { h: g.rows[1].cells[0].hour, m: g.rows[1].cells[0].minute }, { h: 5, m: 30 });
+      eq("kolkata col0 label", g.rows[1].cells[0].label, "5:30am");
+    }
+
+    // computeGrid: empty zone list
+    eq("empty grid", TimeGrid.computeGrid([], Date.UTC(2026, 5, 10), "auto"), { columns: [], nowCol: -1, rows: [] });
+```
+
+- [ ] **Step 2: Run tests, verify FAIL** — TypeError on `TimeGrid.computeGrid`.
+
+- [ ] **Step 3: Implement**
+
+```js
+  // The full display model: 24 column instants anchored at the reference
+  // (first) zone's local midnight, and per-zone cells for each column.
+  function computeGrid(zoneIds, nowMs, formatOverride) {
+    if (!zoneIds.length) return { columns: [], nowCol: -1, rows: [] };
+    const start = zonedMidnightInstant(zoneIds[0], nowMs);
+    const columns = [];
+    for (let i = 0; i < 24; i++) columns.push(start + i * 3600000);
+    const nowCol = columns.findIndex((t) => nowMs >= t && nowMs < t + 3600000);
+    const rows = zoneIds.map((zoneId) => {
+      const format = resolveFormat(zoneId, formatOverride);
+      let prevDay = null;
+      const cells = columns.map((t) => {
+        const w = wallClock(zoneId, t);
+        const isNewDay = prevDay !== null && w.day !== prevDay;
+        prevDay = w.day;
+        return {
+          hour: w.hour,
+          minute: w.minute,
+          label: formatHourLabel(w.hour, w.minute, format),
+          part: dayPart(w.hour),
+          dateLabel: isNewDay ? monthDayLabel(zoneId, t) : null,
+        };
+      });
+      return {
+        zoneId, format, cells,
+        offsetLabel: offsetLabel(zoneId, nowMs),
+        abbreviation: zoneAbbreviation(zoneId, nowMs),
+      };
+    });
+    return { columns, nowCol, rows };
+  }
+```
+
+Add `computeGrid` to the return object.
+
+- [ ] **Step 4: Run tests, verify PASS** — `node test.mjs`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add datetime-converter/index.html
+git commit -m "feat(datetime-converter): computeGrid with DST and fractional-offset handling"
+```
+
+---
+
+### Task 5: State persistence and zone search
+
+**Files:**
+- Modify: `datetime-converter/index.html` (shared-code block)
+
+- [ ] **Step 1: Add failing tests**
+
+```js
+    // state
+    {
+      const valid = ["UTC", "Europe/Copenhagen", "America/Los_Angeles", "Asia/Tokyo"];
+      eq("default state", TimeGrid.defaultState(),
+        { zones: ["UTC", "Europe/Copenhagen", "America/Los_Angeles"], format: "auto" });
+      eq("parse null", TimeGrid.parseState(null, valid), TimeGrid.defaultState());
+      eq("parse corrupt", TimeGrid.parseState("{nope", valid), TimeGrid.defaultState());
+      eq("parse drops unknown zones",
+        TimeGrid.parseState('{"zones":["Asia/Tokyo","Mars/Olympus_Mons"],"format":"24h"}', valid),
+        { zones: ["Asia/Tokyo"], format: "24h" });
+      eq("parse bad format falls back to auto",
+        TimeGrid.parseState('{"zones":["UTC"],"format":"sundial"}', valid),
+        { zones: ["UTC"], format: "auto" });
+      eq("parse empty zones -> defaults", TimeGrid.parseState('{"zones":[],"format":"auto"}', valid), TimeGrid.defaultState());
+      const rt = { zones: ["Asia/Tokyo", "UTC"], format: "ampm" };
+      eq("serialize/parse round trip", TimeGrid.parseState(TimeGrid.serializeState(rt), valid), rt);
+    }
+
+    // searchZones
+    {
+      const all = ["UTC", "Europe/Copenhagen", "America/Los_Angeles", "America/New_York", "Asia/Kolkata"];
+      eq("search by city with space", TimeGrid.searchZones("los angeles", all), ["America/Los_Angeles"]);
+      eq("search case-insensitive partial", TimeGrid.searchZones("copen", all), ["Europe/Copenhagen"]);
+      eq("search by region", TimeGrid.searchZones("america", all), ["America/Los_Angeles", "America/New_York"]);
+      eq("search empty query", TimeGrid.searchZones("  ", all), []);
+    }
+```
+
+- [ ] **Step 2: Run tests, verify FAIL** — TypeError on `TimeGrid.defaultState`.
+
+- [ ] **Step 3: Implement**
+
+```js
+  const DEFAULT_ZONES = ["UTC", "Europe/Copenhagen", "America/Los_Angeles"];
+
+  function defaultState() {
+    return { zones: DEFAULT_ZONES.slice(), format: "auto" };
+  }
+
+  function parseState(json, validZoneIds) {
+    try {
+      const data = JSON.parse(json);
+      const valid = new Set(validZoneIds);
+      const zones = (Array.isArray(data.zones) ? data.zones : [])
+        .filter((z) => typeof z === "string" && valid.has(z));
+      if (!zones.length) return defaultState();
+      const format = ["auto", "24h", "ampm"].includes(data.format) ? data.format : "auto";
+      return { zones, format };
+    } catch {
+      return defaultState();
+    }
+  }
+
+  function serializeState(state) {
+    return JSON.stringify({ zones: state.zones, format: state.format });
+  }
+
+  function searchZones(query, zoneIds) {
+    const q = query.trim().toLowerCase().replace(/\s+/g, "_");
+    if (!q) return [];
+    return zoneIds.filter((z) => z.toLowerCase().includes(q)).slice(0, 12);
+  }
+```
+
+Add `defaultState, parseState, serializeState, searchZones` to the return object.
+
+- [ ] **Step 4: Run tests, verify PASS** — `node test.mjs`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add datetime-converter/index.html
+git commit -m "feat(datetime-converter): state persistence parsing and zone search"
+```
+
+---
+
+### Task 6: Page layout, CSS, and rendering
+
+**Files:**
+- Modify: `datetime-converter/index.html` (head `<style>`, body markup, UI script)
+
+No Node-testable logic here; verification is in the browser.
+
+- [ ] **Step 1: Replace the `<style>` block**
+
+```css
+:root {
+  --bg: #f4f6f8; --panel: #ffffff; --text: #1d2733; --muted: #64748b;
+  --work: #fff7d6; --shoulder: #dde4ec; --night: #2e3f54; --night-text: #b9c6d8;
+  --accent: #2563eb; --now: #e11d48; --border: #e2e8f0;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 24px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg); color: var(--text);
+}
+header {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  justify-content: space-between; max-width: 1280px; margin: 0 auto 16px;
+}
+h1 { font-size: 20px; margin: 0; }
+.controls { display: flex; gap: 12px; align-items: center; }
+.seg {
+  display: inline-flex; border: 1px solid #cbd5e1; border-radius: 8px;
+  overflow: hidden; background: var(--panel);
+}
+.seg button {
+  border: 0; background: transparent; padding: 6px 12px;
+  cursor: pointer; font: inherit; font-size: 13px; color: var(--muted);
+}
+.seg button.active { background: var(--accent); color: #fff; }
+#add-btn {
+  border: 1px solid #cbd5e1; border-radius: 8px; background: var(--panel);
+  padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px;
+}
+#add-btn:hover { border-color: var(--accent); color: var(--accent); }
+.add-wrap { position: relative; }
+#add-panel {
+  position: absolute; right: 0; top: calc(100% + 6px); width: 320px;
+  background: var(--panel); border: 1px solid #cbd5e1; border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .15); padding: 10px; z-index: 10;
+}
+#zone-search {
+  width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1;
+  border-radius: 8px; font: inherit; font-size: 13px;
+}
+#zone-results { list-style: none; margin: 8px 0 0; padding: 0; max-height: 260px; overflow: auto; }
+#zone-results li { padding: 7px 9px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+#zone-results li:hover { background: #eef2ff; }
+#grid { max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
+.row { display: grid; grid-template-columns: 240px 1fr; gap: 8px; }
+.row-label {
+  display: flex; align-items: center; gap: 8px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
+}
+.drag-handle { cursor: grab; color: var(--muted); user-select: none; }
+.zone-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.city {
+  font-weight: 600; font-size: 14px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ref-badge {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--accent); border: 1px solid var(--accent); border-radius: 4px;
+  padding: 0 4px; vertical-align: 2px;
+}
+.meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.row-now { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; white-space: nowrap; }
+.row-buttons { display: flex; flex-direction: column; gap: 0; }
+.row-buttons button {
+  border: 0; background: transparent; cursor: pointer; color: var(--muted);
+  font-size: 10px; padding: 1px 3px; border-radius: 4px; line-height: 1.2;
+}
+.row-buttons button:hover { background: #e2e8f0; color: var(--text); }
+.row-buttons .remove { font-size: 13px; }
+.cells { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; }
+.cell {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 46px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  user-select: none; overflow: hidden;
+}
+.cell.work { background: var(--work); }
+.cell.shoulder { background: var(--shoulder); }
+.cell.night { background: var(--night); color: var(--night-text); }
+.cell .date { font-size: 9px; font-weight: 700; opacity: .85; white-space: nowrap; }
+.cell.now { outline: 2px solid var(--now); outline-offset: -2px; }
+.cell.hover { filter: brightness(.9); }
+.cell.night.hover { filter: brightness(1.3); }
+.cell.pinned { outline: 2px solid var(--accent); outline-offset: -2px; font-weight: 700; }
+.hint { max-width: 1280px; margin: 14px auto 0; color: var(--muted); font-size: 12px; }
+.empty {
+  background: var(--panel); border: 1px dashed #cbd5e1; border-radius: 8px;
+  padding: 24px; text-align: center; color: var(--muted);
+}
+@media (max-width: 900px) {
+  .row { grid-template-columns: 170px 1fr; }
+  .cell { min-height: 38px; font-size: 10px; }
+}
+```
+
+- [ ] **Step 2: Replace the body markup (before the scripts)**
+
+```html
+<header>
+  <h1>Time Zone Converter</h1>
+  <div class="controls">
+    <div class="seg" id="format-toggle">
+      <button data-format="auto">Auto</button>
+      <button data-format="24h">24h</button>
+      <button data-format="ampm">AM/PM</button>
+    </div>
+    <div class="add-wrap">
+      <button id="add-btn">+ Add time zone</button>
+      <div id="add-panel" hidden>
+        <input id="zone-search" type="text" placeholder="Search city or zone&hellip;" autocomplete="off">
+        <ul id="zone-results"></ul>
+      </div>
+    </div>
+  </div>
+</header>
+<main id="grid"></main>
+<p class="hint">Hover a column to compare across zones; click to pin (Esc unpins). Drag &#8801; or use &#9650;&#9660; to reorder &mdash; the top row anchors the day.</p>
+```
+
+- [ ] **Step 3: Replace the UI `<script>` block with state setup + render**
+
+```js
+"use strict";
+const STORAGE_KEY = "datetime-converter-v1";
+const FALLBACK_ZONES = [
+  "UTC", "Europe/Copenhagen", "Europe/London", "Europe/Paris", "Europe/Berlin",
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "America/Sao_Paulo", "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata", "Asia/Dubai",
+  "Australia/Sydney", "Pacific/Auckland",
+];
+const ALL_ZONES = (() => {
+  if (typeof Intl.supportedValuesOf !== "function") return FALLBACK_ZONES;
+  const list = Intl.supportedValuesOf("timeZone");
+  return list.includes("UTC") ? list : ["UTC", ...list];
+})();
+
+let state = TimeGrid.parseState(localStorage.getItem(STORAGE_KEY), ALL_ZONES);
+let pinnedCol = null;
+
+function save() {
+  localStorage.setItem(STORAGE_KEY, TimeGrid.serializeState(state));
+}
+
+const gridEl = document.getElementById("grid");
+
+function render() {
+  const now = Date.now();
+  const model = TimeGrid.computeGrid(state.zones, now, state.format);
+  gridEl.innerHTML = "";
+  if (!model.rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "All rows removed — use “+ Add time zone” to start over.";
+    gridEl.appendChild(empty);
+    return;
+  }
+  model.rows.forEach((row, ri) => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "row";
+    rowEl.dataset.index = ri;
+
+    const label = document.createElement("div");
+    label.className = "row-label";
+    label.draggable = true;
+    label.innerHTML = `
+      <span class="drag-handle" title="Drag to reorder">&#8801;</span>
+      <span class="zone-text">
+        <span class="city">${TimeGrid.cityName(row.zoneId)}${ri === 0 ? ' <span class="ref-badge">anchor</span>' : ""}</span>
+        <span class="meta">${row.abbreviation} &middot; ${row.offsetLabel}</span>
+      </span>
+      <span class="row-now">${TimeGrid.currentTimeLabel(row.zoneId, now, row.format)}</span>
+      <span class="row-buttons">
+        <button class="move-up" title="Move up">&#9650;</button>
+        <button class="move-down" title="Move down">&#9660;</button>
+        <button class="remove" title="Remove row">&times;</button>
+      </span>`;
+    rowEl.appendChild(label);
+
+    const cells = document.createElement("div");
+    cells.className = "cells";
+    row.cells.forEach((cell, ci) => {
+      const c = document.createElement("div");
+      c.className = `cell ${cell.part}`;
+      c.dataset.col = ci;
+      if (ci === model.nowCol) c.classList.add("now");
+      if (ci === pinnedCol) c.classList.add("pinned");
+      const date = cell.dateLabel ? `<span class="date">${cell.dateLabel}</span>` : "";
+      c.innerHTML = `${date}<span class="hour">${cell.label}</span>`;
+      cells.appendChild(c);
+    });
+    rowEl.appendChild(cells);
+    gridEl.appendChild(rowEl);
+  });
+}
+
+// Re-render when the minute ticks over, keeping clocks and the now-column fresh.
+let lastMinute = Math.floor(Date.now() / 60000);
+setInterval(() => {
+  const m = Math.floor(Date.now() / 60000);
+  if (m !== lastMinute) { lastMinute = m; render(); }
+}, 5000);
+
+document.querySelectorAll("#format-toggle button").forEach((b) => {
+  b.classList.toggle("active", b.dataset.format === state.format);
+});
+render();
+```
+
+- [ ] **Step 4: Verify in browser**
+
+Run: `open /Users/neoneye/git/vibe-coding-lab/datetime-converter/index.html`
+Expected: three rows (UTC anchor, Copenhagen, Los Angeles), 24 tinted cells each, LA row in AM/PM with a date label where its day rolls over, the current hour outlined in red, live current time per row.
+
+- [ ] **Step 5: Run `node test.mjs` (regression) and commit**
+
+```bash
+git add datetime-converter/index.html
+git commit -m "feat(datetime-converter): page layout, day-tinted hour grid, live clocks"
+```
+
+---
+
+### Task 7: Hover and pin interactions
+
+**Files:**
+- Modify: `datetime-converter/index.html` (UI script)
+
+- [ ] **Step 1: Add column highlight + pin handling to the UI script**
+
+Append after `render()` definition (before the interval):
+
+```js
+function setColClass(col, cls, on) {
+  if (col === null || col < 0) return;
+  gridEl.querySelectorAll(`.cell[data-col="${col}"]`).forEach((el) => el.classList.toggle(cls, on));
+}
+
+let hoverCol = null;
+gridEl.addEventListener("mouseover", (e) => {
+  const cell = e.target.closest(".cell");
+  const col = cell ? Number(cell.dataset.col) : null;
+  if (col === hoverCol) return;
+  setColClass(hoverCol, "hover", false);
+  hoverCol = col;
+  setColClass(hoverCol, "hover", true);
+});
+gridEl.addEventListener("mouseleave", () => {
+  setColClass(hoverCol, "hover", false);
+  hoverCol = null;
+});
+
+gridEl.addEventListener("click", (e) => {
+  const cell = e.target.closest(".cell");
+  if (!cell) return;
+  const col = Number(cell.dataset.col);
+  setColClass(pinnedCol, "pinned", false);
+  pinnedCol = pinnedCol === col ? null : col;
+  setColClass(pinnedCol, "pinned", true);
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  setColClass(pinnedCol, "pinned", false);
+  pinnedCol = null;
+});
+```
+
+- [ ] **Step 2: Verify in browser**
+
+Reload the page. Expected: hovering an hour darkens the whole column in every row; clicking outlines the column blue and it stays after moving the mouse; clicking the same column or pressing Esc removes it; the pin survives the minute re-render (because `render()` re-applies `pinnedCol`).
+
+- [ ] **Step 3: Run `node test.mjs` (regression) and commit**
+
+```bash
+git add datetime-converter/index.html
+git commit -m "feat(datetime-converter): hover column highlight and click-to-pin"
+```
+
+---
+
+### Task 8: Add, remove, reorder, format toggle, persistence wiring
+
+**Files:**
+- Modify: `datetime-converter/index.html` (UI script)
+
+- [ ] **Step 1: Add row buttons + drag reorder + format toggle + add-panel logic**
+
+Append to the UI script:
+
+```js
+// Row buttons: remove / move up / move down (event delegation).
+gridEl.addEventListener("click", (e) => {
+  const btn = e.target.closest(".row-buttons button");
+  if (!btn) return;
+  const i = Number(btn.closest(".row").dataset.index);
+  if (btn.classList.contains("remove")) {
+    state.zones.splice(i, 1);
+  } else if (btn.classList.contains("move-up") && i > 0) {
+    [state.zones[i - 1], state.zones[i]] = [state.zones[i], state.zones[i - 1]];
+  } else if (btn.classList.contains("move-down") && i < state.zones.length - 1) {
+    [state.zones[i + 1], state.zones[i]] = [state.zones[i], state.zones[i + 1]];
+  } else {
+    return;
+  }
+  save();
+  render();
+});
+
+// Drag-and-drop reorder via the row label.
+let dragIndex = null;
+gridEl.addEventListener("dragstart", (e) => {
+  const row = e.target.closest(".row");
+  if (!row) return;
+  dragIndex = Number(row.dataset.index);
+  e.dataTransfer.effectAllowed = "move";
+});
+gridEl.addEventListener("dragover", (e) => {
+  if (dragIndex !== null) e.preventDefault();
+});
+gridEl.addEventListener("drop", (e) => {
+  const row = e.target.closest(".row");
+  if (dragIndex === null || !row) return;
+  e.preventDefault();
+  const to = Number(row.dataset.index);
+  if (to !== dragIndex) {
+    const [zone] = state.zones.splice(dragIndex, 1);
+    state.zones.splice(to, 0, zone);
+    save();
+    render();
+  }
+  dragIndex = null;
+});
+gridEl.addEventListener("dragend", () => { dragIndex = null; });
+
+// Global format toggle.
+document.getElementById("format-toggle").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  state.format = btn.dataset.format;
+  document.querySelectorAll("#format-toggle button").forEach((b) => b.classList.toggle("active", b === btn));
+  save();
+  render();
+});
+
+// Add-zone panel.
+const addPanel = document.getElementById("add-panel");
+const searchInput = document.getElementById("zone-search");
+const resultsEl = document.getElementById("zone-results");
+
+document.getElementById("add-btn").addEventListener("click", () => {
+  addPanel.hidden = !addPanel.hidden;
+  if (!addPanel.hidden) {
+    searchInput.value = "";
+    resultsEl.innerHTML = "";
+    searchInput.focus();
+  }
+});
+searchInput.addEventListener("input", () => {
+  resultsEl.innerHTML = "";
+  for (const zone of TimeGrid.searchZones(searchInput.value, ALL_ZONES)) {
+    const li = document.createElement("li");
+    li.textContent = `${TimeGrid.cityName(zone)} — ${zone} (${TimeGrid.offsetLabel(zone, Date.now())})`;
+    li.addEventListener("click", () => {
+      if (!state.zones.includes(zone)) {
+        state.zones.push(zone);
+        save();
+        render();
+      }
+      addPanel.hidden = true;
+    });
+    resultsEl.appendChild(li);
+  }
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".add-wrap")) addPanel.hidden = true;
+});
+```
+
+Also extend the existing Escape handler to close the add panel — replace its body with:
+
+```js
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  setColClass(pinnedCol, "pinned", false);
+  pinnedCol = null;
+  addPanel.hidden = true;
+});
+```
+
+(Note: the `addPanel` const is declared later in the script than the Task 7 keydown handler; move the keydown registration to the end of the script, after `addPanel` exists.)
+
+- [ ] **Step 2: Verify in browser**
+
+Reload and check:
+- "+ Add time zone" → type "tokyo" → click result → Tokyo row appears at the bottom.
+- "los angeles" (with space) finds Los Angeles; adding a duplicate does nothing.
+- × removes a row; ▲▼ move rows; dragging a row label reorders; moving a row to the top re-anchors hours 0–23 to that zone.
+- Format toggle: 24h forces LA row to 0–23; AM/PM forces Copenhagen row to am/pm; Auto restores per-zone.
+- Reload the page: rows, order, and format choice persist (localStorage).
+- Remove all rows: friendly empty message; add a zone to recover.
+
+- [ ] **Step 3: Run `node test.mjs` (regression)**
+
+Expected: `PASS: all TimeGrid tests`.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add datetime-converter/index.html
+git commit -m "feat(datetime-converter): add/remove/reorder rows, format toggle, persistence"
+```
+
+---
+
+### Task 9: Final verification and screenshot
+
+- [ ] **Step 1: Full test run** — `node test.mjs` → PASS.
+- [ ] **Step 2: Browser walkthrough** of every spec requirement (defaults, alignment, tints, now-marker, hover, pin, Esc, add/remove/reorder, formats, persistence).
+- [ ] **Step 3: Screenshot** — capture the page as `datetime-converter/screenshot1.jpg` (sibling-project convention). If no scriptable browser/screenshot tool is available in the environment, ask the user to provide one and skip.
+- [ ] **Step 4: Commit** any remaining files:
+
+```bash
+git add datetime-converter/
+git commit -m "feat(datetime-converter): screenshot"
+```
