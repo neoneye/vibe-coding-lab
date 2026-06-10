@@ -236,6 +236,56 @@ check('NegativeCycleError exported', typeof BNW.NegativeCycleError === 'function
   }
 }
 
+// ---------- Task 8: shortestPaths ----------
+function checkGraph(name, graph, source) {
+  const ref = bfAll(graph.n, graph.edges);
+  const res = BNW.shortestPaths(graph, source, { seed: 7 });
+  if (ref.negativeCycle) {
+    check(`${name}: cycle flagged`, Array.isArray(res.negativeCycle) && res.negativeCycle.length > 0);
+    if (Array.isArray(res.negativeCycle) && res.negativeCycle.length > 0) {
+      const c = res.negativeCycle;
+      let sum = 0, closed = true;
+      for (let i = 0; i < c.length; i++) {
+        const e = graph.edges[c[i]], f = graph.edges[c[(i + 1) % c.length]];
+        if (e.to !== f.from) closed = false;
+        sum += e.weight;
+      }
+      check(`${name}: cycle closed`, closed);
+      check(`${name}: cycle negative`, sum < 0, sum);
+    }
+  } else {
+    check(`${name}: no false cycle`, res.negativeCycle === null);
+    if (res.negativeCycle === null) {
+      const want = bfFrom(graph.n, graph.edges, source);
+      check(`${name}: distances match BF`, res.dist.every((d, i) => d === want[i]),
+        { got: res.dist, want });
+    }
+  }
+}
+
+{
+  // size tiers; each graph tested from source 0
+  for (let seed = 1; seed <= 200; seed++) checkGraph(`sp small ${seed}`, BNW.generateGraph({ n: 2 + (seed % 38), avgDegree: 2.7, seed }), 0);
+  for (let seed = 1; seed <= 40; seed++) checkGraph(`sp mid ${seed}`, BNW.generateGraph({ n: 41 + (seed % 50), avgDegree: 2.5, seed }), 0);
+  for (let seed = 1; seed <= 8; seed++) checkGraph(`sp big ${seed}`, BNW.generateGraph({ n: 100 + seed * 7, avgDegree: 2.4, seed }), 0);
+  // planted negative cycles
+  for (let seed = 1; seed <= 60; seed++) {
+    const g = BNW.generateGraph({ n: 3 + (seed % 30), avgDegree: 2.7, seed });
+    BNW.plantNegativeCycle(g, { seed, len: 1 + (seed % 4) });
+    checkGraph(`sp cycle ${seed}`, g, 0);
+  }
+  // handcrafted edge cases
+  checkGraph('sp: single vertex', { n: 1, edges: [] }, 0);
+  checkGraph('sp: single negative edge', { n: 2, edges: [{ from: 0, to: 1, weight: -5 }] }, 0);
+  checkGraph('sp: negative self-loop', { n: 2, edges: [{ from: 0, to: 1, weight: 3 }, { from: 1, to: 1, weight: -1 }] }, 0);
+  checkGraph('sp: zero-weight 2-cycle (NOT negative)', { n: 2, edges: [{ from: 0, to: 1, weight: 3 }, { from: 1, to: 0, weight: -3 }] }, 0);
+  checkGraph('sp: parallel edges', { n: 2, edges: [{ from: 0, to: 1, weight: 5 }, { from: 0, to: 1, weight: -2 }] }, 0);
+  checkGraph('sp: unreachable vertex', { n: 3, edges: [{ from: 0, to: 1, weight: -4 }, { from: 2, to: 1, weight: 1 }] }, 0);
+  checkGraph('sp: all-negative DAG', { n: 4, edges: [
+    { from: 0, to: 1, weight: -1 }, { from: 1, to: 2, weight: -2 },
+    { from: 0, to: 2, weight: -4 }, { from: 2, to: 3, weight: -3 }] }, 0);
+}
+
 // ---------- summary ----------
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

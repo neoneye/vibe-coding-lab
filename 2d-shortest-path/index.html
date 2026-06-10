@@ -370,7 +370,78 @@ const BNW = (() => {
     if (ctx.stats) ctx.stats.elimNegPasses += res.passes;
   }
 
-  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle, findNegativeCycle, elimNeg, sccsOfView, fixDagEdges, ballAround, lowDiamDecomposition, scaleDown };
+  // BNW Algorithm 2 (SPmain). Returns { dist, parentEdge, negativeCycle, trace }.
+  // dist uses original (unscaled) weights; negativeCycle is a list of global
+  // edge indices forming a closed walk with negative total original weight.
+  function shortestPaths(graph, source, opts = {}) {
+    const n = graph.n, edges = graph.edges;
+    const rng = mulberry32(opts.seed === undefined ? 0xC0FFEE : opts.seed);
+    const wantTrace = !!opts.trace;
+    const scale = 2 * Math.max(1, n);
+    const trace = wantTrace
+      ? { scale, rounds: [], settleOrder: null, parentEdge: null, phi: null, negativeCycle: null }
+      : null;
+    const ws = edges.map(e => e.weight * scale);
+    const phi = new Array(n).fill(0);
+    const allVerts = Array.from({ length: n }, (_, i) => i);
+    const allEdges = Array.from({ length: edges.length }, (_, i) => i);
+    let minW = 0;
+    for (const w of ws) if (w < minW) minW = w;
+    let B = 1;
+    while (2 * B < -minW) B *= 2;
+    try {
+      for (let b = B; b >= 1; b = Math.floor(b / 2)) {
+        const wbase = allEdges.map(ei => ws[ei] + phi[edges[ei].from] - phi[edges[ei].to]);
+        let mn = 0;
+        for (const w of wbase) if (w < mn) mn = w;
+        if (mn >= -b) continue; // this round's guarantee already holds
+        const psi = new Array(n).fill(0);
+        const ctx = {
+          nGlobal: n, edges, wbase, psi, rng,
+          stats: { calls: 0, maxDepth: 0, elimNegPasses: 0 },
+          roundTrace: wantTrace ? {} : null,
+        };
+        scaleDown(ctx, allVerts, allEdges, n, b, 0);
+        for (let v = 0; v < n; v++) phi[v] += psi[v];
+        if (wantTrace) {
+          let after = 0;
+          for (const ei of allEdges) {
+            const w = ws[ei] + phi[edges[ei].from] - phi[edges[ei].to];
+            if (w < after) after = w;
+          }
+          trace.rounds.push({
+            B: b, minBefore: mn, minAfter: after,
+            clusters: ctx.roundTrace.clusters || [allVerts.slice()],
+            cuts: ctx.roundTrace.cuts || [],
+            phiAfter: phi.slice(), stats: ctx.stats,
+          });
+        }
+      }
+      const wstar = ei => ws[ei] + phi[edges[ei].from] - phi[edges[ei].to] + 1;
+      for (const ei of allEdges) {
+        if (wstar(ei) < 0) throw new Error('internal: invariant violated, reduced weight < 0');
+      }
+      const { out } = viewAdjacency(n, edges, allEdges);
+      const { parentEdge, settled } = dijkstra(n, edges, out, [{ v: source, d: 0 }], wstar);
+      const dist = new Array(n).fill(Infinity);
+      dist[source] = 0;
+      for (const v of settled) {
+        if (v === source || parentEdge[v] === -1) continue;
+        const e = edges[parentEdge[v]];
+        dist[v] = dist[e.from] + e.weight;
+      }
+      if (wantTrace) { trace.settleOrder = settled; trace.parentEdge = parentEdge.slice(); trace.phi = phi.slice(); }
+      return { dist, parentEdge, negativeCycle: null, trace };
+    } catch (err) {
+      if (err instanceof NegativeCycleError) {
+        if (wantTrace) trace.negativeCycle = err.cycleEdges;
+        return { dist: null, parentEdge: null, negativeCycle: err.cycleEdges, trace };
+      }
+      throw err;
+    }
+  }
+
+  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle, findNegativeCycle, elimNeg, sccsOfView, fixDagEdges, ballAround, lowDiamDecomposition, scaleDown, shortestPaths };
 })();
 if (typeof globalThis !== 'undefined') globalThis.BNW = BNW;
 </script>
