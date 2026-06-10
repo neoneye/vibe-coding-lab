@@ -63,12 +63,14 @@
   <label>Level <select id="levelSelect"></select></label>
   <label>Player 1 <select id="role1">
     <option value="human">Human (arrows)</option>
-    <option value="bot">Bot — Monte Carlo 2</option>
+    <option value="botMonteCarlo">Bot — Monte Carlo 2</option>
+    <option value="botHybrid">Bot — Hybrid</option>
     <option value="none">Off</option>
   </select></label>
   <label>Player 2 <select id="role2">
     <option value="human">Human (WASD)</option>
-    <option value="bot" selected>Bot — Monte Carlo 2</option>
+    <option value="botMonteCarlo" selected>Bot — Monte Carlo 2</option>
+    <option value="botHybrid">Bot — Hybrid</option>
     <option value="none">Off</option>
   </select></label>
   <button id="btnRestart" title="Enter">Restart</button>
@@ -763,7 +765,7 @@ function playerCreate(id, role, snakeBody) {
   return {
     id, // "player1" | "player2"
     isInstalled: role !== "none",
-    role, // "human" | "bot" | "none"
+    role, // "human" | "botMonteCarlo" | "botHybrid" | "none"
     snakeBody,
     pendingMovement: "dontMove",
     pendingAct: "doNothing",
@@ -773,6 +775,7 @@ function playerCreate(id, role, snakeBody) {
 }
 function playerIsAlive(p) { return p.isInstalled && p.causesOfDeath.length === 0; }
 function playerIsAliveAndHuman(p) { return playerIsAlive(p) && p.role === "human"; }
+function playerIsBot(p) { return p.role === "botMonteCarlo" || p.role === "botHybrid"; }
 function playerUpdate(p, changes) { return { ...p, ...changes }; }
 function playerKill(p, causeOfDeath) {
   if (p.causesOfDeath.includes(causeOfDeath)) return p;
@@ -942,7 +945,7 @@ class StuckDetector {
   }
   reset() { this.history = []; this._rebuild(); }
   killBotIfStuckInLoop(player) {
-    if (!playerIsAlive(player) || player.role !== "bot") return player;
+    if (!playerIsAlive(player) || !playerIsBot(player)) return player;
     this.append(player.snakeBody);
     return this.isStuck ? playerKill(player, "stuckInALoop") : player;
   }
@@ -1028,7 +1031,7 @@ SnakeTests.add("food placement is deterministic and avoids snakes", () => {
 });
 SnakeTests.add("stuck detector kills bot repeating states", () => {
   const detector = new StuckDetector();
-  let player = playerCreate("player1", "bot", bodyCreate({ x: 4, y: 4 }, "right", 2));
+  let player = playerCreate("player1", "botMonteCarlo", bodyCreate({ x: 4, y: 4 }, "right", 2));
   // Cycle through the same 4 body states until flagged stuck.
   const states = [];
   let b = player.snakeBody;
@@ -1095,7 +1098,7 @@ class GameEnvironment {
     let botCount = 0, nonBotCount = 0;
     for (const p of [this.gameState.player1, this.gameState.player2]) {
       if (!playerIsAlive(p)) continue;
-      if (p.role === "bot") botCount++; else nonBotCount++;
+      if (playerIsBot(p)) botCount++; else nonBotCount++;
     }
     if (botCount + nonBotCount === 0) return "reachedTheEnd";
     return nonBotCount > 0 ? "stepRequiresHumanInput" : "stepAutonomous";
@@ -1572,17 +1575,25 @@ class Bot6 {
 }
 
 // --- bot tests ---------------------------------------------------------------
-function runBotGame({ levelName = "Level 0", twoPlayer = false, ticks }) {
-  const env = new GameEnvironment(gameStateCreate(levelName, "bot", twoPlayer ? "bot" : "none"));
+// Maps a role string to the class implementing it (worker + tests + tournament).
+function botForRole(role) {
+  if (role === "botMonteCarlo") return new Bot6();
+  if (role === "botHybrid") return new HybridBot();
+  return null;
+}
+
+function runBotGame({ levelName = "Level 0", role1 = "botMonteCarlo", role2 = "none", twoPlayer = false, ticks }) {
+  if (twoPlayer && role2 === "none") role2 = "botMonteCarlo";
+  const env = new GameEnvironment(gameStateCreate(levelName, role1, role2));
   env.reset();
-  const bots = { player1: new Bot6(), player2: new Bot6() };
+  const bots = { player1: botForRole(role1), player2: botForRole(role2) };
   const movements = [];
   for (let i = 0; i < ticks; i++) {
     if (env.stepControlMode === "reachedTheEnd") break;
     const gs = env.gameState;
     const action = { player1: "dontMove", player2: "dontMove" };
     for (const [key, opp] of [["player1", "player2"], ["player2", "player1"]]) {
-      if (gs[key].role !== "bot" || !playerIsAlive(gs[key])) continue;
+      if (!playerIsBot(gs[key]) || !playerIsAlive(gs[key])) continue;
       bots[key] = bots[key].compute(gsLevel(gs), gs[key], gs[opp], gs.foodPosition);
       action[key] = bots[key].plannedMovement;
       env.setPendingMovement(key, action[key], bots[key].plannedPath);
@@ -1600,7 +1611,7 @@ SnakeTests.add("bot is deterministic", () => {
   assertEq(a.env.gameState.player1.snakeBody, b.env.gameState.player1.snakeBody);
 });
 SnakeTests.add("bot plannedPath is contiguous from head", () => {
-  const gs = gameStateCreate("Level 0", "bot", "none");
+  const gs = gameStateCreate("Level 0", "botMonteCarlo", "none");
   const bot = new Bot6().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
   const path = bot.plannedPath;
   assert(path.length >= 2, `path too short: ${path.length}`);
@@ -1622,10 +1633,18 @@ SnakeTests.add("bot avoids certain death", () => {
     p1: { pos: { x: 1, y: 4 }, dir: "left", len: 2, },
     food: { x: 7, y: 7 },
   });
-  gs = gsUpdatePlayer(gs, "player1", playerUpdate(gs.player1, { role: "bot" }));
+  gs = gsUpdatePlayer(gs, "player1", playerUpdate(gs.player1, { role: "botMonteCarlo" }));
   gs = gsUpdatePlayer(gs, "player2", playerUpdate(playerCreate("player2", "none", gs.player2.snakeBody), {}));
   const bot = new Bot6().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
   assert(bot.plannedMovement !== "moveForward", `bot chose ${bot.plannedMovement}`);
+});
+SnakeTests.add("role plumbing accepts both bot types", () => {
+  const gs = gameStateCreate("Level 0", "botHybrid", "botMonteCarlo");
+  assert(playerIsBot(gs.player1) && playerIsBot(gs.player2));
+  assert(!playerIsAliveAndHuman(gs.player1));
+  const env = new GameEnvironment(gs);
+  env.reset();
+  assertEq(env.stepControlMode, "stepAutonomous");
 });
 SnakeTests.add("bot works in two-player mode", () => {
   const { env } = runBotGame({ twoPlayer: true, ticks: 10 });
@@ -1634,6 +1653,514 @@ SnakeTests.add("bot works in two-player mode", () => {
   // but on Level 0 with 10 ticks neither bot should have died.
   assert(playerIsAlive(env.gameState.player1), `p1 died: ${env.gameState.player1.causesOfDeath}`);
   assert(playerIsAlive(env.gameState.player2), `p2 died: ${env.gameState.player2.causesOfDeath}`);
+});
+
+// ---------------------------------------------------------------------------
+// Path/space toolkit for the Hybrid bot. All searches are timing-aware: a
+// snake body cell counts as passable if it will have vacated by the time the
+// head arrives there. Cells are visited once (a snake cannot wait in place),
+// which is the standard approximation — it is exactly what makes flood fill
+// meaningful for trap detection.
+// ---------------------------------------------------------------------------
+
+// Map posKey → step at which the cell becomes free. fifo.array is tail-first,
+// so index i vacates at step i+1; pending growth delays every vacation.
+// frozen=true marks a dead snake: an obstacle that never vacates.
+function vacateMap(body, growth = 0, frozen = false) {
+  const map = new Map();
+  body.fifo.array.forEach((part, i) => {
+    const step = frozen ? Infinity : i + 1 + growth;
+    const key = posKey(part.position);
+    map.set(key, Math.max(map.get(key) ?? 0, step));
+  });
+  return map;
+}
+
+function passableAt(level, vacateMaps, pos, step) {
+  const key = posKey(pos);
+  if (!level.emptyPositionSet.has(key)) return false;
+  for (const map of vacateMaps) {
+    if ((map.get(key) ?? 0) > step) return false;
+  }
+  return true;
+}
+
+// BFS from start (arrival step 0) to target. Returns [start..target] or null.
+function bfsPath(level, vacateMaps, start, target) {
+  if (posEq(start, target)) return [start];
+  const visited = new Map([[posKey(start), null]]); // posKey → parent posKey
+  const positions = new Map([[posKey(start), start]]);
+  let frontier = [start];
+  let step = 0;
+  while (frontier.length > 0) {
+    step++;
+    const next = [];
+    for (const p of frontier) {
+      for (const d of Object.values(DIRECTION_DELTA)) {
+        const q = offsetBy(p, d.dx, d.dy);
+        const qk = posKey(q);
+        if (visited.has(qk) || !passableAt(level, vacateMaps, q, step)) continue;
+        visited.set(qk, posKey(p));
+        positions.set(qk, q);
+        if (posEq(q, target)) {
+          const path = [];
+          for (let k = qk; k !== null; k = visited.get(k)) path.push(positions.get(k));
+          return path.reverse();
+        }
+        next.push(q);
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+
+// Number of cells reachable from start (start itself not counted).
+function floodFillCount(level, vacateMaps, start) {
+  const visited = new Set([posKey(start)]);
+  let frontier = [start];
+  let step = 0;
+  let count = 0;
+  while (frontier.length > 0) {
+    step++;
+    const next = [];
+    for (const p of frontier) {
+      for (const d of Object.values(DIRECTION_DELTA)) {
+        const q = offsetBy(p, d.dx, d.dy);
+        const qk = posKey(q);
+        if (visited.has(qk) || !passableAt(level, vacateMaps, q, step)) continue;
+        visited.add(qk);
+        count++;
+        next.push(q);
+      }
+    }
+    frontier = next;
+  }
+  return count;
+}
+
+// Can the head still reach the snake's own tail cell? The escape criterion:
+// while the tail is reachable the snake can always keep following it.
+function tailReachable(level, body, growth, otherVacateMaps) {
+  const tail = body.fifo.array[0].position;
+  const maps = [vacateMap(body, growth), ...otherVacateMaps];
+  return bfsPath(level, maps, body.head.position, tail) !== null;
+}
+
+// ---------------------------------------------------------------------------
+// HybridBot — exact-search bot. Single player: BFS to food guarded by a
+// tail-escape proof, else stall safely. Two player: see computeDuel below.
+// Deterministic: no RNG, no time budget.
+// ---------------------------------------------------------------------------
+const HYBRID_MOVES = ["moveCCW", "moveForward", "moveCW"];
+
+function bodyStateHash(body) {
+  return JSON.stringify([bodyPositionArray(body), body.head.direction]);
+}
+
+// Movements that walk a contiguous position path starting at the head.
+function movementsAlongPath(head, path) {
+  const movements = [];
+  let h = head;
+  for (let i = 1; i < path.length; i++) {
+    const movement = headMoveTowardPosition(h, path[i]);
+    if (movement === null || movement === "dontMove") return null;
+    movements.push(movement);
+    h = headSimulateTick(h, movement);
+  }
+  return movements;
+}
+
+class HybridBot {
+  constructor(plannedMovement = "dontMove", plannedPath = [], seenStates = new Set()) {
+    this.plannedMovement = plannedMovement;
+    this.plannedPath = plannedPath;
+    this.seenStates = seenStates; // own body-state hashes, mirrors StuckSnakeDetector
+  }
+
+  compute(level, player, oppositePlayer, foodPosition) {
+    if (!playerIsAlive(player)) return new HybridBot();
+    const duel = oppositePlayer.isInstalled && playerIsAlive(oppositePlayer);
+    const { movement, path } = duel
+      ? this.computeDuel(level, player, oppositePlayer, foodPosition)
+      : this.computeSolo(level, player, oppositePlayer, foodPosition);
+    const nextBody = bodyStateForTick(player.snakeBody, movement, "doNothing");
+    const seen = new Set(this.seenStates);
+    seen.add(bodyStateHash(nextBody));
+    return new HybridBot(movement, path, seen);
+  }
+
+  // Obstacle maps for everything that is not my own body.
+  opponentMaps(oppositePlayer) {
+    if (!oppositePlayer.isInstalled) return [];
+    const frozen = !playerIsAlive(oppositePlayer); // dead snakes never vacate
+    return [vacateMap(oppositePlayer.snakeBody, 0, frozen)];
+  }
+
+  computeSolo(level, player, oppositePlayer, foodPosition) {
+    const body = player.snakeBody;
+    const oppMaps = this.opponentMaps(oppositePlayer);
+
+    // Attack: shortest path to food, committed only if eating leaves an escape.
+    let foodPlan = null; // kept for the stalemate gamble below
+    if (foodPosition) {
+      const path = bfsPath(level, [vacateMap(body, 0), ...oppMaps], body.head.position, foodPosition);
+      if (path && path.length >= 2) {
+        const movements = movementsAlongPath(body.head, path);
+        if (movements) {
+          let walked = body;
+          for (let i = 0; i < movements.length; i++) {
+            const eats = posEq(path[i + 1], foodPosition);
+            walked = bodyStateForTick(walked, movements[i], eats ? "eat" : "doNothing");
+          }
+          // Eating the last food fills the board: that's the noMoreFood WIN,
+          // so no escape is needed (and none can exist — skip the check).
+          if (bodyLength(walked) >= level.emptyPositionArray.length) {
+            return { movement: movements[0], path };
+          }
+          if (tailReachable(level, walked, 0, oppMaps)) {
+            return { movement: movements[0], path };
+          }
+          foodPlan = { movements, path, walked };
+        }
+      }
+    }
+
+    // Stall: stay alive while the tail frees up space. Rank survivable moves:
+    // tail still reachable > unseen body state > larger free area > farther
+    // from the food (waste time) > stable move order.
+    const candidates = [];
+    for (const movement of HYBRID_MOVES) {
+      const newHead = headSimulateTick(body.head, movement);
+      if (!passableAt(level, [vacateMap(body, 0), ...oppMaps], newHead.position, 1)) continue;
+      const eats = posEq(newHead.position, foodPosition);
+      const next = bodyStateForTick(body, movement, eats ? "eat" : "doNothing");
+      candidates.push({
+        movement,
+        next,
+        safe: tailReachable(level, next, 0, oppMaps),
+        repeat: this.seenStates.has(bodyStateHash(next)),
+        area: floodFillCount(level, [vacateMap(next, 0), ...oppMaps], next.head.position),
+        foodDistance: foodPosition ? manhattan(newHead.position, foodPosition) : 0,
+      });
+    }
+    if (candidates.length === 0) {
+      return { movement: "moveForward", path: [] }; // boxed in: die going forward
+    }
+    const anySafe = candidates.some((c) => c.safe);
+    const pool = anySafe ? candidates.filter((c) => c.safe) : candidates;
+    pool.sort((a, b) =>
+      (a.repeat - b.repeat) || (b.area - a.area) || (b.foodDistance - a.foodDistance));
+    const best = pool[0];
+    // Stalemate gamble: stalling forever ends in a stuckInALoop kill, since
+    // unsafe food never despawns. Once fresh stall states run out, eating an
+    // "unsafe" food is the better bet when the post-eat area still fits the
+    // snake — the next food respawns somewhere else and may free the position.
+    if (best.repeat && foodPlan) {
+      const area = floodFillCount(level,
+        [vacateMap(foodPlan.walked, 0), ...oppMaps], foodPlan.walked.head.position);
+      if (area >= bodyLength(foodPlan.walked)) {
+        return { movement: foodPlan.movements[0], path: foodPlan.path };
+      }
+    }
+    // Planned path while stalling: the route back to the own tail (thin line).
+    const tail = best.next.fifo.array[0].position;
+    const tailPath = bfsPath(level, [vacateMap(best.next, 0), ...oppMaps], best.next.head.position, tail);
+    const path = tailPath ? [body.head.position, ...tailPath] : [body.head.position, best.next.head.position];
+    return { movement: best.movement, path };
+  }
+
+  // Two-player: fixed-depth paranoid alpha-beta (8 plies, me/opponent
+  // alternating to approximate simultaneous movement). The engine's
+  // simultaneous head-on rule (both heads on one cell = mutual death) is not
+  // representable sequentially, so my-ply moves into a cell the opponent's
+  // head can also reach this round score as near-death "head-on risk" —
+  // avoided unless every alternative is certain death.
+  computeDuel(level, player, oppositePlayer, foodPosition) {
+    const DEPTH = 8;
+    const DEATH = 1e9, HEAD_ON = 9e8;
+
+    const search = (myBody, oppBody, food, ply, alpha, beta) => {
+      if (ply === DEPTH) {
+        return { score: this.evaluateDuel(level, myBody, oppBody, food), line: [] };
+      }
+      const myTurn = ply % 2 === 0;
+      const mover = myTurn ? myBody : oppBody;
+      const other = myTurn ? oppBody : myBody;
+      const otherPositions = bodyPositionSet(other);
+      const otherNextCells = new Set();
+      if (myTurn) {
+        for (const m of HYBRID_MOVES) {
+          otherNextCells.add(posKey(headSimulateTick(other.head, m).position));
+        }
+      }
+      let best = null;
+      for (const movement of HYBRID_MOVES) {
+        const newHead = headSimulateTick(mover.head, movement);
+        const key = posKey(newHead.position);
+        const eats = food !== null && posEq(newHead.position, food);
+        const moved = bodyStateForTick(mover, movement, eats ? "eat" : "doNothing");
+        const died = !level.emptyPositionSet.has(key)
+          || bodyIsEatingItself(moved)
+          || otherPositions.has(key);
+        const headOnRisk = myTurn && !died && otherNextCells.has(key);
+        let score, line;
+        if (died) {
+          score = myTurn ? -DEATH + ply : DEATH - ply;
+          line = myTurn ? [newHead.position] : [];
+        } else if (headOnRisk) {
+          score = -HEAD_ON + ply;
+          line = [newHead.position];
+        } else {
+          const r = search(
+            myTurn ? moved : myBody,
+            myTurn ? oppBody : moved,
+            eats ? null : food,
+            ply + 1, alpha, beta
+          );
+          score = r.score;
+          line = myTurn ? [newHead.position, ...r.line] : r.line;
+        }
+        if (best === null || (myTurn ? score > best.score : score < best.score)) {
+          best = { score, line };
+        }
+        if (myTurn) alpha = Math.max(alpha, score); else beta = Math.min(beta, score);
+        if (alpha >= beta) break;
+      }
+      return best;
+    };
+
+    const body = player.snakeBody;
+    const oppBody = oppositePlayer.snakeBody;
+    const oppMaps = [vacateMap(oppBody, 0)];
+    const rootMoves = [];
+    for (const movement of HYBRID_MOVES) {
+      const newHead = headSimulateTick(body.head, movement);
+      const key = posKey(newHead.position);
+      const eats = foodPosition !== null && foodPosition !== undefined && posEq(newHead.position, foodPosition);
+      const moved = bodyStateForTick(body, movement, eats ? "eat" : "doNothing");
+      const died = !level.emptyPositionSet.has(key)
+        || bodyIsEatingItself(moved)
+        || bodyPositionSet(oppBody).has(key);
+      let score, line;
+      if (died) {
+        score = -DEATH;
+        line = [newHead.position];
+      } else {
+        const oppNext = new Set(HYBRID_MOVES.map((m) => posKey(headSimulateTick(oppBody.head, m).position)));
+        if (oppNext.has(key)) {
+          score = -HEAD_ON;
+          line = [newHead.position];
+        } else {
+          const r = search(moved, oppBody, eats ? null : foodPosition ?? null, 1, -Infinity, Infinity);
+          score = r.score;
+          line = [newHead.position, ...r.line];
+        }
+      }
+      // The engine kills bots that repeat body states; nudge away from
+      // already-seen states so corridor standoffs don't end in stuckInALoop.
+      if (!died && this.seenStates.has(bodyStateHash(moved))) score -= 500;
+      rootMoves.push({ movement, score, line, moved, died });
+    }
+    // Veto: when some move provably keeps the tail escape, never pick one that doesn't.
+    const escaping = rootMoves.filter((m) => !m.died && tailReachable(level, m.moved, 0, oppMaps));
+    const pool = escaping.length > 0 ? escaping : rootMoves;
+    let best = pool[0];
+    for (const m of pool) if (m.score > best.score) best = m;
+    return { movement: best.movement, path: [body.head.position, ...best.line] };
+  }
+
+  // Leaf evaluation: length difference, Voronoi territory (per-cell compare
+  // of BFS distance maps), food race, and a trapped-space penalty.
+  evaluateDuel(level, myBody, oppBody, food) {
+    let score = (bodyLength(myBody) - bodyLength(oppBody)) * 10000;
+
+    const obstacles = new Set([...bodyPositionSet(myBody), ...bodyPositionSet(oppBody)]);
+    const distanceMap = (start) => {
+      const dist = new Map([[posKey(start), 0]]);
+      let frontier = [start];
+      let d = 0;
+      while (frontier.length > 0) {
+        d++;
+        const next = [];
+        for (const p of frontier) {
+          for (const delta of Object.values(DIRECTION_DELTA)) {
+            const q = offsetBy(p, delta.dx, delta.dy);
+            const qk = posKey(q);
+            if (dist.has(qk) || !level.emptyPositionSet.has(qk) || obstacles.has(qk)) continue;
+            dist.set(qk, d);
+            next.push(q);
+          }
+        }
+        frontier = next;
+      }
+      return dist;
+    };
+    const myDist = distanceMap(myBody.head.position);
+    const oppDist = distanceMap(oppBody.head.position);
+    let territory = 0;
+    for (const key of level.emptyPositionSet) {
+      if (obstacles.has(key)) continue;
+      const md = myDist.get(key), od = oppDist.get(key);
+      if (md !== undefined && (od === undefined || md < od)) territory++;
+      else if (od !== undefined && (md === undefined || od < md)) territory--;
+    }
+    score += territory * 10;
+
+    if (food) {
+      const fk = posKey(food);
+      const md = myDist.get(fk), od = oppDist.get(fk);
+      // Graded approach: without a distance gradient the 8-ply horizon never
+      // "sees" far-away food and the bot plays pure territory while starving.
+      if (md !== undefined) score -= md * 100;
+      if (md !== undefined && (od === undefined || md < od)) score += 2000;
+    }
+
+    const myLen = bodyLength(myBody);
+    const area = floodFillCount(level,
+      [vacateMap(myBody, 0), vacateMap(oppBody, 0, true)], myBody.head.position);
+    if (area < myLen) score -= (myLen - area) * 1000;
+
+    return score;
+  }
+}
+
+SnakeTests.add("toolkit: vacate timing on own body", () => {
+  // bodyCreate(.., right, 4) occupies x=1..5 at y=5; tail (1,5) frees at step 1.
+  const body = bodyCreate({ x: 5, y: 5 }, "right", 4);
+  const lv = getLevel("Level 0");
+  const maps = [vacateMap(body, 0)];
+  assert(!passableAt(lv, maps, { x: 4, y: 5 }, 1), "mid-body blocked early");
+  assert(passableAt(lv, maps, { x: 4, y: 5 }, 4), "mid-body free once vacated");
+  assert(passableAt(lv, maps, { x: 1, y: 5 }, 1), "tail frees next step");
+  assert(!passableAt(lv, maps, { x: 0, y: 5 }, 9), "wall never passable");
+});
+SnakeTests.add("toolkit: bfsPath routes around the body in time", () => {
+  const body = bodyCreate({ x: 5, y: 5 }, "right", 4);
+  const lv = getLevel("Level 0");
+  const path = bfsPath(lv, [vacateMap(body, 0)], body.head.position, { x: 1, y: 5 });
+  assert(path, "tail is reachable");
+  assertEq(path[0], { x: 5, y: 5 });
+  assertEq(path[path.length - 1], { x: 1, y: 5 });
+  for (let i = 1; i < path.length; i++) assertEq(manhattan(path[i - 1], path[i]), 1);
+  assert(tailReachable(lv, body, 0, []));
+});
+SnakeTests.add("toolkit: flood fill sees through a vacating body but not a frozen one", () => {
+  // Snake spans the full row y=5 (x=1..7): the board is split while it stands.
+  const body = bodyCreate({ x: 7, y: 5 }, "right", 6);
+  const lv = getLevel("Level 0");
+  const north = { x: 4, y: 7 };
+  const aliveCount = floodFillCount(lv, [vacateMap(body, 0)], north);
+  const frozenCount = floodFillCount(lv, [vacateMap(body, 0, true)], north);
+  assert(frozenCount < aliveCount, `frozen ${frozenCount} < alive ${aliveCount}`);
+  assertEq(frozenCount, 13, "north pocket: 2 rows x 7 minus start");
+});
+
+SnakeTests.add("hybrid: deterministic", () => {
+  const gs = gameStateCreate("Level 0", "botHybrid", "none");
+  const a = new HybridBot().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
+  const b = new HybridBot().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
+  assertEq(a.plannedMovement, b.plannedMovement);
+  assertEq(a.plannedPath, b.plannedPath);
+  assert(a.plannedMovement !== "dontMove");
+});
+SnakeTests.add("hybrid: nearly clears Level 0 solo", () => {
+  // 49 free cells. Filling all of them can be parity-impossible (a snake on a
+  // bipartite grid cannot always align its head with the final hole), so the
+  // bar is: cleared, or grown to >= 45 of 49 before the anti-loop rule bites.
+  const { env } = runBotGame({ role1: "botHybrid", ticks: 1500 });
+  const p1 = env.gameState.player1;
+  const cleared = p1.causesOfDeath.includes("noMoreFood");
+  assert(cleared || bodyLength(p1.snakeBody) >= 45,
+    `expected near-clear, got: ${p1.causesOfDeath} after ${env.gameState.numberOfSteps} steps, length ${bodyLength(p1.snakeBody)}`);
+});
+SnakeTests.add("hybrid: safety invariant over 200 solo steps", () => {
+  const env = new GameEnvironment(gameStateCreate("Level 0", "botHybrid", "none"));
+  env.reset();
+  let bot = new HybridBot();
+  for (let i = 0; i < 200; i++) {
+    if (env.stepControlMode === "reachedTheEnd") break;
+    const gs = env.gameState;
+    const body = gs.player1.snakeBody;
+    const level = gsLevel(gs);
+    // Does any legal move keep the tail reachable?
+    let safeExists = false;
+    for (const movement of HYBRID_MOVES) {
+      const h = headSimulateTick(body.head, movement);
+      if (!passableAt(level, [vacateMap(body, 0)], h.position, 1)) continue;
+      const eats = posEq(h.position, gs.foodPosition);
+      if (tailReachable(level, bodyStateForTick(body, movement, eats ? "eat" : "doNothing"), 0, [])) safeExists = true;
+    }
+    bot = bot.compute(level, gs.player1, gs.player2, gs.foodPosition);
+    env.setPendingMovement("player1", bot.plannedMovement, bot.plannedPath);
+    env.step({ player1: "dontMove", player2: "dontMove" });
+    const after = env.gameState.player1;
+    if (safeExists && playerIsAlive(after)) {
+      assert(tailReachable(level, after.snakeBody, 0, []),
+        `tail unreachable after step ${i} though a safe move existed`);
+    }
+    if (!playerIsAlive(after)) {
+      assert(!safeExists || after.causesOfDeath.includes("noMoreFood"),
+        `died (${after.causesOfDeath}) at step ${i} though a safe move existed`);
+      break;
+    }
+  }
+});
+SnakeTests.add("hybrid: refuses food in a sealed-off pocket", () => {
+  // Dead opponent walls off the bottom-left 3x3 room except a 1-cell entrance;
+  // food sits deep inside. A 12-long snake cannot eat it and escape.
+  const oppCells = [
+    { x: 1, y: 4 }, { x: 2, y: 4 }, { x: 3, y: 4 }, { x: 4, y: 4 },
+    { x: 4, y: 3 }, { x: 4, y: 2 },
+  ];
+  const oppBody = {
+    fifo: { capacity: oppCells.length, array: oppCells.map((p) => ({ position: p, content: "empty" })) },
+    head: { position: oppCells[oppCells.length - 1], direction: "down" },
+  };
+  let gs = gameStateCreate("Level 0", "botHybrid", "none");
+  let opp = playerCreate("player2", "botMonteCarlo", oppBody);
+  opp = playerKill(opp, "collisionWithWall"); // dead obstacle
+  gs = gsUpdatePlayer(gs, "player2", opp);
+  // My snake: long, head one step BEFORE the pocket entrance, with a real
+  // alternative move available (turning away at (6,1)).
+  const myCells = [];
+  for (let x = 7; x >= 5; x--) myCells.push({ x, y: 7 });
+  for (let y = 6; y >= 1; y--) myCells.push({ x: 5, y });
+  const myBody = {
+    fifo: { capacity: myCells.length, array: myCells.map((p) => ({ position: p, content: "empty" })) },
+    head: { position: { x: 5, y: 1 }, direction: "down" },
+  };
+  gs = gsUpdatePlayer(gs, "player1", playerUpdate(gs.player1, { snakeBody: myBody }));
+  gs = gsUpdate(gs, { foodPosition: { x: 1, y: 1 } });
+  const bot = new HybridBot().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
+  // Entering means eating in a 9-cell room with an 11+ length: suicide.
+  // The bot must stall (its move keeps the tail reachable) instead of entering.
+  const newHead = headSimulateTick(gs.player1.snakeBody.head, bot.plannedMovement);
+  const next = bodyStateForTick(gs.player1.snakeBody, bot.plannedMovement,
+    posEq(newHead.position, gs.foodPosition) ? "eat" : "doNothing");
+  assert(tailReachable(gsLevel(gs), next, 0, [vacateMap(oppBody, 0, true)]),
+    `bot chose ${bot.plannedMovement} which loses its escape`);
+});
+SnakeTests.add("hybrid: avoids a simultaneous head-on", () => {
+  // Heads facing each other, 2 cells apart: moveForward = mutual death.
+  let gs = createGameStateForTest({
+    p1: { pos: { x: 3, y: 4 }, dir: "right", len: 3 },
+    p2: { pos: { x: 5, y: 4 }, dir: "left", len: 3 },
+    food: { x: 4, y: 7 },
+  });
+  gs = gsUpdatePlayer(gs, "player1", playerUpdate(gs.player1, { role: "botHybrid" }));
+  gs = gsUpdatePlayer(gs, "player2", playerUpdate(gs.player2, { role: "botMonteCarlo" }));
+  const bot = new HybridBot().compute(gsLevel(gs), gs.player1, gs.player2, gs.foodPosition);
+  assert(bot.plannedMovement !== "moveForward", `bot chose ${bot.plannedMovement}`);
+});
+SnakeTests.add("hybrid: duel vs monte carlo runs clean and deterministic", () => {
+  const a = runBotGame({ role1: "botHybrid", role2: "botMonteCarlo", ticks: 20 });
+  const b = runBotGame({ role1: "botHybrid", role2: "botMonteCarlo", ticks: 20 });
+  assertEq(a.movements, b.movements);
+  assert(a.env.gameState.numberOfSteps > 0);
+  const path = a.bots.player1.plannedPath;
+  assert(path.length >= 2, "duel planned path present");
+  for (let i = 1; i < path.length; i++) assertEq(manhattan(path[i - 1], path[i]), 1, `gap at ${i}`);
 });
 </script>
 
@@ -1648,18 +2175,22 @@ SnakeTests.add("bot works in two-player mode", () => {
 // tree simply fails to match and is rebuilt, same as Swift's failed-reuse path.
 // --------------------------------------------------------------------------
 const WORKER_GLUE = `
-const bots = { player1: new Bot6(), player2: new Bot6() };
+const bots = { player1: null, player2: null }; // { role, bot }
 self.onmessage = (e) => {
   const msg = e.data;
   if (msg.type === "reset") {
-    bots.player1 = new Bot6();
-    bots.player2 = new Bot6();
+    bots.player1 = null;
+    bots.player2 = null;
     return;
   }
   if (msg.type === "compute") {
     const level = getLevel(msg.levelName);
-    bots[msg.playerKey] = bots[msg.playerKey].compute(level, msg.player, msg.oppositePlayer, msg.foodPosition);
-    const bot = bots[msg.playerKey];
+    if (!bots[msg.playerKey] || bots[msg.playerKey].role !== msg.role) {
+      bots[msg.playerKey] = { role: msg.role, bot: botForRole(msg.role) };
+    }
+    const entry = bots[msg.playerKey];
+    entry.bot = entry.bot.compute(level, msg.player, msg.oppositePlayer, msg.foodPosition);
+    const bot = entry.bot;
     self.postMessage({
       type: "result",
       playerKey: msg.playerKey,
@@ -1732,13 +2263,14 @@ function requestBotMoves() {
   const gs = app.env.gameState;
   for (const [key, opp] of [["player1", "player2"], ["player2", "player1"]]) {
     const p = gs[key];
-    if (p.role !== "bot" || !playerIsAlive(p) || p.pendingMovement !== "dontMove") continue;
+    if (!playerIsBot(p) || !playerIsAlive(p) || p.pendingMovement !== "dontMove") continue;
     if (app.inflight[key] !== null) continue;
     app.inflight[key] = app.requestSerial;
     worker.postMessage({
       type: "compute",
       serial: app.requestSerial,
       playerKey: key,
+      role: p.role,
       levelName: gs.levelName,
       player: p,
       oppositePlayer: gs[opp],
@@ -1761,7 +2293,7 @@ function onBotResult(msg) {
 function botsAreReady() {
   for (const key of ["player1", "player2"]) {
     const p = app.env.gameState[key];
-    if (p.role === "bot" && playerIsAlive(p) && p.pendingMovement === "dontMove") return false;
+    if (playerIsBot(p) && playerIsAlive(p) && p.pendingMovement === "dontMove") return false;
   }
   return true;
 }
@@ -1958,7 +2490,7 @@ function render() {
   if (app.showPath) {
     for (const key of ["player1", "player2"]) {
       const p = gs[key];
-      if (p.role !== "bot" || !playerIsAlive(p)) continue;
+      if (!playerIsBot(p) || !playerIsAlive(p)) continue;
       drawPlannedPath(p.botPlannedPath, gs.foodPosition, PLAYER_COLOR[key], tile, cx, cy);
     }
   }
