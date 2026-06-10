@@ -160,10 +160,41 @@ const TimeGrid = (() => {
     return { columns, nowCol, rows };
   }
 
+  const DEFAULT_ZONES = ["UTC", "Europe/Copenhagen", "America/Los_Angeles"];
+
+  function defaultState() {
+    return { zones: DEFAULT_ZONES.slice(), format: "auto" };
+  }
+
+  function parseState(json, validZoneIds) {
+    try {
+      const data = JSON.parse(json);
+      const valid = new Set(validZoneIds);
+      const zones = (Array.isArray(data.zones) ? data.zones : [])
+        .filter((z) => typeof z === "string" && valid.has(z));
+      if (!zones.length) return defaultState();
+      const format = ["auto", "24h", "ampm"].includes(data.format) ? data.format : "auto";
+      return { zones, format };
+    } catch {
+      return defaultState();
+    }
+  }
+
+  function serializeState(state) {
+    return JSON.stringify({ zones: state.zones, format: state.format });
+  }
+
+  function searchZones(query, zoneIds) {
+    const q = query.trim().toLowerCase().replace(/\s+/g, "_");
+    if (!q) return [];
+    return zoneIds.filter((z) => z.toLowerCase().includes(q)).slice(0, 12);
+  }
+
   return {
     dayPart, formatHourLabel, wallClock, zoneOffsetMinutes, zonedMidnightInstant,
     offsetLabel, monthDayLabel, zoneAbbreviation, currentTimeLabel,
     zoneUses12Hour, resolveFormat, cityName, computeGrid,
+    defaultState, parseState, serializeState, searchZones,
   };
 })();
 
@@ -286,6 +317,33 @@ const TimeGridTests = {
 
     // computeGrid: empty zone list
     eq("empty grid", TimeGrid.computeGrid([], Date.UTC(2026, 5, 10), "auto"), { columns: [], nowCol: -1, rows: [] });
+
+    // state
+    {
+      const valid = ["UTC", "Europe/Copenhagen", "America/Los_Angeles", "Asia/Tokyo"];
+      eq("default state", TimeGrid.defaultState(),
+        { zones: ["UTC", "Europe/Copenhagen", "America/Los_Angeles"], format: "auto" });
+      eq("parse null", TimeGrid.parseState(null, valid), TimeGrid.defaultState());
+      eq("parse corrupt", TimeGrid.parseState("{nope", valid), TimeGrid.defaultState());
+      eq("parse drops unknown zones",
+        TimeGrid.parseState('{"zones":["Asia/Tokyo","Mars/Olympus_Mons"],"format":"24h"}', valid),
+        { zones: ["Asia/Tokyo"], format: "24h" });
+      eq("parse bad format falls back to auto",
+        TimeGrid.parseState('{"zones":["UTC"],"format":"sundial"}', valid),
+        { zones: ["UTC"], format: "auto" });
+      eq("parse empty zones -> defaults", TimeGrid.parseState('{"zones":[],"format":"auto"}', valid), TimeGrid.defaultState());
+      const rt = { zones: ["Asia/Tokyo", "UTC"], format: "ampm" };
+      eq("serialize/parse round trip", TimeGrid.parseState(TimeGrid.serializeState(rt), valid), rt);
+    }
+
+    // searchZones
+    {
+      const all = ["UTC", "Europe/Copenhagen", "America/Los_Angeles", "America/New_York", "Asia/Kolkata"];
+      eq("search by city with space", TimeGrid.searchZones("los angeles", all), ["America/Los_Angeles"]);
+      eq("search case-insensitive partial", TimeGrid.searchZones("copen", all), ["Europe/Copenhagen"]);
+      eq("search by region", TimeGrid.searchZones("america", all), ["America/Los_Angeles", "America/New_York"]);
+      eq("search empty query", TimeGrid.searchZones("  ", all), []);
+    }
 
     if (failures.length) console.error(failures.join("\n"));
     console.log(failures.length ? `FAIL: ${failures.length} failure(s)` : "PASS: all TimeGrid tests");
