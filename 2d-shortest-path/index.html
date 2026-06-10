@@ -94,7 +94,7 @@ const BNW = (() => {
     const avgDegree = opts.avgDegree ?? 2.6;
     const seed = opts.seed ?? 1;
     const spread = opts.spread ?? 30;
-    const noise = opts.noise ?? 24;
+    const noise = Math.max(0, opts.noise ?? 24);
     const rng = mulberry32(seed);
     const h = Array.from({ length: n }, () => Math.floor(rng() * spread));
     const edges = [];
@@ -108,7 +108,7 @@ const BNW = (() => {
     return { n, edges };
   }
 
-  // Appends a directed cycle with total weight <= -1. Returns the new edge indices.
+  // Appends a directed cycle with total weight exactly -1. Returns the new edge indices.
   function plantNegativeCycle(graph, opts = {}) {
     const seed = opts.seed ?? 2;
     const len = Math.max(1, Math.min(opts.len ?? 3, graph.n));
@@ -129,7 +129,74 @@ const BNW = (() => {
     return idxs;
   }
 
-  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle };
+  // Textbook synchronous Bellman-Ford from a virtual super-source, used only to
+  // extract a concrete negative cycle once elimNeg's pass cap trips.
+  function findNegativeCycle(nGlobal, edges, verts, edgeIdxs, weightOf) {
+    const dist = new Array(nGlobal).fill(Infinity);
+    const parentEdge = new Array(nGlobal).fill(-1);
+    for (const v of verts) dist[v] = 0;
+    let last = -1;
+    for (let pass = 0; pass <= verts.length; pass++) {
+      last = -1;
+      for (const ei of edgeIdxs) {
+        const e = edges[ei];
+        if (dist[e.from] + weightOf(ei) < dist[e.to]) {
+          dist[e.to] = dist[e.from] + weightOf(ei); parentEdge[e.to] = ei; last = e.to;
+        }
+      }
+      if (last === -1) return null;
+    }
+    let v = last;
+    for (let i = 0; i < verts.length; i++) v = edges[parentEdge[v]].from;
+    const cycle = [];
+    let u = v;
+    do { const ei = parentEdge[u]; cycle.push(ei); u = edges[ei].from; } while (u !== v);
+    cycle.reverse();
+    return cycle;
+  }
+
+  // BNW Algorithm 3: alternating Dijkstra phases (non-negative edges) and
+  // Bellman-Ford phases (negative out-edges of vertices settled in the last
+  // Dijkstra phase), from a virtual source with 0-weight edges to every vertex.
+  // No negative cycle => at most |verts| BF phases are needed; the cap detects cycles.
+  function elimNeg(nGlobal, edges, verts, edgeIdxs, weightOf) {
+    const { out } = viewAdjacency(nGlobal, edges, edgeIdxs);
+    const dist = new Array(nGlobal).fill(Infinity);
+    const heap = new MinHeap();
+    for (const v of verts) { dist[v] = 0; heap.push(0, v); }
+    let bfPasses = 0;
+    while (heap.size > 0) {
+      const marked = new Set();
+      while (heap.size > 0) {
+        const { key, val: v } = heap.pop();
+        if (key > dist[v] || marked.has(v)) continue;
+        marked.add(v);
+        for (const ei of out[v]) {
+          const w = weightOf(ei);
+          if (w < 0) continue;
+          const e = edges[ei];
+          if (dist[v] + w < dist[e.to]) { dist[e.to] = dist[v] + w; heap.push(dist[e.to], e.to); }
+        }
+      }
+      bfPasses++;
+      if (bfPasses > verts.length + 2) {
+        const cycle = findNegativeCycle(nGlobal, edges, verts, edgeIdxs, weightOf);
+        if (!cycle) throw new Error('internal: pass cap exceeded but no negative cycle found');
+        return { negativeCycle: cycle };
+      }
+      for (const v of marked) {
+        for (const ei of out[v]) {
+          const w = weightOf(ei);
+          if (w >= 0) continue;
+          const e = edges[ei];
+          if (dist[v] + w < dist[e.to]) { dist[e.to] = dist[v] + w; heap.push(dist[e.to], e.to); }
+        }
+      }
+    }
+    return { dist, passes: bfPasses };
+  }
+
+  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle, findNegativeCycle, elimNeg };
 })();
 if (typeof globalThis !== 'undefined') globalThis.BNW = BNW;
 </script>

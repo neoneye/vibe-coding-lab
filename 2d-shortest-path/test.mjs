@@ -91,6 +91,38 @@ check('NegativeCycleError exported', typeof BNW.NegativeCycleError === 'function
   check('generator produces negative edges', anyNegativeEdge);
 }
 
+// ---------- Task 4: elimNeg ----------
+{
+  for (let seed = 1; seed <= 40; seed++) {
+    const g = BNW.generateGraph({ n: 5 + (seed % 20), avgDegree: 2.8, seed });
+    const allV = Array.from({ length: g.n }, (_, i) => i);
+    const allE = Array.from({ length: g.edges.length }, (_, i) => i);
+    const r = BNW.elimNeg(g.n, g.edges, allV, allE, ei => g.edges[ei].weight);
+    const ref = bfAll(g.n, g.edges);
+    check(`elimNeg ${seed}: matches super-source BF`,
+      r.dist && r.dist.every((d, i) => d === ref.dist[i]), { got: r.dist, want: ref.dist });
+  }
+  for (let seed = 1; seed <= 40; seed++) {
+    const g = BNW.generateGraph({ n: 5 + (seed % 12), avgDegree: 2.8, seed });
+    BNW.plantNegativeCycle(g, { seed, len: 1 + (seed % 4) });
+    const allV = Array.from({ length: g.n }, (_, i) => i);
+    const allE = Array.from({ length: g.edges.length }, (_, i) => i);
+    const r = BNW.elimNeg(g.n, g.edges, allV, allE, ei => g.edges[ei].weight);
+    const c = r.negativeCycle;
+    check(`elimNeg cycle ${seed}: reported`, Array.isArray(c) && c.length > 0);
+    if (Array.isArray(c) && c.length > 0) {
+      let sum = 0, closed = true;
+      for (let i = 0; i < c.length; i++) {
+        const e = g.edges[c[i]], f = g.edges[c[(i + 1) % c.length]];
+        if (e.to !== f.from) closed = false;
+        sum += e.weight;
+      }
+      check(`elimNeg cycle ${seed}: closed`, closed);
+      check(`elimNeg cycle ${seed}: negative`, sum < 0, sum);
+    }
+  }
+}
+
 // ---------- summary ----------
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
