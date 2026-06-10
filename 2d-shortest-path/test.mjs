@@ -123,6 +123,46 @@ check('NegativeCycleError exported', typeof BNW.NegativeCycleError === 'function
   }
 }
 
+// ---------- Task 5: SCC + FixDAGEdges ----------
+{
+  // brute-force SCC check on small graphs via Floyd-Warshall reachability
+  for (let seed = 1; seed <= 30; seed++) {
+    const g = BNW.generateGraph({ n: 8, avgDegree: 3.0, seed });
+    const allV = Array.from({ length: g.n }, (_, i) => i);
+    const allE = Array.from({ length: g.edges.length }, (_, i) => i);
+    const reach = Array.from({ length: g.n }, (_, i) => allV.map(j => i === j));
+    for (const e of g.edges) reach[e.from][e.to] = true;
+    for (let k = 0; k < g.n; k++) for (let i = 0; i < g.n; i++) for (let j = 0; j < g.n; j++)
+      if (reach[i][k] && reach[k][j]) reach[i][j] = true;
+    const { comps, compOf } = BNW.sccsOfView(g.n, g.edges, allV, allE);
+    check(`scc ${seed}: partition covers all`, comps.flat().sort((a, b) => a - b).join() === allV.join());
+    let ok = true;
+    for (let i = 0; i < g.n; i++) for (let j = 0; j < g.n; j++) {
+      const same = reach[i][j] && reach[j][i];
+      if (same !== (compOf.get(i) === compOf.get(j))) ok = false;
+    }
+    check(`scc ${seed}: matches mutual reachability`, ok);
+    check(`scc ${seed}: topological order`,
+      allE.every(ei => compOf.get(g.edges[ei].from) <= compOf.get(g.edges[ei].to)));
+  }
+
+  // FixDAGEdges on a handcrafted condensation: comps [[0],[1],[2,3]]
+  const edges = [
+    { from: 0, to: 1, weight: -3 },  // cross 0 -> 1
+    { from: 1, to: 2, weight: -5 },  // cross 1 -> 2
+    { from: 2, to: 3, weight: 1 },   // intra
+    { from: 3, to: 2, weight: 2 },   // intra
+  ];
+  const psi = [0, 0, 0, 0];
+  const comps = [[0], [1], [2, 3]];
+  const compOf = new Map([[0, 0], [1, 1], [2, 2], [3, 2]]);
+  BNW.fixDagEdges(4, edges, [0, 1, 2, 3], comps, compOf, ei => edges[ei].weight, psi);
+  const red = ei => edges[ei].weight + psi[edges[ei].from] - psi[edges[ei].to];
+  check('fixDagEdges: all edges non-negative', [0, 1, 2, 3].every(ei => red(ei) >= 0),
+    [0, 1, 2, 3].map(red));
+  check('fixDagEdges: intra edges unchanged', red(2) === 1 && red(3) === 2);
+}
+
 // ---------- summary ----------
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

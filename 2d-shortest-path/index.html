@@ -196,7 +196,73 @@ const BNW = (() => {
     return { dist, passes: bfPasses };
   }
 
-  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle, findNegativeCycle, elimNeg };
+  // Iterative Tarjan over a view. Returns comps in TOPOLOGICAL order of the
+  // condensation (Tarjan emits reverse topological order; we reverse it) and a
+  // Map from vertex to component index.
+  function sccsOfView(nGlobal, edges, verts, edgeIdxs) {
+    const { out } = viewAdjacency(nGlobal, edges, edgeIdxs);
+    const index = new Map(), low = new Map(), onStack = new Set(), stack = [];
+    const comps = [];
+    let counter = 0;
+    const visit = (root) => {
+      const work = [[root, 0]];
+      index.set(root, counter); low.set(root, counter); counter++;
+      stack.push(root); onStack.add(root);
+      while (work.length > 0) {
+        const frame = work[work.length - 1];
+        const u = frame[0];
+        if (frame[1] < out[u].length) {
+          const x = edges[out[u][frame[1]++]].to;
+          if (!index.has(x)) {
+            index.set(x, counter); low.set(x, counter); counter++;
+            stack.push(x); onStack.add(x);
+            work.push([x, 0]);
+          } else if (onStack.has(x)) {
+            low.set(u, Math.min(low.get(u), index.get(x)));
+          }
+        } else {
+          work.pop();
+          if (work.length > 0) {
+            const parent = work[work.length - 1][0];
+            low.set(parent, Math.min(low.get(parent), low.get(u)));
+          }
+          if (low.get(u) === index.get(u)) {
+            const comp = [];
+            for (;;) { const w = stack.pop(); onStack.delete(w); comp.push(w); if (w === u) break; }
+            comps.push(comp);
+          }
+        }
+      }
+    };
+    for (const v of verts) if (!index.has(v)) visit(v);
+    comps.reverse();
+    const compOf = new Map();
+    comps.forEach((comp, i) => comp.forEach(v => compOf.set(v, i)));
+    return { comps, compOf };
+  }
+
+  // BNW Phase 2: per-SCC offsets in topological order make every cross-SCC edge
+  // of the kept (DAG) graph non-negative; intra-SCC edges are untouched because
+  // both endpoints get the same offset.
+  function fixDagEdges(nGlobal, edges, keptEdgeIdxs, comps, compOf, weightOf, psi) {
+    const { inn } = viewAdjacency(nGlobal, edges, keptEdgeIdxs);
+    const offset = new Array(comps.length).fill(0);
+    for (let j = 0; j < comps.length; j++) {
+      let off = 0;
+      for (const v of comps[j]) {
+        for (const ei of inn[v]) {
+          const i = compOf.get(edges[ei].from);
+          if (i === j) continue;
+          const cand = offset[i] + weightOf(ei);
+          if (cand < off) off = cand;
+        }
+      }
+      offset[j] = off;
+    }
+    for (let j = 0; j < comps.length; j++) for (const v of comps[j]) psi[v] += offset[j];
+  }
+
+  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle, findNegativeCycle, elimNeg, sccsOfView, fixDagEdges };
 })();
 if (typeof globalThis !== 'undefined') globalThis.BNW = BNW;
 </script>
