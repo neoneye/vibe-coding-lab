@@ -55,6 +55,17 @@
         .panel h3:first-child { margin-top: 0; }
         .panel h3.eyes { color: #8f8; }
         .panel h3.mouth { color: #f88; }
+        .panel h3.lag { color: #fa0; }
+        .panel label.slider input[type="range"] {
+            flex: 1;
+            min-width: 80px;
+        }
+        .panel label.slider .val {
+            min-width: 2ch;
+            text-align: right;
+            color: #fa0;
+            font-variant-numeric: tabular-nums;
+        }
         .panel label {
             display: flex;
             align-items: center;
@@ -93,6 +104,10 @@
             <h3 class="mouth">Mouth</h3>
             <label><input type="checkbox" id="mouthFlipX" checked> Flip X (mirror)</label>
             <label><input type="checkbox" id="mouthFlipY"> Flip Y</label>
+            <h3 class="lag">Lag (frames)</h3>
+            <label class="slider">L eye <input type="range" id="delayL" min="1" max="30" value="1"><span class="val" id="delayLVal">1</span></label>
+            <label class="slider">R eye <input type="range" id="delayR" min="1" max="30" value="1"><span class="val" id="delayRVal">1</span></label>
+            <label class="slider">Mouth <input type="range" id="delayM" min="1" max="30" value="1"><span class="val" id="delayMVal">1</span></label>
             <div class="hint">
                 Hold <kbd>Space</kbd> to hide overlay
             </div>
@@ -115,13 +130,17 @@
 
     let spaceHeld = false;
 
-    // Reusable temp canvases
-    const tmpA = document.createElement('canvas');
-    const tmpACtx = tmpA.getContext('2d');
-    const tmpB = document.createElement('canvas');
-    const tmpBCtx = tmpB.getContext('2d');
-    const tmpC = document.createElement('canvas');
-    const tmpCCtx = tmpC.getContext('2d');
+    // Ring buffer of per-region crops from the last frames, so each
+    // region can be pasted with its own delay (max 30 frames + current).
+    const RING = 31;
+    const ring = Array.from({ length: RING }, () => {
+        const mk = () => {
+            const c = document.createElement('canvas');
+            return { c, ctx: c.getContext('2d') };
+        };
+        return { l: mk(), r: mk(), m: mk() };
+    });
+    let frameNo = 0;
 
     // ---- Helpers ----
 
@@ -265,33 +284,32 @@
                         const eFY   = document.getElementById('eyeFlipY').checked;
                         const mFX   = document.getElementById('mouthFlipX').checked;
                         const mFY   = document.getElementById('mouthFlipY').checked;
+                        const dL    = +document.getElementById('delayL').value;
+                        const dR    = +document.getElementById('delayR').value;
+                        const dM    = +document.getElementById('delayM').value;
 
                         const ePad = 18;
+                        const lb = bbox(lm, L_EYE, W, H, ePad);
+                        const rb = bbox(lm, R_EYE, W, H, ePad);
+                        const mb = bbox(lm, LIPS, W, H, 12);
 
-                        // ---- Eyes ----
-                        if (eSwap || eFX || eFY) {
-                            const lb = bbox(lm, L_EYE, W, H, ePad);
-                            const rb = bbox(lm, R_EYE, W, H, ePad);
+                        // Capture this frame's regions before pasting anything
+                        const slot = ring[frameNo % RING];
+                        copyRegion(slot.l.c, slot.l.ctx, canvas, lb);
+                        copyRegion(slot.r.c, slot.r.ctx, canvas, rb);
+                        copyRegion(slot.m.c, slot.m.ctx, canvas, mb);
 
-                            copyRegion(tmpA, tmpACtx, canvas, lb);
-                            copyRegion(tmpB, tmpBCtx, canvas, rb);
+                        // Paste delayed content at the current positions
+                        // (clamped while history is still filling up)
+                        const past = d => ring[Math.max(0, frameNo - d) % RING];
+                        const srcL = past(dL), srcR = past(dR), srcM = past(dM);
 
-                            if (eSwap) {
-                                // Right eye content → left position, left → right
-                                pasteRegion(ctx, tmpB, lb, eFX, eFY);
-                                pasteRegion(ctx, tmpA, rb, eFX, eFY);
-                            } else {
-                                pasteRegion(ctx, tmpA, lb, eFX, eFY);
-                                pasteRegion(ctx, tmpB, rb, eFX, eFY);
-                            }
-                        }
+                        // With swap on, each position shows the opposite eye
+                        pasteRegion(ctx, (eSwap ? srcL.r : srcL.l).c, lb, eFX, eFY);
+                        pasteRegion(ctx, (eSwap ? srcR.l : srcR.r).c, rb, eFX, eFY);
+                        pasteRegion(ctx, srcM.m.c, mb, mFX, mFY);
 
-                        // ---- Mouth ----
-                        if (mFX || mFY) {
-                            const mb = bbox(lm, LIPS, W, H, 12);
-                            copyRegion(tmpC, tmpCCtx, canvas, mb);
-                            pasteRegion(ctx, tmpC, mb, mFX, mFY);
-                        }
+                        frameNo++;
 
                         // ---- Overlay ----
                         if (!spaceHeld) {
@@ -311,6 +329,14 @@
     } catch (err) {
         statusEl.textContent = 'Error: ' + err.message;
         console.error(err);
+    }
+
+    // ---- Slider readouts ----
+
+    for (const id of ['delayL', 'delayR', 'delayM']) {
+        const el = document.getElementById(id);
+        const val = document.getElementById(id + 'Val');
+        el.addEventListener('input', () => { val.textContent = el.value; });
     }
 
     // ---- Keyboard ----
