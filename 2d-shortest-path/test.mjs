@@ -198,19 +198,41 @@ check('NegativeCycleError exported', typeof BNW.NegativeCycleError === 'function
     const ok = allE.every(ei => wbase[ei] + psi[g.edges[ei].from] - psi[g.edges[ei].to] >= -B);
     check(`scaleDown ${seed}: reduced weights >= -B`, ok, { B });
   }
-  // negative cycle: must throw NegativeCycleError
+  // negative cycle: caught once B is small relative to the 2n-scaled cycle weight.
+  // A single ScaleDown call with large B legitimately succeeds (the bump masks the
+  // cycle), so we mirror SPmain: scale weights by 2n and run rounds with B halving.
   {
     const g = BNW.generateGraph({ n: 10, avgDegree: 2.7, seed: 99 });
     BNW.plantNegativeCycle(g, { seed: 99, len: 3 });
     const allV = Array.from({ length: g.n }, (_, i) => i);
     const allE = Array.from({ length: g.edges.length }, (_, i) => i);
-    const wbase = g.edges.map(e => e.weight);
-    let mn = 0; for (const w of wbase) if (w < mn) mn = w;
+    const scale = 2 * g.n;
+    const ws = g.edges.map(e => e.weight * scale);
+    const phi = new Array(g.n).fill(0);
+    let mn = 0; for (const w of ws) if (w < mn) mn = w;
     let B = 1; while (2 * B < -mn) B *= 2;
-    const ctx = { nGlobal: g.n, edges: g.edges, wbase, psi: new Array(g.n).fill(0), rng: BNW.mulberry32(1) };
     let threw = null;
-    try { BNW.scaleDown(ctx, allV, allE, g.n, B, 0); } catch (e) { threw = e; }
-    check('scaleDown: throws NegativeCycleError', threw instanceof BNW.NegativeCycleError);
+    try {
+      for (let b = B; b >= 1; b = Math.floor(b / 2)) {
+        const wbase = allE.map(ei => ws[ei] + phi[g.edges[ei].from] - phi[g.edges[ei].to]);
+        const psi = new Array(g.n).fill(0);
+        const ctx = { nGlobal: g.n, edges: g.edges, wbase, psi, rng: BNW.mulberry32(1) };
+        BNW.scaleDown(ctx, allV, allE, g.n, b, 0);
+        for (let v = 0; v < g.n; v++) phi[v] += psi[v];
+      }
+    } catch (e) { threw = e; }
+    check('scaleDown: negative cycle caught during scaling rounds', threw instanceof BNW.NegativeCycleError);
+    if (threw instanceof BNW.NegativeCycleError) {
+      const c = threw.cycleEdges;
+      let sum = 0, closed = c.length > 0;
+      for (let i = 0; i < c.length; i++) {
+        const e = g.edges[c[i]], f = g.edges[c[(i + 1) % c.length]];
+        if (e.to !== f.from) closed = false;
+        sum += e.weight;
+      }
+      check('scaleDown: extracted cycle closed', closed);
+      check('scaleDown: extracted cycle negative in original weights', sum < 0, sum);
+    }
   }
 }
 
