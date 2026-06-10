@@ -127,7 +127,162 @@ const Physics = {
 if (typeof module !== 'undefined') module.exports = Physics;
 </script>
 <script id="app">
-// Tasks 3-5
+'use strict';
+const fieldC = document.getElementById('field');
+const fctx = fieldC.getContext('2d');
+const W = fieldC.width, H = fieldC.height;
+const GS = 2, GW = W / GS, GH = H / GS;          // half-res sim grid
+const SRC = { x: 40, y: H / 2 };
+const BARRIER_X = 280, BARRIER_W = 6, SCREEN_X = 700;
+const PER_SLIT = 9;
+
+const state = { slits: 2, sep: 90, slitWidth: 12, lambda: 16, rate: 60, detector: false, paused: false };
+
+let reA, imA, reB, imB, envArr, screenI, cdf, maxScreenI = 0;
+let sources = [], kNum = 0;
+
+const gcan = document.createElement('canvas');
+gcan.width = GW; gcan.height = GH;
+const gctx = gcan.getContext('2d');
+const gimg = gctx.createImageData(GW, GH);
+
+const glowCan = document.createElement('canvas');
+glowCan.width = 1; glowCan.height = H;
+const glowCtx = glowCan.getContext('2d');
+
+function incoherent() { return state.detector && state.slits === 2; }
+
+function recompute() {
+  // keep slits from overlapping
+  if (state.slits === 2 && state.slitWidth > state.sep - 16) state.slitWidth = state.sep - 16;
+  kNum = 2 * Math.PI / state.lambda;
+  sources = Physics.slitSources({ slitCount: state.slits, sep: state.sep,
+    slitWidth: state.slitWidth, barrierX: BARRIER_X, cy: H / 2, perSlit: PER_SLIT });
+  const n = GW * GH;
+  reA = new Float32Array(n); imA = new Float32Array(n);
+  reB = new Float32Array(n); imB = new Float32Array(n);
+  const srcNorm = 3.2 / PER_SLIT;
+  for (let gy = 0; gy < GH; gy++) {
+    const y = gy * GS + GS / 2;
+    for (let gx = 0; gx < GW; gx++) {
+      const x = gx * GS + GS / 2;
+      const i = gy * GW + gx;
+      if (x > BARRIER_X - BARRIER_W / 2 && x < BARRIER_X + BARRIER_W / 2) continue;
+      if (x < BARRIER_X) {
+        const r = Math.max(Math.hypot(x - SRC.x, y - SRC.y), 0.5);
+        const a = 2.2 / Math.sqrt(r);
+        reA[i] = a * Math.cos(kNum * r); imA[i] = a * Math.sin(kNum * r);
+      } else {
+        const f = Physics.fieldAt(sources, kNum, x, y);
+        reA[i] = f.re[0] * srcNorm; imA[i] = f.im[0] * srcNorm;
+        reB[i] = f.re[1] * srcNorm; imB[i] = f.im[1] * srcNorm;
+      }
+    }
+  }
+  computeEnv();
+  screenI = Physics.screenIntensity(sources, kNum, SCREEN_X, H, !incoherent());
+  cdf = Physics.buildCDF(screenI);
+  maxScreenI = 0;
+  for (let y = 0; y < H; y++) maxScreenI = Math.max(maxScreenI, screenI[y]);
+  buildGlow();
+  updateCaption();
+  syncControls();
+}
+
+function computeEnv() {
+  envArr = new Float32Array(GW * GH);
+  const inc = incoherent();
+  for (let i = 0; i < envArr.length; i++) {
+    envArr[i] = inc
+      ? Math.sqrt(reA[i] * reA[i] + imA[i] * imA[i] + reB[i] * reB[i] + imB[i] * imB[i])
+      : Math.hypot(reA[i] + reB[i], imA[i] + imB[i]);
+  }
+}
+
+function buildGlow() {
+  const img = glowCtx.createImageData(1, H);
+  for (let y = 0; y < H; y++) {
+    const a = maxScreenI > 0 ? screenI[y] / maxScreenI : 0;
+    const p = y * 4;
+    img.data[p] = 255; img.data[p + 1] = 190; img.data[p + 2] = 90;
+    img.data[p + 3] = Math.round(a * 215);
+  }
+  glowCtx.putImageData(img, 0, 0);
+}
+
+let thetaB = 0;  // extra phase on slit B; random-walks when "watched"
+function drawField(tSec) {
+  const om = kNum * 110;                       // ripples travel ~110 px/s
+  const c = Math.cos(om * tSec), s = Math.sin(om * tSec);
+  let cB = c, sB = s;
+  if (incoherent()) {
+    thetaB += (Math.random() - 0.5) * 0.9;     // measurement scrambles relative phase
+    cB = Math.cos(om * tSec + thetaB); sB = Math.sin(om * tSec + thetaB);
+  }
+  const d = gimg.data;
+  for (let i = 0; i < GW * GH; i++) {
+    const v = reA[i] * c + imA[i] * s + reB[i] * cB + imB[i] * sB;
+    const ve = Math.tanh(v * 1.1);
+    const ee = Math.tanh(envArr[i] * 0.9);
+    const p = i * 4;
+    d[p]     = Math.max(0, 10 + ee * 35 + ve * 25);
+    d[p + 1] = Math.max(0, 16 + ee * 95 + ve * 75);
+    d[p + 2] = Math.max(0, 26 + ee * 150 + ve * 105);
+    d[p + 3] = 255;
+  }
+  gctx.putImageData(gimg, 0, 0);
+  fctx.imageSmoothingEnabled = true;
+  fctx.drawImage(gcan, 0, 0, W, H);
+  fctx.drawImage(glowCan, SCREEN_X, 0, W - SCREEN_X, H);
+  drawBarrier();
+  drawSource(tSec);
+}
+
+function drawBarrier() {
+  const cy = H / 2;
+  const centers = state.slits === 1 ? [cy] : [cy - state.sep / 2, cy + state.sep / 2];
+  const xb = BARRIER_X - BARRIER_W / 2;
+  const segs = [0];
+  centers.forEach(c => segs.push(c - state.slitWidth / 2, c + state.slitWidth / 2));
+  segs.push(H);
+  fctx.fillStyle = '#46536b';
+  for (let i = 0; i < segs.length; i += 2) fctx.fillRect(xb, segs[i], BARRIER_W, segs[i + 1] - segs[i]);
+  if (incoherent()) centers.forEach(c => drawEye(BARRIER_X + 18, c));
+}
+
+function drawEye(x, y) {
+  fctx.strokeStyle = '#ffb454'; fctx.fillStyle = '#ffb454'; fctx.lineWidth = 1.5;
+  fctx.beginPath(); fctx.ellipse(x, y, 9, 5.5, 0, 0, Math.PI * 2); fctx.stroke();
+  fctx.beginPath(); fctx.arc(x, y, 2.6, 0, Math.PI * 2); fctx.fill();
+}
+
+function drawSource(t) {
+  fctx.fillStyle = '#9fe3ff';
+  fctx.beginPath(); fctx.arc(SRC.x, SRC.y, 3.5 + Math.sin(t * 6) * 0.8, 0, Math.PI * 2); fctx.fill();
+}
+
+// ---- stubs completed in Tasks 4-5 ----
+function fireParticles(dt) {}
+function drawPops(t) {}
+function drawPanel() {}
+function updateCaption() {}
+function syncControls() {}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  if (!state.paused) {
+    const tSec = now / 1000;
+    fireParticles(dt);
+    drawField(tSec);
+    drawPops(tSec);
+    drawPanel();
+  }
+  requestAnimationFrame(frame);
+}
+recompute();
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
