@@ -28,7 +28,81 @@ const TimeGrid = (() => {
     return `${h12}${mm}${hour < 12 ? "am" : "pm"}`;
   }
 
-  return { dayPart, formatHourLabel };
+  const wallClockFormatters = new Map();
+  function wallClockFormatter(zoneId) {
+    let f = wallClockFormatters.get(zoneId);
+    if (!f) {
+      f = new Intl.DateTimeFormat("en-US", {
+        timeZone: zoneId, year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+      });
+      wallClockFormatters.set(zoneId, f);
+    }
+    return f;
+  }
+
+  // Local wall-clock components of an absolute instant in a zone.
+  function wallClock(zoneId, instantMs) {
+    const p = {};
+    for (const part of wallClockFormatter(zoneId).formatToParts(instantMs)) p[part.type] = part.value;
+    return { year: +p.year, month: +p.month, day: +p.day, hour: +p.hour, minute: +p.minute };
+  }
+
+  function zoneOffsetMinutes(zoneId, instantMs) {
+    const t = instantMs - (instantMs % 60000); // whole minute, so wallClock truncation is exact
+    const w = wallClock(zoneId, t);
+    return (Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute) - t) / 60000;
+  }
+
+  // Instant at which the zone's wall clock reads y-mo-d 00:00. Iterates to
+  // converge across DST offsets.
+  function zonedTimeToInstant(zoneId, y, mo, d) {
+    const target = Date.UTC(y, mo - 1, d);
+    let guess = target;
+    for (let i = 0; i < 3; i++) {
+      const next = target - zoneOffsetMinutes(zoneId, guess) * 60000;
+      if (next === guess) break;
+      guess = next;
+    }
+    return guess;
+  }
+
+  function zonedMidnightInstant(zoneId, instantMs) {
+    const w = wallClock(zoneId, instantMs);
+    return zonedTimeToInstant(zoneId, w.year, w.month, w.day);
+  }
+
+  function offsetLabel(zoneId, instantMs) {
+    const off = zoneOffsetMinutes(zoneId, instantMs);
+    const sign = off < 0 ? "-" : "+";
+    const abs = Math.abs(off);
+    const m = abs % 60;
+    return `UTC${sign}${Math.floor(abs / 60)}${m ? ":" + String(m).padStart(2, "0") : ""}`;
+  }
+
+  function monthDayLabel(zoneId, instantMs) {
+    return new Intl.DateTimeFormat("en-US", { timeZone: zoneId, month: "short", day: "numeric" }).format(instantMs);
+  }
+
+  function zoneAbbreviation(zoneId, instantMs) {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: zoneId, timeZoneName: "short" }).formatToParts(instantMs);
+    const p = parts.find((x) => x.type === "timeZoneName");
+    return p ? p.value : "";
+  }
+
+  // Full current time for the row label, e.g. "14:05" or "2:05pm".
+  function currentTimeLabel(zoneId, instantMs, format) {
+    const w = wallClock(zoneId, instantMs);
+    const mm = String(w.minute).padStart(2, "0");
+    if (format === "24h") return `${w.hour}:${mm}`;
+    const h12 = w.hour % 12 === 0 ? 12 : w.hour % 12;
+    return `${h12}:${mm}${w.hour < 12 ? "am" : "pm"}`;
+  }
+
+  return {
+    dayPart, formatHourLabel, wallClock, zoneOffsetMinutes, zonedMidnightInstant,
+    offsetLabel, monthDayLabel, zoneAbbreviation, currentTimeLabel,
+  };
 })();
 
 const TimeGridTests = {
@@ -57,6 +131,38 @@ const TimeGridTests = {
     eq("label 0 ampm", TimeGrid.formatHourLabel(0, 0, "ampm"), "12am");
     eq("label 12 ampm", TimeGrid.formatHourLabel(12, 0, "ampm"), "12pm");
     eq("label 13:30 ampm", TimeGrid.formatHourLabel(13, 30, "ampm"), "1:30pm");
+
+    // wallClock
+    eq("wallClock UTC", TimeGrid.wallClock("UTC", Date.UTC(2026, 5, 10, 12, 34)),
+      { year: 2026, month: 6, day: 10, hour: 12, minute: 34 });
+    eq("wallClock Copenhagen summer (+2)", TimeGrid.wallClock("Europe/Copenhagen", Date.UTC(2026, 5, 10, 12, 0)),
+      { year: 2026, month: 6, day: 10, hour: 14, minute: 0 });
+    eq("wallClock LA summer (-7)", TimeGrid.wallClock("America/Los_Angeles", Date.UTC(2026, 5, 10, 1, 0)),
+      { year: 2026, month: 6, day: 9, hour: 18, minute: 0 });
+
+    // zoneOffsetMinutes
+    eq("offset UTC", TimeGrid.zoneOffsetMinutes("UTC", Date.UTC(2026, 5, 10)), 0);
+    eq("offset CPH winter", TimeGrid.zoneOffsetMinutes("Europe/Copenhagen", Date.UTC(2026, 0, 15)), 60);
+    eq("offset CPH summer", TimeGrid.zoneOffsetMinutes("Europe/Copenhagen", Date.UTC(2026, 5, 15)), 120);
+    eq("offset LA summer", TimeGrid.zoneOffsetMinutes("America/Los_Angeles", Date.UTC(2026, 5, 15)), -420);
+    eq("offset Kolkata", TimeGrid.zoneOffsetMinutes("Asia/Kolkata", Date.UTC(2026, 5, 15)), 330);
+
+    // zonedMidnightInstant: local midnight of the local day containing the instant
+    eq("midnight CPH summer", TimeGrid.zonedMidnightInstant("Europe/Copenhagen", Date.UTC(2026, 5, 10, 12, 0)),
+      Date.UTC(2026, 5, 9, 22, 0));
+    eq("midnight CPH winter", TimeGrid.zonedMidnightInstant("Europe/Copenhagen", Date.UTC(2026, 0, 15, 12, 0)),
+      Date.UTC(2026, 0, 14, 23, 0));
+    eq("midnight UTC", TimeGrid.zonedMidnightInstant("UTC", Date.UTC(2026, 5, 10, 12, 0)),
+      Date.UTC(2026, 5, 10, 0, 0));
+
+    // display labels
+    eq("offsetLabel UTC", TimeGrid.offsetLabel("UTC", Date.UTC(2026, 5, 10)), "UTC+0");
+    eq("offsetLabel CPH summer", TimeGrid.offsetLabel("Europe/Copenhagen", Date.UTC(2026, 5, 10)), "UTC+2");
+    eq("offsetLabel LA summer", TimeGrid.offsetLabel("America/Los_Angeles", Date.UTC(2026, 5, 10)), "UTC-7");
+    eq("offsetLabel Kolkata", TimeGrid.offsetLabel("Asia/Kolkata", Date.UTC(2026, 5, 10)), "UTC+5:30");
+    eq("monthDayLabel", TimeGrid.monthDayLabel("UTC", Date.UTC(2026, 5, 10, 12)), "Jun 10");
+    eq("currentTimeLabel 24h", TimeGrid.currentTimeLabel("UTC", Date.UTC(2026, 5, 10, 9, 5), "24h"), "9:05");
+    eq("currentTimeLabel ampm", TimeGrid.currentTimeLabel("UTC", Date.UTC(2026, 5, 10, 14, 5), "ampm"), "2:05pm");
 
     if (failures.length) console.error(failures.join("\n"));
     console.log(failures.length ? `FAIL: ${failures.length} failure(s)` : "PASS: all TimeGrid tests");
