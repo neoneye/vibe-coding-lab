@@ -41,6 +41,7 @@ button:disabled { opacity:0.4; cursor:default; }
     <div class="btngroup">
       <button id="slits1">1 slit</button>
       <button id="slits2" class="active">2 slits</button>
+      <button id="slits3">3 slits</button>
     </div>
   </div>
   <div class="ctl">which-path detector
@@ -52,8 +53,17 @@ button:disabled { opacity:0.4; cursor:default; }
   <div class="ctl"><span>slit separation d <span class="val" id="sepVal"></span></span>
     <input type="range" id="sep" min="40" max="160" step="2" value="90">
   </div>
-  <div class="ctl"><span>slit width w <span class="val" id="slitWidthVal"></span></span>
-    <input type="range" id="slitWidth" min="4" max="24" step="1" value="12">
+  <div class="ctl"><span>middle slit position <span class="val" id="midPosVal"></span></span>
+    <input type="range" id="midPos" min="-1" max="1" step="0.05" value="0">
+  </div>
+  <div class="ctl"><span>top slit width <span class="val" id="w1Val"></span></span>
+    <input type="range" id="w1" min="4" max="24" step="1" value="12">
+  </div>
+  <div class="ctl"><span>middle slit width <span class="val" id="w2Val"></span></span>
+    <input type="range" id="w2" min="4" max="24" step="1" value="12">
+  </div>
+  <div class="ctl"><span>bottom slit width <span class="val" id="w3Val"></span></span>
+    <input type="range" id="w3" min="4" max="24" step="1" value="12">
   </div>
   <div class="ctl"><span>particles/sec <span class="val" id="rateVal"></span></span>
     <input type="range" id="rate" min="0" max="300" step="5" value="60">
@@ -66,23 +76,42 @@ button:disabled { opacity:0.4; cursor:default; }
   </div>
 </div>
 <script id="physics-core">
-// Pure double-slit math. No DOM. Huygens: each slit = perSlit coherent point
-// sources; 2D cylindrical waves e^{ikr}/sqrt(r).
+// Pure slit-experiment math. No DOM. Huygens: each slit = perSlit coherent
+// point sources; 2D cylindrical waves e^{ikr}/sqrt(r). Up to 3 slits, each
+// with its own width. midPos slides the middle slit of a 3-slit barrier:
+// -1 = adjacent to the top slit, 0 = centered, +1 = adjacent to the bottom.
 const Physics = {
-  slitSources({ slitCount, sep, slitWidth, barrierX, cy, perSlit }) {
-    const centers = slitCount === 1 ? [cy] : [cy - sep / 2, cy + sep / 2];
+  // Slit centers/widths, top to bottom. widths[i] belongs to slit i.
+  slitLayout({ slitCount, sep, widths, midPos = 0, cy }) {
+    if (slitCount === 1) return [{ c: cy, w: widths[0] }];
+    if (slitCount === 2) return [
+      { c: cy - sep / 2, w: widths[0] },
+      { c: cy + sep / 2, w: widths[1] }
+    ];
+    const wT = widths[0], wM = widths[1], wB = widths[2];
+    const offTop = Math.max(0, sep / 2 - (wT + wM) / 2 - 2); // 2 px wall at the extreme
+    const offBot = Math.max(0, sep / 2 - (wB + wM) / 2 - 2);
+    const c = cy + (midPos < 0 ? midPos * offTop : midPos * offBot);
+    return [
+      { c: cy - sep / 2, w: wT },
+      { c, w: wM },
+      { c: cy + sep / 2, w: wB }
+    ];
+  },
+  slitSources(opts) {
+    const { barrierX, perSlit } = opts;
     const srcs = [];
-    centers.forEach((c, slit) => {
+    Physics.slitLayout(opts).forEach(({ c, w }, slit) => {
       for (let i = 0; i < perSlit; i++) {
         const f = perSlit === 1 ? 0 : i / (perSlit - 1) - 0.5;
-        srcs.push({ x: barrierX, y: c + f * slitWidth, slit });
+        srcs.push({ x: barrierX, y: c + f * w, slit });
       }
     });
     return srcs;
   },
-  // Per-slit complex field sums at one point: {re:[A,B], im:[A,B]}
+  // Per-slit complex field sums at one point: {re:[A,B,C], im:[A,B,C]}
   fieldAt(sources, k, px, py) {
-    const re = [0, 0], im = [0, 0];
+    const re = [0, 0, 0], im = [0, 0, 0];
     for (const s of sources) {
       const r = Math.max(Math.hypot(px - s.x, py - s.y), 0.5);
       const a = 1 / Math.sqrt(r);
@@ -92,14 +121,14 @@ const Physics = {
     return { re, im };
   },
   // Intensity profile down the screen column. coherent=false models a
-  // which-path measurement: |psi1|^2 + |psi2|^2 instead of |psi1+psi2|^2.
+  // which-path measurement: sum |psi_i|^2 instead of |sum psi_i|^2.
   screenIntensity(sources, k, screenX, height, coherent) {
     const I = new Float64Array(height);
     for (let y = 0; y < height; y++) {
       const f = Physics.fieldAt(sources, k, screenX, y + 0.5);
       I[y] = coherent
-        ? (f.re[0] + f.re[1]) ** 2 + (f.im[0] + f.im[1]) ** 2
-        : f.re[0] ** 2 + f.im[0] ** 2 + f.re[1] ** 2 + f.im[1] ** 2;
+        ? (f.re[0] + f.re[1] + f.re[2]) ** 2 + (f.im[0] + f.im[1] + f.im[2]) ** 2
+        : f.re[0] ** 2 + f.im[0] ** 2 + f.re[1] ** 2 + f.im[1] ** 2 + f.re[2] ** 2 + f.im[2] ** 2;
     }
     return I;
   },
@@ -136,9 +165,9 @@ const SRC = { x: 40, y: H / 2 };
 const BARRIER_X = 280, BARRIER_W = 6, SCREEN_X = 700;
 const PER_SLIT = 9;
 
-const state = { slits: 2, sep: 90, slitWidth: 12, lambda: 16, rate: 60, detector: false, paused: false };
+const state = { slits: 2, sep: 90, w1: 12, w2: 12, w3: 12, midPos: 0, lambda: 16, rate: 60, detector: false, paused: false };
 
-let reA, imA, reB, imB, envArr, screenI, cdf, maxScreenI = 0;
+let reS, imS, envArr, screenI, cdf, maxScreenI = 0;
 let sources = [], kNum = 0;
 
 const gcan = document.createElement('canvas');
@@ -150,17 +179,33 @@ const glowCan = document.createElement('canvas');
 glowCan.width = 1; glowCan.height = H;
 const glowCtx = glowCan.getContext('2d');
 
-function incoherent() { return state.detector && state.slits === 2; }
+function incoherent() { return state.detector && state.slits >= 2; }
+
+// widths in slit order, top to bottom; the single slit sits in the middle
+function activeWidths() {
+  if (state.slits === 1) return [state.w2];
+  if (state.slits === 2) return [state.w1, state.w3];
+  return [state.w1, state.w2, state.w3];
+}
+
+function layoutOpts() {
+  return { slitCount: state.slits, sep: state.sep, widths: activeWidths(),
+    midPos: state.midPos, barrierX: BARRIER_X, cy: H / 2, perSlit: PER_SLIT };
+}
 
 function recompute() {
   // keep slits from overlapping
-  if (state.slits === 2 && state.slitWidth > state.sep - 16) state.slitWidth = state.sep - 16;
+  if (state.slits >= 2) {
+    const cap = state.slits === 3 ? Math.max(4, Math.floor(state.sep / 2 - 6)) : Math.max(4, state.sep - 16);
+    state.w1 = Math.min(state.w1, cap);
+    state.w2 = Math.min(state.w2, cap);
+    state.w3 = Math.min(state.w3, cap);
+  }
   kNum = 2 * Math.PI / state.lambda;
-  sources = Physics.slitSources({ slitCount: state.slits, sep: state.sep,
-    slitWidth: state.slitWidth, barrierX: BARRIER_X, cy: H / 2, perSlit: PER_SLIT });
+  sources = Physics.slitSources(layoutOpts());
   const n = GW * GH;
-  reA = new Float32Array(n); imA = new Float32Array(n);
-  reB = new Float32Array(n); imB = new Float32Array(n);
+  reS = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+  imS = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
   const srcNorm = 3.2 / PER_SLIT;
   for (let gy = 0; gy < GH; gy++) {
     const y = gy * GS + GS / 2;
@@ -171,11 +216,12 @@ function recompute() {
       if (x < BARRIER_X) {
         const r = Math.max(Math.hypot(x - SRC.x, y - SRC.y), 0.5);
         const a = 2.2 / Math.sqrt(r);
-        reA[i] = a * Math.cos(kNum * r); imA[i] = a * Math.sin(kNum * r);
+        reS[0][i] = a * Math.cos(kNum * r); imS[0][i] = a * Math.sin(kNum * r);
       } else {
         const f = Physics.fieldAt(sources, kNum, x, y);
-        reA[i] = f.re[0] * srcNorm; imA[i] = f.im[0] * srcNorm;
-        reB[i] = f.re[1] * srcNorm; imB[i] = f.im[1] * srcNorm;
+        for (let sl = 0; sl < 3; sl++) {
+          reS[sl][i] = f.re[sl] * srcNorm; imS[sl][i] = f.im[sl] * srcNorm;
+        }
       }
     }
   }
@@ -192,10 +238,11 @@ function recompute() {
 function computeEnv() {
   envArr = new Float32Array(GW * GH);
   const inc = incoherent();
+  const [r0, r1, r2] = reS, [i0, i1, i2] = imS;
   for (let i = 0; i < envArr.length; i++) {
     envArr[i] = inc
-      ? Math.sqrt(reA[i] * reA[i] + imA[i] * imA[i] + reB[i] * reB[i] + imB[i] * imB[i])
-      : Math.hypot(reA[i] + reB[i], imA[i] + imB[i]);
+      ? Math.sqrt(r0[i] * r0[i] + i0[i] * i0[i] + r1[i] * r1[i] + i1[i] * i1[i] + r2[i] * r2[i] + i2[i] * i2[i])
+      : Math.hypot(r0[i] + r1[i] + r2[i], i0[i] + i1[i] + i2[i]);
   }
 }
 
@@ -210,18 +257,21 @@ function buildGlow() {
   glowCtx.putImageData(img, 0, 0);
 }
 
-let thetaB = 0;  // extra phase on slit B; random-walks when "watched"
+let theta1 = 0, theta2 = 0;  // extra phase per slit; random-walks when "watched"
 function drawField(tSec) {
   const om = kNum * 110;                       // ripples travel ~110 px/s
   const c = Math.cos(om * tSec), s = Math.sin(om * tSec);
-  let cB = c, sB = s;
+  let c1 = c, s1 = s, c2 = c, s2 = s;
   if (incoherent()) {
-    thetaB += (Math.random() - 0.5) * 0.9;     // measurement scrambles relative phase
-    cB = Math.cos(om * tSec + thetaB); sB = Math.sin(om * tSec + thetaB);
+    theta1 += (Math.random() - 0.5) * 0.9;     // measurement scrambles relative phases
+    theta2 += (Math.random() - 0.5) * 0.9;
+    c1 = Math.cos(om * tSec + theta1); s1 = Math.sin(om * tSec + theta1);
+    c2 = Math.cos(om * tSec + theta2); s2 = Math.sin(om * tSec + theta2);
   }
+  const [r0, rr1, rr2] = reS, [i0, ii1, ii2] = imS;
   const d = gimg.data;
   for (let i = 0; i < GW * GH; i++) {
-    const v = reA[i] * c + imA[i] * s + reB[i] * cB + imB[i] * sB;
+    const v = r0[i] * c + i0[i] * s + rr1[i] * c1 + ii1[i] * s1 + rr2[i] * c2 + ii2[i] * s2;
     const ve = Math.tanh(v * 1.1);
     const ee = Math.tanh(envArr[i] * 0.9);
     const p = i * 4;
@@ -239,15 +289,20 @@ function drawField(tSec) {
 }
 
 function drawBarrier() {
-  const cy = H / 2;
-  const centers = state.slits === 1 ? [cy] : [cy - state.sep / 2, cy + state.sep / 2];
+  const layout = Physics.slitLayout(layoutOpts());
+  const ivs = layout.map(({ c, w }) => [c - w / 2, c + w / 2]).sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const iv of ivs) {
+    if (merged.length && iv[0] <= merged[merged.length - 1][1]) {
+      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], iv[1]);
+    } else merged.push([iv[0], iv[1]]);
+  }
   const xb = BARRIER_X - BARRIER_W / 2;
-  const segs = [0];
-  centers.forEach(c => segs.push(c - state.slitWidth / 2, c + state.slitWidth / 2));
-  segs.push(H);
   fctx.fillStyle = '#46536b';
-  for (let i = 0; i < segs.length; i += 2) fctx.fillRect(xb, segs[i], BARRIER_W, segs[i + 1] - segs[i]);
-  if (incoherent()) centers.forEach(c => drawEye(BARRIER_X + 18, c));
+  let prev = 0;
+  for (const [a, b] of merged) { fctx.fillRect(xb, prev, BARRIER_W, a - prev); prev = b; }
+  fctx.fillRect(xb, prev, BARRIER_W, H - prev);
+  if (incoherent()) layout.forEach(({ c }) => drawEye(BARRIER_X + 18, c));
 }
 
 function drawEye(x, y) {
@@ -338,27 +393,43 @@ function drawPanel() {
 const captions = {
   one: 'One slit open: the wave spreads out from the slit (diffraction) and particles pile up in a single broad band. Nothing to interfere with — no fringes.',
   two: 'Both slits open: each particle’s wave passes through BOTH slits at once. Where crest meets crest the wavelets reinforce (bright fringes); where crest meets trough they cancel (dark gaps). Each particle lands at ONE random spot — no trajectory is drawn because it has none — yet thousands of them trace out the wave’s interference pattern.',
-  watched: 'Detector on: we now know which slit each particle used. That information destroys the superposition — the two wavelets’ relative phase is scrambled (watch the fringes jitter and wash out) — and the pattern collapses into two overlapping single-slit bands. Looking changes the outcome.'
+  three: 'Three slits open: three wavelets interfere. Evenly spaced slits give sharp principal maxima with faint secondary peaks between them. Slide the middle slit off-center to detune the spacing and watch the pattern reorganize; shrink a slit and its wavelet carries less weight, washing out the fringes it helped sharpen.',
+  watched: 'Detector on: we now know which slit each particle used. That information destroys the superposition — the wavelets’ relative phases are scrambled (watch the fringes jitter and wash out) — and the pattern collapses into overlapping single-slit bands. Looking changes the outcome.'
 };
 function updateCaption() {
   document.getElementById('caption').textContent =
-    state.slits === 1 ? captions.one : (state.detector ? captions.watched : captions.two);
+    state.slits === 1 ? captions.one
+    : state.detector ? captions.watched
+    : state.slits === 2 ? captions.two : captions.three;
 }
 
 const els = {};
-['slits1', 'slits2', 'detector', 'lambda', 'sep', 'slitWidth', 'rate', 'clear', 'pause',
- 'lambdaVal', 'sepVal', 'slitWidthVal', 'rateVal'].forEach(id => els[id] = document.getElementById(id));
+['slits1', 'slits2', 'slits3', 'detector', 'lambda', 'sep', 'midPos', 'w1', 'w2', 'w3', 'rate', 'clear', 'pause',
+ 'lambdaVal', 'sepVal', 'midPosVal', 'w1Val', 'w2Val', 'w3Val', 'rateVal'].forEach(id => els[id] = document.getElementById(id));
+
+function setEnabled(id, on) {
+  els[id].disabled = !on;
+  els[id].parentElement.style.opacity = on ? '' : '0.4';
+}
 
 function syncControls() {
   els.slits1.classList.toggle('active', state.slits === 1);
   els.slits2.classList.toggle('active', state.slits === 2);
+  els.slits3.classList.toggle('active', state.slits === 3);
   els.detector.disabled = state.slits === 1;
-  els.detector.textContent = state.detector && state.slits === 2 ? 'on' : 'off';
-  els.detector.classList.toggle('active', state.detector && state.slits === 2);
-  els.lambda.value = state.lambda;       els.lambdaVal.textContent = state.lambda + ' px';
-  els.sep.value = state.sep;             els.sepVal.textContent = state.sep + ' px';
-  els.slitWidth.value = state.slitWidth; els.slitWidthVal.textContent = state.slitWidth + ' px';
-  els.rate.value = state.rate;           els.rateVal.textContent = String(state.rate);
+  els.detector.textContent = incoherent() ? 'on' : 'off';
+  els.detector.classList.toggle('active', incoherent());
+  setEnabled('midPos', state.slits === 3);
+  setEnabled('w1', state.slits >= 2);
+  setEnabled('w2', state.slits !== 2);
+  setEnabled('w3', state.slits >= 2);
+  els.lambda.value = state.lambda;   els.lambdaVal.textContent = state.lambda + ' px';
+  els.sep.value = state.sep;         els.sepVal.textContent = state.sep + ' px';
+  els.midPos.value = state.midPos;   els.midPosVal.textContent = state.midPos.toFixed(2);
+  els.w1.value = state.w1;           els.w1Val.textContent = state.w1 + ' px';
+  els.w2.value = state.w2;           els.w2Val.textContent = state.w2 + ' px';
+  els.w3.value = state.w3;           els.w3Val.textContent = state.w3 + ' px';
+  els.rate.value = state.rate;       els.rateVal.textContent = String(state.rate);
 }
 
 function clearDetections() {
@@ -367,10 +438,14 @@ function clearDetections() {
 
 els.slits1.addEventListener('click', () => { state.slits = 1; clearDetections(); recompute(); });
 els.slits2.addEventListener('click', () => { state.slits = 2; clearDetections(); recompute(); });
+els.slits3.addEventListener('click', () => { state.slits = 3; clearDetections(); recompute(); });
 els.detector.addEventListener('click', () => { state.detector = !state.detector; clearDetections(); recompute(); });
 els.lambda.addEventListener('input', () => { state.lambda = +els.lambda.value; clearDetections(); recompute(); });
 els.sep.addEventListener('input', () => { state.sep = +els.sep.value; clearDetections(); recompute(); });
-els.slitWidth.addEventListener('input', () => { state.slitWidth = +els.slitWidth.value; clearDetections(); recompute(); });
+els.midPos.addEventListener('input', () => { state.midPos = +els.midPos.value; clearDetections(); recompute(); });
+['w1', 'w2', 'w3'].forEach(id => els[id].addEventListener('input', () => {
+  state[id] = +els[id].value; clearDetections(); recompute();
+}));
 els.rate.addEventListener('input', () => { state.rate = +els.rate.value; syncControls(); });
 els.clear.addEventListener('click', clearDetections);
 els.pause.addEventListener('click', () => {
