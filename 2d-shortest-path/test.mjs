@@ -74,6 +74,23 @@ check('NegativeCycleError exported', typeof BNW.NegativeCycleError === 'function
   check('dijkstra parent tree', edges[r.parentEdge[3]].from === 2 && edges[r.parentEdge[2]].from === 1);
 }
 
+// ---------- Task 3: generator ----------
+{
+  let anyNegativeEdge = false;
+  for (let seed = 1; seed <= 50; seed++) {
+    const g = BNW.generateGraph({ n: 20, avgDegree: 2.5, seed });
+    check(`gen ${seed}: edge endpoints valid`,
+      g.edges.every(e => e.from >= 0 && e.from < g.n && e.to >= 0 && e.to < g.n));
+    check(`gen ${seed}: no negative cycle`, bfAll(g.n, g.edges).negativeCycle === false);
+    check(`gen ${seed}: source 0 reaches all`, bfFrom(g.n, g.edges, 0).every(d => d !== Infinity));
+    if (g.edges.some(e => e.weight < 0)) anyNegativeEdge = true;
+    const cyc = BNW.plantNegativeCycle(g, { seed, len: 3 });
+    check(`gen ${seed}: planted cycle detected`, bfAll(g.n, g.edges).negativeCycle === true);
+    check(`gen ${seed}: planted indices valid`, cyc.every(ei => ei >= 0 && ei < g.edges.length));
+  }
+  check('generator produces negative edges', anyNegativeEdge);
+}
+
 // ---------- summary ----------
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
