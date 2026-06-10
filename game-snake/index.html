@@ -1802,6 +1802,7 @@ class HybridBot {
     const oppMaps = this.opponentMaps(oppositePlayer);
 
     // Attack: shortest path to food, committed only if eating leaves an escape.
+    let foodPlan = null; // kept for the stalemate gamble below
     if (foodPosition) {
       const path = bfsPath(level, [vacateMap(body, 0), ...oppMaps], body.head.position, foodPosition);
       if (path && path.length >= 2) {
@@ -1812,9 +1813,15 @@ class HybridBot {
             const eats = posEq(path[i + 1], foodPosition);
             walked = bodyStateForTick(walked, movements[i], eats ? "eat" : "doNothing");
           }
+          // Eating the last food fills the board: that's the noMoreFood WIN,
+          // so no escape is needed (and none can exist — skip the check).
+          if (bodyLength(walked) >= level.emptyPositionArray.length) {
+            return { movement: movements[0], path };
+          }
           if (tailReachable(level, walked, 0, oppMaps)) {
             return { movement: movements[0], path };
           }
+          foodPlan = { movements, path, walked };
         }
       }
     }
@@ -1845,6 +1852,17 @@ class HybridBot {
     pool.sort((a, b) =>
       (a.repeat - b.repeat) || (b.area - a.area) || (b.foodDistance - a.foodDistance));
     const best = pool[0];
+    // Stalemate gamble: stalling forever ends in a stuckInALoop kill, since
+    // unsafe food never despawns. Once fresh stall states run out, eating an
+    // "unsafe" food is the better bet when the post-eat area still fits the
+    // snake — the next food respawns somewhere else and may free the position.
+    if (best.repeat && foodPlan) {
+      const area = floodFillCount(level,
+        [vacateMap(foodPlan.walked, 0), ...oppMaps], foodPlan.walked.head.position);
+      if (area >= bodyLength(foodPlan.walked)) {
+        return { movement: foodPlan.movements[0], path: foodPlan.path };
+      }
+    }
     // Planned path while stalling: the route back to the own tail (thin line).
     const tail = best.next.fifo.array[0].position;
     const tailPath = bfsPath(level, [vacateMap(best.next, 0), ...oppMaps], best.next.head.position, tail);
@@ -1939,6 +1957,9 @@ class HybridBot {
           line = [newHead.position, ...r.line];
         }
       }
+      // The engine kills bots that repeat body states; nudge away from
+      // already-seen states so corridor standoffs don't end in stuckInALoop.
+      if (!died && this.seenStates.has(bodyStateHash(moved))) score -= 500;
       rootMoves.push({ movement, score, line, moved, died });
     }
     // Veto: when some move provably keeps the tail escape, never pick one that doesn't.
@@ -1989,6 +2010,9 @@ class HybridBot {
     if (food) {
       const fk = posKey(food);
       const md = myDist.get(fk), od = oppDist.get(fk);
+      // Graded approach: without a distance gradient the 8-ply horizon never
+      // "sees" far-away food and the bot plays pure territory while starving.
+      if (md !== undefined) score -= md * 100;
       if (md !== undefined && (od === undefined || md < od)) score += 2000;
     }
 
