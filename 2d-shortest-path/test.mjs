@@ -286,6 +286,32 @@ function checkGraph(name, graph, source) {
     { from: 0, to: 2, weight: -4 }, { from: 2, to: 3, weight: -3 }] }, 0);
 }
 
+// ---------- Task 9: trace ----------
+{
+  const g = BNW.generateGraph({ n: 36, avgDegree: 2.6, seed: 5 });
+  const res = BNW.shortestPaths(g, 0, { seed: 5, trace: true });
+  const t = res.trace;
+  check('trace exists', t !== null && Array.isArray(t.rounds));
+  check('trace has rounds (graph has negative edges)',
+    !g.edges.some(e => e.weight < 0) || t.rounds.length > 0);
+  for (const [i, r] of t.rounds.entries()) {
+    const flat = r.clusters.flat().sort((a, b) => a - b);
+    check(`trace round ${i}: clusters partition vertices`,
+      flat.length === g.n && flat.every((v, j) => v === j));
+    check(`trace round ${i}: bound met`, r.minAfter >= -r.B, r);
+    check(`trace round ${i}: cuts valid`, r.cuts.every(ei => ei >= 0 && ei < g.edges.length));
+    check(`trace round ${i}: phi snapshot length`, r.phiAfter.length === g.n);
+  }
+  check('trace settle order starts at source', t.settleOrder[0] === 0);
+  check('trace phi present', Array.isArray(t.phi) && t.phi.length === g.n);
+
+  const g2 = BNW.generateGraph({ n: 12, avgDegree: 2.6, seed: 6 });
+  BNW.plantNegativeCycle(g2, { seed: 6, len: 3 });
+  const res2 = BNW.shortestPaths(g2, 0, { seed: 6, trace: true });
+  check('trace records negative cycle', Array.isArray(res2.trace.negativeCycle)
+    && res2.trace.negativeCycle === res2.negativeCycle);
+}
+
 // ---------- summary ----------
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
