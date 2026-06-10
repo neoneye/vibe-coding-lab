@@ -63,10 +63,10 @@ with adjacency lists built internally.
   pointers from a still-relaxable vertex, Bellman-Ford style) for the viz to
   highlight. Work bounds inside ElimNeg prevent non-termination.
 
-- **Instrumentation**: engine accepts an optional `trace` callback and emits events:
-  `round-start`, `ldd-ball`, `ldd-cluster`, `recurse-enter`, `recurse-exit`,
-  `dag-fix`, `elimneg-pass`, `potential-update`, `dijkstra-settle`,
-  `negative-cycle`. Tests run with tracing off. The viz replays the trace.
+- **Instrumentation**: engine accepts an optional `trace: true` flag and returns a
+  structured trace object: per-round `{B, clusters, cuts, phiAfter, minBefore,
+  minAfter, stats}` plus final `{settleOrder, parentEdge, phi, negativeCycle}`.
+  Tests run with tracing off. The viz replays the trace.
 
 ## Visualization
 
