@@ -163,6 +163,26 @@ check('NegativeCycleError exported', typeof BNW.NegativeCycleError === 'function
   check('fixDagEdges: intra edges unchanged', red(2) === 1 && red(3) === 2);
 }
 
+// ---------- Task 6: LDD ----------
+{
+  for (let seed = 1; seed <= 30; seed++) {
+    const g = BNW.generateGraph({ n: 25, avgDegree: 3.0, seed });
+    const allV = Array.from({ length: g.n }, (_, i) => i);
+    const allE = Array.from({ length: g.edges.length }, (_, i) => i);
+    const wNN = ei => Math.max(0, g.edges[ei].weight);
+    const ctx = { nGlobal: g.n, edges: g.edges, rng: BNW.mulberry32(seed) };
+    const cuts = [];
+    BNW.lowDiamDecomposition(ctx, allV, allE, wNN, 40, cuts);
+    check(`ldd ${seed}: cut indices valid`, cuts.every(ei => allE.includes(ei)));
+    check(`ldd ${seed}: no duplicate cuts`, new Set(cuts).size === cuts.length);
+    // determinism with same seed
+    const ctx2 = { nGlobal: g.n, edges: g.edges, rng: BNW.mulberry32(seed) };
+    const cuts2 = [];
+    BNW.lowDiamDecomposition(ctx2, allV, allE, wNN, 40, cuts2);
+    check(`ldd ${seed}: deterministic`, cuts.join() === cuts2.join());
+  }
+}
+
 // ---------- summary ----------
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

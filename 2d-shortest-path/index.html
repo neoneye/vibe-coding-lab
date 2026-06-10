@@ -262,7 +262,73 @@ const BNW = (() => {
     for (let j = 0; j < comps.length; j++) for (const v of comps[j]) psi[v] += offset[j];
   }
 
-  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle, findNegativeCycle, elimNeg, sccsOfView, fixDagEdges };
+  // Vertices within weighted distance r of v: dir 'out' follows edges forward
+  // (adj must be out-lists), dir 'in' follows them backward (adj must be in-lists).
+  function ballAround(nGlobal, edges, adj, v, r, weightOf, alive, dir) {
+    const dist = new Map([[v, 0]]);
+    const seen = new Set();
+    const heap = new MinHeap();
+    heap.push(0, v);
+    const ball = [];
+    while (heap.size > 0) {
+      const { key, val: u } = heap.pop();
+      if (seen.has(u) || key > dist.get(u)) continue;
+      seen.add(u); ball.push(u);
+      for (const ei of adj[u]) {
+        const e = edges[ei];
+        const x = dir === 'out' ? e.to : e.from;
+        if (!alive[x]) continue;
+        const nd = key + weightOf(ei);
+        if (nd <= r && nd < (dist.has(x) ? dist.get(x) : Infinity)) { dist.set(x, nd); heap.push(nd, x); }
+      }
+    }
+    return ball;
+  }
+
+  // BNW low-diameter decomposition (randomized ball-carving). Appends cut edge
+  // indices to `cuts`. ANY output is correct for ScaleDown (it only affects
+  // speed): light vertices get geometric-radius balls carved out (cutting the
+  // boundary in the carve direction and recursing inside); heavy vertices stay
+  // as the core. Capping R at d/4 keeps every carved ball <= 0.7|verts|, which
+  // guarantees the recursion shrinks.
+  function lowDiamDecomposition(ctx, verts, edgeIdxs, weightNN, d, cuts) {
+    const { nGlobal, edges, rng } = ctx;
+    if (verts.length <= 1) return;
+    const { out, inn } = viewAdjacency(nGlobal, edges, edgeIdxs);
+    const alive = new Uint8Array(nGlobal);
+    for (const v of verts) alive[v] = 1;
+    const radius = Math.max(1, d / 4);
+    const limit = 0.7 * verts.length;
+    const lightDir = new Map();
+    for (const v of verts) {
+      if (ballAround(nGlobal, edges, out, v, radius, weightNN, alive, 'out').length <= limit) lightDir.set(v, 'out');
+      else if (ballAround(nGlobal, edges, inn, v, radius, weightNN, alive, 'in').length <= limit) lightDir.set(v, 'in');
+    }
+    const p = Math.min(1, (4 * Math.log(Math.max(verts.length, 2))) / radius);
+    for (const v of verts) {
+      if (!alive[v] || !lightDir.has(v)) continue;
+      const dir = lightDir.get(v);
+      let R = Math.floor(Math.log(1 - rng()) / Math.log(1 - p)) + 1;
+      if (!(R >= 1)) R = 1;
+      if (R > radius) R = Math.floor(radius);
+      const adj = dir === 'out' ? out : inn;
+      const ball = ballAround(nGlobal, edges, adj, v, R, weightNN, alive, dir);
+      const inBall = new Uint8Array(nGlobal);
+      for (const u of ball) inBall[u] = 1;
+      for (const u of ball) {
+        for (const ei of (dir === 'out' ? out[u] : inn[u])) {
+          const e = edges[ei];
+          const x = dir === 'out' ? e.to : e.from;
+          if (alive[x] && !inBall[x]) cuts.push(ei);
+        }
+      }
+      const ballEdges = edgeIdxs.filter(ei => inBall[edges[ei].from] && inBall[edges[ei].to]);
+      for (const u of ball) alive[u] = 0;
+      lowDiamDecomposition(ctx, ball, ballEdges, weightNN, d, cuts);
+    }
+  }
+
+  return { NegativeCycleError, mulberry32, MinHeap, viewAdjacency, dijkstra, generateGraph, plantNegativeCycle, findNegativeCycle, elimNeg, sccsOfView, fixDagEdges, ballAround, lowDiamDecomposition };
 })();
 if (typeof globalThis !== 'undefined') globalThis.BNW = BNW;
 </script>
