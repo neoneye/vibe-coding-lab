@@ -5,6 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Negative-Weight SSSP in Near-Linear Time — BNW 2022</title>
 <script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background: #f5f7fa; color: #333; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 { text-align: center; color: #2c3e50; font-size: 1.5em; }
+  .subtitle { text-align: center; color: #7f8c8d; margin-bottom: 16px; }
+  .controls { display: flex; justify-content: center; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  button { padding: 8px 16px; background: #3498db; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+  button:hover { background: #2980b9; }
+  button:disabled { background: #bdc3c7; cursor: not-allowed; }
+  label.toggle { display: flex; align-items: center; gap: 5px; user-select: none; }
+  #stepLabel { font-weight: bold; min-width: 110px; text-align: center; }
+  .panel { background: #fff; border-radius: 8px; padding: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.1); margin-bottom: 14px; }
+  #info { border-left: 4px solid #3498db; background: #e8f4fc; border-radius: 0 4px 4px 0; min-height: 3.2em; }
+  svg { display: block; width: 100%; height: auto; }
+  .legend { display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; font-size: .9em; color: #555; margin-bottom: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 18px; height: 4px; display: inline-block; border-radius: 2px; }
+</style>
 <script id="shared-code">
 'use strict';
 const BNW = (() => {
@@ -447,6 +465,237 @@ if (typeof globalThis !== 'undefined') globalThis.BNW = BNW;
 </script>
 </head>
 <body>
-<p>Visualization arrives in Task 10.</p>
+<div class="container">
+  <h1>Negative-Weight Shortest Paths in Near-Linear Time</h1>
+  <div class="subtitle">Bernstein–Nanongkai–Wulff-Nilsen (FOCS 2022) — low-diameter decomposition + scaling + potentials, then plain Dijkstra</div>
+  <div class="controls">
+    <button id="newGraph">New graph</button>
+    <label class="toggle"><input type="checkbox" id="plantCycle"> plant a negative cycle</label>
+    <button id="prev">&#9664; Prev</button>
+    <span id="stepLabel"></span>
+    <button id="next">Next &#9654;</button>
+    <button id="play">&#9654; Auto-play</button>
+  </div>
+  <div class="legend">
+    <span><span class="swatch" style="background:#e74c3c"></span> negative edge</span>
+    <span><span class="swatch" style="background:#bbb"></span> non-negative edge</span>
+    <span><span class="swatch" style="background:#999;border:1px dashed #555"></span> LDD cut edge</span>
+    <span><span class="swatch" style="background:#27ae60"></span> shortest-path tree</span>
+  </div>
+  <div class="panel" id="info"></div>
+  <div class="panel"><svg id="graph" viewBox="0 0 960 560"></svg></div>
+</div>
+<script>
+'use strict';
+const W = 960, H = 560, NODE_R = 13;
+const palette = d3.schemeTableau10;
+const state = { seed: 1, graph: null, result: null, steps: [], stepIndex: 0, playing: false, playTimer: null, animTimer: null, pos: null };
+
+function regenerate() {
+  const graph = BNW.generateGraph({ n: 36, avgDegree: 2.4, seed: state.seed });
+  if (document.getElementById('plantCycle').checked) BNW.plantNegativeCycle(graph, { seed: state.seed, len: 3 });
+  state.graph = graph;
+  state.result = BNW.shortestPaths(graph, 0, { seed: state.seed, trace: true });
+  state.pos = layout(graph);
+  state.steps = buildSteps(state.result);
+  state.stepIndex = 0;
+  stopAnim();
+  render();
+}
+
+function layout(graph) {
+  const nodes = Array.from({ length: graph.n }, (_, i) => ({ id: i }));
+  const links = graph.edges.map(e => ({ source: e.from, target: e.to }));
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).distance(75).strength(0.6))
+    .force('charge', d3.forceManyBody().strength(-220))
+    .force('center', d3.forceCenter(W / 2, H / 2))
+    .force('collide', d3.forceCollide(NODE_R * 2))
+    .stop();
+  for (let i = 0; i < 300; i++) sim.tick();
+  return nodes.map(d => ({
+    x: Math.max(NODE_R + 2, Math.min(W - NODE_R - 2, d.x)),
+    y: Math.max(NODE_R + 2, Math.min(H - NODE_R - 2, d.y)),
+  }));
+}
+
+function buildSteps(result) {
+  const steps = [{ kind: 'original' }];
+  for (let r = 0; r < result.trace.rounds.length; r++) {
+    steps.push({ kind: 'ldd', r });
+    steps.push({ kind: 'potentials', r });
+  }
+  steps.push(result.negativeCycle ? { kind: 'cycle' } : { kind: 'dijkstra' });
+  return steps;
+}
+
+function describeStep(step) {
+  const t = state.result.trace, R = t.rounds.length;
+  switch (step.kind) {
+    case 'original':
+      return `The input graph (${state.graph.n} nodes). Red edges have negative weight. BNW computes exact shortest paths from source 0 (double ring) in near-linear time — Bellman-Ford needs O(mn). Internally all weights are scaled \xd7${t.scale}; each round below halves the worst negativity bound B.`;
+    case 'ldd': {
+      const r = t.rounds[step.r];
+      return `Round ${step.r + 1}/${R} — B = ${r.B}. Low-diameter decomposition: random ball-carving cuts the dashed edges, splitting the graph into colored strongly-connected clusters. ScaleDown recurses into each cluster with half the budget (${r.stats.calls} recursive calls, depth ${r.stats.maxDepth}, ${r.stats.elimNegPasses} ElimNeg passes).`;
+    }
+    case 'potentials': {
+      const r = t.rounds[step.r];
+      return `Round ${step.r + 1}/${R} done. Recursion + DAG-fixing + ElimNeg produced potentials φ (under each node). Edge labels now show the reduced weight w(u,v)+φ(u)−φ(v) in scaled units: worst edge went from ${r.minBefore} to ${r.minAfter} (guaranteed ≥ −${r.B}). Potentials never change which paths are shortest.`;
+    }
+    case 'dijkstra':
+      return `Every reduced weight is now ≥ 0 (after a harmless +1 shift absorbed by the \xd7${t.scale} scaling), so plain Dijkstra finishes the job. Nodes light up in settle order; green edges form the shortest-path tree. Node labels show true distances in original weights.`;
+    case 'cycle':
+      return `A negative cycle was detected (bold red): no potential function can make its edges non-negative — total weight around it is negative no matter what. BNW reports the concrete cycle instead of looping forever. Distances are undefined.`;
+  }
+}
+
+function edgePath(e, i) {
+  const a = state.pos[e.from], b = state.pos[e.to];
+  if (e.from === e.to) {
+    return `M ${a.x} ${a.y - NODE_R} a ${NODE_R} ${NODE_R} 0 1 1 ${NODE_R} ${NODE_R}`;
+  }
+  // bend each edge slightly so parallel/reciprocal edges stay visible
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+  const off = 14 + (i % 3) * 6;
+  const mx = (a.x + b.x) / 2 - (dy / len) * off, my = (a.y + b.y) / 2 + (dx / len) * off;
+  return `M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`;
+}
+
+function render(animSettledCount) {
+  const step = state.steps[state.stepIndex];
+  const { graph, result } = state;
+  const t = result.trace;
+  const svg = d3.select('#graph');
+  svg.selectAll('*').remove();
+  svg.append('defs').append('marker')
+    .attr('id', 'arrow').attr('viewBox', '0 -5 10 10').attr('refX', 22).attr('refY', 0)
+    .attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#999');
+
+  const round = (step.kind === 'ldd' || step.kind === 'potentials') ? t.rounds[step.r] : null;
+  const cutSet = step.kind === 'ldd' ? new Set(round.cuts) : new Set();
+  const cycleSet = step.kind === 'cycle' ? new Set(result.negativeCycle) : new Set();
+  const clusterOf = new Map();
+  if (step.kind === 'ldd') round.clusters.forEach((c, i) => c.forEach(v => clusterOf.set(v, i)));
+  const treeSet = new Set();
+  const settledSet = new Set();
+  if (step.kind === 'dijkstra') {
+    const upTo = animSettledCount === undefined ? t.settleOrder.length : animSettledCount;
+    for (let i = 0; i < upTo; i++) {
+      const v = t.settleOrder[i];
+      settledSet.add(v);
+      if (t.parentEdge[v] !== -1) treeSet.add(t.parentEdge[v]);
+    }
+  }
+  const phiNow = step.kind === 'potentials' ? round.phiAfter
+    : step.kind === 'dijkstra' ? t.phi : null;
+
+  const edgeLabel = (e) => {
+    if (phiNow) return String(e.weight * t.scale + phiNow[e.from] - phiNow[e.to]);
+    return String(e.weight);
+  };
+  const edgeColor = (e, ei) => {
+    if (cycleSet.has(ei)) return '#c0392b';
+    if (treeSet.has(ei)) return '#27ae60';
+    if (cutSet.has(ei)) return '#999';
+    const w = phiNow ? e.weight * t.scale + phiNow[e.from] - phiNow[e.to] : e.weight;
+    return w < 0 ? '#e74c3c' : '#bbb';
+  };
+
+  const eg = svg.append('g');
+  graph.edges.forEach((e, ei) => {
+    eg.append('path').attr('d', edgePath(e, ei)).attr('fill', 'none')
+      .attr('stroke', edgeColor(e, ei))
+      .attr('stroke-width', cycleSet.has(ei) || treeSet.has(ei) ? 3.5 : 1.6)
+      .attr('stroke-dasharray', cutSet.has(ei) ? '5,4' : null)
+      .attr('marker-end', 'url(#arrow)');
+    const a = state.pos[e.from], b = state.pos[e.to];
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+    const off = 14 + (ei % 3) * 6;
+    eg.append('text')
+      .attr('x', (a.x + b.x) / 2 - (dy / len) * off * 0.75)
+      .attr('y', (a.y + b.y) / 2 + (dx / len) * off * 0.75)
+      .attr('font-size', 9).attr('text-anchor', 'middle')
+      .attr('fill', edgeColor(e, ei) === '#bbb' ? '#888' : edgeColor(e, ei))
+      .text(edgeLabel(e));
+  });
+
+  const ng = svg.append('g');
+  for (let v = 0; v < graph.n; v++) {
+    const p = state.pos[v];
+    const fill = step.kind === 'ldd' ? palette[clusterOf.get(v) % palette.length]
+      : step.kind === 'dijkstra' && settledSet.has(v) ? '#27ae60'
+      : '#3498db';
+    ng.append('circle').attr('cx', p.x).attr('cy', p.y).attr('r', NODE_R)
+      .attr('fill', fill).attr('stroke', '#2c3e50').attr('stroke-width', 1.5);
+    if (v === 0) ng.append('circle').attr('cx', p.x).attr('cy', p.y).attr('r', NODE_R + 4)
+      .attr('fill', 'none').attr('stroke', '#2c3e50').attr('stroke-width', 1.5);
+    ng.append('text').attr('x', p.x).attr('y', p.y + 4)
+      .attr('text-anchor', 'middle').attr('font-size', 11).attr('fill', '#fff').attr('font-weight', 'bold')
+      .text(v);
+    let sub = null;
+    if (step.kind === 'potentials') sub = `φ=${phiNow[v]}`;
+    if (step.kind === 'dijkstra' && settledSet.has(v) && result.dist) {
+      sub = result.dist[v] === Infinity ? '∞' : `d=${result.dist[v]}`;
+    }
+    if (sub !== null) ng.append('text').attr('x', p.x).attr('y', p.y + NODE_R + 12)
+      .attr('text-anchor', 'middle').attr('font-size', 10).attr('fill', '#555').text(sub);
+  }
+
+  document.getElementById('info').textContent = describeStep(step);
+  document.getElementById('stepLabel').textContent = `step ${state.stepIndex + 1} / ${state.steps.length}`;
+  document.getElementById('prev').disabled = state.stepIndex === 0;
+  document.getElementById('next').disabled = state.stepIndex === state.steps.length - 1;
+}
+
+function stopAnim() {
+  if (state.animTimer) { clearInterval(state.animTimer); state.animTimer = null; }
+}
+
+function enterStep() {
+  stopAnim();
+  const step = state.steps[state.stepIndex];
+  if (step.kind === 'dijkstra') {
+    let count = 0;
+    const total = state.result.trace.settleOrder.length;
+    render(0);
+    state.animTimer = setInterval(() => {
+      count++;
+      render(count);
+      if (count >= total) stopAnim();
+    }, 140);
+  } else {
+    render();
+  }
+}
+
+function go(delta) {
+  state.stepIndex = Math.max(0, Math.min(state.steps.length - 1, state.stepIndex + delta));
+  enterStep();
+}
+
+document.getElementById('prev').onclick = () => go(-1);
+document.getElementById('next').onclick = () => go(1);
+document.getElementById('newGraph').onclick = () => { state.seed++; regenerate(); };
+document.getElementById('plantCycle').onchange = () => regenerate();
+document.getElementById('play').onclick = () => {
+  state.playing = !state.playing;
+  document.getElementById('play').textContent = state.playing ? '⏸ Pause' : '▶ Auto-play';
+  if (state.playing) {
+    state.playTimer = setInterval(() => {
+      if (state.stepIndex >= state.steps.length - 1) {
+        clearInterval(state.playTimer); state.playing = false;
+        document.getElementById('play').textContent = '▶ Auto-play';
+        return;
+      }
+      go(1);
+    }, 2200);
+  } else {
+    clearInterval(state.playTimer);
+  }
+};
+
+regenerate();
+</script>
 </body>
 </html>
