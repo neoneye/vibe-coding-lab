@@ -27,6 +27,28 @@ function mulberry32(seed) {
 
 const FIELD_CLAMP = 4.0;
 
+// Per-type track character. deposit(E) is ionization per step (the alpha's
+// 1/E term produces the Bragg peak); scatter(E) is the multiple-scattering
+// kick amplitude; momentumScale sets how hard the magnetic field curves the
+// track (theta += bField / (E * momentumScale) per step).
+const PARTICLE_TYPES = {
+  alpha: {
+    energy: [30, 50], stopping: 0.55, momentumScale: 50, thick: true, deltas: true,
+    deposit(E) { return Math.min(5, 2.0 + 30 / E); },
+    scatter() { return 0.012; },
+  },
+  beta: {
+    energy: [4, 40], stopping: 0.04, momentumScale: 1, thick: false, deltas: false,
+    deposit() { return 0.55; },
+    scatter(E) { return 0.05 + 0.35 / Math.sqrt(Math.max(E, 0.5)); },
+  },
+  muon: {
+    energy: [1500, 2500], stopping: 0.4, momentumScale: 1, thick: false, deltas: true,
+    deposit() { return 0.7; },
+    scatter() { return 0.002; },
+  },
+};
+
 // Droplet condensation field for a 2D diffusion cloud chamber. Particle
 // tracks deposit instantly; the field diffuses slightly and decays per frame.
 // Not toroidal: deposits outside the chamber are discarded.
@@ -50,6 +72,52 @@ class ChamberEngine {
     if (xi < 0 || xi >= this.width || yi < 0 || yi >= this.height) return;
     const idx = yi * this.width + xi;
     this.field[idx] = Math.min(FIELD_CLAMP, this.field[idx] + amount);
+  }
+
+  // Integrate a particle track, depositing ionization instantly (particles
+  // cross at near light speed; only the condensation trail lingers).
+  fireParticle(type, x, y, theta, E, isDelta) {
+    const def = PARTICLE_TYPES[type];
+    if (E === undefined) E = def.energy[0] + this.rng() * (def.energy[1] - def.energy[0]);
+    const { bField, deltaProb } = this.params;
+    const startX = x, startY = y;
+    let steps = 0, deposited = 0, maxExcursion = 0;
+    const perStep = [];
+    while (E > 0.5) {
+      const q = def.deposit(E);
+      const jx = x + (this.rng() - 0.5), jy = y + (this.rng() - 0.5);
+      if (def.thick) {
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++)
+            this._deposit(jx + dx, jy + dy, q * (dx === 0 && dy === 0 ? 1 : 0.35));
+      } else {
+        this._deposit(jx, jy, q);
+      }
+      deposited += q;
+      perStep.push(q);
+      theta += (this.rng() * 2 - 1) * def.scatter(E);
+      theta += bField / Math.max(E * def.momentumScale, 0.5);
+      x += Math.cos(theta);
+      y += Math.sin(theta);
+      steps++;
+      const ex = Math.hypot(x - startX, y - startY);
+      if (ex > maxExcursion) maxExcursion = ex;
+      E -= def.stopping;
+      if (x < 0 || x >= this.width || y < 0 || y >= this.height) break;
+      if (!isDelta && def.deltas && this.rng() < deltaProb) {
+        const side = this.rng() < 0.5 ? 1 : -1;
+        this.fireParticle("beta", x, y,
+          theta + side * (Math.PI / 2) * (0.5 + this.rng() * 0.5), 2 + this.rng() * 6, true);
+      }
+    }
+    const qn = Math.max(1, Math.floor(perStep.length / 4));
+    let braggFirstQ = 0, braggLastQ = 0;
+    for (let i = 0; i < qn; i++) braggFirstQ += perStep[i];
+    for (let i = perStep.length - qn; i < perStep.length; i++) braggLastQ += perStep[i];
+    braggFirstQ /= qn;
+    braggLastQ /= qn;
+    return { steps, pathLength: steps, endX: x, endY: y, deposited,
+             braggFirstQ, braggLastQ, maxExcursion };
   }
 
   addSource(x, y) {
@@ -123,6 +191,70 @@ const ChamberTests = {
         e.clearSources();
         check("sources: cleared", e.sources.length === 0);
       }
+    }
+
+    // --- Particle tracks ---
+    if (typeof ChamberEngine !== "undefined" && ChamberEngine.prototype.fireParticle) {
+      // Alpha: short, straight, dense, Bragg peak at the end.
+      {
+        const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(20) });
+        const a = e.fireParticle("alpha", 240, 240, 0.3);
+        check("alpha: range in [40,110] (" + a.steps + ")", a.steps >= 40 && a.steps <= 110);
+        const endToEnd = Math.hypot(a.endX - 240, a.endY - 240);
+        check("alpha: straight (" + (endToEnd / a.pathLength).toFixed(3) + ")",
+          endToEnd / a.pathLength > 0.95);
+        check("alpha: bragg peak (" + a.braggFirstQ.toFixed(2) + " -> " + a.braggLastQ.toFixed(2) + ")",
+          a.braggLastQ > a.braggFirstQ * 1.5);
+        const e2 = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(21) });
+        const b = e2.fireParticle("beta", 240, 240, 0.3, 3.5);
+        check("alpha: denser than comparable beta", a.deposited > b.deposited * 2);
+      }
+      // Beta: B=0 wanders far; strong B confines it into spirals.
+      {
+        const free = new ChamberEngine({ width: 2000, height: 2000, rng: mulberry32(22) })
+          .fireParticle("beta", 1000, 1000, 0, 30);
+        const held = new ChamberEngine({ width: 2000, height: 2000, rng: mulberry32(22),
+          params: { bField: 2.5 } }).fireParticle("beta", 1000, 1000, 0, 30);
+        check("beta: free electron travels far (" + free.maxExcursion.toFixed(0) + ")",
+          free.maxExcursion > 60);
+        check("beta: B-field confines spiral (" + held.maxExcursion.toFixed(0) + ")",
+          held.maxExcursion < free.maxExcursion * 0.5);
+      }
+      // Muon: razor straight, crosses the chamber.
+      {
+        const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(23) });
+        const m = e.fireParticle("muon", 0, 240, 0);
+        const endToEnd = Math.hypot(m.endX - 0, m.endY - 240);
+        check("muon: crosses chamber (" + m.steps + " steps)", m.pathLength >= 480 * 0.9);
+        check("muon: straight (" + (endToEnd / m.pathLength).toFixed(4) + ")",
+          endToEnd / m.pathLength > 0.99);
+      }
+      // Outward at a wall: stops immediately.
+      {
+        const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(24) });
+        const m = e.fireParticle("muon", 0, 240, Math.PI);
+        check("track: stops at wall", m.steps <= 2);
+      }
+      // Delta rays: forcing them on deposits strictly more mass.
+      {
+        const off = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(25),
+          params: { deltaProb: 0 } });
+        off.fireParticle("muon", 0, 240, 0);
+        const on = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(25),
+          params: { deltaProb: 1 } });
+        on.fireParticle("muon", 0, 240, 0);
+        check("deltas: extra ionization", on.fieldMass() > off.fieldMass() * 1.5);
+      }
+      // Determinism of the integrator.
+      {
+        const r1 = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(26) })
+          .fireParticle("beta", 240, 240, 1.0);
+        const r2 = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(26) })
+          .fireParticle("beta", 240, 240, 1.0);
+        check("tracks: deterministic", r1.endX === r2.endX && r1.deposited === r2.deposited);
+      }
+    } else {
+      check("fireParticle: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
