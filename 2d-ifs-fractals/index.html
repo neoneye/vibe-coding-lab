@@ -303,6 +303,429 @@ function obtainFunctionValues(index0, index1, mix, seed) {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Flame variants: transcription of the 54 calc_out_* functions from
+// gfx_chaos.cpp. Each fn: (c, p, rng) -> {x, y} with c = {x, y, xb, yb, xc, yc}
+// (xb/yb/xc/yc from the chosen affine row). Guarded early-returns in the C++
+// leave out_x/out_y = input, so guards here return {x: c.x, y: c.y}.
+// tmp_atan_xy is atan2(x, y) — "looks wrong but this is how flam3 does it".
+// tmp_rand01 -> rng(), tmp_rand11 -> rng()*2-1.
+// ---------------------------------------------------------------------------
+const EPS = 1e-10;
+
+function applyVariant(menuEntry, c, rng) {
+  return VARIANT_FNS[menuEntry.fn](c, menuEntry.params || {}, rng);
+}
+
+const VARIANT_FNS = {
+  linear(c) { return { x: c.x, y: c.y }; },
+  sinusoidal(c) { return { x: Math.sin(c.x), y: Math.sin(c.y) }; },
+  spherical(c) {
+    const r2 = c.x * c.x + c.y * c.y;
+    if (r2 <= 0.000001) return { x: c.x, y: c.y };
+    return { x: c.x / r2, y: c.y / r2 };
+  },
+  swirl(c) {
+    const r2 = c.x * c.x + c.y * c.y;
+    return { x: c.x * Math.sin(r2) - c.y * Math.cos(r2), y: c.x * Math.cos(r2) + c.y * Math.sin(r2) };
+  },
+  horseshoe(c) {
+    const r = Math.hypot(c.x, c.y);
+    if (r <= 0.000001) return { x: c.x, y: c.y };
+    return { x: (c.x - c.y) * (c.x + c.y) / r, y: 2 * c.x * c.y / r };
+  },
+  polar(c) {
+    return { x: Math.atan2(c.x, c.y) / Math.PI, y: Math.hypot(c.x, c.y) - 1 };
+  },
+  handkerchief(c) {
+    const r = Math.hypot(c.x, c.y), a = Math.atan2(c.x, c.y);
+    return { x: r * Math.sin(a + r), y: r * Math.cos(a - r) };
+  },
+  heart(c) {
+    const r = Math.hypot(c.x, c.y), a = Math.atan2(c.x, c.y), v = r * a;
+    return { x: r * Math.sin(v), y: -r * Math.cos(v) };
+  },
+  disc(c) {
+    const r = Math.hypot(c.x, c.y), a = Math.atan2(c.x, c.y);
+    const v0 = r * Math.PI, v1 = a / Math.PI;
+    return { x: Math.sin(v0) * v1, y: Math.cos(v0) * v1 };
+  },
+  spiral(c) {
+    const r = Math.hypot(c.x, c.y);
+    if (r <= 0.0001) return { x: c.x, y: c.y };
+    const a = Math.atan2(c.x, c.y), sina = Math.sin(a), cosa = Math.cos(a);
+    return { x: (cosa + Math.sin(r)) / r, y: (sina - Math.cos(r)) / r };
+  },
+  hyperbolic(c) {
+    const r = Math.hypot(c.x, c.y);
+    if (r <= 0.0001) return { x: c.x, y: c.y };
+    const a = Math.atan2(c.x, c.y);
+    return { x: Math.sin(a) / r, y: Math.cos(a) * r };
+  },
+  diamond(c) {
+    const r = Math.hypot(c.x, c.y), a = Math.atan2(c.x, c.y);
+    return { x: Math.sin(a) * Math.cos(r), y: Math.cos(a) * Math.sin(r) };
+  },
+  ex(c) {
+    const r = Math.hypot(c.x, c.y), a = Math.atan2(c.x, c.y);
+    const n0 = Math.sin(a + r), n1 = Math.cos(a - r);
+    const m0 = n0 * n0 * n0 * r, m1 = n1 * n1 * n1 * r;
+    return { x: m0 + m1, y: m0 - m1 };
+  },
+  julia(c, p, rng) {
+    const r = Math.hypot(c.x, c.y);
+    let v0 = Math.atan2(c.x, c.y) * 0.5;
+    if (rng() * 2 - 1 > 0) v0 += Math.PI;
+    const v1 = Math.sqrt(r);
+    return { x: Math.cos(v0) * v1, y: Math.sin(v0) * v1 };
+  },
+  bent(c) {
+    return { x: c.x < 0 ? c.x * 2 : c.x, y: c.y < 0 ? c.y * 0.5 : c.y };
+  },
+  waves(c) {
+    const dx2 = c.xc * c.xc + EPS, dy2 = c.yc * c.yc + EPS;
+    if (dx2 < 0.00001 || dy2 < 0.00001) return { x: c.x, y: c.y };
+    return { x: c.x + c.xb * Math.sin(c.y / dx2), y: c.y + c.yb * Math.sin(c.x / dy2) };
+  },
+  fisheye(c) {
+    const r = Math.hypot(c.x, c.y), v = 2 / (r + 1);
+    return { x: c.y * v, y: c.x * v };
+  },
+  popcorn(c) {
+    return { x: c.x + c.xc * Math.sin(Math.tan(3 * c.y)), y: c.y + c.yc * Math.sin(Math.tan(3 * c.x)) };
+  },
+  exponential(c) {
+    const v0 = Math.exp(c.x - 1), v1 = Math.PI * c.y;
+    return { x: v0 * Math.cos(v1), y: v0 * Math.sin(v1) };
+  },
+  power(c) {
+    const r = Math.hypot(c.x, c.y);
+    if (r <= 0.00001) return { x: c.x, y: c.y };
+    const a = Math.atan2(c.x, c.y), sina = Math.sin(a), cosa = Math.cos(a);
+    const v1 = Math.pow(r, sina);
+    return { x: v1 * cosa, y: v1 * sina };
+  },
+  cosine(c) {
+    const v = c.x * Math.PI;
+    return { x: Math.cos(v) * Math.cosh(c.y), y: -Math.sin(v) * Math.sinh(c.y) };
+  },
+  rings(c) {
+    const dx = c.xc * c.xc + EPS;
+    if (dx <= 0.0001) return { x: c.x, y: c.y };
+    const r = Math.hypot(c.x, c.y), a = Math.atan2(c.x, c.y);
+    const mod = ((r + dx) % (2 * dx) + 2 * dx) % (2 * dx);
+    const v = mod - dx + r * (1 - dx);
+    return { x: v * Math.cos(a), y: v * Math.sin(a) };
+  },
+  fan(c) {
+    let dx = c.xc * c.xc + EPS;
+    if (dx <= 0.0001) return { x: c.x, y: c.y };
+    const dy = c.yc;
+    dx *= Math.PI;
+    const dx2 = dx * 0.5;
+    const r = Math.hypot(c.x, c.y);
+    let v = Math.atan2(c.x, c.y);
+    const mod = ((v + dy) % dx + dx) % dx;
+    v += mod > dx2 ? -dx2 : dx2;
+    return { x: r * Math.cos(v), y: r * Math.sin(v) };
+  },
+  blob(c, p) {
+    const bdiff = p.high - p.low;
+    const a = Math.atan2(c.x, c.y), sina = Math.sin(a), cosa = Math.cos(a);
+    let r = Math.hypot(c.x, c.y);
+    r *= p.low + bdiff * (0.5 + 0.5 * Math.sin(p.waves * a));
+    return { x: sina * r, y: cosa * r };
+  },
+  pdj(c, p) {
+    return { x: Math.sin(c.y * p.a) - Math.cos(c.x * p.b), y: Math.sin(c.x * p.c) - Math.cos(c.y * p.d) };
+  },
+  fan2(c, p) {
+    let dx = p.x * p.x + EPS;
+    if (dx <= 0.00001) return { x: c.x, y: c.y };
+    dx *= Math.PI;
+    const dx2 = dx * 0.5, dy = p.y;
+    const r = Math.hypot(c.x, c.y);
+    let a = Math.atan2(c.x, c.y);
+    const t = a + dy - dx * Math.trunc((a + dy) / dx);
+    a = t > dx2 ? a - dx2 : a + dx2;
+    return { x: Math.sin(a) * r, y: Math.cos(a) * r };
+  },
+  rings2(c, p) {
+    const pp = p.val * p.val + EPS;
+    if (pp <= 0.00001) return { x: c.x, y: c.y };
+    const r = Math.hypot(c.x, c.y), a = Math.atan2(c.x, c.y);
+    let t = r;
+    t -= 2 * pp * Math.trunc((r + pp) / (2 * pp));
+    t += r * (1 - pp);
+    return { x: t * Math.sin(a), y: t * Math.cos(a) };
+  },
+  eyefish(c) {
+    const t = 2 / (Math.hypot(c.x, c.y) + 1);
+    return { x: t * c.x, y: t * c.y };
+  },
+  bubble(c) {
+    const t = 4 / (c.x * c.x + c.y * c.y + 4);
+    return { x: t * c.x, y: t * c.y };
+  },
+  cylinder(c) { return { x: Math.sin(c.x), y: c.y }; },
+  perspective(c, p) {
+    const t = p.dist - c.y * Math.sin(p.angle);
+    if (t >= -0.0001 && t <= 0.0001) return { x: c.x, y: c.y };
+    const v = p.dist / t;
+    return { x: c.x * v, y: c.y * v * Math.cos(p.angle) };
+  },
+  noise(c, p, rng) {
+    const r0 = rng() * 2 - 1, r1 = rng() * 2 - 1;
+    const rads = r0 * Math.PI;
+    return { x: c.x * Math.cos(rads) * r1, y: c.y * Math.sin(rads) * r1 };
+  },
+  julia_n(c, p, rng) {
+    const p1 = p.power, p2 = p.dist;
+    if (p1 < 0.0001) return { x: c.x, y: c.y };
+    const cn = p2 / p1 / 2;
+    if (cn < 0.0001) return { x: c.x, y: c.y };
+    const p3 = Math.trunc(rng() * Math.abs(p1));
+    const t = (Math.atan2(c.y, c.x) + 2 * Math.PI * p3) / p1;
+    const r = Math.pow(Math.hypot(c.x, c.y), cn);
+    return { x: r * Math.cos(t), y: r * Math.sin(t) };
+  },
+  juliascope_n(c, p, rng) {
+    const p1 = p.power, p2 = p.dist;
+    if (p1 < 0.0001) return { x: c.x, y: c.y };
+    const cn = p2 / p1 / 2;
+    if (cn < 0.0001) return { x: c.x, y: c.y };
+    const r01 = rng();
+    const sign = (rng() * 2 - 1) > 0 ? 1 : -1;
+    const p3 = Math.trunc(r01 * Math.abs(p1));
+    const t = (sign * Math.atan2(c.y, c.x) + 2 * Math.PI * p3) / p1;
+    const r = Math.pow(Math.hypot(c.x, c.y), cn);
+    return { x: r * Math.cos(t), y: r * Math.sin(t) };
+  },
+  blur(c, p, rng) {
+    const r01 = rng();
+    const rads = (rng() * 2 - 1) * Math.PI;
+    return { x: r01 * Math.cos(rads), y: r01 * Math.sin(rads) };
+  },
+  gaussian(c, p, rng) {
+    const len = ((rng() * 2 - 1) + (rng() * 2 - 1) + (rng() * 2 - 1) + (rng() * 2 - 1)) * 0.5;
+    const rads = (rng() * 2 - 1) * Math.PI;
+    return { x: len * Math.cos(rads), y: len * Math.sin(rads) };
+  },
+  radial_blur(c, p, rng) {
+    const r = Math.hypot(c.x, c.y);
+    const t1 = ((rng() * 2 - 1) + (rng() * 2 - 1) + (rng() * 2 - 1) + (rng() * 2 - 1)) * 0.5;
+    const t2 = t1 * Math.sin(p.angle) + Math.atan2(c.y, c.x);
+    const t3 = t1 * Math.cos(p.angle) - 1;
+    return { x: r * Math.cos(t2) + t3 * c.x, y: r * Math.sin(t2) + t3 * c.y };
+  },
+  pie(c, p, rng) {
+    const t1 = Math.trunc(rng() * p.slices + 0.5);
+    const t2a = (t1 + rng() * p.thickness) / p.slices;
+    const t2 = p.rotation + 2 * Math.PI * t2a;
+    const r2 = rng();
+    return { x: r2 * Math.cos(t2), y: r2 * Math.sin(t2) };
+  },
+  ngon(c, p) {
+    const p2 = 2 * Math.PI / p.sides;
+    const denom = Math.pow(c.x * c.x + c.y * c.y, p.power * 0.5);
+    if (denom < 0.0001 || p2 < 0.0001) return { x: c.x, y: c.y };
+    const ayx = Math.atan2(c.y, c.x);
+    const t3 = ayx - p2 * Math.floor(ayx / p2);
+    const t4 = t3 > p2 * 0.5 ? t3 : t3 - p2;
+    const cosbb = Math.cos(t4);
+    if (cosbb < 0.0001) return { x: c.x, y: c.y };
+    const k = (p.corners * (1 / cosbb - 1) + p.circle) / denom;
+    return { x: k * c.x, y: k * c.y };
+  },
+  curl(c, p) {
+    const t1 = 1 + p.c1 * c.x + p.c2 * (c.x * c.x - c.y * c.y);
+    const t2 = p.c1 * c.y + 2 * p.c2 * c.x * c.y;
+    const denom = t1 * t1 + t2 * t2;
+    if (denom < 0.0001) return { x: c.x, y: c.y };
+    return { x: (c.x * t1 + c.y * t2) / denom, y: (c.y * t1 - c.x * t2) / denom };
+  },
+  rectangles(c, p) {
+    let ox = c.x, oy = c.y;
+    if (p.x > 0.0001) ox = (Math.floor(c.x / p.x) * 2 + 1) * p.x - c.x;
+    if (p.y > 0.0001) oy = (Math.floor(c.y / p.y) * 2 + 1) * p.y - c.y;
+    return { x: ox, y: oy };
+  },
+  arch(c, p, rng) {
+    const v41 = 0.4;
+    const rads = rng() * Math.PI * v41;
+    let cc = Math.cos(rads);
+    if (cc > -0.0001 && cc < 0.0001) cc = 0.0001;
+    const s = Math.sin(rads);
+    return { x: v41 * s, y: v41 * s * s / cc };
+  },
+  tangent(c) {
+    const s = Math.sin(c.x);
+    let cc = Math.cos(c.y);
+    if (cc > -0.0001 && cc < 0.0001) cc = 0.0001;
+    return { x: s / cc, y: Math.tan(c.y) };
+  },
+  square(c, p, rng) {
+    return { x: (rng() * 2 - 1) * 0.5, y: (rng() * 2 - 1) * 0.5 };
+  },
+  rays(c, p, rng) {
+    const v44 = 0.7;
+    const r2 = c.x * c.x + c.y * c.y;
+    const rads = v44 * rng() * Math.PI;
+    const v = v44 * Math.tan(rads) * (v44 / (r2 + 0.0001));
+    return { x: Math.cos(c.x) * v, y: Math.sin(c.y) * v };
+  },
+  blade(c, p, rng) {
+    const rads = rng() * Math.hypot(c.x, c.y);
+    const cc = Math.cos(rads), s = Math.sin(rads);
+    return { x: c.x * (cc + s), y: c.x * (cc - s) };
+  },
+  secant(c) {
+    const v46 = 2;
+    const r = Math.hypot(c.x, c.y);
+    const cc = Math.cos(v46 * r);
+    let icr = (cc < -0.0001 || cc > 0.0001) ? 1 / cc : 0;
+    icr += cc < 0 ? 1 : -1;
+    return { x: v46 * c.x, y: v46 * icr };
+  },
+  twintrian(c, p, rng) {
+    const rads = rng() * Math.hypot(c.x, c.y);
+    const s = Math.sin(rads);
+    let t = 0;
+    if (s > 0.0001) t = Math.log10(s * s) + Math.cos(rads);
+    return { x: c.x * t, y: c.x * (t - s * Math.PI) };
+  },
+  cross(c) {
+    let s = c.x * c.x - c.y * c.y;
+    s *= s;
+    const r = 1 / Math.sqrt(s + 0.0001);
+    return { x: c.x * r, y: c.y * r };
+  },
+  disc2(c, p) {
+    const t = p.rot * (c.x + c.y);
+    const cc = Math.cos(t), s = Math.sin(t);
+    const r = Math.atan2(c.x, c.y) / Math.PI;
+    let sa = Math.sin(p.twist);
+    let ca = Math.cos(p.twist) - 1;
+    if (p.twist > 2 * Math.PI) {
+      const k = 1 + p.twist - 2 * Math.PI;
+      ca *= k; sa *= k;
+    }
+    if (p.twist < -2 * Math.PI) {
+      const k = 1 + p.twist + 2 * Math.PI;
+      ca *= k; sa *= k;
+    }
+    return { x: (s + ca) * r, y: (cc + sa) * r };
+  },
+  supershape(c, p, rng) {
+    const r0 = Math.hypot(c.x, c.y);
+    if (r0 < 0.0001) return { x: c.x, y: c.y };
+    const theta = p.m * 0.25 * Math.atan2(c.y, c.x) + Math.PI / 4;
+    const t1 = Math.pow(Math.abs(Math.cos(theta)), p.n2);
+    const t2 = Math.pow(Math.abs(Math.sin(theta)), p.n3);
+    let r = rng() * p.random;
+    r += (1 - p.random) * p.holes;
+    r *= Math.pow(t1 + t2, p.n1) / r0;
+    return { x: c.x * r, y: c.y * r };
+  },
+  flower(c, p, rng) {
+    const rads = Math.atan2(c.y, c.x);
+    let t = rng();
+    t *= p.holes;
+    t *= Math.cos(p.petals * rads);
+    return { x: t * Math.cos(rads), y: t * Math.sin(rads) };
+  },
+  conic(c, p, rng) {
+    const ayx = Math.atan2(c.y, c.x);
+    const cc = Math.cos(ayx);
+    let t = rng();
+    t -= p.holes;
+    t *= p.eccentricity;
+    t /= p.eccentricity * cc + 1;
+    return { x: t * cc, y: t * Math.sin(ayx) };
+  },
+  parabola(c, p, rng) {
+    const r = Math.hypot(c.x, c.y);
+    const s = Math.sin(r);
+    return { x: Math.cos(r) * rng(), y: -(s * s) * rng() };
+  },
+};
+
+// The init_variant switch as data: 278 entries (cases 0..277), same order.
+// ARCH exists as a function but is excluded from the menu, as in the original.
+const VARIANT_MENU = (() => {
+  const deg2rad = (d) => (d * Math.PI) / 180;
+  const m = [];
+  const add = (fn, params, extra) =>
+    m.push({ label: `${m.length} ${fn}${extra ? " " + extra : ""}`, fn, params });
+  // cases 0..30: CASE_DIRECT in original order
+  for (const fn of ["linear", "rings", "sinusoidal", "bubble", "swirl", "spiral", "hyperbolic",
+                    "diamond", "ex", "bent", "spherical", "horseshoe", "polar", "handkerchief",
+                    "heart", "cosine", "fan", "eyefish", "cylinder", "parabola", "waves",
+                    "fisheye", "popcorn", "exponential", "power", "secant", "twintrian",
+                    "blade", "rays", "tangent", "cross"]) add(fn);
+  // 31..48 CASE_JULIA1, 49..66 CASE_JULIA2
+  for (const fn of ["julia_n", "juliascope_n"])
+    for (const power of [2, 3, 4, 5, 6, 7])
+      for (const dist of [2, 3, 5]) add(fn, { power, dist }, `p=${power} d=${dist}`);
+  // 67..86 CASE_SUPERSHAPE
+  for (const mm of [3, 4, 5, 6, 7])
+    for (const [random, holes] of [[1, 0], [0.5, 0.5]])
+      add("supershape", { m: mm, n1: 3.2, n2: 1, n3: 1, random, holes }, `m=${mm} n1=3.2 r=${random}`);
+  for (const mm of [4, 6, 8, 10, 12])
+    for (const [random, holes] of [[1, 0], [0.5, 0.5]])
+      add("supershape", { m: mm, n1: 4.6, n2: 0.15, n3: 0.75, random, holes }, `m=${mm} n1=4.6 r=${random}`);
+  // 87..108 CASE_DISC2
+  for (const rot of [1.178, 2.356])
+    for (const twist of [-1.0, -0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+      add("disc2", { rot, twist }, `rot=${rot} twist=${twist}`);
+  // 109..120 CASE_RINGS2
+  for (const val of [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95])
+    add("rings2", { val }, `v=${val}`);
+  // 121..134 CASE_RECTANGLES
+  for (const [x, y] of [[1, 2], [2, 2], [1, 3], [2, 3], [3, 3], [1, 5], [2, 5], [3, 5],
+                        [4, 5], [5, 5], [7, 5], [7, 3], [7, 2], [7, 1]])
+    add("rectangles", { x, y }, `${x}x${y}`);
+  // 135..149 CASE_BLOB
+  for (const waves of [5, 6, 7, 8, 9])
+    for (const [low, high] of [[-1.1, 1.1], [-1.3, 1.3], [-1.7, 1.7]])
+      add("blob", { low, high, waves }, `±${high} w=${waves}`);
+  // 150..168 CASE_PDJ
+  for (const v of [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9])
+    add("pdj", { a: v, b: v, c: v, d: v }, `${v}`);
+  for (const v of [1.8, 1.7, 1.6, 1.5, 1.4, 1.3, 1.2, 1.1])
+    add("pdj", { a: 1.9, b: 1.9, c: v, d: v }, `1.9/${v}`);
+  add("pdj", { a: 1.8, b: 1.8, c: 1.1, d: 1.1 }, "1.8/1.1");
+  // 169..177 CASE_FAN2
+  for (const y of [0.4, 0.5, 0.6])
+    for (const x of [0.4, 0.5, 0.6]) add("fan2", { x, y }, `${x}/${y}`);
+  // 178..182 CASE_PIE
+  for (const slices of [3, 4, 5, 6, 7])
+    add("pie", { rotation: 0, slices, thickness: 0.333 }, `s=${slices}`);
+  // 183..194 CASE_PERSPECTIVE
+  for (const deg of [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60])
+    add("perspective", { angle: deg2rad(deg), dist: 4 }, `${deg}°`);
+  // 195..207 CASE_RADIALBLUR (the duplicate 60° is in the original)
+  for (const deg of [10, 20, 30, 40, 50, 60, 60, 70, 80, 90, 100, 110, 120])
+    add("radial_blur", { angle: deg2rad(deg) }, `${deg}°`);
+  // 208..232 CASE_NGON
+  for (const circle of [0.1, 0.3, 1.5, 5.5, 8.5])
+    for (const sides of [5, 6, 7, 8, 9])
+      add("ngon", { power: 1.5, sides, corners: 1, circle }, `s=${sides} c=${circle}`);
+  // 233..248 CASE_CURL
+  for (const c2 of [0.2, 0.4, 0.6, 0.8])
+    for (const c1 of [0.2, 0.4, 0.6, 0.8]) add("curl", { c1, c2 }, `${c1}/${c2}`);
+  // 249..258 CASE_FLOWER
+  for (const holes of [0.333, 0.667])
+    for (const petals of [3, 4, 5, 6, 7]) add("flower", { holes, petals }, `h=${holes} p=${petals}`);
+  // 259..273 CASE_CONIC
+  for (const holes of [0.33, 0.5, 0.66])
+    for (const eccentricity of [0.3, 0.4, 0.5, 0.6, 0.7])
+      add("conic", { holes, eccentricity }, `h=${holes} e=${eccentricity}`);
+  // 274..277 trailing CASE_DIRECTs
+  for (const fn of ["noise", "blur", "gaussian", "square"]) add(fn);
+  return m;
+})();
+
 const IfsTests = {
   run() {
     const failures = [];
@@ -399,6 +822,56 @@ const IfsTests = {
       }
     } else {
       check("obtainFunctionValues: implemented", false);
+    }
+
+    // --- Variants ---
+    if (typeof VARIANT_MENU !== "undefined") {
+      check("variants: menu is exactly the 278 original cases", VARIANT_MENU.length === 278);
+      // Case order from init_variant: 0 linear, 2 sinusoidal, 10 spherical.
+      {
+        const out = applyVariant(VARIANT_MENU[0], { x: 0.3, y: -0.7, xb: 0, yb: 0, xc: 0, yc: 0 }, mulberry32(1));
+        check("variants: linear identity", out.x === 0.3 && out.y === -0.7);
+      }
+      {
+        const r = mulberry32(2);
+        let ok = VARIANT_MENU[2].fn === "sinusoidal";
+        for (let i = 0; i < 100; i++) {
+          const out = applyVariant(VARIANT_MENU[2], { x: r() * 20 - 10, y: r() * 20 - 10, xb: 0, yb: 0, xc: 0, yc: 0 }, r);
+          if (out.x < -1 || out.x > 1 || out.y < -1 || out.y > 1) ok = false;
+        }
+        check("variants: sinusoidal bounded", ok);
+      }
+      {
+        const out = applyVariant(VARIANT_MENU[10], { x: 2, y: 0, xb: 0, yb: 0, xc: 0, yc: 0 }, mulberry32(3));
+        check("variants: spherical (2,0)->(0.5,0)",
+          VARIANT_MENU[10].fn === "spherical" && Math.abs(out.x - 0.5) < 1e-6 && Math.abs(out.y) < 1e-6);
+      }
+      // Family index spot checks against the C++ switch.
+      {
+        check("variants: julia_n family at 31..48",
+          VARIANT_MENU[31].fn === "julia_n" && VARIANT_MENU[31].params.power === 2 && VARIANT_MENU[31].params.dist === 2
+          && VARIANT_MENU[48].fn === "julia_n" && VARIANT_MENU[48].params.power === 7 && VARIANT_MENU[48].params.dist === 5);
+        check("variants: curl family at 233..248",
+          VARIANT_MENU[233].fn === "curl" && VARIANT_MENU[233].params.c1 === 0.2 && VARIANT_MENU[233].params.c2 === 0.2
+          && VARIANT_MENU[248].fn === "curl" && VARIANT_MENU[248].params.c1 === 0.8 && VARIANT_MENU[248].params.c2 === 0.8);
+        check("variants: tail directs 274..277",
+          VARIANT_MENU[274].fn === "noise" && VARIANT_MENU[277].fn === "square");
+      }
+      // EVERY menu entry: finite output over 200 seeded random inputs.
+      {
+        let bad = null;
+        for (let vi = 0; vi < VARIANT_MENU.length && !bad; vi++) {
+          const r = mulberry32(1000 + vi);
+          for (let i = 0; i < 200; i++) {
+            const out = applyVariant(VARIANT_MENU[vi],
+              { x: r() * 4 - 2, y: r() * 4 - 2, xb: r() - 0.5, yb: r() - 0.5, xc: r() - 0.5, yc: r() - 0.5 }, r);
+            if (!Number.isFinite(out.x) || !Number.isFinite(out.y)) { bad = VARIANT_MENU[vi].label; break; }
+          }
+        }
+        check("variants: all finite (" + (bad || "ok") + ")", bad === null);
+      }
+    } else {
+      check("variants: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
