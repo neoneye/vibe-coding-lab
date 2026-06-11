@@ -88,13 +88,36 @@ class SlimeEngine {
     return v < 0 ? v + size : v;
   }
 
+  _trailAt(x, y) {
+    const xi = Math.floor(this._wrap(x, this.width));
+    const yi = Math.floor(this._wrap(y, this.height));
+    return this.trail[yi * this.width + xi];
+  }
+
   step() {
     const { stepSize, deposit } = this.params;
     const W = this.width, H = this.height;
     const a = this.agents;
     const n = a.length / 3;
+    const { sensorAngle, sensorDistance, turnAngle } = this.params;
     for (let i = 0; i < n; i++) {
-      const h = a[i * 3 + 2];
+      let h = a[i * 3 + 2];
+      if (sensorDistance > 0) {
+        const px = a[i * 3], py = a[i * 3 + 1];
+        const f = this._trailAt(px + Math.cos(h) * sensorDistance, py + Math.sin(h) * sensorDistance);
+        const l = this._trailAt(px + Math.cos(h - sensorAngle) * sensorDistance, py + Math.sin(h - sensorAngle) * sensorDistance);
+        const r = this._trailAt(px + Math.cos(h + sensorAngle) * sensorDistance, py + Math.sin(h + sensorAngle) * sensorDistance);
+        if (f >= l && f >= r) {
+          // forward strongest: keep heading
+        } else if (l > r) {
+          h -= turnAngle;
+        } else if (r > l) {
+          h += turnAngle;
+        } else {
+          h += this.rng() < 0.5 ? -turnAngle : turnAngle;
+        }
+        a[i * 3 + 2] = h;
+      }
       const x = this._wrap(a[i * 3] + Math.cos(h) * stepSize, W);
       const y = this._wrap(a[i * 3 + 1] + Math.sin(h) * stepSize, H);
       a[i * 3] = x;
@@ -225,6 +248,35 @@ const SlimeTests = {
       }
     } else {
       check("step: implemented", false);
+    }
+
+    // --- Sensing steers agents toward trails ---
+    if (typeof SlimeEngine !== "undefined" && SlimeEngine.prototype.step) {
+      // A persistent 3-cell-thick horizontal trail line at y=64. Agents start
+      // parallel within sensor reach; with sensing they converge to the line,
+      // without (sensorDistance 0) they hold their y forever.
+      const meanDist = (sensorDistance) => {
+        const e = new SlimeEngine({ width: 128, height: 128, agentCount: 200, rng: mulberry32(8),
+          params: { sensorDistance, sensorAngle: 30 * Math.PI / 180, turnAngle: 25 * Math.PI / 180,
+                    stepSize: 1, deposit: 0, decay: 1, diffusion: 0 } });
+        const r = mulberry32(9);
+        for (let i = 0; i < 200; i++) {
+          e.agents[i * 3] = r() * 128;
+          e.agents[i * 3 + 1] = 64 + (r() * 16 - 8);
+          e.agents[i * 3 + 2] = 0;
+        }
+        const stamp = () => {
+          for (let x = 0; x < 128; x++)
+            for (let dy = -1; dy <= 1; dy++) e.trail[(64 + dy) * 128 + x] = 3;
+        };
+        for (let s = 0; s < 50; s++) { stamp(); e.step(); }
+        let sum = 0;
+        for (let i = 0; i < 200; i++) sum += Math.abs(e.agents[i * 3 + 1] - 64);
+        return sum / 200;
+      };
+      const sensing = meanDist(10), control = meanDist(0);
+      check("sensing: agents converge to trail line (" + sensing.toFixed(2) + " vs " + control.toFixed(2) + ")",
+        sensing < control * 0.6);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
