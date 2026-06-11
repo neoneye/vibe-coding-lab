@@ -273,6 +273,49 @@ class SlimeEngine {
     return oldN + count;
   }
 
+  // Translate trail mass, agents, and food inside the disk (cx, cy, radius)
+  // by (dx, dy), wrapping toroidally. Cell membership uses the cell's integer
+  // coordinate; agent/food membership uses Euclidean distance (no wrap).
+  translateRegion(cx, cy, radius, dx, dy) {
+    const W = this.width, H = this.height, r2 = radius * radius;
+    // Trail: gather disk cells, zero them, scatter-add at wrapped destinations.
+    const x0 = Math.floor(cx - radius), x1 = Math.ceil(cx + radius);
+    const y0 = Math.floor(cy - radius), y1 = Math.ceil(cy + radius);
+    const moved = [];
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const ddx = x - cx, ddy = y - cy;
+        if (ddx * ddx + ddy * ddy > r2) continue;
+        const xi = Math.floor(this._wrap(x, W)), yi = Math.floor(this._wrap(y, H));
+        const idx = yi * W + xi;
+        if (this.trail[idx] === 0) continue;
+        moved.push(x + dx, y + dy, this.trail[idx]);
+        this.trail[idx] = 0;
+      }
+    }
+    for (let i = 0; i < moved.length; i += 3) {
+      const xi = Math.floor(this._wrap(moved[i], W));
+      const yi = Math.floor(this._wrap(moved[i + 1], H));
+      const idx = yi * W + xi;
+      this.trail[idx] = Math.min(TRAIL_CLAMP, this.trail[idx] + moved[i + 2]);
+    }
+    // Agents.
+    const a = this.agents, n = a.length / 3;
+    for (let i = 0; i < n; i++) {
+      const ddx = a[i * 3] - cx, ddy = a[i * 3 + 1] - cy;
+      if (ddx * ddx + ddy * ddy > r2) continue;
+      a[i * 3] = this._wrap(a[i * 3] + dx, W);
+      a[i * 3 + 1] = this._wrap(a[i * 3 + 1] + dy, H);
+    }
+    // Food.
+    for (const food of this.foods) {
+      const ddx = food.x - cx, ddy = food.y - cy;
+      if (ddx * ddx + ddy * ddy > r2) continue;
+      food.x = this._wrap(food.x + dx, W);
+      food.y = this._wrap(food.y + dy, H);
+    }
+  }
+
   _stampFood() {
     const { foodDeposit, foodRadius } = this.params;
     const W = this.width, H = this.height;
@@ -493,6 +536,50 @@ const SlimeTests = {
       check("addAgents: deposits visible trail", e.trailMass() > 0);
     } else {
       check("addAgents: implemented", false);
+    }
+
+    // --- translateRegion ---
+    if (typeof SlimeEngine !== "undefined" && SlimeEngine.prototype.translateRegion) {
+      // Trail mass moves, source empties, total conserved.
+      {
+        const e = new SlimeEngine({ width: 64, height: 64, agentCount: 0, rng: mulberry32(13) });
+        e.trail[20 * 64 + 20] = 2; e.trail[21 * 64 + 20] = 1;
+        const before = e.trailMass();
+        e.translateRegion(20, 20.5, 5, 10, 6);
+        check("translate: mass conserved", Math.abs(e.trailMass() - before) < 1e-3);
+        check("translate: destination holds mass",
+          Math.abs(e.trail[26 * 64 + 30] - 2) < 1e-6 && Math.abs(e.trail[27 * 64 + 30] - 1) < 1e-6);
+        check("translate: source emptied", e.trail[20 * 64 + 20] === 0 && e.trail[21 * 64 + 20] === 0);
+      }
+      // Agents: inside moves by delta, outside untouched.
+      {
+        const e = new SlimeEngine({ width: 64, height: 64, agentCount: 2, rng: mulberry32(14) });
+        e.agents[0] = 20; e.agents[1] = 20;
+        e.agents[3] = 50; e.agents[4] = 50;
+        e.translateRegion(20, 20, 5, 3, 4);
+        check("translate: agent inside moves",
+          Math.abs(e.agents[0] - 23) < 1e-4 && Math.abs(e.agents[1] - 24) < 1e-4);
+        check("translate: agent outside unmoved", e.agents[3] === 50 && e.agents[4] === 50);
+      }
+      // Food: inside moves, outside not.
+      {
+        const e = new SlimeEngine({ width: 64, height: 64, agentCount: 0, rng: mulberry32(15) });
+        e.addFood(20, 20); e.addFood(50, 50);
+        e.translateRegion(20, 20, 5, 3, 4);
+        check("translate: food inside moves", e.foods[0].x === 23 && e.foods[0].y === 24);
+        check("translate: food outside unmoved", e.foods[1].x === 50 && e.foods[1].y === 50);
+      }
+      // Wrap: blob pushed across the right edge reappears near x=0.
+      {
+        const e = new SlimeEngine({ width: 64, height: 64, agentCount: 0, rng: mulberry32(16) });
+        e.trail[10 * 64 + 62] = 1.5;
+        const before = e.trailMass();
+        e.translateRegion(62, 10, 3, 4, 0);
+        check("translate: wraps across edge",
+          Math.abs(e.trailMass() - before) < 1e-3 && Math.abs(e.trail[10 * 64 + 2] - 1.5) < 1e-6);
+      }
+    } else {
+      check("translateRegion: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
