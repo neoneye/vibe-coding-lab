@@ -252,6 +252,57 @@ const PRESETS = [
 ];
 // END GENERATED PRESETS
 
+const SUB_FUNCTION_CAPACITY = 40;
+
+function interpolateCosine(t, a, b) {
+  const f = (1 - Math.cos(t * Math.PI)) * 0.5;
+  return a + (b - a) * f;
+}
+
+// Port of obtain_function_values: mixes two presets row-by-row with cosine
+// interpolation, optional seed-driven row shuffle (original constants),
+// cumulative probabilities, and the guaranteed-last-row trick.
+function obtainFunctionValues(index0, index1, mix, seed) {
+  const maxIndex = PRESETS.length - 1;
+  const fd0 = PRESETS[Math.min(Math.max(index0, 0), maxIndex)];
+  const fd1 = PRESETS[Math.min(Math.max(index1, 0), maxIndex)];
+  const n0 = fd0.maps.length, n1 = fd1.maps.length;
+  const zero = [0, 0, 0, 0, 0, 0, 0];
+
+  const indexes0 = [], indexes1 = [];
+  for (let i = 0; i < SUB_FUNCTION_CAPACITY; i++) { indexes0.push(i); indexes1.push(i); }
+  if (seed > 0) {
+    for (let i = 0; i < n0; i++) {
+      const v = (random1d(seed * 10033 + i * 100) + 1) * 0.5;
+      let i2 = Math.floor(v * n0);
+      i2 = Math.min(Math.max(i2, 0), n0 - 1);
+      const tmp = indexes0[i]; indexes0[i] = indexes0[i2]; indexes0[i2] = tmp;
+    }
+    for (let i = 0; i < n1; i++) {
+      const v = (random1d(seed * 20003 + i * 53) + 1) * 0.5;
+      let i2 = Math.floor(v * n1);
+      i2 = Math.min(Math.max(i2, 0), n1 - 1);
+      const tmp = indexes1[i]; indexes1[i] = indexes1[i2]; indexes1[i2] = tmp;
+    }
+  }
+
+  const result = [];
+  for (let d = 0; d < SUB_FUNCTION_CAPACITY; d++) {
+    const c0 = d < n0 ? fd0.maps[indexes0[d]] : zero;
+    const c1 = d < n1 ? fd1.maps[indexes1[d]] : zero;
+    const row = { q: interpolateCosine(mix, c0[0], c1[0]), values: [] };
+    if (d > 0) row.q += result[d - 1].q;
+    for (let e = 0; e < 6; e++) row.values.push(interpolateCosine(mix, c0[e + 1], c1[e + 1]));
+    result.push(row);
+  }
+
+  if (mix < 0.0001) result[n0 - 1].q = 5;
+  else if (mix > 0.9999) result[n1 - 1].q = 5;
+  else if (n0 > n1) result[n0 - 1].q = 5;
+  else result[n1 - 1].q = 5;
+  return result;
+}
+
 const IfsTests = {
   run() {
     const failures = [];
@@ -307,6 +358,47 @@ const IfsTests = {
       check("presets: probabilities sum ~1", probOk);
       const sier = PRESETS.find((p) => p.name === "sierpinski gasket (equal sides)");
       check("presets: sierpinski present", !!sier && sier.maps.length === 3);
+    }
+
+    // --- Function mixing ---
+    if (typeof obtainFunctionValues !== "undefined") {
+      const i = PRESETS.findIndex((p) => p.name === "sierpinski gasket (equal sides)");
+      // mix=0, no shuffle: rows reproduce preset A exactly; q cumulative; last q=5.
+      {
+        const fv = obtainFunctionValues(i, (i + 1) % PRESETS.length, 0, 0);
+        const src = PRESETS[i].maps;
+        let exact = true, cum = 0;
+        for (let d = 0; d < src.length; d++) {
+          for (let e = 0; e < 6; e++) if (fv[d].values[e] !== src[d][e + 1]) exact = false;
+          if (d < src.length - 1) {
+            cum += src[d][0];
+            if (Math.abs(fv[d].q - cum) > 1e-6) exact = false;
+          }
+        }
+        check("mix: mix=0 reproduces preset A", exact);
+        check("mix: last row q=5 guarantee", fv[src.length - 1].q === 5);
+      }
+      // q nondecreasing for a 0.5 mix of different-row-count presets.
+      {
+        const a = PRESETS.findIndex((p) => p.maps.length >= 4);
+        const b = PRESETS.findIndex((p) => p.maps.length === 2);
+        const fv = obtainFunctionValues(a, b, 0.5, 0);
+        let mono = true;
+        const n = Math.max(PRESETS[a].maps.length, PRESETS[b].maps.length);
+        for (let d = 1; d < n; d++) if (fv[d].q < fv[d - 1].q - 1e-6) mono = false;
+        check("mix: cumulative q nondecreasing", mono);
+      }
+      // Shuffle: seed>0 permutes rows deterministically (same seed -> same result).
+      {
+        const f1 = obtainFunctionValues(i, i, 0, 42);
+        const f2 = obtainFunctionValues(i, i, 0, 42);
+        let same = true;
+        for (let d = 0; d < PRESETS[i].maps.length; d++)
+          for (let e = 0; e < 6; e++) if (f1[d].values[e] !== f2[d].values[e]) same = false;
+        check("mix: shuffle deterministic", same);
+      }
+    } else {
+      check("obtainFunctionValues: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
