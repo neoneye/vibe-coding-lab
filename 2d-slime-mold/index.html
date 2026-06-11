@@ -251,6 +251,28 @@ class SlimeEngine {
     this.foods = [];
   }
 
+  // Spawn `count` agents uniformly inside the disk (cx, cy, radius) with
+  // random headings, depositing immediately so painting is visible while
+  // paused. Returns the new total agent count.
+  addAgents(cx, cy, radius, count) {
+    const oldN = this.agents.length / 3;
+    const next = new Float32Array((oldN + count) * 3);
+    next.set(this.agents);
+    for (let i = oldN; i < oldN + count; i++) {
+      const r = radius * Math.sqrt(this.rng());
+      const theta = this.rng() * 2 * Math.PI;
+      const x = this._wrap(cx + Math.cos(theta) * r, this.width);
+      const y = this._wrap(cy + Math.sin(theta) * r, this.height);
+      next[i * 3] = x;
+      next[i * 3 + 1] = y;
+      next[i * 3 + 2] = this.rng() * 2 * Math.PI;
+      const idx = Math.floor(y) * this.width + Math.floor(x);
+      this.trail[idx] = Math.min(TRAIL_CLAMP, this.trail[idx] + this.params.deposit);
+    }
+    this.agents = next;
+    return oldN + count;
+  }
+
   _stampFood() {
     const { foodDeposit, foodRadius } = this.params;
     const W = this.width, H = this.height;
@@ -452,6 +474,25 @@ const SlimeTests = {
       }
     } else {
       check("food: implemented", false);
+    }
+
+    // --- addAgents ---
+    if (typeof SlimeEngine !== "undefined" && SlimeEngine.prototype.addAgents) {
+      const e = new SlimeEngine({ width: 64, height: 64, agentCount: 10, rng: mulberry32(12),
+        params: { deposit: 0.5, decay: 1, diffusion: 0 } });
+      const ret = e.addAgents(32, 32, 8, 50);
+      check("addAgents: count grows and returns total", ret === 60 && e.agents.length === 180);
+      let confined = true, headingsOk = true;
+      for (let i = 10; i < 60; i++) {
+        const dx = e.agents[i * 3] - 32, dy = e.agents[i * 3 + 1] - 32, h = e.agents[i * 3 + 2];
+        if (dx * dx + dy * dy > 8 * 8 + 1e-4) confined = false;
+        if (h < 0 || h >= 2 * Math.PI) headingsOk = false;
+      }
+      check("addAgents: spawns confined to brush disk", confined);
+      check("addAgents: headings in range", headingsOk);
+      check("addAgents: deposits visible trail", e.trailMass() > 0);
+    } else {
+      check("addAgents: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
