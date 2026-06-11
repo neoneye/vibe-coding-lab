@@ -5,11 +5,91 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>2D Cloud Chamber</title>
 <style>
-/* styles added in Task 5 */
+:root {
+  --bg: #11141a; --panel: #1a1f29; --border: #2c3442;
+  --text: #dde3ee; --muted: #8a94a6; --accent: #5aa9ff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+h1 { font-size: 1.3rem; margin: 0 0 4px; }
+.subtitle { color: var(--muted); margin: 0 0 16px; font-size: 0.9rem; }
+.layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px;
+}
+#display-canvas { display: block; background: #000; border: 1px solid var(--border); cursor: crosshair; }
+.controls { width: 340px; display: flex; flex-direction: column; gap: 12px; }
+fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 8px 12px; }
+legend { color: var(--muted); font-size: 0.8rem; padding: 0 4px; }
+label.slider { display: block; font-size: 0.85rem; margin: 6px 0; }
+label.slider input { width: 100%; }
+.buttons { display: flex; gap: 8px; }
+button {
+  flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: #232a37; color: var(--text); font-size: 0.9rem; cursor: pointer;
+}
+button:hover { background: #2c3545; }
+table.readout { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+table.readout td { padding: 3px 0; }
+table.readout td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.hint { font-size: 0.8rem; color: var(--muted); margin: 8px 0 0; }
 </style>
 </head>
 <body>
-<p>UI under construction.</p>
+<h1>2D Cloud Chamber</h1>
+<p class="subtitle">Charged particles cross a supersaturated vapor layer and leave condensation trails: fat alphas with Bragg-peak endings, wandering betas, razor-straight cosmic muons. Click to place a radioactive speck; turn up the magnet to wind electrons into spirals.</p>
+<div class="layout">
+  <div class="panel">
+    <canvas id="display-canvas" width="640" height="640"></canvas>
+    <p class="hint">Click: place a radioactive speck · click a highlighted speck: remove it</p>
+  </div>
+  <div class="controls">
+    <fieldset class="panel">
+      <legend>Particles</legend>
+      <label class="slider">Alphas / s: <span id="alpha-rate-value"></span>
+        <input type="range" id="alpha-rate" min="0" max="5" step="0.1" value="0.4">
+      </label>
+      <label class="slider">Betas / s: <span id="beta-rate-value"></span>
+        <input type="range" id="beta-rate" min="0" max="5" step="0.1" value="0.5">
+      </label>
+      <label class="slider">Muons / s: <span id="muon-rate-value"></span>
+        <input type="range" id="muon-rate" min="0" max="5" step="0.1" value="0.3">
+      </label>
+      <label class="slider">Source activity / s: <span id="source-rate-value"></span>
+        <input type="range" id="source-rate" min="0" max="20" step="0.5" value="6">
+      </label>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>Chamber</legend>
+      <label class="slider">Magnetic field: <span id="b-field-value"></span>
+        <input type="range" id="b-field" min="0" max="3" step="0.05" value="0">
+      </label>
+      <label class="slider">Fade: <span id="decay-value"></span>
+        <input type="range" id="decay" min="0.90" max="0.995" step="0.001" value="0.965">
+      </label>
+      <label class="slider">Mist: <span id="mist-value"></span>
+        <input type="range" id="mist" min="0" max="200" step="5" value="60">
+      </label>
+      <div class="buttons">
+        <button id="pause-btn">Pause</button>
+        <button id="clear-btn">Clear chamber</button>
+        <button id="clear-sources-btn">Clear sources</button>
+      </div>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>State</legend>
+      <table class="readout">
+        <tr><td>Events</td><td id="readout-events">0</td></tr>
+        <tr><td>Sources</td><td id="readout-sources">0</td></tr>
+        <tr><td>Magnetic field</td><td id="readout-b">0</td></tr>
+      </table>
+    </fieldset>
+  </div>
+</div>
 <script id="shared-code">
 "use strict";
 
@@ -365,7 +445,164 @@ const ChamberTests = {
 };
 </script>
 <script>
-// UI added in Task 5.
+"use strict";
+const GRID = 480;
+const display = document.getElementById("display-canvas");
+const displayCtx = display.getContext("2d");
+const SCALE = display.width / GRID;
+
+const offscreen = document.createElement("canvas");
+offscreen.width = GRID;
+offscreen.height = GRID;
+const offCtx = offscreen.getContext("2d");
+const image = offCtx.createImageData(GRID, GRID);
+
+const engine = new ChamberEngine({
+  width: GRID, height: GRID,
+  rng: mulberry32((Math.random() * 2 ** 32) >>> 0),
+});
+let running = true;
+
+// Monochrome vapor palette: black -> faint blue-grey -> white.
+const PALETTE_STOPS = [[4, 6, 10], [38, 48, 66], [150, 168, 196], [255, 255, 255]];
+const palette = (() => {
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = (i / 255) * (PALETTE_STOPS.length - 1);
+    const k = Math.min(PALETTE_STOPS.length - 2, Math.floor(t));
+    const f = t - k;
+    for (let c = 0; c < 3; c++)
+      lut[i * 3 + c] = PALETTE_STOPS[k][c] + (PALETTE_STOPS[k + 1][c] - PALETTE_STOPS[k][c]) * f;
+  }
+  return lut;
+})();
+
+// Sliders -> params.
+const SLIDERS = [
+  { id: "alpha-rate",  param: "alphaRate",  fmt: (v) => v.toFixed(1) },
+  { id: "beta-rate",   param: "betaRate",   fmt: (v) => v.toFixed(1) },
+  { id: "muon-rate",   param: "muonRate",   fmt: (v) => v.toFixed(1) },
+  { id: "source-rate", param: "sourceRate", fmt: (v) => v.toFixed(1) },
+  { id: "b-field",     param: "bField",     fmt: (v) => v.toFixed(2) },
+  { id: "decay",       param: "decay",      fmt: (v) => v.toFixed(3) },
+  { id: "mist",        param: "mist",       fmt: (v) => v },
+];
+for (const s of SLIDERS) {
+  const input = document.getElementById(s.id);
+  const valueEl = document.getElementById(s.id + "-value");
+  const apply = () => {
+    const v = Number(input.value);
+    engine.params[s.param] = v;
+    valueEl.textContent = s.fmt(v);
+  };
+  input.addEventListener("input", apply);
+  apply();
+}
+
+document.getElementById("pause-btn").addEventListener("click", (ev) => {
+  running = !running;
+  ev.target.textContent = running ? "Pause" : "Resume";
+});
+document.getElementById("clear-btn").addEventListener("click", () => engine.field.fill(0));
+document.getElementById("clear-sources-btn").addEventListener("click", () => engine.clearSources());
+
+// Source placement with the slime-mold feedback language.
+const cursor = { x: 0, y: 0, inside: false };
+const effects = [];
+
+function toGrid(ev) {
+  const rect = display.getBoundingClientRect();
+  return { x: ((ev.clientX - rect.left) / rect.width) * GRID,
+           y: ((ev.clientY - rect.top) / rect.height) * GRID };
+}
+display.addEventListener("pointerdown", (ev) => {
+  const g = toGrid(ev);
+  if (engine.removeSourceNear(g.x, g.y, 6)) effects.push({ type: "remove", x: g.x, y: g.y, age: 0 });
+  else { engine.addSource(g.x, g.y); effects.push({ type: "add", x: g.x, y: g.y, age: 0 }); }
+});
+display.addEventListener("pointermove", (ev) => {
+  const g = toGrid(ev);
+  cursor.x = g.x; cursor.y = g.y; cursor.inside = true;
+});
+display.addEventListener("pointerleave", () => { cursor.inside = false; });
+
+const GAMMA = 0.5;
+function render() {
+  const data = image.data, t = engine.field;
+  for (let i = 0; i < t.length; i++) {
+    const v = Math.min(1, t[i] / FIELD_CLAMP);
+    const idx = (255 * Math.pow(v, GAMMA)) | 0;
+    data[i * 4] = palette[idx * 3];
+    data[i * 4 + 1] = palette[idx * 3 + 1];
+    data[i * 4 + 2] = palette[idx * 3 + 2];
+    data[i * 4 + 3] = 255;
+  }
+  offCtx.putImageData(image, 0, 0);
+  displayCtx.imageSmoothingEnabled = true;
+  displayCtx.drawImage(offscreen, 0, 0, display.width, display.height);
+
+  // Source specks: dot + ring, red highlight when a click would remove.
+  let hoveredSource = null;
+  if (cursor.inside) {
+    for (const s of engine.sources) {
+      if ((s.x - cursor.x) ** 2 + (s.y - cursor.y) ** 2 <= 36) { hoveredSource = s; break; }
+    }
+  }
+  for (const s of engine.sources) {
+    const sx = s.x * SCALE, sy = s.y * SCALE;
+    const hovered = s === hoveredSource;
+    const color = hovered ? "rgba(255,80,80,0.95)" : "rgba(255,220,120,0.95)";
+    displayCtx.fillStyle = color;
+    displayCtx.beginPath();
+    displayCtx.arc(sx, sy, 3.5, 0, 2 * Math.PI);
+    displayCtx.fill();
+    displayCtx.strokeStyle = color;
+    displayCtx.lineWidth = 1.5;
+    displayCtx.beginPath();
+    displayCtx.arc(sx, sy, hovered ? 11 : 8, 0, 2 * Math.PI);
+    displayCtx.stroke();
+  }
+  // Ghost ring where a click would add a source.
+  if (cursor.inside && !hoveredSource) {
+    displayCtx.strokeStyle = "rgba(255,220,120,0.35)";
+    displayCtx.lineWidth = 1.5;
+    displayCtx.beginPath();
+    displayCtx.arc(cursor.x * SCALE, cursor.y * SCALE, 8, 0, 2 * Math.PI);
+    displayCtx.stroke();
+  }
+  // Add/remove pulses.
+  const EFFECT_LIFE = 25;
+  for (let i = effects.length - 1; i >= 0; i--) {
+    const fx = effects[i];
+    const t2 = fx.age / EFFECT_LIFE;
+    displayCtx.lineWidth = 2.5;
+    displayCtx.beginPath();
+    if (fx.type === "add") {
+      displayCtx.strokeStyle = `rgba(255,220,120,${1 - t2})`;
+      displayCtx.arc(fx.x * SCALE, fx.y * SCALE, 8 + t2 * 26, 0, 2 * Math.PI);
+    } else {
+      displayCtx.strokeStyle = `rgba(255,80,80,${1 - t2})`;
+      displayCtx.arc(fx.x * SCALE, fx.y * SCALE, Math.max(1, 11 * (1 - t2)), 0, 2 * Math.PI);
+    }
+    displayCtx.stroke();
+    fx.age++;
+    if (fx.age > EFFECT_LIFE) effects.splice(i, 1);
+  }
+}
+
+function updateReadout() {
+  document.getElementById("readout-events").textContent = engine.events.toLocaleString();
+  document.getElementById("readout-sources").textContent = engine.sources.length;
+  document.getElementById("readout-b").textContent = engine.params.bField.toFixed(2);
+}
+
+function frame() {
+  if (running) engine.step();
+  render();
+  updateReadout();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
