@@ -279,12 +279,25 @@ class ChamberEngine {
     for (let i = 0; i < p.mist; i++) {
       this._depositSmoke(this.rng() * W, this.rng() * H, 0.05);
     }
+    this._advectSmoke();
+    this._smokeDiffuseDecay();
     this._diffuseAndDecay();
+    this.tick++;
   }
 
   _diffuseAndDecay() {
-    const { diffusion, decay } = this.params;
-    const W = this.width, H = this.height, t = this.field, out = this.tmp;
+    [this.field, this.tmp] = this._blurDecay(this.field, this.tmp,
+      this.params.diffusion, this.params.decay);
+  }
+
+  _smokeDiffuseDecay() {
+    [this.smoke, this.smokeTmp] = this._blurDecay(this.smoke, this.smokeTmp,
+      this.params.smokeDiffusion, this.params.smokeDecay);
+  }
+
+  // 3x3 box blur blended by `diffusion`, multiplied by `decay`. Edge-clamped.
+  _blurDecay(src, tmp, diffusion, decay) {
+    const W = this.width, H = this.height, t = src, out = tmp;
     for (let y = 0; y < H; y++) {
       const yu = Math.max(0, y - 1) * W, yc = y * W, yd = Math.min(H - 1, y + 1) * W;
       for (let x = 0; x < W; x++) {
@@ -296,8 +309,41 @@ class ChamberEngine {
         out[yc + x] = (c + (blurred - c) * diffusion) * decay;
       }
     }
-    this.field = out;
-    this.tmp = t;
+    return [out, t];
+  }
+
+  // Semi-Lagrangian advection of the smoke through an animated swirl flow:
+  //   vx = swirl * (sin(y*0.013 + t*0.011) + 0.5*sin((x+y)*0.021 - t*0.017))
+  //   vy = swirl * (cos(x*0.011 - t*0.013) + 0.5*cos((x-y)*0.019 + t*0.019) + 0.35)
+  // The +0.35 is a gentle downdraft. 1D trig tables keep it cheap.
+  _advectSmoke() {
+    const { swirl } = this.params;
+    if (swirl === 0) return;
+    const W = this.width, H = this.height, src = this.smoke, out = this.smokeTmp;
+    const t = this.tick;
+    const rowSin = new Float32Array(H);
+    for (let y = 0; y < H; y++) rowSin[y] = Math.sin(y * 0.013 + t * 0.011);
+    const diagSin = new Float32Array(W + H);
+    for (let i = 0; i < W + H; i++) diagSin[i] = Math.sin(i * 0.021 - t * 0.017);
+    const colCos = new Float32Array(W);
+    for (let x = 0; x < W; x++) colCos[x] = Math.cos(x * 0.011 - t * 0.013);
+    const adiagCos = new Float32Array(W + H);
+    for (let i = 0; i < W + H; i++) adiagCos[i] = Math.cos((i - H) * 0.019 + t * 0.019);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const vx = swirl * (rowSin[y] + 0.5 * diagSin[x + y]);
+        const vy = swirl * (colCos[x] + 0.5 * adiagCos[x - y + H] + 0.35);
+        let sx = x - vx, sy = y - vy;
+        if (sx < 0) sx = 0; else if (sx > W - 1.001) sx = W - 1.001;
+        if (sy < 0) sy = 0; else if (sy > H - 1.001) sy = H - 1.001;
+        const x0 = sx | 0, y0 = sy | 0, fx = sx - x0, fy = sy - y0;
+        const i00 = y0 * W + x0;
+        out[y * W + x] = src[i00] * (1 - fx) * (1 - fy) + src[i00 + 1] * fx * (1 - fy)
+                       + src[i00 + W] * (1 - fx) * fy + src[i00 + W + 1] * fx * fy;
+      }
+    }
+    this.smoke = out;
+    this.smokeTmp = src;
   }
 }
 
@@ -477,6 +523,62 @@ const ChamberTests = {
       }
     } else {
       check("smoke: implemented", false);
+    }
+
+    // --- Smoke dynamics ---
+    if (typeof ChamberEngine !== "undefined" && ChamberEngine.prototype._advectSmoke) {
+      const blank = () => new ChamberEngine({ width: 100, height: 100, rng: mulberry32(42),
+        params: { alphaRate: 0, betaRate: 0, muonRate: 0, mist: 0, decay: 1, diffusion: 0 } });
+      // Still air (swirl 0) is the identity.
+      {
+        const e = blank();
+        e.params.swirl = 0; e.params.smokeDiffusion = 0; e.params.smokeDecay = 1;
+        e.smoke[50 * 100 + 50] = 2; e.smoke[20 * 100 + 70] = 1;
+        e.step();
+        check("smoke: still air is identity",
+          e.smoke[50 * 100 + 50] === 2 && e.smoke[20 * 100 + 70] === 1
+          && Math.abs(e.smokeMass() - 3) < 1e-6);
+      }
+      // Swirl advects: centroid of a blob moves.
+      {
+        const e = blank();
+        e.params.swirl = 1.5; e.params.smokeDiffusion = 0; e.params.smokeDecay = 1;
+        for (let dy = -3; dy <= 3; dy++)
+          for (let dx = -3; dx <= 3; dx++) e.smoke[(50 + dy) * 100 + 40 + dx] = 1;
+        const centroid = () => {
+          let m = 0, cx = 0, cy = 0;
+          for (let y = 0; y < 100; y++) for (let x = 0; x < 100; x++) {
+            const v = e.smoke[y * 100 + x]; m += v; cx += v * x; cy += v * y;
+          }
+          return { x: cx / m, y: cy / m };
+        };
+        const c0 = centroid();
+        for (let s = 0; s < 10; s++) e.step();
+        const c1 = centroid();
+        const moved = Math.hypot(c1.x - c0.x, c1.y - c0.y);
+        check("smoke: swirl advects (" + moved.toFixed(1) + " cells)", moved >= 2);
+      }
+      // Smoke decays by its own factor.
+      {
+        const e = blank();
+        e.params.swirl = 0; e.params.smokeDiffusion = 0; e.params.smokeDecay = 0.9;
+        for (let i = 0; i < e.smoke.length; i++) e.smoke[i] = 1;
+        const before = e.smokeMass();
+        e.step();
+        check("smoke: decays", Math.abs(e.smokeMass() - before * 0.9) / (before * 0.9) < 1e-2);
+      }
+      // Determinism including the smoke layer.
+      {
+        const mk = () => {
+          const e = new ChamberEngine({ width: 200, height: 200, rng: mulberry32(43) });
+          e.addSource(60, 60);
+          for (let s = 0; s < 30; s++) e.step();
+          return e.smokeMass();
+        };
+        check("smoke: deterministic", mk() === mk());
+      }
+    } else {
+      check("smoke dynamics: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
