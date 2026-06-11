@@ -1,0 +1,890 @@
+# 2D Cloud Chamber Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A standalone `2d-cloud-chamber/index.html` simulating a diffusion cloud chamber — alpha/beta/muon tracks with Bragg peaks, scattering, magnetic spirals, and delta rays, condensing into a fading droplet field, with placeable radioactive sources.
+
+**Architecture:** `ChamberEngine` (Float32Array droplet field, non-wrapping; per-type track integrator; ambient event spawner; sources) lives in `<script id="shared-code">` with `ChamberTests`; `test.mjs` runs them under Node (`2d-slime-mold` pattern). UI renders the field through a monochrome vapor palette into a 480→640 scaled canvas, with the slime mold's click-feedback language for sources.
+
+**Tech Stack:** Vanilla JS, Canvas 2D, Node ≥18, headless Chrome for screenshots.
+
+**Spec:** `docs/superpowers/specs/2026-06-11-cloud-chamber-design.md`
+
+---
+
+### Task 1: Scaffold, test runner, seeded PRNG
+
+**Files:**
+- Create: `2d-cloud-chamber/test.mjs`
+- Create: `2d-cloud-chamber/index.html`
+
+- [ ] **Step 1: Write the test runner**
+
+`2d-cloud-chamber/test.mjs`:
+
+```js
+// Runs the ChamberTests embedded in index.html's shared-code script block.
+// Usage: node test.mjs
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.html"), "utf8");
+const m = html.match(/<script id="shared-code">([\s\S]*?)<\/script>/);
+if (!m) {
+  console.error("shared-code block not found");
+  process.exit(1);
+}
+const ok = new Function(`${m[1]}; return ChamberTests.run();`)();
+process.exit(ok ? 0 : 1);
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd 2d-cloud-chamber && node test.mjs`
+Expected: FAIL — `ENOENT ... index.html`.
+
+- [ ] **Step 3: Create index.html skeleton with PRNG tests**
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2D Cloud Chamber</title>
+<style>
+/* styles added in Task 5 */
+</style>
+</head>
+<body>
+<p>UI under construction.</p>
+<script id="shared-code">
+"use strict";
+
+// Deterministic PRNG (mulberry32). Returns floats in [0, 1).
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const ChamberTests = {
+  run() {
+    const failures = [];
+    const check = (name, cond) => {
+      console.log((cond ? "PASS" : "FAIL") + " " + name);
+      if (!cond) failures.push(name);
+    };
+
+    // --- PRNG ---
+    {
+      const a = mulberry32(42), b = mulberry32(42);
+      let same = true, inRange = true;
+      for (let i = 0; i < 1000; i++) {
+        const va = a(), vb = b();
+        if (va !== vb) same = false;
+        if (va < 0 || va >= 1) inRange = false;
+      }
+      check("prng: deterministic for equal seeds", same);
+      check("prng: values in [0,1)", inRange);
+    }
+
+    console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
+    return failures.length === 0;
+  },
+};
+</script>
+<script>
+// UI added in Task 5.
+</script>
+</body>
+</html>
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd 2d-cloud-chamber && node test.mjs`
+Expected: 2× PASS, exit 0.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add 2d-cloud-chamber
+git commit -m "cloud-chamber: scaffold with test runner and seeded PRNG"
+```
+
+---
+
+### Task 2: Engine skeleton — field, deposit, sources
+
+**Files:**
+- Modify: `2d-cloud-chamber/index.html` (shared-code block only)
+
+- [ ] **Step 1: Add failing tests**
+
+Inside `ChamberTests.run()`, before the final `console.log`:
+
+```js
+    // --- Engine skeleton ---
+    {
+      check("engine: class exists", typeof ChamberEngine !== "undefined");
+      if (typeof ChamberEngine !== "undefined") {
+        const e = new ChamberEngine({ width: 100, height: 80, rng: mulberry32(1) });
+        check("engine: field sized and zero", e.field.length === 8000 && e.fieldMass() === 0);
+        check("engine: defaults applied", e.params.decay === 0.965 && e.params.deltaProb === 0.004);
+        const o = new ChamberEngine({ width: 10, height: 10, rng: mulberry32(2), params: { decay: 0.5 } });
+        check("engine: params override", o.params.decay === 0.5 && o.params.diffusion === 0.15);
+
+        e._deposit(5, 5, 10);
+        check("deposit: clamps at FIELD_CLAMP", e.field[5 * 100 + 5] === 4);
+        const before = e.fieldMass();
+        e._deposit(-3, 5, 1); e._deposit(5, 200, 1);
+        check("deposit: out of bounds discarded", e.fieldMass() === before);
+
+        e.addSource(10, 20); e.addSource(50, 50);
+        check("sources: added", e.sources.length === 2);
+        check("sources: removeSourceNear hits", e.removeSourceNear(11, 21, 6) === true && e.sources.length === 1);
+        check("sources: removeSourceNear misses", e.removeSourceNear(90, 70, 6) === false);
+        e.clearSources();
+        check("sources: cleared", e.sources.length === 0);
+      }
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd 2d-cloud-chamber && node test.mjs`
+Expected: `FAIL engine: class exists`, exit 1.
+
+- [ ] **Step 3: Implement the engine skeleton**
+
+In shared-code, after `mulberry32`, before `ChamberTests`:
+
+```js
+const FIELD_CLAMP = 4.0;
+
+// Droplet condensation field for a 2D diffusion cloud chamber. Particle
+// tracks deposit instantly; the field diffuses slightly and decays per frame.
+// Not toroidal: deposits outside the chamber are discarded.
+class ChamberEngine {
+  constructor(opts) {
+    this.width = opts.width;
+    this.height = opts.height;
+    this.rng = opts.rng || Math.random;
+    this.params = Object.assign({
+      bField: 0, alphaRate: 0.4, betaRate: 0.5, muonRate: 0.3, sourceRate: 6,
+      decay: 0.965, diffusion: 0.15, mist: 60, deltaProb: 0.004,
+    }, opts.params || {});
+    this.field = new Float32Array(this.width * this.height);
+    this.tmp = new Float32Array(this.width * this.height);
+    this.sources = [];
+    this.events = 0;
+  }
+
+  _deposit(x, y, amount) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    if (xi < 0 || xi >= this.width || yi < 0 || yi >= this.height) return;
+    const idx = yi * this.width + xi;
+    this.field[idx] = Math.min(FIELD_CLAMP, this.field[idx] + amount);
+  }
+
+  addSource(x, y) {
+    this.sources.push({ x, y });
+  }
+
+  removeSourceNear(x, y, r) {
+    let best = -1, bestD = r * r;
+    for (let i = 0; i < this.sources.length; i++) {
+      const dx = this.sources[i].x - x, dy = this.sources[i].y - y;
+      const d = dx * dx + dy * dy;
+      if (d <= bestD) { bestD = d; best = i; }
+    }
+    if (best < 0) return false;
+    this.sources.splice(best, 1);
+    return true;
+  }
+
+  clearSources() {
+    this.sources = [];
+  }
+
+  fieldMass() {
+    let s = 0;
+    for (let i = 0; i < this.field.length; i++) s += this.field[i];
+    return s;
+  }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd 2d-cloud-chamber && node test.mjs`
+Expected: all PASS, exit 0.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add 2d-cloud-chamber/index.html
+git commit -m "cloud-chamber: engine skeleton with droplet field and sources"
+```
+
+---
+
+### Task 3: Particle track integrator
+
+**Files:**
+- Modify: `2d-cloud-chamber/index.html` (shared-code block only)
+
+- [ ] **Step 1: Add failing tests**
+
+Inside `ChamberTests.run()`, after the engine-skeleton block:
+
+```js
+    // --- Particle tracks ---
+    if (typeof ChamberEngine !== "undefined" && ChamberEngine.prototype.fireParticle) {
+      // Alpha: short, straight, dense, Bragg peak at the end.
+      {
+        const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(20) });
+        const a = e.fireParticle("alpha", 240, 240, 0.3);
+        check("alpha: range in [40,110] (" + a.steps + ")", a.steps >= 40 && a.steps <= 110);
+        const endToEnd = Math.hypot(a.endX - 240, a.endY - 240);
+        check("alpha: straight (" + (endToEnd / a.pathLength).toFixed(3) + ")",
+          endToEnd / a.pathLength > 0.95);
+        check("alpha: bragg peak (" + a.braggFirstQ.toFixed(2) + " -> " + a.braggLastQ.toFixed(2) + ")",
+          a.braggLastQ > a.braggFirstQ * 1.5);
+        const e2 = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(21) });
+        const b = e2.fireParticle("beta", 240, 240, 0.3, 3.5);
+        check("alpha: denser than comparable beta", a.deposited > b.deposited * 2);
+      }
+      // Beta: B=0 wanders far; strong B confines it into spirals.
+      {
+        const free = new ChamberEngine({ width: 2000, height: 2000, rng: mulberry32(22) })
+          .fireParticle("beta", 1000, 1000, 0, 30);
+        const held = new ChamberEngine({ width: 2000, height: 2000, rng: mulberry32(22),
+          params: { bField: 2.5 } }).fireParticle("beta", 1000, 1000, 0, 30);
+        check("beta: free electron travels far (" + free.maxExcursion.toFixed(0) + ")",
+          free.maxExcursion > 60);
+        check("beta: B-field confines spiral (" + held.maxExcursion.toFixed(0) + ")",
+          held.maxExcursion < free.maxExcursion * 0.5);
+      }
+      // Muon: razor straight, crosses the chamber.
+      {
+        const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(23) });
+        const m = e.fireParticle("muon", 0, 240, 0);
+        const endToEnd = Math.hypot(m.endX - 0, m.endY - 240);
+        check("muon: crosses chamber (" + m.steps + " steps)", m.pathLength >= 480 * 0.9);
+        check("muon: straight (" + (endToEnd / m.pathLength).toFixed(4) + ")",
+          endToEnd / m.pathLength > 0.99);
+      }
+      // Outward at a wall: stops immediately.
+      {
+        const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(24) });
+        const m = e.fireParticle("muon", 0, 240, Math.PI);
+        check("track: stops at wall", m.steps <= 2);
+      }
+      // Delta rays: forcing them on deposits strictly more mass.
+      {
+        const off = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(25),
+          params: { deltaProb: 0 } });
+        off.fireParticle("muon", 0, 240, 0);
+        const on = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(25),
+          params: { deltaProb: 1 } });
+        on.fireParticle("muon", 0, 240, 0);
+        check("deltas: extra ionization", on.fieldMass() > off.fieldMass() * 1.5);
+      }
+      // Determinism of the integrator.
+      {
+        const r1 = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(26) })
+          .fireParticle("beta", 240, 240, 1.0);
+        const r2 = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(26) })
+          .fireParticle("beta", 240, 240, 1.0);
+        check("tracks: deterministic", r1.endX === r2.endX && r1.deposited === r2.deposited);
+      }
+    } else {
+      check("fireParticle: implemented", false);
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd 2d-cloud-chamber && node test.mjs`
+Expected: `FAIL fireParticle: implemented`, exit 1.
+
+- [ ] **Step 3: Implement PARTICLE_TYPES and fireParticle**
+
+In shared-code, after `FIELD_CLAMP`:
+
+```js
+// Per-type track character. deposit(E) is ionization per step (the alpha's
+// 1/E term produces the Bragg peak); scatter(E) is the multiple-scattering
+// kick amplitude; momentumScale sets how hard the magnetic field curves the
+// track (theta += bField / (E * momentumScale) per step).
+const PARTICLE_TYPES = {
+  alpha: {
+    energy: [30, 50], stopping: 0.55, momentumScale: 50, thick: true, deltas: true,
+    deposit(E) { return Math.min(5, 2.0 + 30 / E); },
+    scatter() { return 0.012; },
+  },
+  beta: {
+    energy: [4, 40], stopping: 0.04, momentumScale: 1, thick: false, deltas: false,
+    deposit() { return 0.55; },
+    scatter(E) { return 0.05 + 0.35 / Math.sqrt(Math.max(E, 0.5)); },
+  },
+  muon: {
+    energy: [1500, 2500], stopping: 0.4, momentumScale: 1, thick: false, deltas: true,
+    deposit() { return 0.7; },
+    scatter() { return 0.002; },
+  },
+};
+```
+
+And add to `ChamberEngine` (after `_deposit`):
+
+```js
+  // Integrate a particle track, depositing ionization instantly (particles
+  // cross at near light speed; only the condensation trail lingers).
+  fireParticle(type, x, y, theta, E, isDelta) {
+    const def = PARTICLE_TYPES[type];
+    if (E === undefined) E = def.energy[0] + this.rng() * (def.energy[1] - def.energy[0]);
+    const { bField, deltaProb } = this.params;
+    const startX = x, startY = y;
+    let steps = 0, deposited = 0, maxExcursion = 0;
+    const perStep = [];
+    while (E > 0.5) {
+      const q = def.deposit(E);
+      const jx = x + (this.rng() - 0.5), jy = y + (this.rng() - 0.5);
+      if (def.thick) {
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++)
+            this._deposit(jx + dx, jy + dy, q * (dx === 0 && dy === 0 ? 1 : 0.35));
+      } else {
+        this._deposit(jx, jy, q);
+      }
+      deposited += q;
+      perStep.push(q);
+      theta += (this.rng() * 2 - 1) * def.scatter(E);
+      theta += bField / Math.max(E * def.momentumScale, 0.5);
+      x += Math.cos(theta);
+      y += Math.sin(theta);
+      steps++;
+      const ex = Math.hypot(x - startX, y - startY);
+      if (ex > maxExcursion) maxExcursion = ex;
+      E -= def.stopping;
+      if (x < 0 || x >= this.width || y < 0 || y >= this.height) break;
+      if (!isDelta && def.deltas && this.rng() < deltaProb) {
+        const side = this.rng() < 0.5 ? 1 : -1;
+        this.fireParticle("beta", x, y,
+          theta + side * (Math.PI / 2) * (0.5 + this.rng() * 0.5), 2 + this.rng() * 6, true);
+      }
+    }
+    const qn = Math.max(1, Math.floor(perStep.length / 4));
+    let braggFirstQ = 0, braggLastQ = 0;
+    for (let i = 0; i < qn; i++) braggFirstQ += perStep[i];
+    for (let i = perStep.length - qn; i < perStep.length; i++) braggLastQ += perStep[i];
+    braggFirstQ /= qn;
+    braggLastQ /= qn;
+    return { steps, pathLength: steps, endX: x, endY: y, deposited,
+             braggFirstQ, braggLastQ, maxExcursion };
+  }
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd 2d-cloud-chamber && node test.mjs`
+Expected: all PASS, exit 0. If the beta-confinement margins fail, report the measured numbers — do not silently loosen thresholds.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add 2d-cloud-chamber/index.html
+git commit -m "cloud-chamber: particle track integrator with Bragg peak, scattering, B-field, deltas"
+```
+
+---
+
+### Task 4: step() — ambient events, sources, mist, field dynamics
+
+**Files:**
+- Modify: `2d-cloud-chamber/index.html` (shared-code block only)
+
+- [ ] **Step 1: Add failing tests**
+
+Inside `ChamberTests.run()`, after the particle-tracks block:
+
+```js
+    // --- step(): events, sources, mist, decay ---
+    if (typeof ChamberEngine !== "undefined" && ChamberEngine.prototype.step) {
+      // Decay: no events, no mist, no diffusion -> mass shrinks by exactly decay.
+      {
+        const e = new ChamberEngine({ width: 64, height: 64, rng: mulberry32(30),
+          params: { alphaRate: 0, betaRate: 0, muonRate: 0, mist: 0, diffusion: 0, decay: 0.9 } });
+        for (let i = 0; i < e.field.length; i++) e.field[i] = 1;
+        const before = e.fieldMass();
+        e.step();
+        check("step: decay shrinks mass", Math.abs(e.fieldMass() - before * 0.9) < 1e-2);
+      }
+      // Ambient events fire at rate 60/s (probability 1 per frame).
+      {
+        const e = new ChamberEngine({ width: 200, height: 200, rng: mulberry32(31),
+          params: { alphaRate: 60, betaRate: 0, muonRate: 0, mist: 0 } });
+        for (let s = 0; s < 5; s++) e.step();
+        check("step: ambient alphas fire", e.events >= 5 && e.fieldMass() > 0);
+      }
+      // Sources fire.
+      {
+        const e = new ChamberEngine({ width: 200, height: 200, rng: mulberry32(32),
+          params: { alphaRate: 0, betaRate: 0, muonRate: 0, mist: 0, sourceRate: 60 } });
+        e.addSource(100, 100);
+        for (let s = 0; s < 5; s++) e.step();
+        check("step: source fires", e.events >= 5 && e.fieldMass() > 0);
+      }
+      // Mist: adds ~count * 0.05 mass per step.
+      {
+        const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(33),
+          params: { alphaRate: 0, betaRate: 0, muonRate: 0, mist: 100, decay: 1, diffusion: 0 } });
+        e.step();
+        check("step: mist deposits (" + e.fieldMass().toFixed(2) + ")",
+          e.fieldMass() > 4.5 && e.fieldMass() < 5.01);
+      }
+      // Determinism.
+      {
+        const make = () => {
+          const e = new ChamberEngine({ width: 200, height: 200, rng: mulberry32(34) });
+          e.addSource(60, 60);
+          for (let s = 0; s < 30; s++) e.step();
+          return e;
+        };
+        const a = make(), b = make();
+        check("step: deterministic", a.fieldMass() === b.fieldMass() && a.events === b.events);
+      }
+    } else {
+      check("step: implemented", false);
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd 2d-cloud-chamber && node test.mjs`
+Expected: `FAIL step: implemented`, exit 1.
+
+- [ ] **Step 3: Implement step() and _diffuseAndDecay()**
+
+Add to `ChamberEngine` (after `fireParticle`):
+
+```js
+  step() {
+    const p = this.params, dt = 1 / 60;
+    const W = this.width, H = this.height;
+    if (this.rng() < p.alphaRate * dt) {
+      this.fireParticle("alpha", this.rng() * W, this.rng() * H, this.rng() * 2 * Math.PI);
+      this.events++;
+    }
+    if (this.rng() < p.betaRate * dt) {
+      this.fireParticle("beta", this.rng() * W, this.rng() * H, this.rng() * 2 * Math.PI);
+      this.events++;
+    }
+    if (this.rng() < p.muonRate * dt) {
+      // Cosmic muons enter from a chamber edge, aimed inward ±60°.
+      const edge = Math.floor(this.rng() * 4);
+      let x, y, base;
+      if (edge === 0) { x = this.rng() * W; y = 0; base = Math.PI / 2; }
+      else if (edge === 1) { x = this.rng() * W; y = H - 1; base = -Math.PI / 2; }
+      else if (edge === 2) { x = 0; y = this.rng() * H; base = 0; }
+      else { x = W - 1; y = this.rng() * H; base = Math.PI; }
+      this.fireParticle("muon", x, y, base + (this.rng() * 2 - 1) * Math.PI / 3);
+      this.events++;
+    }
+    for (const s of this.sources) {
+      if (this.rng() < p.sourceRate * dt) {
+        const type = this.rng() < 0.1 ? "beta" : "alpha";
+        this.fireParticle(type, s.x, s.y, this.rng() * 2 * Math.PI);
+        this.events++;
+      }
+    }
+    for (let i = 0; i < p.mist; i++) {
+      this._deposit(this.rng() * W, this.rng() * H, 0.05);
+    }
+    this._diffuseAndDecay();
+  }
+
+  _diffuseAndDecay() {
+    const { diffusion, decay } = this.params;
+    const W = this.width, H = this.height, t = this.field, out = this.tmp;
+    for (let y = 0; y < H; y++) {
+      const yu = Math.max(0, y - 1) * W, yc = y * W, yd = Math.min(H - 1, y + 1) * W;
+      for (let x = 0; x < W; x++) {
+        const xl = Math.max(0, x - 1), xr = Math.min(W - 1, x + 1);
+        const blurred = (t[yu + xl] + t[yu + x] + t[yu + xr]
+                       + t[yc + xl] + t[yc + x] + t[yc + xr]
+                       + t[yd + xl] + t[yd + x] + t[yd + xr]) / 9;
+        const c = t[yc + x];
+        out[yc + x] = (c + (blurred - c) * diffusion) * decay;
+      }
+    }
+    this.field = out;
+    this.tmp = t;
+  }
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd 2d-cloud-chamber && node test.mjs`
+Expected: all PASS, exit 0.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add 2d-cloud-chamber/index.html
+git commit -m "cloud-chamber: ambient events, sources, mist, field dynamics"
+```
+
+---
+
+### Task 5: UI
+
+**Files:**
+- Modify: `2d-cloud-chamber/index.html` (style, body, UI script)
+
+- [ ] **Step 1: Replace the `<style>` contents**
+
+```css
+:root {
+  --bg: #11141a; --panel: #1a1f29; --border: #2c3442;
+  --text: #dde3ee; --muted: #8a94a6; --accent: #5aa9ff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+h1 { font-size: 1.3rem; margin: 0 0 4px; }
+.subtitle { color: var(--muted); margin: 0 0 16px; font-size: 0.9rem; }
+.layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px;
+}
+#display-canvas { display: block; background: #000; border: 1px solid var(--border); cursor: crosshair; }
+.controls { width: 340px; display: flex; flex-direction: column; gap: 12px; }
+fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 8px 12px; }
+legend { color: var(--muted); font-size: 0.8rem; padding: 0 4px; }
+label.slider { display: block; font-size: 0.85rem; margin: 6px 0; }
+label.slider input { width: 100%; }
+.buttons { display: flex; gap: 8px; }
+button {
+  flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: #232a37; color: var(--text); font-size: 0.9rem; cursor: pointer;
+}
+button:hover { background: #2c3545; }
+table.readout { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+table.readout td { padding: 3px 0; }
+table.readout td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.hint { font-size: 0.8rem; color: var(--muted); margin: 8px 0 0; }
+```
+
+- [ ] **Step 2: Replace the placeholder body markup** (keep both script blocks)
+
+```html
+<h1>2D Cloud Chamber</h1>
+<p class="subtitle">Charged particles cross a supersaturated vapor layer and leave condensation trails: fat alphas with Bragg-peak endings, wandering betas, razor-straight cosmic muons. Click to place a radioactive speck; turn up the magnet to wind electrons into spirals.</p>
+<div class="layout">
+  <div class="panel">
+    <canvas id="display-canvas" width="640" height="640"></canvas>
+    <p class="hint">Click: place a radioactive speck · click a highlighted speck: remove it</p>
+  </div>
+  <div class="controls">
+    <fieldset class="panel">
+      <legend>Particles</legend>
+      <label class="slider">Alphas / s: <span id="alpha-rate-value"></span>
+        <input type="range" id="alpha-rate" min="0" max="5" step="0.1" value="0.4">
+      </label>
+      <label class="slider">Betas / s: <span id="beta-rate-value"></span>
+        <input type="range" id="beta-rate" min="0" max="5" step="0.1" value="0.5">
+      </label>
+      <label class="slider">Muons / s: <span id="muon-rate-value"></span>
+        <input type="range" id="muon-rate" min="0" max="5" step="0.1" value="0.3">
+      </label>
+      <label class="slider">Source activity / s: <span id="source-rate-value"></span>
+        <input type="range" id="source-rate" min="0" max="20" step="0.5" value="6">
+      </label>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>Chamber</legend>
+      <label class="slider">Magnetic field: <span id="b-field-value"></span>
+        <input type="range" id="b-field" min="0" max="3" step="0.05" value="0">
+      </label>
+      <label class="slider">Fade: <span id="decay-value"></span>
+        <input type="range" id="decay" min="0.90" max="0.995" step="0.001" value="0.965">
+      </label>
+      <label class="slider">Mist: <span id="mist-value"></span>
+        <input type="range" id="mist" min="0" max="200" step="5" value="60">
+      </label>
+      <div class="buttons">
+        <button id="pause-btn">Pause</button>
+        <button id="clear-btn">Clear chamber</button>
+        <button id="clear-sources-btn">Clear sources</button>
+      </div>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>State</legend>
+      <table class="readout">
+        <tr><td>Events</td><td id="readout-events">0</td></tr>
+        <tr><td>Sources</td><td id="readout-sources">0</td></tr>
+        <tr><td>Magnetic field</td><td id="readout-b">0</td></tr>
+      </table>
+    </fieldset>
+  </div>
+</div>
+```
+
+- [ ] **Step 3: Replace the UI `<script>`**
+
+```js
+"use strict";
+const GRID = 480;
+const display = document.getElementById("display-canvas");
+const displayCtx = display.getContext("2d");
+const SCALE = display.width / GRID;
+
+const offscreen = document.createElement("canvas");
+offscreen.width = GRID;
+offscreen.height = GRID;
+const offCtx = offscreen.getContext("2d");
+const image = offCtx.createImageData(GRID, GRID);
+
+const engine = new ChamberEngine({
+  width: GRID, height: GRID,
+  rng: mulberry32((Math.random() * 2 ** 32) >>> 0),
+});
+let running = true;
+
+// Monochrome vapor palette: black -> faint blue-grey -> white.
+const PALETTE_STOPS = [[4, 6, 10], [38, 48, 66], [150, 168, 196], [255, 255, 255]];
+const palette = (() => {
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = (i / 255) * (PALETTE_STOPS.length - 1);
+    const k = Math.min(PALETTE_STOPS.length - 2, Math.floor(t));
+    const f = t - k;
+    for (let c = 0; c < 3; c++)
+      lut[i * 3 + c] = PALETTE_STOPS[k][c] + (PALETTE_STOPS[k + 1][c] - PALETTE_STOPS[k][c]) * f;
+  }
+  return lut;
+})();
+
+// Sliders -> params.
+const SLIDERS = [
+  { id: "alpha-rate",  param: "alphaRate",  fmt: (v) => v.toFixed(1) },
+  { id: "beta-rate",   param: "betaRate",   fmt: (v) => v.toFixed(1) },
+  { id: "muon-rate",   param: "muonRate",   fmt: (v) => v.toFixed(1) },
+  { id: "source-rate", param: "sourceRate", fmt: (v) => v.toFixed(1) },
+  { id: "b-field",     param: "bField",     fmt: (v) => v.toFixed(2) },
+  { id: "decay",       param: "decay",      fmt: (v) => v.toFixed(3) },
+  { id: "mist",        param: "mist",       fmt: (v) => v },
+];
+for (const s of SLIDERS) {
+  const input = document.getElementById(s.id);
+  const valueEl = document.getElementById(s.id + "-value");
+  const apply = () => {
+    const v = Number(input.value);
+    engine.params[s.param] = v;
+    valueEl.textContent = s.fmt(v);
+  };
+  input.addEventListener("input", apply);
+  apply();
+}
+
+document.getElementById("pause-btn").addEventListener("click", (ev) => {
+  running = !running;
+  ev.target.textContent = running ? "Pause" : "Resume";
+});
+document.getElementById("clear-btn").addEventListener("click", () => engine.field.fill(0));
+document.getElementById("clear-sources-btn").addEventListener("click", () => engine.clearSources());
+
+// Source placement with the slime-mold feedback language.
+const cursor = { x: 0, y: 0, inside: false };
+const effects = [];
+
+function toGrid(ev) {
+  const rect = display.getBoundingClientRect();
+  return { x: ((ev.clientX - rect.left) / rect.width) * GRID,
+           y: ((ev.clientY - rect.top) / rect.height) * GRID };
+}
+display.addEventListener("pointerdown", (ev) => {
+  const g = toGrid(ev);
+  if (engine.removeSourceNear(g.x, g.y, 6)) effects.push({ type: "remove", x: g.x, y: g.y, age: 0 });
+  else { engine.addSource(g.x, g.y); effects.push({ type: "add", x: g.x, y: g.y, age: 0 }); }
+});
+display.addEventListener("pointermove", (ev) => {
+  const g = toGrid(ev);
+  cursor.x = g.x; cursor.y = g.y; cursor.inside = true;
+});
+display.addEventListener("pointerleave", () => { cursor.inside = false; });
+
+const GAMMA = 0.5;
+function render() {
+  const data = image.data, t = engine.field;
+  for (let i = 0; i < t.length; i++) {
+    const v = Math.min(1, t[i] / FIELD_CLAMP);
+    const idx = (255 * Math.pow(v, GAMMA)) | 0;
+    data[i * 4] = palette[idx * 3];
+    data[i * 4 + 1] = palette[idx * 3 + 1];
+    data[i * 4 + 2] = palette[idx * 3 + 2];
+    data[i * 4 + 3] = 255;
+  }
+  offCtx.putImageData(image, 0, 0);
+  displayCtx.imageSmoothingEnabled = true;
+  displayCtx.drawImage(offscreen, 0, 0, display.width, display.height);
+
+  // Source specks: dot + ring, red highlight when a click would remove.
+  let hoveredSource = null;
+  if (cursor.inside) {
+    for (const s of engine.sources) {
+      if ((s.x - cursor.x) ** 2 + (s.y - cursor.y) ** 2 <= 36) { hoveredSource = s; break; }
+    }
+  }
+  for (const s of engine.sources) {
+    const sx = s.x * SCALE, sy = s.y * SCALE;
+    const hovered = s === hoveredSource;
+    const color = hovered ? "rgba(255,80,80,0.95)" : "rgba(255,220,120,0.95)";
+    displayCtx.fillStyle = color;
+    displayCtx.beginPath();
+    displayCtx.arc(sx, sy, 3.5, 0, 2 * Math.PI);
+    displayCtx.fill();
+    displayCtx.strokeStyle = color;
+    displayCtx.lineWidth = 1.5;
+    displayCtx.beginPath();
+    displayCtx.arc(sx, sy, hovered ? 11 : 8, 0, 2 * Math.PI);
+    displayCtx.stroke();
+  }
+  // Ghost ring where a click would add a source.
+  if (cursor.inside && !hoveredSource) {
+    displayCtx.strokeStyle = "rgba(255,220,120,0.35)";
+    displayCtx.lineWidth = 1.5;
+    displayCtx.beginPath();
+    displayCtx.arc(cursor.x * SCALE, cursor.y * SCALE, 8, 0, 2 * Math.PI);
+    displayCtx.stroke();
+  }
+  // Add/remove pulses.
+  const EFFECT_LIFE = 25;
+  for (let i = effects.length - 1; i >= 0; i--) {
+    const fx = effects[i];
+    const t2 = fx.age / EFFECT_LIFE;
+    displayCtx.lineWidth = 2.5;
+    displayCtx.beginPath();
+    if (fx.type === "add") {
+      displayCtx.strokeStyle = `rgba(255,220,120,${1 - t2})`;
+      displayCtx.arc(fx.x * SCALE, fx.y * SCALE, 8 + t2 * 26, 0, 2 * Math.PI);
+    } else {
+      displayCtx.strokeStyle = `rgba(255,80,80,${1 - t2})`;
+      displayCtx.arc(fx.x * SCALE, fx.y * SCALE, Math.max(1, 11 * (1 - t2)), 0, 2 * Math.PI);
+    }
+    displayCtx.stroke();
+    fx.age++;
+    if (fx.age > EFFECT_LIFE) effects.splice(i, 1);
+  }
+}
+
+function updateReadout() {
+  document.getElementById("readout-events").textContent = engine.events.toLocaleString();
+  document.getElementById("readout-sources").textContent = engine.sources.length;
+  document.getElementById("readout-b").textContent = engine.params.bField.toFixed(2);
+}
+
+function frame() {
+  if (running) engine.step();
+  render();
+  updateReadout();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+```
+
+- [ ] **Step 4: Run tests, then screenshot**
+
+Run: `cd 2d-cloud-chamber && node test.mjs` → `ALL TESTS PASSED`.
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+  --screenshot=/tmp/chamber-check.png --window-size=1060,900 --virtual-time-budget=8000 \
+  "file:///Users/neoneye/git/vibe-coding-lab/2d-cloud-chamber/index.html"
+```
+
+Read it: dark chamber with mist speckle, controls rendered. Ambient rates are low (~1.2 events/s combined), so few or no tracks may appear in the handful of headless frames — layout and mist are what this step verifies; track visuals come in Task 6.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add 2d-cloud-chamber/index.html
+git commit -m "cloud-chamber: UI with particle sliders, magnet, sources, vapor rendering"
+```
+
+---
+
+### Task 6: Visual tuning and gallery integration
+
+**Files:**
+- Create: `2d-cloud-chamber/screenshot1.png`
+- Modify: `gallery.yaml`
+- Modify: `index.html` (repo root, regenerated)
+- Possibly modify: `2d-cloud-chamber/index.html` (visual constants only)
+
+- [ ] **Step 1: Warm-up screenshot with forced tracks**
+
+Append a TEMP block at the end of the UI script (before `requestAnimationFrame(frame)`):
+
+```js
+// TEMP visual verification
+engine.addSource(120, 360);
+for (let i = 0; i < 6; i++) engine.fireParticle("alpha", 120, 360, i * 1.05);
+engine.fireParticle("muon", 0, 100, 0.15);
+engine.fireParticle("muon", 460, 470, -2.6);
+engine.params.bField = 1.5;
+for (let i = 0; i < 3; i++) engine.fireParticle("beta", 300 + i * 40, 200, 1 + i);
+engine.params.bField = 0;
+for (let i = 0; i < 25; i++) engine.step();
+```
+
+Screenshot (same command as Task 5) and verify the aesthetic: thick alpha bursts radiating from the source with brighter tips (Bragg), thin straight muon lines crossing, curled beta spirals, everything softening into the mist. Tune `GAMMA`, palette stops, `decay`, or per-type `deposit` values if tracks are washed out or invisible — report what was changed.
+
+- [ ] **Step 2: Capture the gallery screenshot**
+
+With the TEMP block still in place (tuned), capture:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+  --screenshot=/Users/neoneye/git/vibe-coding-lab/2d-cloud-chamber/screenshot1.png \
+  --window-size=1060,900 --virtual-time-budget=8000 \
+  "file:///Users/neoneye/git/vibe-coding-lab/2d-cloud-chamber/index.html"
+```
+
+Read it to confirm a captivating frame, then **delete the TEMP block** and re-run `node test.mjs`.
+
+- [ ] **Step 3: Gallery registration**
+
+Append to `gallery.yaml`:
+
+```yaml
+2d-cloud-chamber: 2D Cloud Chamber
+```
+
+Run: `cd /Users/neoneye/git/vibe-coding-lab && python3 build_gallery.py`
+Expected: 33 entries with a `2d-cloud-chamber` card.
+
+- [ ] **Step 4: Final test run**
+
+Run: `cd 2d-cloud-chamber && node test.mjs`
+Expected: `ALL TESTS PASSED`, exit 0.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add 2d-cloud-chamber gallery.yaml index.html
+git commit -m "cloud-chamber: visual tuning and gallery integration"
+```
