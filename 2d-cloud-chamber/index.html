@@ -145,6 +145,59 @@ class ChamberEngine {
     for (let i = 0; i < this.field.length; i++) s += this.field[i];
     return s;
   }
+
+  step() {
+    const p = this.params, dt = 1 / 60;
+    const W = this.width, H = this.height;
+    if (this.rng() < p.alphaRate * dt) {
+      this.fireParticle("alpha", this.rng() * W, this.rng() * H, this.rng() * 2 * Math.PI);
+      this.events++;
+    }
+    if (this.rng() < p.betaRate * dt) {
+      this.fireParticle("beta", this.rng() * W, this.rng() * H, this.rng() * 2 * Math.PI);
+      this.events++;
+    }
+    if (this.rng() < p.muonRate * dt) {
+      // Cosmic muons enter from a chamber edge, aimed inward ±60°.
+      const edge = Math.floor(this.rng() * 4);
+      let x, y, base;
+      if (edge === 0) { x = this.rng() * W; y = 0; base = Math.PI / 2; }
+      else if (edge === 1) { x = this.rng() * W; y = H - 1; base = -Math.PI / 2; }
+      else if (edge === 2) { x = 0; y = this.rng() * H; base = 0; }
+      else { x = W - 1; y = this.rng() * H; base = Math.PI; }
+      this.fireParticle("muon", x, y, base + (this.rng() * 2 - 1) * Math.PI / 3);
+      this.events++;
+    }
+    for (const s of this.sources) {
+      if (this.rng() < p.sourceRate * dt) {
+        const type = this.rng() < 0.1 ? "beta" : "alpha";
+        this.fireParticle(type, s.x, s.y, this.rng() * 2 * Math.PI);
+        this.events++;
+      }
+    }
+    for (let i = 0; i < p.mist; i++) {
+      this._deposit(this.rng() * W, this.rng() * H, 0.05);
+    }
+    this._diffuseAndDecay();
+  }
+
+  _diffuseAndDecay() {
+    const { diffusion, decay } = this.params;
+    const W = this.width, H = this.height, t = this.field, out = this.tmp;
+    for (let y = 0; y < H; y++) {
+      const yu = Math.max(0, y - 1) * W, yc = y * W, yd = Math.min(H - 1, y + 1) * W;
+      for (let x = 0; x < W; x++) {
+        const xl = Math.max(0, x - 1), xr = Math.min(W - 1, x + 1);
+        const blurred = (t[yu + xl] + t[yu + x] + t[yu + xr]
+                       + t[yc + xl] + t[yc + x] + t[yc + xr]
+                       + t[yd + xl] + t[yd + x] + t[yd + xr]) / 9;
+        const c = t[yc + x];
+        out[yc + x] = (c + (blurred - c) * diffusion) * decay;
+      }
+    }
+    this.field = out;
+    this.tmp = t;
+  }
 }
 
 const ChamberTests = {
@@ -255,6 +308,55 @@ const ChamberTests = {
       }
     } else {
       check("fireParticle: implemented", false);
+    }
+
+    // --- step(): events, sources, mist, decay ---
+    if (typeof ChamberEngine !== "undefined" && ChamberEngine.prototype.step) {
+      // Decay: no events, no mist, no diffusion -> mass shrinks by exactly decay.
+      {
+        const e = new ChamberEngine({ width: 64, height: 64, rng: mulberry32(30),
+          params: { alphaRate: 0, betaRate: 0, muonRate: 0, mist: 0, diffusion: 0, decay: 0.9 } });
+        for (let i = 0; i < e.field.length; i++) e.field[i] = 1;
+        const before = e.fieldMass();
+        e.step();
+        check("step: decay shrinks mass", Math.abs(e.fieldMass() - before * 0.9) < 1e-2);
+      }
+      // Ambient events fire at rate 60/s (probability 1 per frame).
+      {
+        const e = new ChamberEngine({ width: 200, height: 200, rng: mulberry32(31),
+          params: { alphaRate: 60, betaRate: 0, muonRate: 0, mist: 0 } });
+        for (let s = 0; s < 5; s++) e.step();
+        check("step: ambient alphas fire", e.events >= 5 && e.fieldMass() > 0);
+      }
+      // Sources fire.
+      {
+        const e = new ChamberEngine({ width: 200, height: 200, rng: mulberry32(32),
+          params: { alphaRate: 0, betaRate: 0, muonRate: 0, mist: 0, sourceRate: 60 } });
+        e.addSource(100, 100);
+        for (let s = 0; s < 5; s++) e.step();
+        check("step: source fires", e.events >= 5 && e.fieldMass() > 0);
+      }
+      // Mist: adds ~count * 0.05 mass per step.
+      {
+        const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(33),
+          params: { alphaRate: 0, betaRate: 0, muonRate: 0, mist: 100, decay: 1, diffusion: 0 } });
+        e.step();
+        check("step: mist deposits (" + e.fieldMass().toFixed(2) + ")",
+          e.fieldMass() > 4.5 && e.fieldMass() < 5.01);
+      }
+      // Determinism.
+      {
+        const make = () => {
+          const e = new ChamberEngine({ width: 200, height: 200, rng: mulberry32(34) });
+          e.addSource(60, 60);
+          for (let s = 0; s < 30; s++) e.step();
+          return e;
+        };
+        const a = make(), b = make();
+        check("step: deterministic", a.fieldMass() === b.fieldMass() && a.events === b.events);
+      }
+    } else {
+      check("step: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
