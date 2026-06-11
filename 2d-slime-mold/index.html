@@ -25,6 +25,65 @@ function mulberry32(seed) {
   };
 }
 
+// Named parameter sets producing visually distinct morphologies.
+// Angles in radians, distances in trail-grid cells.
+const PRESETS = {
+  networks:    { sensorAngle: 30 * Math.PI / 180, sensorDistance: 9,  turnAngle: 25 * Math.PI / 180, stepSize: 1.0, deposit: 0.6, decay: 0.92, diffusion: 0.55 },
+  cells:       { sensorAngle: 45 * Math.PI / 180, sensorDistance: 18, turnAngle: 45 * Math.PI / 180, stepSize: 1.2, deposit: 0.8, decay: 0.90, diffusion: 0.40 },
+  waves:       { sensorAngle: 15 * Math.PI / 180, sensorDistance: 25, turnAngle: 12 * Math.PI / 180, stepSize: 1.6, deposit: 0.5, decay: 0.95, diffusion: 0.65 },
+  fingerprint: { sensorAngle: 60 * Math.PI / 180, sensorDistance: 4,  turnAngle: 60 * Math.PI / 180, stepSize: 0.8, deposit: 0.9, decay: 0.88, diffusion: 0.30 },
+};
+
+const TRAIL_CLAMP = 5.0;
+
+// Physarum simulation on a toroidal trail grid. Agents are stored flat:
+// agents[i*3] = x, agents[i*3+1] = y, agents[i*3+2] = heading.
+class SlimeEngine {
+  constructor(opts) {
+    this.width = opts.width;
+    this.height = opts.height;
+    this.rng = opts.rng || Math.random;
+    this.params = Object.assign(
+      { foodDeposit: 0.4, foodRadius: 4 },
+      PRESETS.networks,
+      opts.params || {}
+    );
+    this.trail = new Float32Array(this.width * this.height);
+    this.tmp = new Float32Array(this.width * this.height);
+    this.foods = [];
+    this.steps = 0;
+    this.agents = new Float32Array(0);
+    this.setAgentCount(opts.agentCount || 0);
+  }
+
+  setAgentCount(n) {
+    const old = this.agents;
+    const oldN = old.length / 3;
+    const next = new Float32Array(n * 3);
+    next.set(old.subarray(0, Math.min(oldN, n) * 3));
+    for (let i = oldN; i < n; i++) {
+      next[i * 3] = this.rng() * this.width;
+      next[i * 3 + 1] = this.rng() * this.height;
+      next[i * 3 + 2] = this.rng() * 2 * Math.PI;
+    }
+    this.agents = next;
+  }
+
+  reset() {
+    this.trail.fill(0);
+    this.steps = 0;
+    const n = this.agents.length / 3;
+    this.agents = new Float32Array(0);
+    this.setAgentCount(n);
+  }
+
+  trailMass() {
+    let s = 0;
+    for (let i = 0; i < this.trail.length; i++) s += this.trail[i];
+    return s;
+  }
+}
+
 const SlimeTests = {
   run() {
     const failures = [];
@@ -44,6 +103,33 @@ const SlimeTests = {
       }
       check("prng: deterministic for equal seeds", same);
       check("prng: values in [0,1)", inRange);
+    }
+
+    // --- Engine construction & agents ---
+    {
+      check("engine: class exists", typeof SlimeEngine !== "undefined");
+      if (typeof SlimeEngine !== "undefined") {
+        const e = new SlimeEngine({ width: 64, height: 48, agentCount: 100, rng: mulberry32(1) });
+        check("engine: agent array sized", e.agents.length === 300);
+        let bounds = true;
+        for (let i = 0; i < 100; i++) {
+          const x = e.agents[i * 3], y = e.agents[i * 3 + 1], h = e.agents[i * 3 + 2];
+          if (x < 0 || x >= 64 || y < 0 || y >= 48 || h < 0 || h >= 2 * Math.PI) bounds = false;
+        }
+        check("engine: agents within bounds", bounds);
+        check("engine: trail sized and zero", e.trail.length === 64 * 48 && e.trailMass() === 0);
+        check("engine: networks preset is default", e.params.sensorDistance === 9);
+
+        const firstX = e.agents[0];
+        e.setAgentCount(150);
+        check("engine: grow preserves existing agents", e.agents.length === 450 && e.agents[0] === firstX);
+        e.setAgentCount(10);
+        check("engine: shrink keeps prefix", e.agents.length === 30 && e.agents[0] === firstX);
+
+        e.trail[5] = 1.5;
+        e.reset();
+        check("engine: reset clears trail and rescatters", e.trailMass() === 0 && e.agents.length === 30 && e.steps === 0);
+      }
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
