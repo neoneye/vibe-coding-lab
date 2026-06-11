@@ -82,6 +82,50 @@ class SlimeEngine {
     for (let i = 0; i < this.trail.length; i++) s += this.trail[i];
     return s;
   }
+
+  _wrap(v, size) {
+    v %= size;
+    return v < 0 ? v + size : v;
+  }
+
+  step() {
+    const { stepSize, deposit } = this.params;
+    const W = this.width, H = this.height;
+    const a = this.agents;
+    const n = a.length / 3;
+    for (let i = 0; i < n; i++) {
+      const h = a[i * 3 + 2];
+      const x = this._wrap(a[i * 3] + Math.cos(h) * stepSize, W);
+      const y = this._wrap(a[i * 3 + 1] + Math.sin(h) * stepSize, H);
+      a[i * 3] = x;
+      a[i * 3 + 1] = y;
+      const idx = Math.floor(y) * W + Math.floor(x);
+      this.trail[idx] = Math.min(TRAIL_CLAMP, this.trail[idx] + deposit);
+    }
+    this._diffuseAndDecay();
+    this.steps++;
+  }
+
+  _diffuseAndDecay() {
+    const { diffusion, decay } = this.params;
+    const W = this.width, H = this.height, t = this.trail, out = this.tmp;
+    for (let y = 0; y < H; y++) {
+      const yu = (y === 0 ? H - 1 : y - 1) * W;
+      const yc = y * W;
+      const yd = (y === H - 1 ? 0 : y + 1) * W;
+      for (let x = 0; x < W; x++) {
+        const xl = x === 0 ? W - 1 : x - 1;
+        const xr = x === W - 1 ? 0 : x + 1;
+        const blurred = (t[yu + xl] + t[yu + x] + t[yu + xr]
+                       + t[yc + xl] + t[yc + x] + t[yc + xr]
+                       + t[yd + xl] + t[yd + x] + t[yd + xr]) / 9;
+        const c = t[yc + x];
+        out[yc + x] = (c + (blurred - c) * diffusion) * decay;
+      }
+    }
+    this.trail = out;
+    this.tmp = t;
+  }
 }
 
 const SlimeTests = {
@@ -130,6 +174,57 @@ const SlimeTests = {
         e.reset();
         check("engine: reset clears trail and rescatters", e.trailMass() === 0 && e.agents.length === 30 && e.steps === 0);
       }
+    }
+
+    // --- Movement, deposit, diffusion, decay ---
+    if (typeof SlimeEngine !== "undefined" && SlimeEngine.prototype.step) {
+      // Toroidal wrap: agent at right edge heading +x reappears on the left.
+      {
+        const e = new SlimeEngine({ width: 64, height: 64, agentCount: 1, rng: mulberry32(2),
+          params: { sensorDistance: 0, stepSize: 1.0, deposit: 0.5, decay: 1, diffusion: 0 } });
+        e.agents[0] = 63.9; e.agents[1] = 32; e.agents[2] = 0;
+        e.step();
+        check("step: toroidal wrap", Math.abs(e.agents[0] - 0.9) < 1e-4 && Math.abs(e.agents[1] - 32) < 1e-4);
+      }
+      // Deposit: decay 1, diffusion 0 -> one step adds n * deposit mass.
+      {
+        const e = new SlimeEngine({ width: 64, height: 64, agentCount: 100, rng: mulberry32(3),
+          params: { sensorDistance: 0, deposit: 0.5, decay: 1, diffusion: 0 } });
+        e.step();
+        check("step: mass grows by n*deposit (" + e.trailMass().toFixed(3) + ")",
+          Math.abs(e.trailMass() - 50) < 1e-3);
+        check("step: counter increments", e.steps === 1);
+      }
+      // Decay: no agents -> mass shrinks by exactly the decay factor.
+      {
+        const e = new SlimeEngine({ width: 32, height: 32, agentCount: 0, rng: mulberry32(4),
+          params: { decay: 0.9, diffusion: 0 } });
+        for (let i = 0; i < e.trail.length; i++) e.trail[i] = 1;
+        const before = e.trailMass();
+        e.step();
+        check("step: decay shrinks mass", Math.abs(e.trailMass() - before * 0.9) < 1e-2);
+      }
+      // Diffusion conserves mass on the torus (decay 1, full diffusion).
+      {
+        const e = new SlimeEngine({ width: 32, height: 32, agentCount: 0, rng: mulberry32(5),
+          params: { decay: 1, diffusion: 1 } });
+        const r = mulberry32(6);
+        for (let i = 0; i < e.trail.length; i++) e.trail[i] = r();
+        const before = e.trailMass();
+        e.step();
+        check("step: diffusion conserves mass", Math.abs(e.trailMass() - before) / before < 1e-3);
+      }
+      // Clamp: huge deposits on a tiny grid never exceed TRAIL_CLAMP.
+      {
+        const e = new SlimeEngine({ width: 8, height: 8, agentCount: 200, rng: mulberry32(7),
+          params: { sensorDistance: 0, deposit: 10, decay: 1, diffusion: 0 } });
+        for (let s = 0; s < 30; s++) e.step();
+        let maxV = 0;
+        for (let i = 0; i < e.trail.length; i++) maxV = Math.max(maxV, e.trail[i]);
+        check("step: trail clamped", maxV <= TRAIL_CLAMP + 1e-6);
+      }
+    } else {
+      check("step: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
