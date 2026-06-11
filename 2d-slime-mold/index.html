@@ -37,6 +37,7 @@ button {
   background: #232a37; color: var(--text); font-size: 0.9rem; cursor: pointer;
 }
 button:hover { background: #2c3545; }
+button.tool.active { background: var(--accent); color: #0b0e13; border-color: var(--accent); font-weight: 600; }
 table.readout { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 table.readout td { padding: 3px 0; }
 table.readout td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
@@ -49,9 +50,20 @@ table.readout td:last-child { text-align: right; font-variant-numeric: tabular-n
 <div class="layout">
   <div class="panel">
     <canvas id="display-canvas" width="640" height="640"></canvas>
-    <p class="hint">Click: add food · click a food ring: remove it</p>
+    <p class="hint" id="hint">Click: add food · click a highlighted ring: remove it</p>
   </div>
   <div class="controls">
+    <fieldset class="panel">
+      <legend>Tool</legend>
+      <div class="buttons">
+        <button id="tool-food" class="tool active">Food</button>
+        <button id="tool-drag" class="tool">Drag</button>
+        <button id="tool-slime" class="tool">Slime</button>
+      </div>
+      <label class="slider">Brush size: <span id="brush-size-value"></span>
+        <input type="range" id="brush-size" min="8" max="60" step="1" value="24">
+      </label>
+    </fieldset>
     <fieldset class="panel">
       <legend>Preset</legend>
       <select id="preset">
@@ -672,12 +684,74 @@ document.getElementById("pause-btn").addEventListener("click", (ev) => {
 });
 document.getElementById("reset-btn").addEventListener("click", () => engine.reset());
 document.getElementById("clear-food-btn").addEventListener("click", () => engine.clearFood());
-display.addEventListener("click", (ev) => {
+// --- Tool system ---
+const HINTS = {
+  food: "Click: add food · click a highlighted ring: remove it",
+  drag: "Drag to move trail, agents and food inside the circle",
+  slime: "Click or drag to paint fresh slime",
+};
+let tool = "food";
+const toolButtons = {
+  food: document.getElementById("tool-food"),
+  drag: document.getElementById("tool-drag"),
+  slime: document.getElementById("tool-slime"),
+};
+for (const [name, btn] of Object.entries(toolButtons)) {
+  btn.addEventListener("click", () => {
+    tool = name;
+    for (const b of Object.values(toolButtons)) b.classList.remove("active");
+    btn.classList.add("active");
+    document.getElementById("hint").textContent = HINTS[name];
+  });
+}
+const brushInput = document.getElementById("brush-size");
+const brushRadius = () => Number(brushInput.value);
+const brushValueEl = document.getElementById("brush-size-value");
+brushInput.addEventListener("input", () => { brushValueEl.textContent = brushInput.value; });
+brushValueEl.textContent = brushInput.value;
+
+const cursor = { x: 0, y: 0, inside: false, down: false };
+const effects = [];
+const MAX_AGENTS = 80000;
+
+function toGrid(ev) {
   const rect = display.getBoundingClientRect();
-  const gx = ((ev.clientX - rect.left) / rect.width) * GRID;
-  const gy = ((ev.clientY - rect.top) / rect.height) * GRID;
-  if (!engine.removeFoodNear(gx, gy, 6)) engine.addFood(gx, gy);
+  return { x: ((ev.clientX - rect.left) / rect.width) * GRID,
+           y: ((ev.clientY - rect.top) / rect.height) * GRID };
+}
+
+function paintSlime(x, y) {
+  const count = Math.min(150, MAX_AGENTS - engine.agents.length / 3);
+  if (count <= 0) return;
+  const total = engine.addAgents(x, y, brushRadius(), count);
+  agentInput.value = total;
+  document.getElementById("agents-value").textContent = total.toLocaleString();
+}
+
+display.addEventListener("pointerdown", (ev) => {
+  const g = toGrid(ev);
+  cursor.x = g.x; cursor.y = g.y; cursor.inside = true; cursor.down = true;
+  display.setPointerCapture(ev.pointerId);
+  if (tool === "food") {
+    if (engine.removeFoodNear(g.x, g.y, 6)) effects.push({ type: "remove", x: g.x, y: g.y, age: 0 });
+    else { engine.addFood(g.x, g.y); effects.push({ type: "add", x: g.x, y: g.y, age: 0 }); }
+  } else if (tool === "slime") {
+    paintSlime(g.x, g.y);
+  }
 });
+display.addEventListener("pointermove", (ev) => {
+  const g = toGrid(ev);
+  if (cursor.down) {
+    if (tool === "drag") {
+      engine.translateRegion(cursor.x, cursor.y, brushRadius(), g.x - cursor.x, g.y - cursor.y);
+    } else if (tool === "slime") {
+      paintSlime(g.x, g.y);
+    }
+  }
+  cursor.x = g.x; cursor.y = g.y; cursor.inside = true;
+});
+display.addEventListener("pointerup", () => { cursor.down = false; });
+display.addEventListener("pointerleave", () => { cursor.inside = false; cursor.down = false; });
 
 // --- Render loop ---
 const GAMMA = 0.45;
@@ -694,12 +768,60 @@ function render() {
   offCtx.putImageData(image, 0, 0);
   displayCtx.imageSmoothingEnabled = true;
   displayCtx.drawImage(offscreen, 0, 0, display.width, display.height);
-  displayCtx.strokeStyle = "rgba(255,255,255,0.9)";
-  displayCtx.lineWidth = 2;
+  // Food markers: filled dot + ring; red highlight when the food tool would remove.
+  let hoveredFood = null;
+  if (tool === "food" && cursor.inside) {
+    for (const food of engine.foods) {
+      if ((food.x - cursor.x) ** 2 + (food.y - cursor.y) ** 2 <= 36) { hoveredFood = food; break; }
+    }
+  }
   for (const food of engine.foods) {
+    const fx = food.x * SCALE, fy = food.y * SCALE;
+    const hovered = food === hoveredFood;
+    const color = hovered ? "rgba(255,80,80,0.95)" : "rgba(255,255,255,0.9)";
+    displayCtx.fillStyle = color;
     displayCtx.beginPath();
-    displayCtx.arc(food.x * SCALE, food.y * SCALE, 9, 0, 2 * Math.PI);
+    displayCtx.arc(fx, fy, 4, 0, 2 * Math.PI);
+    displayCtx.fill();
+    displayCtx.strokeStyle = color;
+    displayCtx.lineWidth = 2;
+    displayCtx.beginPath();
+    displayCtx.arc(fx, fy, hovered ? 12 : 9, 0, 2 * Math.PI);
     displayCtx.stroke();
+  }
+  // Ghost ring: where a food-tool click would add.
+  if (tool === "food" && cursor.inside && !hoveredFood) {
+    displayCtx.strokeStyle = "rgba(255,255,255,0.35)";
+    displayCtx.lineWidth = 2;
+    displayCtx.beginPath();
+    displayCtx.arc(cursor.x * SCALE, cursor.y * SCALE, 9, 0, 2 * Math.PI);
+    displayCtx.stroke();
+  }
+  // Brush circle for drag/slime tools.
+  if ((tool === "drag" || tool === "slime") && cursor.inside) {
+    displayCtx.strokeStyle = cursor.down ? "rgba(90,169,255,0.9)" : "rgba(255,255,255,0.5)";
+    displayCtx.lineWidth = 1.5;
+    displayCtx.beginPath();
+    displayCtx.arc(cursor.x * SCALE, cursor.y * SCALE, brushRadius() * SCALE, 0, 2 * Math.PI);
+    displayCtx.stroke();
+  }
+  // Transient add/remove pulses.
+  const EFFECT_LIFE = 25;
+  for (let i = effects.length - 1; i >= 0; i--) {
+    const fx = effects[i];
+    const t = fx.age / EFFECT_LIFE;
+    displayCtx.lineWidth = 3;
+    displayCtx.beginPath();
+    if (fx.type === "add") {
+      displayCtx.strokeStyle = `rgba(255,255,255,${1 - t})`;
+      displayCtx.arc(fx.x * SCALE, fx.y * SCALE, 9 + t * 30, 0, 2 * Math.PI);
+    } else {
+      displayCtx.strokeStyle = `rgba(255,80,80,${1 - t})`;
+      displayCtx.arc(fx.x * SCALE, fx.y * SCALE, Math.max(1, 12 * (1 - t)), 0, 2 * Math.PI);
+    }
+    displayCtx.stroke();
+    fx.age++;
+    if (fx.age > EFFECT_LIFE) effects.splice(i, 1);
   }
 }
 
@@ -710,11 +832,9 @@ function updateReadout() {
 }
 
 function frame() {
-  if (running) {
-    engine.step();
-    render();
-    updateReadout();
-  }
+  if (running) engine.step();
+  render();
+  updateReadout();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
