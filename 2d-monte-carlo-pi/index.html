@@ -25,6 +25,77 @@ function mulberry32(seed) {
   };
 }
 
+// All shapes are inscribed in the unit square [0,1]x[0,1]. Sampling that
+// square uniformly, hits/samples estimates areaFraction, and piFromRatio
+// inverts that to an estimate of pi. draw() renders the outline; s = canvas px.
+const SHAPES = [
+  {
+    key: "circle",
+    label: "Circle in square",
+    formula: "π ≈ 4 · hits ⁄ samples",
+    explanation: "A circle of radius ½ has area π(½)² = π/4, so it covers π/4 of the unit square.",
+    areaFraction: Math.PI / 4,
+    contains(x, y) { const dx = x - 0.5, dy = y - 0.5; return dx * dx + dy * dy <= 0.25; },
+    piFromRatio(r) { return 4 * r; },
+    draw(ctx, s) {
+      ctx.beginPath();
+      ctx.arc(0.5 * s, 0.5 * s, 0.5 * s, 0, 2 * Math.PI);
+      ctx.stroke();
+    },
+  },
+  {
+    key: "quarter",
+    label: "Quarter circle",
+    formula: "π ≈ 4 · hits ⁄ samples",
+    explanation: "A quarter of a radius-1 circle fits exactly in the unit square; its area is π·1²/4 = π/4.",
+    areaFraction: Math.PI / 4,
+    contains(x, y) { return x * x + y * y <= 1; },
+    piFromRatio(r) { return 4 * r; },
+    draw(ctx, s) {
+      ctx.beginPath();
+      ctx.arc(0, 0, s, 0, Math.PI / 2);
+      ctx.stroke();
+    },
+  },
+  {
+    key: "ellipse",
+    label: "Ellipse",
+    formula: "π ≈ 8 · hits ⁄ samples",
+    explanation: "Ellipse area is π·a·b. With semi-axes ½ × ¼ it covers π/8 of the square. Fun fact: any ellipse covers π/4 of its own bounding rectangle, no matter how squashed.",
+    areaFraction: Math.PI / 8,
+    contains(x, y) {
+      const nx = (x - 0.5) / 0.5, ny = (y - 0.5) / 0.25;
+      return nx * nx + ny * ny <= 1;
+    },
+    piFromRatio(r) { return 8 * r; },
+    draw(ctx, s) {
+      ctx.beginPath();
+      ctx.ellipse(0.5 * s, 0.5 * s, 0.5 * s, 0.25 * s, 0, 0, 2 * Math.PI);
+      ctx.stroke();
+    },
+  },
+  {
+    key: "annulus",
+    label: "Annulus (ring)",
+    formula: "π ≈ (16⁄3) · hits ⁄ samples",
+    explanation: "A ring with outer radius ½ and inner radius ¼ has area π(¼ − ¹⁄₁₆) = 3π/16.",
+    areaFraction: (3 * Math.PI) / 16,
+    contains(x, y) {
+      const dx = x - 0.5, dy = y - 0.5, d2 = dx * dx + dy * dy;
+      return d2 <= 0.25 && d2 >= 0.0625;
+    },
+    piFromRatio(r) { return (16 / 3) * r; },
+    draw(ctx, s) {
+      ctx.beginPath();
+      ctx.arc(0.5 * s, 0.5 * s, 0.5 * s, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0.5 * s, 0.5 * s, 0.25 * s, 0, 2 * Math.PI);
+      ctx.stroke();
+    },
+  },
+];
+
 const PiTests = {
   run() {
     const failures = [];
@@ -45,6 +116,38 @@ const PiTests = {
       check("prng: deterministic for equal seeds", same);
       check("prng: values in [0,1)", inRange);
       check("prng: different seeds differ", mulberry32(1)() !== mulberry32(2)());
+    }
+
+    // --- Shape geometry probes ---
+    {
+      const probes = {
+        circle:  { inside: [[0.5, 0.5], [0.5, 0.05]], outside: [[0.02, 0.02], [0.98, 0.98]] },
+        quarter: { inside: [[0.1, 0.1], [0.7, 0.7]],  outside: [[0.8, 0.7], [0.99, 0.99]] },
+        ellipse: { inside: [[0.5, 0.5], [0.95, 0.5]], outside: [[0.5, 0.2], [0.05, 0.3]] },
+        annulus: { inside: [[0.5, 0.2], [0.85, 0.5]], outside: [[0.5, 0.5], [0.98, 0.98]] },
+      };
+      check("shapes: 4 defined", typeof SHAPES !== "undefined" && SHAPES.length === 4);
+      for (const shape of (typeof SHAPES === "undefined" ? [] : SHAPES)) {
+        const p = probes[shape.key];
+        check(shape.key + ": probe points", p &&
+          p.inside.every(([x, y]) => shape.contains(x, y)) &&
+          p.outside.every(([x, y]) => !shape.contains(x, y)));
+      }
+    }
+
+    // --- Area fraction matches contains() empirically ---
+    if (typeof SHAPES !== "undefined") {
+      for (const shape of SHAPES) {
+        const rng = mulberry32(42);
+        const N = 200000;
+        let hits = 0;
+        for (let i = 0; i < N; i++) if (shape.contains(rng(), rng())) hits++;
+        const frac = hits / N;
+        check(shape.key + ": empirical fraction near areaFraction (" + frac.toFixed(4) + ")",
+          Math.abs(frac - shape.areaFraction) < 0.01);
+        check(shape.key + ": piFromRatio inverts areaFraction",
+          Math.abs(shape.piFromRatio(shape.areaFraction) - Math.PI) < 1e-12);
+      }
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
