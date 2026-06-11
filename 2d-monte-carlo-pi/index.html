@@ -96,6 +96,34 @@ const SHAPES = [
   },
 ];
 
+// Samples uniform points in the unit square and counts hits in the shape.
+class Estimator {
+  constructor(shape, rng) {
+    this.shape = shape;
+    this.rng = rng || Math.random;
+    this.reset();
+  }
+  reset() {
+    this.samples = 0;
+    this.hits = 0;
+  }
+  // Sample n points; returns the batch for plotting.
+  step(n) {
+    const pts = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = this.rng(), y = this.rng();
+      const inside = this.shape.contains(x, y);
+      if (inside) this.hits++;
+      pts[i] = { x, y, inside };
+    }
+    this.samples += n;
+    return pts;
+  }
+  estimate() {
+    return this.samples === 0 ? NaN : this.shape.piFromRatio(this.hits / this.samples);
+  }
+}
+
 const PiTests = {
   run() {
     const failures = [];
@@ -147,6 +175,32 @@ const PiTests = {
           Math.abs(frac - shape.areaFraction) < 0.01);
         check(shape.key + ": piFromRatio inverts areaFraction",
           Math.abs(shape.piFromRatio(shape.areaFraction) - Math.PI) < 1e-12);
+      }
+    }
+
+    // --- Estimator ---
+    {
+      check("estimator: class exists", typeof Estimator !== "undefined");
+      if (typeof Estimator !== "undefined") {
+        for (const shape of SHAPES) {
+          const est = new Estimator(shape, mulberry32(7));
+          est.step(200000);
+          check(shape.key + ": converges at 200k (" + est.estimate().toFixed(4) + ")",
+            Math.abs(est.estimate() - Math.PI) < 0.05);
+        }
+        const a = new Estimator(SHAPES[0], mulberry32(123));
+        const b = new Estimator(SHAPES[0], mulberry32(123));
+        a.step(1000); b.step(1000);
+        check("estimator: deterministic with equal seeds",
+          a.hits === b.hits && a.samples === b.samples);
+        const c = new Estimator(SHAPES[0], mulberry32(5));
+        check("estimator: NaN before sampling", Number.isNaN(c.estimate()));
+        const batch = c.step(50);
+        check("estimator: step returns batch with inside flags",
+          batch.length === 50 && batch.every(p =>
+            p.x >= 0 && p.x < 1 && p.y >= 0 && p.y < 1 && typeof p.inside === "boolean"));
+        c.reset();
+        check("estimator: reset zeroes counts", c.samples === 0 && c.hits === 0);
       }
     }
 
