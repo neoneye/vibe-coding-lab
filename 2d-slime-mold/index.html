@@ -125,8 +125,47 @@ class SlimeEngine {
       const idx = Math.floor(y) * W + Math.floor(x);
       this.trail[idx] = Math.min(TRAIL_CLAMP, this.trail[idx] + deposit);
     }
+    this._stampFood();
     this._diffuseAndDecay();
     this.steps++;
+  }
+
+  addFood(x, y) {
+    this.foods.push({ x, y });
+  }
+
+  removeFoodNear(x, y, r) {
+    let best = -1, bestD = r * r;
+    for (let i = 0; i < this.foods.length; i++) {
+      const dx = this.foods[i].x - x, dy = this.foods[i].y - y;
+      const d = dx * dx + dy * dy;
+      if (d <= bestD) { bestD = d; best = i; }
+    }
+    if (best < 0) return false;
+    this.foods.splice(best, 1);
+    return true;
+  }
+
+  clearFood() {
+    this.foods = [];
+  }
+
+  _stampFood() {
+    const { foodDeposit, foodRadius } = this.params;
+    const W = this.width, H = this.height;
+    const r = Math.ceil(foodRadius), r2 = foodRadius * foodRadius;
+    for (const food of this.foods) {
+      const cx = Math.round(food.x), cy = Math.round(food.y);
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy > r2) continue;
+          const xi = Math.floor(this._wrap(cx + dx, W));
+          const yi = Math.floor(this._wrap(cy + dy, H));
+          const idx = yi * W + xi;
+          this.trail[idx] = Math.min(TRAIL_CLAMP, this.trail[idx] + foodDeposit);
+        }
+      }
+    }
   }
 
   _diffuseAndDecay() {
@@ -277,6 +316,41 @@ const SlimeTests = {
       const sensing = meanDist(10), control = meanDist(0);
       check("sensing: agents converge to trail line (" + sensing.toFixed(2) + " vs " + control.toFixed(2) + ")",
         sensing < control * 0.6);
+    }
+
+    // --- Food ---
+    if (typeof SlimeEngine !== "undefined" && SlimeEngine.prototype.addFood) {
+      {
+        const e = new SlimeEngine({ width: 64, height: 64, agentCount: 0, rng: mulberry32(10),
+          params: { decay: 1, diffusion: 0, foodDeposit: 0.4, foodRadius: 4 } });
+        e.addFood(32, 32);
+        e.step();
+        let cells = 0;
+        for (let dy = -4; dy <= 4; dy++)
+          for (let dx = -4; dx <= 4; dx++)
+            if (dx * dx + dy * dy <= 16) cells++;
+        check("food: stamp adds foodDeposit per cell in radius",
+          Math.abs(e.trailMass() - cells * 0.4) < 1e-3);
+        check("food: removeFoodNear hits", e.removeFoodNear(33, 33, 6) === true && e.foods.length === 0);
+        check("food: removeFoodNear misses", e.removeFoodNear(10, 10, 6) === false);
+        e.addFood(5, 5); e.addFood(50, 50);
+        e.clearFood();
+        check("food: clearFood empties", e.foods.length === 0);
+      }
+      // Determinism: identical seeds + identical food -> identical state.
+      {
+        const make = () => {
+          const e = new SlimeEngine({ width: 64, height: 64, agentCount: 500, rng: mulberry32(11) });
+          e.addFood(20, 20);
+          for (let s = 0; s < 20; s++) e.step();
+          return e;
+        };
+        const a = make(), b = make();
+        check("determinism: equal trail mass and first agent",
+          a.trailMass() === b.trailMass() && a.agents[0] === b.agents[0] && a.agents[2] === b.agents[2]);
+      }
+    } else {
+      check("food: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
