@@ -5,11 +5,86 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>2D Monte Carlo π</title>
 <style>
-/* styles added in Task 4 */
+:root {
+  --bg: #11141a; --panel: #1a1f29; --border: #2c3442;
+  --text: #dde3ee; --muted: #8a94a6;
+  --green: #3ecf6e; --red: #e05555; --accent: #5aa9ff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+h1 { font-size: 1.3rem; margin: 0 0 4px; }
+.subtitle { color: var(--muted); margin: 0 0 16px; font-size: 0.9rem; }
+.layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px;
+}
+#sim-canvas { display: block; background: #0b0e13; border: 1px solid var(--border); }
+.controls { width: 360px; display: flex; flex-direction: column; gap: 12px; }
+fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 8px 12px; }
+legend { color: var(--muted); font-size: 0.8rem; padding: 0 4px; }
+.shape-option { display: block; margin: 4px 0; cursor: pointer; }
+.shape-info { font-size: 0.85rem; color: var(--muted); margin: 8px 0 0; }
+.shape-info .formula { color: var(--accent); font-size: 1rem; display: block; margin-bottom: 4px; }
+label.slider { display: block; font-size: 0.85rem; margin: 6px 0; }
+label.slider input { width: 100%; }
+.buttons { display: flex; gap: 8px; }
+button {
+  flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: #232a37; color: var(--text); font-size: 0.9rem; cursor: pointer;
+}
+button:hover { background: #2c3545; }
+table.readout { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+table.readout td { padding: 3px 0; }
+table.readout td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+#pi-estimate { color: var(--green); font-weight: 600; }
+#chart-canvas { display: block; width: 100%; }
 </style>
 </head>
 <body>
-<p>UI under construction.</p>
+<h1>2D Monte Carlo π</h1>
+<p class="subtitle">Throw random points at a square. Any inscribed shape whose area involves π turns the hit ratio into an estimate of π.</p>
+<div class="layout">
+  <div class="panel">
+    <canvas id="sim-canvas" width="480" height="480"></canvas>
+  </div>
+  <div class="controls">
+    <fieldset class="panel">
+      <legend>Shape</legend>
+      <div id="shape-options"></div>
+      <p class="shape-info"><span class="formula" id="shape-formula"></span><span id="shape-explanation"></span></p>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>Parameters</legend>
+      <label class="slider">Points per frame: <span id="speed-value"></span>
+        <input type="range" id="speed" min="0" max="4" step="0.25" value="2">
+      </label>
+      <label class="slider">Point size: <span id="size-value"></span> px
+        <input type="range" id="point-size" min="1" max="4" step="1" value="2">
+      </label>
+      <div class="buttons">
+        <button id="pause-btn">Pause</button>
+        <button id="reset-btn">Reset</button>
+      </div>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>Estimate</legend>
+      <table class="readout">
+        <tr><td>Samples</td><td id="samples">0</td></tr>
+        <tr><td>Hits</td><td id="hits">0</td></tr>
+        <tr><td>π estimate</td><td id="pi-estimate">—</td></tr>
+        <tr><td>|error|</td><td id="pi-error">—</td></tr>
+      </table>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>Convergence (log scale)</legend>
+      <canvas id="chart-canvas" width="336" height="150"></canvas>
+    </fieldset>
+  </div>
+</div>
 <script id="shared-code">
 "use strict";
 
@@ -210,7 +285,105 @@ const PiTests = {
 };
 </script>
 <script>
-// UI added in Task 4.
+"use strict";
+const sim = document.getElementById("sim-canvas");
+const simCtx = sim.getContext("2d");
+const S = sim.width;
+
+const speedInput = document.getElementById("speed");
+const sizeInput = document.getElementById("point-size");
+const pauseBtn = document.getElementById("pause-btn");
+const resetBtn = document.getElementById("reset-btn");
+
+let shape = SHAPES[0];
+let estimator = null;
+let running = true;
+let series = [];          // [samples, estimate] checkpoints for the chart
+let nextCheckpoint = 1;
+
+function pointsPerFrame() { return Math.round(10 ** Number(speedInput.value)); }
+function pointSize() { return Number(sizeInput.value); }
+
+// Build shape radio buttons from SHAPES — the UI hard-codes no shape math.
+const shapeOptions = document.getElementById("shape-options");
+for (const s of SHAPES) {
+  const label = document.createElement("label");
+  label.className = "shape-option";
+  const radio = document.createElement("input");
+  radio.type = "radio";
+  radio.name = "shape";
+  radio.value = s.key;
+  radio.checked = s === shape;
+  radio.addEventListener("change", () => { shape = s; reset(); });
+  label.append(radio, " " + s.label);
+  shapeOptions.append(label);
+}
+
+function drawOutline() {
+  simCtx.strokeStyle = "#5aa9ff";
+  simCtx.lineWidth = 2;
+  shape.draw(simCtx, S);
+}
+
+function reset() {
+  estimator = new Estimator(shape, mulberry32((Math.random() * 2 ** 32) >>> 0));
+  series = [];
+  nextCheckpoint = 1;
+  simCtx.fillStyle = "#0b0e13";
+  simCtx.fillRect(0, 0, S, S);
+  drawOutline();
+  document.getElementById("shape-formula").textContent = shape.formula;
+  document.getElementById("shape-explanation").textContent = shape.explanation;
+  updateReadout();
+  drawChart();
+}
+
+function updateReadout() {
+  document.getElementById("samples").textContent = estimator.samples.toLocaleString();
+  document.getElementById("hits").textContent = estimator.hits.toLocaleString();
+  const est = estimator.estimate();
+  document.getElementById("pi-estimate").textContent = Number.isNaN(est) ? "—" : est.toFixed(6);
+  document.getElementById("pi-error").textContent =
+    Number.isNaN(est) ? "—" : Math.abs(est - Math.PI).toFixed(6);
+}
+
+function drawChart() { /* implemented in Task 5 */ }
+
+function updateLabels() {
+  document.getElementById("speed-value").textContent = pointsPerFrame().toLocaleString();
+  document.getElementById("size-value").textContent = pointSize();
+}
+speedInput.addEventListener("input", updateLabels);
+sizeInput.addEventListener("input", updateLabels);
+
+pauseBtn.addEventListener("click", () => {
+  running = !running;
+  pauseBtn.textContent = running ? "Pause" : "Resume";
+});
+resetBtn.addEventListener("click", reset);
+
+function frame() {
+  if (running) {
+    const r = pointSize();
+    const batch = estimator.step(pointsPerFrame());
+    for (const p of batch) {
+      simCtx.fillStyle = p.inside ? "#3ecf6e" : "#e05555";
+      simCtx.fillRect(p.x * S - r / 2, p.y * S - r / 2, r, r);
+    }
+    drawOutline();
+    while (estimator.samples >= nextCheckpoint) {
+      series.push([estimator.samples, estimator.estimate()]);
+      nextCheckpoint = Math.max(nextCheckpoint + 1, Math.ceil(nextCheckpoint * 1.15));
+    }
+    updateReadout();
+    drawChart();
+  }
+  requestAnimationFrame(frame);
+}
+
+updateLabels();
+reset();
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
