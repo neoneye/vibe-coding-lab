@@ -25,6 +25,60 @@ function mulberry32(seed) {
   };
 }
 
+const FIELD_CLAMP = 4.0;
+
+// Droplet condensation field for a 2D diffusion cloud chamber. Particle
+// tracks deposit instantly; the field diffuses slightly and decays per frame.
+// Not toroidal: deposits outside the chamber are discarded.
+class ChamberEngine {
+  constructor(opts) {
+    this.width = opts.width;
+    this.height = opts.height;
+    this.rng = opts.rng || Math.random;
+    this.params = Object.assign({
+      bField: 0, alphaRate: 0.4, betaRate: 0.5, muonRate: 0.3, sourceRate: 6,
+      decay: 0.965, diffusion: 0.15, mist: 60, deltaProb: 0.004,
+    }, opts.params || {});
+    this.field = new Float32Array(this.width * this.height);
+    this.tmp = new Float32Array(this.width * this.height);
+    this.sources = [];
+    this.events = 0;
+  }
+
+  _deposit(x, y, amount) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    if (xi < 0 || xi >= this.width || yi < 0 || yi >= this.height) return;
+    const idx = yi * this.width + xi;
+    this.field[idx] = Math.min(FIELD_CLAMP, this.field[idx] + amount);
+  }
+
+  addSource(x, y) {
+    this.sources.push({ x, y });
+  }
+
+  removeSourceNear(x, y, r) {
+    let best = -1, bestD = r * r;
+    for (let i = 0; i < this.sources.length; i++) {
+      const dx = this.sources[i].x - x, dy = this.sources[i].y - y;
+      const d = dx * dx + dy * dy;
+      if (d <= bestD) { bestD = d; best = i; }
+    }
+    if (best < 0) return false;
+    this.sources.splice(best, 1);
+    return true;
+  }
+
+  clearSources() {
+    this.sources = [];
+  }
+
+  fieldMass() {
+    let s = 0;
+    for (let i = 0; i < this.field.length; i++) s += this.field[i];
+    return s;
+  }
+}
+
 const ChamberTests = {
   run() {
     const failures = [];
@@ -44,6 +98,31 @@ const ChamberTests = {
       }
       check("prng: deterministic for equal seeds", same);
       check("prng: values in [0,1)", inRange);
+    }
+
+    // --- Engine skeleton ---
+    {
+      check("engine: class exists", typeof ChamberEngine !== "undefined");
+      if (typeof ChamberEngine !== "undefined") {
+        const e = new ChamberEngine({ width: 100, height: 80, rng: mulberry32(1) });
+        check("engine: field sized and zero", e.field.length === 8000 && e.fieldMass() === 0);
+        check("engine: defaults applied", e.params.decay === 0.965 && e.params.deltaProb === 0.004);
+        const o = new ChamberEngine({ width: 10, height: 10, rng: mulberry32(2), params: { decay: 0.5 } });
+        check("engine: params override", o.params.decay === 0.5 && o.params.diffusion === 0.15);
+
+        e._deposit(5, 5, 10);
+        check("deposit: clamps at FIELD_CLAMP", e.field[5 * 100 + 5] === 4);
+        const before = e.fieldMass();
+        e._deposit(-3, 5, 1); e._deposit(5, 200, 1);
+        check("deposit: out of bounds discarded", e.fieldMass() === before);
+
+        e.addSource(10, 20); e.addSource(50, 50);
+        check("sources: added", e.sources.length === 2);
+        check("sources: removeSourceNear hits", e.removeSourceNear(11, 21, 6) === true && e.sources.length === 1);
+        check("sources: removeSourceNear misses", e.removeSourceNear(90, 70, 6) === false);
+        e.clearSources();
+        check("sources: cleared", e.sources.length === 0);
+      }
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
