@@ -106,6 +106,7 @@ function mulberry32(seed) {
 }
 
 const FIELD_CLAMP = 4.0;
+const SMOKE_CLAMP = 4.0;
 
 // Per-type track character. deposit(E) is ionization per step (the alpha's
 // 1/E term produces the Bragg peak); scatter(E) is the multiple-scattering
@@ -140,9 +141,13 @@ class ChamberEngine {
     this.params = Object.assign({
       bField: 0, alphaRate: 0.4, betaRate: 0.5, muonRate: 0.3, sourceRate: 6,
       decay: 0.965, diffusion: 0.15, mist: 60, deltaProb: 0.004,
+      smokeAmount: 0.35, swirl: 0.6, smokeDecay: 0.985, smokeDiffusion: 0.5,
     }, opts.params || {});
     this.field = new Float32Array(this.width * this.height);
     this.tmp = new Float32Array(this.width * this.height);
+    this.smoke = new Float32Array(this.width * this.height);
+    this.smokeTmp = new Float32Array(this.width * this.height);
+    this.tick = 0;
     this.sources = [];
     this.events = 0;
   }
@@ -152,6 +157,16 @@ class ChamberEngine {
     if (xi < 0 || xi >= this.width || yi < 0 || yi >= this.height) return;
     const idx = yi * this.width + xi;
     this.field[idx] = Math.min(FIELD_CLAMP, this.field[idx] + amount);
+    if (this.params.smokeAmount > 0) {
+      this.smoke[idx] = Math.min(SMOKE_CLAMP, this.smoke[idx] + amount * this.params.smokeAmount);
+    }
+  }
+
+  _depositSmoke(x, y, amount) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    if (xi < 0 || xi >= this.width || yi < 0 || yi >= this.height) return;
+    const idx = yi * this.width + xi;
+    this.smoke[idx] = Math.min(SMOKE_CLAMP, this.smoke[idx] + amount);
   }
 
   // Integrate a particle track, depositing ionization instantly (particles
@@ -226,6 +241,12 @@ class ChamberEngine {
     return s;
   }
 
+  smokeMass() {
+    let s = 0;
+    for (let i = 0; i < this.smoke.length; i++) s += this.smoke[i];
+    return s;
+  }
+
   step() {
     const p = this.params, dt = 1 / 60;
     const W = this.width, H = this.height;
@@ -256,7 +277,7 @@ class ChamberEngine {
       }
     }
     for (let i = 0; i < p.mist; i++) {
-      this._deposit(this.rng() * W, this.rng() * H, 0.05);
+      this._depositSmoke(this.rng() * W, this.rng() * H, 0.05);
     }
     this._diffuseAndDecay();
   }
@@ -416,13 +437,14 @@ const ChamberTests = {
         for (let s = 0; s < 5; s++) e.step();
         check("step: source fires", e.events >= 5 && e.fieldMass() > 0);
       }
-      // Mist: adds ~count * 0.05 mass per step.
+      // Mist: feeds the smoke layer, not the track field.
       {
         const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(33),
-          params: { alphaRate: 0, betaRate: 0, muonRate: 0, mist: 100, decay: 1, diffusion: 0 } });
+          params: { alphaRate: 0, betaRate: 0, muonRate: 0, mist: 100, decay: 1, diffusion: 0,
+                    swirl: 0, smokeDecay: 1, smokeDiffusion: 0 } });
         e.step();
-        check("step: mist deposits (" + e.fieldMass().toFixed(2) + ")",
-          e.fieldMass() > 4.5 && e.fieldMass() < 5.01);
+        check("step: mist feeds smoke (" + e.smokeMass().toFixed(2) + ")",
+          e.smokeMass() > 4.5 && e.smokeMass() < 5.01 && e.fieldMass() === 0);
       }
       // Determinism.
       {
@@ -437,6 +459,24 @@ const ChamberTests = {
       }
     } else {
       check("step: implemented", false);
+    }
+
+    // --- Smoke layer: feeding ---
+    if (typeof ChamberEngine !== "undefined" && ChamberEngine.prototype.smokeMass) {
+      {
+        const mk = (amt) => {
+          const e = new ChamberEngine({ width: 480, height: 480, rng: mulberry32(40),
+            params: { smokeAmount: amt } });
+          e.fireParticle("alpha", 240, 240, 0.3);
+          return e.smokeMass();
+        };
+        const none = mk(0), low = mk(0.1), high = mk(0.5);
+        check("smoke: none at amount 0", none === 0);
+        check("smoke: fed by tracks, scales (" + low.toFixed(1) + " -> " + high.toFixed(1) + ")",
+          low > 0 && high > low * 3);
+      }
+    } else {
+      check("smoke: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
