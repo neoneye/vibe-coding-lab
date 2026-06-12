@@ -5,11 +5,103 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>2D City Generator</title>
 <style>
-/* styles added in Task 4 */
+:root {
+  --bg: #11141a; --panel: #1a1f29; --border: #2c3442;
+  --text: #dde3ee; --muted: #8a94a6; --accent: #5aa9ff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+h1 { font-size: 1.3rem; margin: 0 0 4px; }
+.subtitle { color: var(--muted); margin: 0 0 16px; font-size: 0.9rem; }
+.layout { display: flex; gap: 16px; align-items: flex-start; }
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px;
+}
+.canvas-wrap { flex: 1; min-width: 0; display: flex; justify-content: center; }
+#display-canvas { display: block; background: #f4f1ea; border: 1px solid var(--border); }
+.controls {
+  flex: 0 0 340px; width: 340px; display: flex; flex-direction: column; gap: 12px;
+  max-height: calc(100vh - 110px); overflow-y: auto;
+}
+fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 8px 12px; }
+legend { color: var(--muted); font-size: 0.8rem; padding: 0 4px; }
+label.slider { display: block; font-size: 0.85rem; margin: 6px 0; }
+label.slider input[type="range"] { width: 100%; }
+.buttons { display: flex; gap: 8px; }
+button {
+  flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: #232a37; color: var(--text); font-size: 0.9rem; cursor: pointer;
+}
+button:hover { background: #2c3545; }
+table.readout { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+table.readout td { padding: 3px 0; }
+table.readout td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
-<p>UI under construction.</p>
+<h1>2D City Generator</h1>
+<p class="subtitle">Streets grow like cracks: agents crawl, collide, and branch at right angles into a city plan. Substrate-inspired.</p>
+<div class="layout">
+  <div class="panel canvas-wrap">
+    <canvas id="display-canvas" width="640" height="640"></canvas>
+  </div>
+  <div class="controls">
+    <fieldset class="panel">
+      <legend>Actions</legend>
+      <div class="buttons">
+        <button id="regen-btn">Regenerate</button>
+        <button id="finish-btn">Finish</button>
+        <button id="pause-btn">Pause</button>
+      </div>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>Cracks</legend>
+      <label class="slider">Crack seed: <span id="crack-seed-value"></span>
+        <input type="range" id="crack-seed" min="0" max="400" step="1" value="0">
+      </label>
+      <label class="slider">Crack rotation: <span id="rotation-value"></span>°
+        <input type="range" id="rotation" min="-180" max="180" step="1" value="0">
+      </label>
+      <label class="slider">Crack density: <span id="density-value"></span>
+        <input type="range" id="density" min="0" max="100" step="1" value="25">
+      </label>
+      <label class="slider">Crack count: <span id="crack-count-value"></span>
+        <input type="range" id="crack-count" min="0" max="20" step="1" value="5">
+      </label>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>Growth</legend>
+      <label class="slider">Swarm count: <span id="swarm-count-value"></span>
+        <input type="range" id="swarm-count" min="0" max="100" step="1" value="25">
+      </label>
+      <label class="slider">Iterations: <span id="iterations-value"></span>
+        <input type="range" id="iterations" min="0" max="100" step="1" value="25">
+      </label>
+      <label class="slider">Iteration seed: <span id="iteration-seed-value"></span>
+        <input type="range" id="iteration-seed" min="0" max="400" step="1" value="0">
+      </label>
+      <label class="slider">Iteration noise: <span id="noise-value"></span>
+        <input type="range" id="noise" min="0" max="100" step="1" value="0">
+      </label>
+      <label class="slider"><input type="checkbox" id="tile" checked> Tile</label>
+      <label class="slider">Speed (iter/frame): <span id="speed-value"></span>
+        <input type="range" id="speed" min="1" max="200" step="1" value="30">
+      </label>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>State</legend>
+      <table class="readout">
+        <tr><td>Iterations</td><td id="readout-iter">0 / 0</td></tr>
+        <tr><td>Agents</td><td id="readout-agents">0</td></tr>
+        <tr><td>Street pixels</td><td id="readout-px">0</td></tr>
+      </table>
+    </fieldset>
+  </div>
+</div>
 <script id="shared-code">
 "use strict";
 
@@ -339,7 +431,104 @@ const CityTests = {
 };
 </script>
 <script>
-// UI added in Task 4.
+"use strict";
+const GRID = 640;
+const display = document.getElementById("display-canvas");
+const displayCtx = display.getContext("2d");
+const offscreen = document.createElement("canvas");
+offscreen.width = GRID;
+offscreen.height = GRID;
+const offCtx = offscreen.getContext("2d");
+const image = offCtx.createImageData(GRID, GRID);
+
+const engine = new CityEngine({ width: GRID, height: GRID });
+let running = true;
+
+function resizeCanvas() {
+  const wrap = display.parentElement;
+  const avail = Math.max(320, Math.min(
+    wrap.clientWidth - 26,
+    window.innerHeight - display.getBoundingClientRect().top - 40
+  ));
+  const size = Math.floor(avail);
+  if (display.width !== size) {
+    display.width = size;
+    display.height = size;
+  }
+}
+window.addEventListener("resize", resizeCanvas);
+
+const SLIDERS = [
+  { id: "crack-seed",     key: "crackSeed" },
+  { id: "rotation",       key: "rotation" },
+  { id: "density",        key: "density" },
+  { id: "crack-count",    key: "crackCount" },
+  { id: "swarm-count",    key: "swarmCount" },
+  { id: "iterations",     key: "iterations" },
+  { id: "iteration-seed", key: "iterationSeed" },
+  { id: "noise",          key: "noise" },
+];
+
+function currentParams() {
+  const p = { tileMode: document.getElementById("tile").checked };
+  for (const s of SLIDERS) {
+    const v = Number(document.getElementById(s.id).value);
+    p[s.key] = v;
+    document.getElementById(s.id + "-value").textContent = v;
+  }
+  return p;
+}
+
+function restart() {
+  engine.start(currentParams());
+  running = true;
+  document.getElementById("pause-btn").textContent = "Pause";
+}
+
+for (const s of SLIDERS) document.getElementById(s.id).addEventListener("input", restart);
+document.getElementById("tile").addEventListener("change", restart);
+document.getElementById("speed").addEventListener("input", () => {
+  document.getElementById("speed-value").textContent = document.getElementById("speed").value;
+});
+document.getElementById("regen-btn").addEventListener("click", restart);
+document.getElementById("finish-btn").addEventListener("click", () => { engine.finish(); });
+document.getElementById("pause-btn").addEventListener("click", (ev) => {
+  running = !running;
+  ev.target.textContent = running ? "Pause" : "Resume";
+});
+
+// paper white / near-black streets
+const BG = [244, 241, 234], FG = [26, 26, 26];
+function render() {
+  const data = image.data, px = engine.pixels;
+  for (let i = 0; i < px.length; i++) {
+    const c = px[i] ? FG : BG;
+    data[i * 4] = c[0];
+    data[i * 4 + 1] = c[1];
+    data[i * 4 + 2] = c[2];
+    data[i * 4 + 3] = 255;
+  }
+  offCtx.putImageData(image, 0, 0);
+  displayCtx.imageSmoothingEnabled = true;
+  displayCtx.drawImage(offscreen, 0, 0, display.width, display.height);
+}
+
+function frame() {
+  if (running && engine.iterationsDone < engine.iterationsTotal) {
+    engine.step(Number(document.getElementById("speed").value));
+  }
+  render();
+  document.getElementById("readout-iter").textContent =
+    engine.iterationsDone.toLocaleString() + " / " + engine.iterationsTotal.toLocaleString();
+  document.getElementById("readout-agents").textContent = engine.usedAgentCount();
+  document.getElementById("readout-px").textContent = engine.streetPixelCount().toLocaleString();
+  requestAnimationFrame(frame);
+}
+
+document.getElementById("speed-value").textContent = document.getElementById("speed").value;
+resizeCanvas();
+restart();
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
