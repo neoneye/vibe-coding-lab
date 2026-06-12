@@ -111,6 +111,108 @@ class CityEngine {
     for (let i = 0; i < this.pixels.length; i++) n += this.pixels[i];
     return n;
   }
+
+  _advance(agent, len) {
+    if (!agent.used) return;
+    const rads = (agent.angle * Math.PI) / 180;
+    agent.x += len * Math.cos(rads);
+    agent.y += len * Math.sin(rads);
+  }
+
+  moveAgent(agent, agentIndex) {
+    const W = this.width, H = this.height;
+    if (!agent.used) { this.restartAgent(agent); return; }
+    this._advance(agent, 0.42);
+
+    // first agents wobble most (tiers from the C++)
+    let randAmount;
+    if (agentIndex < 2) randAmount = 5;
+    else if (agentIndex < 4) randAmount = 4;
+    else if (agentIndex < 8) randAmount = 3;
+    else if (agentIndex < 16) randAmount = 2;
+    else randAmount = 1;
+    randAmount *= this.iterationNoise;
+    agent.angle = (agent.angle + this.rand1() * randAmount) % 360;
+
+    const x = agent.x, y = agent.y, dir = agent.angle;
+    const z = 0.33;
+    let cx = Math.trunc(x + this.rand1() * z);
+    let cy = Math.trunc(y + this.rand1() * z);
+    if (this.tileMode) { cx = mod(cx, W); cy = mod(cy, H); }
+
+    if (cx < 0 || cx >= W || cy < 0 || cy >= H) {
+      this.restartAgent(agent);
+      this.insertAgent();
+    } else {
+      const gdir = this.grid[cy * W + cx];
+      if (gdir > 10000 || Math.abs(gdir - dir) < 5) {
+        this.grid[cy * W + cx] = Math.trunc(dir);   // Uint32Array wraps negatives, as the C++ uint did
+      } else if (Math.abs(gdir - dir) > 2) {
+        this.restartAgent(agent);
+        this.insertAgent();
+      }
+    }
+
+    if (this.tileMode) {
+      agent.x = agent.x % W;   // fmod semantics: may stay negative, as in C++
+      agent.y = agent.y % H;
+    }
+
+    let dx = Math.trunc(x), dy = Math.trunc(y);
+    if (this.tileMode) { dx = mod(dx, W); dy = mod(dy, H); }
+    if (dx >= 0 && dx < W && dy >= 0 && dy < H) this.pixels[dy * W + dx] = 1;
+  }
+
+  insertAgent() {
+    if (this.count >= this.agents.length) return;
+    this.restartAgent(this.agents[this.count]);
+    this.count++;
+  }
+
+  restartAgent(agent) {
+    const found = this.findStartPoint();
+    if (!found) { agent.used = false; agent.x = 0; agent.y = 0; agent.angle = 0; return; }
+    this.initAgent(agent, found.x, found.y, found.dir);
+  }
+
+  initAgent(agent, x, y, dir) {
+    const adj = 90 + this.rand1() * 2;
+    dir += this.rand1() < 0 ? adj : -adj;
+    dir = dir % 360;
+    agent.used = true; agent.x = x; agent.y = y; agent.angle = dir;
+    this._advance(agent, 0.61);
+  }
+
+  // probe up to 1000 random cells for an existing crack
+  findStartPoint() {
+    const W = this.width, H = this.height;
+    for (let i = 0; i < 1000; i++) {
+      const rx = Math.trunc(this.rand2() * (W - 0.9));
+      const ry = Math.trunc(this.rand2() * (H - 0.9));
+      const x = mod(rx, W), y = mod(ry, H);
+      const dir = this.grid[y * W + x];
+      if (dir >= 360) continue;
+      return { x, y, dir };
+    }
+    return null;
+  }
+
+  step(n) {
+    for (let i = 0; i < n && this.iterationsDone < this.iterationsTotal; i++) {
+      for (let j = 0; j < this.count; j++) this.moveAgent(this.agents[j], j);
+      this.iterationsDone++;
+    }
+  }
+
+  finish() {
+    this.step(this.iterationsTotal - this.iterationsDone);
+  }
+
+  usedAgentCount() {
+    let n = 0;
+    for (let j = 0; j < this.count; j++) if (this.agents[j].used) n++;
+    return n;
+  }
 }
 
 const CityTests = {
@@ -158,6 +260,77 @@ const CityTests = {
       }
     } else {
       check("CityEngine: implemented", false);
+    }
+
+    // --- Engine: movement, branching, collision ---
+    if (typeof CityEngine !== "undefined" && CityEngine.prototype.step) {
+      const PARAMS = { crackSeed: 0, rotation: 0, density: 25, crackCount: 5,
+        swarmCount: 25, iterations: 25, iterationSeed: 0, tileMode: true, noise: 0 };
+      // Perpendicular branching: restart off a known crack row.
+      {
+        const e = new CityEngine({ width: 64, height: 64 });
+        e.start(Object.assign({}, PARAMS, { density: 0, crackCount: 1, iterations: 50 }));
+        e.grid.fill(10001);
+        for (let x = 0; x < 64; x++) e.grid[32 * 64 + x] = 0;   // crack row, direction 0 (probe can't miss)
+        e.currentSeed = 5;
+        const agent = e.agents[0];
+        e.restartAgent(agent);
+        const d = mod(Math.round(Math.abs(agent.angle)), 360);
+        const diff = Math.min(d, 360 - d);
+        check("branch: perpendicular 90±2 (" + agent.angle.toFixed(1) + ")",
+          agent.used && diff >= 88 && diff <= 92);
+      }
+      // Collision with a differently-angled crack stops and spawns.
+      {
+        const e = new CityEngine({ width: 64, height: 64 });
+        e.start(Object.assign({}, PARAMS, { tileMode: false, crackCount: 1 }));
+        e.grid.fill(10001);
+        for (let y = 0; y < 64; y++) e.grid[y * 64 + 40] = 90;   // vertical crack line
+        e.count = 1;
+        const a = e.agents[0];
+        a.used = true; a.x = 35.5; a.y = 32; a.angle = 0;
+        e.currentSeed = 7;
+        const before = e.count;
+        for (let i = 0; i < 20; i++) e.moveAgent(e.agents[0], 0);
+        check("collision: agent restarted and swarm grew", e.count === before + 1);
+      }
+      // Tile wrap: pixel plots on the opposite edge.
+      {
+        const e = new CityEngine({ width: 64, height: 64 });
+        e.start(Object.assign({}, PARAMS, { crackCount: 1 }));
+        e.grid.fill(10001);
+        e.count = 1;
+        const a = e.agents[0];
+        a.used = true; a.x = 63.5; a.y = 32; a.angle = 0;
+        e.currentSeed = 9;
+        for (let i = 0; i < 3; i++) e.moveAgent(e.agents[0], 0);
+        check("tile: wrapped pixel at left edge", e.pixels[32 * 64 + 0] === 1);
+      }
+      // Non-tile: leaving the canvas restarts the agent.
+      {
+        const e = new CityEngine({ width: 64, height: 64 });
+        e.start(Object.assign({}, PARAMS, { tileMode: false, crackCount: 1 }));
+        e.grid.fill(10001);
+        e.grid[10 * 64 + 10] = 45;    // give the probe something to find
+        e.count = 1;
+        const a = e.agents[0];
+        a.used = true; a.x = 63.5; a.y = 32; a.angle = 0;
+        e.currentSeed = 11;
+        for (let i = 0; i < 5; i++) e.moveAgent(e.agents[0], 0);
+        check("bounds: agent no longer cruising straight out",
+          !(e.agents[0].used && e.agents[0].angle === 0));
+      }
+      // Full determinism + progressive equivalence.
+      {
+        const mk = () => { const e = new CityEngine({ width: 128, height: 128 }); e.start(PARAMS); return e; };
+        const a = mk(); a.finish();
+        const b = mk(); while (b.iterationsDone < b.iterationsTotal) b.step(137);
+        let same = a.streetPixelCount() === b.streetPixelCount() && a.streetPixelCount() > 0;
+        for (let i = 0; i < a.pixels.length && same; i++) if (a.pixels[i] !== b.pixels[i]) same = false;
+        check("run: deterministic, progressive == finish (" + a.streetPixelCount() + " px)", same);
+      }
+    } else {
+      check("step: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
