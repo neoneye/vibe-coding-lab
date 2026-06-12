@@ -32,6 +32,87 @@ function mod(v, m) {
   return r < 0 ? r + m : r;
 }
 
+// Faithful port of the gfx_city brick. Grid: Uint32Array, 10001 = empty,
+// < 360 = crack direction at that cell. The Uint32Array reproduces the C++
+// uint quirk: a negative direction stored via (int) cast wraps to a huge
+// value and reads back as "empty".
+class CityEngine {
+  constructor({ width, height }) {
+    this.width = width;
+    this.height = height;
+    this.grid = new Uint32Array(width * height);
+    this.pixels = new Uint8Array(width * height);
+    this.agents = [];
+    this.count = 0;            // m_agent_count: live agent slots
+    this.currentSeed = 0;
+    this.iterationSeed = 0;
+    this.iterationsDone = 0;
+    this.iterationsTotal = 0;
+    this.tileMode = true;
+    this.iterationNoise = 0;
+    this.numberOfCracks = 0;
+  }
+
+  rand1() { return random1(this.currentSeed++); }
+  rand2() { return (this.rand1() + 1) * 0.5; }
+
+  start(raw) {
+    const W = this.width, H = this.height;
+    const crackSeed = raw.crackSeed * 1000 + 9298;
+    this.iterationSeed = raw.iterationSeed * 10000 + 234234;
+    this.tileMode = !!raw.tileMode;
+    this.iterationNoise = remap(raw.noise, 0, 100, 0, 2);
+    const initialCrackCount = Math.max(raw.crackCount, 1);
+    const capacity = Math.max(raw.swarmCount, 3);
+
+    {
+      const v = Math.exp(remap(raw.density, 0, 100, 0, 4) * Math.log(8));
+      this.numberOfCracks = Math.floor((W * H * v) / (400 * 400)) + 16;
+    }
+    {
+      const v = remap(raw.iterations, 0, 100, 1, 5);
+      this.iterationsTotal = v > 0.05 ? Math.floor((10000 * Math.log(v)) / Math.log(5)) : 0;
+    }
+
+    this.pixels.fill(0);
+    this.grid.fill(10001);
+    this.agents = [];
+    for (let i = 0; i < capacity; i++) this.agents.push({ used: false, x: 0, y: 0, angle: 0 });
+    this.count = 0;
+
+    for (let i = 0; i < this.numberOfCracks; i++) {
+      this.currentSeed = (crackSeed + i) * 10 + 34;
+      const rx = Math.trunc(this.rand2() * (W - 0.9));
+      const ry = Math.trunc(this.rand2() * (H - 0.9));
+      const x = mod(rx, W), y = mod(ry, H);
+      let dir = Math.trunc(this.rand2() * 359.1);
+      dir += raw.rotation;
+      this.grid[y * W + x] = mod(dir, 360);
+      if (i < initialCrackCount && this.count < capacity) {
+        // C++ passes dir BEFORE the modulo to the agent
+        const a = this.agents[this.count];
+        a.used = true; a.x = x; a.y = y; a.angle = dir;
+        this.count++;
+      }
+    }
+
+    this.currentSeed = this.iterationSeed;
+    this.iterationsDone = 0;
+  }
+
+  crackCellCount() {
+    let n = 0;
+    for (let i = 0; i < this.grid.length; i++) if (this.grid[i] < 360) n++;
+    return n;
+  }
+
+  streetPixelCount() {
+    let n = 0;
+    for (let i = 0; i < this.pixels.length; i++) n += this.pixels[i];
+    return n;
+  }
+}
+
 const CityTests = {
   run() {
     const failures = [];
@@ -47,6 +128,36 @@ const CityTests = {
         Math.abs(random1(7) - 0.16649853717535734) < 1e-12 &&
         Math.abs(random1(100) - 0.7281943624839187) < 1e-12);
       check("mod: positive modulo", mod(-3, 64) === 61 && mod(67, 64) === 3);
+    }
+
+    // --- Engine: start() remaps and seeding ---
+    if (typeof CityEngine !== "undefined") {
+      const PARAMS = { crackSeed: 0, rotation: 0, density: 25, crackCount: 5,
+        swarmCount: 25, iterations: 25, iterationSeed: 0, tileMode: true, noise: 0 };
+      {
+        const e = new CityEngine({ width: 640, height: 640 });
+        e.start(PARAMS);
+        check("start: density 25 -> 36 cracks @640", e.numberOfCracks === 36);
+        check("start: iterations 25 -> 4306", e.iterationsTotal === 4306);
+        check("start: crack cells seeded", e.crackCellCount() > 0 && e.crackCellCount() <= 36);
+        check("start: initial agents", e.count === 5);
+      }
+      {
+        const e = new CityEngine({ width: 640, height: 640 });
+        e.start(Object.assign({}, PARAMS, { iterations: 0, noise: 50 }));
+        check("start: iterations 0 -> 0 total", e.iterationsTotal === 0);
+        check("start: noise 50 -> 1.0", e.iterationNoise === 1);
+      }
+      {
+        const a = new CityEngine({ width: 128, height: 128 });
+        const b = new CityEngine({ width: 128, height: 128 });
+        a.start(PARAMS); b.start(PARAMS);
+        let same = a.crackCellCount() === b.crackCellCount();
+        for (let i = 0; i < a.grid.length && same; i++) if (a.grid[i] !== b.grid[i]) same = false;
+        check("start: seeding deterministic", same);
+      }
+    } else {
+      check("CityEngine: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
