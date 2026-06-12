@@ -212,6 +212,161 @@ function perlinNoiseFixed(x, y, z, fadeZ) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Octave pipeline: port of render_fixedpoint. Per-octave Int32Array cache,
+// rebuilt only when seed/frequency/backend/size change; composite() does the
+// cheap mode/fadeoff/amplify/gamma/color stage.
+// ---------------------------------------------------------------------------
+const MAX_OCTAVES = 8;
+
+class PerlinEngine {
+  static BACKENDS = {
+    simplex: { frequencyFactor: 0.375, amplifyTable: [0.6, 0.6, 0.5, 0.4] },
+    perlin:  { frequencyFactor: 0.5,   amplifyTable: [1.0, 0.75, 0.5, 0.4] },
+  };
+
+  constructor({ size }) {
+    this.size = size;
+    this.octaveNoise = [];     // Int32Array per octave, lazily built
+    this.validOctaves = 0;
+    this.buildCount = 0;
+    this.cacheKey = "";
+    this.sumBuffer = new Float32Array(size * size);
+    this.params = null;
+  }
+
+  setParams(p) {
+    this.params = p;
+    const key = `${p.backend}|${p.seed}|${p.frequency}|${this.size}`;
+    if (key !== this.cacheKey) {
+      this.cacheKey = key;
+      this.validOctaves = 0;
+    }
+  }
+
+  octavesPending() {
+    return Math.max(0, Math.min(this.params.octaves, MAX_OCTAVES) - this.validOctaves);
+  }
+
+  // Build the next missing octave; returns true if work was done.
+  buildNextOctave() {
+    const want = Math.min(this.params.octaves, MAX_OCTAVES);
+    if (this.validOctaves >= want) return false;
+    this._buildOctave(this.validOctaves);
+    this.validOctaves++;
+    this.buildCount++;
+    return true;
+  }
+
+  buildAllOctaves() {
+    while (this.buildNextOctave()) { /* build */ }
+  }
+
+  _buildOctave(octave) {
+    const size = this.size, p = this.params;
+    const cfg = PerlinEngine.BACKENDS[p.backend];
+    if (!this.octaveNoise[octave] || this.octaveNoise[octave].length !== size * size) {
+      this.octaveNoise[octave] = new Int32Array(size * size);
+    }
+    const out = this.octaveNoise[octave];
+
+    const frequency = Math.pow(2, p.frequency) * cfg.frequencyFactor;
+    const areaSpan = frequency * (1 << octave);
+    const ex = 2 * areaSpan;
+    const delta = ex / (size - 0.5);
+    const seed = p.seed / 400;
+    const nz = octave + 1 + seed * 1000;
+
+    const ilower = Math.trunc(-areaSpan * 65536) | 0;
+    const idelta = Math.trunc(delta * 65536) | 0;
+    const iex = Math.trunc(ex * 65536) | 0;
+    const inz = Math.trunc(nz * 65536) | 0;
+    const blendInv = Math.trunc((4095 * 65536) / (size - 1)) | 0;
+    const simplex = p.backend === "simplex";
+    const fadeZ = simplex ? 0 : perlinFade(inz & 0xffff);
+
+    let iycur = ilower;
+    let d = 0;
+    for (let y = 0; y < size; y++) {
+      let ixcur = ilower;
+      const iblendY = Math.imul(y, blendInv) >> 16;
+      for (let x = 0; x < size; x++, d++) {
+        const iblendX = Math.imul(x, blendInv) >> 16;
+        let bl, br, tl, tr;
+        if (simplex) {
+          bl = simplexNoiseFixed(ixcur, iycur, inz);
+          br = simplexNoiseFixed((ixcur + iex) | 0, iycur, inz);
+          tl = simplexNoiseFixed(ixcur, (iycur + iex) | 0, inz);
+          tr = simplexNoiseFixed((ixcur + iex) | 0, (iycur + iex) | 0, inz);
+        } else {
+          bl = perlinNoiseFixed(ixcur, iycur, inz, fadeZ);
+          br = perlinNoiseFixed((ixcur + iex) | 0, iycur, inz, fadeZ);
+          tl = perlinNoiseFixed(ixcur, (iycur + iex) | 0, inz, fadeZ);
+          tr = perlinNoiseFixed((ixcur + iex) | 0, (iycur + iex) | 0, inz, fadeZ);
+        }
+        // original argument order: (blend, br, bl) and (blendY, top, bottom)
+        const iy0 = lerpFixed(iblendX, br, bl);
+        const iy1 = lerpFixed(iblendX, tr, tl);
+        out[d] = lerpFixed(iblendY, iy1, iy0);
+        ixcur = (ixcur + idelta) | 0;
+      }
+      iycur = (iycur + idelta) | 0;
+    }
+  }
+
+  composite() {
+    const size = this.size, p = this.params;
+    const cfg = PerlinEngine.BACKENDS[p.backend];
+    const octaves = Math.min(this.validOctaves, Math.min(p.octaves, MAX_OCTAVES));
+    const fadeoff = p.fadeoff / 100;
+    const amplify = (p.amplify / 100) * cfg.amplifyTable[p.mode];
+    const gamma = p.gamma / 100;
+    const n = size * size;
+    const sum = this.sumBuffer;
+
+    for (let i = 0; i < n; i++) {
+      let scale = 1, s = 0;
+      for (let o = 0; o < octaves; o++) {
+        let v = this.octaveNoise[o][i] / 65536;
+        switch (p.mode) {
+          case 0:
+            s += v * scale;
+            break;
+          case 1:
+            if (fadeoff < 0 && (o & 1)) s -= Math.abs(v * scale);
+            else s += Math.abs(v * scale);
+            break;
+          case 2:
+            s += fastSin(v * Math.PI * 1.33) * scale;
+            break;
+          case 3:
+            v += fastSin(v * Math.PI * 1.33);
+            if (fadeoff < 0 && (o & 1)) s -= Math.abs(v * scale);
+            else s += Math.abs(v * scale);
+            break;
+        }
+        scale *= fadeoff;
+      }
+      sum[i] = s * amplify;
+    }
+
+    const out = new Uint8ClampedArray(n * 4);
+    const c0 = p.colorBegin, c1 = p.colorEnd;
+    for (let i = 0; i < n; i++) {
+      let v;
+      if (p.mode === 0 || p.mode === 2) v = (sum[i] + 1) * 0.5;   // remap [-1,1]->[0,1]
+      else v = sum[i];
+      if (v < 0.00001) v = 0.00001;
+      v = fastPow(v, gamma);
+      out[i * 4] = c0[0] + (c1[0] - c0[0]) * v;
+      out[i * 4 + 1] = c0[1] + (c1[1] - c0[1]) * v;
+      out[i * 4 + 2] = c0[2] + (c1[2] - c0[2]) * v;
+      out[i * 4 + 3] = 255;
+    }
+    return out;
+  }
+}
+
 const PerlinTests = {
   run() {
     const failures = [];
@@ -302,6 +457,106 @@ const PerlinTests = {
       }
     } else {
       check("noise backends: implemented", false);
+    }
+
+    // --- Engine ---
+    if (typeof PerlinEngine !== "undefined") {
+      const DEFAULTS = { backend: "simplex", seed: 0, frequency: 2, octaves: 3,
+        mode: 0, fadeoff: 100, amplify: 100, gamma: 100,
+        colorBegin: [0, 0, 0], colorEnd: [255, 255, 255] };
+      // Octave cache: composite twice with different fadeoff -> no rebuilds.
+      {
+        const e = new PerlinEngine({ size: 64 });
+        e.setParams(DEFAULTS);
+        e.buildAllOctaves();
+        const builds = e.buildCount;
+        e.setParams(Object.assign({}, DEFAULTS, { fadeoff: -150 }));
+        e.composite();
+        e.setParams(Object.assign({}, DEFAULTS, { gamma: 200 }));
+        e.composite();
+        check("engine: composite reuses octave cache", e.buildCount === builds);
+        e.setParams(Object.assign({}, DEFAULTS, { seed: 7 }));
+        e.buildAllOctaves();
+        check("engine: seed change rebuilds", e.buildCount > builds);
+      }
+      // Determinism.
+      {
+        const mk = () => {
+          const e = new PerlinEngine({ size: 64 });
+          e.setParams(DEFAULTS);
+          e.buildAllOctaves();
+          return e.composite();
+        };
+        const a = mk(), b = mk();
+        let same = a.length === b.length;
+        for (let i = 0; i < a.length && same; i++) if (a[i] !== b[i]) same = false;
+        check("engine: deterministic", same);
+      }
+      // Backends differ and use their tables.
+      {
+        const e1 = new PerlinEngine({ size: 64 });
+        e1.setParams(DEFAULTS);
+        e1.buildAllOctaves();
+        const p1 = e1.composite();
+        const e2 = new PerlinEngine({ size: 64 });
+        e2.setParams(Object.assign({}, DEFAULTS, { backend: "perlin" }));
+        e2.buildAllOctaves();
+        const p2 = e2.composite();
+        let differ = false;
+        for (let i = 0; i < p1.length; i++) if (p1[i] !== p2[i]) { differ = true; break; }
+        check("engine: backends produce different textures", differ);
+        check("engine: backend configs", PerlinEngine.BACKENDS.simplex.frequencyFactor === 0.375
+          && PerlinEngine.BACKENDS.perlin.frequencyFactor === 0.5
+          && PerlinEngine.BACKENDS.simplex.amplifyTable[0] === 0.6
+          && PerlinEngine.BACKENDS.perlin.amplifyTable[1] === 0.75);
+      }
+      // Tiling: the wrap seam must be no rougher than interior gradients.
+      // (An absolute threshold is wrong here: the original samples the last
+      // pixel ~1.5 texels before the wrap point by construction, so the seam
+      // difference matches normal adjacent-pixel deltas. Measured: seam 0.23
+      // vs interior max 0.54 at defaults.)
+      {
+        const e = new PerlinEngine({ size: 64 });
+        e.setParams(DEFAULTS);
+        e.buildAllOctaves();
+        e.composite();
+        const s = e.sumBuffer;
+        let maxEdge = 0, maxInterior = 0;
+        for (let y = 0; y < 64; y++) {
+          maxEdge = Math.max(maxEdge, Math.abs(s[y * 64] - s[y * 64 + 63]));
+          for (let x = 1; x < 64; x++) maxInterior = Math.max(maxInterior, Math.abs(s[y * 64 + x] - s[y * 64 + x - 1]));
+        }
+        for (let x = 0; x < 64; x++) {
+          maxEdge = Math.max(maxEdge, Math.abs(s[x] - s[63 * 64 + x]));
+          for (let y = 1; y < 64; y++) maxInterior = Math.max(maxInterior, Math.abs(s[y * 64 + x] - s[(y - 1) * 64 + x]));
+        }
+        check("engine: seam no rougher than interior (" + maxEdge.toFixed(2) + " vs " + maxInterior.toFixed(2) + ")",
+          maxEdge < maxInterior);
+      }
+      // Absolute mode with positive fadeoff: sum stage non-negative.
+      {
+        const e = new PerlinEngine({ size: 32 });
+        e.setParams(Object.assign({}, DEFAULTS, { mode: 1 }));
+        e.buildAllOctaves();
+        e.composite();
+        let nonneg = true;
+        for (let i = 0; i < e.sumBuffer.length; i++) if (e.sumBuffer[i] < 0) nonneg = false;
+        check("engine: absolute mode non-negative", nonneg);
+      }
+      // Octaves 0 + gamma 1: exactly the 50% color (fastPow(0.5,1) is exact).
+      {
+        const e = new PerlinEngine({ size: 16 });
+        e.setParams(Object.assign({}, DEFAULTS, { octaves: 0 }));
+        e.buildAllOctaves();
+        const px = e.composite();
+        let ok = true;
+        for (let i = 0; i < 16 * 16; i++) {
+          if (Math.abs(px[i * 4] - 127) > 1 || Math.abs(px[i * 4 + 1] - 127) > 1) ok = false;
+        }
+        check("engine: zero octaves -> mid color", ok);
+      }
+    } else {
+      check("PerlinEngine: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
