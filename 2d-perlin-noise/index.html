@@ -57,6 +57,43 @@ const FADE_LUT = new Int32Array([
   4091,4092,4092,4093,4094,4094,4095,4095,4095,4095,4095,4095,4095,
 ]);
 
+// 2007 speed hacks, preserved. fastSin: parabola approximation.
+// fastLog2/fastPow2: float bit reinterpretation (Float32/Int32 views give
+// exactly the C++ *(int*)& punning).
+function fastSin(x) {
+  if (x < -3.14159265) x += 6.28318531;
+  else if (x > 3.14159265) x -= 6.28318531;
+  const B = 4 / Math.PI, C = -4 / (Math.PI * Math.PI);
+  return B * x + C * x * Math.abs(x);
+}
+
+const _punF = new Float32Array(1);
+const _punI = new Int32Array(_punF.buffer);
+const SHIFT23 = 1 << 23;
+const OOSHIFT23 = 1.0 / (1 << 23);
+
+function fastLog2(i) {
+  _punF[0] = i;
+  let x = _punI[0] * OOSHIFT23;
+  x -= 127;
+  let y = x - Math.floor(x);
+  y = (y - y * y) * 0.346607;
+  return x + y;
+}
+
+function fastPow2(i) {
+  let y = i - Math.floor(i);
+  y = (y - y * y) * 0.33971;
+  let x = i + 127 - y;
+  x *= SHIFT23;
+  _punI[0] = x;        // Int32Array assignment truncates like the C++ (int) cast
+  return _punF[0];
+}
+
+function fastPow(a, b) {
+  return fastPow2(b * fastLog2(a));
+}
+
 const PerlinTests = {
   run() {
     const failures = [];
@@ -76,6 +113,32 @@ const PerlinTests = {
       let mono = true;
       for (let i = 1; i < 256; i++) if (FADE_LUT[i] < FADE_LUT[i - 1]) mono = false;
       check("fade_lut: monotone", mono);
+    }
+
+    // --- Fast math ---
+    if (typeof fastPow !== "undefined") {
+      {
+        let maxErr = 0;
+        for (let i = 0; i <= 100; i++) {
+          const x = -Math.PI + (2 * Math.PI * i) / 100;
+          maxErr = Math.max(maxErr, Math.abs(fastSin(x) - Math.sin(x)));
+        }
+        check("fastSin: within 0.06 of sin (" + maxErr.toFixed(3) + ")", maxErr < 0.06);
+      }
+      {
+        let ok = true;
+        for (const g of [0.25, 0.5, 1, 2, 4]) {
+          const a = fastPow(0.5, g), b = Math.pow(0.5, g);
+          if (Math.abs(a - b) > 0.1 * b) ok = false;
+        }
+        for (const x of [0.1, 0.5, 0.9]) {
+          if (Math.abs(fastPow(x, 1) - x) > 0.1 * x) ok = false;
+        }
+        check("fastPow: near pow over gamma range", ok);
+        check("fastPow: exact at 0.5^1", fastPow(0.5, 1) === 0.5);
+      }
+    } else {
+      check("fast math: implemented", false);
     }
 
     console.log(failures.length === 0 ? "ALL TESTS PASSED" : failures.length + " FAILURES");
