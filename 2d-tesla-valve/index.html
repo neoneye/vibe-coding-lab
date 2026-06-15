@@ -89,7 +89,7 @@
 <body>
 <header>
   <h1>2D Tesla Valve</h1>
-  <p>A Tesla valve lets fluid pass easily one way but resists the other &mdash; with no moving parts. Flip the flow direction and watch the difference: forward, particles glide along the channel; reverse, the angled loops divert them into pockets where they stall and recirculate. Larger particles get trapped more easily.</p>
+  <p>A Tesla valve lets fluid pass easily one way but resists the other &mdash; with no moving parts. Forward, particles stream straight down the open lane. Reverse, the diverter tongues scoop them up into the loops, which whirl them around and throw them back against the oncoming flow &mdash; the recirculating &ldquo;backflow&rdquo; that chokes the reverse direction. Flip the direction and compare the throughput; larger particles get caught more easily.</p>
 </header>
 <main>
   <div id="stage">
@@ -113,7 +113,7 @@
     </div>
     <div class="row">
       <label>Emission rate <span class="val" id="rateVal"></span></label>
-      <input type="range" id="rate" min="10" max="160" step="5" value="70">
+      <input type="range" id="rate" min="10" max="160" step="5" value="55">
     </div>
     <div class="row btns">
       <button id="pauseBtn">Pause</button>
@@ -178,39 +178,57 @@ function collideCircleSegment(p, seg, restitution) {
 }
 
 // Build the Tesla valve wall geometry.
-// Forward flow is +x. Fins lean downstream so forward flow ramps over them,
-// while reverse flow falls into the downstream-facing pockets and stalls.
+// Forward flow is +x. Each unit is a recirculation loop (a near-closed arc)
+// whose mouth opens downstream. Forward flow slides past the closed (upstream)
+// back of the loop; reverse flow is scooped into the mouth, curls all the way
+// around inside the loop, and is thrown back out *against* the oncoming flow --
+// the "backflow" that gives a real Tesla valve its directional resistance.
 function buildTeslaValve(opts) {
   const o = Object.assign({
     width: 900, height: 300,
-    units: 6, margin: 70,
-    finUp: 140, finDX: 90, hookDX: 0, hookDown: 0,
+    units: 5, margin: 28,
+    laneH: 125,     // height of the clear main lane along the bottom
+    mouthDeg: 55,   // half-angle of the downstream-facing loop mouth
+    tongueRun: 110, // how far downstream the diverter tongue reaches
+    tongueGap: 26,  // floor gap left under the tongue tip (forward flow slips under)
+    segs: 22,       // polyline segments per loop arc
   }, opts || {});
   const W = o.width, H = o.height;
   const walls = [];
   const add = (ax, ay, bx, by) => walls.push({ ax, ay, bx, by });
 
-  // Outer channel walls.
+  // Outer channel walls. The bottom is the clear main lane floor.
   add(0, 0, W, 0);
   add(0, H, W, H);
 
-  const hasHook = (o.hookDX !== 0 || o.hookDown !== 0);
+  const R = (H - o.laneH) / 2;          // loops hang from the ceiling down to y = 2R
   const span = W - 2 * o.margin;
   const step = span / o.units;
+  const m = o.mouthDeg * Math.PI / 180;
+
   for (let i = 0; i < o.units; i++) {
-    const xc = o.margin + step * (i + 0.5);
-    const bottom = (i % 2 === 0);
-    if (bottom) {
-      const baseX = xc, baseY = H;
-      const tipX = baseX + o.finDX, tipY = H - o.finUp;
-      add(baseX, baseY, tipX, tipY);   // leaning fin: a ramp to forward flow, a scoop to reverse flow
-      if (hasHook) add(tipX, tipY, tipX + o.hookDX, tipY + o.hookDown);
-    } else {
-      const baseX = xc, baseY = 0;
-      const tipX = baseX + o.finDX, tipY = o.finUp;
-      add(baseX, baseY, tipX, tipY);
-      if (hasHook) add(tipX, tipY, tipX + o.hookDX, tipY - o.hookDown);
+    const cx = o.margin + step * (i + 0.5);
+    const cy = R;                        // tangent to the ceiling (y = 0)
+
+    // Loop wall: full circle minus the downstream-facing mouth (theta near 0).
+    // theta=0 -> +x (downstream), theta=90deg -> +y (down toward the lane).
+    const a0 = m, a1 = 2 * Math.PI - m;
+    let prev = null;
+    for (let s = 0; s <= o.segs; s++) {
+      const t = a0 + (a1 - a0) * s / o.segs;
+      const x = cx + R * Math.cos(t);
+      const y = cy + R * Math.sin(t);
+      if (prev) add(prev.x, prev.y, x, y);
+      prev = { x, y };
     }
+
+    // Diverter tongue: hangs from the lower lip of the mouth down toward the
+    // floor, sloping downstream. Forward flow slips through the floor gap;
+    // reverse flow rides up the slope and is funnelled into the loop, where it
+    // recirculates and is thrown back out against the oncoming stream.
+    const lipX = cx + R * Math.cos(a1);
+    const lipY = cy + R * Math.sin(a1);
+    add(lipX, lipY, cx + R * Math.cos(a1) + o.tongueRun, H - o.tongueGap);
   }
   return { walls, width: W, height: H, opts: o };
 }
@@ -227,8 +245,8 @@ class Particle {
 class Simulation {
   constructor(config) {
     const c = Object.assign({
-      width: 900, height: 300, units: 6,
-      radius: 4, force: 260, emitRate: 70,
+      width: 900, height: 300, units: 5,
+      radius: 4, force: 260, emitRate: 55,
       direction: 1, drag: 1.8, restitution: 0.25,
       maxSpeed: 600, maxParticles: 1400, maxAge: 14, seed: 1,
       geo: null,
@@ -361,12 +379,16 @@ const TeslaTests = {
       ok("no false collision", collideCircleSegment(p, seg, 0.5) === false);
     }
 
-    // Geometry: outer walls (2) + 1 fin per unit (no hook by default).
+    // Geometry: outer walls (2) + per unit (segs arc segments + 1 tongue).
     {
-      const g = buildTeslaValve({ units: 6 });
-      ok("wall count (no hook)", g.walls.length === 2 + 6);
-      const gh = buildTeslaValve({ units: 6, hookDown: 20 });
-      ok("wall count (with hook)", gh.walls.length === 2 + 6 * 2);
+      const g = buildTeslaValve({ units: 5, segs: 22 });
+      ok("wall count", g.walls.length === 2 + 5 * (22 + 1));
+      // No interior wall reaches the floor, so the bottom lane is never sealed:
+      // the tongues stop a gap short of it.
+      const floorY = g.height;
+      const interior = g.walls.slice(2); // skip the two outer walls
+      const lowest = Math.max(...interior.map((w) => Math.max(w.ay, w.by)));
+      ok("bottom lane never sealed", lowest <= floorY - g.opts.tongueGap + 1);
     }
 
     // Containment: after many steps no particle is buried in a wall.
