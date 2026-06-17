@@ -54,6 +54,9 @@ canvas { width: 100%; background: #0e1118; border-radius: 6px; display: block; m
       <button id="start">Start</button>
       <button id="pause" class="secondary" disabled>Pause</button>
       <button id="reset" class="secondary">Reset</button>
+      <button id="save" class="secondary">Save weights</button>
+      <button id="load" class="secondary">Load weights</button>
+      <input type="file" id="loadFile" accept=".json" style="display:none">
     </div>
   </section>
   <section>
@@ -431,6 +434,21 @@ function generate(net, vocab, seedText, length, temp, rng, K) {
   return out;
 }
 
+// --- Serialization ---
+function serializeNet(net) {
+  return {
+    inDim: net.inDim,
+    layerSizes: net.layers.map(l => l.outDim),
+    layers: net.layers.map(l => ({ W: Array.from(l.W), b: Array.from(l.b) }))
+  };
+}
+
+function deserializeNet(obj, rng) {
+  const net = new FFNet({ inDim: obj.inDim, layerSizes: obj.layerSizes, rng });
+  obj.layers.forEach((ld, i) => { net.layers[i].W.set(ld.W); net.layers[i].b.set(ld.b); });
+  return net;
+}
+
 FFTests.add("Trainer overfits a trivial repeating pattern above chance", () => {
   const text = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc";
   const tr = new Trainer({
@@ -454,6 +472,16 @@ FFTests.add("generate returns a string of the requested length", () => {
   const out = generate(tr.net, tr.vocab, "ab", 10, 0.8, makeRng(2), tr.K);
   FFTests.assert(out.startsWith("ab"), "starts with seed");
   FFTests.assert(out.length === "ab".length + 10, "seed + length chars");
+});
+
+FFTests.add("serialize/deserialize preserves predictions", () => {
+  const v = buildVocab("abcabcabc", 6); const K = 2;
+  const net = new FFNet({ inDim: inputDim(v, K), layerSizes: [12, 12], rng: makeRng(9) });
+  const ctx = [1, 2];
+  const before = net.predictDistribution(v, ctx, { temp: 1 });
+  const clone = deserializeNet(serializeNet(net), makeRng(0));
+  const after = clone.predictDistribution(v, ctx, { temp: 1 });
+  for (let i = 0; i < before.length; i++) FFTests.approx(before[i], after[i], 1e-9, "dist preserved");
 });
 
 // --- Built-in Corpora & Store ---
@@ -508,14 +536,14 @@ FFTests.add("CorpusStore exposes builtins and accepts uploads", () => {
 });
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, FFNet, Trainer, generate, BUILTIN_CORPORA, CorpusStore };
+  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, FFNet, Trainer, generate, serializeNet, deserializeNet, BUILTIN_CORPORA, CorpusStore };
 }
 </script>
 
 <script>
 const S = {}; // DOM refs
 ["corpus","upload","layers","layersVal","width","widthVal","kctx","kVal","lr","lrVal","batch","batchVal",
- "start","pause","reset","status","examples","sps","acc","good","liveSample","chart",
+ "start","pause","reset","save","load","loadFile","status","examples","sps","acc","good","liveSample","chart",
  "prompt","temp","tempVal","genlen","lenVal","generate","genOut","dist"].forEach(id => S[id] = document.getElementById(id));
 
 const store = new CorpusStore();
@@ -610,6 +638,19 @@ S.reset.onclick = () => {
   setStatus("idle"); S.examples.textContent = "0"; S.acc.textContent = "–"; S.good.textContent = "–";
   S.start.disabled = false; S.pause.disabled = true; S.start.textContent = "Start";
   Ctrl.history = []; drawChart();
+};
+
+S.save.onclick = () => {
+  if (!Ctrl.trainer) return;
+  const blob = new Blob([JSON.stringify(serializeNet(Ctrl.trainer.net))], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "ff-weights.json"; a.click();
+};
+S.load.onclick = () => S.loadFile.click();
+S.loadFile.onchange = async (e) => {
+  const f = e.target.files[0]; if (!f || !Ctrl.trainer) return;
+  const obj = JSON.parse(await f.text());
+  Ctrl.trainer.net = deserializeNet(obj, makeRng(1));
+  refreshDistribution(); setStatus("weights loaded");
 };
 
 function drawChart() {
