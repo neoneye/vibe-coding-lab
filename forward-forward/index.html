@@ -223,6 +223,51 @@ function softmax(arr) {
   return out;
 }
 
+// --- Matrix helpers for Muon optimizer ---
+function matMul(A, ar, ac, B, br, bc) {
+  const C = new Float64Array(ar * bc);
+  for (let i = 0; i < ar; i++) {
+    const aRow = i * ac, cRow = i * bc;
+    for (let k = 0; k < ac; k++) {
+      const a = A[aRow + k];
+      if (a === 0) continue;
+      const bRow = k * bc;
+      for (let j = 0; j < bc; j++) C[cRow + j] += a * B[bRow + j];
+    }
+  }
+  return C;
+}
+
+function transpose(A, rows, cols) {
+  const T = new Float64Array(rows * cols);
+  for (let i = 0; i < rows; i++)
+    for (let j = 0; j < cols; j++) T[j * rows + i] = A[i * cols + j];
+  return T;
+}
+
+function frobNorm(A) { let s = 0; for (let i = 0; i < A.length; i++) s += A[i] * A[i]; return Math.sqrt(s); }
+
+function newtonSchulz5(G, rows, cols) {
+  const a = 3.4445, b = -4.7750, c = 2.0315;
+  const norm = frobNorm(G) + 1e-7;
+  let X = new Float64Array(G.length);
+  for (let i = 0; i < G.length; i++) X[i] = G[i] / norm;
+  let r = rows, cc = cols, transposed = false;
+  if (rows > cols) { X = transpose(X, rows, cols); r = cols; cc = rows; transposed = true; }
+  // X is r x cc with r <= cc
+  for (let it = 0; it < 5; it++) {
+    const Xt = transpose(X, r, cc);          // cc x r
+    const A = matMul(X, r, cc, Xt, cc, r);   // r x r
+    const AA = matMul(A, r, r, A, r, r);     // r x r
+    const B = new Float64Array(r * r);
+    for (let i = 0; i < r * r; i++) B[i] = b * A[i] + c * AA[i];
+    const BX = matMul(B, r, r, X, r, cc);    // r x cc
+    for (let i = 0; i < r * cc; i++) X[i] = a * X[i] + BX[i];
+  }
+  if (transposed) X = transpose(X, r, cc);   // back to rows x cols
+  return X;
+}
+
 // --- FFNet (stack of FFLayers) ---
 class FFNet {
   constructor({ inDim, layerSizes, rng }) {
@@ -545,6 +590,31 @@ FFTests.add("CorpusStore exposes builtins and accepts uploads", () => {
   FFTests.assert(cs.active === "mine" && cs.get("mine") === "hello hello hello", "upload stored + active");
 });
 
+FFTests.add("matMul and transpose compute known results", () => {
+  // A = [[1,2,3],[4,5,6]] (2x3), B = [[1,0],[0,1],[1,1]] (3x2) => [[4,5],[10,11]]
+  const A = Float64Array.from([1,2,3,4,5,6]);
+  const B = Float64Array.from([1,0,0,1,1,1]);
+  const C = matMul(A,2,3,B,3,2);
+  FFTests.assert(C.join(",") === "4,5,10,11", "matMul result " + C.join(","));
+  const T = transpose(A,2,3); // 3x2: [[1,4],[2,5],[3,6]]
+  FFTests.assert(T.join(",") === "1,4,2,5,3,6", "transpose result " + T.join(","));
+});
+
+FFTests.add("newtonSchulz5 yields a near-semi-orthogonal matrix", () => {
+  const rng = makeRng(123), rows = 4, cols = 6;
+  const G = new Float64Array(rows*cols);
+  for (let i=0;i<G.length;i++) G[i] = rng()*2 - 1;
+  const X = newtonSchulz5(G, rows, cols);
+  // With rows<=cols, X*X^T should be close to the rows x rows identity.
+  const XXt = matMul(X, rows, cols, transpose(X, rows, cols), cols, rows);
+  let maxDev = 0;
+  for (let i=0;i<rows;i++) for (let j=0;j<rows;j++) {
+    const target = i===j ? 1 : 0;
+    maxDev = Math.max(maxDev, Math.abs(XXt[i*rows+j] - target));
+  }
+  FFTests.assert(maxDev < 0.3, "X*X^T should be near identity, maxDev=" + maxDev.toFixed(3));
+});
+
 // --- Weights compatibility guard ---
 function weightsCompatible(obj, vocab, K) {
   if (!obj || obj.inDim !== inputDim(vocab, K)) return false;
@@ -553,7 +623,7 @@ function weightsCompatible(obj, vocab, K) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, FFNet, Trainer, generate, serializeNet, deserializeNet, weightsCompatible, BUILTIN_CORPORA, CorpusStore };
+  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, matMul, transpose, frobNorm, newtonSchulz5, FFNet, Trainer, generate, serializeNet, deserializeNet, weightsCompatible, BUILTIN_CORPORA, CorpusStore };
 }
 </script>
 
