@@ -63,6 +63,73 @@ function padContextIndices(indices, K, padIndex) {
   return pad.concat(indices);
 }
 
+// --- Sigmoid ---
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+
+// --- FFLayer ---
+class FFLayer {
+  constructor(inDim, outDim, rng) {
+    this.inDim = inDim; this.outDim = outDim;
+    this.W = new Float64Array(inDim * outDim);
+    this.b = new Float64Array(outDim);
+    const scale = Math.sqrt(2 / inDim); // He init
+    for (let i = 0; i < this.W.length; i++) this.W[i] = (rng() * 2 - 1) * scale;
+    // Adam state
+    this.mW = new Float64Array(this.W.length); this.vW = new Float64Array(this.W.length);
+    this.mb = new Float64Array(outDim); this.vb = new Float64Array(outDim);
+    this.t = 0;
+    this.dW = new Float64Array(this.W.length); this.db = new Float64Array(outDim);
+    this.count = 0;
+  }
+  forward(x) {
+    const { inDim, outDim, W, b } = this;
+    const a = new Float64Array(outDim);
+    for (let j = 0; j < outDim; j++) {
+      let z = b[j]; const base = j * inDim;
+      for (let k = 0; k < inDim; k++) z += W[base + k] * x[k];
+      a[j] = z > 0 ? z : 0;
+    }
+    return a;
+  }
+  goodness(a) { let g = 0; for (let j = 0; j < a.length; j++) g += a[j] * a[j]; return g; }
+  zeroGrad() { this.dW.fill(0); this.db.fill(0); this.count = 0; }
+  accumulate(x, isPositive, theta) {
+    const a = this.forward(x);
+    const g = this.goodness(a);
+    const s = sigmoid(g - theta);
+    const factor = isPositive ? (s - 1) : s;
+    const loss = isPositive ? Math.log(1 + Math.exp(-(g - theta))) : Math.log(1 + Math.exp(g - theta));
+    const { inDim, dW, db } = this;
+    for (let j = 0; j < this.outDim; j++) {
+      const gj = factor * 2 * a[j];
+      if (gj === 0) continue;
+      db[j] += gj; const base = j * inDim;
+      for (let k = 0; k < inDim; k++) dW[base + k] += gj * x[k];
+    }
+    this.count++;
+    return { a, g, loss };
+  }
+  step(lr) {
+    if (this.count === 0) return;
+    const b1 = 0.9, b2 = 0.999, eps = 1e-8, n = this.count;
+    this.t++;
+    const bc1 = 1 - Math.pow(b1, this.t), bc2 = 1 - Math.pow(b2, this.t);
+    for (let i = 0; i < this.W.length; i++) {
+      const g = this.dW[i] / n;
+      this.mW[i] = b1 * this.mW[i] + (1 - b1) * g;
+      this.vW[i] = b2 * this.vW[i] + (1 - b2) * g * g;
+      this.W[i] -= lr * (this.mW[i] / bc1) / (Math.sqrt(this.vW[i] / bc2) + eps);
+    }
+    for (let j = 0; j < this.outDim; j++) {
+      const g = this.db[j] / n;
+      this.mb[j] = b1 * this.mb[j] + (1 - b1) * g;
+      this.vb[j] = b2 * this.vb[j] + (1 - b2) * g * g;
+      this.b[j] -= lr * (this.mb[j] / bc1) / (Math.sqrt(this.vb[j] / bc2) + eps);
+    }
+    this.zeroGrad();
+  }
+}
+
 // --- Test harness (engine tests appended in later tasks) ---
 const FFTests = {
   _tests: [],
@@ -108,8 +175,31 @@ FFTests.add("padContextIndices fixes length", () => {
   FFTests.assert(padContextIndices([5], 3, 0).join(",") === "0,0,5", "left pad");
 });
 
+FFTests.add("FFLayer goodness rises on positive, falls on negative after updates", () => {
+  const rng = makeRng(7);
+  const layer = new FFLayer(6, 8, rng);
+  const xPos = Float64Array.from([1, 0, 0, 1, 0, 1]);
+  const theta = 8;
+  const g0 = layer.goodness(layer.forward(xPos));
+  for (let i = 0; i < 60; i++) { layer.zeroGrad(); layer.accumulate(xPos, true, theta); layer.step(0.05); }
+  const g1 = layer.goodness(layer.forward(xPos));
+  FFTests.assert(g1 > g0, `positive goodness should rise (${g0} -> ${g1})`);
+
+  const xNeg = Float64Array.from([0, 1, 1, 0, 1, 0]);
+  const n0 = layer.goodness(layer.forward(xNeg));
+  for (let i = 0; i < 60; i++) { layer.zeroGrad(); layer.accumulate(xNeg, false, theta); layer.step(0.05); }
+  const n1 = layer.goodness(layer.forward(xNeg));
+  FFTests.assert(n1 < n0, `negative goodness should fall (${n0} -> ${n1})`);
+});
+
+FFTests.add("FFLayer.forward applies ReLU (no negatives)", () => {
+  const layer = new FFLayer(4, 5, makeRng(1));
+  const a = layer.forward(Float64Array.from([1, -1, 1, 0]));
+  for (const v of a) FFTests.assert(v >= 0, "ReLU output must be >= 0");
+});
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests };
+  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer };
 }
 </script>
 
