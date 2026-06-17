@@ -130,6 +130,64 @@ class FFLayer {
   }
 }
 
+// --- Normalization & Softmax ---
+function l2normalize(a) {
+  let n = 0; for (let i = 0; i < a.length; i++) n += a[i] * a[i];
+  n = Math.sqrt(n) + 1e-8;
+  const out = new Float64Array(a.length);
+  for (let i = 0; i < a.length; i++) out[i] = a[i] / n;
+  return out;
+}
+
+function softmax(arr) {
+  let max = -Infinity; for (const x of arr) if (x > max) max = x;
+  const out = new Float64Array(arr.length); let sum = 0;
+  for (let i = 0; i < arr.length; i++) { out[i] = Math.exp(arr[i] - max); sum += out[i]; }
+  for (let i = 0; i < out.length; i++) out[i] /= sum;
+  return out;
+}
+
+// --- FFNet (stack of FFLayers) ---
+class FFNet {
+  constructor({ inDim, layerSizes, rng }) {
+    this.inDim = inDim;
+    this.layers = [];
+    let prev = inDim;
+    for (const w of layerSizes) { this.layers.push(new FFLayer(prev, w, rng)); prev = w; }
+  }
+  forwardAll(x) {
+    const acts = [], goods = [];
+    let input = x;
+    for (let i = 0; i < this.layers.length; i++) {
+      const a = this.layers[i].forward(input);
+      acts.push(a); goods.push(this.layers[i].goodness(a));
+      input = l2normalize(a);
+    }
+    return { acts, goods };
+  }
+  totalGoodness(x, excludeFirst = true) {
+    const { goods } = this.forwardAll(x);
+    let g = 0;
+    for (let i = excludeFirst ? 1 : 0; i < goods.length; i++) g += goods[i];
+    return g;
+  }
+  predictDistribution(vocab, contextIndices, opts = {}) {
+    const temp = opts.temp || 1, excludeFirst = opts.excludeFirst !== false;
+    const scores = new Float64Array(vocab.size);
+    for (let c = 0; c < vocab.size; c++) {
+      const x = encode(vocab, contextIndices, c);
+      scores[c] = this.totalGoodness(x, excludeFirst) / temp;
+    }
+    return softmax(scores);
+  }
+  sample(vocab, contextIndices, opts, rng) {
+    const dist = this.predictDistribution(vocab, contextIndices, opts);
+    let r = rng(), acc = 0;
+    for (let c = 0; c < dist.length; c++) { acc += dist[c]; if (r <= acc) return c; }
+    return dist.length - 1;
+  }
+}
+
 // --- Test harness (engine tests appended in later tasks) ---
 const FFTests = {
   _tests: [],
@@ -198,8 +256,30 @@ FFTests.add("FFLayer.forward applies ReLU (no negatives)", () => {
   for (const v of a) FFTests.assert(v >= 0, "ReLU output must be >= 0");
 });
 
+FFTests.add("softmax sums to 1 and is non-negative", () => {
+  const p = softmax([2, 1, 0, -3]);
+  let s = 0; for (const x of p) { FFTests.assert(x >= 0, "non-negative"); s += x; }
+  FFTests.approx(s, 1, 1e-9, "sums to 1");
+});
+
+FFTests.add("FFNet.predictDistribution returns a valid distribution over vocab", () => {
+  const v = buildVocab("hello world", 8);
+  const K = 3;
+  const net = new FFNet({ inDim: inputDim(v, K), layerSizes: [16, 16], rng: makeRng(3) });
+  const ctx = padContextIndices([charToIndex(v, "l")], K, v.unkIndex);
+  const dist = net.predictDistribution(v, ctx, { temp: 1, excludeFirst: true });
+  FFTests.assert(dist.length === v.size, "distribution length = vocab size");
+  let s = 0; for (const x of dist) s += x;
+  FFTests.approx(s, 1, 1e-9, "distribution sums to 1");
+});
+
+FFTests.add("l2normalize yields unit length", () => {
+  const u = l2normalize(Float64Array.from([3, 4]));
+  FFTests.approx(Math.hypot(u[0], u[1]), 1, 1e-6, "unit length");
+});
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer };
+  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, FFNet };
 }
 </script>
 
