@@ -754,6 +754,111 @@ FFTests.add("encodeContextBits length and left-pad", () => {
   FFTests.assert(x[16] === 1, "last slot holds the token's MSB");
 });
 
+// --- ARReadout (NADE-style autoregressive bit-readout head) ---
+class ARReadout {
+  constructor(featDim, outDim, rng) {
+    this.featDim = featDim; this.outDim = outDim; // R, M
+    const M = outDim, R = featDim;
+    this.V = new Float64Array(M * R);
+    this.U = new Float64Array(M * M); // lower-triangular entries (k<i) used
+    this.c = new Float64Array(M);
+    const scale = Math.sqrt(1 / R);
+    for (let i = 0; i < this.V.length; i++) this.V[i] = (rng() * 2 - 1) * scale;
+    this.mV = new Float64Array(this.V.length); this.vV = new Float64Array(this.V.length);
+    this.mU = new Float64Array(this.U.length); this.vU = new Float64Array(this.U.length);
+    this.mc = new Float64Array(M); this.vc = new Float64Array(M);
+    this.t = 0;
+    this.dV = new Float64Array(this.V.length); this.dU = new Float64Array(this.U.length); this.dc = new Float64Array(M);
+    this.count = 0;
+  }
+  _logit(i, features, bits) {
+    const R = this.featDim, M = this.outDim;
+    let z = this.c[i]; const vb = i * R;
+    for (let r = 0; r < R; r++) z += this.V[vb + r] * features[r];
+    const ub = i * M;
+    for (let k = 0; k < i; k++) z += this.U[ub + k] * bits[k];
+    return z;
+  }
+  logitsTeacher(features, bits) {
+    const M = this.outDim, z = new Float64Array(M);
+    for (let i = 0; i < M; i++) z[i] = this._logit(i, features, bits);
+    return z;
+  }
+  zeroGrad() { this.dV.fill(0); this.dU.fill(0); this.dc.fill(0); this.count = 0; }
+  accumulate(features, targetBits) {
+    const R = this.featDim, M = this.outDim;
+    for (let i = 0; i < M; i++) {
+      const z = this._logit(i, features, targetBits);
+      const p = 1 / (1 + Math.exp(-z));
+      const g = p - targetBits[i];
+      this.dc[i] += g;
+      const vb = i * R; for (let r = 0; r < R; r++) this.dV[vb + r] += g * features[r];
+      const ub = i * M; for (let k = 0; k < i; k++) this.dU[ub + k] += g * targetBits[k];
+    }
+    this.count++;
+  }
+  _adam(param, grad, m, v, lr, n, bc1, bc2) {
+    const b1 = 0.9, b2 = 0.999, eps = 1e-8;
+    for (let idx = 0; idx < param.length; idx++) {
+      const gg = grad[idx] / n;
+      m[idx] = b1 * m[idx] + (1 - b1) * gg; v[idx] = b2 * v[idx] + (1 - b2) * gg * gg;
+      param[idx] -= lr * (m[idx] / bc1) / (Math.sqrt(v[idx] / bc2) + eps);
+    }
+  }
+  step(lr) {
+    if (this.count === 0) return;
+    const n = this.count; this.t++;
+    const bc1 = 1 - Math.pow(0.9, this.t), bc2 = 1 - Math.pow(0.999, this.t);
+    this._adam(this.V, this.dV, this.mV, this.vV, lr, n, bc1, bc2);
+    this._adam(this.U, this.dU, this.mU, this.vU, lr, n, bc1, bc2); // dU=0 for k>=i, so those stay 0
+    this._adam(this.c, this.dc, this.mc, this.vc, lr, n, bc1, bc2);
+    this.zeroGrad();
+  }
+  greedyProbs(features) {
+    const M = this.outDim, bits = new Float64Array(M), probs = new Float64Array(M);
+    for (let i = 0; i < M; i++) {
+      const p = 1 / (1 + Math.exp(-this._logit(i, features, bits)));
+      probs[i] = p; bits[i] = p > 0.5 ? 1 : 0;
+    }
+    return probs;
+  }
+  sample(features, temp, rng) {
+    const M = this.outDim, bits = new Float64Array(M);
+    for (let i = 0; i < M; i++) {
+      const p = 1 / (1 + Math.exp(-this._logit(i, features, bits)));
+      bits[i] = temp <= 0 ? (p > 0.5 ? 1 : 0) : sampleBit(p, temp, rng);
+    }
+    return bits;
+  }
+}
+
+FFTests.add("ARReadout (NADE) commits to a valid token where independent bits cannot", () => {
+  const rng = makeRng(4), featDim = 6, outDim = 8;
+  const feats = new Float64Array(featDim); for (let i = 0; i < featDim; i++) feats[i] = rng() * 2 - 1;
+  const A = Float64Array.from([0,0,0,0,1,1,1,1]); // 0x0F
+  const B = Float64Array.from([1,1,1,1,0,0,0,0]); // 0xF0  (per-bit marginals all 0.5)
+  const ro = new ARReadout(featDim, outDim, rng);
+  for (let i = 0; i < 600; i++) { ro.zeroGrad(); ro.accumulate(feats, A); ro.accumulate(feats, B); ro.step(0.05); }
+  const probs = ro.greedyProbs(feats);
+  const bits = Float64Array.from(probs, p => p > 0.5 ? 1 : 0);
+  const eq = (x, y) => { for (let i = 0; i < 8; i++) if (x[i] !== y[i]) return false; return true; };
+  FFTests.assert(eq(bits, A) || eq(bits, B), "greedy decode must equal a valid trained token, got " + Array.from(bits).join(""));
+});
+
+FFTests.add("ARReadout U is strictly lower-triangular (future bits ignored)", () => {
+  const ro = new ARReadout(5, 8, makeRng(1));
+  const feats = Float64Array.from([0.2, -0.5, 0.1, 0.3, -0.2]);
+  const target = Float64Array.from([1,0,1,1,0,0,1,0]);
+  for (let i = 0; i < 50; i++) { ro.zeroGrad(); ro.accumulate(feats, target); ro.step(0.05); }
+  const M = 8; let okZero = true;
+  for (let i = 0; i < M; i++) for (let k = i; k < M; k++) if (ro.U[i * M + k] !== 0) okZero = false;
+  FFTests.assert(okZero, "U[i][k] must stay exactly 0 for k>=i");
+  const b1 = Float64Array.from([1,0,1,0,0,0,0,0]);
+  const b2 = Float64Array.from([1,0,1,0,0,1,0,0]); // bit 5 flipped
+  const z1 = ro.logitsTeacher(feats, b1), z2 = ro.logitsTeacher(feats, b2);
+  FFTests.approx(z1[2], z2[2], 1e-12, "logit of bit 2 must ignore bit 5");
+});
+
 // --- Byte/bit tokenizer ---
 function textToBytes(text) { return new TextEncoder().encode(text); }
 function bytesToText(bytes) {
@@ -802,7 +907,7 @@ function encodeContextBits(contextTokens, K, n) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { makeRng, FFTests, sigmoid, FFLayer, l2normalize, FFNet, Trainer, generate, sampleBit,
     BUILTIN_CORPORA, CorpusStore, matMul, transpose, frobNorm, newtonSchulz5,
-    textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, Readout,
+    textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, Readout, ARReadout,
     serializeModel, deserializeModel, modelCompatible };
 }
 </script>
