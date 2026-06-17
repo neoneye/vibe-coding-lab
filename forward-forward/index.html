@@ -496,82 +496,112 @@ FFTests.add("FFNet.readoutFeatures concatenates normalized layer activations", (
 // --- Trainer ---
 class Trainer {
   constructor(cfg) {
+    this.n = cfg.n || 1;
     this.K = cfg.K; this.theta = cfg.theta; this.lr = cfg.lr;
-    this.batchSize = cfg.batchSize; this.negPerPos = cfg.negPerPos;
+    this.batchSize = cfg.batchSize;
     this.optimizer = cfg.optimizer || "muon";
     this.seed = cfg.seed; this.rng = makeRng(cfg.seed);
-    this.vocab = buildVocab(cfg.text, cfg.vocabCap);
-    const idx = [...cfg.text].map(ch => charToIndex(this.vocab, ch));
-    const split = Math.max(this.K + 1, Math.floor(idx.length * (1 - cfg.valFraction)));
-    this.trainStream = idx.slice(0, split);
-    this.valStream = idx.slice(Math.max(0, split - this.K)); // keep K context before val region
-    this.net = new FFNet({ inDim: inputDim(this.vocab, this.K), layerSizes: cfg.layerSizes, rng: this.rng });
+    this.bitsPerTok = 8 * this.n;
+    this.inDim = this.K * this.bitsPerTok;
+    const bytes = textToBytes(cfg.text);
+    this.tokens = tokenizeBytes(bytes, this.n);
+    const split = Math.max(this.K + 1, Math.floor(this.tokens.length * (1 - cfg.valFraction)));
+    this.trainTokens = this.tokens.slice(0, split);
+    this.valTokens = this.tokens.slice(Math.max(0, split - this.K));
+    this.net = new FFNet({ inDim: this.inDim, layerSizes: cfg.layerSizes, rng: this.rng });
+    this.readout = new Readout(this.net.readoutDim(), this.bitsPerTok, this.rng);
     this.examplesSeen = 0;
   }
-  sampleContextAt(stream, pos) {
-    const contextIndices = stream.slice(pos - this.K, pos);
-    return { contextIndices, trueIndex: stream[pos] };
+  realContextAt(stream, pos) { return { context: stream.slice(pos - this.K, pos), target: stream[pos] }; }
+  randomContext(stream) {
+    const ctx = [];
+    for (let i = 0; i < this.K; i++) ctx.push(stream[Math.floor(this.rng() * stream.length)]);
+    return ctx;
   }
   _accumPath(x, isPositive) {
-    // run accumulate through all layers along one forward path; return per-layer goodness + total loss
-    const goods = []; let loss = 0; let input = x;
+    const goods = [], acts = []; let loss = 0, input = x;
     for (let i = 0; i < this.net.layers.length; i++) {
       const r = this.net.layers[i].accumulate(input, isPositive, this.theta);
-      goods.push(r.g); loss += r.loss;
+      goods.push(r.g); acts.push(r.a); loss += r.loss;
       input = l2normalize(r.a);
     }
-    return { goods, loss };
+    return { goods, acts, loss };
   }
   stepBatch() {
     const L = this.net.layers.length;
     for (const layer of this.net.layers) layer.zeroGrad();
+    this.readout.zeroGrad();
     const gPos = new Array(L).fill(0), gNeg = new Array(L).fill(0);
-    let lossPos = 0, lossNeg = 0, nPos = 0, nNeg = 0;
+    let lossPos = 0, lossNeg = 0;
     for (let s = 0; s < this.batchSize; s++) {
-      const pos = this.K + Math.floor(this.rng() * (this.trainStream.length - this.K));
-      const { contextIndices, trueIndex } = this.sampleContextAt(this.trainStream, pos);
-      const xPos = encode(this.vocab, contextIndices, trueIndex);
+      const pos = this.K + Math.floor(this.rng() * (this.trainTokens.length - this.K));
+      const { context, target } = this.realContextAt(this.trainTokens, pos);
+      const xPos = encodeContextBits(context, this.K, this.n);
       const rp = this._accumPath(xPos, true);
-      for (let i = 0; i < L; i++) gPos[i] += rp.goods[i]; lossPos += rp.loss; nPos++;
-      for (let n = 0; n < this.negPerPos; n++) {
-        let negIdx = 1 + Math.floor(this.rng() * (this.vocab.size - 1)); // avoid UNK(0)
-        if (negIdx === trueIndex) negIdx = negIdx === this.vocab.size - 1 ? 1 : negIdx + 1;
-        const xNeg = encode(this.vocab, contextIndices, negIdx);
-        const rn = this._accumPath(xNeg, false);
-        for (let i = 0; i < L; i++) gNeg[i] += rn.goods[i]; lossNeg += rn.loss; nNeg++;
-      }
+      for (let i = 0; i < L; i++) gPos[i] += rp.goods[i]; lossPos += rp.loss;
+      const feats = this.net.readoutFeatures(rp.acts);
+      this.readout.accumulate(feats, tokenToBits(target, this.n));
+      const negCtx = this.randomContext(this.trainTokens);
+      const xNeg = encodeContextBits(negCtx, this.K, this.n);
+      const rn = this._accumPath(xNeg, false);
+      for (let i = 0; i < L; i++) gNeg[i] += rn.goods[i]; lossNeg += rn.loss;
     }
     for (const layer of this.net.layers) layer.step(this.lr, this.optimizer);
+    this.readout.step(this.lr);
     this.examplesSeen += this.batchSize;
-    for (let i = 0; i < L; i++) { gPos[i] /= nPos; gNeg[i] /= nNeg; }
-    return { lossPos: lossPos / nPos, lossNeg: lossNeg / nNeg, gPos, gNeg };
+    for (let i = 0; i < L; i++) { gPos[i] /= this.batchSize; gNeg[i] /= this.batchSize; }
+    return { lossPos: lossPos / this.batchSize, lossNeg: lossNeg / this.batchSize, gPos, gNeg };
   }
-  evalAccuracy(sampleCount) {
-    if (this.valStream.length <= this.K + 1) return 0;
+  predictBits(context) {
+    const x = encodeContextBits(context, this.K, this.n);
+    const { acts } = this.net.forwardAll(x);
+    return this.readout.predict(this.net.readoutFeatures(acts));
+  }
+  evalBitAccuracy(count) {
+    if (this.valTokens.length <= this.K + 1) return 0;
     let correct = 0, total = 0;
-    for (let s = 0; s < sampleCount; s++) {
-      const pos = this.K + Math.floor(this.rng() * (this.valStream.length - this.K));
-      const { contextIndices, trueIndex } = this.sampleContextAt(this.valStream, pos);
-      const dist = this.net.predictDistribution(this.vocab, contextIndices, { temp: 1, excludeFirst: true });
-      let best = 0; for (let c = 1; c < dist.length; c++) if (dist[c] > dist[best]) best = c;
-      if (best === trueIndex) correct++; total++;
+    for (let s = 0; s < count; s++) {
+      const pos = this.K + Math.floor(this.rng() * (this.valTokens.length - this.K));
+      const { context, target } = this.realContextAt(this.valTokens, pos);
+      const p = this.predictBits(context), tb = tokenToBits(target, this.n);
+      for (let i = 0; i < p.length; i++) { if ((p[i] > 0.5 ? 1 : 0) === tb[i]) correct++; total++; }
+    }
+    return total ? correct / total : 0;
+  }
+  evalTokenAccuracy(count) {
+    if (this.valTokens.length <= this.K + 1) return 0;
+    let correct = 0, total = 0;
+    for (let s = 0; s < count; s++) {
+      const pos = this.K + Math.floor(this.rng() * (this.valTokens.length - this.K));
+      const { context, target } = this.realContextAt(this.valTokens, pos);
+      const p = this.predictBits(context), tb = tokenToBits(target, this.n);
+      let all = true; for (let i = 0; i < p.length; i++) if ((p[i] > 0.5 ? 1 : 0) !== tb[i]) { all = false; break; }
+      if (all) correct++; total++;
     }
     return total ? correct / total : 0;
   }
 }
 
-function generate(net, vocab, seedText, length, temp, rng, K) {
-  let ctx = padContextIndices([...seedText].map(ch => charToIndex(vocab, ch)), K, vocab.unkIndex);
-  let out = seedText;
-  for (let i = 0; i < length; i++) {
-    let idx = net.sample(vocab, ctx, { temp, excludeFirst: true }, rng);
-    let tries = 0;
-    while (idx === vocab.unkIndex && tries < 5) { idx = net.sample(vocab, ctx, { temp, excludeFirst: true }, rng); tries++; }
-    if (idx === vocab.unkIndex) idx = 1;
-    out += vocab.chars[idx];
-    ctx = padContextIndices(ctx.concat(idx), K, vocab.unkIndex);
+function sampleBit(p, temp, rng) {
+  const pc = Math.min(Math.max(p, 1e-6), 1 - 1e-6);
+  const logit = Math.log(pc / (1 - pc));
+  const p2 = 1 / (1 + Math.exp(-logit / temp));
+  return rng() < p2 ? 1 : 0;
+}
+function generate(trainer, seedText, lengthTokens, temp, rng) {
+  const n = trainer.n, K = trainer.K;
+  const seedBytes = Array.from(textToBytes(seedText));
+  const ctx = tokenizeBytes(seedBytes, n);
+  const outBytes = seedBytes.slice();
+  for (let i = 0; i < lengthTokens; i++) {
+    const p = trainer.predictBits(ctx.slice(-K));
+    const bits = new Float64Array(p.length);
+    for (let b = 0; b < p.length; b++) bits[b] = temp <= 0 ? (p[b] > 0.5 ? 1 : 0) : sampleBit(p[b], temp, rng);
+    const tok = bitsToToken(bits, n);
+    ctx.push(tok);
+    for (const byte of tok) outBytes.push(byte);
   }
-  return out;
+  return bytesToText(Uint8Array.from(outBytes));
 }
 
 // --- Serialization ---
@@ -589,46 +619,48 @@ function deserializeNet(obj, rng) {
   return net;
 }
 
-FFTests.add("Trainer overfits a trivial repeating pattern above chance", () => {
+FFTests.add("binary Trainer readout learns a repeating byte pattern", () => {
   const text = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc";
-  const tr = new Trainer({
-    text, K: 3, layerSizes: [24, 24], theta: 24, lr: 0.02,
-    batchSize: 16, negPerPos: 1, valFraction: 0.25, vocabCap: 8, seed: 11
-  });
-  const chance = 1 / (tr.vocab.size - 1); // exclude UNK roughly
-  const before = tr.evalAccuracy(20);
-  for (let i = 0; i < 200; i++) tr.stepBatch();
-  const after = tr.evalAccuracy(20);
-  FFTests.assert(tr.examplesSeen === 200 * 16, "examplesSeen tracked");
-  FFTests.assert(after > before || after > chance * 1.5,
-    `accuracy should rise (chance≈${chance.toFixed(2)}, before=${before.toFixed(2)}, after=${after.toFixed(2)})`);
+  const tr = new Trainer({ text, n: 1, K: 3, layerSizes: [32, 32], theta: 32, lr: 0.03,
+    batchSize: 16, valFraction: 0.25, seed: 11, optimizer: "adam" });
+  FFTests.assert(tr.n === 1 && tr.bitsPerTok === 8, "byte mode bitsPerTok=8");
+  const before = tr.evalBitAccuracy(20);
+  for (let i = 0; i < 500; i++) tr.stepBatch();
+  const after = tr.evalBitAccuracy(20);
+  FFTests.assert(tr.examplesSeen === 500 * 16, "examplesSeen tracked");
+  FFTests.assert(after > 0.85 || after > before + 0.2,
+    `bit accuracy should rise (before=${before.toFixed(2)} after=${after.toFixed(2)})`);
 });
 
-FFTests.add("Trainer defaults to Muon and learns on a repeating pattern", () => {
-  const text = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc";
-  const tr = new Trainer({
-    text, K: 3, layerSizes: [24, 24], theta: 24, lr: 0.05,
-    batchSize: 16, negPerPos: 1, valFraction: 0.25, vocabCap: 8, seed: 11
-  });
-  FFTests.assert(tr.optimizer === "muon", "default optimizer should be muon");
-  const before = tr.evalAccuracy(20);
-  let sepBefore = 0, last;
-  for (let i = 0; i < 400; i++) last = tr.stepBatch();
-  const after = tr.evalAccuracy(20);
-  const gp = last.gPos.reduce((a,b)=>a+b,0)/last.gPos.length;
-  const gn = last.gNeg.reduce((a,b)=>a+b,0)/last.gNeg.length;
-  FFTests.assert(after > before || gp > gn,
-    `muon should learn (before=${before.toFixed(2)}, after=${after.toFixed(2)}, gp=${gp.toFixed(1)}, gn=${gn.toFixed(1)})`);
+FFTests.add("binary Trainer defaults to Muon and trains", () => {
+  const text = "abcabcabcabcabcabcabcabcabcabc";
+  const tr = new Trainer({ text, n: 1, K: 3, layerSizes: [24, 24], theta: 24, lr: 0.03,
+    batchSize: 16, valFraction: 0.25, seed: 7 });
+  FFTests.assert(tr.optimizer === "muon", "default optimizer muon");
+  const before = tr.evalBitAccuracy(15);
+  for (let i = 0; i < 400; i++) tr.stepBatch();
+  const after = tr.evalBitAccuracy(15);
+  FFTests.assert(after > 0.6 || after > before + 0.1,
+    `muon should train the readout (before=${before.toFixed(2)} after=${after.toFixed(2)})`);
 });
 
-FFTests.add("generate returns a string of the requested length", () => {
+FFTests.add("generate returns seed prefix and grows by tokens*n bytes", () => {
   const text = "abcabcabcabcabcabc";
-  const tr = new Trainer({ text, K: 3, layerSizes: [16], theta: 16, lr: 0.02,
-    batchSize: 8, negPerPos: 1, valFraction: 0.2, vocabCap: 6, seed: 5 });
-  for (let i = 0; i < 50; i++) tr.stepBatch();
-  const out = generate(tr.net, tr.vocab, "ab", 10, 0.8, makeRng(2), tr.K);
+  const tr = new Trainer({ text, n: 1, K: 3, layerSizes: [16], theta: 16, lr: 0.03,
+    batchSize: 8, valFraction: 0.2, seed: 5, optimizer: "adam" });
+  for (let i = 0; i < 100; i++) tr.stepBatch();
+  const out = generate(tr, "ab", 10, 0.5, makeRng(2));
   FFTests.assert(out.startsWith("ab"), "starts with seed");
-  FFTests.assert(out.length === "ab".length + 10, "seed + length chars");
+  FFTests.assert([...new TextEncoder().encode(out)].length === 2 + 10, "byte length = seed + tokens*n");
+});
+
+FFTests.add("FF goodness separates real from random-position contexts", () => {
+  const text = "the quick brown fox jumps over the lazy dog the quick brown fox";
+  const tr = new Trainer({ text, n: 1, K: 4, layerSizes: [32, 32], theta: 32, lr: 0.03,
+    batchSize: 16, valFraction: 0.2, seed: 3, optimizer: "adam" });
+  let last; for (let i = 0; i < 400; i++) last = tr.stepBatch();
+  const gp = last.gPos.reduce((a,b)=>a+b,0), gn = last.gNeg.reduce((a,b)=>a+b,0);
+  FFTests.assert(gp > gn, `positive goodness should exceed negative (gp=${gp.toFixed(1)} gn=${gn.toFixed(1)})`);
 });
 
 FFTests.add("serialize/deserialize preserves predictions", () => {
@@ -875,7 +907,7 @@ function weightsCompatible(obj, vocab, K) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, matMul, transpose, frobNorm, newtonSchulz5, FFNet, Trainer, generate, serializeNet, deserializeNet, weightsCompatible, BUILTIN_CORPORA, CorpusStore, textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, Readout };
+  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, matMul, transpose, frobNorm, newtonSchulz5, FFNet, Trainer, generate, sampleBit, serializeNet, deserializeNet, weightsCompatible, BUILTIN_CORPORA, CorpusStore, textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, Readout };
 }
 </script>
 
