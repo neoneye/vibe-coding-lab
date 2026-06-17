@@ -702,6 +702,37 @@ FFTests.add("encodeContextBits length and left-pad", () => {
   FFTests.assert(x[16] === 1, "last slot holds the token's MSB");
 });
 
+FFTests.add("bytesContextBits length, bits, and zero-pad", () => {
+  const bytes = Uint8Array.from([0x80, 0x01]); // 10000000, 00000001
+  const x = bytesContextBits(bytes, 2, 2);
+  FFTests.assert(x.length === 16, "length 8K");
+  FFTests.assert(x[0] === 1 && x[8 + 7] === 1, "MSB of byte0 and LSB of byte1 set");
+  const y = bytesContextBits(bytes, 1, 2); // first slot is index -1 => zero
+  let pad = true; for (let i = 0; i < 8; i++) if (y[i] !== 0) pad = false;
+  FFTests.assert(pad && y[8] === 1, "left slot zero-padded, second slot = byte0");
+});
+
+FFTests.add("computeFeedback float discrepancy (unclamped), zeros when missing", () => {
+  const n = 3;
+  const L1 = new Float64Array(24); for (let b = 0; b < 8; b++) L1[8 + b] = 0.7;  // slot1 probs
+  const L2 = new Float64Array(24); for (let b = 0; b < 8; b++) L2[16 + b] = 0.2; // slot2 probs
+  const predBuffer = [new Float64Array(24), L1, L2]; // [0]=most recent (unused), [1], [2]
+  const revealed = tokenToBits([0xFF], 1); // all ones
+  const fb = computeFeedback(predBuffer, revealed, n);
+  FFTests.assert(fb.length === 16, "feedback width 8(n-1)");
+  FFTests.approx(fb[0], 0.7 - 1, 1e-9, "slot1: 0.7 - 1 = -0.3 (unclamped float)");
+  FFTests.approx(fb[8], 0.2 - 1, 1e-9, "slot2: 0.2 - 1 = -0.8");
+  const fb0 = computeFeedback([], revealed, n);
+  let allZero = true; for (const v of fb0) if (v !== 0) allZero = false;
+  FFTests.assert(allZero, "no history => zero feedback");
+  FFTests.assert(computeFeedback([], tokenToBits([0], 1), 1).length === 0, "n=1 => width 0");
+});
+
+FFTests.add("concatFloat concatenates", () => {
+  const c = concatFloat(Float64Array.from([1, 2]), Float64Array.from([3]));
+  FFTests.assert(c.length === 3 && c[0] === 1 && c[2] === 3, "concat");
+});
+
 // --- ARReadout (NADE-style autoregressive bit-readout head) ---
 class ARReadout {
   constructor(featDim, outDim, rng) {
@@ -852,11 +883,40 @@ function encodeContextBits(contextTokens, K, n) {
   return x;
 }
 
+// --- Feedback helpers ---
+function concatFloat(a, b) {
+  const out = new Float64Array(a.length + b.length);
+  out.set(a, 0); out.set(b, a.length);
+  return out;
+}
+
+function bytesContextBits(bytes, p, K) {
+  const x = new Float64Array(8 * K);
+  for (let i = 0; i < K; i++) {
+    const idx = p - K + i;
+    if (idx < 0) continue;
+    const v = bytes[idx];
+    for (let b = 0; b < 8; b++) x[i * 8 + b] = (v >> (7 - b)) & 1;
+  }
+  return x;
+}
+
+function computeFeedback(predBuffer, revealedByteBits, n) {
+  const out = new Float64Array(8 * (n - 1));
+  for (let k = 1; k < n; k++) {
+    const pred = predBuffer[k];
+    if (!pred) continue;
+    const off = (k - 1) * 8, slot = k * 8;
+    for (let b = 0; b < 8; b++) out[off + b] = pred[slot + b] - revealedByteBits[b];
+  }
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { makeRng, FFTests, sigmoid, FFLayer, l2normalize, FFNet, Trainer, generate, sampleBit,
     BUILTIN_CORPORA, CorpusStore, matMul, transpose, frobNorm, newtonSchulz5,
     textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, ARReadout,
-    serializeModel, deserializeModel, modelCompatible };
+    serializeModel, deserializeModel, modelCompatible, concatFloat, bytesContextBits, computeFeedback };
 }
 </script>
 
