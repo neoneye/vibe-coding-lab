@@ -46,8 +46,14 @@ canvas { width: 100%; background: #0e1118; border-radius: 6px; display: block; m
     <input type="range" id="width" min="16" max="256" step="16" value="128">
     <div class="row"><label style="flex:1">Context K</label><span class="val" id="kVal">8</span></div>
     <input type="range" id="kctx" min="2" max="16" value="8">
-    <div class="row"><label style="flex:1">Learning rate</label><span class="val" id="lrVal">0.010</span></div>
-    <input type="range" id="lr" min="1" max="100" value="10">
+    <label>Optimizer</label>
+    <select id="optimizer">
+      <option value="muon" selected>Muon (orthogonalized)</option>
+      <option value="adam">Adam</option>
+      <option value="sgd">SGD + momentum</option>
+    </select>
+    <div class="row"><label style="flex:1">Learning rate</label><span class="val" id="lrVal">0.020</span></div>
+    <input type="range" id="lr" min="1" max="100" value="20">
     <div class="row"><label style="flex:1">Batch size</label><span class="val" id="batchVal">32</span></div>
     <input type="range" id="batch" min="8" max="128" step="8" value="32">
     <div style="margin-top:10px">
@@ -715,7 +721,7 @@ if (typeof module !== "undefined" && module.exports) {
 const S = {}; // DOM refs
 ["corpus","upload","layers","layersVal","width","widthVal","kctx","kVal","lr","lrVal","batch","batchVal",
  "start","pause","reset","save","load","loadFile","status","examples","sps","acc","good","liveSample","chart",
- "prompt","temp","tempVal","genlen","lenVal","generate","genOut","dist"].forEach(id => S[id] = document.getElementById(id));
+ "prompt","temp","tempVal","genlen","lenVal","generate","genOut","dist","optimizer"].forEach(id => S[id] = document.getElementById(id));
 
 const store = new CorpusStore();
 function refreshCorpora() {
@@ -747,12 +753,13 @@ function bindLabels() {
 bindLabels();
 
 const Ctrl = {
-  trainer: null, running: false, raf: 0, history: [], lastTick: 0, stepCount: 0,
+  trainer: null, running: false, raf: 0, history: [], lastTick: 0, stepCount: 0, lastTickSteps: 0,
   build() {
     const width = parseInt(S.width.value, 10);
     const layers = parseInt(S.layers.value, 10);
     this.trainer = new Trainer({
       text: store.get(store.active),
+      optimizer: S.optimizer.value,
       K: parseInt(S.kctx.value, 10),
       layerSizes: new Array(layers).fill(width),
       theta: width, lr: lrValue(),
@@ -763,9 +770,15 @@ const Ctrl = {
   },
   loop() {
     if (!this.running) return;
-    let last = null;
-    for (let i = 0; i < 20; i++) { last = this.trainer.stepBatch(); this.stepCount++; }
-    this.trainer.lr = lrValue(); // allow live LR tweaks
+    let last = null, steps = 0;
+    const tStart = performance.now();
+    do {
+      this.trainer.lr = lrValue();                 // live LR
+      this.trainer.optimizer = S.optimizer.value;  // live optimizer switch
+      last = this.trainer.stepBatch();
+      this.stepCount++; steps++;
+    } while (steps < 64 && performance.now() - tStart < 16);
+    this.lastTickSteps = steps;
     this.updateStats(last);
     this.raf = requestAnimationFrame(() => this.loop());
   },
@@ -773,7 +786,7 @@ const Ctrl = {
     const t = this.trainer;
     S.examples.textContent = t.examplesSeen.toLocaleString();
     const now = performance.now();
-    if (this.lastTick) S.sps.textContent = Math.round(20000 / (now - this.lastTick));
+    if (this.lastTick) S.sps.textContent = Math.round((this.lastTickSteps || 0) * 1000 / (now - this.lastTick));
     this.lastTick = now;
     if (this.stepCount % 10 === 0) {
       const acc = t.evalAccuracy(40);
