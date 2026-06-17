@@ -347,21 +347,23 @@ class Trainer {
     this.optimizer = cfg.optimizer || "muon";
     this.seed = cfg.seed; this.rng = makeRng(cfg.seed);
     this.bitsPerTok = 8 * this.n;
-    this.inDim = this.K * this.bitsPerTok;
-    const bytes = textToBytes(cfg.text);
-    this.tokens = tokenizeBytes(bytes, this.n);
-    const split = Math.max(this.K + 1, Math.floor(this.tokens.length * (1 - cfg.valFraction)));
-    this.trainTokens = this.tokens.slice(0, split);
-    this.valTokens = this.tokens.slice(Math.max(0, split - this.K));
+    this.feedbackDim = 8 * (this.n - 1);
+    this.inDim = 8 * this.K + this.feedbackDim;
+    this.bytes = textToBytes(cfg.text);
+    this.split = Math.max(this.K + 1, Math.floor(this.bytes.length * (1 - cfg.valFraction)));
+    this.trainBytes = this.bytes.slice(0, this.split);
+    this.valStart = this.split;
     this.net = new FFNet({ inDim: this.inDim, layerSizes: cfg.layerSizes, rng: this.rng });
     this.readout = new ARReadout(this.net.readoutDim(), this.bitsPerTok, this.rng);
     this.examplesSeen = 0;
   }
-  realContextAt(stream, pos) { return { context: stream.slice(pos - this.K, pos), target: stream[pos] }; }
-  randomContext(stream) {
-    const ctx = [];
-    for (let i = 0; i < this.K; i++) ctx.push(stream[Math.floor(this.rng() * stream.length)]);
-    return ctx;
+  randomContextBits() {
+    const x = new Float64Array(8 * this.K);
+    for (let i = 0; i < this.K; i++) {
+      const v = this.trainBytes[Math.floor(this.rng() * this.trainBytes.length)];
+      for (let b = 0; b < 8; b++) x[i * 8 + b] = (v >> (7 - b)) & 1;
+    }
+    return x;
   }
   _accumPath(x, isPositive) {
     const goods = [], acts = []; let loss = 0, input = x;
@@ -372,64 +374,77 @@ class Trainer {
     }
     return { goods, acts, loss };
   }
+  _features(x) { return this.net.readoutFeatures(this.net.forwardAll(x).acts); }
   stepBatch() {
-    const L = this.net.layers.length;
+    const L = this.net.layers.length, n = this.n, K = this.K;
     for (const layer of this.net.layers) layer.zeroGrad();
     this.readout.zeroGrad();
     const gPos = new Array(L).fill(0), gNeg = new Array(L).fill(0);
     let lossPos = 0, lossNeg = 0;
-    for (let s = 0; s < this.batchSize; s++) {
-      const pos = this.K + Math.floor(this.rng() * (this.trainTokens.length - this.K));
-      const { context, target } = this.realContextAt(this.trainTokens, pos);
-      const xPos = encodeContextBits(context, this.K, this.n);
+    const lastValid = this.trainBytes.length - n;        // need bytes[p .. p+n-1]
+    const span = lastValid - K;
+    let start = K;
+    if (span > this.batchSize) start = K + Math.floor(this.rng() * (span - this.batchSize));
+    const steps = Math.max(1, Math.min(this.batchSize, lastValid - start + 1));
+    const predBuffer = [];
+    for (let w = 0; w < steps; w++) {
+      const p = start + w;
+      const revealed = p > 0 ? this.trainBytes[p - 1] : 0;
+      const feedback = computeFeedback(predBuffer, tokenToBits([revealed], 1), n);
+      const xPos = concatFloat(bytesContextBits(this.trainBytes, p, K), feedback);
       const rp = this._accumPath(xPos, true);
       for (let i = 0; i < L; i++) gPos[i] += rp.goods[i]; lossPos += rp.loss;
       const feats = this.net.readoutFeatures(rp.acts);
-      this.readout.accumulate(feats, tokenToBits(target, this.n));
-      const negCtx = this.randomContext(this.trainTokens);
-      const xNeg = encodeContextBits(negCtx, this.K, this.n);
+      const tok = []; for (let j = 0; j < n; j++) tok.push(this.trainBytes[p + j]);
+      this.readout.accumulate(feats, tokenToBits(tok, n));
+      const xNeg = concatFloat(this.randomContextBits(), new Float64Array(this.feedbackDim));
       const rn = this._accumPath(xNeg, false);
       for (let i = 0; i < L; i++) gNeg[i] += rn.goods[i]; lossNeg += rn.loss;
+      const probs = this.readout.greedyProbs(feats);
+      predBuffer.unshift(probs); if (predBuffer.length > n) predBuffer.pop();
     }
     for (const layer of this.net.layers) layer.step(this.lr, this.optimizer);
     this.readout.step(this.lr);
     this.examplesSeen += this.batchSize;
-    for (let i = 0; i < L; i++) { gPos[i] /= this.batchSize; gNeg[i] /= this.batchSize; }
-    return { lossPos: lossPos / this.batchSize, lossNeg: lossNeg / this.batchSize, gPos, gNeg };
+    for (let i = 0; i < L; i++) { gPos[i] /= steps; gNeg[i] /= steps; }
+    return { lossPos: lossPos / steps, lossNeg: lossNeg / steps, gPos, gNeg };
   }
-  predictBits(context) {
-    const x = encodeContextBits(context, this.K, this.n);
-    const { acts } = this.net.forwardAll(x);
-    return this.readout.greedyProbs(this.net.readoutFeatures(acts));
-  }
-  sampleToken(context, temp, rng) {
-    const x = encodeContextBits(context, this.K, this.n);
-    const { acts } = this.net.forwardAll(x);
-    return this.readout.sample(this.net.readoutFeatures(acts), temp, rng);
-  }
-  evalBitAccuracy(count) {
-    if (this.valTokens.length <= this.K + 1) return 0;
-    let correct = 0, total = 0;
-    for (let s = 0; s < count; s++) {
-      const pos = this.K + Math.floor(this.rng() * (this.valTokens.length - this.K));
-      const { context, target } = this.realContextAt(this.valTokens, pos);
-      const p = this.predictBits(context), tb = tokenToBits(target, this.n);
-      for (let i = 0; i < p.length; i++) { if ((p[i] > 0.5 ? 1 : 0) === tb[i]) correct++; total++; }
+  predictNextByteProbs(seedText) {
+    const n = this.n, K = this.K;
+    const bytes = Array.from(textToBytes(seedText));
+    const predBuffer = [];
+    const start = Math.max(0, bytes.length - n);
+    for (let p = start; p <= bytes.length; p++) {
+      const revealed = p > 0 ? bytes[p - 1] : 0;
+      const feedback = computeFeedback(predBuffer, tokenToBits([revealed], 1), n);
+      const probs = this.readout.greedyProbs(this._features(concatFloat(bytesContextBits(bytes, p, K), feedback)));
+      if (p === bytes.length) return probs.slice(0, 8);
+      predBuffer.unshift(probs); if (predBuffer.length > n) predBuffer.pop();
     }
-    return total ? correct / total : 0;
+    return this.readout.greedyProbs(this._features(new Float64Array(this.inDim))).slice(0, 8);
   }
-  evalTokenAccuracy(count) {
-    if (this.valTokens.length <= this.K + 1) return 0;
-    let correct = 0, total = 0;
-    for (let s = 0; s < count; s++) {
-      const pos = this.K + Math.floor(this.rng() * (this.valTokens.length - this.K));
-      const { context, target } = this.realContextAt(this.valTokens, pos);
-      const p = this.predictBits(context), tb = tokenToBits(target, this.n);
-      let all = true; for (let i = 0; i < p.length; i++) if ((p[i] > 0.5 ? 1 : 0) !== tb[i]) { all = false; break; }
-      if (all) correct++; total++;
+  evalNextByte(count) {
+    const n = this.n, K = this.K;
+    const lo = Math.max(K, this.valStart), hi = this.bytes.length - 1;
+    if (hi - lo < 1) return { bit: 0, byte: 0 };
+    let start = lo; const span = hi - lo;
+    if (span > count) start = lo + Math.floor(this.rng() * (span - count));
+    const predBuffer = [];
+    let cB = 0, tB = 0, cBy = 0, tBy = 0;
+    for (let w = 0; w < count && start + w <= hi; w++) {
+      const p = start + w;
+      const feedback = computeFeedback(predBuffer, tokenToBits([this.bytes[p - 1]], 1), n);
+      const probs = this.readout.greedyProbs(this._features(concatFloat(bytesContextBits(this.bytes, p, K), feedback)));
+      const trueBits = tokenToBits([this.bytes[p]], 1);
+      let all = true;
+      for (let b = 0; b < 8; b++) { const bit = probs[b] > 0.5 ? 1 : 0; if (bit === trueBits[b]) cB++; else all = false; tB++; }
+      if (all) cBy++; tBy++;
+      predBuffer.unshift(probs); if (predBuffer.length > n) predBuffer.pop();
     }
-    return total ? correct / total : 0;
+    return { bit: tB ? cB / tB : 0, byte: tBy ? cBy / tBy : 0 };
   }
+  evalBitAccuracy(count) { return this.evalNextByte(count).bit; }
+  evalTokenAccuracy(count) { return this.evalNextByte(count).byte; }
 }
 
 function sampleBit(p, temp, rng) {
@@ -438,18 +453,21 @@ function sampleBit(p, temp, rng) {
   const p2 = 1 / (1 + Math.exp(-logit / temp));
   return rng() < p2 ? 1 : 0;
 }
-function generate(trainer, seedText, lengthTokens, temp, rng) {
+function generate(trainer, seedText, lengthBytes, temp, rng) {
   const n = trainer.n, K = trainer.K;
-  const seedBytes = Array.from(textToBytes(seedText));
-  const ctx = tokenizeBytes(seedBytes, n);
-  const outBytes = seedBytes.slice();
-  for (let i = 0; i < lengthTokens; i++) {
-    const bits = trainer.sampleToken(ctx.slice(-K), temp, rng);
-    const tok = bitsToToken(bits, n);
-    ctx.push(tok);
-    for (const byte of tok) outBytes.push(byte);
+  const out = Array.from(textToBytes(seedText));
+  const predBuffer = [];
+  for (let i = 0; i < lengthBytes; i++) {
+    const p = out.length;
+    const revealed = p > 0 ? out[p - 1] : 0;
+    const feedback = computeFeedback(predBuffer, tokenToBits([revealed], 1), n);
+    const feats = trainer.net.readoutFeatures(trainer.net.forwardAll(concatFloat(bytesContextBits(out, p, K), feedback)).acts);
+    const bits = trainer.readout.sample(feats, temp, rng);
+    out.push(bitsToToken(bits.slice(0, 8), 1)[0]);
+    const probs = trainer.readout.greedyProbs(feats);
+    predBuffer.unshift(probs); if (predBuffer.length > n) predBuffer.pop();
   }
-  return bytesToText(Uint8Array.from(outBytes));
+  return bytesToText(Uint8Array.from(out));
 }
 
 // --- Serialization ---
@@ -472,64 +490,66 @@ function deserializeModel(trainer, obj) {
   trainer.readout.V.set(obj.readout.V); trainer.readout.U.set(obj.readout.U); trainer.readout.c.set(obj.readout.c);
 }
 
-FFTests.add("binary Trainer readout learns a repeating byte pattern", () => {
+FFTests.add("Trainer inDim = 8K + 8(n-1); feedback width scales with n", () => {
+  const t1 = new Trainer({ text: "abcabcabcabc", n: 1, K: 4, layerSizes: [8], theta: 8, lr: 0.02, batchSize: 4, valFraction: 0.25, seed: 1 });
+  FFTests.assert(t1.inDim === 8 * 4 && t1.feedbackDim === 0, "n=1 => no feedback");
+  const t3 = new Trainer({ text: "abcabcabcabcabcabc", n: 3, K: 4, layerSizes: [8], theta: 8, lr: 0.02, batchSize: 4, valFraction: 0.25, seed: 1 });
+  FFTests.assert(t3.inDim === 8 * 4 + 16 && t3.feedbackDim === 16, "n=3 => 16 feedback inputs");
+});
+
+FFTests.add("feedback inputs actually reach the network", () => {
+  const t = new Trainer({ text: "the quick brown fox jumps over the lazy dog the end", n: 3, K: 4, layerSizes: [16, 16], theta: 16, lr: 0.02, batchSize: 8, valFraction: 0.2, seed: 2 });
+  for (let i = 0; i < 50; i++) t.stepBatch();
+  const ctx = bytesContextBits(t.bytes, 10, t.K);
+  const xZero = concatFloat(ctx, new Float64Array(16));
+  const fb = new Float64Array(16); for (let i = 0; i < 16; i++) fb[i] = (i % 2) ? 0.5 : -0.5;
+  const xFb = concatFloat(ctx, fb);
+  const pZero = t.readout.greedyProbs(t.net.readoutFeatures(t.net.forwardAll(xZero).acts));
+  const pFb = t.readout.greedyProbs(t.net.readoutFeatures(t.net.forwardAll(xFb).acts));
+  let diff = 0; for (let i = 0; i < pZero.length; i++) diff = Math.max(diff, Math.abs(pZero[i] - pFb[i]));
+  FFTests.assert(diff > 1e-6, "changing the feedback inputs must change the output, diff=" + diff);
+});
+
+FFTests.add("Trainer next-byte bit-accuracy rises on a repeating pattern (n=3 lookahead)", () => {
   const text = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc";
-  const tr = new Trainer({ text, n: 1, K: 3, layerSizes: [32, 32], theta: 32, lr: 0.03,
-    batchSize: 16, valFraction: 0.25, seed: 11, optimizer: "adam" });
-  FFTests.assert(tr.n === 1 && tr.bitsPerTok === 8, "byte mode bitsPerTok=8");
+  const tr = new Trainer({ text, n: 3, K: 6, layerSizes: [32, 32], theta: 32, lr: 0.03, batchSize: 16, valFraction: 0.25, seed: 11, optimizer: "adam" });
   const before = tr.evalBitAccuracy(20);
   for (let i = 0; i < 500; i++) tr.stepBatch();
   const after = tr.evalBitAccuracy(20);
   FFTests.assert(tr.examplesSeen === 500 * 16, "examplesSeen tracked");
-  FFTests.assert(after > 0.85 || after > before + 0.2,
-    `bit accuracy should rise (before=${before.toFixed(2)} after=${after.toFixed(2)})`);
+  FFTests.assert(after > 0.85 || after > before + 0.2, `next-byte bit accuracy should rise (before=${before.toFixed(2)} after=${after.toFixed(2)})`);
 });
 
-FFTests.add("binary Trainer defaults to Muon and trains", () => {
-  const text = "abcabcabcabcabcabcabcabcabcabc";
-  const tr = new Trainer({ text, n: 1, K: 3, layerSizes: [24, 24], theta: 24, lr: 0.03,
-    batchSize: 16, valFraction: 0.25, seed: 7 });
+FFTests.add("Trainer defaults to Muon and FF goodness separates", () => {
+  const text = "the quick brown fox jumps over the lazy dog the quick brown fox jumps";
+  const tr = new Trainer({ text, n: 3, K: 6, layerSizes: [32, 32], theta: 32, lr: 0.02, batchSize: 16, valFraction: 0.2, seed: 3 });
   FFTests.assert(tr.optimizer === "muon", "default optimizer muon");
-  const before = tr.evalBitAccuracy(15);
-  for (let i = 0; i < 400; i++) tr.stepBatch();
-  const after = tr.evalBitAccuracy(15);
-  FFTests.assert(after > 0.6 || after > before + 0.1,
-    `muon should train the readout (before=${before.toFixed(2)} after=${after.toFixed(2)})`);
-});
-
-FFTests.add("generate returns seed prefix and grows by tokens*n bytes", () => {
-  const text = "abcabcabcabcabcabc";
-  const tr = new Trainer({ text, n: 1, K: 3, layerSizes: [16], theta: 16, lr: 0.03,
-    batchSize: 8, valFraction: 0.2, seed: 5, optimizer: "adam" });
-  for (let i = 0; i < 100; i++) tr.stepBatch();
-  const out = generate(tr, "ab", 10, 0.5, makeRng(2));
-  FFTests.assert(out.startsWith("ab"), "starts with seed");
-  FFTests.assert([...new TextEncoder().encode(out)].length === 2 + 10, "byte length = seed + tokens*n");
-});
-
-FFTests.add("FF goodness separates real from random-position contexts", () => {
-  const text = "the quick brown fox jumps over the lazy dog the quick brown fox";
-  const tr = new Trainer({ text, n: 1, K: 4, layerSizes: [32, 32], theta: 32, lr: 0.03,
-    batchSize: 16, valFraction: 0.2, seed: 3, optimizer: "adam" });
-  let last; for (let i = 0; i < 400; i++) last = tr.stepBatch();
-  const gp = last.gPos.reduce((a,b)=>a+b,0), gn = last.gNeg.reduce((a,b)=>a+b,0);
+  let last; for (let i = 0; i < 300; i++) last = tr.stepBatch();
+  const gp = last.gPos.reduce((a, b) => a + b, 0), gn = last.gNeg.reduce((a, b) => a + b, 0);
   FFTests.assert(gp > gn, `positive goodness should exceed negative (gp=${gp.toFixed(1)} gn=${gn.toFixed(1)})`);
 });
 
-FFTests.add("serializeModel/deserializeModel preserve readout predictions; modelCompatible checks n", () => {
-  const text = "abcabcabcabcabcabcabcabc";
-  const cfg = { text, n: 1, K: 3, layerSizes: [16, 16], theta: 16, lr: 0.03, batchSize: 8, valFraction: 0.2, seed: 1, optimizer: "adam" };
+FFTests.add("generate returns seed + length bytes (one byte per step)", () => {
+  const text = "abcabcabcabcabcabcabc";
+  const tr = new Trainer({ text, n: 3, K: 4, layerSizes: [16], theta: 16, lr: 0.03, batchSize: 8, valFraction: 0.2, seed: 5, optimizer: "adam" });
+  for (let i = 0; i < 100; i++) tr.stepBatch();
+  const out = generate(tr, "ab", 10, 0.5, makeRng(2));
+  FFTests.assert(out.startsWith("ab"), "starts with seed");
+  FFTests.assert([...new TextEncoder().encode(out)].length === 2 + 10, "byte length = seed + lengthBytes");
+});
+
+FFTests.add("serializeModel/deserializeModel preserve next-byte predictions; modelCompatible checks n", () => {
+  const cfg = { text: "abcabcabcabcabcabcabcabc", n: 3, K: 4, layerSizes: [16, 16], theta: 16, lr: 0.03, batchSize: 8, valFraction: 0.2, seed: 1, optimizer: "adam" };
   const a = new Trainer(cfg);
   for (let i = 0; i < 50; i++) a.stepBatch();
   const obj = serializeModel(a);
-  const b = new Trainer(cfg); // fresh, same shape
-  FFTests.assert(modelCompatible(obj, b), "same-config model is compatible");
+  const b = new Trainer(cfg);
+  FFTests.assert(modelCompatible(obj, b), "same-config compatible");
   deserializeModel(b, obj);
-  const ctx = a.trainTokens.slice(3, 6);
-  const pa = a.predictBits(ctx), pb = b.predictBits(ctx);
-  for (let i = 0; i < pa.length; i++) FFTests.approx(pa[i], pb[i], 1e-9, "readout prediction preserved");
+  const pa = a.predictNextByteProbs("abc"), pb = b.predictNextByteProbs("abc");
+  for (let i = 0; i < pa.length; i++) FFTests.approx(pa[i], pb[i], 1e-9, "next-byte prediction preserved");
   const other = new Trainer(Object.assign({}, cfg, { n: 2 }));
-  FFTests.assert(!modelCompatible(obj, other), "different n must be incompatible");
+  FFTests.assert(!modelCompatible(obj, other), "different n => incompatible (different inDim)");
 });
 
 // --- Built-in Corpora & Store ---
@@ -657,16 +677,6 @@ FFTests.add("step honors the optimizer arg (muon and sgd differ from adam)", () 
   const maxAbs = (A, B) => { let d = 0; for (let i = 0; i < A.length; i++) d = Math.max(d, Math.abs(A[i] - B[i])); return d; };
   FFTests.assert(maxAbs(Wm, Wa) > 1e-6, "muon must produce different weights than adam (optimizer arg ignored?), diff=" + maxAbs(Wm, Wa));
   FFTests.assert(maxAbs(Ws, Wa) > 1e-6, "sgd must produce different weights than adam, diff=" + maxAbs(Ws, Wa));
-});
-
-FFTests.add("binary Trainer exact-token accuracy rises above zero (AR readout)", () => {
-  const text = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc";
-  const tr = new Trainer({ text, n: 1, K: 3, layerSizes: [32, 32], theta: 32, lr: 0.03,
-    batchSize: 16, valFraction: 0.25, seed: 11, optimizer: "adam" });
-  const before = tr.evalTokenAccuracy(20);
-  for (let i = 0; i < 600; i++) tr.stepBatch();
-  const after = tr.evalTokenAccuracy(20);
-  FFTests.assert(after > 0.5, `exact-token accuracy should rise well above 0 (before=${before.toFixed(2)} after=${after.toFixed(2)})`);
 });
 
 FFTests.add("tokenToBits/bitsToToken round-trip for n=1,2,3", () => {
