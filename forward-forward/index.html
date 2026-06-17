@@ -107,44 +107,6 @@ function makeRng(seed) {
   };
 }
 
-// --- Vocab & Encoder ---
-function buildVocab(text, capN) {
-  const counts = new Map();
-  for (const ch of text) counts.set(ch, (counts.get(ch) || 0) + 1);
-  const sorted = [...counts.entries()].sort((a, b) =>
-    b[1] - a[1] || a[0].charCodeAt(0) - b[0].charCodeAt(0));
-  const chars = [""];
-  for (const [ch] of sorted) {
-    if (chars.length >= capN) break;
-    chars.push(ch);
-  }
-  const index = new Map();
-  chars.forEach((ch, i) => index.set(ch, i));
-  return { chars, index, size: chars.length, unkIndex: 0 };
-}
-
-function charToIndex(vocab, ch) {
-  const i = vocab.index.get(ch);
-  return i === undefined ? vocab.unkIndex : i;
-}
-
-function inputDim(vocab, K) { return (K + 1) * vocab.size; }
-
-function encode(vocab, contextIndices, candidateIndex) {
-  const S = vocab.size;
-  const x = new Float64Array((contextIndices.length + 1) * S);
-  for (let p = 0; p < contextIndices.length; p++) x[p * S + contextIndices[p]] = 1;
-  x[contextIndices.length * S + candidateIndex] = 1;
-  return x;
-}
-
-function padContextIndices(indices, K, padIndex) {
-  if (indices.length === K) return indices.slice();
-  if (indices.length > K) return indices.slice(indices.length - K);
-  const pad = new Array(K - indices.length).fill(padIndex);
-  return pad.concat(indices);
-}
-
 // --- Sigmoid ---
 function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 
@@ -227,20 +189,12 @@ class FFLayer {
   }
 }
 
-// --- Normalization & Softmax ---
+// --- Normalization ---
 function l2normalize(a) {
   let n = 0; for (let i = 0; i < a.length; i++) n += a[i] * a[i];
   n = Math.sqrt(n) + 1e-8;
   const out = new Float64Array(a.length);
   for (let i = 0; i < a.length; i++) out[i] = a[i] / n;
-  return out;
-}
-
-function softmax(arr) {
-  let max = -Infinity; for (const x of arr) if (x > max) max = x;
-  const out = new Float64Array(arr.length); let sum = 0;
-  for (let i = 0; i < arr.length; i++) { out[i] = Math.exp(arr[i] - max); sum += out[i]; }
-  for (let i = 0; i < out.length; i++) out[i] /= sum;
   return out;
 }
 
@@ -313,27 +267,6 @@ class FFNet {
     let off = 0;
     for (const a of acts) { const u = l2normalize(a); out.set(u, off); off += u.length; }
     return out;
-  }
-  totalGoodness(x, excludeFirst = true) {
-    const { goods } = this.forwardAll(x);
-    let g = 0;
-    for (let i = excludeFirst ? 1 : 0; i < goods.length; i++) g += goods[i];
-    return g;
-  }
-  predictDistribution(vocab, contextIndices, opts = {}) {
-    const temp = opts.temp || 1, excludeFirst = opts.excludeFirst !== false;
-    const scores = new Float64Array(vocab.size);
-    for (let c = 0; c < vocab.size; c++) {
-      const x = encode(vocab, contextIndices, c);
-      scores[c] = this.totalGoodness(x, excludeFirst) / temp;
-    }
-    return softmax(scores);
-  }
-  sample(vocab, contextIndices, opts, rng) {
-    const dist = this.predictDistribution(vocab, contextIndices, opts);
-    let r = rng(), acc = 0;
-    for (let c = 0; c < dist.length; c++) { acc += dist[c]; if (r <= acc) return c; }
-    return dist.length - 1;
   }
 }
 
@@ -413,29 +346,6 @@ FFTests.add("rng is deterministic", () => {
   FFTests.assert(r1() === r2(), "same seed must produce same sequence");
 });
 
-FFTests.add("buildVocab caps size and reserves UNK at 0", () => {
-  const v = buildVocab("aaaabbbccd", 3);
-  FFTests.assert(v.size === 3, "size should equal cap");
-  FFTests.assert(v.unkIndex === 0, "UNK at index 0");
-  FFTests.assert(v.chars[1] === "a", "most frequent char first after UNK");
-  FFTests.assert(charToIndex(v, "z") === 0, "unknown char -> UNK");
-  FFTests.assert(charToIndex(v, "a") === 1, "known char -> its index");
-});
-
-FFTests.add("encode produces one-hots of correct dimension", () => {
-  const v = buildVocab("abcabc", 4); // UNK + a,b,c => size 4
-  const K = 2;
-  const x = encode(v, [charToIndex(v, "a"), charToIndex(v, "b")], charToIndex(v, "c"));
-  FFTests.assert(x.length === inputDim(v, K), "input length = (K+1)*size");
-  let ones = 0; for (const xi of x) ones += xi;
-  FFTests.assert(ones === 3, "exactly K+1 ones total");
-});
-
-FFTests.add("padContextIndices fixes length", () => {
-  FFTests.assert(padContextIndices([1, 2, 3], 2, 0).join(",") === "2,3", "truncate oldest");
-  FFTests.assert(padContextIndices([5], 3, 0).join(",") === "0,0,5", "left pad");
-});
-
 FFTests.add("FFLayer goodness rises on positive, falls on negative after updates", () => {
   const rng = makeRng(7);
   const layer = new FFLayer(6, 8, rng);
@@ -457,23 +367,6 @@ FFTests.add("FFLayer.forward applies ReLU (no negatives)", () => {
   const layer = new FFLayer(4, 5, makeRng(1));
   const a = layer.forward(Float64Array.from([1, -1, 1, 0]));
   for (const v of a) FFTests.assert(v >= 0, "ReLU output must be >= 0");
-});
-
-FFTests.add("softmax sums to 1 and is non-negative", () => {
-  const p = softmax([2, 1, 0, -3]);
-  let s = 0; for (const x of p) { FFTests.assert(x >= 0, "non-negative"); s += x; }
-  FFTests.approx(s, 1, 1e-9, "sums to 1");
-});
-
-FFTests.add("FFNet.predictDistribution returns a valid distribution over vocab", () => {
-  const v = buildVocab("hello world", 8);
-  const K = 3;
-  const net = new FFNet({ inDim: inputDim(v, K), layerSizes: [16, 16], rng: makeRng(3) });
-  const ctx = padContextIndices([charToIndex(v, "l")], K, v.unkIndex);
-  const dist = net.predictDistribution(v, ctx, { temp: 1, excludeFirst: true });
-  FFTests.assert(dist.length === v.size, "distribution length = vocab size");
-  let s = 0; for (const x of dist) s += x;
-  FFTests.approx(s, 1, 1e-9, "distribution sums to 1");
 });
 
 FFTests.add("l2normalize yields unit length", () => {
@@ -605,18 +498,23 @@ function generate(trainer, seedText, lengthTokens, temp, rng) {
 }
 
 // --- Serialization ---
-function serializeNet(net) {
+function serializeModel(trainer) {
   return {
-    inDim: net.inDim,
-    layerSizes: net.layers.map(l => l.outDim),
-    layers: net.layers.map(l => ({ W: Array.from(l.W), b: Array.from(l.b) }))
+    n: trainer.n, inDim: trainer.inDim,
+    layerSizes: trainer.net.layers.map(l => l.outDim),
+    layers: trainer.net.layers.map(l => ({ W: Array.from(l.W), b: Array.from(l.b) })),
+    readout: { Wr: Array.from(trainer.readout.Wr), br: Array.from(trainer.readout.br) }
   };
 }
-
-function deserializeNet(obj, rng) {
-  const net = new FFNet({ inDim: obj.inDim, layerSizes: obj.layerSizes, rng });
-  obj.layers.forEach((ld, i) => { net.layers[i].W.set(ld.W); net.layers[i].b.set(ld.b); });
-  return net;
+function modelCompatible(obj, trainer) {
+  if (!obj || obj.n !== trainer.n || obj.inDim !== trainer.inDim) return false;
+  if (!Array.isArray(obj.layerSizes) || obj.layerSizes.length !== trainer.net.layers.length) return false;
+  for (let i = 0; i < obj.layerSizes.length; i++) if (obj.layerSizes[i] !== trainer.net.layers[i].outDim) return false;
+  return true;
+}
+function deserializeModel(trainer, obj) {
+  obj.layers.forEach((ld, i) => { trainer.net.layers[i].W.set(ld.W); trainer.net.layers[i].b.set(ld.b); });
+  trainer.readout.Wr.set(obj.readout.Wr); trainer.readout.br.set(obj.readout.br);
 }
 
 FFTests.add("binary Trainer readout learns a repeating byte pattern", () => {
@@ -663,24 +561,20 @@ FFTests.add("FF goodness separates real from random-position contexts", () => {
   FFTests.assert(gp > gn, `positive goodness should exceed negative (gp=${gp.toFixed(1)} gn=${gn.toFixed(1)})`);
 });
 
-FFTests.add("serialize/deserialize preserves predictions", () => {
-  const v = buildVocab("abcabcabc", 6); const K = 2;
-  const net = new FFNet({ inDim: inputDim(v, K), layerSizes: [12, 12], rng: makeRng(9) });
-  const ctx = [1, 2];
-  const before = net.predictDistribution(v, ctx, { temp: 1 });
-  const clone = deserializeNet(serializeNet(net), makeRng(0));
-  const after = clone.predictDistribution(v, ctx, { temp: 1 });
-  for (let i = 0; i < before.length; i++) FFTests.approx(before[i], after[i], 1e-9, "dist preserved");
-});
-
-FFTests.add("weightsCompatible accepts matching, rejects mismatched K/vocab", () => {
-  const v = buildVocab("abcabc", 6); const K = 3;
-  const net = new FFNet({ inDim: inputDim(v, K), layerSizes: [8], rng: makeRng(1) });
-  const obj = Object.assign(serializeNet(net), { K, vocabChars: v.chars });
-  FFTests.assert(weightsCompatible(obj, v, K) === true, "matching should be accepted");
-  FFTests.assert(weightsCompatible(obj, v, K + 1) === false, "different K rejected");
-  const v2 = buildVocab("xyzxyz", 6);
-  FFTests.assert(weightsCompatible(obj, v2, K) === false, "different vocab rejected");
+FFTests.add("serializeModel/deserializeModel preserve readout predictions; modelCompatible checks n", () => {
+  const text = "abcabcabcabcabcabcabcabc";
+  const cfg = { text, n: 1, K: 3, layerSizes: [16, 16], theta: 16, lr: 0.03, batchSize: 8, valFraction: 0.2, seed: 1, optimizer: "adam" };
+  const a = new Trainer(cfg);
+  for (let i = 0; i < 50; i++) a.stepBatch();
+  const obj = serializeModel(a);
+  const b = new Trainer(cfg); // fresh, same shape
+  FFTests.assert(modelCompatible(obj, b), "same-config model is compatible");
+  deserializeModel(b, obj);
+  const ctx = a.trainTokens.slice(3, 6);
+  const pa = a.predictBits(ctx), pb = b.predictBits(ctx);
+  for (let i = 0; i < pa.length; i++) FFTests.approx(pa[i], pb[i], 1e-9, "readout prediction preserved");
+  const other = new Trainer(Object.assign({}, cfg, { n: 2 }));
+  FFTests.assert(!modelCompatible(obj, other), "different n must be incompatible");
 });
 
 // --- Built-in Corpora & Store ---
@@ -899,15 +793,11 @@ function encodeContextBits(contextTokens, K, n) {
   return x;
 }
 
-// --- Weights compatibility guard ---
-function weightsCompatible(obj, vocab, K) {
-  if (!obj || obj.inDim !== inputDim(vocab, K)) return false;
-  if (obj.vocabChars && obj.vocabChars.join("") !== vocab.chars.join("")) return false;
-  return true;
-}
-
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, matMul, transpose, frobNorm, newtonSchulz5, FFNet, Trainer, generate, sampleBit, serializeNet, deserializeNet, weightsCompatible, BUILTIN_CORPORA, CorpusStore, textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, Readout };
+  module.exports = { makeRng, FFTests, sigmoid, FFLayer, l2normalize, FFNet, Trainer, generate, sampleBit,
+    BUILTIN_CORPORA, CorpusStore, matMul, transpose, frobNorm, newtonSchulz5,
+    textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, Readout,
+    serializeModel, deserializeModel, modelCompatible };
 }
 </script>
 
