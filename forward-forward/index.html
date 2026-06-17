@@ -46,6 +46,12 @@ canvas { width: 100%; background: #0e1118; border-radius: 6px; display: block; m
     <input type="range" id="width" min="16" max="256" step="16" value="128">
     <div class="row"><label style="flex:1">Context K</label><span class="val" id="kVal">8</span></div>
     <input type="range" id="kctx" min="2" max="16" value="8">
+    <label>Token unit</label>
+    <select id="tokenUnit">
+      <option value="1" selected>Bytes (8-bit)</option>
+      <option value="2">Bigrams (16-bit)</option>
+      <option value="3">Trigrams (24-bit)</option>
+    </select>
     <label>Optimizer</label>
     <select id="optimizer">
       <option value="muon" selected>Muon (orthogonalized)</option>
@@ -71,7 +77,7 @@ canvas { width: 100%; background: #0e1118; border-radius: 6px; display: block; m
       <div class="stat"><span>Status</span><span id="status">idle</span></div>
       <div class="stat"><span>Examples seen</span><span id="examples">0</span></div>
       <div class="stat"><span>Steps/sec</span><span id="sps">0</span></div>
-      <div class="stat"><span>Val accuracy (top-1)</span><span id="acc">–</span></div>
+      <div class="stat"><span>Bit acc / token acc</span><span id="acc">–</span></div>
       <div class="stat"><span>Mean goodness +/−</span><span id="good">–</span></div>
       <div class="stat"><span>Live sample</span><span></span></div>
       <div class="gen" id="liveSample" style="min-height:40px"></div>
@@ -805,7 +811,7 @@ if (typeof module !== "undefined" && module.exports) {
 const S = {}; // DOM refs
 ["corpus","upload","layers","layersVal","width","widthVal","kctx","kVal","lr","lrVal","batch","batchVal",
  "start","pause","reset","save","load","loadFile","status","examples","sps","acc","good","liveSample","chart",
- "prompt","temp","tempVal","genlen","lenVal","generate","genOut","dist","optimizer"].forEach(id => S[id] = document.getElementById(id));
+ "prompt","temp","tempVal","genlen","lenVal","generate","genOut","dist","optimizer","tokenUnit"].forEach(id => S[id] = document.getElementById(id));
 
 const store = new CorpusStore();
 function refreshCorpora() {
@@ -848,7 +854,7 @@ const Ctrl = {
       layerSizes: new Array(layers).fill(width),
       theta: width, lr: lrValue(),
       batchSize: parseInt(S.batch.value, 10),
-      negPerPos: 1, valFraction: 0.1, vocabCap: 60, seed: 1234
+      valFraction: 0.1, n: parseInt(S.tokenUnit.value, 10), seed: 1234
     });
     this.history = []; this.stepCount = 0;
   },
@@ -873,8 +879,9 @@ const Ctrl = {
     if (this.lastTick) S.sps.textContent = Math.round((this.lastTickSteps || 0) * 1000 / (now - this.lastTick));
     this.lastTick = now;
     if (this.stepCount % 10 === 0) {
-      const acc = t.evalAccuracy(40);
-      S.acc.textContent = (acc * 100).toFixed(1) + "%";
+      const bitAcc = t.evalBitAccuracy(40), tokAcc = t.evalTokenAccuracy(40);
+      const acc = bitAcc;
+      S.acc.textContent = (bitAcc * 100).toFixed(1) + "% / " + (tokAcc * 100).toFixed(1) + "%";
       const gp = last.gPos.reduce((a,b)=>a+b,0)/last.gPos.length;
       const gn = last.gNeg.reduce((a,b)=>a+b,0)/last.gNeg.length;
       S.good.textContent = gp.toFixed(1) + " / " + gn.toFixed(1);
@@ -883,7 +890,7 @@ const Ctrl = {
       refreshDistribution();
       if (this.stepCount % 30 === 0) {
         const t = this.trainer;
-        S.liveSample.textContent = generate(t.net, t.vocab, S.prompt.value.slice(-t.K) || " ", 80, 0.8, makeRng(this.stepCount + 1), t.K);
+        S.liveSample.textContent = generate(t, S.prompt.value || "the", Math.max(8, Math.round(60 / t.n)), 0.7, makeRng(this.stepCount + 1));
       }
     }
   }
@@ -910,22 +917,18 @@ S.reset.onclick = () => {
 
 S.save.onclick = () => {
   if (!Ctrl.trainer) return;
-  const blob = new Blob([JSON.stringify(Object.assign(serializeNet(Ctrl.trainer.net), { K: Ctrl.trainer.K, vocabChars: Ctrl.trainer.vocab.chars }))], { type: "application/json" });
-  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "ff-weights.json"; a.click();
+  const blob = new Blob([JSON.stringify(serializeModel(Ctrl.trainer))], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "ff-model.json"; a.click();
 };
 S.load.onclick = () => S.loadFile.click();
 S.loadFile.onchange = async (e) => {
   const f = e.target.files[0]; if (!f || !Ctrl.trainer) return;
   try {
     const obj = JSON.parse(await f.text());
-    if (!weightsCompatible(obj, Ctrl.trainer.vocab, Ctrl.trainer.K)) {
-      setStatus("weights don't match current model"); e.target.value = ""; return;
-    }
-    Ctrl.trainer.net = deserializeNet(obj, makeRng(1));
-    refreshDistribution(); setStatus("weights loaded");
-  } catch (err) {
-    setStatus("invalid weights file"); return;
-  }
+    if (!modelCompatible(obj, Ctrl.trainer)) { setStatus("model doesn't match current settings"); e.target.value = ""; return; }
+    deserializeModel(Ctrl.trainer, obj);
+  } catch (err) { setStatus("invalid model file"); e.target.value = ""; return; }
+  refreshDistribution(); setStatus("model loaded");
   e.target.value = "";
 };
 
@@ -957,24 +960,23 @@ function drawChart() {
 function refreshDistribution() {
   if (!Ctrl.trainer) return;
   const t = Ctrl.trainer;
-  const ctxIdx = padContextIndices([...S.prompt.value].map(ch => charToIndex(t.vocab, ch)), t.K, t.vocab.unkIndex);
-  const dist = t.net.predictDistribution(t.vocab, ctxIdx, { temp: parseInt(S.temp.value, 10) / 100, excludeFirst: true });
-  const pairs = [...dist].map((p, i) => ({ p, ch: t.vocab.chars[i] })).sort((a, b) => b.p - a.p).slice(0, 24);
-  const max = pairs[0] ? pairs[0].p : 1;
+  const seedBytes = Array.from(new TextEncoder().encode(S.prompt.value));
+  const ctx = tokenizeBytes(seedBytes, t.n).slice(-t.K);
+  const p = t.predictBits(ctx);
   S.dist.innerHTML = "";
-  for (const { p, ch } of pairs) {
-    const b = document.createElement("div"); b.className = "bar";
-    b.style.height = (p / max * 100) + "%";
-    b.title = JSON.stringify(ch) + " " + (p * 100).toFixed(1) + "%";
-    S.dist.appendChild(b);
+  for (let i = 0; i < p.length; i++) {
+    const bar = document.createElement("div"); bar.className = "bar";
+    bar.style.height = (p[i] * 100) + "%";
+    bar.title = "bit " + i + " (byte " + Math.floor(i / 8) + ", b" + (i % 8) + ") p=" + p[i].toFixed(2);
+    S.dist.appendChild(bar);
   }
 }
 
 S.generate.onclick = () => {
   if (!Ctrl.trainer) return;
   const t = Ctrl.trainer;
-  const out = generate(t.net, t.vocab, S.prompt.value, parseInt(S.genlen.value, 10),
-    parseInt(S.temp.value, 10) / 100, makeRng((Date.now() & 0xffff) | 1), t.K);
+  const tokens = Math.max(1, Math.round(parseInt(S.genlen.value, 10) / t.n));
+  const out = generate(t, S.prompt.value, tokens, parseInt(S.temp.value, 10) / 100, makeRng((Date.now() & 0xffff) | 1));
   S.genOut.textContent = out;
   refreshDistribution();
 };
