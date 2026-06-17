@@ -705,6 +705,84 @@ FFTests.add("step honors the optimizer arg (muon and sgd differ from adam)", () 
   FFTests.assert(maxAbs(Ws, Wa) > 1e-6, "sgd must produce different weights than adam, diff=" + maxAbs(Ws, Wa));
 });
 
+FFTests.add("tokenToBits/bitsToToken round-trip for n=1,2,3", () => {
+  const rng = makeRng(1);
+  for (const n of [1, 2, 3]) {
+    const token = []; for (let j = 0; j < n; j++) token.push(Math.floor(rng() * 256));
+    const bits = tokenToBits(token, n);
+    FFTests.assert(bits.length === 8 * n, "bit length 8n for n=" + n);
+    FFTests.assert(bitsToToken(bits, n).join(",") === token.join(","), "round-trip n=" + n);
+  }
+  // MSB-first check: byte 0x80 = 1000 0000
+  FFTests.assert(tokenToBits([0x80], 1).join("") === "10000000", "MSB-first");
+});
+
+FFTests.add("tokenizeBytes splits non-overlapping and drops remainder", () => {
+  const toks = tokenizeBytes(Uint8Array.from([1,2,3,4,5,6,7]), 2);
+  FFTests.assert(toks.length === 3, "7 bytes / 2 => 3 tokens (remainder dropped)");
+  FFTests.assert(toks[2].join(",") === "5,6", "third token is [5,6]");
+});
+
+FFTests.add("textToBytes/bytesToText round-trip ASCII and multibyte", () => {
+  FFTests.assert(bytesToText(textToBytes("hi")) === "hi", "ascii round-trip");
+  const e = textToBytes("é"); // é = 0xC3 0xA9
+  FFTests.assert(e.length === 2 && e[0] === 0xC3 && e[1] === 0xA9, "utf-8 two bytes");
+  FFTests.assert(bytesToText(e) === "é", "multibyte round-trip");
+});
+
+FFTests.add("encodeContextBits length and left-pad", () => {
+  const x = encodeContextBits([[0x80]], 3, 1); // 1 token, K=3, n=1 => length 24
+  FFTests.assert(x.length === 3 * 8, "length K*8n");
+  let firstZero = true; for (let i = 0; i < 16; i++) if (x[i] !== 0) firstZero = false;
+  FFTests.assert(firstZero, "left-padded slots are zero");
+  FFTests.assert(x[16] === 1, "last slot holds the token's MSB");
+});
+
+// --- Byte/bit tokenizer ---
+function textToBytes(text) { return new TextEncoder().encode(text); }
+function bytesToText(bytes) {
+  const u = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+  return new TextDecoder("utf-8", { fatal: false }).decode(u);
+}
+function tokenizeBytes(bytes, n) {
+  const tokens = [], count = Math.floor(bytes.length / n);
+  for (let t = 0; t < count; t++) {
+    const tok = [];
+    for (let j = 0; j < n; j++) tok.push(bytes[t * n + j]);
+    tokens.push(tok);
+  }
+  return tokens;
+}
+function tokenToBits(token, n) {
+  const bits = new Float64Array(8 * n);
+  for (let j = 0; j < n; j++) {
+    const v = token[j] | 0;
+    for (let b = 0; b < 8; b++) bits[j * 8 + b] = (v >> (7 - b)) & 1;
+  }
+  return bits;
+}
+function bitsToToken(bits, n) {
+  const token = [];
+  for (let j = 0; j < n; j++) {
+    let v = 0;
+    for (let b = 0; b < 8; b++) if (bits[j * 8 + b] > 0.5) v |= (1 << (7 - b));
+    token.push(v);
+  }
+  return token;
+}
+function encodeContextBits(contextTokens, K, n) {
+  const bpt = 8 * n;
+  const toks = contextTokens.length > K ? contextTokens.slice(contextTokens.length - K) : contextTokens;
+  const x = new Float64Array(K * bpt);
+  const start = K - toks.length;
+  for (let t = 0; t < toks.length; t++) {
+    const bits = tokenToBits(toks[t], n);
+    const off = (start + t) * bpt;
+    for (let i = 0; i < bpt; i++) x[off + i] = bits[i];
+  }
+  return x;
+}
+
 // --- Weights compatibility guard ---
 function weightsCompatible(obj, vocab, K) {
   if (!obj || obj.inDim !== inputDim(vocab, K)) return false;
@@ -713,7 +791,7 @@ function weightsCompatible(obj, vocab, K) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, matMul, transpose, frobNorm, newtonSchulz5, FFNet, Trainer, generate, serializeNet, deserializeNet, weightsCompatible, BUILTIN_CORPORA, CorpusStore };
+  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, matMul, transpose, frobNorm, newtonSchulz5, FFNet, Trainer, generate, serializeNet, deserializeNet, weightsCompatible, BUILTIN_CORPORA, CorpusStore, textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits };
 }
 </script>
 
