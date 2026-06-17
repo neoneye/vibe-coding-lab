@@ -276,60 +276,6 @@ class FFNet {
   }
 }
 
-// --- Readout (sigmoid bit-readout head) ---
-class Readout {
-  constructor(featDim, outDim, rng) {
-    this.featDim = featDim; this.outDim = outDim;
-    this.Wr = new Float64Array(outDim * featDim);
-    this.br = new Float64Array(outDim);
-    const scale = Math.sqrt(1 / featDim);
-    for (let i = 0; i < this.Wr.length; i++) this.Wr[i] = (rng() * 2 - 1) * scale;
-    this.mW = new Float64Array(this.Wr.length); this.vW = new Float64Array(this.Wr.length);
-    this.mb = new Float64Array(outDim); this.vb = new Float64Array(outDim);
-    this.t = 0;
-    this.dW = new Float64Array(this.Wr.length); this.db = new Float64Array(outDim);
-    this.count = 0;
-  }
-  predict(features) {
-    const { featDim, outDim, Wr, br } = this;
-    const p = new Float64Array(outDim);
-    for (let i = 0; i < outDim; i++) {
-      let z = br[i]; const base = i * featDim;
-      for (let j = 0; j < featDim; j++) z += Wr[base + j] * features[j];
-      p[i] = 1 / (1 + Math.exp(-z));
-    }
-    return p;
-  }
-  zeroGrad() { this.dW.fill(0); this.db.fill(0); this.count = 0; }
-  accumulate(features, targetBits) {
-    const p = this.predict(features);
-    const { featDim, dW, db } = this;
-    for (let i = 0; i < this.outDim; i++) {
-      const g = p[i] - targetBits[i]; // dL/dlogit for sigmoid + BCE
-      db[i] += g; const base = i * featDim;
-      for (let j = 0; j < featDim; j++) dW[base + j] += g * features[j];
-    }
-    this.count++;
-  }
-  step(lr) {
-    if (this.count === 0) return;
-    const b1 = 0.9, b2 = 0.999, eps = 1e-8, n = this.count;
-    this.t++;
-    const bc1 = 1 - Math.pow(b1, this.t), bc2 = 1 - Math.pow(b2, this.t);
-    for (let i = 0; i < this.Wr.length; i++) {
-      const g = this.dW[i] / n;
-      this.mW[i] = b1 * this.mW[i] + (1 - b1) * g; this.vW[i] = b2 * this.vW[i] + (1 - b2) * g * g;
-      this.Wr[i] -= lr * (this.mW[i] / bc1) / (Math.sqrt(this.vW[i] / bc2) + eps);
-    }
-    for (let i = 0; i < this.outDim; i++) {
-      const g = this.db[i] / n;
-      this.mb[i] = b1 * this.mb[i] + (1 - b1) * g; this.vb[i] = b2 * this.vb[i] + (1 - b2) * g * g;
-      this.br[i] -= lr * (this.mb[i] / bc1) / (Math.sqrt(this.vb[i] / bc2) + eps);
-    }
-    this.zeroGrad();
-  }
-}
-
 // --- Test harness (engine tests appended in later tasks) ---
 const FFTests = {
   _tests: [],
@@ -408,7 +354,7 @@ class Trainer {
     this.trainTokens = this.tokens.slice(0, split);
     this.valTokens = this.tokens.slice(Math.max(0, split - this.K));
     this.net = new FFNet({ inDim: this.inDim, layerSizes: cfg.layerSizes, rng: this.rng });
-    this.readout = new Readout(this.net.readoutDim(), this.bitsPerTok, this.rng);
+    this.readout = new ARReadout(this.net.readoutDim(), this.bitsPerTok, this.rng);
     this.examplesSeen = 0;
   }
   realContextAt(stream, pos) { return { context: stream.slice(pos - this.K, pos), target: stream[pos] }; }
@@ -454,7 +400,12 @@ class Trainer {
   predictBits(context) {
     const x = encodeContextBits(context, this.K, this.n);
     const { acts } = this.net.forwardAll(x);
-    return this.readout.predict(this.net.readoutFeatures(acts));
+    return this.readout.greedyProbs(this.net.readoutFeatures(acts));
+  }
+  sampleToken(context, temp, rng) {
+    const x = encodeContextBits(context, this.K, this.n);
+    const { acts } = this.net.forwardAll(x);
+    return this.readout.sample(this.net.readoutFeatures(acts), temp, rng);
   }
   evalBitAccuracy(count) {
     if (this.valTokens.length <= this.K + 1) return 0;
@@ -493,9 +444,7 @@ function generate(trainer, seedText, lengthTokens, temp, rng) {
   const ctx = tokenizeBytes(seedBytes, n);
   const outBytes = seedBytes.slice();
   for (let i = 0; i < lengthTokens; i++) {
-    const p = trainer.predictBits(ctx.slice(-K));
-    const bits = new Float64Array(p.length);
-    for (let b = 0; b < p.length; b++) bits[b] = temp <= 0 ? (p[b] > 0.5 ? 1 : 0) : sampleBit(p[b], temp, rng);
+    const bits = trainer.sampleToken(ctx.slice(-K), temp, rng);
     const tok = bitsToToken(bits, n);
     ctx.push(tok);
     for (const byte of tok) outBytes.push(byte);
@@ -509,7 +458,7 @@ function serializeModel(trainer) {
     n: trainer.n, inDim: trainer.inDim,
     layerSizes: trainer.net.layers.map(l => l.outDim),
     layers: trainer.net.layers.map(l => ({ W: Array.from(l.W), b: Array.from(l.b) })),
-    readout: { Wr: Array.from(trainer.readout.Wr), br: Array.from(trainer.readout.br) }
+    readout: { V: Array.from(trainer.readout.V), U: Array.from(trainer.readout.U), c: Array.from(trainer.readout.c) }
   };
 }
 function modelCompatible(obj, trainer) {
@@ -520,7 +469,7 @@ function modelCompatible(obj, trainer) {
 }
 function deserializeModel(trainer, obj) {
   obj.layers.forEach((ld, i) => { trainer.net.layers[i].W.set(ld.W); trainer.net.layers[i].b.set(ld.b); });
-  trainer.readout.Wr.set(obj.readout.Wr); trainer.readout.br.set(obj.readout.br);
+  trainer.readout.V.set(obj.readout.V); trainer.readout.U.set(obj.readout.U); trainer.readout.c.set(obj.readout.c);
 }
 
 FFTests.add("binary Trainer readout learns a repeating byte pattern", () => {
@@ -710,15 +659,14 @@ FFTests.add("step honors the optimizer arg (muon and sgd differ from adam)", () 
   FFTests.assert(maxAbs(Ws, Wa) > 1e-6, "sgd must produce different weights than adam, diff=" + maxAbs(Ws, Wa));
 });
 
-FFTests.add("Readout overfits a fixed feature->bits mapping", () => {
-  const rng = makeRng(4), featDim = 10, outDim = 8;
-  const feats = new Float64Array(featDim); for (let i = 0; i < featDim; i++) feats[i] = rng() * 2 - 1;
-  const target = Float64Array.from([1,0,1,1,0,0,1,0]);
-  const ro = new Readout(featDim, outDim, rng);
-  for (let i = 0; i < 300; i++) { ro.zeroGrad(); ro.accumulate(feats, target); ro.step(0.1); }
-  const p = ro.predict(feats);
-  let ok = true; for (let i = 0; i < outDim; i++) if ((p[i] > 0.5 ? 1 : 0) !== target[i]) ok = false;
-  FFTests.assert(ok, "readout should reproduce the target bits, p=" + Array.from(p).map(x=>x.toFixed(2)).join(","));
+FFTests.add("binary Trainer exact-token accuracy rises above zero (AR readout)", () => {
+  const text = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc";
+  const tr = new Trainer({ text, n: 1, K: 3, layerSizes: [32, 32], theta: 32, lr: 0.03,
+    batchSize: 16, valFraction: 0.25, seed: 11, optimizer: "adam" });
+  const before = tr.evalTokenAccuracy(20);
+  for (let i = 0; i < 600; i++) tr.stepBatch();
+  const after = tr.evalTokenAccuracy(20);
+  FFTests.assert(after > 0.5, `exact-token accuracy should rise well above 0 (before=${before.toFixed(2)} after=${after.toFixed(2)})`);
 });
 
 FFTests.add("tokenToBits/bitsToToken round-trip for n=1,2,3", () => {
@@ -907,7 +855,7 @@ function encodeContextBits(contextTokens, K, n) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { makeRng, FFTests, sigmoid, FFLayer, l2normalize, FFNet, Trainer, generate, sampleBit,
     BUILTIN_CORPORA, CorpusStore, matMul, transpose, frobNorm, newtonSchulz5,
-    textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, Readout, ARReadout,
+    textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, ARReadout,
     serializeModel, deserializeModel, modelCompatible };
 }
 </script>
