@@ -5,11 +5,82 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Forward-Forward Char LM</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 0; background: #11141a; color: #e6e9ef; }
+body { font-family: system-ui, sans-serif; margin: 0; background: #11141a; color: #e6e9ef; }
+header { padding: 12px 16px; background: #161a22; border-bottom: 1px solid #232a36; }
+header h1 { margin: 0; font-size: 18px; }
+header p { margin: 4px 0 0; color: #9aa4b2; font-size: 13px; }
+main { display: grid; grid-template-columns: 280px 1fr; gap: 16px; padding: 16px; }
+.panel { background: #161a22; border: 1px solid #232a36; border-radius: 8px; padding: 14px; }
+.panel h2 { margin: 0 0 10px; font-size: 14px; color: #c8d0dc; }
+label { display: block; font-size: 12px; margin: 8px 0 2px; color: #9aa4b2; }
+input[type=range] { width: 100%; }
+select, input[type=text], textarea { width: 100%; box-sizing: border-box; background: #0e1118; color: #e6e9ef; border: 1px solid #2b3340; border-radius: 5px; padding: 6px; }
+button { background: #2d6cdf; color: #fff; border: 0; border-radius: 5px; padding: 8px 12px; margin: 4px 4px 0 0; cursor: pointer; font-size: 13px; }
+button.secondary { background: #2b3340; }
+button:disabled { opacity: 0.4; cursor: default; }
+.stat { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; }
+.stat span:last-child { font-variant-numeric: tabular-nums; color: #7fd1ae; }
+canvas { width: 100%; background: #0e1118; border-radius: 6px; display: block; margin-top: 8px; }
+.bars { display: flex; align-items: flex-end; gap: 1px; height: 90px; }
+.bars .bar { flex: 1; background: #2d6cdf; }
+.gen { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px; background: #0e1118; padding: 8px; border-radius: 6px; min-height: 60px; }
+.row { display:flex; gap:8px; align-items:center; }
+.row .val { font-variant-numeric: tabular-nums; color:#c8d0dc; font-size:12px; min-width:34px; text-align:right; }
 </style>
 </head>
 <body>
-<div id="app"></div>
+<header>
+  <h1>Forward-Forward Char Language Model</h1>
+  <p>Hinton's Forward-Forward algorithm (no backprop, no GPU) learning next-char prediction. Train, pause, predict, resume.</p>
+</header>
+<main>
+  <section class="panel" id="controls">
+    <h2>Model & Training</h2>
+    <label>Corpus</label>
+    <select id="corpus"></select>
+    <label>Upload .txt (adds a corpus)</label>
+    <input type="file" id="upload" accept=".txt,text/plain">
+    <div class="row"><label style="flex:1">Hidden layers</label><span class="val" id="layersVal">3</span></div>
+    <input type="range" id="layers" min="1" max="6" value="3">
+    <div class="row"><label style="flex:1">Layer width</label><span class="val" id="widthVal">128</span></div>
+    <input type="range" id="width" min="16" max="256" step="16" value="128">
+    <div class="row"><label style="flex:1">Context K</label><span class="val" id="kVal">8</span></div>
+    <input type="range" id="kctx" min="2" max="16" value="8">
+    <div class="row"><label style="flex:1">Learning rate</label><span class="val" id="lrVal">0.010</span></div>
+    <input type="range" id="lr" min="1" max="100" value="10">
+    <div class="row"><label style="flex:1">Batch size</label><span class="val" id="batchVal">32</span></div>
+    <input type="range" id="batch" min="8" max="128" step="8" value="32">
+    <div style="margin-top:10px">
+      <button id="start">Start</button>
+      <button id="pause" class="secondary" disabled>Pause</button>
+      <button id="reset" class="secondary">Reset</button>
+    </div>
+  </section>
+  <section>
+    <div class="panel">
+      <h2>Training stats</h2>
+      <div class="stat"><span>Status</span><span id="status">idle</span></div>
+      <div class="stat"><span>Examples seen</span><span id="examples">0</span></div>
+      <div class="stat"><span>Steps/sec</span><span id="sps">0</span></div>
+      <div class="stat"><span>Val accuracy (top-1)</span><span id="acc">–</span></div>
+      <div class="stat"><span>Mean goodness +/−</span><span id="good">–</span></div>
+      <canvas id="chart" width="760" height="140"></canvas>
+    </div>
+    <div class="panel" id="predictPanel" style="margin-top:16px">
+      <h2>Predict / Generate (uses current weights)</h2>
+      <label>Seed prompt</label>
+      <textarea id="prompt" rows="2">To be</textarea>
+      <div class="row"><label style="flex:1">Temperature</label><span class="val" id="tempVal">0.80</span></div>
+      <input type="range" id="temp" min="10" max="200" value="80">
+      <div class="row"><label style="flex:1">Generate length</label><span class="val" id="lenVal">120</span></div>
+      <input type="range" id="genlen" min="20" max="400" step="20" value="120">
+      <button id="generate">Generate</button>
+      <div class="gen" id="genOut"></div>
+      <label>Next-char distribution</label>
+      <div class="bars" id="dist"></div>
+    </div>
+  </section>
+</main>
 
 <script id="shared-code">
 "use strict";
@@ -440,7 +511,143 @@ if (typeof module !== "undefined" && module.exports) {
 </script>
 
 <script>
-// UI wiring goes here (added in later tasks). Intentionally empty for now.
+const S = {}; // DOM refs
+["corpus","upload","layers","layersVal","width","widthVal","kctx","kVal","lr","lrVal","batch","batchVal",
+ "start","pause","reset","status","examples","sps","acc","good","chart",
+ "prompt","temp","tempVal","genlen","lenVal","generate","genOut","dist"].forEach(id => S[id] = document.getElementById(id));
+
+const store = new CorpusStore();
+function refreshCorpora() {
+  S.corpus.innerHTML = "";
+  for (const name of store.list()) {
+    const o = document.createElement("option"); o.value = name; o.textContent = name; S.corpus.appendChild(o);
+  }
+  S.corpus.value = store.active;
+}
+refreshCorpora();
+S.corpus.onchange = () => { store.setActive(S.corpus.value); };
+S.upload.onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const text = await f.text();
+  store.add(f.name, text); store.setActive(f.name); refreshCorpora();
+};
+
+// live slider labels
+const lrValue = () => parseInt(S.lr.value, 10) / 1000;
+function bindLabels() {
+  S.layers.oninput = () => S.layersVal.textContent = S.layers.value;
+  S.width.oninput  = () => S.widthVal.textContent  = S.width.value;
+  S.kctx.oninput   = () => S.kVal.textContent      = S.kctx.value;
+  S.lr.oninput     = () => S.lrVal.textContent     = lrValue().toFixed(3);
+  S.batch.oninput  = () => S.batchVal.textContent  = S.batch.value;
+  S.temp.oninput   = () => S.tempVal.textContent   = (S.temp.value/100).toFixed(2);
+  S.genlen.oninput = () => S.lenVal.textContent    = S.genlen.value;
+}
+bindLabels();
+
+const Ctrl = {
+  trainer: null, running: false, raf: 0, history: [], lastTick: 0, stepCount: 0,
+  build() {
+    const width = parseInt(S.width.value, 10);
+    const layers = parseInt(S.layers.value, 10);
+    this.trainer = new Trainer({
+      text: store.get(store.active),
+      K: parseInt(S.kctx.value, 10),
+      layerSizes: new Array(layers).fill(width),
+      theta: width, lr: lrValue(),
+      batchSize: parseInt(S.batch.value, 10),
+      negPerPos: 1, valFraction: 0.1, vocabCap: 60, seed: 1234
+    });
+    this.history = []; this.stepCount = 0;
+  },
+  loop() {
+    if (!this.running) return;
+    let last = null;
+    for (let i = 0; i < 20; i++) { last = this.trainer.stepBatch(); this.stepCount++; }
+    this.trainer.lr = lrValue(); // allow live LR tweaks
+    this.updateStats(last);
+    this.raf = requestAnimationFrame(() => this.loop());
+  },
+  updateStats(last) {
+    const t = this.trainer;
+    S.examples.textContent = t.examplesSeen.toLocaleString();
+    const now = performance.now();
+    if (this.lastTick) S.sps.textContent = Math.round(20000 / (now - this.lastTick));
+    this.lastTick = now;
+    if (this.stepCount % 10 === 0) {
+      const acc = t.evalAccuracy(40);
+      S.acc.textContent = (acc * 100).toFixed(1) + "%";
+      const gp = last.gPos.reduce((a,b)=>a+b,0)/last.gPos.length;
+      const gn = last.gNeg.reduce((a,b)=>a+b,0)/last.gNeg.length;
+      S.good.textContent = gp.toFixed(1) + " / " + gn.toFixed(1);
+      this.history.push({ acc, gp, gn });
+      drawChart();
+      refreshDistribution();
+    }
+  }
+};
+
+function setStatus(s) { S.status.textContent = s; }
+
+S.start.onclick = () => {
+  if (!Ctrl.trainer) Ctrl.build();
+  Ctrl.running = true; setStatus("training");
+  S.start.disabled = true; S.pause.disabled = false;
+  Ctrl.lastTick = 0; Ctrl.loop();
+};
+S.pause.onclick = () => {
+  Ctrl.running = false; cancelAnimationFrame(Ctrl.raf); setStatus("paused");
+  S.start.disabled = false; S.pause.disabled = true; S.start.textContent = "Resume";
+};
+S.reset.onclick = () => {
+  Ctrl.running = false; cancelAnimationFrame(Ctrl.raf); Ctrl.trainer = null;
+  setStatus("idle"); S.examples.textContent = "0"; S.acc.textContent = "–"; S.good.textContent = "–";
+  S.start.disabled = false; S.pause.disabled = true; S.start.textContent = "Start";
+  S.history = []; drawChart();
+};
+
+function drawChart() {
+  const c = S.chart, ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, c.width, c.height);
+  const h = Ctrl.history || [];
+  if (h.length < 2) return;
+  const plot = (key, color, scaleMax) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    h.forEach((p, i) => {
+      const x = (i / (h.length - 1)) * c.width;
+      const y = c.height - (Math.min(p[key], scaleMax) / scaleMax) * c.height;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.stroke();
+  };
+  const maxG = Math.max(1, ...h.map(p => Math.max(p.gp, p.gn)));
+  plot("gp", "#7fd1ae", maxG); plot("gn", "#e0707a", maxG); plot("acc", "#f0c060", 1);
+}
+
+function refreshDistribution() {
+  if (!Ctrl.trainer) return;
+  const t = Ctrl.trainer;
+  const ctxIdx = padContextIndices([...S.prompt.value].map(ch => charToIndex(t.vocab, ch)), t.K, t.vocab.unkIndex);
+  const dist = t.net.predictDistribution(t.vocab, ctxIdx, { temp: 1, excludeFirst: true });
+  const pairs = [...dist].map((p, i) => ({ p, ch: t.vocab.chars[i] })).sort((a, b) => b.p - a.p).slice(0, 24);
+  const max = pairs[0] ? pairs[0].p : 1;
+  S.dist.innerHTML = "";
+  for (const { p, ch } of pairs) {
+    const b = document.createElement("div"); b.className = "bar";
+    b.style.height = (p / max * 100) + "%";
+    b.title = JSON.stringify(ch) + " " + (p * 100).toFixed(1) + "%";
+    S.dist.appendChild(b);
+  }
+}
+
+S.generate.onclick = () => {
+  if (!Ctrl.trainer) return;
+  const t = Ctrl.trainer;
+  const out = generate(t.net, t.vocab, S.prompt.value, parseInt(S.genlen.value, 10),
+    parseInt(S.temp.value, 10) / 100, makeRng((Date.now() & 0xffff) | 1), t.K);
+  S.genOut.textContent = out;
+  refreshDistribution();
+};
 </script>
 </body>
 </html>
