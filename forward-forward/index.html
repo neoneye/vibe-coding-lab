@@ -278,8 +278,113 @@ FFTests.add("l2normalize yields unit length", () => {
   FFTests.approx(Math.hypot(u[0], u[1]), 1, 1e-6, "unit length");
 });
 
+// --- Trainer ---
+class Trainer {
+  constructor(cfg) {
+    this.K = cfg.K; this.theta = cfg.theta; this.lr = cfg.lr;
+    this.batchSize = cfg.batchSize; this.negPerPos = cfg.negPerPos;
+    this.seed = cfg.seed; this.rng = makeRng(cfg.seed);
+    this.vocab = buildVocab(cfg.text, cfg.vocabCap);
+    const idx = [...cfg.text].map(ch => charToIndex(this.vocab, ch));
+    const split = Math.max(this.K + 1, Math.floor(idx.length * (1 - cfg.valFraction)));
+    this.trainStream = idx.slice(0, split);
+    this.valStream = idx.slice(Math.max(0, split - this.K)); // keep K context before val region
+    this.net = new FFNet({ inDim: inputDim(this.vocab, this.K), layerSizes: cfg.layerSizes, rng: this.rng });
+    this.examplesSeen = 0;
+  }
+  sampleContextAt(stream, pos) {
+    const contextIndices = stream.slice(pos - this.K, pos);
+    return { contextIndices, trueIndex: stream[pos] };
+  }
+  _accumPath(x, isPositive) {
+    // run accumulate through all layers along one forward path; return per-layer goodness + total loss
+    const goods = []; let loss = 0; let input = x;
+    for (let i = 0; i < this.net.layers.length; i++) {
+      const r = this.net.layers[i].accumulate(input, isPositive, this.theta);
+      goods.push(r.g); loss += r.loss;
+      input = l2normalize(r.a);
+    }
+    return { goods, loss };
+  }
+  stepBatch() {
+    const L = this.net.layers.length;
+    for (const layer of this.net.layers) layer.zeroGrad();
+    const gPos = new Array(L).fill(0), gNeg = new Array(L).fill(0);
+    let lossPos = 0, lossNeg = 0, nPos = 0, nNeg = 0;
+    for (let s = 0; s < this.batchSize; s++) {
+      const pos = this.K + Math.floor(this.rng() * (this.trainStream.length - this.K));
+      const { contextIndices, trueIndex } = this.sampleContextAt(this.trainStream, pos);
+      const xPos = encode(this.vocab, contextIndices, trueIndex);
+      const rp = this._accumPath(xPos, true);
+      for (let i = 0; i < L; i++) gPos[i] += rp.goods[i]; lossPos += rp.loss; nPos++;
+      for (let n = 0; n < this.negPerPos; n++) {
+        let negIdx = 1 + Math.floor(this.rng() * (this.vocab.size - 1)); // avoid UNK(0)
+        if (negIdx === trueIndex) negIdx = negIdx === this.vocab.size - 1 ? 1 : negIdx + 1;
+        const xNeg = encode(this.vocab, contextIndices, negIdx);
+        const rn = this._accumPath(xNeg, false);
+        for (let i = 0; i < L; i++) gNeg[i] += rn.goods[i]; lossNeg += rn.loss; nNeg++;
+      }
+    }
+    for (const layer of this.net.layers) layer.step(this.lr);
+    this.examplesSeen += this.batchSize;
+    for (let i = 0; i < L; i++) { gPos[i] /= nPos; gNeg[i] /= nNeg; }
+    return { lossPos: lossPos / nPos, lossNeg: lossNeg / nNeg, gPos, gNeg };
+  }
+  evalAccuracy(sampleCount) {
+    if (this.valStream.length <= this.K + 1) return 0;
+    let correct = 0, total = 0;
+    for (let s = 0; s < sampleCount; s++) {
+      const pos = this.K + Math.floor(this.rng() * (this.valStream.length - this.K));
+      const { contextIndices, trueIndex } = this.sampleContextAt(this.valStream, pos);
+      const dist = this.net.predictDistribution(this.vocab, contextIndices, { temp: 1, excludeFirst: true });
+      let best = 0; for (let c = 1; c < dist.length; c++) if (dist[c] > dist[best]) best = c;
+      if (best === trueIndex) correct++; total++;
+    }
+    return total ? correct / total : 0;
+  }
+}
+
+function generate(net, vocab, seedText, length, temp, rng, K) {
+  let ctx = padContextIndices([...seedText].map(ch => charToIndex(vocab, ch)), K, vocab.unkIndex);
+  let out = seedText;
+  for (let i = 0; i < length; i++) {
+    let idx = net.sample(vocab, ctx, { temp, excludeFirst: true }, rng);
+    let tries = 0;
+    while (idx === vocab.unkIndex && tries < 5) { idx = net.sample(vocab, ctx, { temp, excludeFirst: true }, rng); tries++; }
+    if (idx === vocab.unkIndex) idx = 1;
+    out += vocab.chars[idx];
+    ctx = padContextIndices(ctx.concat(idx), K, vocab.unkIndex);
+  }
+  return out;
+}
+
+FFTests.add("Trainer overfits a trivial repeating pattern above chance", () => {
+  const text = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc";
+  const tr = new Trainer({
+    text, K: 3, layerSizes: [24, 24], theta: 24, lr: 0.02,
+    batchSize: 16, negPerPos: 1, valFraction: 0.25, vocabCap: 8, seed: 11
+  });
+  const chance = 1 / (tr.vocab.size - 1); // exclude UNK roughly
+  const before = tr.evalAccuracy(20);
+  for (let i = 0; i < 200; i++) tr.stepBatch();
+  const after = tr.evalAccuracy(20);
+  FFTests.assert(tr.examplesSeen === 200 * 16, "examplesSeen tracked");
+  FFTests.assert(after > before || after > chance * 1.5,
+    `accuracy should rise (chance≈${chance.toFixed(2)}, before=${before.toFixed(2)}, after=${after.toFixed(2)})`);
+});
+
+FFTests.add("generate returns a string of the requested length", () => {
+  const text = "abcabcabcabcabcabc";
+  const tr = new Trainer({ text, K: 3, layerSizes: [16], theta: 16, lr: 0.02,
+    batchSize: 8, negPerPos: 1, valFraction: 0.2, vocabCap: 6, seed: 5 });
+  for (let i = 0; i < 50; i++) tr.stepBatch();
+  const out = generate(tr.net, tr.vocab, "ab", 10, 0.8, makeRng(2), tr.K);
+  FFTests.assert(out.startsWith("ab"), "starts with seed");
+  FFTests.assert(out.length === "ab".length + 10, "seed + length chars");
+});
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, FFNet };
+  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, FFNet, Trainer, generate };
 }
 </script>
 
