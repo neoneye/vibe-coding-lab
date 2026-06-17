@@ -155,6 +155,9 @@ class FFLayer {
     this.mb = new Float64Array(outDim); this.vb = new Float64Array(outDim);
     this.t = 0;
     this.dW = new Float64Array(this.W.length); this.db = new Float64Array(outDim);
+    this.Bw = new Float64Array(this.W.length);   // Muon momentum buffer (matrix)
+    this.vW2 = new Float64Array(this.W.length);  // SGD velocity for W
+    this.vb2 = new Float64Array(outDim);         // SGD velocity for b
     this.count = 0;
   }
   forward(x) {
@@ -185,22 +188,34 @@ class FFLayer {
     this.count++;
     return { a, g, loss };
   }
-  step(lr) {
-    if (this.count === 0) return;
-    const b1 = 0.9, b2 = 0.999, eps = 1e-8, n = this.count;
-    this.t++;
-    const bc1 = 1 - Math.pow(b1, this.t), bc2 = 1 - Math.pow(b2, this.t);
-    for (let i = 0; i < this.W.length; i++) {
-      const g = this.dW[i] / n;
-      this.mW[i] = b1 * this.mW[i] + (1 - b1) * g;
-      this.vW[i] = b2 * this.vW[i] + (1 - b2) * g * g;
-      this.W[i] -= lr * (this.mW[i] / bc1) / (Math.sqrt(this.vW[i] / bc2) + eps);
+  _adamArray(param, dArr, m, v, lr, n, bc1, bc2) {
+    const b1 = 0.9, b2 = 0.999, eps = 1e-8;
+    for (let i = 0; i < param.length; i++) {
+      const g = dArr[i] / n;
+      m[i] = b1 * m[i] + (1 - b1) * g;
+      v[i] = b2 * v[i] + (1 - b2) * g * g;
+      param[i] -= lr * (m[i] / bc1) / (Math.sqrt(v[i] / bc2) + eps);
     }
-    for (let j = 0; j < this.outDim; j++) {
-      const g = this.db[j] / n;
-      this.mb[j] = b1 * this.mb[j] + (1 - b1) * g;
-      this.vb[j] = b2 * this.vb[j] + (1 - b2) * g * g;
-      this.b[j] -= lr * (this.mb[j] / bc1) / (Math.sqrt(this.vb[j] / bc2) + eps);
+  }
+  step(lr, optimizer = "adam") {
+    if (this.count === 0) return;
+    const n = this.count, mu = 0.95;
+    if (optimizer === "sgd") {
+      for (let i = 0; i < this.W.length; i++) { this.vW2[i] = mu * this.vW2[i] + this.dW[i] / n; this.W[i] -= lr * this.vW2[i]; }
+      for (let j = 0; j < this.outDim; j++) { this.vb2[j] = mu * this.vb2[j] + this.db[j] / n; this.b[j] -= lr * this.vb2[j]; }
+    } else if (optimizer === "muon") {
+      for (let i = 0; i < this.W.length; i++) this.Bw[i] = mu * this.Bw[i] + this.dW[i] / n;
+      const O = newtonSchulz5(this.Bw, this.outDim, this.inDim);
+      const scale = lr * Math.sqrt(Math.max(1, this.outDim / this.inDim));
+      for (let i = 0; i < this.W.length; i++) this.W[i] -= scale * O[i];
+      this.t++;
+      const bc1 = 1 - Math.pow(0.9, this.t), bc2 = 1 - Math.pow(0.999, this.t);
+      this._adamArray(this.b, this.db, this.mb, this.vb, lr, n, bc1, bc2); // bias via Adam
+    } else { // adam (default)
+      this.t++;
+      const bc1 = 1 - Math.pow(0.9, this.t), bc2 = 1 - Math.pow(0.999, this.t);
+      this._adamArray(this.W, this.dW, this.mW, this.vW, lr, n, bc1, bc2);
+      this._adamArray(this.b, this.db, this.mb, this.vb, lr, n, bc1, bc2);
     }
     this.zeroGrad();
   }
@@ -617,6 +632,40 @@ FFTests.add("newtonSchulz5 substantially orthogonalizes a matrix", () => {
   // so require the result to be much closer to identity than the raw normalized input.
   FFTests.assert(devOut < devIn * 0.6, `NS should sharply increase semi-orthogonality (devIn=${devIn.toFixed(3)} devOut=${devOut.toFixed(3)})`);
   FFTests.assert(devOut < 0.5, `NS output should be reasonably semi-orthogonal, devOut=${devOut.toFixed(3)}`);
+});
+
+FFTests.add("FFLayer Muon raises goodness on positive, lowers on negative", () => {
+  const rng = makeRng(7);
+  const layer = new FFLayer(6, 8, rng);
+  const xPos = Float64Array.from([1, 0, 0, 1, 0, 1]);
+  const theta = 8;
+  const g0 = layer.goodness(layer.forward(xPos));
+  for (let i = 0; i < 120; i++) { layer.zeroGrad(); layer.accumulate(xPos, true, theta); layer.step(0.1, "muon"); }
+  const g1 = layer.goodness(layer.forward(xPos));
+  FFTests.assert(g1 > g0, `muon positive goodness should rise (${g0} -> ${g1})`);
+
+  const xNeg = Float64Array.from([0, 1, 1, 0, 1, 0]);
+  const n0 = layer.goodness(layer.forward(xNeg));
+  for (let i = 0; i < 120; i++) { layer.zeroGrad(); layer.accumulate(xNeg, false, theta); layer.step(0.1, "muon"); }
+  const n1 = layer.goodness(layer.forward(xNeg));
+  FFTests.assert(n1 < n0, `muon negative goodness should fall (${n0} -> ${n1})`);
+});
+
+FFTests.add("FFLayer SGD raises goodness on a positive sample", () => {
+  const layer = new FFLayer(6, 8, makeRng(5));
+  const xPos = Float64Array.from([1, 0, 1, 0, 1, 0]);
+  const g0 = layer.goodness(layer.forward(xPos));
+  for (let i = 0; i < 80; i++) { layer.zeroGrad(); layer.accumulate(xPos, true, 8); layer.step(0.02, "sgd"); }
+  FFTests.assert(layer.goodness(layer.forward(xPos)) > g0, "sgd should raise positive goodness");
+});
+
+FFTests.add("FFLayer optimizer switch (muon->adam) is safe and keeps learning", () => {
+  const layer = new FFLayer(6, 8, makeRng(9));
+  const xPos = Float64Array.from([1, 1, 0, 0, 1, 0]);
+  const g0 = layer.goodness(layer.forward(xPos));
+  for (let i = 0; i < 60; i++) { layer.zeroGrad(); layer.accumulate(xPos, true, 8); layer.step(0.1, "muon"); }
+  for (let i = 0; i < 60; i++) { layer.zeroGrad(); layer.accumulate(xPos, true, 8); layer.step(0.01, "adam"); }
+  FFTests.assert(layer.goodness(layer.forward(xPos)) > g0, "switching muon->adam should not throw and should keep raising goodness");
 });
 
 // --- Weights compatibility guard ---
