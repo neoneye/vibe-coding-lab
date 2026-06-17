@@ -25,6 +25,44 @@ function makeRng(seed) {
   };
 }
 
+// --- Vocab & Encoder ---
+function buildVocab(text, capN) {
+  const counts = new Map();
+  for (const ch of text) counts.set(ch, (counts.get(ch) || 0) + 1);
+  const sorted = [...counts.entries()].sort((a, b) =>
+    b[1] - a[1] || a[0].charCodeAt(0) - b[0].charCodeAt(0));
+  const chars = [""];
+  for (const [ch] of sorted) {
+    if (chars.length >= capN) break;
+    chars.push(ch);
+  }
+  const index = new Map();
+  chars.forEach((ch, i) => index.set(ch, i));
+  return { chars, index, size: chars.length, unkIndex: 0 };
+}
+
+function charToIndex(vocab, ch) {
+  const i = vocab.index.get(ch);
+  return i === undefined ? vocab.unkIndex : i;
+}
+
+function inputDim(vocab, K) { return (K + 1) * vocab.size; }
+
+function encode(vocab, contextIndices, candidateIndex) {
+  const S = vocab.size;
+  const x = new Float64Array((contextIndices.length + 1) * S);
+  for (let p = 0; p < contextIndices.length; p++) x[p * S + contextIndices[p]] = 1;
+  x[contextIndices.length * S + candidateIndex] = 1;
+  return x;
+}
+
+function padContextIndices(indices, K, padIndex) {
+  if (indices.length === K) return indices.slice();
+  if (indices.length > K) return indices.slice(indices.length - K);
+  const pad = new Array(K - indices.length).fill(padIndex);
+  return pad.concat(indices);
+}
+
 // --- Test harness (engine tests appended in later tasks) ---
 const FFTests = {
   _tests: [],
@@ -47,8 +85,31 @@ FFTests.add("rng is deterministic", () => {
   FFTests.assert(r1() === r2(), "same seed must produce same sequence");
 });
 
+FFTests.add("buildVocab caps size and reserves UNK at 0", () => {
+  const v = buildVocab("aaaabbbccd", 3);
+  FFTests.assert(v.size === 3, "size should equal cap");
+  FFTests.assert(v.unkIndex === 0, "UNK at index 0");
+  FFTests.assert(v.chars[1] === "a", "most frequent char first after UNK");
+  FFTests.assert(charToIndex(v, "z") === 0, "unknown char -> UNK");
+  FFTests.assert(charToIndex(v, "a") === 1, "known char -> its index");
+});
+
+FFTests.add("encode produces one-hots of correct dimension", () => {
+  const v = buildVocab("abcabc", 4); // UNK + a,b,c => size 4
+  const K = 2;
+  const x = encode(v, [charToIndex(v, "a"), charToIndex(v, "b")], charToIndex(v, "c"));
+  FFTests.assert(x.length === inputDim(v, K), "input length = (K+1)*size");
+  let ones = 0; for (const xi of x) ones += xi;
+  FFTests.assert(ones === 3, "exactly K+1 ones total");
+});
+
+FFTests.add("padContextIndices fixes length", () => {
+  FFTests.assert(padContextIndices([1, 2, 3], 2, 0).join(",") === "2,3", "truncate oldest");
+  FFTests.assert(padContextIndices([5], 3, 0).join(",") === "0,0,5", "left pad");
+});
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, FFTests };
+  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests };
 }
 </script>
 
