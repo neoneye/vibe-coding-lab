@@ -484,6 +484,16 @@ FFTests.add("serialize/deserialize preserves predictions", () => {
   for (let i = 0; i < before.length; i++) FFTests.approx(before[i], after[i], 1e-9, "dist preserved");
 });
 
+FFTests.add("weightsCompatible accepts matching, rejects mismatched K/vocab", () => {
+  const v = buildVocab("abcabc", 6); const K = 3;
+  const net = new FFNet({ inDim: inputDim(v, K), layerSizes: [8], rng: makeRng(1) });
+  const obj = Object.assign(serializeNet(net), { K, vocabChars: v.chars });
+  FFTests.assert(weightsCompatible(obj, v, K) === true, "matching should be accepted");
+  FFTests.assert(weightsCompatible(obj, v, K + 1) === false, "different K rejected");
+  const v2 = buildVocab("xyzxyz", 6);
+  FFTests.assert(weightsCompatible(obj, v2, K) === false, "different vocab rejected");
+});
+
 // --- Built-in Corpora & Store ---
 const BUILTIN_CORPORA = [
   { name: "Shakespeare (Sonnet 18+)", text:
@@ -535,8 +545,15 @@ FFTests.add("CorpusStore exposes builtins and accepts uploads", () => {
   FFTests.assert(cs.active === "mine" && cs.get("mine") === "hello hello hello", "upload stored + active");
 });
 
+// --- Weights compatibility guard ---
+function weightsCompatible(obj, vocab, K) {
+  if (!obj || obj.inDim !== inputDim(vocab, K)) return false;
+  if (obj.vocabChars && obj.vocabChars.join("") !== vocab.chars.join("")) return false;
+  return true;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, FFNet, Trainer, generate, serializeNet, deserializeNet, BUILTIN_CORPORA, CorpusStore };
+  module.exports = { makeRng, buildVocab, charToIndex, inputDim, encode, padContextIndices, FFTests, sigmoid, FFLayer, l2normalize, softmax, FFNet, Trainer, generate, serializeNet, deserializeNet, weightsCompatible, BUILTIN_CORPORA, CorpusStore };
 }
 </script>
 
@@ -642,7 +659,7 @@ S.reset.onclick = () => {
 
 S.save.onclick = () => {
   if (!Ctrl.trainer) return;
-  const blob = new Blob([JSON.stringify(serializeNet(Ctrl.trainer.net))], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(Object.assign(serializeNet(Ctrl.trainer.net), { K: Ctrl.trainer.K, vocabChars: Ctrl.trainer.vocab.chars }))], { type: "application/json" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "ff-weights.json"; a.click();
 };
 S.load.onclick = () => S.loadFile.click();
@@ -650,6 +667,9 @@ S.loadFile.onchange = async (e) => {
   const f = e.target.files[0]; if (!f || !Ctrl.trainer) return;
   try {
     const obj = JSON.parse(await f.text());
+    if (!weightsCompatible(obj, Ctrl.trainer.vocab, Ctrl.trainer.K)) {
+      setStatus("weights don't match current model"); e.target.value = ""; return;
+    }
     Ctrl.trainer.net = deserializeNet(obj, makeRng(1));
     refreshDistribution(); setStatus("weights loaded");
   } catch (err) {
