@@ -419,6 +419,7 @@ class Trainer {
   constructor(cfg) {
     this.K = cfg.K; this.theta = cfg.theta; this.lr = cfg.lr;
     this.batchSize = cfg.batchSize; this.negPerPos = cfg.negPerPos;
+    this.optimizer = cfg.optimizer || "muon";
     this.seed = cfg.seed; this.rng = makeRng(cfg.seed);
     this.vocab = buildVocab(cfg.text, cfg.vocabCap);
     const idx = [...cfg.text].map(ch => charToIndex(this.vocab, ch));
@@ -461,7 +462,7 @@ class Trainer {
         for (let i = 0; i < L; i++) gNeg[i] += rn.goods[i]; lossNeg += rn.loss; nNeg++;
       }
     }
-    for (const layer of this.net.layers) layer.step(this.lr);
+    for (const layer of this.net.layers) layer.step(this.lr, this.optimizer);
     this.examplesSeen += this.batchSize;
     for (let i = 0; i < L; i++) { gPos[i] /= nPos; gNeg[i] /= nNeg; }
     return { lossPos: lossPos / nPos, lossNeg: lossNeg / nNeg, gPos, gNeg };
@@ -522,6 +523,23 @@ FFTests.add("Trainer overfits a trivial repeating pattern above chance", () => {
   FFTests.assert(tr.examplesSeen === 200 * 16, "examplesSeen tracked");
   FFTests.assert(after > before || after > chance * 1.5,
     `accuracy should rise (chance≈${chance.toFixed(2)}, before=${before.toFixed(2)}, after=${after.toFixed(2)})`);
+});
+
+FFTests.add("Trainer defaults to Muon and learns on a repeating pattern", () => {
+  const text = "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc";
+  const tr = new Trainer({
+    text, K: 3, layerSizes: [24, 24], theta: 24, lr: 0.05,
+    batchSize: 16, negPerPos: 1, valFraction: 0.25, vocabCap: 8, seed: 11
+  });
+  FFTests.assert(tr.optimizer === "muon", "default optimizer should be muon");
+  const before = tr.evalAccuracy(20);
+  let sepBefore = 0, last;
+  for (let i = 0; i < 400; i++) last = tr.stepBatch();
+  const after = tr.evalAccuracy(20);
+  const gp = last.gPos.reduce((a,b)=>a+b,0)/last.gPos.length;
+  const gn = last.gNeg.reduce((a,b)=>a+b,0)/last.gNeg.length;
+  FFTests.assert(after > before || gp > gn,
+    `muon should learn (before=${before.toFixed(2)}, after=${after.toFixed(2)}, gp=${gp.toFixed(1)}, gn=${gn.toFixed(1)})`);
 });
 
 FFTests.add("generate returns a string of the requested length", () => {
