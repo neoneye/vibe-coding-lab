@@ -74,6 +74,9 @@ canvas { width: 100%; background: #0e1118; border-radius: 6px; display: block; m
       <button id="load" class="secondary">Load weights</button>
       <input type="file" id="loadFile" accept=".json" style="display:none">
     </div>
+    <div class="stat" style="margin-top:12px; border-top:1px solid #232a36; padding-top:8px;">
+      <span>Parameters (weights)</span><span id="params">–</span>
+    </div>
   </section>
   <section>
     <div class="panel">
@@ -273,12 +276,23 @@ class FFNet {
     return { acts, goods };
   }
   readoutDim() { let s = 0; for (const l of this.layers) s += l.outDim; return s; }
+  paramCount() { let s = 0; for (const l of this.layers) s += l.W.length + l.b.length; return s; }
   readoutFeatures(acts) {
     const out = new Float64Array(this.readoutDim());
     let off = 0;
     for (const a of acts) { const u = l2normalize(a); out.set(u, off); off += u.length; }
     return out;
   }
+}
+
+// Trainable-weight count for a given config, without instantiating a model.
+// Mirrors FFNet + ARReadout: layer W/b, readout V (M×R) + lower-tri U + c.
+function modelParamCount({ inDim, layerSizes, bitsPerTok }) {
+  let net = 0, prev = inDim;
+  for (const w of layerSizes) { net += prev * w + w; prev = w; }
+  const R = layerSizes.reduce((a, b) => a + b, 0); // readout feature dim
+  const M = bitsPerTok;
+  return net + M * R + (M * (M - 1)) / 2 + M;
 }
 
 // --- Test harness (engine tests appended in later tasks) ---
@@ -331,6 +345,19 @@ FFTests.add("l2normalize yields unit length", () => {
   FFTests.approx(Math.hypot(u[0], u[1]), 1, 1e-6, "unit length");
 });
 
+FFTests.add("paramCount sums layer + readout weights", () => {
+  const net = new FFNet({ inDim: 12, layerSizes: [8, 6], rng: makeRng(2) });
+  // layer0: 12*8 + 8 = 104, layer1: 8*6 + 6 = 54 => 158
+  FFTests.assert(net.paramCount() === 158, "net params = 158, got " + net.paramCount());
+  const ro = new ARReadout(14, 8, makeRng(1)); // V:8*14 + lowerTri:8*7/2 + c:8 = 112+28+8 = 148
+  FFTests.assert(ro.paramCount() === 148, "readout params = 148, got " + ro.paramCount());
+});
+FFTests.add("modelParamCount matches a built Trainer", () => {
+  const t = new Trainer({ text: "the quick brown fox jumps over the lazy dog the end", n: 3, K: 6,
+    layerSizes: [32, 16], theta: 32, lr: 0.02, batchSize: 8, valFraction: 0.2, seed: 7 });
+  const est = modelParamCount({ inDim: t.inDim, layerSizes: [32, 16], bitsPerTok: t.bitsPerTok });
+  FFTests.assert(est === t.paramCount(), "estimate " + est + " != actual " + t.paramCount());
+});
 FFTests.add("FFNet.readoutFeatures concatenates normalized layer activations", () => {
   const net = new FFNet({ inDim: 12, layerSizes: [8, 6], rng: makeRng(2) });
   const x = new Float64Array(12); for (let i = 0; i < 12; i++) x[i] = (i % 3) ? 1 : 0;
@@ -362,6 +389,7 @@ class Trainer {
     this.readout = new ARReadout(this.net.readoutDim(), this.bitsPerTok, this.rng);
     this.examplesSeen = 0;
   }
+  paramCount() { return this.net.paramCount() + this.readout.paramCount(); }
   randomContextBits() {
     const x = new Float64Array(8 * this.K);
     for (let i = 0; i < this.K; i++) {
@@ -765,6 +793,8 @@ class ARReadout {
     this.dV = new Float64Array(this.V.length); this.dU = new Float64Array(this.U.length); this.dc = new Float64Array(M);
     this.count = 0;
   }
+  // V (M×R) + strictly-lower-triangular U (M·(M−1)/2 used entries) + c (M)
+  paramCount() { const M = this.outDim, R = this.featDim; return M * R + (M * (M - 1)) / 2 + M; }
   _logit(i, features, bits) {
     const R = this.featDim, M = this.outDim;
     let z = this.c[i]; const vb = i * R;
@@ -931,14 +961,14 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = { makeRng, FFTests, sigmoid, FFLayer, l2normalize, FFNet, Trainer, generate, sampleBit,
     BUILTIN_CORPORA, CorpusStore, matMul, transpose, frobNorm, newtonSchulz5,
     textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, ARReadout,
-    serializeModel, deserializeModel, modelCompatible, concatFloat, bytesContextBits, computeFeedback };
+    serializeModel, deserializeModel, modelCompatible, concatFloat, bytesContextBits, computeFeedback, modelParamCount };
 }
 </script>
 
 <script>
 const S = {}; // DOM refs
 ["corpus","upload","layers","layersVal","width","widthVal","kctx","kVal","lr","lrVal","batch","batchVal",
- "start","pause","reset","save","load","loadFile","status","examples","sps","acc","good","liveSample","chart",
+ "start","pause","reset","save","load","loadFile","status","examples","params","sps","acc","good","liveSample","chart",
  "prompt","temp","tempVal","genlen","lenVal","generate","genOut","dist","optimizer","tokenUnit"].forEach(id => S[id] = document.getElementById(id));
 
 const store = new CorpusStore();
@@ -986,15 +1016,16 @@ window.addEventListener("drop", (e) => {
 // live slider labels
 const lrValue = () => parseInt(S.lr.value, 10) / 1000;
 function bindLabels() {
-  S.layers.oninput = () => S.layersVal.textContent = S.layers.value;
-  S.width.oninput  = () => S.widthVal.textContent  = S.width.value;
-  S.kctx.oninput   = () => S.kVal.textContent      = S.kctx.value;
+  S.layers.oninput = () => { S.layersVal.textContent = S.layers.value; refreshParams(); };
+  S.width.oninput  = () => { S.widthVal.textContent  = S.width.value;  refreshParams(); };
+  S.kctx.oninput   = () => { S.kVal.textContent      = S.kctx.value;   refreshParams(); };
   S.lr.oninput     = () => S.lrVal.textContent     = lrValue().toFixed(3);
   S.batch.oninput  = () => S.batchVal.textContent  = S.batch.value;
   S.temp.oninput   = () => S.tempVal.textContent   = (S.temp.value/100).toFixed(2);
   S.genlen.oninput = () => S.lenVal.textContent    = S.genlen.value;
 }
 bindLabels();
+refreshParams(); // show footprint for the default settings up front
 
 const Ctrl = {
   trainer: null, running: false, raf: 0, history: [], lastTick: 0, stepCount: 0, lastTickSteps: 0,
@@ -1011,6 +1042,7 @@ const Ctrl = {
       valFraction: 0.1, n: parseInt(S.tokenUnit.value, 10), seed: 1234
     });
     this.history = []; this.stepCount = 0;
+    refreshParams();
   },
   loop() {
     if (!this.running) return;
@@ -1052,6 +1084,17 @@ const Ctrl = {
 };
 
 function setStatus(s) { S.status.textContent = s; }
+function refreshParams() {
+  const width = parseInt(S.width.value, 10);
+  const layers = parseInt(S.layers.value, 10);
+  const K = parseInt(S.kctx.value, 10);
+  const n = parseInt(S.tokenUnit.value, 10);
+  const inDim = 8 * K + 8 * (n - 1);
+  const count = modelParamCount({ inDim, layerSizes: new Array(layers).fill(width), bitsPerTok: 8 * n });
+  const bytes = count * 8; // Float64 weights
+  const size = bytes >= 1048576 ? (bytes / 1048576).toFixed(2) + " MB" : (bytes / 1024).toFixed(1) + " KB";
+  S.params.textContent = count.toLocaleString() + " (" + size + ")";
+}
 
 S.start.onclick = () => {
   if (!Ctrl.trainer) Ctrl.build();
@@ -1066,6 +1109,7 @@ S.pause.onclick = () => {
 S.reset.onclick = () => {
   Ctrl.running = false; cancelAnimationFrame(Ctrl.raf); Ctrl.trainer = null;
   setStatus("idle"); S.examples.textContent = "0"; S.acc.textContent = "–"; S.good.textContent = "–";
+  refreshParams();
   S.start.disabled = false; S.pause.disabled = true; S.start.textContent = "Start";
   Ctrl.history = []; drawChart();
 };
