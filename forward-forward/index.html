@@ -74,8 +74,10 @@ canvas { width: 100%; background: #0e1118; border-radius: 6px; display: block; m
       <button id="load" class="secondary">Load weights</button>
       <input type="file" id="loadFile" accept=".json" style="display:none">
     </div>
-    <div class="stat" style="margin-top:12px; border-top:1px solid #232a36; padding-top:8px;">
-      <span>Parameters (weights)</span><span id="params">–</span>
+    <div style="margin-top:12px; border-top:1px solid #232a36; padding-top:8px;">
+      <div class="stat"><span>Parameters (weights)</span><span id="params">–</span></div>
+      <div class="stat"><span>Optimizer state</span><span id="optMem">–</span></div>
+      <div class="stat"><span>Total training RAM</span><span id="totalMem">–</span></div>
     </div>
   </section>
   <section>
@@ -295,6 +297,18 @@ function modelParamCount({ inDim, layerSizes, bitsPerTok }) {
   return net + M * R + (M * (M - 1)) / 2 + M;
 }
 
+// Auxiliary training buffers (gradients + Adam/Muon/SGD state) allocated
+// alongside the weights, regardless of which optimizer is selected.
+// FFLayer: 5×W-sized (mW,vW,dW,Bw,vW2) + 4×b-sized (mb,vb,db,vb2).
+// ARReadout: 3×V + 3×U(M·M, full alloc) + 3×c.
+function optimizerStateCount({ inDim, layerSizes, bitsPerTok }) {
+  let aux = 0, prev = inDim;
+  for (const w of layerSizes) { aux += 5 * (prev * w) + 4 * w; prev = w; }
+  const R = layerSizes.reduce((a, b) => a + b, 0);
+  const M = bitsPerTok;
+  return aux + 3 * (M * R) + 3 * (M * M) + 3 * M;
+}
+
 // --- Test harness (engine tests appended in later tasks) ---
 const FFTests = {
   _tests: [],
@@ -357,6 +371,18 @@ FFTests.add("modelParamCount matches a built Trainer", () => {
     layerSizes: [32, 16], theta: 32, lr: 0.02, batchSize: 8, valFraction: 0.2, seed: 7 });
   const est = modelParamCount({ inDim: t.inDim, layerSizes: [32, 16], bitsPerTok: t.bitsPerTok });
   FFTests.assert(est === t.paramCount(), "estimate " + est + " != actual " + t.paramCount());
+});
+FFTests.add("optimizerStateCount matches allocated aux arrays", () => {
+  const t = new Trainer({ text: "the quick brown fox jumps over the lazy dog the end", n: 3, K: 6,
+    layerSizes: [32, 16], theta: 32, lr: 0.02, batchSize: 8, valFraction: 0.2, seed: 7 });
+  let actual = 0;
+  for (const l of t.net.layers) actual += l.mW.length + l.vW.length + l.dW.length + l.Bw.length + l.vW2.length
+    + l.mb.length + l.vb.length + l.db.length + l.vb2.length;
+  const r = t.readout;
+  actual += r.mV.length + r.vV.length + r.dV.length + r.mU.length + r.vU.length + r.dU.length
+    + r.mc.length + r.vc.length + r.dc.length;
+  const est = optimizerStateCount({ inDim: t.inDim, layerSizes: [32, 16], bitsPerTok: t.bitsPerTok });
+  FFTests.assert(est === actual, "estimate " + est + " != actual " + actual);
 });
 FFTests.add("FFNet.readoutFeatures concatenates normalized layer activations", () => {
   const net = new FFNet({ inDim: 12, layerSizes: [8, 6], rng: makeRng(2) });
@@ -961,14 +987,14 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = { makeRng, FFTests, sigmoid, FFLayer, l2normalize, FFNet, Trainer, generate, sampleBit,
     BUILTIN_CORPORA, CorpusStore, matMul, transpose, frobNorm, newtonSchulz5,
     textToBytes, bytesToText, tokenizeBytes, tokenToBits, bitsToToken, encodeContextBits, ARReadout,
-    serializeModel, deserializeModel, modelCompatible, concatFloat, bytesContextBits, computeFeedback, modelParamCount };
+    serializeModel, deserializeModel, modelCompatible, concatFloat, bytesContextBits, computeFeedback, modelParamCount, optimizerStateCount };
 }
 </script>
 
 <script>
 const S = {}; // DOM refs
 ["corpus","upload","layers","layersVal","width","widthVal","kctx","kVal","lr","lrVal","batch","batchVal",
- "start","pause","reset","save","load","loadFile","status","examples","params","sps","acc","good","liveSample","chart",
+ "start","pause","reset","save","load","loadFile","status","examples","params","optMem","totalMem","sps","acc","good","liveSample","chart",
  "prompt","temp","tempVal","genlen","lenVal","generate","genOut","dist","optimizer","tokenUnit"].forEach(id => S[id] = document.getElementById(id));
 
 const store = new CorpusStore();
@@ -1084,16 +1110,22 @@ const Ctrl = {
 };
 
 function setStatus(s) { S.status.textContent = s; }
+function fmtFloats(count) { // count of Float64 values -> "N (X KB/MB)"
+  const bytes = count * 8;
+  const size = bytes >= 1048576 ? (bytes / 1048576).toFixed(2) + " MB" : (bytes / 1024).toFixed(1) + " KB";
+  return count.toLocaleString() + " (" + size + ")";
+}
 function refreshParams() {
   const width = parseInt(S.width.value, 10);
   const layers = parseInt(S.layers.value, 10);
   const K = parseInt(S.kctx.value, 10);
   const n = parseInt(S.tokenUnit.value, 10);
-  const inDim = 8 * K + 8 * (n - 1);
-  const count = modelParamCount({ inDim, layerSizes: new Array(layers).fill(width), bitsPerTok: 8 * n });
-  const bytes = count * 8; // Float64 weights
-  const size = bytes >= 1048576 ? (bytes / 1048576).toFixed(2) + " MB" : (bytes / 1024).toFixed(1) + " KB";
-  S.params.textContent = count.toLocaleString() + " (" + size + ")";
+  const cfg = { inDim: 8 * K + 8 * (n - 1), layerSizes: new Array(layers).fill(width), bitsPerTok: 8 * n };
+  const weights = modelParamCount(cfg);
+  const opt = optimizerStateCount(cfg);
+  S.params.textContent = fmtFloats(weights);
+  S.optMem.textContent = fmtFloats(opt);
+  S.totalMem.textContent = fmtFloats(weights + opt);
 }
 
 S.start.onclick = () => {
