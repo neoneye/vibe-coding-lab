@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Geo Guess</title>
+</head>
+<body>
+<script id="country-data">window.COUNTRIES = [];</script>
+<script id="shared-code">
+// ---- Test harness (used by test.mjs via GeoTests.run) ----
+const GeoTests = (() => {
+  const tests = [];
+  let cur = '';
+  function add(name, fn) { tests.push({ name, fn }); }
+  function assert(cond, msg) { if (!cond) throw new Error(msg || ('assertion failed in ' + cur)); }
+  function assertApprox(a, b, eps, msg) {
+    if (Math.abs(a - b) > (eps == null ? 1e-6 : eps))
+      throw new Error((msg ? msg + ': ' : '') + 'expected ' + b + ' got ' + a);
+  }
+  function run() {
+    let pass = 0, fail = 0;
+    for (const t of tests) {
+      cur = t.name;
+      try { t.fn(); pass++; console.log('  ok   -', t.name); }
+      catch (e) { fail++; console.error('  FAIL -', t.name + ':', e.message); }
+    }
+    console.log('\n' + pass + ' passed, ' + fail + ' failed');
+    return fail === 0;
+  }
+  return { add, run, assert, assertApprox };
+})();
+
+// ---- projection: orthographic globe (math coords, y up, unit sphere) ----
+const DEG = Math.PI / 180;
+
+function project(lon, lat, rot) {
+  const a = (lon + rot.lambda) * DEG;
+  const b = lat * DEG;
+  const cx = Math.cos(b) * Math.sin(a);
+  const cy = Math.sin(b);
+  const cz = Math.cos(b) * Math.cos(a);
+  const p = rot.phi * DEG;
+  const ty = cy * Math.cos(p) - cz * Math.sin(p);
+  const tz = cy * Math.sin(p) + cz * Math.cos(p);
+  return { x: cx, y: ty, visible: tz > 0 };
+}
+
+function unproject(x, y, rot) {
+  const r2 = x * x + y * y;
+  if (r2 > 1) return null;
+  const tz = Math.sqrt(1 - r2);
+  const ty = y;
+  const p = rot.phi * DEG;
+  const cy = ty * Math.cos(p) + tz * Math.sin(p);
+  const cz = -ty * Math.sin(p) + tz * Math.cos(p);
+  const cx = x;
+  const lat = Math.asin(Math.max(-1, Math.min(1, cy))) / DEG;
+  let lon = Math.atan2(cx, cz) / DEG - rot.lambda;
+  lon = ((lon + 180) % 360 + 360) % 360 - 180;
+  return { lon, lat };
+}
+
+GeoTests.add('project center at zero rotation maps to origin', () => {
+  const r = project(0, 0, { lambda: 0, phi: 0 });
+  GeoTests.assertApprox(r.x, 0, 1e-9, 'x');
+  GeoTests.assertApprox(r.y, 0, 1e-9, 'y');
+  GeoTests.assert(r.visible, 'should be visible');
+});
+
+GeoTests.add('project/unproject round-trip on near hemisphere', () => {
+  const rot = { lambda: 20, phi: -10 };
+  for (const [lon, lat] of [[0, 0], [45, 30], [10, -25], [-15, 5]]) {
+    const p = project(lon, lat, rot);
+    GeoTests.assert(p.visible, lon + ',' + lat + ' should be visible');
+    const u = unproject(p.x, p.y, rot);
+    GeoTests.assertApprox(u.lon, lon, 1e-6, 'lon');
+    GeoTests.assertApprox(u.lat, lat, 1e-6, 'lat');
+  }
+});
+
+GeoTests.add('unproject outside the disk returns null', () => {
+  GeoTests.assert(unproject(0.99, 0.99, { lambda: 0, phi: 0 }) === null, 'should be null');
+});
+
+GeoTests.add('back hemisphere point is not visible', () => {
+  const r = project(180, 0, { lambda: 0, phi: 0 });
+  GeoTests.assert(!r.visible, 'antipode should be hidden');
+});
+</script>
+</body>
+</html>
