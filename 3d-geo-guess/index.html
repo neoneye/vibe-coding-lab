@@ -158,6 +158,71 @@ GeoTests.add('iso2ToEmoji returns empty for invalid input', () => {
   GeoTests.assert(iso2ToEmoji('-99') === '', 'too long');
   GeoTests.assert(iso2ToEmoji('1A') === '', 'non-letter');
 });
+
+// ---- game: health/score state machine (rendering-independent) ----
+const TOLERANCE_KM = 150;
+
+function createGame(countries, rng) {
+  rng = rng || Math.random;
+  const state = { health: 3, score: 0, target: null, prompt: 'name', phase: 'guessing' };
+  function pickTarget() {
+    const c = countries[Math.floor(rng() * countries.length)];
+    state.target = c;
+    state.prompt = (rng() < 0.5 && c.iso2) ? 'flag' : 'name';
+    state.phase = 'guessing';
+  }
+  function guess(lon, lat) {
+    if (state.phase !== 'guessing') return null;
+    const d = distanceToCountryKm(lon, lat, state.target);
+    const correct = d <= TOLERANCE_KM;
+    if (correct) state.score++; else state.health--;
+    state.phase = state.health <= 0 ? 'over' : 'revealed';
+    return { correct: correct, distanceKm: d };
+  }
+  function next() { if (state.phase === 'revealed') pickTarget(); }
+  function restart() { state.health = 3; state.score = 0; pickTarget(); }
+  pickTarget();
+  return { state, guess, next, restart, pickTarget };
+}
+
+// Deterministic rng helper for tests: cycles through the given values.
+function _seqRng(values) { let i = 0; return () => values[i++ % values.length]; }
+const _squareland = [{ name: 'Squareland', iso2: '', rings: [[[0,0],[0,10],[10,10],[10,0],[0,0]]], centroid: [5,5] }];
+
+GeoTests.add('correct guess keeps health, raises score, reveals', () => {
+  const g = createGame(_squareland, _seqRng([0, 0.9]));
+  const r = g.guess(5, 5);
+  GeoTests.assert(r.correct, 'should be correct');
+  GeoTests.assert(g.state.health === 3, 'health kept');
+  GeoTests.assert(g.state.score === 1, 'score up');
+  GeoTests.assert(g.state.phase === 'revealed', 'revealed');
+});
+
+GeoTests.add('wrong guess drops health and reveals', () => {
+  const g = createGame(_squareland, _seqRng([0, 0.9]));
+  const r = g.guess(80, 80);
+  GeoTests.assert(!r.correct, 'should be wrong');
+  GeoTests.assert(g.state.health === 2, 'health -1');
+  GeoTests.assert(g.state.phase === 'revealed', 'revealed');
+});
+
+GeoTests.add('three wrong guesses ends the game', () => {
+  const g = createGame(_squareland, _seqRng([0, 0.9]));
+  g.guess(80, 80); g.next();
+  g.guess(80, 80); g.next();
+  const r = g.guess(80, 80);
+  GeoTests.assert(g.state.health === 0, 'health 0');
+  GeoTests.assert(g.state.phase === 'over', 'game over');
+  GeoTests.assert(g.guess(5, 5) === null, 'no guessing after over');
+});
+
+GeoTests.add('restart resets health and score', () => {
+  const g = createGame(_squareland, _seqRng([0, 0.9]));
+  g.guess(80, 80);
+  g.restart();
+  GeoTests.assert(g.state.health === 3 && g.state.score === 0, 'reset');
+  GeoTests.assert(g.state.phase === 'guessing', 'guessing again');
+});
 </script>
 </body>
 </html>
