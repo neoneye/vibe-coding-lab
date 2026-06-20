@@ -1,14 +1,14 @@
-// One-time converter: download Natural Earth 110m admin-0 countries (public domain),
+// One-time converter: download Natural Earth 50m admin-0 countries (public domain),
 // simplify, and embed as window.COUNTRIES in index.html's country-data block.
 // Usage: node build_data.mjs
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson";
+const SRC_URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson";
 const round2 = (n) => Math.round(n * 100) / 100;
 
-const res = await fetch(URL);
+const res = await fetch(SRC_URL);
 if (!res.ok) { console.error("download failed:", res.status); process.exit(1); }
 const gj = await res.json();
 
