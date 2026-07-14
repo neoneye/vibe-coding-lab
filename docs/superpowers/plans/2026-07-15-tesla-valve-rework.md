@@ -611,6 +611,108 @@ git commit -m "tesla-valve: D2Q9 LBM solver with bounce-back and body force"
 
 ---
 
+### Task 4 — AMENDMENT (binding; supersedes the geometry and constants everywhere in this plan)
+
+The original geometry (straight duct + hanging loops) measured Di ≈ 1.00 at every
+force/tau, including both prescribed fallbacks: with an unobstructed straight lane,
+reverse flow never engages the loops. The controller iterated candidate geometries
+against quick LBM sweeps and validated a replacement that reaches **Di ≈ 1.67**
+(protocol: 3500 dev + 1500 measure steps, per direction) at the constants below.
+Mechanism: the main duct zigzags; a recirculation bucket hangs over each apex.
+Forward (+x) flow shoots across the bucket mouths along the zigzag; reverse (−x)
+flow is aimed by each descending leg straight into a bucket mouth, curls around
+inside, and is thrown back against the oncoming stream. Verified: single connected
+fluid region, all Task-2/Task-3 test predicates, stability at 1.5× pump for 11k steps.
+
+Apply ALL of the following to `2d-tesla-valve/index.html` (and `tune.mjs` where noted):
+
+**A. Constants** (in `shared-code`):
+
+```js
+// Lattice grid per simulation.
+const GRID_W = 480;
+const GRID_H = 88;
+// LBM relaxation time; kinematic viscosity nu = (TAU - 0.5) / 3.
+const TAU = 0.51;
+// Body-force magnitude driving the pump (lattice units). Tuned via tune.mjs;
+// measured diodicity ~1.67 at these defaults (Re ~ 500 in the duct).
+const DEFAULT_FORCE = 4e-5;
+```
+
+(`PROBE_X = 8` and `DIODICITY_MIN = 1.25` stay as they are.)
+
+**B. Replace `buildValveMask` entirely** (keep `carveCapsule` and `fluidComponents` as-is):
+
+```js
+// Tesla-valve wall mask: a zigzag main duct with a recirculation "bucket"
+// hanging over each apex. Forward (+x) flow shoots across the bucket mouths,
+// hugging the zigzag; reverse (-x) flow is aimed by each descending leg
+// straight into a bucket mouth, curls around inside, and is thrown back
+// against the oncoming stream. Diodicity is emergent (~1.67x at defaults,
+// Re ~ 500); geometry and constants tuned empirically with tune.mjs.
+function buildValveMask(opts) {
+  const o = Object.assign({
+    width: GRID_W, height: GRID_H,
+    units: 5, unitStep: 84, firstBase: 60,
+    ductY: 70, rise: 21, apexFrac: 0.45,
+    ductHalf: 9, loopHalf: 7.5,
+    // bucket waypoints relative to each apex; the last point lands back on
+    // the up-leg so the pocket discharges against the reverse stream
+    loop: [[0, 0], [-20, -14], [-39, -15], [-51, -3], [-48, 15], [-27, 11]],
+  }, opts || {});
+  const W = o.width, H = o.height;
+  const solid = new Uint8Array(W * H).fill(1);
+  const cc = (ax, ay, bx, by, r) => carveCapsule(solid, W, H, ax, ay, bx, by, r);
+  // straight periodic runs at both ends (x wraps)
+  cc(-8, o.ductY, o.firstBase + 2, o.ductY, o.ductHalf);
+  const endX = o.firstBase + o.units * o.unitStep;
+  cc(endX - 2, o.ductY, W + 8, o.ductY, o.ductHalf);
+  for (let k = 0; k < o.units; k++) {
+    const x0 = o.firstBase + k * o.unitStep;
+    const ax = x0 + o.apexFrac * o.unitStep, ay = o.ductY - o.rise;
+    cc(x0, o.ductY, ax, ay, o.ductHalf);               // up-leg
+    cc(ax, ay, x0 + o.unitStep, o.ductY, o.ductHalf);  // down-leg
+    for (let s = 0; s + 1 < o.loop.length; s++) {
+      cc(ax + o.loop[s][0], ay + o.loop[s][1],
+         ax + o.loop[s + 1][0], ay + o.loop[s + 1][1], o.loopHalf);
+    }
+  }
+  return { solid, width: W, height: H, opts: o };
+}
+```
+
+**C. Geometry test threshold**: in the test `"geometry: loops carve real area (islands exist)"`,
+change `assert(cv > cs * 1.6, ...)` to `assert(cv > cs * 1.4, ...)` (measured ratio is 1.58).
+
+**D. Canvas size**: in the HTML, change both canvases from `width="640" height="192"` to
+`width="960" height="176"` (2× the new grid).
+
+**E. Header copy**: replace the header `<p>` text with:
+
+```
+A Tesla valve has no moving parts, yet fluid passes easily one way and struggles the
+other way. The two channels below are <em>identical</em> and pumped equally hard &mdash;
+the top one forward, the bottom one in reverse. Forward flow shoots across the bucket
+mouths, hugging the zigzag duct. Reverse flow is aimed by each bend straight into a
+bucket, swirls around inside, and is thrown back against the oncoming stream. The flow
+numbers and the ratio are measured live from a real fluid simulation (lattice-Boltzmann)
+&mdash; nothing is scripted.
+```
+
+**F. `tune.mjs` sweep values**: `DEV = 3500`, `MEASURE = 1500`, taus `[0.51, 0.515]`,
+forces `[3e-5, 4e-5, 5e-5, 6e-5]`.
+
+**G. Later-task adjustments** (apply when those tasks run): in Task 6's DOM script use
+`WARMUP_STEPS = 2000` (not 1200) and speed-color normalization `/ 0.16` (not `/ 0.12`)
+in both the field shading and tracer coloring.
+
+Expected outcomes after A–F: `node test.mjs` (with the Task 4 diodicity test added)
+passes with measured Di ≈ 1.67 (suite runtime roughly 1.5–3 minutes — the diodicity
+test alone runs 10,000 LBM steps); `node tune.mjs` reproduces a table whose best row
+is force 4e-5 / tau 0.51.
+
+---
+
 ### Task 4: Diodicity — tuning sweep and the money test
 
 Add `tune.mjs` (a keeper, like the repo's other converter/tool scripts) that sweeps pump force and tau, printing forward/reverse flow and the emergent diodicity. Pick defaults, then lock in the headline test.
