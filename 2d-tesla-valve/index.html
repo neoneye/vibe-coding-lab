@@ -470,6 +470,122 @@ TeslaTests.test("diodicity: forward flow beats reverse (the point of the valve)"
   const di = qf / Math.abs(qr);
   assert(di > DIODICITY_MIN, `diodicity ${di.toFixed(2)} <= ${DIODICITY_MIN}`);
 });
+
+// Visual advection speed: display cells per second per unit lattice velocity.
+const ADVECT_SCALE = 900;
+const TRACER_MAX_AGE = 12;
+
+// Bilinear velocity sample at grid position (x, y); solid cells contribute
+// zero, which naturally slows tracers near walls. x wraps, y clamps.
+function sampleVelocity(sim, x, y, out) {
+  const W = sim.W, H = sim.H;
+  const x0 = Math.floor(x - 0.5), y0 = Math.floor(y - 0.5);
+  const fx = x - 0.5 - x0, fy = y - 0.5 - y0;
+  let vx = 0, vy = 0;
+  for (let j = 0; j < 2; j++) {
+    let cy = y0 + j;
+    if (cy < 0) cy = 0; else if (cy >= H) cy = H - 1;
+    for (let i = 0; i < 2; i++) {
+      let cx = (x0 + i) % W;
+      if (cx < 0) cx += W;
+      const c = cy * W + cx;
+      if (sim.solid[c]) continue;
+      const w = (i ? fx : 1 - fx) * (j ? fy : 1 - fy);
+      vx += w * sim.ux[c];
+      vy += w * sim.uy[c];
+    }
+  }
+  out.x = vx; out.y = vy;
+}
+
+// Massless tracer particles riding the LBM velocity field.
+class Tracers {
+  constructor(sim, count, seed) {
+    this.sim = sim;
+    this.rng = makeRng(seed == null ? 1 : seed);
+    this.fluidCells = [];
+    for (let c = 0; c < sim.W * sim.H; c++) if (!sim.solid[c]) this.fluidCells.push(c);
+    this.count = count;
+    this.xs = new Float32Array(count);
+    this.ys = new Float32Array(count);
+    this.age = new Float32Array(count);
+    for (let i = 0; i < count; i++) this._respawn(i, this.rng() * TRACER_MAX_AGE);
+  }
+
+  _respawn(i, age) {
+    const c = this.fluidCells[(this.rng() * this.fluidCells.length) | 0];
+    this.xs[i] = (c % this.sim.W) + this.rng();
+    this.ys[i] = ((c / this.sim.W) | 0) + this.rng();
+    this.age[i] = age || 0;
+  }
+
+  step(dt) {
+    const sim = this.sim, W = sim.W, H = sim.H;
+    const v = { x: 0, y: 0 };
+    const sub = 2, h = dt / sub;
+    for (let i = 0; i < this.count; i++) {
+      for (let s = 0; s < sub; s++) {
+        sampleVelocity(sim, this.xs[i], this.ys[i], v);
+        let x = this.xs[i] + v.x * ADVECT_SCALE * h;
+        const y = this.ys[i] + v.y * ADVECT_SCALE * h;
+        if (x < 0) x += W; else if (x >= W) x -= W;
+        this.xs[i] = x; this.ys[i] = y;
+      }
+      this.age[i] += dt;
+      const cx = this.xs[i] | 0, cy = this.ys[i] | 0;
+      if (cy < 0 || cy >= H || sim.solid[cy * W + cx] || this.age[i] > TRACER_MAX_AGE) {
+        this._respawn(i, 0);
+      }
+    }
+  }
+}
+
+// Exponential moving average for flow readouts.
+class Meter {
+  constructor(k) { this.k = k == null ? 0.02 : k; this.reset(); }
+  reset() { this.avg = 0; this.primed = false; }
+  add(v) {
+    if (!this.primed) { this.avg = v; this.primed = true; }
+    else this.avg += this.k * (v - this.avg);
+  }
+}
+
+TeslaTests.test("tracers: stay in fluid and are deterministic", () => {
+  const sim = new LBM({});
+  for (let i = 0; i < 400; i++) sim.step();
+  const a = new Tracers(sim, 200, 42);
+  const b = new Tracers(sim, 200, 42);
+  for (let i = 0; i < 300; i++) { a.step(1 / 60); b.step(1 / 60); }
+  for (let i = 0; i < a.count; i++) {
+    const cx = a.xs[i] | 0, cy = a.ys[i] | 0;
+    assert(cx >= 0 && cx < sim.W && cy >= 0 && cy < sim.H, "in bounds");
+    assert(!sim.solid[cy * sim.W + cx], `tracer ${i} inside a wall`);
+    assert(a.xs[i] === b.xs[i] && a.ys[i] === b.ys[i], "deterministic under seed");
+  }
+});
+
+TeslaTests.test("tracers: drift downstream in a straight duct", () => {
+  const sim = new LBM({ geo: buildValveMask({ units: 0 }) });
+  for (let i = 0; i < 1000; i++) sim.step();
+  const tr = new Tracers(sim, 100, 7);
+  const x0 = Array.from(tr.xs);
+  for (let i = 0; i < 60; i++) tr.step(1 / 60);
+  let moved = 0;
+  for (let i = 0; i < tr.count; i++) {
+    let d = tr.xs[i] - x0[i];
+    if (d < -sim.W / 2) d += sim.W;      // unwrap
+    if (d > 1) moved++;
+  }
+  assert(moved > tr.count * 0.7, `only ${moved}/${tr.count} tracers moved downstream`);
+});
+
+TeslaTests.test("meter: EMA converges and resets", () => {
+  const m = new Meter(0.1);
+  for (let i = 0; i < 200; i++) m.add(5);
+  assert(Math.abs(m.avg - 5) < 1e-6, "converges to constant input");
+  m.reset();
+  assert(m.avg === 0, "reset clears");
+});
 </script>
 
 <script>
