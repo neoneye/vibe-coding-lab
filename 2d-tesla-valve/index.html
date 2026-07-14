@@ -95,14 +95,20 @@
 <body>
 <header>
   <h1>2D Tesla Valve</h1>
-  <p>A Tesla valve has no moving parts, yet fluid passes easily one way and struggles the other way. The two channels below are <em>identical</em> and pumped equally hard &mdash; the top one forward, the bottom one in reverse. Forward flow glides along the main duct past the loop mouths. Reverse flow is peeled off at each junction, sent around the loop, and fired back against itself. The flow numbers and the ratio are measured live from a real fluid simulation (lattice-Boltzmann) &mdash; nothing is scripted.</p>
+  <p>A Tesla valve has no moving parts, yet fluid passes easily one way and struggles the
+other way. The two channels below are <em>identical</em> and pumped equally hard &mdash;
+the top one forward, the bottom one in reverse. Forward flow shoots across the bucket
+mouths, hugging the zigzag duct. Reverse flow is aimed by each bend straight into a
+bucket, swirls around inside, and is thrown back against the oncoming stream. The flow
+numbers and the ratio are measured live from a real fluid simulation (lattice-Boltzmann)
+&mdash; nothing is scripted.</p>
 </header>
 <main>
   <div id="stage">
     <div class="paneLabel"><span>FORWARD &rarr;<span class="sub">pump pushes left&rarr;right</span></span><span class="flow">flow <b id="qf">&ndash;</b></span></div>
-    <canvas id="cfwd" width="640" height="192"></canvas>
+    <canvas id="cfwd" width="960" height="176"></canvas>
     <div class="paneLabel"><span>&larr; REVERSE<span class="sub">same pump, pushing right&rarr;left</span></span><span class="flow">flow <b id="qr">&ndash;</b></span></div>
-    <canvas id="crev" width="640" height="192"></canvas>
+    <canvas id="crev" width="960" height="176"></canvas>
     <div id="verdict">developing flow&hellip;</div>
   </div>
   <div class="panel">
@@ -127,12 +133,13 @@
 // ----- Pure, DOM-free simulation logic. Run by test.mjs via extraction. -----
 
 // Lattice grid per simulation.
-const GRID_W = 320;
-const GRID_H = 96;
+const GRID_W = 480;
+const GRID_H = 88;
 // LBM relaxation time; kinematic viscosity nu = (TAU - 0.5) / 3.
-const TAU = 0.53;
-// Body-force magnitude driving the pump (lattice units). Tuned in tune.mjs.
-const DEFAULT_FORCE = 6e-5;
+const TAU = 0.51;
+// Body-force magnitude driving the pump (lattice units). Tuned via tune.mjs;
+// measured diodicity ~1.67 at these defaults (Re ~ 500 in the duct).
+const DEFAULT_FORCE = 4e-5;
 // x-column (inside the straight run, clear of the first loop) where flow is measured.
 const PROBE_X = 8;
 // Test floor for forward/reverse flow ratio. Set from tune.mjs results.
@@ -196,30 +203,37 @@ function carveCapsule(solid, W, H, ax, ay, bx, by, r) {
   }
 }
 
-// Authentic Tesla-valve wall mask. Forward flow is +x along a straight duct.
-// Each unit adds a loop branch, listed here in the order REVERSE (-x) flow
-// travels it: a shallow peel-off up-left from the duct at R, over the top
-// moving left, down the left side, then re-entering the duct at L aimed
-// DOWNSTREAM (+x) -- so the loop's output collides head-on with the reverse
-// stream. Forward flow just slides past both mouths.
+// Tesla-valve wall mask: a zigzag main duct with a recirculation "bucket"
+// hanging over each apex. Forward (+x) flow shoots across the bucket mouths,
+// hugging the zigzag; reverse (-x) flow is aimed by each descending leg
+// straight into a bucket mouth, curls around inside, and is thrown back
+// against the oncoming stream. Diodicity is emergent (~1.67x at defaults,
+// Re ~ 500); geometry and constants tuned empirically with tune.mjs.
 function buildValveMask(opts) {
   const o = Object.assign({
     width: GRID_W, height: GRID_H,
-    units: 4, unitStep: 70, firstBase: 44,
-    ductY: 68, ductHalf: 6, loopHalf: 5,
+    units: 5, unitStep: 84, firstBase: 60,
+    ductY: 70, rise: 21, apexFrac: 0.45,
+    ductHalf: 9, loopHalf: 7.5,
+    // bucket waypoints relative to each apex; the last point lands back on
+    // the up-leg so the pocket discharges against the reverse stream
+    loop: [[0, 0], [-20, -14], [-39, -15], [-51, -3], [-48, 15], [-27, 11]],
   }, opts || {});
   const W = o.width, H = o.height;
   const solid = new Uint8Array(W * H).fill(1);
-  carveCapsule(solid, W, H, -8, o.ductY, W + 8, o.ductY, o.ductHalf);
-  // Loop waypoints as offsets from (base, ductY): R, peel, up, top, top-left,
-  // left, lower-left, L(=duct re-entry pointing +x).
-  const LOOP = [[37, 0], [18, -11], [2, -27], [-5, -43], [-21, -47], [-27, -30], [-22, -15], [0, 0]];
+  const cc = (ax, ay, bx, by, r) => carveCapsule(solid, W, H, ax, ay, bx, by, r);
+  // straight periodic runs at both ends (x wraps)
+  cc(-8, o.ductY, o.firstBase + 2, o.ductY, o.ductHalf);
+  const endX = o.firstBase + o.units * o.unitStep;
+  cc(endX - 2, o.ductY, W + 8, o.ductY, o.ductHalf);
   for (let k = 0; k < o.units; k++) {
-    const bx = o.firstBase + k * o.unitStep, by = o.ductY;
-    for (let s = 0; s + 1 < LOOP.length; s++) {
-      carveCapsule(solid, W, H,
-        bx + LOOP[s][0], by + LOOP[s][1],
-        bx + LOOP[s + 1][0], by + LOOP[s + 1][1], o.loopHalf);
+    const x0 = o.firstBase + k * o.unitStep;
+    const ax = x0 + o.apexFrac * o.unitStep, ay = o.ductY - o.rise;
+    cc(x0, o.ductY, ax, ay, o.ductHalf);               // up-leg
+    cc(ax, ay, x0 + o.unitStep, o.ductY, o.ductHalf);  // down-leg
+    for (let s = 0; s + 1 < o.loop.length; s++) {
+      cc(ax + o.loop[s][0], ay + o.loop[s][1],
+         ax + o.loop[s + 1][0], ay + o.loop[s + 1][1], o.loopHalf);
     }
   }
   return { solid, width: W, height: H, opts: o };
@@ -284,7 +298,7 @@ TeslaTests.test("geometry: loops carve real area (islands exist)", () => {
   const straight = buildValveMask({ units: 0 });
   const count = (m) => { let n = 0; for (const v of m.solid) if (!v) n++; return n; };
   const cv = count(g), cs = count(straight);
-  assert(cv > cs * 1.6, `valve fluid ${cv} should far exceed straight duct ${cs}`);
+  assert(cv > cs * 1.4, `valve fluid ${cv} should far exceed straight duct ${cs}`);
   assert(cv < g.width * g.height * 0.45, "fluid fraction sane");
 });
 
@@ -440,6 +454,21 @@ TeslaTests.test("lbm: stable over a long valve run", () => {
   for (let i = 0; i < 2000; i++) sim.step();
   assert(sim.allFinite(), "all distributions finite");
   assert(sim.maxSpeed() < 0.3, `max lattice speed ${sim.maxSpeed()}`);
+});
+
+TeslaTests.test("diodicity: forward flow beats reverse (the point of the valve)", () => {
+  const run = (dir) => {
+    const sim = new LBM({ forceX: dir * DEFAULT_FORCE });
+    for (let i = 0; i < 3500; i++) sim.step();
+    let q = 0;
+    for (let i = 0; i < 1500; i++) { sim.step(); q += sim.flowRate(PROBE_X); }
+    assert(sim.allFinite(), "sim stayed finite");
+    return q / 1500;
+  };
+  const qf = run(+1), qr = run(-1);
+  assert(qf > 0 && qr < 0, `flow signs follow the pump: ${qf}, ${qr}`);
+  const di = qf / Math.abs(qr);
+  assert(di > DIODICITY_MIN, `diodicity ${di.toFixed(2)} <= ${DIODICITY_MIN}`);
 });
 </script>
 
