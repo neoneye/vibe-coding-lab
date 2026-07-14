@@ -1,0 +1,1099 @@
+# 2D Tesla Valve Rework Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace the fake particle demo in `2d-tesla-valve/` with a real lattice-Boltzmann fluid simulation of the authentic Tesla valve geometry, shown as two stacked canvases (forward vs reverse pumping) with a live, emergent diodicity readout.
+
+**Architecture:** One self-contained `index.html`. A DOM-free `<script id="shared-code">` block holds geometry builder, D2Q9 LBM solver, tracer advection, meters, and tests (`TeslaTests`); `test.mjs` extracts and runs it in Node. A second DOM script builds two LBM instances over the same wall mask, pumped in opposite directions, and renders field shading + tracer particles.
+
+**Tech Stack:** Vanilla JS, 2D canvas, typed arrays. No dependencies, no CDN.
+
+**Spec:** `docs/superpowers/specs/2026-07-15-tesla-valve-rework-design.md`
+
+## Global Constraints
+
+- Single self-contained `index.html`; no external resources of any kind.
+- All pure logic in `<script id="shared-code">`, runnable by `node test.mjs` (extraction pattern already in `test.mjs` — keep it unchanged).
+- Commits go directly to `main` (repo convention). Commit message prefix: `tesla-valve:`.
+- Grid per sim: 320×96. Forward = +x. Canvas internal size 640×192 (2× scale).
+- Keep the repo's dark GitHub-ish aesthetic (`#0d1117` background, `#58a6ff` accent) from the current page.
+- Screenshot stays named `screenshot1.png` (gallery references it by that name; no gallery edits needed).
+
+---
+
+### Task 1: Skeleton rewrite + test harness
+
+Replace the old page wholesale with a new shell: HTML/CSS layout, empty-ish shared-code block containing constants, `makeRng`, an `assert` helper, and a registration-style `TeslaTests` harness. `test.mjs` stays byte-identical.
+
+**Files:**
+- Rewrite: `2d-tesla-valve/index.html`
+- Keep unchanged: `2d-tesla-valve/test.mjs`
+
+**Interfaces:**
+- Produces: constants `GRID_W=320`, `GRID_H=96`, `TAU`, `DEFAULT_FORCE`, `PROBE_X=8`, `DIODICITY_MIN`; `makeRng(seed) -> () => float`; `assert(cond, msg)`; `TeslaTests.test(name, fn)` and `TeslaTests.run() -> bool`. Later tasks append code to the shared-code block and register tests via `TeslaTests.test(...)` **above** the final `TeslaTests.run` definition order requirement: registration calls may appear anywhere after the harness definition; `run()` executes them all.
+
+- [ ] **Step 1: Rewrite `index.html`**
+
+Replace the entire file with:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2D Tesla Valve</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+  header { padding: 14px 20px 6px; }
+  header h1 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
+  header p { margin: 0; font-size: 13px; color: #8b949e; max-width: 860px; }
+  main {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 12px 20px 24px;
+    align-items: flex-start;
+  }
+  #stage { flex: 1 1 640px; min-width: 320px; }
+  .paneLabel {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    margin: 10px 2px 4px;
+  }
+  .paneLabel .sub { font-weight: 400; color: #8b949e; margin-left: 8px; }
+  .paneLabel .flow { font-weight: 400; color: #8b949e; }
+  .paneLabel .flow b { color: #58a6ff; font-variant-numeric: tabular-nums; }
+  canvas {
+    width: 100%;
+    height: auto;
+    background: #06090f;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    display: block;
+  }
+  #verdict {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: #11161d;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    font-size: 18px;
+    font-weight: 600;
+    color: #58a6ff;
+    text-align: center;
+  }
+  .panel {
+    flex: 0 0 260px;
+    background: #11161d;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .panel h2 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #8b949e;
+  }
+  .row { margin-bottom: 14px; }
+  .row label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+  .row label .val { color: #58a6ff; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: #58a6ff; }
+  .btns { display: flex; gap: 8px; }
+  button {
+    flex: 1;
+    background: #21262d;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { background: #2d333b; }
+  button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  .legend { font-size: 12px; color: #8b949e; margin-top: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>2D Tesla Valve</h1>
+  <p>A Tesla valve has no moving parts, yet fluid passes easily one way and struggles the other way. The two channels below are <em>identical</em> and pumped equally hard &mdash; the top one forward, the bottom one in reverse. Forward flow glides along the main duct past the loop mouths. Reverse flow is peeled off at each junction, sent around the loop, and fired back against itself. The flow numbers and the ratio are measured live from a real fluid simulation (lattice-Boltzmann) &mdash; nothing is scripted.</p>
+</header>
+<main>
+  <div id="stage">
+    <div class="paneLabel"><span>FORWARD &rarr;<span class="sub">pump pushes left&rarr;right</span></span><span class="flow">flow <b id="qf">&ndash;</b></span></div>
+    <canvas id="cfwd" width="640" height="192"></canvas>
+    <div class="paneLabel"><span>&larr; REVERSE<span class="sub">same pump, pushing right&rarr;left</span></span><span class="flow">flow <b id="qr">&ndash;</b></span></div>
+    <canvas id="crev" width="640" height="192"></canvas>
+    <div id="verdict">developing flow&hellip;</div>
+  </div>
+  <div class="panel">
+    <h2>Controls</h2>
+    <div class="row">
+      <label>Pump strength <span class="val" id="pumpVal"></span></label>
+      <input type="range" id="pump" min="0.5" max="1.5" step="0.05" value="1">
+    </div>
+    <div class="row">
+      <label>Tracer particles <span class="val" id="tracersVal"></span></label>
+      <input type="range" id="tracers" min="100" max="800" step="50" value="350">
+    </div>
+    <div class="row btns">
+      <button id="pauseBtn">Pause</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+    <div class="legend">Background brightness and dot color show local flow speed. &ldquo;flow&rdquo; is the time-averaged volumetric flow rate through the duct (arbitrary units). Both valves share the same geometry and pump strength; only the pump direction differs.</div>
+  </div>
+</main>
+
+<script id="shared-code">
+// ----- Pure, DOM-free simulation logic. Run by test.mjs via extraction. -----
+
+// Lattice grid per simulation.
+const GRID_W = 320;
+const GRID_H = 96;
+// LBM relaxation time; kinematic viscosity nu = (TAU - 0.5) / 3.
+const TAU = 0.53;
+// Body-force magnitude driving the pump (lattice units). Tuned in tune.mjs.
+const DEFAULT_FORCE = 6e-5;
+// x-column (inside the straight run, clear of the first loop) where flow is measured.
+const PROBE_X = 8;
+// Test floor for forward/reverse flow ratio. Set from tune.mjs results.
+const DIODICITY_MIN = 1.25;
+
+function makeRng(seed) {
+  let s = seed >>> 0;
+  return function () {
+    s |= 0; s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || "assertion failed");
+}
+
+const TeslaTests = {
+  cases: [],
+  test(name, fn) { this.cases.push([name, fn]); },
+  run() {
+    let pass = 0, fail = 0;
+    for (const [name, fn] of this.cases) {
+      try { fn(); pass++; }
+      catch (e) { fail++; console.error("FAIL:", name, "-", e.message); }
+    }
+    console.log(`TeslaTests: ${pass} passed, ${fail} failed`);
+    return fail === 0;
+  },
+};
+
+TeslaTests.test("harness sanity", () => {
+  assert(GRID_W > 0 && GRID_H > 0);
+  const rng = makeRng(1);
+  const v = rng();
+  assert(v >= 0 && v < 1, "rng in [0,1)");
+  assert(makeRng(1)() === v, "rng deterministic");
+});
+</script>
+
+<script>
+// ----- Rendering + UI (DOM). Filled in by later tasks. -----
+</script>
+</body>
+</html>
+```
+
+- [ ] **Step 2: Run tests**
+
+Run: `cd /Users/neoneye/git/vibe-coding-lab/2d-tesla-valve && node test.mjs`
+Expected: `TeslaTests: 1 passed, 0 failed`, exit 0.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add 2d-tesla-valve/index.html
+git commit -m "tesla-valve: replace old demo with LBM rework skeleton"
+```
+
+---
+
+### Task 2: Valve geometry (wall mask)
+
+Parametric builder producing a `Uint8Array` solid mask: a straight duct spanning the full width (periodic in x) plus 4 loop branches, each traced the way reverse flow travels it — peel off shallowly up-left, over the top, down the left side, re-enter the duct pointing downstream (+x).
+
+**Files:**
+- Modify: `2d-tesla-valve/index.html` (append inside `shared-code`, before the DOM script)
+
+**Interfaces:**
+- Produces: `carveCapsule(solid, W, H, ax, ay, bx, by, r)` (mutates mask, wraps x, never carves rows 0 / H-1); `buildValveMask(opts?) -> { solid: Uint8Array, width, height, opts }` where `solid[y*width+x]` is 1 = wall, 0 = fluid; `fluidComponents(solid, W, H) -> { count, label: Int32Array }` (4-connectivity, x-periodic).
+- Consumes: `GRID_W`, `GRID_H`, `assert`, `TeslaTests` from Task 1.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append inside the `shared-code` script (below the harness sanity test):
+
+```js
+TeslaTests.test("geometry: mask shape and borders", () => {
+  const g = buildValveMask();
+  assert(g.width === GRID_W && g.height === GRID_H);
+  assert(g.solid.length === GRID_W * GRID_H);
+  for (let x = 0; x < g.width; x++) {
+    assert(g.solid[x] === 1, "top border row solid");
+    assert(g.solid[(g.height - 1) * g.width + x] === 1, "bottom border row solid");
+  }
+});
+
+TeslaTests.test("geometry: single connected fluid region", () => {
+  const g = buildValveMask();
+  const comp = fluidComponents(g.solid, g.width, g.height);
+  assert(comp.count === 1, `expected 1 fluid component, got ${comp.count}`);
+});
+
+TeslaTests.test("geometry: duct present in every column (periodic wrap)", () => {
+  const g = buildValveMask();
+  for (let x = 0; x < g.width; x++) {
+    let n = 0;
+    for (let y = 0; y < g.height; y++) if (!g.solid[y * g.width + x]) n++;
+    assert(n >= 2 * g.opts.ductHalf - 2, `column ${x} too narrow: ${n}`);
+  }
+});
+
+TeslaTests.test("geometry: probe column is plain duct", () => {
+  const g = buildValveMask();
+  let n = 0;
+  for (let y = 0; y < g.height; y++) if (!g.solid[y * g.width + PROBE_X]) n++;
+  assert(n <= 2 * g.opts.ductHalf + 3, "probe column must not intersect a loop");
+});
+
+TeslaTests.test("geometry: loops carve real area (islands exist)", () => {
+  const g = buildValveMask();
+  const straight = buildValveMask({ units: 0 });
+  const count = (m) => { let n = 0; for (const v of m.solid) if (!v) n++; return n; };
+  const cv = count(g), cs = count(straight);
+  assert(cv > cs * 1.6, `valve fluid ${cv} should far exceed straight duct ${cs}`);
+  assert(cv < g.width * g.height * 0.45, "fluid fraction sane");
+});
+
+TeslaTests.test("geometry: units:0 gives a uniform straight duct", () => {
+  const g = buildValveMask({ units: 0 });
+  const colCount = (x) => { let n = 0; for (let y = 0; y < g.height; y++) if (!g.solid[y * g.width + x]) n++; return n; };
+  const c0 = colCount(0);
+  for (let x = 1; x < g.width; x++) assert(colCount(x) === c0, "uniform width");
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `node test.mjs`
+Expected: FAIL lines mentioning `buildValveMask is not defined`; exit 1.
+
+- [ ] **Step 3: Implement geometry**
+
+Insert **above** the tests just added:
+
+```js
+// Carve a thick line segment (capsule of half-width r) into the mask as fluid.
+// x wraps periodically; rows 0 and H-1 are never carved (outer walls).
+function carveCapsule(solid, W, H, ax, ay, bx, by, r) {
+  const minX = Math.floor(Math.min(ax, bx) - r - 1);
+  const maxX = Math.ceil(Math.max(ax, bx) + r + 1);
+  const minY = Math.max(1, Math.floor(Math.min(ay, by) - r - 1));
+  const maxY = Math.min(H - 2, Math.ceil(Math.max(ay, by) + r + 1));
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      let t = len2 > 0 ? ((x - ax) * dx + (y - ay) * dy) / len2 : 0;
+      if (t < 0) t = 0; else if (t > 1) t = 1;
+      const px = ax + t * dx - x, py = ay + t * dy - y;
+      if (px * px + py * py <= r * r) {
+        let xw = x % W; if (xw < 0) xw += W;
+        solid[y * W + xw] = 0;
+      }
+    }
+  }
+}
+
+// Authentic Tesla-valve wall mask. Forward flow is +x along a straight duct.
+// Each unit adds a loop branch, listed here in the order REVERSE (-x) flow
+// travels it: a shallow peel-off up-left from the duct at R, over the top
+// moving left, down the left side, then re-entering the duct at L aimed
+// DOWNSTREAM (+x) -- so the loop's output collides head-on with the reverse
+// stream. Forward flow just slides past both mouths.
+function buildValveMask(opts) {
+  const o = Object.assign({
+    width: GRID_W, height: GRID_H,
+    units: 4, unitStep: 70, firstBase: 44,
+    ductY: 68, ductHalf: 6, loopHalf: 5,
+  }, opts || {});
+  const W = o.width, H = o.height;
+  const solid = new Uint8Array(W * H).fill(1);
+  carveCapsule(solid, W, H, -8, o.ductY, W + 8, o.ductY, o.ductHalf);
+  // Loop waypoints as offsets from (base, ductY): R, peel, up, top, top-left,
+  // left, lower-left, L(=duct re-entry pointing +x).
+  const LOOP = [[37, 0], [18, -11], [2, -27], [-5, -43], [-21, -47], [-27, -30], [-22, -15], [0, 0]];
+  for (let k = 0; k < o.units; k++) {
+    const bx = o.firstBase + k * o.unitStep, by = o.ductY;
+    for (let s = 0; s + 1 < LOOP.length; s++) {
+      carveCapsule(solid, W, H,
+        bx + LOOP[s][0], by + LOOP[s][1],
+        bx + LOOP[s + 1][0], by + LOOP[s + 1][1], o.loopHalf);
+    }
+  }
+  return { solid, width: W, height: H, opts: o };
+}
+
+// Count 4-connected fluid components (x-periodic). Border rows are solid,
+// so y-neighbor indexing never leaves the array.
+function fluidComponents(solid, W, H) {
+  const label = new Int32Array(W * H).fill(-1);
+  let count = 0;
+  const stack = [];
+  for (let c = 0; c < W * H; c++) {
+    if (solid[c] || label[c] >= 0) continue;
+    stack.push(c); label[c] = count;
+    while (stack.length) {
+      const q = stack.pop();
+      const y = (q / W) | 0, x = q % W;
+      const nb = [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), q + W, q - W];
+      for (const n of nb) {
+        if (!solid[n] && label[n] < 0) { label[n] = count; stack.push(n); }
+      }
+    }
+    count++;
+  }
+  return { count, label };
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `node test.mjs`
+Expected: `TeslaTests: 7 passed, 0 failed`.
+
+- [ ] **Step 5: Eyeball the mask in ASCII**
+
+Run (from `2d-tesla-valve/`):
+
+```bash
+node -e '
+import("node:fs").then(({readFileSync}) => {
+  const src = readFileSync("index.html","utf8").match(/<script id="shared-code">([\s\S]*?)<\/script>/)[1];
+  const lib = new Function(src + "; return { buildValveMask };")();
+  const g = lib.buildValveMask();
+  for (let y = 0; y < g.height; y += 3) {
+    let row = "";
+    for (let x = 0; x < g.width; x += 3) row += g.solid[y*g.width+x] ? "#" : ".";
+    console.log(row);
+  }
+});'
+```
+
+Expected: a horizontal channel of `.` near the bottom with four loop shapes rising above it, each loop leaning left with its tail rejoining the duct. If a loop's segments visibly pinch off (disconnected `.` blobs), the connectivity test would have caught it — do not hand-tune yet; tuning happens in Task 4.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add 2d-tesla-valve/index.html
+git commit -m "tesla-valve: parametric valve wall mask with loop branches"
+```
+
+---
+
+### Task 3: D2Q9 lattice-Boltzmann solver
+
+BGK collision, velocity-shift (Shan–Chen) body forcing, halfway bounce-back at walls, periodic in x. Two Float32 distribution buffers swapped each step; per-cell `rho/ux/uy` kept for rendering, advection, and measurement.
+
+**Files:**
+- Modify: `2d-tesla-valve/index.html` (append inside `shared-code`)
+
+**Interfaces:**
+- Consumes: `buildValveMask`, constants from earlier tasks.
+- Produces: module-level `EX, EY, WQ, OPP` D2Q9 tables; `class LBM` with `constructor({geo?, tau?, forceX?})`, `reset()`, `step()`, `mass() -> number`, `flowRate(xCol) -> number` (sum of `ux` over fluid cells in the column; valid after ≥1 step), `maxSpeed() -> number`, `allFinite() -> bool`, fields `W, H, solid, ux, uy, rho, steps, forceX, tau`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append inside `shared-code`:
+
+```js
+TeslaTests.test("lbm: mass conserved under forcing", () => {
+  const sim = new LBM({});
+  const m0 = sim.mass();
+  for (let i = 0; i < 300; i++) sim.step();
+  const m1 = sim.mass();
+  assert(Math.abs(m1 - m0) / m0 < 1e-4, `mass drift ${(m1 - m0) / m0}`);
+});
+
+TeslaTests.test("lbm: straight duct develops forward Poiseuille-like flow", () => {
+  const sim = new LBM({ geo: buildValveMask({ units: 0 }) });
+  for (let i = 0; i < 1200; i++) sim.step();
+  assert(sim.flowRate(PROBE_X) > 0, "net +x flux under +x force");
+  // Centerline faster than near-wall.
+  const ys = [];
+  for (let y = 0; y < sim.H; y++) if (!sim.solid[y * sim.W + PROBE_X]) ys.push(y);
+  const mid = ys[(ys.length / 2) | 0], edge = ys[0];
+  const u = (y) => sim.ux[y * sim.W + PROBE_X];
+  assert(u(mid) > 1.5 * u(edge), `profile peaked: mid=${u(mid)} edge=${u(edge)}`);
+});
+
+TeslaTests.test("lbm: straight duct is symmetric (no fake diodicity)", () => {
+  const geo = buildValveMask({ units: 0 });
+  const fwd = new LBM({ geo, forceX: DEFAULT_FORCE });
+  const rev = new LBM({ geo: buildValveMask({ units: 0 }), forceX: -DEFAULT_FORCE });
+  for (let i = 0; i < 800; i++) { fwd.step(); rev.step(); }
+  const qf = Math.abs(fwd.flowRate(PROBE_X)), qr = Math.abs(rev.flowRate(PROBE_X));
+  assert(qf / qr > 0.98 && qf / qr < 1.02, `straight-duct ratio ${qf / qr}`);
+});
+
+TeslaTests.test("lbm: stable over a long valve run", () => {
+  const sim = new LBM({});
+  for (let i = 0; i < 2000; i++) sim.step();
+  assert(sim.allFinite(), "all distributions finite");
+  assert(sim.maxSpeed() < 0.3, `max lattice speed ${sim.maxSpeed()}`);
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `node test.mjs`
+Expected: 4 FAIL lines with `LBM is not defined`; geometry tests still pass.
+
+- [ ] **Step 3: Implement the solver**
+
+Insert above the new tests:
+
+```js
+// D2Q9 lattice: rest, +x, +y, -x, -y, then diagonals (+x+y, -x+y, -x-y, +x-y).
+const EX = [0, 1, 0, -1, 0, 1, -1, -1, 1];
+const EY = [0, 0, 1, 0, -1, 1, 1, -1, -1];
+const WQ = [4 / 9, 1 / 9, 1 / 9, 1 / 9, 1 / 9, 1 / 36, 1 / 36, 1 / 36, 1 / 36];
+const OPP = [0, 3, 4, 1, 2, 7, 8, 5, 6];
+
+// D2Q9 BGK lattice-Boltzmann solver, periodic in x, halfway bounce-back at
+// walls, constant body force via equilibrium velocity shift (u_eq = u + tau*F/rho).
+class LBM {
+  constructor(opts) {
+    const o = Object.assign({ geo: null, tau: TAU, forceX: DEFAULT_FORCE }, opts || {});
+    const g = o.geo || buildValveMask();
+    this.W = g.width; this.H = g.height;
+    this.solid = g.solid;
+    this.tau = o.tau;
+    this.forceX = o.forceX;
+    const N = this.W * this.H;
+    this.f = new Float32Array(N * 9);
+    this.f2 = new Float32Array(N * 9);
+    this.rho = new Float32Array(N);
+    this.ux = new Float32Array(N);
+    this.uy = new Float32Array(N);
+    this.steps = 0;
+    this.reset();
+  }
+
+  reset() {
+    const N = this.W * this.H;
+    for (let c = 0; c < N; c++) {
+      this.rho[c] = 1; this.ux[c] = 0; this.uy[c] = 0;
+      for (let i = 0; i < 9; i++) { this.f[c * 9 + i] = WQ[i]; this.f2[c * 9 + i] = WQ[i]; }
+    }
+    this.steps = 0;
+  }
+
+  step() {
+    const W = this.W, H = this.H, solid = this.solid;
+    const f = this.f, f2 = this.f2;
+    const invTau = 1 / this.tau, tau = this.tau, Fx = this.forceX;
+    const rho = this.rho, ux = this.ux, uy = this.uy;
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 0; x < W; x++) {
+        const c = y * W + x;
+        if (solid[c]) continue;
+        const b = c * 9;
+        let r = 0, mx = 0, my = 0;
+        for (let i = 0; i < 9; i++) {
+          const fi = f[b + i];
+          r += fi; mx += fi * EX[i]; my += fi * EY[i];
+        }
+        const vx = mx / r, vy = my / r;
+        rho[c] = r; ux[c] = vx; uy[c] = vy;
+        // Forcing: shift the equilibrium velocity; clamp for stability.
+        let ex = vx + tau * Fx / r, ey = vy;
+        const s2 = ex * ex + ey * ey;
+        if (s2 > 0.0625) { const k = 0.25 / Math.sqrt(s2); ex *= k; ey *= k; }
+        const usq = 1.5 * (ex * ex + ey * ey);
+        for (let i = 0; i < 9; i++) {
+          const eu = 3 * (EX[i] * ex + EY[i] * ey);
+          const feq = WQ[i] * r * (1 + eu + 0.5 * eu * eu - usq);
+          const fp = f[b + i] - (f[b + i] - feq) * invTau;
+          let nx = x + EX[i];
+          if (nx < 0) nx += W; else if (nx >= W) nx -= W;
+          const n = (y + EY[i]) * W + nx;
+          if (solid[n]) f2[b + OPP[i]] = fp;   // halfway bounce-back
+          else f2[n * 9 + i] = fp;             // stream
+        }
+      }
+    }
+    const t = this.f; this.f = this.f2; this.f2 = t;
+    this.steps++;
+  }
+
+  mass() {
+    let m = 0;
+    const N = this.W * this.H;
+    for (let c = 0; c < N; c++) {
+      if (this.solid[c]) continue;
+      for (let i = 0; i < 9; i++) m += this.f[c * 9 + i];
+    }
+    return m;
+  }
+
+  flowRate(xCol) {
+    let q = 0;
+    for (let y = 0; y < this.H; y++) {
+      const c = y * this.W + xCol;
+      if (!this.solid[c]) q += this.ux[c];
+    }
+    return q;
+  }
+
+  maxSpeed() {
+    let m = 0;
+    const N = this.W * this.H;
+    for (let c = 0; c < N; c++) {
+      if (this.solid[c]) continue;
+      const s = this.ux[c] * this.ux[c] + this.uy[c] * this.uy[c];
+      if (s > m) m = s;
+    }
+    return Math.sqrt(m);
+  }
+
+  allFinite() {
+    for (let i = 0; i < this.f.length; i++) {
+      if (!Number.isFinite(this.f[i])) return false;
+    }
+    return true;
+  }
+}
+```
+
+Correctness notes for the implementer (do not skip):
+- Every fluid-cell slot of `f2` is written each step: slot `(n, i)` comes from neighbor `n - e_i` if fluid, otherwise from `n` itself via the bounce-back branch. Solid cells' slots go stale but are never read.
+- `y` runs 1..H-2 only; border rows are solid so no fluid cell touches them, and `(y + EY[i])` stays in range.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `node test.mjs`
+Expected: `TeslaTests: 11 passed, 0 failed`. Runtime up to ~30 s (the solver tests step ~150 M cell-updates). If any LBM test fails with NaN, first suspect an index typo in `EX/EY/OPP` — verify `OPP` pairs sum to opposite vectors.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add 2d-tesla-valve/index.html
+git commit -m "tesla-valve: D2Q9 LBM solver with bounce-back and body force"
+```
+
+---
+
+### Task 4: Diodicity — tuning sweep and the money test
+
+Add `tune.mjs` (a keeper, like the repo's other converter/tool scripts) that sweeps pump force and tau, printing forward/reverse flow and the emergent diodicity. Pick defaults, then lock in the headline test.
+
+**Files:**
+- Create: `2d-tesla-valve/tune.mjs`
+- Modify: `2d-tesla-valve/index.html` (constants + one test)
+
+**Interfaces:**
+- Consumes: `buildValveMask`, `LBM`, `PROBE_X` via shared-code extraction.
+- Produces: final values for `DEFAULT_FORCE`, `TAU`, `DIODICITY_MIN` in `index.html`.
+
+- [ ] **Step 1: Write `tune.mjs`**
+
+```js
+// Sweeps pump force and relaxation time; prints emergent diodicity.
+// Usage: node tune.mjs            (takes a few minutes)
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.html"), "utf8");
+const src = html.match(/<script id="shared-code">([\s\S]*?)<\/script>/)[1];
+const lib = new Function(`${src}; return { buildValveMask, LBM, PROBE_X };`)();
+
+const DEV = 4000, MEASURE = 1500;
+
+function measure(force, tau, dir) {
+  const sim = new lib.LBM({ geo: lib.buildValveMask(), tau, forceX: dir * force });
+  for (let i = 0; i < DEV; i++) sim.step();
+  let q = 0;
+  for (let i = 0; i < MEASURE; i++) { sim.step(); q += sim.flowRate(lib.PROBE_X); }
+  return { q: q / MEASURE, maxU: sim.maxSpeed(), finite: sim.allFinite() };
+}
+
+console.log("force    tau   Qfwd      Qrev       Di    maxU   ok");
+for (const tau of [0.53, 0.56]) {
+  for (const force of [3e-5, 6e-5, 1e-4, 1.5e-4]) {
+    const F = measure(force, tau, +1);
+    const R = measure(force, tau, -1);
+    const di = Math.abs(F.q) / Math.max(Math.abs(R.q), 1e-9);
+    console.log(
+      force.toExponential(1), tau.toFixed(2),
+      F.q.toFixed(4).padStart(8), R.q.toFixed(4).padStart(9),
+      di.toFixed(2).padStart(6), Math.max(F.maxU, R.maxU).toFixed(3).padStart(6),
+      F.finite && R.finite
+    );
+  }
+}
+```
+
+- [ ] **Step 2: Run the sweep**
+
+Run: `node tune.mjs` (expect a few minutes; ~2.6 G cell-updates)
+Expected output: a table where `Di` grows with force (inertial effect) until stability degrades. Pick the row with the highest `Di` such that `ok` is `true` and `maxU < 0.25`.
+
+- [ ] **Step 3: Act on the results**
+
+Decision rule:
+- If best `Di >= 1.8`: set `DEFAULT_FORCE` and `TAU` in `index.html` to that row's values; set `DIODICITY_MIN` to `0.75 * Di` rounded **down** to one decimal (but not above 1.8).
+- If best `Di` is in 1.4–1.8: same updates; set `DIODICITY_MIN = 1.25`.
+- If best `Di < 1.4`: sharpen the geometry and re-run the sweep. Concrete first move: make the loop's duct re-entry shallower so the returning jet opposes the duct flow more directly — in `LOOP`, change `[-22, -15]` to `[-26, -10]`; if still short, add a fifth unit: `units: 5, unitStep: 62, firstBase: 40` (re-run `node test.mjs` after any geometry change — connectivity and probe-column tests must still pass). If after both moves `Di < 1.4`, stop and report to the user with the sweep table rather than shipping a weak demo.
+
+- [ ] **Step 4: Add the diodicity test**
+
+Append inside `shared-code`:
+
+```js
+TeslaTests.test("diodicity: forward flow beats reverse (the point of the valve)", () => {
+  const run = (dir) => {
+    const sim = new LBM({ forceX: dir * DEFAULT_FORCE });
+    for (let i = 0; i < 3500; i++) sim.step();
+    let q = 0;
+    for (let i = 0; i < 1500; i++) { sim.step(); q += sim.flowRate(PROBE_X); }
+    assert(sim.allFinite(), "sim stayed finite");
+    return q / 1500;
+  };
+  const qf = run(+1), qr = run(-1);
+  assert(qf > 0 && qr < 0, `flow signs follow the pump: ${qf}, ${qr}`);
+  const di = qf / Math.abs(qr);
+  assert(di > DIODICITY_MIN, `diodicity ${di.toFixed(2)} <= ${DIODICITY_MIN}`);
+});
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `node test.mjs`
+Expected: `TeslaTests: 12 passed, 0 failed` (total runtime roughly 30–90 s; the diodicity test alone is ~300 M cell-updates).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add 2d-tesla-valve/index.html 2d-tesla-valve/tune.mjs
+git commit -m "tesla-valve: tuning sweep and emergent-diodicity test"
+```
+
+---
+
+### Task 5: Tracer particles and flow meter
+
+Tracers are massless particles advected through the LBM velocity field (bilinear-sampled, scaled for visibility); they respawn on wall contact or old age. `Meter` is an exponential moving average for the readouts.
+
+**Files:**
+- Modify: `2d-tesla-valve/index.html` (append inside `shared-code`)
+
+**Interfaces:**
+- Consumes: `LBM` fields `W, H, solid, ux, uy`; `makeRng`.
+- Produces: `ADVECT_SCALE` (visual cells/sec per unit lattice velocity), `TRACER_MAX_AGE` (sec); `sampleVelocity(sim, x, y, out)` filling `out.x/out.y`; `class Tracers` with `constructor(sim, count, seed)`, `step(dt)`, fields `count, xs, ys` (Float32Arrays, grid coordinates); `class Meter` with `constructor(k=0.02)`, `add(v)`, `reset()`, field `avg`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append inside `shared-code`:
+
+```js
+TeslaTests.test("tracers: stay in fluid and are deterministic", () => {
+  const sim = new LBM({});
+  for (let i = 0; i < 400; i++) sim.step();
+  const a = new Tracers(sim, 200, 42);
+  const b = new Tracers(sim, 200, 42);
+  for (let i = 0; i < 300; i++) { a.step(1 / 60); b.step(1 / 60); }
+  for (let i = 0; i < a.count; i++) {
+    const cx = a.xs[i] | 0, cy = a.ys[i] | 0;
+    assert(cx >= 0 && cx < sim.W && cy >= 0 && cy < sim.H, "in bounds");
+    assert(!sim.solid[cy * sim.W + cx], `tracer ${i} inside a wall`);
+    assert(a.xs[i] === b.xs[i] && a.ys[i] === b.ys[i], "deterministic under seed");
+  }
+});
+
+TeslaTests.test("tracers: drift downstream in a straight duct", () => {
+  const sim = new LBM({ geo: buildValveMask({ units: 0 }) });
+  for (let i = 0; i < 1000; i++) sim.step();
+  const tr = new Tracers(sim, 100, 7);
+  const x0 = Array.from(tr.xs);
+  for (let i = 0; i < 60; i++) tr.step(1 / 60);
+  let moved = 0;
+  for (let i = 0; i < tr.count; i++) {
+    let d = tr.xs[i] - x0[i];
+    if (d < -sim.W / 2) d += sim.W;      // unwrap
+    if (d > 1) moved++;
+  }
+  assert(moved > tr.count * 0.7, `only ${moved}/${tr.count} tracers moved downstream`);
+});
+
+TeslaTests.test("meter: EMA converges and resets", () => {
+  const m = new Meter(0.1);
+  for (let i = 0; i < 200; i++) m.add(5);
+  assert(Math.abs(m.avg - 5) < 1e-6, "converges to constant input");
+  m.reset();
+  assert(m.avg === 0, "reset clears");
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `node test.mjs`
+Expected: 3 FAIL lines (`Tracers is not defined`, `Meter is not defined`).
+
+- [ ] **Step 3: Implement tracers and meter**
+
+Insert above the new tests:
+
+```js
+// Visual advection speed: display cells per second per unit lattice velocity.
+const ADVECT_SCALE = 900;
+const TRACER_MAX_AGE = 12;
+
+// Bilinear velocity sample at grid position (x, y); solid cells contribute
+// zero, which naturally slows tracers near walls. x wraps, y clamps.
+function sampleVelocity(sim, x, y, out) {
+  const W = sim.W, H = sim.H;
+  const x0 = Math.floor(x - 0.5), y0 = Math.floor(y - 0.5);
+  const fx = x - 0.5 - x0, fy = y - 0.5 - y0;
+  let vx = 0, vy = 0;
+  for (let j = 0; j < 2; j++) {
+    let cy = y0 + j;
+    if (cy < 0) cy = 0; else if (cy >= H) cy = H - 1;
+    for (let i = 0; i < 2; i++) {
+      let cx = (x0 + i) % W;
+      if (cx < 0) cx += W;
+      const c = cy * W + cx;
+      if (sim.solid[c]) continue;
+      const w = (i ? fx : 1 - fx) * (j ? fy : 1 - fy);
+      vx += w * sim.ux[c];
+      vy += w * sim.uy[c];
+    }
+  }
+  out.x = vx; out.y = vy;
+}
+
+// Massless tracer particles riding the LBM velocity field.
+class Tracers {
+  constructor(sim, count, seed) {
+    this.sim = sim;
+    this.rng = makeRng(seed == null ? 1 : seed);
+    this.fluidCells = [];
+    for (let c = 0; c < sim.W * sim.H; c++) if (!sim.solid[c]) this.fluidCells.push(c);
+    this.count = count;
+    this.xs = new Float32Array(count);
+    this.ys = new Float32Array(count);
+    this.age = new Float32Array(count);
+    for (let i = 0; i < count; i++) this._respawn(i, this.rng() * TRACER_MAX_AGE);
+  }
+
+  _respawn(i, age) {
+    const c = this.fluidCells[(this.rng() * this.fluidCells.length) | 0];
+    this.xs[i] = (c % this.sim.W) + this.rng();
+    this.ys[i] = ((c / this.sim.W) | 0) + this.rng();
+    this.age[i] = age || 0;
+  }
+
+  step(dt) {
+    const sim = this.sim, W = sim.W, H = sim.H;
+    const v = { x: 0, y: 0 };
+    const sub = 2, h = dt / sub;
+    for (let i = 0; i < this.count; i++) {
+      for (let s = 0; s < sub; s++) {
+        sampleVelocity(sim, this.xs[i], this.ys[i], v);
+        let x = this.xs[i] + v.x * ADVECT_SCALE * h;
+        const y = this.ys[i] + v.y * ADVECT_SCALE * h;
+        if (x < 0) x += W; else if (x >= W) x -= W;
+        this.xs[i] = x; this.ys[i] = y;
+      }
+      this.age[i] += dt;
+      const cx = this.xs[i] | 0, cy = this.ys[i] | 0;
+      if (cy < 0 || cy >= H || sim.solid[cy * W + cx] || this.age[i] > TRACER_MAX_AGE) {
+        this._respawn(i, 0);
+      }
+    }
+  }
+}
+
+// Exponential moving average for flow readouts.
+class Meter {
+  constructor(k) { this.k = k == null ? 0.02 : k; this.reset(); }
+  reset() { this.avg = 0; this.primed = false; }
+  add(v) {
+    if (!this.primed) { this.avg = v; this.primed = true; }
+    else this.avg += this.k * (v - this.avg);
+  }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `node test.mjs`
+Expected: `TeslaTests: 15 passed, 0 failed`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add 2d-tesla-valve/index.html
+git commit -m "tesla-valve: field-advected tracer particles and flow meter"
+```
+
+---
+
+### Task 6: Rendering, UI, and the live diodicity readout
+
+Two panes over one geometry, pumped opposite ways. Field shading at grid resolution scaled up with smoothing; tracers on top; adaptive LBM steps per frame; synchronous `?prewarm=N` first paint for headless screenshots.
+
+**Files:**
+- Modify: `2d-tesla-valve/index.html` (fill the second `<script>` block)
+
+**Interfaces:**
+- Consumes: everything from `shared-code`; canvas ids `cfwd`, `crev`; control ids `pump`, `pumpVal`, `tracers`, `tracersVal`, `pauseBtn`, `resetBtn`; readout ids `qf`, `qr`, `verdict`.
+- Produces: URL hooks — `?prewarm=N` runs N LBM steps per sim synchronously, advances tracers, and paints one frame before the rAF loop starts.
+
+- [ ] **Step 1: Implement the DOM script**
+
+Replace the placeholder second `<script>` block body with:
+
+```js
+// ----- Rendering + UI (DOM). -----
+(function () {
+  const WARMUP_STEPS = 1200;
+
+  function makePane(canvasId, dir, seed) {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext("2d");
+    const sim = new LBM({ forceX: dir * DEFAULT_FORCE });
+    const tracers = new Tracers(sim, 350, seed);
+    const meter = new Meter(0.01);
+    const buf = document.createElement("canvas");
+    buf.width = sim.W; buf.height = sim.H;
+    const bctx = buf.getContext("2d");
+    const img = bctx.createImageData(sim.W, sim.H);
+    return { canvas, ctx, sim, tracers, meter, dir, seed, buf, bctx, img };
+  }
+
+  const panes = [makePane("cfwd", +1, 11), makePane("crev", -1, 22)];
+
+  const els = {};
+  for (const id of ["pump", "pumpVal", "tracers", "tracersVal", "pauseBtn", "resetBtn", "qf", "qr", "verdict"]) {
+    els[id] = document.getElementById(id);
+  }
+
+  let paused = false;
+  let stepsPerFrame = 4;
+
+  function applyControls() {
+    const mult = +els.pump.value;
+    for (const p of panes) p.sim.forceX = p.dir * DEFAULT_FORCE * mult;
+    els.pumpVal.textContent = mult.toFixed(2) + "×";
+    const n = +els.tracers.value;
+    els.tracersVal.textContent = n;
+    for (const p of panes) {
+      if (p.tracers.count !== n) p.tracers = new Tracers(p.sim, n, p.seed);
+    }
+  }
+  els.pump.addEventListener("input", applyControls);
+  els.tracers.addEventListener("input", applyControls);
+
+  els.pauseBtn.addEventListener("click", () => {
+    paused = !paused;
+    els.pauseBtn.textContent = paused ? "Resume" : "Pause";
+    els.pauseBtn.classList.toggle("active", paused);
+  });
+
+  els.resetBtn.addEventListener("click", () => {
+    for (const p of panes) {
+      p.sim.reset();
+      p.meter.reset();
+      p.tracers = new Tracers(p.sim, +els.tracers.value, p.seed);
+    }
+  });
+
+  function stepPane(p, nSteps, dt) {
+    for (let s = 0; s < nSteps; s++) {
+      p.sim.step();
+      p.meter.add(p.sim.flowRate(PROBE_X));
+    }
+    // Spec guard: if the solver ever goes non-finite (e.g. extreme slider
+    // combos), restart that pane instead of showing NaN.
+    if (!Number.isFinite(p.meter.avg)) {
+      p.sim.reset();
+      p.meter.reset();
+      p.tracers = new Tracers(p.sim, p.tracers.count, p.seed);
+    }
+    p.tracers.step(dt);
+  }
+
+  const WALL = [42, 52, 70];
+  function renderPane(p) {
+    const { sim, ctx, canvas, img } = p;
+    const d = img.data;
+    const N = sim.W * sim.H;
+    for (let c = 0; c < N; c++) {
+      const o = c * 4;
+      if (sim.solid[c]) {
+        d[o] = WALL[0]; d[o + 1] = WALL[1]; d[o + 2] = WALL[2];
+      } else {
+        const vx = sim.ux[c], vy = sim.uy[c];
+        const t = Math.min(1, Math.sqrt(vx * vx + vy * vy) / 0.12);
+        d[o] = 8 + 30 * t; d[o + 1] = 14 + 70 * t; d[o + 2] = 28 + 130 * t;
+      }
+      d[o + 3] = 255;
+    }
+    p.bctx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(p.buf, 0, 0, canvas.width, canvas.height);
+
+    const sx = canvas.width / sim.W, sy = canvas.height / sim.H;
+    const tr = p.tracers, v = { x: 0, y: 0 };
+    for (let i = 0; i < tr.count; i++) {
+      sampleVelocity(sim, tr.xs[i], tr.ys[i], v);
+      const t = Math.min(1, Math.hypot(v.x, v.y) / 0.12);
+      ctx.fillStyle = `hsl(${210 - 190 * t}, 90%, ${55 + t * 12}%)`;
+      ctx.beginPath();
+      ctx.arc(tr.xs[i] * sx, tr.ys[i] * sy, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function updateReadout() {
+    const qf = Math.abs(panes[0].meter.avg), qr = Math.abs(panes[1].meter.avg);
+    els.qf.textContent = (qf * 1000).toFixed(1);
+    els.qr.textContent = (qr * 1000).toFixed(1);
+    if (panes[0].sim.steps >= WARMUP_STEPS) {
+      const di = qf / Math.max(qr, 1e-9);
+      els.verdict.textContent = `≈ ${di.toFixed(1)}× easier forward — same valve, same pump, opposite directions`;
+    } else {
+      els.verdict.textContent = "developing flow…";
+    }
+  }
+
+  function renderAll() {
+    for (const p of panes) renderPane(p);
+    updateReadout();
+  }
+
+  // Headless-screenshot hook: ?prewarm=N advances both sims N LBM steps and
+  // paints one frame synchronously, so a capture works without rAF ticks.
+  const q = new URLSearchParams(location.search);
+  const prewarm = parseInt(q.get("prewarm") || "0", 10);
+  applyControls();
+  if (prewarm > 0) {
+    for (const p of panes) {
+      for (let i = 0; i < prewarm; i++) {
+        p.sim.step();
+        p.meter.add(p.sim.flowRate(PROBE_X));
+      }
+      for (let i = 0; i < 300; i++) p.tracers.step(1 / 60);
+    }
+    renderAll();
+  }
+
+  let last = 0;
+  function frame(now) {
+    if (!last) last = now;
+    let dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    if (!paused) {
+      const t0 = performance.now();
+      for (const p of panes) stepPane(p, stepsPerFrame, dt);
+      const ms = performance.now() - t0;
+      if (ms > 14 && stepsPerFrame > 1) stepsPerFrame--;
+      else if (ms < 7 && stepsPerFrame < 12) stepsPerFrame++;
+    }
+    renderAll();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+```
+
+- [ ] **Step 2: Run tests (regression)**
+
+Run: `node test.mjs`
+Expected: `TeslaTests: 15 passed, 0 failed` (DOM script is not extracted; this just guards against accidental shared-code edits).
+
+- [ ] **Step 3: Visual smoke test via headless screenshot**
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu \
+  --screenshot=/private/tmp/claude-501/-Users-neoneye-git-vibe-coding-lab/2d5906f3-8799-4e09-9c84-96594c106c40/scratchpad/tesla_smoke.png \
+  --window-size=1400,1000 --virtual-time-budget=6000 \
+  "file:///Users/neoneye/git/vibe-coding-lab/2d-tesla-valve/index.html?prewarm=3000"
+```
+
+Read the PNG and verify: both canvases show the valve walls with a bright flowing duct; the FORWARD pane's duct visibly brighter (faster) than REVERSE; verdict text shows a ratio > 1 (e.g. "≈ 1.8× easier forward"); flow readouts non-zero. If canvases are blank, the synchronous `renderAll()` after prewarm did not run — check the `?prewarm` parsing before blaming rAF (per repo memory, rAF does not advance under `--virtual-time-budget`).
+
+- [ ] **Step 4: Interactive sanity check (best-effort)**
+
+Open the page normally (`open 2d-tesla-valve/index.html`) and let it run ~20 s: verify the verdict appears after warm-up, Pause/Reset/sliders work, and animation is smooth. If working headless-only, capture a second screenshot with `?prewarm=6000` and confirm the ratio is stable versus Step 3.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add 2d-tesla-valve/index.html
+git commit -m "tesla-valve: dual-pane rendering, controls, live diodicity readout"
+```
+
+---
+
+### Task 7: Screenshot, final verification, wrap-up
+
+**Files:**
+- Replace: `2d-tesla-valve/screenshot1.png`
+
+- [ ] **Step 1: Full test run**
+
+Run: `node test.mjs`
+Expected: all tests pass, exit 0. Record the pass count.
+
+- [ ] **Step 2: Regenerate the gallery screenshot**
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu \
+  --screenshot=/Users/neoneye/git/vibe-coding-lab/2d-tesla-valve/screenshot1.png \
+  --window-size=1400,1000 --virtual-time-budget=6000 \
+  "file:///Users/neoneye/git/vibe-coding-lab/2d-tesla-valve/index.html?prewarm=4000"
+```
+
+Read the PNG to confirm it shows the finished page (both panes, ratio readout). The gallery (`index.html` at repo root) references this filename directly — no gallery edits needed.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add 2d-tesla-valve/screenshot1.png
+git commit -m "tesla-valve: refresh gallery screenshot"
+```
+
+- [ ] **Step 4: Verification before completion**
+
+Use superpowers:verification-before-completion: re-run `node test.mjs` fresh, confirm `git status` clean, view the final screenshot, and only then report done — quoting the measured diodicity from the test output and the screenshot's on-page ratio.
