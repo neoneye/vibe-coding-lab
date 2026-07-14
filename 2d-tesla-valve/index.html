@@ -589,7 +589,158 @@ TeslaTests.test("meter: EMA converges and resets", () => {
 </script>
 
 <script>
-// ----- Rendering + UI (DOM). Filled in by later tasks. -----
+// ----- Rendering + UI (DOM). -----
+(function () {
+  const WARMUP_STEPS = 2000;
+
+  function makePane(canvasId, dir, seed) {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext("2d");
+    const sim = new LBM({ forceX: dir * DEFAULT_FORCE });
+    const tracers = new Tracers(sim, 350, seed);
+    const meter = new Meter(0.01);
+    const buf = document.createElement("canvas");
+    buf.width = sim.W; buf.height = sim.H;
+    const bctx = buf.getContext("2d");
+    const img = bctx.createImageData(sim.W, sim.H);
+    return { canvas, ctx, sim, tracers, meter, dir, seed, buf, bctx, img };
+  }
+
+  const panes = [makePane("cfwd", +1, 11), makePane("crev", -1, 22)];
+
+  const els = {};
+  for (const id of ["pump", "pumpVal", "tracers", "tracersVal", "pauseBtn", "resetBtn", "qf", "qr", "verdict"]) {
+    els[id] = document.getElementById(id);
+  }
+
+  let paused = false;
+  let stepsPerFrame = 4;
+
+  function applyControls() {
+    const mult = +els.pump.value;
+    for (const p of panes) p.sim.forceX = p.dir * DEFAULT_FORCE * mult;
+    els.pumpVal.textContent = mult.toFixed(2) + "×";
+    const n = +els.tracers.value;
+    els.tracersVal.textContent = n;
+    for (const p of panes) {
+      if (p.tracers.count !== n) p.tracers = new Tracers(p.sim, n, p.seed);
+    }
+  }
+  els.pump.addEventListener("input", applyControls);
+  els.tracers.addEventListener("input", applyControls);
+
+  els.pauseBtn.addEventListener("click", () => {
+    paused = !paused;
+    els.pauseBtn.textContent = paused ? "Resume" : "Pause";
+    els.pauseBtn.classList.toggle("active", paused);
+  });
+
+  els.resetBtn.addEventListener("click", () => {
+    for (const p of panes) {
+      p.sim.reset();
+      p.meter.reset();
+      p.tracers = new Tracers(p.sim, +els.tracers.value, p.seed);
+    }
+  });
+
+  function stepPane(p, nSteps, dt) {
+    for (let s = 0; s < nSteps; s++) {
+      p.sim.step();
+      p.meter.add(p.sim.flowRate(PROBE_X));
+    }
+    // Spec guard: if the solver ever goes non-finite (e.g. extreme slider
+    // combos), restart that pane instead of showing NaN.
+    if (!Number.isFinite(p.meter.avg)) {
+      p.sim.reset();
+      p.meter.reset();
+      p.tracers = new Tracers(p.sim, p.tracers.count, p.seed);
+    }
+    p.tracers.step(dt);
+  }
+
+  const WALL = [42, 52, 70];
+  function renderPane(p) {
+    const { sim, ctx, canvas, img } = p;
+    const d = img.data;
+    const N = sim.W * sim.H;
+    for (let c = 0; c < N; c++) {
+      const o = c * 4;
+      if (sim.solid[c]) {
+        d[o] = WALL[0]; d[o + 1] = WALL[1]; d[o + 2] = WALL[2];
+      } else {
+        const vx = sim.ux[c], vy = sim.uy[c];
+        const t = Math.min(1, Math.sqrt(vx * vx + vy * vy) / 0.16);
+        d[o] = 8 + 30 * t; d[o + 1] = 14 + 70 * t; d[o + 2] = 28 + 130 * t;
+      }
+      d[o + 3] = 255;
+    }
+    p.bctx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(p.buf, 0, 0, canvas.width, canvas.height);
+
+    const sx = canvas.width / sim.W, sy = canvas.height / sim.H;
+    const tr = p.tracers, v = { x: 0, y: 0 };
+    for (let i = 0; i < tr.count; i++) {
+      sampleVelocity(sim, tr.xs[i], tr.ys[i], v);
+      const t = Math.min(1, Math.hypot(v.x, v.y) / 0.16);
+      ctx.fillStyle = `hsl(${210 - 190 * t}, 90%, ${55 + t * 12}%)`;
+      ctx.beginPath();
+      ctx.arc(tr.xs[i] * sx, tr.ys[i] * sy, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function updateReadout() {
+    const qf = Math.abs(panes[0].meter.avg), qr = Math.abs(panes[1].meter.avg);
+    els.qf.textContent = (qf * 1000).toFixed(1);
+    els.qr.textContent = (qr * 1000).toFixed(1);
+    if (panes[0].sim.steps >= WARMUP_STEPS) {
+      const di = qf / Math.max(qr, 1e-9);
+      els.verdict.textContent = `≈ ${di.toFixed(1)}× easier forward — same valve, same pump, opposite directions`;
+    } else {
+      els.verdict.textContent = "developing flow…";
+    }
+  }
+
+  function renderAll() {
+    for (const p of panes) renderPane(p);
+    updateReadout();
+  }
+
+  // Headless-screenshot hook: ?prewarm=N advances both sims N LBM steps and
+  // paints one frame synchronously, so a capture works without rAF ticks.
+  const q = new URLSearchParams(location.search);
+  const prewarm = parseInt(q.get("prewarm") || "0", 10);
+  applyControls();
+  if (prewarm > 0) {
+    for (const p of panes) {
+      for (let i = 0; i < prewarm; i++) {
+        p.sim.step();
+        p.meter.add(p.sim.flowRate(PROBE_X));
+      }
+      for (let i = 0; i < 300; i++) p.tracers.step(1 / 60);
+    }
+    renderAll();
+  }
+
+  let last = 0;
+  function frame(now) {
+    if (!last) last = now;
+    let dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    if (!paused) {
+      const t0 = performance.now();
+      for (const p of panes) stepPane(p, stepsPerFrame, dt);
+      const ms = performance.now() - t0;
+      if (ms > 14 && stepsPerFrame > 1) stepsPerFrame--;
+      else if (ms < 7 && stepsPerFrame < 12) stepsPerFrame++;
+    }
+    renderAll();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
 </script>
 </body>
 </html>
