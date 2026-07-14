@@ -173,6 +173,127 @@ TeslaTests.test("harness sanity", () => {
   assert(v >= 0 && v < 1, "rng in [0,1)");
   assert(makeRng(1)() === v, "rng deterministic");
 });
+
+// Carve a thick line segment (capsule of half-width r) into the mask as fluid.
+// x wraps periodically; rows 0 and H-1 are never carved (outer walls).
+function carveCapsule(solid, W, H, ax, ay, bx, by, r) {
+  const minX = Math.floor(Math.min(ax, bx) - r - 1);
+  const maxX = Math.ceil(Math.max(ax, bx) + r + 1);
+  const minY = Math.max(1, Math.floor(Math.min(ay, by) - r - 1));
+  const maxY = Math.min(H - 2, Math.ceil(Math.max(ay, by) + r + 1));
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      let t = len2 > 0 ? ((x - ax) * dx + (y - ay) * dy) / len2 : 0;
+      if (t < 0) t = 0; else if (t > 1) t = 1;
+      const px = ax + t * dx - x, py = ay + t * dy - y;
+      if (px * px + py * py <= r * r) {
+        let xw = x % W; if (xw < 0) xw += W;
+        solid[y * W + xw] = 0;
+      }
+    }
+  }
+}
+
+// Authentic Tesla-valve wall mask. Forward flow is +x along a straight duct.
+// Each unit adds a loop branch, listed here in the order REVERSE (-x) flow
+// travels it: a shallow peel-off up-left from the duct at R, over the top
+// moving left, down the left side, then re-entering the duct at L aimed
+// DOWNSTREAM (+x) -- so the loop's output collides head-on with the reverse
+// stream. Forward flow just slides past both mouths.
+function buildValveMask(opts) {
+  const o = Object.assign({
+    width: GRID_W, height: GRID_H,
+    units: 4, unitStep: 70, firstBase: 44,
+    ductY: 68, ductHalf: 6, loopHalf: 5,
+  }, opts || {});
+  const W = o.width, H = o.height;
+  const solid = new Uint8Array(W * H).fill(1);
+  carveCapsule(solid, W, H, -8, o.ductY, W + 8, o.ductY, o.ductHalf);
+  // Loop waypoints as offsets from (base, ductY): R, peel, up, top, top-left,
+  // left, lower-left, L(=duct re-entry pointing +x).
+  const LOOP = [[37, 0], [18, -11], [2, -27], [-5, -43], [-21, -47], [-27, -30], [-22, -15], [0, 0]];
+  for (let k = 0; k < o.units; k++) {
+    const bx = o.firstBase + k * o.unitStep, by = o.ductY;
+    for (let s = 0; s + 1 < LOOP.length; s++) {
+      carveCapsule(solid, W, H,
+        bx + LOOP[s][0], by + LOOP[s][1],
+        bx + LOOP[s + 1][0], by + LOOP[s + 1][1], o.loopHalf);
+    }
+  }
+  return { solid, width: W, height: H, opts: o };
+}
+
+// Count 4-connected fluid components (x-periodic). Border rows are solid,
+// so y-neighbor indexing never leaves the array.
+function fluidComponents(solid, W, H) {
+  const label = new Int32Array(W * H).fill(-1);
+  let count = 0;
+  const stack = [];
+  for (let c = 0; c < W * H; c++) {
+    if (solid[c] || label[c] >= 0) continue;
+    stack.push(c); label[c] = count;
+    while (stack.length) {
+      const q = stack.pop();
+      const y = (q / W) | 0, x = q % W;
+      const nb = [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), q + W, q - W];
+      for (const n of nb) {
+        if (!solid[n] && label[n] < 0) { label[n] = count; stack.push(n); }
+      }
+    }
+    count++;
+  }
+  return { count, label };
+}
+
+TeslaTests.test("geometry: mask shape and borders", () => {
+  const g = buildValveMask();
+  assert(g.width === GRID_W && g.height === GRID_H);
+  assert(g.solid.length === GRID_W * GRID_H);
+  for (let x = 0; x < g.width; x++) {
+    assert(g.solid[x] === 1, "top border row solid");
+    assert(g.solid[(g.height - 1) * g.width + x] === 1, "bottom border row solid");
+  }
+});
+
+TeslaTests.test("geometry: single connected fluid region", () => {
+  const g = buildValveMask();
+  const comp = fluidComponents(g.solid, g.width, g.height);
+  assert(comp.count === 1, `expected 1 fluid component, got ${comp.count}`);
+});
+
+TeslaTests.test("geometry: duct present in every column (periodic wrap)", () => {
+  const g = buildValveMask();
+  for (let x = 0; x < g.width; x++) {
+    let n = 0;
+    for (let y = 0; y < g.height; y++) if (!g.solid[y * g.width + x]) n++;
+    assert(n >= 2 * g.opts.ductHalf - 2, `column ${x} too narrow: ${n}`);
+  }
+});
+
+TeslaTests.test("geometry: probe column is plain duct", () => {
+  const g = buildValveMask();
+  let n = 0;
+  for (let y = 0; y < g.height; y++) if (!g.solid[y * g.width + PROBE_X]) n++;
+  assert(n <= 2 * g.opts.ductHalf + 3, "probe column must not intersect a loop");
+});
+
+TeslaTests.test("geometry: loops carve real area (islands exist)", () => {
+  const g = buildValveMask();
+  const straight = buildValveMask({ units: 0 });
+  const count = (m) => { let n = 0; for (const v of m.solid) if (!v) n++; return n; };
+  const cv = count(g), cs = count(straight);
+  assert(cv > cs * 1.6, `valve fluid ${cv} should far exceed straight duct ${cs}`);
+  assert(cv < g.width * g.height * 0.45, "fluid fraction sane");
+});
+
+TeslaTests.test("geometry: units:0 gives a uniform straight duct", () => {
+  const g = buildValveMask({ units: 0 });
+  const colCount = (x) => { let n = 0; for (let y = 0; y < g.height; y++) if (!g.solid[y * g.width + x]) n++; return n; };
+  const c0 = colCount(0);
+  for (let x = 1; x < g.width; x++) assert(colCount(x) === c0, "uniform width");
+});
 </script>
 
 <script>
