@@ -1,11 +1,15 @@
 // Country registry — cosmetic only: name + flag stripe colors (top to bottom).
+// Optional per-country detail: `stripes` (n equal bands, overrides colors for
+// drawing) and `canton` (upper-left field with star dots, e.g. USA).
 window.SE = window.SE || {};
 
 window.SE.COUNTRIES = [
     { id: 'iran',    name: 'Iran',    colors: ['#239f40', '#ffffff', '#da0000'] },
     { id: 'ukraine', name: 'Ukraine', colors: ['#0057b7', '#ffd700', '#0057b7'] },
     { id: 'russia',  name: 'Russia',  colors: ['#ffffff', '#0039a6', '#d52b1e'] },
-    { id: 'usa',     name: 'USA',     colors: ['#b22234', '#ffffff', '#3c3b6e'] },
+    { id: 'usa',     name: 'USA',     colors: ['#b22234', '#ffffff', '#b22234'],
+      stripes: ['#b22234', '#ffffff', '#b22234', '#ffffff', '#b22234', '#ffffff', '#b22234'],
+      canton: { color: '#3c3b6e', stars: '#ffffff' } },
     { id: 'china',   name: 'China',   colors: ['#de2910', '#ffde00', '#de2910'] },
     { id: 'france',  name: 'France',  colors: ['#0055a4', '#ffffff', '#ef4135'] },
     { id: 'germany', name: 'Germany', colors: ['#000000', '#dd0000', '#ffce00'] },

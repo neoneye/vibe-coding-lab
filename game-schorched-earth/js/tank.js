@@ -88,10 +88,24 @@ window.SE = window.SE || {};
             ctx.rect(x - w / 2, y - h / 2, w, h);
         }
         ctx.clip();
-        var colors = this.country.colors;
-        for (var i = 0; i < 3; i++) {
-            ctx.fillStyle = colors[i];
-            ctx.fillRect(x - w / 2, y - h / 2 + (h / 3) * i, w, h / 3 + 1);
+        var stripes = this.country.stripes || this.country.colors;
+        var n = stripes.length;
+        for (var i = 0; i < n; i++) {
+            ctx.fillStyle = stripes[i];
+            ctx.fillRect(x - w / 2, y - h / 2 + (h / n) * i, w, h / n + 1);
+        }
+        var canton = this.country.canton;
+        if (canton) {
+            var cw = w * 0.45, ch = h * 0.55;
+            ctx.fillStyle = canton.color;
+            ctx.fillRect(x - w / 2, y - h / 2, cw, ch);
+            ctx.fillStyle = canton.stars;
+            for (var row = 0; row < 2; row++) {
+                for (var col = 0; col < 3; col++) {
+                    ctx.fillRect(x - w / 2 + 2 + col * 3.5 + (row % 2) * 1.75,
+                                 y - h / 2 + 1.5 + row * 3, 1, 1);
+                }
+            }
         }
         ctx.restore();
         ctx.strokeStyle = '#111';

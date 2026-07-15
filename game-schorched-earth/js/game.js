@@ -71,10 +71,22 @@ window.SE = window.SE || {};
         });
     }
 
-    function paintFlagChip(el, country) {
-        el.innerHTML = country.colors.map(function (c) {
-            return '<i style="background:' + c + '"></i>';
+    function flagChipInner(country) {
+        var stripes = country.stripes || country.colors;
+        var html = stripes.map(function (c) {
+            return '<i style="background:' + c +
+                ';height:' + (100 / stripes.length) + '%"></i>';
         }).join('');
+        if (country.canton) {
+            html += '<b style="background-color:' + country.canton.color +
+                ';background-image:radial-gradient(circle, ' + country.canton.stars +
+                ' 30%, transparent 40%);background-size:3.5px 2.75px"></b>';
+        }
+        return html;
+    }
+
+    function paintFlagChip(el, country) {
+        el.innerHTML = flagChipInner(country);
     }
 
     function countryById(id) {
@@ -354,9 +366,7 @@ window.SE = window.SE || {};
         var html = '<tr><th></th><th>Tank</th><th>Player</th><th>Score</th></tr>';
         rows.forEach(function (r) {
             html += '<tr class="' + (r.alive ? '' : 'dead') + '">' +
-                '<td><span class="flagchip">' + r.country.colors.map(function (c) {
-                    return '<i style="background:' + c + '"></i>';
-                }).join('') + '</span></td>' +
+                '<td><span class="flagchip">' + flagChipInner(r.country) + '</span></td>' +
                 '<td>' + r.name + '</td>' +
                 '<td>' + r.control + '</td>' +
                 '<td class="score">' + r.score + '</td></tr>';

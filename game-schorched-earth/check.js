@@ -24,6 +24,13 @@ function check(name, cond) {
 check('12+ countries incl. Iran/Ukraine/Russia',
     SE.COUNTRIES.length >= 12 &&
     ['iran', 'ukraine', 'russia'].every(id => SE.COUNTRIES.some(c => c.id === id)));
+check('USA flag: 7 alternating stripes + starred canton',
+    (() => {
+        const usa = SE.COUNTRIES.find(c => c.id === 'usa');
+        return usa && usa.stripes && usa.stripes.length === 7 &&
+            usa.stripes[0] === usa.stripes[2] && usa.stripes[1] === '#ffffff' &&
+            usa.canton && !!usa.canton.color && !!usa.canton.stars;
+    })());
 check('6 weapons, baby missile unlimited',
     SE.WEAPONS.length === 6 && SE.WEAPONS[0].ammo === Infinity);
 
