@@ -734,11 +734,11 @@ function hexPencil() {
 }
 const objectMeshes = {
   sphere: new THREE.Mesh(new THREE.SphereGeometry(OBJ_DEFS.sphere.r, 40, 24),
-    new THREE.MeshStandardMaterial({ color: 0x4ea1ff, roughness: 0.35 })),
+    new THREE.MeshStandardMaterial({ color: 0x4ea1ff, roughness: 0.35, transparent: true, opacity: 0.8 })),
   cube: new THREE.Mesh(new RoundedBoxGeometry(4.8, 4.8, 4.8, 3, 0.25),
-    new THREE.MeshStandardMaterial({ color: 0xff9b42, roughness: 0.5 })),
+    new THREE.MeshStandardMaterial({ color: 0xff9b42, roughness: 0.5, transparent: true, opacity: 0.8 })),
   pencil: new THREE.Mesh(hexPencil(),
-    new THREE.MeshStandardMaterial({ color: 0xf3c93e, roughness: 0.6 })),
+    new THREE.MeshStandardMaterial({ color: 0xf3c93e, roughness: 0.6, transparent: true, opacity: 0.9 })),
 };
 for (const m of Object.values(objectMeshes)) { m.castShadow = true; m.visible = false; scene.add(m); }
 
@@ -759,17 +759,6 @@ function applyPoseToBones(pose) {
     threeBones[i].position.fromArray(pose.locals[i].pos);
     threeBones[i].quaternion.fromArray(pose.locals[i].quat);
   }
-}
-function renderOnce() {
-  const pose = computePose(sim.angles);
-  applyPoseToBones(pose);
-  if (sim.obj) {
-    objectMeshes[sim.obj.type].position.fromArray(sim.obj.pos);
-    objectMeshes[sim.obj.type].quaternion.fromArray(sim.obj.quat);
-  }
-  controls.update();
-  renderer.render(scene, camera);
-  return pose;
 }
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -836,11 +825,171 @@ document.getElementById('release').addEventListener('click', () => startTween(PO
 document.getElementById('reset').addEventListener('click', () => startTween(POSES.open));
 document.querySelector('#objects button[data-obj="sphere"]').classList.add('active');
 
+// ---- pressure heatmap ----
+const RAMP = [[0.30,0.62,0.75],[0.55,0.85,0.60],[0.98,0.92,0.35],[0.99,0.60,0.20],[0.85,0.15,0.10]];
+function rampColor(t) {
+  const x = clamp(t, 0, 1) * (RAMP.length - 1), i = Math.min(RAMP.length - 2, Math.floor(x)), f = x - i;
+  return [0, 1, 2].map(k => RAMP[i][k] + (RAMP[i + 1][k] - RAMP[i][k]) * f);
+}
+const splatMap = (() => {                       // per sensor: [{vi, w}, ...]
+  const posAttr = handGeo.attributes.position, skinIdx = handGeo.attributes.skinIndex;
+  const R = 3.0;
+  return sim.sensors.map(s => {
+    const sw = sensorWorld(bindPose.world, s);
+    const out = [];
+    for (let vi = 0; vi < posAttr.count; vi++) {
+      if (skinIdx.getX(vi) !== s.bone) continue;
+      const dx = posAttr.getX(vi) - sw.pos[0], dy = posAttr.getY(vi) - sw.pos[1],
+            dz = posAttr.getZ(vi) - sw.pos[2];
+      const d = Math.hypot(dx, dy, dz);
+      if (d < R) out.push({ vi, w: (1 - d / R) ** 2 });
+    }
+    return out;
+  });
+})();
+const heat = new Float32Array(nv);
+let touched = [];
+function paintHeat(contacts) {
+  const colAttr = handGeo.attributes.color;
+  for (const vi of touched) {
+    heat[vi] = 0;
+    colAttr.setXYZ(vi, SKIN.r, SKIN.g, SKIN.b);
+  }
+  touched = [];
+  for (const c of contacts) {
+    for (const { vi, w } of splatMap[c.sensor]) {
+      if (heat[vi] === 0) touched.push(vi);
+      heat[vi] = Math.min(1, heat[vi] + (c.pressure / 15) * w);
+    }
+  }
+  for (const vi of touched) {
+    const t = heat[vi], rc = rampColor(t), mix = Math.min(1, t * 2.5);
+    colAttr.setXYZ(vi,
+      SKIN.r + (rc[0] - SKIN.r) * mix,
+      SKIN.g + (rc[1] - SKIN.g) * mix,
+      SKIN.b + (rc[2] - SKIN.b) * mix);
+  }
+  colAttr.needsUpdate = true;
+}
+
+// ---- actuator skeleton overlay ----
+const overlay = new THREE.Group();
+overlay.visible = false;
+const jointMats = SKELETON.map(() => new THREE.MeshBasicMaterial({
+  color: 0x33cc55, transparent: true, opacity: 0.95, depthTest: false }));
+const jointSpheres = SKELETON.map((b, i) => {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 8), jointMats[i]);
+  m.renderOrder = 10; overlay.add(m); return m;
+});
+const linePos = new Float32Array((SKELETON.length - 1) * 6);
+const lineGeo = new THREE.BufferGeometry();
+lineGeo.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
+const lines = new THREE.LineSegments(lineGeo,
+  new THREE.LineBasicMaterial({ color: 0x557799, depthTest: false, transparent: true }));
+lines.renderOrder = 9; overlay.add(lines);
+scene.add(overlay);
+document.getElementById('skeleton').addEventListener('change',
+  e => { overlay.visible = e.target.checked; });
+function updateOverlay(pose, stress) {
+  if (!overlay.visible) return;
+  let li = 0;
+  for (let b = 0; b < SKELETON.length; b++) {
+    jointSpheres[b].position.fromArray(pose.world[b].pos);
+    let s = 0;
+    DOF_TABLE.forEach((d, j) => { if (d.bone === b) s = Math.max(s, stress[j]); });
+    const t = Math.min(1, s / STRESS_VIS_MAX);
+    jointMats[b].color.setHSL(0.33 * (1 - t), 0.85, 0.5);
+    if (SKELETON[b].parent >= 0) {
+      linePos.set(pose.world[SKELETON[b].parent].pos, li); li += 3;
+      linePos.set(pose.world[b].pos, li); li += 3;
+    }
+  }
+  lineGeo.attributes.position.needsUpdate = true;
+}
+
+// ---- main simulation loop ----
+const fall = { active: false, v: 0 };
+function frame(now) {
+  stepTween(now);
+  const pose = computePose(sim.angles);
+  applyPoseToBones(pose);
+  let contacts = [], stress = new Array(27).fill(0);
+  if (sim.obj) {
+    if (sim.grasp.attached && sim.rel) {
+      const t = applyRel(pose.world[0], sim.rel);
+      sim.obj.pos = t.pos; sim.obj.quat = t.quat;
+    }
+    contacts = computeContacts(pose.world, sim.sensors, sim.obj);
+    const g = evalGrasp(contacts, sim.sensors);
+    const was = sim.grasp.attached;
+    updateGrasp(sim.grasp, g);
+    if (!was && sim.grasp.attached) { sim.rel = relToRoot(pose.world[0], sim.obj); fall.active = false; }
+    if (was && !sim.grasp.attached) { sim.rel = null; fall.active = true; fall.v = 0; }
+    if (fall.active) {                                   // simple gravity drop
+      fall.v += 981 * 0.016;                             // cm/s^2
+      sim.obj.pos[1] -= fall.v * 0.016;
+      const rest = OBJ_DEFS[sim.obj.type].restY;
+      if (sim.obj.pos[1] <= rest) {
+        sim.obj.pos[1] = rest; fall.active = false;
+        sim.obj.quat = OBJ_DEFS[sim.obj.type].quat0.slice();  // settle flat
+      }
+    }
+    stress = computeStress(pose.world, pose.dofFrames, contacts, sim.sensors, sim.angles);
+    objectMeshes[sim.obj.type].position.fromArray(sim.obj.pos);
+    objectMeshes[sim.obj.type].quaternion.fromArray(sim.obj.quat);
+    const force = contacts.reduce((a, c) => a + c.pressure, 0);
+    const maxp = contacts.reduce((a, c) => Math.max(a, c.pressure), 0);
+    document.getElementById('force').textContent = force.toFixed(0);
+    document.getElementById('maxp').textContent = maxp.toFixed(1);
+    document.getElementById('ncontacts').textContent = contacts.length;
+    const st = document.getElementById('state');
+    st.textContent = sim.grasp.attached ? 'grasped' : 'free';
+    st.className = sim.grasp.attached ? 'grasped' : 'free';
+  }
+  paintHeat(contacts);
+  for (let j = 0; j < 27; j++) {
+    const t = Math.min(1, stress[j] / STRESS_VIS_MAX);
+    ui.stressEls[j].style.width = (t * 100).toFixed(1) + '%';
+    ui.stressEls[j].style.background = `hsl(${120 * (1 - t)}, 70%, 45%)`;
+    ui.valueEls[j].textContent = sim.angles[j].toFixed(2);
+  }
+  updateOverlay(pose, stress);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// ---- screenshot/test hook (drive state synchronously; rAF may not advance headless) ----
+window.__shot = function (name) {           // 'sphere' | 'cube' | 'pencil' | 'open'
+  if (name !== 'open') {
+    setObject(name);
+    document.querySelectorAll('#objects button').forEach(x =>
+      x.classList.toggle('active', x.dataset.obj === name));
+    sim.angles = POSES[name].slice();
+  } else {
+    sim.angles = POSES.open.slice();
+  }
+  setSliders(sim.angles);
+  tween.active = false;
+  frame(performance.now());
+};
+
+window.__cam = function (x, y, z, tx, ty, tz) {
+  camera.position.set(x, y, z);
+  if (tx !== undefined) controls.target.set(tx, ty, tz);
+  frame(performance.now());
+};
+
 setObject('sphere');
 setSliders(sim.angles);
-renderOnce();
 window.__engineReady = true;
-(function loop(now) { requestAnimationFrame(loop); stepTween(now || performance.now()); renderOnce(); })();
+const params = new URLSearchParams(location.search);
+if (params.get('skel')) {
+  overlay.visible = true;
+  document.getElementById('skeleton').checked = true;
+}
+if (params.get('shot')) window.__shot(params.get('shot'));
+if (params.get('cam')) window.__cam(...params.get('cam').split(',').map(Number));
+(function loop(now) { requestAnimationFrame(loop); frame(now || performance.now()); })();
 </script>
 </body>
 </html>
