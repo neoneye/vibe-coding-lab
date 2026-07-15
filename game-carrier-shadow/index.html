@@ -32,6 +32,9 @@ function assertEq(a, b, msg) {
   if (sa !== sb) throw new Error(`${msg || "assertEq"}: ${sa} !== ${sb}`);
 }
 
+// ============ aircraft lifecycle ============
+let nextAircraftId = 1;
+
 // ============ seeded RNG (mulberry32 on state) ============
 function rngNext(state) {
   let t = (state.rngState = (state.rngState + 0x6D2B79F5) >>> 0);
@@ -194,6 +197,14 @@ function legalMoveCells(state, shipId) {
   return neighbors8(ship.x, ship.y)
     .filter((c) => isWaterCell(c.x, c.y) && !occupiedByShip(state, c.x, c.y));
 }
+function spawnAircraft(state, kind, tasking, dest, extra = {}) {
+  const ac = { id: `ac${nextAircraftId++}`, kind, tasking, x: CARRIER_POS.x, y: CARRIER_POS.y,
+    dest, reconEnd: null, targetRef: null, leg: "transit",
+    stationLeft: kind === "surveillance" ? SURVEIL_STATION_TURNS : FIGHTER_STATION_TURNS,
+    ladderDone: [], downed: false, ...extra };
+  state.aircraft.push(ac);
+  return ac;
+}
 function applyAction(state, action) {
   const events = [];
   switch (action.type) {
@@ -251,6 +262,51 @@ function applyAction(state, action) {
       events.push({ type: "cleared", x: action.x, y: action.y, found: !!mine });
       break;
     }
+    case "launch": {
+      const m = action.mission;
+      if (state.outcome) throw new Error("game over");
+      if (m === "surveil") {
+        if (state.resources.surveillance <= 0) throw new Error("no surveillance flights left");
+        state.resources.surveillance--;
+        spawnAircraft(state, "surveillance", "surveil", { x: action.x, y: action.y });
+        addEscalation(state, "reconFlight");
+        logEvent(state, "air", `Surveillance flight launched toward (${action.x},${action.y}).`);
+      } else {
+        if (state.resources.sorties <= 0) throw new Error("no sorties left");
+        state.resources.sorties--;
+        if (m === "cap") {
+          spawnAircraft(state, "fighter", "cap", { x: action.x, y: action.y });
+          logEvent(state, "air", `CAP established over (${action.x},${action.y}).`);
+        } else if (m === "recon") {
+          spawnAircraft(state, "fighter", "recon", { x: action.x, y: action.y },
+            { reconEnd: { x: action.ex, y: action.ey } });
+          addEscalation(state, "reconFlight");
+          logEvent(state, "air", `Recon flight tasked (${action.x},${action.y})→(${action.ex},${action.ey}).`);
+        } else if (m === "intercept") {
+          const sig = airSignals(state)
+            .filter((g) => g.kind !== "sam")
+            .sort((a, b) => chebyshev(a, { x: action.targetX, y: action.targetY })
+                          - chebyshev(b, { x: action.targetX, y: action.targetY }))[0];
+          if (!sig) throw new Error("no contact to intercept");
+          spawnAircraft(state, "fighter", "intercept", { x: sig.x, y: sig.y },
+            { targetRef: { kind: sig.kind, id: sig.ref.id ?? key(sig.x, sig.y) } });
+          logEvent(state, "air", `Interceptor vectored to contact near (${sig.x},${sig.y}).`);
+        } else if (m === "strike") {
+          spawnAircraft(state, "fighter", "strike", { x: action.targetX, y: action.targetY });
+          logEvent(state, "air", `Strike package launched toward (${action.targetX},${action.targetY}).`);
+        } else throw new Error(`unknown mission ${m}`);
+      }
+      events.push({ type: "launched", mission: m });
+      break;
+    }
+    case "refuel": {
+      const ac = state.aircraft.find((a) => a.id === action.aircraftId);
+      if (!ac || ac.leg !== "station" || state.resources.refuel <= 0) throw new Error("illegal refuel");
+      state.resources.refuel--;
+      ac.stationLeft += 2;
+      logEvent(state, "air", `${ac.id} refueled in the air; +2 turns on station.`);
+      break;
+    }
     default: throw new Error(`unknown action ${action.type}`);
   }
   return events;
@@ -277,6 +333,7 @@ function makeTrack(c) {
 
 // ============ game creation ============
 function createGame(seed) {
+  nextAircraftId = 1;
   const state = {
     seed, rngState: seed >>> 0, turn: 1,
     escalation: 0, escalationPeak: 0, escalationBleed: 0, aggressiveThisTurn: false,
@@ -330,7 +387,43 @@ function createGame(seed) {
 }
 
 // ============ Task 8: endTurn resolution ============
-function resolveAircraft(state, events) { /* filled in Task 9 */ }
+function moveAircraftToward(state, ac, dest) {
+  for (let i = 0; i < AIRCRAFT_SPEED; i++) {
+    if (ac.x === dest.x && ac.y === dest.y) break;
+    const step = stepToward(ac, dest);
+    ac.x = step.x; ac.y = step.y;
+  }
+}
+function resolveAircraft(state, events) {
+  for (const ac of state.aircraft) {
+    if (ac.downed || ac.leg === "done") continue;
+    if (ac.leg === "transit") {
+      moveAircraftToward(state, ac, ac.dest);
+      if (ac.x === ac.dest.x && ac.y === ac.dest.y) ac.leg = "station";
+    }
+    if (ac.leg === "station") {
+      ac.stationLeft--;
+      if (ac.kind === "surveillance") sweepFootprint(state, ac.x, ac.y, 2);
+      if (ac.tasking === "recon") resolveReconLeg(state, ac);        // Task 10
+      if (ac.tasking === "strike") resolveStrike(state, ac, events); // Task 11
+      if (ac.tasking === "intercept") arriveIntercept(state, ac);    // Task 11
+      if (ac.stationLeft <= 0 && ac.leg === "station") { ac.leg = "return"; ac.dest = { ...CARRIER_POS }; }
+    }
+    if (ac.leg === "return") {
+      moveAircraftToward(state, ac, ac.dest);
+      if (ac.x === ac.dest.x && ac.y === ac.dest.y) {
+        ac.leg = "done";
+        logEvent(state, "air", `${ac.id} recovered aboard the carrier.`);
+      }
+    }
+    if (terrainAt(ac.x, ac.y) === TER.IRAN && ac.leg !== "done") {
+      addEscalation(state, "airspaceViolation");
+    }
+  }
+}
+function resolveReconLeg(state, ac) {}          // Task 10
+function resolveStrike(state, ac, events) {}    // Task 11
+function arriveIntercept(state, ac) {}          // Task 11
 
 function moveBoats(state) {
   const posture = postureOf(state.escalation);
@@ -696,6 +789,45 @@ CarrierTests.add("win on 3 exits, loss on 2 tanker kills", () => {
   b.mines = []; b.boats = [];
   endTurn(b);
   assert(b.outcome && !b.outcome.win && b.outcome.reason === "convoy");
+});
+
+CarrierTests.add("surveillance launch, transit, station sweep, return", () => {
+  const s = createGame(7);
+  s.drones = []; s.eFighters = []; s.echoes = []; s.airliners = [];
+  applyAction(s, { type: "launch", mission: "surveil", x: 10, y: 5 });
+  assertEq(s.resources.surveillance, 1);
+  assertEq(s.escalation, 1, "recon flight escalation");
+  const ac = s.aircraft[0];
+  assertEq(ac.leg, "transit");
+  endTurn(s); endTurn(s); endTurn(s);
+  assertEq(ac.leg, "station");
+  assert(Object.keys(s.airNumbers).length >= 25 - 5, "5x5 footprint stamped (minus off-grid)");
+  for (let i = 0; i < 8; i++) endTurn(s);   // 4 station turns + return leg from mid-map
+  assertEq(ac.leg, "done", "returned to carrier");
+});
+CarrierTests.add("refuel extends station", () => {
+  const s = createGame(7);
+  applyAction(s, { type: "launch", mission: "cap", x: 12, y: 5 });
+  const ac = s.aircraft[0];
+  while (ac.leg === "transit") endTurn(s);
+  const before = ac.stationLeft;
+  applyAction(s, { type: "refuel", aircraftId: ac.id });
+  assertEq(ac.stationLeft, before + 2);
+  assertEq(s.resources.refuel, 0);
+});
+CarrierTests.add("sortie resource gates launches", () => {
+  const s = createGame(7);
+  s.resources.sorties = 0;
+  let threw = false;
+  try { applyAction(s, { type: "launch", mission: "cap", x: 10, y: 5 }); } catch { threw = true; }
+  assert(threw);
+});
+CarrierTests.add("overflying Iranian coast escalates", () => {
+  const s = createGame(7);
+  applyAction(s, { type: "launch", mission: "cap", x: 10, y: 0 }); // station over IRAN row 0
+  const before = s.escalation;
+  while (s.aircraft[0].leg === "transit") endTurn(s);
+  assert(s.escalation >= before + 5, "airspace violation applied");
 });
 </script>
 <script>
