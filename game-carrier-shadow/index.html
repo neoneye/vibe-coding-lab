@@ -273,6 +273,22 @@ function applyAction(state, action) {
         logEvent(state, "air", `Surveillance flight launched toward (${action.x},${action.y}).`);
       } else {
         if (state.resources.sorties <= 0) throw new Error("no sorties left");
+        // Validate mission and gather info before consuming sortie
+        let sig = null;
+        if (m === "cap") {
+          // cap is always valid
+        } else if (m === "recon") {
+          // recon is always valid
+        } else if (m === "intercept") {
+          sig = airSignals(state)
+            .filter((g) => g.kind !== "sam")
+            .sort((a, b) => chebyshev(a, { x: action.targetX, y: action.targetY })
+                          - chebyshev(b, { x: action.targetX, y: action.targetY }))[0];
+          if (!sig) throw new Error("no contact to intercept");
+        } else if (m === "strike") {
+          // strike is always valid
+        } else throw new Error(`unknown mission ${m}`);
+        // Now consume sortie and spawn
         state.resources.sorties--;
         if (m === "cap") {
           spawnAircraft(state, "fighter", "cap", { x: action.x, y: action.y });
@@ -283,18 +299,13 @@ function applyAction(state, action) {
           addEscalation(state, "reconFlight");
           logEvent(state, "air", `Recon flight tasked (${action.x},${action.y})→(${action.ex},${action.ey}).`);
         } else if (m === "intercept") {
-          const sig = airSignals(state)
-            .filter((g) => g.kind !== "sam")
-            .sort((a, b) => chebyshev(a, { x: action.targetX, y: action.targetY })
-                          - chebyshev(b, { x: action.targetX, y: action.targetY }))[0];
-          if (!sig) throw new Error("no contact to intercept");
           spawnAircraft(state, "fighter", "intercept", { x: sig.x, y: sig.y },
             { targetRef: { kind: sig.kind, id: sig.ref.id ?? key(sig.x, sig.y) } });
           logEvent(state, "air", `Interceptor vectored to contact near (${sig.x},${sig.y}).`);
         } else if (m === "strike") {
           spawnAircraft(state, "fighter", "strike", { x: action.targetX, y: action.targetY });
           logEvent(state, "air", `Strike package launched toward (${action.targetX},${action.targetY}).`);
-        } else throw new Error(`unknown mission ${m}`);
+        }
       }
       events.push({ type: "launched", mission: m });
       break;
@@ -828,6 +839,20 @@ CarrierTests.add("overflying Iranian coast escalates", () => {
   const before = s.escalation;
   while (s.aircraft[0].leg === "transit") endTurn(s);
   assert(s.escalation >= before + 5, "airspace violation applied");
+});
+CarrierTests.add("failed launch does not consume a sortie", () => {
+  const s = createGame(7);
+  s.drones = []; s.eFighters = []; s.airliners = [];
+  s.echoes.forEach((e) => { e.identified = true; });
+  let threw = false;
+  try { applyAction(s, { type: "launch", mission: "intercept", targetX: 10, targetY: 5 }); }
+  catch { threw = true; }
+  assert(threw, "intercept with no contacts throws");
+  assertEq(s.resources.sorties, 6, "sortie not consumed on failed intercept");
+  threw = false;
+  try { applyAction(s, { type: "launch", mission: "bogus", x: 1, y: 1 }); } catch { threw = true; }
+  assert(threw, "unknown mission throws");
+  assertEq(s.resources.sorties, 6, "sortie not consumed on unknown mission");
 });
 </script>
 <script>
