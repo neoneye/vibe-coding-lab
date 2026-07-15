@@ -352,7 +352,7 @@ function createGame(seed) {
     ships: SHIP_STARTS.map((s) => ({ ...s, movesLeft: 0, sensorUsed: false,
       crippled: false, destroyed: false, exited: false, spottedUntil: 0 })),
     mines: [], boats: [], sam: null, drones: [], eFighters: [], echoes: [], airliners: [],
-    aircraft: [], seaNumbers: {}, airNumbers: {}, marks: { sea: {}, air: {} },
+    aircraft: [], seaNumbers: {}, airNumbers: {}, marks: { sea: {}, air: {} }, idents: {},
     log: [], pendingIntercept: null, rescue: null, outcome: null,
   };
   state.ships.forEach((s) => { s.movesLeft = shipSpeed(s); });
@@ -432,7 +432,49 @@ function resolveAircraft(state, events) {
     }
   }
 }
-function resolveReconLeg(state, ac) {}          // Task 10
+function identifyContact(state, sig) {
+  if (sig.kind === "echo") { sig.ref.identified = true; logEvent(state, "intel", `Contact at (${sig.x},${sig.y}) is a false echo.`); }
+  else { state.idents[sig.ref.id] = sig.kind; logEvent(state, "intel", `Contact ${sig.ref.id} identified: ${sig.kind}.`); }
+}
+function contactLabel(state, sig) {
+  if (sig.kind === "echo") return sig.ref.identified ? "false echo" : "unknown";
+  return state.idents[sig.ref.id] || "unknown";
+}
+function resolveReconLeg(state, ac) {
+  const passed = [];
+  for (let i = 0; i < AIRCRAFT_SPEED; i++) {
+    passed.push({ x: ac.x, y: ac.y });
+    if (ac.x === ac.reconEnd.x && ac.y === ac.reconEnd.y) { ac.stationLeft = 0; break; }
+    const step = stepToward(ac, ac.reconEnd);
+    ac.x = step.x; ac.y = step.y;
+  }
+  passed.push({ x: ac.x, y: ac.y });
+  for (const sig of airSignals(state)) {
+    if (passed.some((p) => chebyshev(p, sig) <= 1)) identifyContact(state, sig);
+  }
+  for (const p of passed) {
+    if (!isWaterCell(p.x, p.y)) continue;
+    const raw = seaContentAt(state, p.x, p.y);
+    state.seaNumbers[key(p.x, p.y)] = {
+      value: seaThreatsAdjacent(state, p.x, p.y), turn: state.turn, stale: false,
+      content: raw === "boat" ? "boat" : "empty",
+    };
+  }
+}
+function capEngagements(state) {
+  if (state.pendingIntercept) return;
+  for (const ac of state.aircraft) {
+    if (ac.downed || ac.leg !== "station" || ac.tasking !== "cap") continue;
+    for (const sig of airSignals(state)) {
+      if ((sig.kind === "drone" || sig.kind === "efighter") && chebyshev(ac, sig) <= 2) {
+        state.pendingIntercept = { aircraftId: ac.id, sigKind: sig.kind, sigId: sig.ref.id };
+        logEvent(state, "air", `CAP ${ac.id} intercepting contact ${contactLabel(state, sig)} near (${sig.x},${sig.y}).`);
+        return;
+      }
+    }
+  }
+}
+function resolveLadder(state, step) { state.pendingIntercept = null; }  // replaced in Task 11
 function resolveStrike(state, ac, events) {}    // Task 11
 function arriveIntercept(state, ac) {}          // Task 11
 
@@ -539,6 +581,7 @@ function endTurn(state) {
   const events = [];
   resolveAircraft(state, events);
   moveBoats(state); moveDrones(state); moveEFighters(state); moveAirliners(state);
+  capEngagements(state);
   droneSpotting(state);
   boatAttacks(state);
   mineStrikes(state);
@@ -853,6 +896,31 @@ CarrierTests.add("failed launch does not consume a sortie", () => {
   try { applyAction(s, { type: "launch", mission: "bogus", x: 1, y: 1 }); } catch { threw = true; }
   assert(threw, "unknown mission throws");
   assertEq(s.resources.sorties, 6, "sortie not consumed on unknown mission");
+});
+
+CarrierTests.add("recon identifies contacts along the line and classifies sea", () => {
+  const s = createGame(7);
+  s.drones = [{ id: "d1", x: 10, y: 5, orbit: [{ x: 10, y: 5 }], orbitIndex: 0, downed: false }];
+  s.eFighters = []; s.airliners = []; s.echoes = [{ x: 8, y: 5, identified: false }];
+  s.boats = [{ id: "b1", x: 9, y: 5, waypoints: [{ x: 9, y: 5 }], wpIndex: 0, sunk: false }];
+  s.mines = [{ x: 11, y: 5, cleared: false }];
+  applyAction(s, { type: "launch", mission: "recon", x: 6, y: 5, ex: 14, ey: 5 });
+  for (let i = 0; i < 8; i++) { endTurn(s); if (s.pendingIntercept) resolveLadder(s, "observe"); }
+  assertEq(s.idents["d1"], "drone", "drone identified");
+  assert(s.echoes[0].identified, "echo unmasked");
+  assertEq(s.seaNumbers[key(9, 5)].content, "boat", "boat classified from the air");
+  assertEq(s.seaNumbers[key(11, 5)].content, "empty", "mine invisible from the air");
+});
+CarrierTests.add("CAP engagement raises pendingIntercept and blocks endTurn", () => {
+  const s = createGame(7);
+  s.drones = [{ id: "d1", x: 12, y: 5, orbit: [{ x: 12, y: 5 }], orbitIndex: 0, downed: false }];
+  s.eFighters = []; s.airliners = [];
+  applyAction(s, { type: "launch", mission: "cap", x: 12, y: 5 });
+  while (!s.pendingIntercept && s.turn < 10) endTurn(s);
+  assert(s.pendingIntercept, "engagement triggered");
+  let threw = false;
+  try { endTurn(s); } catch { threw = true; }
+  assert(threw, "endTurn blocked until ladder resolved");
 });
 </script>
 <script>
