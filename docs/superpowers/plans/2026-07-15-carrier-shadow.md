@@ -284,7 +284,7 @@ git commit -m "carrier-shadow: map terrain and geometry helpers"
 
 Also produces `postureOf(escalation) -> 'shadowing'|'harassment'|'conflict'|'war'` and `logEvent(state, kind, text)`.
 
-Placement rules (all seeded via `rngInt`): mines on WATER cells with `x >= 4` (clear of exit) and Chebyshev ≥ 3 from every ship start, unique cells; boats on WATER cells with `8 <= x <= 15`, waypoints are 3 seeded WATER cells with `6 <= x <= 16`; SAM on an IRAN cell; drone orbit centers on any in-bounds cell with `y in 2..9`, orbit = the 2×2 loop `[c, c+dx, c+dx+dy, c+dy]` clamped in bounds; enemy-fighter tracks = 6-cell rectangle loop around seeded centers with `x >= 10`; echoes unique in-bounds cells; airliners: schedule `{spawnTurn: 2 + 4*i, row: i%2 ? 7 : 2, dir: i%2 ? -1 : 1}` for `i = 0..7`. Ship starts (fixed): tankers `(18,4) (18,5) (19,4) (19,5)`, frigates `(17,4) (17,6)`, minesweeper `(17,5)`.
+Placement rules (all seeded via `rngInt`): mines on WATER cells with `x >= 4` (clear of exit) and Chebyshev ≥ 3 from every ship start, unique cells; boats on WATER cells with `8 <= x <= 15`, waypoints are 3 seeded WATER cells with `6 <= x <= 16`; SAM on an IRAN cell; drone orbit centers on cells with `x <= W-2` and `y in 2..9` (so the 2×2 loop `[c, c+dx, c+dx+dy, c+dy]` never needs clamping and stays degenerate-free); enemy-fighter tracks = 6-cell rectangle loop around seeded centers with `10 <= x <= 16` and `y in 2..9` (track x-offsets span -1..+3); echoes unique in-bounds cells; airliners: schedule `{spawnTurn: 2 + 4*i, row: i%2 ? 7 : 2, dir: i%2 ? -1 : 1}` for `i = 0..7`. Ship starts (fixed): tankers `(18,4) (18,5) (19,4) (19,5)`, frigates `(17,4) (17,6)`, minesweeper `(17,5)`.
 
 - [ ] **Step 1: Add failing tests**
 
@@ -389,11 +389,11 @@ function createGame(seed) {
   const samCell = seededCell(state, (x, y) => terrainAt(x, y) === TER.IRAN);
   state.sam = { ...samCell, revealedUntil: 0, relocateAt: SAM_RELOCATE_EVERY, destroyed: false };
   for (let i = 0; i < 3; i++) {
-    const c = seededCell(state, (x, y) => y >= 2 && y <= 9);
+    const c = seededCell(state, (x, y) => x <= W - 2 && y >= 2 && y <= 9);
     state.drones.push({ id: `d${i + 1}`, ...c, orbit: makeOrbit(c), orbitIndex: 0, downed: false });
   }
   for (let i = 0; i < 2; i++) {
-    const c = seededCell(state, (x, y) => x >= 10 && y >= 2 && y <= 9);
+    const c = seededCell(state, (x, y) => x >= 10 && x <= 16 && y >= 2 && y <= 9);
     state.eFighters.push({ id: `ef${i + 1}`, ...c, track: makeTrack(c), trackIndex: 0, downed: false });
   }
   for (let i = 0; i < 4; i++) {

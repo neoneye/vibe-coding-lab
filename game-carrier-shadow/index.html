@@ -110,6 +110,30 @@ function postureOf(esc) {
 }
 function logEvent(state, kind, text) { state.log.push({ turn: state.turn, kind, text }); }
 
+// ============ sonar and sea numbers ============
+function sonarRange(ship) {
+  return ship.kind === "frigate" ? 2 : ship.kind === "minesweeper" ? 3 : 0;
+}
+function seaThreatsAdjacent(state, x, y) {
+  let n = 0;
+  for (const c of neighbors8(x, y)) {
+    if (state.mines.some((m) => !m.cleared && m.x === c.x && m.y === c.y)) n++;
+    if (state.boats.some((b) => !b.sunk && b.x === c.x && b.y === c.y)) n++;
+  }
+  return n;
+}
+function seaContentAt(state, x, y) {
+  if (state.mines.some((m) => !m.cleared && m.x === x && m.y === y)) return "mine";
+  if (state.boats.some((b) => !b.sunk && b.x === x && b.y === y)) return "boat";
+  return "empty";
+}
+function markStaleSeaNumbers(state, oldPos, newPos) {
+  for (const k of Object.keys(state.seaNumbers)) {
+    const c = unkey(k);
+    if (chebyshev(c, oldPos) <= 1 || chebyshev(c, newPos) <= 1) state.seaNumbers[k].stale = true;
+  }
+}
+
 // ============ ship movement ============
 function shipById(state, id) { return state.ships.find((s) => s.id === id); }
 function shipSpeed(ship) {
@@ -136,6 +160,30 @@ function applyAction(state, action) {
       const ship = shipById(state, action.shipId);
       ship.x = action.x; ship.y = action.y; ship.movesLeft--;
       events.push({ type: "moved", shipId: ship.id, x: ship.x, y: ship.y });
+      break;
+    }
+    case "ping": {
+      const ship = shipById(state, action.shipId);
+      const range = sonarRange(ship);
+      if (!range || ship.sensorUsed || ship.crippled || ship.destroyed
+          || !isWaterCell(action.x, action.y) || chebyshev(ship, action) > range) {
+        throw new Error("illegal ping");
+      }
+      ship.sensorUsed = true;
+      const content = seaContentAt(state, action.x, action.y);
+      state.seaNumbers[key(action.x, action.y)] = {
+        value: seaThreatsAdjacent(state, action.x, action.y),
+        turn: state.turn, stale: false, content,
+      };
+      logEvent(state, "intel", `Sonar (${action.x},${action.y}): ${content}, `
+        + `${state.seaNumbers[key(action.x, action.y)].value} contact(s) adjacent.`);
+      events.push({ type: "pinged", x: action.x, y: action.y });
+      break;
+    }
+    case "mark": {
+      const k = key(action.x, action.y);
+      if (action.mark == null) delete state.marks[action.layer][k];
+      else state.marks[action.layer][k] = action.mark;
       break;
     }
     default: throw new Error(`unknown action ${action.type}`);
@@ -302,6 +350,45 @@ CarrierTests.add("illegal moves throw", () => {
   let threw = false;
   try { applyAction(s, { type: "move", shipId: "t1", x: 0, y: 0 }); } catch { threw = true; }
   assert(threw, "cannot move onto land / far cell");
+});
+
+CarrierTests.add("sonar ping stamps a correct minesweeper number", () => {
+  const s = createGame(7);
+  // Plant a controlled scene: clear all enemies, put one mine + one boat around (10,5).
+  s.mines = [{ x: 9, y: 4, cleared: false }];
+  s.boats = [{ id: "b1", x: 11, y: 6, waypoints: [{ x: 11, y: 6 }], wpIndex: 0, sunk: false }];
+  const f1 = shipById(s, "f1"); f1.x = 10; f1.y = 6;   // (10,5) within range 2
+  applyAction(s, { type: "ping", shipId: "f1", x: 10, y: 5 });
+  const e = s.seaNumbers[key(10, 5)];
+  assertEq(e.value, 2, "mine + boat adjacent");
+  assertEq(e.content, "empty");
+  assertEq(e.stale, false);
+  assert(f1.sensorUsed, "sensor spent");
+  let threw = false;
+  try { applyAction(s, { type: "ping", shipId: "f1", x: 10, y: 6 }); } catch { threw = true; }
+  assert(threw, "one sensor action per turn");
+});
+CarrierTests.add("ping reveals target cell content", () => {
+  const s = createGame(7);
+  s.mines = [{ x: 15, y: 5, cleared: false }]; s.boats = [];
+  const m1 = shipById(s, "m1"); m1.x = 14; m1.y = 5;
+  applyAction(s, { type: "ping", shipId: "m1", x: 15, y: 5 });
+  assertEq(s.seaNumbers[key(15, 5)].content, "mine");
+});
+CarrierTests.add("boat movement stales nearby sea numbers", () => {
+  const s = createGame(7);
+  s.seaNumbers[key(10, 5)] = { value: 1, turn: 1, stale: false, content: "empty" };
+  s.seaNumbers[key(2, 2)] = { value: 0, turn: 1, stale: false, content: "empty" };
+  markStaleSeaNumbers(s, { x: 11, y: 6 }, { x: 12, y: 6 });
+  assert(s.seaNumbers[key(10, 5)].stale, "neighborhood touched by old pos");
+  assert(!s.seaNumbers[key(2, 2)].stale, "far number untouched");
+});
+CarrierTests.add("marks are bookkeeping", () => {
+  const s = createGame(7);
+  applyAction(s, { type: "mark", layer: "sea", x: 5, y: 5, mark: "mine" });
+  assertEq(s.marks.sea[key(5, 5)], "mine");
+  applyAction(s, { type: "mark", layer: "sea", x: 5, y: 5, mark: null });
+  assertEq(s.marks.sea[key(5, 5)], undefined);
 });
 </script>
 <script>
