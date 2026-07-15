@@ -1416,8 +1416,190 @@ function drawLog() {
     .map((l) => `<div class="${l.kind}">T${l.turn} ${l.text}</div>`).join("");
   el.scrollTop = el.scrollHeight;
 }
-function drawPanel() { /* filled by Task 16 (interaction); harmless no-op until then */ }
-function maybeOverlay() { /* filled by Task 16 */ }
+function describeSelection(s, sel) {
+  if (!sel) return "Click a unit or the carrier.";
+  if (sel.kind === "carrier") return "Carrier (off-map). Launch air missions.";
+  if (sel.kind === "aircraft") {
+    const ac = s.aircraft.find((a) => a.id === sel.id);
+    return ac ? `${ac.id} — ${ac.tasking}, ${ac.leg}${ac.leg === "station" ? ` (${ac.stationLeft} turns left)` : ""}` : "";
+  }
+  const sh = shipById(s, sel.id);
+  return `${sh.kind} ${sh.id}${sh.crippled ? " (CRIPPLED)" : ""} — moves ${sh.movesLeft}, sensor ${sh.sensorUsed ? "used" : "ready"}`;
+}
+const ACTION_LABEL = {
+  ping: "Sonar ping…", sweep: "Radar sweep…", clearMine: "Clear mine…",
+  surveil: "Surveillance flight…", cap: "CAP…", recon: "Recon line…",
+  intercept: "Intercept…", strike: "Strike…", refuel: "Refuel (+2 turns)", rescue: "Rescue crew",
+};
+function drawPanel() {
+  const s = ui.state;
+  document.getElementById("selinfo").textContent = describeSelection(s, ui.selection);
+  const box = document.getElementById("actions");
+  box.innerHTML = "";
+  if (ui.pendingLaunch) {
+    box.innerHTML = `<div>${ui.pendingLaunch.mission}: click target cell`
+      + `${ui.pendingLaunch.mission === "recon" && ui.pendingLaunch.start ? " (end point)" : ""}</div>`;
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    cancel.onclick = () => { ui.pendingLaunch = null; ui.pendingTargetAction = null; ui.render(); };
+    box.appendChild(cancel);
+    return;
+  }
+  for (const a of uiOptions(s, ui.selection).actions) {
+    const b = document.createElement("button");
+    b.textContent = ACTION_LABEL[a];
+    b.onclick = () => onAction(a);
+    box.appendChild(b);
+  }
+}
+function onAction(a) {
+  const s = ui.state;
+  try {
+    if (a === "refuel") { applyAction(s, { type: "refuel", aircraftId: ui.selection.id }); }
+    else if (a === "rescue") { applyAction(s, { type: "rescue" }); }
+    else if (a === "ping" || a === "sweep" || a === "clearMine") {
+      ui.pendingTargetAction = { type: a, shipId: ui.selection.id };
+      ui.pendingLaunch = { mission: a };   // reuse the "click a target" panel state
+    } else { ui.pendingLaunch = { mission: a }; }
+  } catch (e) { logUi(e.message); }
+  ui.render();
+}
+function logUi(text) { ui.state.log.push({ turn: ui.state.turn, kind: "warning", text }); }
+
+function cellFromEvent(ev) {
+  const rect = canvas.getBoundingClientRect();
+  const scale = canvas.width / rect.width;
+  const cx = (ev.clientX - rect.left) * scale, cy = (ev.clientY - rect.top) * scale;
+  if (cx >= PAD + W * CELL) return { strip: true };
+  const x = Math.floor((cx - PAD) / CELL), y = Math.floor((cy - PAD) / CELL);
+  return inBounds(x, y) ? { x, y } : null;
+}
+canvas.addEventListener("click", (ev) => {
+  const s = ui.state;
+  const c = cellFromEvent(ev);
+  if (!c) return;
+  if (c.strip) { ui.selection = { kind: "carrier" }; ui.pendingLaunch = null; ui.render(); return; }
+  try {
+    if (ui.pendingLaunch) { handleTargetClick(c); ui.render(); return; }
+    const ship = s.ships.find((sh) => !sh.destroyed && !sh.exited && sh.x === c.x && sh.y === c.y);
+    const ac = s.aircraft.find((a) => a.leg !== "done" && !a.downed && a.x === c.x && a.y === c.y);
+    if (ship) ui.selection = { kind: "ship", id: ship.id };
+    else if (ac) ui.selection = { kind: "aircraft", id: ac.id };
+    else if (ui.selection?.kind === "ship") {
+      const mv = uiOptions(s, ui.selection).moves.some((m) => m.x === c.x && m.y === c.y);
+      if (mv) applyAction(s, { type: "move", shipId: ui.selection.id, x: c.x, y: c.y });
+    }
+  } catch (e) { logUi(e.message); }
+  ui.render();
+});
+function handleTargetClick(c) {
+  const s = ui.state, m = ui.pendingLaunch.mission;
+  if (ui.pendingTargetAction) {
+    applyAction(s, { ...ui.pendingTargetAction, x: c.x, y: c.y });
+    ui.pendingTargetAction = null; ui.pendingLaunch = null;
+    return;
+  }
+  if (m === "recon") {
+    if (!ui.pendingLaunch.start) { ui.pendingLaunch.start = c; return; }
+    applyAction(s, { type: "launch", mission: "recon",
+      x: ui.pendingLaunch.start.x, y: ui.pendingLaunch.start.y, ex: c.x, ey: c.y });
+  } else if (m === "intercept" || m === "strike") {
+    applyAction(s, { type: "launch", mission: m, targetX: c.x, targetY: c.y });
+  } else {
+    applyAction(s, { type: "launch", mission: m, x: c.x, y: c.y });
+  }
+  ui.pendingLaunch = null;
+}
+canvas.addEventListener("contextmenu", (ev) => {
+  ev.preventDefault();
+  const c = cellFromEvent(ev);
+  if (!c || c.strip) return;
+  const cycles = {
+    sea: [null, "mine", "ship", "clear"],
+    air: [null, "hostile", "civ", "drone", "radar", "false"],
+  }[ui.view];
+  const cur = ui.state.marks[ui.view][key(c.x, c.y)] ?? null;
+  const next = cycles[(cycles.indexOf(cur) + 1) % cycles.length];
+  applyAction(ui.state, { type: "mark", layer: ui.view, x: c.x, y: c.y, mark: next });
+  ui.render();
+});
+function setView(v) {
+  ui.view = v;
+  document.getElementById("btnSea").classList.toggle("active", v === "sea");
+  document.getElementById("btnAir").classList.toggle("active", v === "air");
+  ui.render();
+}
+document.getElementById("btnSea").onclick = () => setView("sea");
+document.getElementById("btnAir").onclick = () => setView("air");
+function doEndTurn() {
+  if (ui.state.pendingIntercept) { logUi("Resolve the intercept first."); ui.render(); return; }
+  if (ui.state.outcome) return;
+  endTurn(ui.state);
+  ui.selection = null; ui.pendingLaunch = null; ui.pendingTargetAction = null;
+  ui.render();
+}
+document.getElementById("btnEnd").onclick = doEndTurn;
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Tab") { ev.preventDefault(); setView(ui.view === "sea" ? "air" : "sea"); }
+  if (ev.key === " ") { ev.preventDefault(); doEndTurn(); }
+});
+
+const LADDER_STEPS = [
+  ["observe", "Observe (+0)"], ["hail", "Hail (+0)"], ["lock", "Radar lock (+3)"],
+  ["warningShot", "Warning shot (+6)"], ["attack", "Attack (+8/+20 / airliner = defeat)"],
+];
+let howToDismissed = false;
+function maybeOverlay() {
+  const s = ui.state;
+  const overlay = document.getElementById("overlay");
+  const box = document.getElementById("overlaybox");
+  if (!howToDismissed) {
+    box.innerHTML = `<h2>Carrier Shadow</h2>
+<p>Escort <b>3 of 4 tankers</b> to the green exit zone in the west. The strait hides
+mines, missile boats, a mobile SAM, drones and false radar echoes.</p>
+<p><b>SEA / AIR</b> (Tab) toggles the intel layers. Sonar and radar stamp
+Minesweeper-style numbers: threats adjacent to that cell. Gray numbers are stale —
+something moved. Right-click marks cells.</p>
+<p>Your carrier (east strip) launches surveillance, CAP, recon, intercepts and
+strikes — resources are finite. Every aggressive act raises <b>escalation</b>;
+at 100 the region is at war and you lose. Quiet turns cool it down.</p>
+<p><button id="btnStart">Start mission</button></p>`;
+    overlay.classList.remove("hidden");
+    document.getElementById("btnStart").onclick = () => { howToDismissed = true; ui.render(); };
+    return;
+  }
+  if (s.pendingIntercept) {
+    box.innerHTML = `<h3>Intercept — contact ${s.pendingIntercept.sigId} (${
+      contactLabel(s, findSignalById(s, s.pendingIntercept.sigKind, s.pendingIntercept.sigId) || { kind: s.pendingIntercept.sigKind, ref: {} })
+    })</h3><p>Choose your action:</p><p id="ladderbtns"></p>`;
+    overlay.classList.remove("hidden");
+    const p = box.querySelector("#ladderbtns");
+    for (const [step, label] of LADDER_STEPS) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.onclick = () => { try { applyAction(s, { type: "ladder", step }); } catch (e) { logUi(e.message); } ui.render(); };
+      p.appendChild(b);
+    }
+    return;
+  }
+  if (s.outcome) {
+    const t = s.ships.filter((x) => x.kind === "tanker");
+    box.innerHTML = `<h2>${s.outcome.win ? "MISSION ACCOMPLISHED" : "MISSION FAILED"}</h2>
+<p>${{ "convoy-through": "The convoy is through.", convoy: "Too many tankers lost.",
+       war: "Escalation reached 100 — regional war.", airliner: "A civilian airliner was shot down." }[s.outcome.reason]}</p>
+<p>Tankers through: ${t.filter((x) => x.exited).length}/4 · Escalation peak: ${s.escalationPeak}
+ · Turns: ${s.turn} · Grade: <b>${s.outcome.grade}</b></p>
+<p><button id="btnNew">New game (new seed)</button></p>`;
+    overlay.classList.remove("hidden");
+    document.getElementById("btnNew").onclick = () => {
+      ui.state = createGame(((Math.random() * 2 ** 31) | 0) >>> 0);
+      ui.selection = null; ui.pendingLaunch = null;
+      ui.render();
+    };
+    return;
+  }
+  overlay.classList.add("hidden");
+}
 ui.render();
 </script>
 </body>
