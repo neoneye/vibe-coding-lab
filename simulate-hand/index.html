@@ -164,6 +164,39 @@ function tipPos(world, b) {
   return v3add(world[b].pos, qrot(world[b].quat, [0, SKELETON[b].len, 0]));
 }
 
+// ---- object SDFs ----
+function sdfSphere(p, r) { return v3len(p) - r; }
+function sdfBox(p, h) {
+  const q = [Math.abs(p[0]) - h[0], Math.abs(p[1]) - h[1], Math.abs(p[2]) - h[2]];
+  const outside = v3len([Math.max(q[0], 0), Math.max(q[1], 0), Math.max(q[2], 0)]);
+  return outside + Math.min(Math.max(q[0], q[1], q[2]), 0);
+}
+function sdfCapsuleY(p, half, r) {
+  const y = clamp(p[1], -half, half);
+  return v3len([p[0], p[1] - y, p[2]]) - r;
+}
+const OBJ_DEFS = {
+  sphere: { r: 3.0,  ready: [0.6, 20.0, 4.2], restY: 3.0,  quat0: [0, 0, 0, 1] },
+  cube:   { h: [2.4, 2.4, 2.4], ready: [0.6, 20.0, 4.0], restY: 2.4, quat0: [0, 0, 0, 1] },
+  pencil: { r: 0.45, half: 9.0, ready: [1.2, 21.0, 3.4], restY: 0.45,
+            quat0: qaa([0, 0, 1], Math.PI / 2) }, // held/lying horizontally
+};
+function objSdf(obj, p) {
+  const l = qrotInv(obj.quat, v3sub(p, obj.pos));
+  const d = OBJ_DEFS[obj.type];
+  if (obj.type === 'sphere') return sdfSphere(l, d.r);
+  if (obj.type === 'cube') return sdfBox(l, d.h);
+  return sdfCapsuleY(l, d.half, d.r);
+}
+function objNormal(obj, p) {
+  const e = 1e-3;
+  return v3norm([
+    objSdf(obj, [p[0] + e, p[1], p[2]]) - objSdf(obj, [p[0] - e, p[1], p[2]]),
+    objSdf(obj, [p[0], p[1] + e, p[2]]) - objSdf(obj, [p[0], p[1] - e, p[2]]),
+    objSdf(obj, [p[0], p[1], p[2] + e]) - objSdf(obj, [p[0], p[1], p[2] - e]),
+  ]);
+}
+
 // ---- tests ----
 HandTests.add('quat: 90deg about X takes Y to Z', () => {
   const v = qrot(qaa([1,0,0], Math.PI/2), [0,1,0]);
@@ -240,6 +273,40 @@ HandTests.add('FK: dofFrames axes are unit and jointPos matches bone origin', ()
   }
   const d = v3sub(dofFrames[12].jointPos, world[5].pos);
   HandTests.assert(v3len(d) < 1e-9, 'index MCP frame at index1 origin');
+});
+HandTests.add('SDF: sphere inside/outside distances', () => {
+  HandTests.assertApprox(sdfSphere([0, 0, 5], 3), 2, 1e-9);
+  HandTests.assertApprox(sdfSphere([0, 1, 0], 3), -2, 1e-9);
+});
+HandTests.add('SDF: box face, corner, inside', () => {
+  HandTests.assertApprox(sdfBox([4, 0, 0], [2, 2, 2]), 2, 1e-9);
+  HandTests.assertApprox(sdfBox([3, 3, 3], [2, 2, 2]), Math.sqrt(3), 1e-9);
+  HandTests.assertApprox(sdfBox([0, 0, 1], [2, 2, 2]), -1, 1e-9);
+});
+HandTests.add('SDF: capsule caps and side', () => {
+  HandTests.assertApprox(sdfCapsuleY([0, 0, 2], 5, 1), 1, 1e-9);
+  HandTests.assertApprox(sdfCapsuleY([0, 7, 0], 5, 1), 1, 1e-9);
+  HandTests.assertApprox(sdfCapsuleY([0, 3, 0], 5, 1), -1, 1e-9);
+});
+HandTests.add('SDF: objSdf respects object pose, objNormal matches analytic', () => {
+  const obj = { type: 'sphere', pos: [10, 20, 30], quat: qaa([0, 1, 0], 0.9) };
+  HandTests.assertApprox(objSdf(obj, [10, 20, 34]), 4 - OBJ_DEFS.sphere.r, 1e-6);
+  const n = objNormal(obj, [10, 20, 34]);
+  HandTests.assertApprox(n[0], 0, 1e-3); HandTests.assertApprox(n[1], 0, 1e-3);
+  HandTests.assertApprox(n[2], 1, 1e-3);
+});
+HandTests.add('SDF: rotated cube face distance', () => {
+  const obj = { type: 'cube', pos: [0, 0, 0], quat: qaa([0, 1, 0], Math.PI / 4) };
+  const h = OBJ_DEFS.cube.h[0];
+  // point along rotated +X face normal
+  const p = qrot(obj.quat, [h + 1.5, 0, 0]);
+  HandTests.assertApprox(objSdf(obj, p), 1.5, 1e-6);
+});
+HandTests.add('OBJ_DEFS: ready positions sit in front of the palm', () => {
+  for (const k of ['sphere', 'cube', 'pencil']) {
+    const r = OBJ_DEFS[k].ready;
+    HandTests.assert(r[2] > 1.5 && r[1] > 16 && r[1] < 26, k + ' ready pos plausible');
+  }
 });
 HandTests.add('SKELETON: 17 bones, parents precede children, digits mapped', () => {
   HandTests.assert(SKELETON.length === 17);
