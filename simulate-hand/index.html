@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>27-DoF Hand Simulator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #0b0e13; font-family: ui-monospace, monospace; color: #ccc; }
+  canvas { display: block; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script id="shared-code">
+'use strict';
+// ---- Test harness ----
+const HandTests = (() => {
+  const tests = []; let cur = '';
+  function add(name, fn) { tests.push({ name, fn }); }
+  function assert(cond, msg) { if (!cond) throw new Error(msg || ('assert failed in ' + cur)); }
+  function assertApprox(a, b, eps, msg) {
+    if (Math.abs(a - b) > (eps == null ? 1e-6 : eps))
+      throw new Error((msg ? msg + ': ' : '') + 'expected ' + b + ' got ' + a);
+  }
+  function run() {
+    let pass = 0, fail = 0;
+    for (const t of tests) {
+      cur = t.name;
+      try { t.fn(); pass++; console.log('  ok   -', t.name); }
+      catch (e) { fail++; console.error('  FAIL -', t.name + ':', e.message); }
+    }
+    console.log('\n' + pass + ' passed, ' + fail + ' failed');
+    return fail === 0;
+  }
+  return { add, run, assert, assertApprox };
+})();
+
+// ---- vec3 / quat ----
+function v3add(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+function v3sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function v3scale(a, s) { return [a[0]*s, a[1]*s, a[2]*s]; }
+function v3dot(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+function v3cross(a, b) {
+  return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+}
+function v3len(a) { return Math.hypot(a[0], a[1], a[2]); }
+function v3norm(a) { const l = v3len(a) || 1; return [a[0]/l, a[1]/l, a[2]/l]; }
+function clamp(x, lo, hi) { return x < lo ? lo : x > hi ? hi : x; }
+
+function qaa(axis, angle) {
+  const s = Math.sin(angle / 2);
+  return [axis[0]*s, axis[1]*s, axis[2]*s, Math.cos(angle / 2)];
+}
+function qmul(a, b) {
+  return [
+    a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
+    a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
+    a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
+    a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2],
+  ];
+}
+function qconj(q) { return [-q[0], -q[1], -q[2], q[3]]; }
+function qrot(q, v) {
+  const u = [q[0], q[1], q[2]];
+  const t = v3scale(v3cross(u, v), 2);
+  return v3add(v3add(v, v3scale(t, q[3])), v3cross(u, t));
+}
+function qrotInv(q, v) { return qrot(qconj(q), v); }
+
+// ---- skeleton (17 bones, units cm, fingers +Y, palm faces +Z) ----
+const WRIST_HOME = [0, 14, 0];
+const THUMB_BIND = qmul(qaa([0, 0, 1], -1.0), qaa([1, 0, 0], 0.55));
+const SKELETON = [
+  { name: 'root',    parent: -1, pos: [0, 0, 0],       len: 0,   radius: 1.6 },
+  { name: 'palm',    parent: 0,  pos: [0, 1.0, 0],     len: 9.0, radius: 1.4 },
+  { name: 'thumb1',  parent: 1,  pos: [3.1, 0.6, 0.4], len: 4.6, radius: 1.15, bind: THUMB_BIND },
+  { name: 'thumb2',  parent: 2,  pos: [0, 4.6, 0],     len: 3.2, radius: 1.05 },
+  { name: 'thumb3',  parent: 3,  pos: [0, 3.2, 0],     len: 2.8, radius: 0.95 },
+  { name: 'index1',  parent: 1,  pos: [3.0, 8.2, 0],   len: 4.5, radius: 0.88 },
+  { name: 'index2',  parent: 5,  pos: [0, 4.5, 0],     len: 2.6, radius: 0.80 },
+  { name: 'index3',  parent: 6,  pos: [0, 2.6, 0],     len: 2.4, radius: 0.72 },
+  { name: 'middle1', parent: 1,  pos: [1.0, 8.6, 0],   len: 5.0, radius: 0.92 },
+  { name: 'middle2', parent: 8,  pos: [0, 5.0, 0],     len: 3.0, radius: 0.84 },
+  { name: 'middle3', parent: 9,  pos: [0, 3.0, 0],     len: 2.6, radius: 0.76 },
+  { name: 'ring1',   parent: 1,  pos: [-1.0, 8.3, 0],  len: 4.6, radius: 0.86 },
+  { name: 'ring2',   parent: 11, pos: [0, 4.6, 0],     len: 2.8, radius: 0.78 },
+  { name: 'ring3',   parent: 12, pos: [0, 2.8, 0],     len: 2.5, radius: 0.70 },
+  { name: 'pinky1',  parent: 1,  pos: [-2.9, 7.4, 0],  len: 3.6, radius: 0.72 },
+  { name: 'pinky2',  parent: 14, pos: [0, 3.6, 0],     len: 2.2, radius: 0.66 },
+  { name: 'pinky3',  parent: 15, pos: [0, 2.2, 0],     len: 2.1, radius: 0.60 },
+];
+const DIGIT_OF_BONE = ['palm', 'palm', 'thumb', 'thumb', 'thumb',
+  'index', 'index', 'index', 'middle', 'middle', 'middle',
+  'ring', 'ring', 'ring', 'pinky', 'pinky', 'pinky'];
+function digitOf(bone) { return DIGIT_OF_BONE[bone]; }
+const DESCENDANTS = SKELETON.map((_, b) => {
+  const out = [];
+  for (let i = 0; i < SKELETON.length; i++) {
+    let j = i;
+    while (j >= 0) { if (j === b) { out.push(i); break; } j = SKELETON[j].parent; }
+  }
+  return out;
+});
+
+// ---- 27 DoF ----
+function fingerDofs(name, b) {
+  return [
+    { name: name + ' MCP spread', group: name, bone: b,     kind: 'r', axis: [0,0,1], min: -0.35, max: 0.35, def: 0 },
+    { name: name + ' MCP flex',   group: name, bone: b,     kind: 'r', axis: [1,0,0], min: -0.30, max: 1.60, def: 0.15 },
+    { name: name + ' PIP flex',   group: name, bone: b + 1, kind: 'r', axis: [1,0,0], min: 0.00,  max: 1.90, def: 0.20 },
+    { name: name + ' DIP flex',   group: name, bone: b + 2, kind: 'r', axis: [1,0,0], min: 0.00,  max: 1.40, def: 0.10 },
+  ];
+}
+const DOF_TABLE = [
+  { name: 'Wrist X',     group: 'Wrist', bone: 0, kind: 't', axis: [1,0,0], min: -12, max: 12, def: 0 },
+  { name: 'Wrist Y',     group: 'Wrist', bone: 0, kind: 't', axis: [0,1,0], min: -10, max: 14, def: 0 },
+  { name: 'Wrist Z',     group: 'Wrist', bone: 0, kind: 't', axis: [0,0,1], min: -12, max: 12, def: 0 },
+  { name: 'Wrist pitch', group: 'Wrist', bone: 0, kind: 'r', axis: [1,0,0], min: -1.0, max: 1.0, def: 0 },
+  { name: 'Wrist yaw',   group: 'Wrist', bone: 0, kind: 'r', axis: [0,1,0], min: -1.2, max: 1.2, def: 0 },
+  { name: 'Wrist roll',  group: 'Wrist', bone: 0, kind: 'r', axis: [0,0,1], min: -1.6, max: 1.6, def: 0 },
+  { name: 'Thumb CMC spread', group: 'Thumb', bone: 2, kind: 'r', axis: [0,0,1], min: -0.5,  max: 0.8, def: 0.15 },
+  { name: 'Thumb CMC flex',   group: 'Thumb', bone: 2, kind: 'r', axis: [1,0,0], min: -0.3,  max: 1.0, def: 0.10 },
+  { name: 'Thumb MCP spread', group: 'Thumb', bone: 3, kind: 'r', axis: [0,0,1], min: -0.35, max: 0.35, def: 0 },
+  { name: 'Thumb MCP flex',   group: 'Thumb', bone: 3, kind: 'r', axis: [1,0,0], min: -0.1,  max: 1.1, def: 0.10 },
+  { name: 'Thumb IP flex',    group: 'Thumb', bone: 4, kind: 'r', axis: [1,0,0], min: -0.3,  max: 1.5, def: 0.10 },
+  ...fingerDofs('Index', 5), ...fingerDofs('Middle', 8),
+  ...fingerDofs('Ring', 11), ...fingerDofs('Pinky', 14),
+];
+function defaultAngles() { return DOF_TABLE.map(d => d.def); }
+
+// ---- tests ----
+HandTests.add('quat: 90deg about X takes Y to Z', () => {
+  const v = qrot(qaa([1,0,0], Math.PI/2), [0,1,0]);
+  HandTests.assertApprox(v[0], 0, 1e-9); HandTests.assertApprox(v[1], 0, 1e-9);
+  HandTests.assertApprox(v[2], 1, 1e-9);
+});
+HandTests.add('quat: qmul composes, qrotInv inverts', () => {
+  const q = qmul(qaa([0,1,0], 0.7), qaa([1,0,0], -0.3));
+  const v = [1, 2, 3], w = qrotInv(q, qrot(q, v));
+  for (let i = 0; i < 3; i++) HandTests.assertApprox(w[i], v[i], 1e-9);
+});
+HandTests.add('DOF_TABLE has 27 valid entries', () => {
+  HandTests.assert(DOF_TABLE.length === 27, 'expected 27 DoF, got ' + DOF_TABLE.length);
+  const names = new Set();
+  for (const d of DOF_TABLE) {
+    HandTests.assert(d.min < d.def + 1e-9 && d.def < d.max + 1e-9, 'bad range: ' + d.name);
+    HandTests.assert(!names.has(d.name), 'dup name: ' + d.name); names.add(d.name);
+    HandTests.assert(d.bone >= 0 && d.bone < 17, 'bad bone: ' + d.name);
+  }
+});
+HandTests.add('SKELETON: 17 bones, parents precede children, digits mapped', () => {
+  HandTests.assert(SKELETON.length === 17);
+  SKELETON.forEach((b, i) => HandTests.assert(b.parent < i, 'parent order: ' + b.name));
+  HandTests.assert(DESCENDANTS[0].length === 17, 'root descends all');
+  HandTests.assert(DESCENDANTS[5].length === 3, 'index1 has 3');
+  HandTests.assert(digitOf(4) === 'thumb' && digitOf(16) === 'pinky');
+});
+</script>
+<script type="module">
+// rendering + UI added in later tasks
+</script>
+</body>
+</html>
