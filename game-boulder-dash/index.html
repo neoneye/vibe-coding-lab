@@ -373,6 +373,50 @@ function serialize(g) {
 }
 
 // ============================================================================
+// Input — held-direction stack plus a queue of press edges. The simulation
+// samples input only once per TICK_MS, so presses that land between samples
+// would vanish if we only looked at what is held now; the queue replays each
+// press on its own tick. Capped so a long backlog can't rubber-band the
+// player: past the cap the oldest press is dropped, keeping newest intent.
+// ============================================================================
+
+const PRESS_QUEUE_MAX = 3;
+
+function createInput() {
+  return { held: [], presses: [] };
+}
+
+// isRepeat marks an OS auto-repeat keydown. Normally ignored — the held
+// stack already tracks the key — but when the initial keydown was never
+// delivered (key already down as the window gained focus), the repeat
+// re-registers the key so holding it moves the player again.
+function inputPress(inp, d, isRepeat = false) {
+  const i = inp.held.indexOf(d);
+  if (isRepeat && i >= 0) return;
+  if (i >= 0) inp.held.splice(i, 1);
+  inp.held.push(d);
+  inp.presses.push(d);
+  if (inp.presses.length > PRESS_QUEUE_MAX) inp.presses.shift();
+}
+
+function inputRelease(inp, d) {
+  const i = inp.held.indexOf(d);
+  if (i >= 0) inp.held.splice(i, 1);
+}
+
+function inputClear(inp) {
+  inp.held.length = 0;
+  inp.presses.length = 0;
+}
+
+// Direction for the tick that is about to run: the oldest unreplayed press
+// edge wins, then the most recently held key, else NONE.
+function inputConsume(inp) {
+  if (inp.presses.length) return inp.presses.shift();
+  return inp.held.length ? inp.held[inp.held.length - 1] : DIR.NONE;
+}
+
+// ============================================================================
 // Tests — run via `node test.mjs` (extracts this block).
 // ============================================================================
 
@@ -603,6 +647,83 @@ const ColosseumTests = {
       const need = Math.ceil(1000 / TICK_MS) + 1;
       for (let k = 0; k < need + BOOM_TICKS + 1; k++) tick(g);
       assert(g.state === "dead" && g.cause === "time", "died from timeout");
+    });
+
+    test("input: a tap released before the next tick still moves once", () => {
+      const inp = createInput();
+      inputPress(inp, DIR.RIGHT);
+      inputRelease(inp, DIR.RIGHT); // full tap inside one tick window
+      assert(inputConsume(inp) === DIR.RIGHT, "buffered tap consumed");
+      assert(inputConsume(inp) === DIR.NONE, "tap consumed only once");
+    });
+
+    test("input: held key moves every tick; most recent press wins", () => {
+      const inp = createInput();
+      inputPress(inp, DIR.RIGHT);
+      assert(inputConsume(inp) === DIR.RIGHT, "first tick");
+      assert(inputConsume(inp) === DIR.RIGHT, "still held on later ticks");
+      inputPress(inp, DIR.UP);
+      assert(inputConsume(inp) === DIR.UP, "newer press wins");
+      assert(inputConsume(inp) === DIR.UP, "newer hold persists");
+      inputRelease(inp, DIR.UP);
+      assert(inputConsume(inp) === DIR.RIGHT, "falls back to older held key");
+      inputRelease(inp, DIR.RIGHT);
+      assert(inputConsume(inp) === DIR.NONE, "nothing held");
+    });
+
+    test("input: two taps inside one tick window give two moves", () => {
+      const inp = createInput();
+      inputPress(inp, DIR.UP); inputRelease(inp, DIR.UP);
+      inputPress(inp, DIR.UP); inputRelease(inp, DIR.UP);
+      assert(inputConsume(inp) === DIR.UP, "first tap replayed");
+      assert(inputConsume(inp) === DIR.UP, "second tap replayed");
+      assert(inputConsume(inp) === DIR.NONE, "no phantom third move");
+    });
+
+    test("input: alternating quick taps replay in press order", () => {
+      const inp = createInput();
+      inputPress(inp, DIR.LEFT); inputRelease(inp, DIR.LEFT);
+      inputPress(inp, DIR.RIGHT); inputRelease(inp, DIR.RIGHT);
+      assert(inputConsume(inp) === DIR.LEFT, "first press first");
+      assert(inputConsume(inp) === DIR.RIGHT, "second press second");
+      assert(inputConsume(inp) === DIR.NONE, "queue drained");
+    });
+
+    test("input: OS auto-repeat of a tracked key adds no extra moves", () => {
+      const inp = createInput();
+      inputPress(inp, DIR.RIGHT);
+      assert(inputConsume(inp) === DIR.RIGHT, "initial press");
+      inputPress(inp, DIR.RIGHT, true);
+      inputPress(inp, DIR.RIGHT, true);
+      inputRelease(inp, DIR.RIGHT);
+      assert(inputConsume(inp) === DIR.NONE, "repeats queued nothing");
+    });
+
+    test("input: auto-repeat heals a missed initial keydown", () => {
+      const inp = createInput();
+      inputPress(inp, DIR.LEFT, true); // browser only delivered repeats
+      assert(inputConsume(inp) === DIR.LEFT, "moves despite missed keydown");
+      assert(inputConsume(inp) === DIR.LEFT, "now tracked as held");
+      inputRelease(inp, DIR.LEFT);
+      assert(inputConsume(inp) === DIR.NONE, "released cleanly");
+    });
+
+    test("input: press backlog is capped at 3, newest kept", () => {
+      const inp = createInput();
+      for (const d of [DIR.UP, DIR.RIGHT, DIR.DOWN, DIR.LEFT, DIR.UP]) {
+        inputPress(inp, d); inputRelease(inp, d);
+      }
+      assert(inputConsume(inp) === DIR.DOWN, "oldest overflow dropped");
+      assert(inputConsume(inp) === DIR.LEFT, "order preserved");
+      assert(inputConsume(inp) === DIR.UP, "newest kept");
+      assert(inputConsume(inp) === DIR.NONE, "then empty");
+    });
+
+    test("input: clear drops held keys and buffered taps", () => {
+      const inp = createInput();
+      inputPress(inp, DIR.LEFT);
+      inputClear(inp);
+      assert(inputConsume(inp) === DIR.NONE, "cleared on blur");
     });
 
     test("deterministic: identical input scripts give identical states", () => {
@@ -1387,21 +1508,20 @@ const ColosseumTests = {
   let deathTicks = 0;
   let acc = 0, lastTs = 0;
 
-  // input: stack of held directions, most recent wins
-  const held = [];
+  // input: held-direction stack + one-tick press buffer (see engine block)
+  const input = createInput();
   const KEYD = {
     ArrowUp: DIR.UP, ArrowRight: DIR.RIGHT, ArrowDown: DIR.DOWN, ArrowLeft: DIR.LEFT,
     w: DIR.UP, d: DIR.RIGHT, s: DIR.DOWN, a: DIR.LEFT,
     W: DIR.UP, D: DIR.RIGHT, S: DIR.DOWN, A: DIR.LEFT,
   };
   window.addEventListener("keydown", (e) => {
-    if (e.repeat) return;
     const d = KEYD[e.key];
     if (d !== undefined) {
       e.preventDefault();
-      const i = held.indexOf(d);
-      if (i >= 0) held.splice(i, 1);
-      held.push(d);
+      inputPress(input, d, e.repeat);
+    } else if (e.repeat) {
+      return;
     } else if (e.key === "Enter") {
       advance();
     } else if (e.key === "r" || e.key === "R") {
@@ -1416,13 +1536,11 @@ const ColosseumTests = {
   });
   window.addEventListener("keyup", (e) => {
     const d = KEYD[e.key];
-    if (d !== undefined) {
-      const i = held.indexOf(d);
-      if (i >= 0) held.splice(i, 1);
-    }
+    if (d !== undefined) inputRelease(input, d);
   });
-
-  function currentDir() { return held.length ? held[held.length - 1] : DIR.NONE; }
+  // keyups can be swallowed while the tab is unfocused (cmd-tab, etc.);
+  // drop everything so no direction sticks.
+  window.addEventListener("blur", () => inputClear(input));
 
   function startLevel() {
     game = createGame(levelIndex);
@@ -1777,7 +1895,7 @@ const ColosseumTests = {
       acc += dt;
       while (acc >= TICK_MS) {
         acc -= TICK_MS;
-        tick(game, currentDir());
+        tick(game, inputConsume(input));
         handleEvents(game.events);
         if (game.state === "dead") {
           deathTicks++;
@@ -1824,6 +1942,7 @@ const ColosseumTests = {
     setMode(m) { mode = m; },
     draw(t = 1000) { render(t, 1); },
     game: () => game,
+    consumeInput: () => inputConsume(input),
   };
 
   requestAnimationFrame(frame);
