@@ -8,6 +8,29 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { overflow: hidden; background: #0b0e13; font-family: ui-monospace, monospace; color: #ccc; }
   canvas { display: block; }
+  #panel { position: absolute; top: 0; left: 0; bottom: 0; width: 300px;
+    overflow-y: auto; background: rgba(10, 13, 19, 0.92); padding: 12px 14px;
+    border-right: 1px solid #232b3a; font-size: 12px; }
+  #panel h1 { font-size: 14px; color: #fff; margin-bottom: 8px; }
+  #readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 8px 0; }
+  #readouts .card { background: #131926; border: 1px solid #232b3a; border-radius: 6px;
+    padding: 6px 8px; }
+  #readouts .card b { display: block; color: #8cf; font-size: 15px; }
+  #state.grasped { color: #7f7; } #state.free { color: #999; }
+  .btnrow { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+  button { background: #1b2333; color: #cde; border: 1px solid #2c3850;
+    border-radius: 6px; padding: 6px 10px; cursor: pointer; font: inherit; }
+  button:hover { background: #24304a; }
+  button.active { background: #2c4a7a; border-color: #4a7ac0; color: #fff; }
+  details { margin-top: 8px; border-top: 1px solid #1c2230; padding-top: 6px; }
+  summary { cursor: pointer; color: #9ab; font-weight: bold; }
+  .dof { margin: 7px 0 2px; }
+  .dof label { display: flex; justify-content: space-between; color: #bcd; }
+  .dof label span { color: #8cf; }
+  .dof input[type=range] { width: 100%; }
+  .stress { height: 4px; background: #1a2130; border-radius: 2px; overflow: hidden; }
+  .stress i { display: block; height: 100%; width: 0%; background: #4a4; }
+  label.chk { display: block; margin-top: 8px; color: #bcd; cursor: pointer; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -17,6 +40,27 @@
 </script>
 </head>
 <body>
+<div id="panel">
+  <h1>27-DoF Hand Simulator</h1>
+  <div class="btnrow" id="objects">
+    <button data-obj="sphere">Sphere</button>
+    <button data-obj="cube">Cube</button>
+    <button data-obj="pencil">Pencil</button>
+  </div>
+  <div class="btnrow">
+    <button id="grasp">Grasp</button>
+    <button id="release">Release</button>
+    <button id="reset">Reset pose</button>
+  </div>
+  <div id="readouts">
+    <div class="card">Grip force<b id="force">0</b></div>
+    <div class="card">Max pressure<b id="maxp">0</b></div>
+    <div class="card">Contacts<b id="ncontacts">0</b></div>
+    <div class="card">State<b id="state" class="free">free</b></div>
+  </div>
+  <label class="chk"><input type="checkbox" id="skeleton"> Show actuator skeleton</label>
+  <div id="sliders"></div>
+</div>
 <script id="shared-code">
 'use strict';
 // ---- Test harness ----
@@ -732,10 +776,71 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+// ---- control panel ----
+const ui = { sliderEls: [], valueEls: [], stressEls: [] };
+{
+  const wrap = document.getElementById('sliders');
+  const groups = {};
+  DOF_TABLE.forEach((d, j) => {
+    if (!groups[d.group]) {
+      const det = document.createElement('details');
+      det.open = true;
+      det.innerHTML = `<summary>${d.group}</summary>`;
+      wrap.appendChild(det);
+      groups[d.group] = det;
+    }
+    const row = document.createElement('div');
+    row.className = 'dof';
+    row.innerHTML = `<label>${d.name}<span></span></label>
+      <input type="range" min="${d.min}" max="${d.max}" step="0.01" value="${d.def}">
+      <div class="stress"><i></i></div>`;
+    groups[d.group].appendChild(row);
+    const inp = row.querySelector('input');
+    inp.addEventListener('input', () => {
+      tween.active = false;                    // manual override cancels tween
+      sim.angles[j] = parseFloat(inp.value);
+    });
+    ui.sliderEls.push(inp);
+    ui.valueEls.push(row.querySelector('span'));
+    ui.stressEls.push(row.querySelector('.stress i'));
+  });
+}
+function setSliders(angles) {
+  angles.forEach((v, j) => { ui.sliderEls[j].value = v; });
+}
+const tween = { active: false, t0: 0, dur: 900, from: null, to: null, onDone: null };
+function startTween(target, onDone) {
+  tween.active = true; tween.t0 = performance.now();
+  tween.from = sim.angles.slice(); tween.to = target.slice(); tween.onDone = onDone || null;
+}
+function stepTween(now) {
+  if (!tween.active) return;
+  let t = (now - tween.t0) / tween.dur;
+  if (t >= 1) { t = 1; tween.active = false; }
+  const s = t * t * (3 - 2 * t); // smoothstep
+  for (let j = 0; j < 27; j++) sim.angles[j] = tween.from[j] + (tween.to[j] - tween.from[j]) * s;
+  setSliders(sim.angles);
+  if (!tween.active && tween.onDone) tween.onDone();
+}
+document.querySelectorAll('#objects button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#objects button').forEach(x => x.classList.toggle('active', x === b));
+    setObject(b.dataset.obj);
+  });
+});
+document.getElementById('grasp').addEventListener('click', () => {
+  if (sim.obj) startTween(POSES[sim.obj.type]);
+});
+document.getElementById('release').addEventListener('click', () => startTween(POSES.open));
+document.getElementById('reset').addEventListener('click', () => startTween(POSES.open));
+document.querySelector('#objects button[data-obj="sphere"]').classList.add('active');
+
 setObject('sphere');
+setSliders(sim.angles);
 renderOnce();
 window.__engineReady = true;
-(function loop() { requestAnimationFrame(loop); renderOnce(); })();
+(function loop(now) { requestAnimationFrame(loop); stepTween(now || performance.now()); renderOnce(); })();
 </script>
 </body>
 </html>
