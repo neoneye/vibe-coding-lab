@@ -1009,38 +1009,88 @@ const ColosseumTests = {
     px(ctx, bx + 44, by - 26, 8, 14, "#e0b64c");
     px(ctx, bx - 50, by - 30, 4, 10, "#a32222");
     px(ctx, bx + 46, by - 30, 4, 10, "#a32222");
-    // emperor: white toga, laurel
+    // emperor: white toga with purple sash, laurel crown
     ctx.fillStyle = "#ece6da";
     ctx.fillRect(bx - 7, by + 2, 14, 22);
+    ctx.fillStyle = "#7a3aa0";
+    ctx.fillRect(bx - 7, by + 2, 4, 22);
+    const headLift = thumb < 0 ? 3 : 0; // arrogant chin-up when the crowd got blood
     ctx.fillStyle = "#e8b98a";
-    ctx.beginPath(); ctx.arc(bx, by - 2, 6, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(bx, by - 2 - headLift, 6, 0, 7); ctx.fill();
+    if (thumb < 0) px(ctx, bx + 4, by - 4 - headLift, 4, 2, "#e8b98a"); // nose in the air
     ctx.strokeStyle = "#6d8a3a"; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(bx, by - 3, 6.5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
-    // verdict arm
-    if (thumb !== 0) {
-      ctx.strokeStyle = "#e8b98a"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(bx, by - 3 - headLift, 6.5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+    ctx.strokeStyle = "#e8b98a"; ctx.lineWidth = 3;
+    if (thumb > 0) {
+      // triumphant: thumbs-up fist plus an arm waving to the crowd
+      const wave = Math.sin(t * 0.012);
       ctx.beginPath();
       ctx.moveTo(bx + 7, by + 8);
-      ctx.lineTo(bx + 18, thumb > 0 ? by - 2 : by + 18);
+      ctx.lineTo(bx + 16, by - 2);
+      ctx.moveTo(bx - 7, by + 8);
+      ctx.lineTo(bx - 15 - wave * 4, by - 7 - Math.abs(wave) * 5);
       ctx.stroke();
-      ctx.fillStyle = thumb > 0 ? "#e0b64c" : "#a32222";
-      ctx.fillRect(bx + 15, (thumb > 0 ? by - 8 : by + 16), 7, 7);
+      px(ctx, bx + 13, by - 9, 7, 7, "#e0b64c");                                   // fist
+      px(ctx, bx + 15, by - 13, 3, 5, "#e8b98a");                                  // thumb up
+      px(ctx, bx - 19 - wave * 4, by - 12 - Math.abs(wave) * 5, 5, 5, "#e8b98a");  // waving hand
+    } else if (thumb < 0) {
+      // arrogant: hand on hip, slow dismissive thumbs-down flick
+      const flick = Math.sin(t * 0.006) * 3;
+      ctx.beginPath();
+      ctx.moveTo(bx - 7, by + 8);
+      ctx.lineTo(bx - 13, by + 12);
+      ctx.lineTo(bx - 7, by + 16);
+      ctx.moveTo(bx + 7, by + 8);
+      ctx.lineTo(bx + 17, by + 11 + flick);
+      ctx.stroke();
+      px(ctx, bx + 14, by + 9 + flick, 7, 7, "#e0b64c");   // fist
+      px(ctx, bx + 16, by + 16 + flick, 3, 6, "#e8b98a");  // thumb down
     }
   }
 
   // ==========================================================================
   // Audio — WebAudio synth sfx, lazy context.
   // ==========================================================================
-  let ac = null, muted = false, noiseBuf = null;
+  let ac = null, muted = false, noiseBuf = null, crowdGain = null;
   function audio() {
     if (!ac) {
       ac = new (window.AudioContext || window.webkitAudioContext)();
       noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
       const d = noiseBuf.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      // ambient crowd roar: looping noise whose volume follows the cheer level
+      const src = ac.createBufferSource();
+      src.buffer = noiseBuf; src.loop = true;
+      const f = ac.createBiquadFilter();
+      f.type = "bandpass"; f.frequency.value = 650; f.Q.value = 0.5;
+      crowdGain = ac.createGain(); crowdGain.gain.value = 0;
+      src.connect(f).connect(crowdGain).connect(ac.destination);
+      src.start();
     }
     if (ac.state === "suspended") ac.resume();
     return ac;
+  }
+  // scattered hand-claps from the stands
+  function applause(strength = 1) {
+    if (muted) return;
+    const a = audio(), t0 = a.currentTime;
+    const claps = 10 + Math.floor(strength * 12);
+    for (let i = 0; i < claps; i++) {
+      const t = t0 + Math.random() * (0.4 + strength * 0.5);
+      const src = a.createBufferSource();
+      src.buffer = noiseBuf;
+      src.playbackRate.value = 0.8 + Math.random() * 0.6;
+      const f = a.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.value = 1600 + Math.random() * 1600;
+      f.Q.value = 1.5;
+      const g = a.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.05 + 0.06 * strength, t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05 + Math.random() * 0.04);
+      src.connect(f).connect(g).connect(a.destination);
+      src.start(t); src.stop(t + 0.12);
+    }
   }
   function env(gainNode, t0, peak, dur) {
     gainNode.gain.setValueAtTime(0.0001, t0);
@@ -1080,6 +1130,7 @@ const ColosseumTests = {
     win: () => [523, 659, 784, 1047, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.2, "triangle", 0.13), i * 130)),
     death: () => [400, 300, 220, 150].forEach((f, i) => setTimeout(() => blip(f, 0.2, "sawtooth", 0.10), i * 140)),
     cheer: () => noise(0.9, 2500, 0.14, 600),
+    boo: () => { noise(1.1, 240, 0.2, 90); blip(170, 0.8, "sawtooth", 0.07, -80); },
     tick: () => blip(1200, 0.05, "square", 0.06),
   };
 
@@ -1162,14 +1213,15 @@ const ColosseumTests = {
 
   function handleEvents(evts) {
     for (const ev of evts) {
-      if (ev === "gold") { score += 10; cheer = Math.min(1, cheer + 0.35); SFX.gold(); if (cheer > 0.6) SFX.cheer(); }
-      else if (ev === "goldboom") { score += 25; cheer = 1; SFX.goldboom(); SFX.cheer(); }
-      else if (ev === "boom") { SFX.boom(); cheer = Math.min(1, cheer + 0.5); SFX.cheer(); }
+      if (ev === "gold") { score += 10; cheer = Math.min(1, cheer + 0.35); SFX.gold(); applause(0.6); }
+      else if (ev === "goldboom") { score += 25; cheer = 1; SFX.goldboom(); applause(1); SFX.cheer(); }
+      else if (ev === "boom") { SFX.boom(); cheer = Math.min(1, cheer + 0.5); applause(0.8); }
       else if (ev === "dig") SFX.dig();
       else if (ev === "push") SFX.push();
       else if (ev === "thud") SFX.thud();
-      else if (ev === "exit-open") { SFX["exit-open"](); cheer = 1; SFX.cheer(); }
-      else if (ev === "win") { score += 100 + timeLeft(game) * 2; thumb = 1; cheer = 1; SFX.win(); SFX.cheer(); }
+      else if (ev === "exit-open") { SFX["exit-open"](); cheer = 1; applause(1); SFX.cheer(); }
+      else if (ev === "win") { score += 100 + timeLeft(game) * 2; thumb = 1; cheer = 1; SFX.win(); applause(1.2); SFX.cheer(); }
+      else if (ev === "death") { cheer = 1; SFX.boo(); applause(0.9); }
     }
   }
 
@@ -1382,6 +1434,7 @@ const ColosseumTests = {
     const dt = Math.min(100, ts - lastTs);
     lastTs = ts;
     cheer = Math.max(0, cheer - dt / 2500);
+    if (crowdGain) crowdGain.gain.setTargetAtTime(muted ? 0 : cheer * 0.16, ac.currentTime, 0.15);
 
     if (mode === "play") {
       acc += dt;
@@ -1432,6 +1485,7 @@ const ColosseumTests = {
     },
     step(n = 1, dir = DIR.NONE) { for (let k = 0; k < n; k++) tick(game, dir); },
     setCheer(c) { cheer = c; },
+    setThumb(v) { thumb = v; },
     draw(t = 1000) { render(t, 1); },
     game: () => game,
   };

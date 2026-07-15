@@ -22,9 +22,12 @@ step needed.
 
 The engine is a classic deterministic cell simulation: one top-to-bottom,
 left-to-right scan per tick, falling/rolling physics, 3×3 explosions. The
-audience in the stands is decorative but reactive — they cheer when you
-collect gold, when something explodes, and when you win; the emperor gives
-a thumbs down when you die.
+audience in the stands is reactive — every gold pickup draws scattered
+applause and a swell of crowd roar (a looping WebAudio noise bed that follows
+the excitement level), and explosions and victories bring the house down.
+Caesar watches from his box: on a win he salutes you with a wave and a
+thumbs-up; when you fall he lifts his chin, puts a hand on his hip, and gives
+a slow, dismissive thumbs-down while the crowd howls.
 
 ## Levels
 
