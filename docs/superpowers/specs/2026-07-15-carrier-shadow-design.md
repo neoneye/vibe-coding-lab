@@ -240,3 +240,25 @@ asserts:
 Visual verification: headless-Chrome screenshot driving the engine
 synchronously in a temporary `_shot.html` (rAF loops don't advance under
 `--virtual-time-budget`).
+
+## Scope deltas (recorded 2026-07-16, post-implementation review)
+
+Implemented and shipped as designed, except these spec items were narrowed
+during planning and are open owner decisions for a future iteration:
+
+- **Frigate anti-air bubble (radius 2)** — not implemented; frigates
+  currently contribute sensors only, no air interception.
+- **Boats stalk the nearest tanker, not the nearest *detected* tanker** —
+  harassment-tier missile boats are omniscient about tanker positions;
+  drone spotting affects hit odds only.
+- **Enemy fighters do not hunt player aircraft** at open conflict; their
+  only attack is the deterministic kill/abort of unescorted surveillance
+  aircraft at Chebyshev 1.
+- **Surveillance flights fly to a fixed station** (no player-drawn patrol
+  path, no sea-staleness refresh); CAP engages at radius 2 rather than the
+  spec's radius-3 orbit; SAM warning strength scales with posture rather
+  than depth-in-envelope.
+- **Recon vs. sonar number provenance** — recon-stamped numbers count boats
+  only (mines invisible from the air, per the interplay rule); a recon leg
+  can overwrite a fresher mine-inclusive sonar number with a boats-only
+  value. Acceptable fog for now; a source tag would disambiguate.
