@@ -12,8 +12,8 @@
     overflow: hidden;
   }
   canvas {
-    image-rendering: pixelated;
-    image-rendering: crisp-edges;
+    /* backing store is sized in device pixels (see fitCanvas); css never
+       resamples it, so no image-rendering hints are needed */
     max-width: 100vw; max-height: 100vh;
   }
 </style>
@@ -417,6 +417,21 @@ function inputConsume(inp) {
 }
 
 // ============================================================================
+// Canvas sizing — fit a cw x ch logical scene into the window at full device
+// resolution. The backing store is sized in device pixels (css size * dpr)
+// so a retina display gets real pixels instead of a css-upscaled 1x buffer;
+// the renderer applies {sx, sy} as its base transform.
+// ============================================================================
+
+function fitCanvasMetrics(innerW, innerH, dpr, cw, ch) {
+  const s = Math.min(innerW / cw, innerH / ch);
+  const pxW = Math.max(1, Math.round(cw * s * dpr));
+  const pxH = Math.max(1, Math.round(ch * s * dpr));
+  // css size derived from the backing store so 1 backing px = 1 device px
+  return { pxW, pxH, cssW: pxW / dpr, cssH: pxH / dpr, sx: pxW / cw, sy: pxH / ch };
+}
+
+// ============================================================================
 // Tests — run via `node test.mjs` (extracts this block).
 // ============================================================================
 
@@ -649,6 +664,30 @@ const ColosseumTests = {
       assert(g.state === "dead" && g.cause === "time", "died from timeout");
     });
 
+    test("canvas metrics: retina backing store uses full device pixels", () => {
+      // window exactly CW x CH css px on a 2x display
+      const m = fitCanvasMetrics(792, 558, 2, 792, 558);
+      assert(m.pxW === 1584 && m.pxH === 1116, "backing store doubled");
+      assert(m.cssW === 792 && m.cssH === 558, "css size unchanged");
+      assert(m.sx === 2 && m.sy === 2, "draw scale 2");
+    });
+
+    test("canvas metrics: 1x display matches legacy sizing", () => {
+      const m = fitCanvasMetrics(792, 558, 1, 792, 558);
+      assert(m.pxW === 792 && m.pxH === 558, "backing = logical");
+      assert(m.sx === 1 && m.sy === 1, "unit scale");
+    });
+
+    test("canvas metrics: fits window, keeps 1 backing px per device px", () => {
+      const m = fitCanvasMetrics(1000, 700, 2, 792, 558);
+      const s = Math.min(1000 / 792, 700 / 558);
+      assert(Math.abs(m.cssW - 792 * s) < 1 && Math.abs(m.cssH - 558 * s) < 1, "fits window");
+      assert(m.pxW === Math.round(m.cssW * 2) && m.pxH === Math.round(m.cssH * 2), "no css resampling");
+      assert(Math.abs(m.sx - s * 2) < 0.01 && Math.abs(m.sy - s * 2) < 0.01, "scale tracks fit*dpr");
+      const tiny = fitCanvasMetrics(0, 0, 2, 792, 558);
+      assert(tiny.pxW >= 1 && tiny.pxH >= 1, "never a zero-sized canvas");
+    });
+
     test("input: a tap released before the next tick still moves once", () => {
       const inp = createInput();
       inputPress(inp, DIR.RIGHT);
@@ -822,13 +861,18 @@ const ColosseumTests = {
   const PF_X = STAND, PF_Y = STAND + HUD_H;
 
   const canvas = document.getElementById("game");
-  canvas.width = CW; canvas.height = CH;
   const ctx = canvas.getContext("2d");
+  let viewSX = 1, viewSY = 1; // base draw scale, device px per logical px
 
   function fitCanvas() {
-    const s = Math.min(window.innerWidth / CW, window.innerHeight / CH);
-    canvas.style.width = `${Math.floor(CW * s)}px`;
-    canvas.style.height = `${Math.floor(CH * s)}px`;
+    const m = fitCanvasMetrics(
+      window.innerWidth, window.innerHeight,
+      window.devicePixelRatio || 1, CW, CH);
+    canvas.width = m.pxW; canvas.height = m.pxH; // resets ctx state
+    canvas.style.width = `${m.cssW}px`;
+    canvas.style.height = `${m.cssH}px`;
+    viewSX = m.sx; viewSY = m.sy;
+    ctx.imageSmoothingEnabled = false; // keep pixel-art sprites crisp
   }
   window.addEventListener("resize", fitCanvas);
   fitCanvas();
@@ -1811,6 +1855,8 @@ const ColosseumTests = {
   }
 
   function render(t, alpha) {
+    // base transform: logical CW x CH scene -> device-pixel backing store
+    ctx.setTransform(viewSX, 0, 0, viewSY, 0, 0);
     if (mode === "title") { drawTitle(t); return; }
     drawStandsBase();
     drawAudience(t, cheer, thumb);
