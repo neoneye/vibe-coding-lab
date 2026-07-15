@@ -180,6 +180,10 @@ function sweepFootprint(state, cx, cy, radius) {
     state.airNumbers[key(x, y)] = { value: airSignalsAdjacent(state, x, y), turn: state.turn };
   }
 }
+function findSignalById(state, sigKind, sigId) {
+  return airSignals(state).find((g) => g.kind === sigKind
+    && (g.ref.id === sigId || key(g.x, g.y) === sigId)) || null;
+}
 
 // ============ ship movement ============
 function shipById(state, id) { return state.ships.find((s) => s.id === id); }
@@ -318,6 +322,7 @@ function applyAction(state, action) {
       logEvent(state, "air", `${ac.id} refueled in the air; +2 turns on station.`);
       break;
     }
+    case "ladder": { resolveLadder(state, action.step); break; }
     default: throw new Error(`unknown action ${action.type}`);
   }
   return events;
@@ -474,9 +479,65 @@ function capEngagements(state) {
     }
   }
 }
-function resolveLadder(state, step) { state.pendingIntercept = null; }  // replaced in Task 11
-function resolveStrike(state, ac, events) {}    // Task 11
-function arriveIntercept(state, ac) {}          // Task 11
+function resolveLadder(state, step) {
+  const pi = state.pendingIntercept;
+  if (!pi) throw new Error("no pending intercept");
+  state.pendingIntercept = null;
+  const sig = findSignalById(state, pi.sigKind, pi.sigId);
+  if (!sig) { logEvent(state, "air", "Contact faded before action."); return; }
+  if (step === "observe") {
+    identifyContact(state, sig);
+  } else if (step === "hail") {
+    if (sig.kind === "airliner") { identifyContact(state, sig); logEvent(state, "air", "Contact answers hail: civilian airliner."); }
+    else logEvent(state, "air", "No response to hail.");
+  } else if (step === "lock") {
+    addEscalation(state, "radarLock");
+    identifyContact(state, sig);
+  } else if (step === "warningShot") {
+    addEscalation(state, "warningShot");
+    if (sig.kind === "drone" || sig.kind === "efighter") {
+      sig.ref.x = Math.min(W - 1, sig.ref.x + 3);
+      logEvent(state, "air", `Contact ${sig.ref.id} turns away east.`);
+    } else logEvent(state, "air", "Warning shot near a civilian track. Diplomatic protest incoming.");
+  } else if (step === "attack") {
+    if (sig.kind === "airliner") {
+      state.outcome = { win: false, reason: "airliner", grade: "F" };
+      logEvent(state, "outcome", "A civilian airliner is down. Catastrophe. Mission failed.");
+    } else if (sig.kind === "drone") {
+      sig.ref.downed = true; addEscalation(state, "droneShootdown");
+      logEvent(state, "air", `Drone ${sig.ref.id} splashed.`);
+    } else if (sig.kind === "efighter") {
+      sig.ref.downed = true; addEscalation(state, "mannedShootdown");
+      logEvent(state, "air", `Hostile fighter ${sig.ref.id} shot down. This will have consequences.`);
+    } else if (sig.kind === "echo") {
+      sig.ref.identified = true;
+      logEvent(state, "air", "Weapons expended on a false echo.");
+    }
+  } else throw new Error(`unknown ladder step ${step}`);
+}
+function arriveIntercept(state, ac) {
+  if (state.pendingIntercept) return;
+  const sig = findSignalById(state, ac.targetRef.kind, ac.targetRef.id);
+  if (!sig) { ac.stationLeft = 0; logEvent(state, "air", `${ac.id}: contact lost.`); return; }
+  moveAircraftToward(state, ac, sig);
+  if (chebyshev(ac, sig) <= 1) {
+    state.pendingIntercept = { aircraftId: ac.id, sigKind: sig.kind, sigId: ac.targetRef.id };
+  }
+}
+function resolveStrike(state, ac, events) {
+  const b = state.boats.find((x) => !x.sunk && x.x === ac.dest.x && x.y === ac.dest.y);
+  if (b) {
+    b.sunk = true; addEscalation(state, "attackVessel");
+    markStaleSeaNumbers(state, b, b);
+    logEvent(state, "combat", `Missile boat ${b.id} destroyed by air strike.`);
+  } else if (state.sam && !state.sam.destroyed && state.sam.x === ac.dest.x && state.sam.y === ac.dest.y) {
+    state.sam.destroyed = true; addEscalation(state, "attackVessel");
+    logEvent(state, "combat", "SAM site destroyed by air strike.");
+  } else {
+    logEvent(state, "combat", "Strike found no target. Ordnance wasted.");
+  }
+  ac.stationLeft = 0;
+}
 
 function moveBoats(state) {
   const posture = postureOf(state.escalation);
@@ -921,6 +982,52 @@ CarrierTests.add("CAP engagement raises pendingIntercept and blocks endTurn", ()
   let threw = false;
   try { endTurn(s); } catch { threw = true; }
   assert(threw, "endTurn blocked until ladder resolved");
+});
+
+function makePending(s, kind, obj) {   // test helper
+  s.pendingIntercept = { aircraftId: "acX", sigKind: kind, sigId: obj.id };
+}
+CarrierTests.add("ladder: observe identifies, lock escalates, attack downs drone", () => {
+  const s = createGame(7);
+  const d = s.drones[0];
+  makePending(s, "drone", d);
+  resolveLadder(s, "observe");
+  assertEq(s.idents[d.id], "drone"); assertEq(s.escalation, 0);
+  makePending(s, "drone", d);
+  resolveLadder(s, "lock");
+  assertEq(s.escalation, ESCALATION.radarLock);
+  makePending(s, "drone", d);
+  resolveLadder(s, "attack");
+  assert(d.downed);
+  assertEq(s.escalation, ESCALATION.radarLock + ESCALATION.droneShootdown);
+});
+CarrierTests.add("ladder: attacking an airliner loses the game", () => {
+  const s = createGame(7);
+  const al = s.airliners[0]; al.active = true;
+  makePending(s, "airliner", al);
+  resolveLadder(s, "attack");
+  assert(s.outcome && !s.outcome.win && s.outcome.reason === "airliner");
+});
+CarrierTests.add("ladder: hail identifies airliner but not drone", () => {
+  const s = createGame(7);
+  const al = s.airliners[0]; al.active = true;
+  makePending(s, "airliner", al);
+  resolveLadder(s, "hail");
+  assertEq(s.idents[al.id], "airliner");
+  const d = s.drones[0];
+  makePending(s, "drone", d);
+  resolveLadder(s, "hail");
+  assertEq(s.idents[d.id], undefined, "drone ignores hail");
+});
+CarrierTests.add("strike sinks an identified boat and escalates +12", () => {
+  const s = createGame(7);
+  const b = s.boats[0];
+  applyAction(s, { type: "launch", mission: "strike", targetX: b.x, targetY: b.y });
+  const boatPos = { x: b.x, y: b.y };
+  b.waypoints = [boatPos]; s.escalation = 0;   // keep boat parked (shadowing patrol on own cell)
+  while (!b.sunk && s.turn < 12) { if (s.pendingIntercept) resolveLadder(s, "observe"); endTurn(s); }
+  assert(b.sunk, "boat sunk by strike");
+  assert(s.escalation >= ESCALATION.attackVessel - 4, "attackVessel escalation applied (minus decay)");
 });
 </script>
 <script>
