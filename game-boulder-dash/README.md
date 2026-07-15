@@ -29,7 +29,13 @@ Caesar watches from his box with Cleopatra at his side, attended by servant
 girls — two sway palm fans over the royals, one bears a tray with a gold jug.
 On a win Caesar salutes you with a wave and a thumbs-up and Cleopatra raises
 a hand with him; when you fall he lifts his chin, puts a hand on his hip, and
-gives a slow, dismissive thumbs-down while the crowd howls.
+gives a slow, dismissive thumbs-down while the crowd howls. The death screen
+zooms in on the grinning imperial party above a pixel-art tableau of the
+fallen gladiator, helmet rolled away in the sand.
+
+The Colosseum itself is framed in Roman architecture: a marble colonnade
+rings the stands beneath a slanted terracotta portico roof, and the imperial
+box is a proper temple front with fluted columns and a pediment.
 
 ## Levels
 
