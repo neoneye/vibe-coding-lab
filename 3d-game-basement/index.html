@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BASEMENT — Sublevel K, Tape #7</title>
 <style>
-  html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; cursor:crosshair; }
-  #view { width:100vw; height:100vh; object-fit:contain; background:#000; display:block;
-          image-rendering:pixelated; }
+  html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; cursor:crosshair;
+               display:flex; align-items:center; justify-content:center; }
+  /* backing store is sized in device pixels (see fitDisplay); css never
+     resamples it, so no object-fit / image-rendering hints are needed */
+  #view { background:#000; display:block; }
 </style>
 </head>
 <body>
@@ -33,6 +35,7 @@ const dctx = display.getContext('2d');
 const game = document.createElement('canvas'); game.width = GW; game.height = GH;
 const gctx = game.getContext('2d');
 gctx.imageSmoothingEnabled = false; dctx.imageSmoothingEnabled = false;
+let viewSX = 1, viewSY = 1;        // device px per logical DW/DH px
 
 function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
 function mulberry32(seed) {
@@ -2006,6 +2009,31 @@ const vignette = (function() {
 const chromaTmp = makeCanvas(DW, DH);
 const chromaCtx = chromaTmp.getContext('2d');
 
+// Fit the DW x DH composite into the window at full device resolution: the
+// backing store gets real device pixels (css size * devicePixelRatio, css
+// size derived back so 1 backing px = 1 device px). The game buffer stays
+// GW x GH — the VHS layer (scanlines, noise, OSD) is what sharpens.
+function fitDisplay() {
+  const dpr = window.devicePixelRatio || 1;
+  const s = Math.min(window.innerWidth / DW, window.innerHeight / DH);
+  // composite scale is capped at 2x the DW x DH design: that is already
+  // retina-sharp for this tape, and the multi-pass VHS composite costs a
+  // full-frame draw per effect. Past the cap the browser upscales smoothly
+  // (no pixelated hint), which is imperceptible from a 2x buffer.
+  const S = Math.min(s * dpr, 2);
+  const pxW = Math.max(1, Math.round(DW * S));
+  const pxH = Math.max(1, Math.round(DH * S));
+  display.width = pxW; display.height = pxH;   // resets dctx state
+  display.style.width = `${DW * s}px`;
+  display.style.height = `${DH * s}px`;
+  chromaTmp.width = pxW; chromaTmp.height = pxH;
+  viewSX = pxW / DW; viewSY = pxH / DH;
+  dctx.imageSmoothingEnabled = false;
+  chromaCtx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', fitDisplay);
+fitDisplay();
+
 let osdBlink = 0, trackBandY = 0, trackBandH = 0, trackT = 0, rollY = 0;
 
 function compositeVHS(dt) {
@@ -2022,6 +2050,11 @@ function compositeVHS(dt) {
 
   const shx = shakeT > 0 ? (Math.random() - 0.5) * 10 : 0;
   const shy = shakeT > 0 ? (Math.random() - 0.5) * 8 : 0;
+
+  // all compositing happens in logical DW x DH coordinates, scaled to the
+  // device-pixel backing store (see fitDisplay)
+  dctx.setTransform(viewSX, 0, 0, viewSY, 0, 0);
+  chromaCtx.setTransform(viewSX, 0, 0, viewSY, 0, 0);
 
   dctx.fillStyle = '#000'; dctx.fillRect(0, 0, DW, DH);
   dctx.drawImage(game, shx, shy, DW, DH);
@@ -2045,7 +2078,9 @@ function compositeVHS(dt) {
   // tracking band
   if (glitching && trackBandH > 0) {
     const off = (Math.random() - 0.5) * 40;
-    dctx.drawImage(display, 0, trackBandY, DW, trackBandH, off, trackBandY + (Math.random() - 0.5) * 4, DW, trackBandH);
+    // source rect is in the display's backing pixels, not logical units
+    dctx.drawImage(display, 0, trackBandY * viewSY, DW * viewSX, trackBandH * viewSY,
+                   off, trackBandY + (Math.random() - 0.5) * 4, DW, trackBandH);
     dctx.globalAlpha = 0.25;
     dctx.drawImage(noiseTiles[(Math.random() * 8) | 0], 0, 0, 240, 40, 0, trackBandY, DW, trackBandH);
     dctx.globalAlpha = 1;
@@ -2064,7 +2099,9 @@ function compositeVHS(dt) {
   dctx.drawImage(noiseTiles[(Math.random() * 8) | 0], 0, (Math.random() * 140) | 0, 240, 4, (Math.random() * 8) - 4, DH - 7, DW, 7);
   dctx.globalAlpha = 1;
 
+  dctx.imageSmoothingEnabled = true;  // gradient, not pixel art
   dctx.drawImage(vignette, 0, 0);
+  dctx.imageSmoothingEnabled = false;
 
   // ---- OSD (burned in after the noise, like a real VCR)
   osdBlink += dt;
