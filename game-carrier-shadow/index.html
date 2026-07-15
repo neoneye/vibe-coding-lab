@@ -134,6 +134,12 @@ function postureOf(esc) {
 function logEvent(state, kind, text) { state.log.push({ turn: state.turn, kind, text }); }
 
 // ============ escalation engine ============
+function checkWarOutcome(state) {
+  if (state.escalation >= 100 && !state.outcome) {
+    state.outcome = { win: false, reason: "war", grade: "F" };
+    logEvent(state, "outcome", "Escalation reached 100: regional war. Mission failed.");
+  }
+}
 function addEscalation(state, kindKey) {
   const amount = ESCALATION[kindKey];
   if (amount === undefined) throw new Error(`unknown escalation ${kindKey}`);
@@ -141,16 +147,14 @@ function addEscalation(state, kindKey) {
   state.escalationPeak = Math.max(state.escalationPeak, state.escalation);
   if (kindKey !== "reconFlight") state.aggressiveThisTurn = true;
   logEvent(state, "escalation", `Escalation +${amount} (${kindKey}) → ${state.escalation}.`);
-  if (state.escalation >= 100 && !state.outcome) {
-    state.outcome = { win: false, reason: "war", grade: "F" };
-    logEvent(state, "outcome", "Escalation reached 100: regional war. Mission failed.");
-  }
+  checkWarOutcome(state);
 }
 function decayEscalation(state) {
   if (!state.aggressiveThisTurn && state.escalation > 0) state.escalation -= 1;
   state.escalation = Math.min(100, state.escalation + state.escalationBleed);
   state.escalationPeak = Math.max(state.escalationPeak, state.escalation);
   state.aggressiveThisTurn = false;
+  checkWarOutcome(state);
 }
 
 // ============ sonar and sea numbers ============
@@ -164,6 +168,10 @@ function seaThreatsAdjacent(state, x, y) {
     if (state.boats.some((b) => !b.sunk && b.x === c.x && b.y === c.y)) n++;
   }
   return n;
+}
+function boatsAdjacent(state, x, y) {
+  return neighbors8(x, y).filter((c) =>
+    state.boats.some((b) => !b.sunk && b.x === c.x && b.y === c.y)).length;
 }
 function seaContentAt(state, x, y) {
   if (state.mines.some((m) => !m.cleared && m.x === x && m.y === y)) return "mine";
@@ -277,7 +285,7 @@ function applyAction(state, action) {
     }
     case "clearMine": {
       const ship = shipById(state, action.shipId);
-      if (!ship || ship.kind !== "minesweeper" || ship.sensorUsed || ship.destroyed
+      if (!ship || ship.kind !== "minesweeper" || ship.sensorUsed || ship.destroyed || ship.crippled
           || chebyshev(ship, action) !== 1) throw new Error("illegal clearMine");
       ship.sensorUsed = true; ship.movesLeft = 0;
       const mine = state.mines.find((m) => !m.cleared && m.x === action.x && m.y === action.y);
@@ -305,7 +313,7 @@ function applyAction(state, action) {
           // recon is always valid
         } else if (m === "intercept") {
           sig = airSignals(state)
-            .filter((g) => g.kind !== "sam")
+            .filter((g) => g.kind !== "sam" && contactLabel(state, g) === "unknown")
             .sort((a, b) => chebyshev(a, { x: action.targetX, y: action.targetY })
                           - chebyshev(b, { x: action.targetX, y: action.targetY }))[0];
           if (!sig) throw new Error("no contact to intercept");
@@ -512,7 +520,7 @@ function resolveReconLeg(state, ac) {
     if (!isWaterCell(p.x, p.y)) continue;
     const raw = seaContentAt(state, p.x, p.y);
     state.seaNumbers[key(p.x, p.y)] = {
-      value: seaThreatsAdjacent(state, p.x, p.y), turn: state.turn, stale: false,
+      value: boatsAdjacent(state, p.x, p.y), turn: state.turn, stale: false,
       content: raw === "boat" ? "boat" : "empty",
     };
   }
@@ -693,6 +701,14 @@ function gradeGame(state) {
   return score >= 90 ? "A" : score >= 75 ? "B" : score >= 60 ? "C" : "D";
 }
 
+function downAircraft(state, ac) {
+  ac.downed = true;
+  if (state.rescue) {
+    state.escalationBleed += 1;
+    logEvent(state, "escalation", "A second crew goes down — the first is lost. Political pressure mounts: +1 escalation per turn.");
+  }
+  state.rescue = { x: ac.x, y: ac.y, deadline: state.turn + RESCUE_WINDOW, aircraftId: ac.id };
+}
 function samPhase(state) {
   const sam = state.sam;
   if (!sam || sam.destroyed) return;
@@ -712,8 +728,7 @@ function samPhase(state) {
     } else {
       sam.revealedUntil = state.turn + 2;
       if (rngNext(state) < SAM_HIT_CHANCE) {
-        ac.downed = true;
-        state.rescue = { x: ac.x, y: ac.y, deadline: state.turn + RESCUE_WINDOW, aircraftId: ac.id };
+        downAircraft(state, ac);
         logEvent(state, "combat", `SAM launch — ${ac.id} is hit and goes down. Crew in the water at (${ac.x},${ac.y}).`);
       } else {
         logEvent(state, "combat", `SAM launch — ${ac.id} evades. Site position glimpsed.`);
@@ -733,8 +748,7 @@ function fighterThreats(state) {
       logEvent(state, "air", "CAP drives off a bandit closing on the surveillance aircraft.");
     } else {
       // Spec: unescorted surveillance reached by a fighter is lost (manned crew -> rescue window).
-      surv.downed = true;
-      state.rescue = { x: surv.x, y: surv.y, deadline: state.turn + RESCUE_WINDOW, aircraftId: surv.id };
+      downAircraft(state, surv);
       logEvent(state, "combat", `Surveillance aircraft ${surv.id} shot down — crew in the water at (${surv.x},${surv.y}).`);
     }
   }
@@ -1245,6 +1259,65 @@ CarrierTests.add("uiOptions lists per-selection capabilities", () => {
   assert(!c2.actions.includes("cap") && c2.actions.includes("surveil"));
   assertEq(uiOptions(s, null), { moves: [], actions: [] });
 });
+CarrierTests.add("escalation bleed alone triggers war defeat", () => {
+  const s = createGame(7);
+  s.escalation = 99; s.escalationBleed = 1; s.aggressiveThisTurn = true;
+  decayEscalation(s);
+  assertEq(s.escalation, 100);
+  assert(s.outcome && !s.outcome.win && s.outcome.reason === "war", "bleed to 100 ends the game");
+});
+CarrierTests.add("second shootdown penalizes the clobbered rescue", () => {
+  const s = createGame(7);
+  s.rescue = { x: 5, y: 5, deadline: s.turn + RESCUE_WINDOW, aircraftId: "acOld" };
+  downAircraft(s, { id: "acNew", x: 8, y: 4, downed: false });
+  assertEq(s.escalationBleed, 1, "lost first crew bleeds");
+  assertEq(s.rescue.aircraftId, "acNew", "new rescue window open");
+});
+CarrierTests.add("crippled minesweeper cannot clear mines", () => {
+  const s = createGame(7);
+  s.mines = [{ x: 10, y: 5, cleared: false }];
+  const m1 = shipById(s, "m1"); m1.x = 10; m1.y = 6; m1.crippled = true;
+  let threw = false;
+  try { applyAction(s, { type: "clearMine", shipId: "m1", x: 10, y: 5 }); } catch { threw = true; }
+  assert(threw, "crippled minesweeper refused");
+});
+CarrierTests.add("intercept skips identified contacts", () => {
+  const s = createGame(7);
+  s.eFighters = []; s.airliners = [];
+  s.echoes.forEach((e) => { e.identified = true; });
+  s.drones = [{ id: "d1", x: 10, y: 5, orbit: [{ x: 10, y: 5 }], orbitIndex: 0, downed: false }];
+  s.idents["d1"] = "drone";
+  let threw = false;
+  try { applyAction(s, { type: "launch", mission: "intercept", targetX: 10, targetY: 5 }); }
+  catch { threw = true; }
+  assert(threw, "no unknown contact left to intercept");
+  assertEq(s.resources.sorties, 6, "sortie preserved");
+});
+CarrierTests.add("recon numbers ignore mines", () => {
+  const s = createGame(7);
+  s.mines = [{ x: 11, y: 5, cleared: false }]; s.boats = [];
+  s.drones = []; s.eFighters = []; s.airliners = []; s.echoes = [];
+  applyAction(s, { type: "launch", mission: "recon", x: 9, y: 5, ex: 13, ey: 5 });
+  for (let i = 0; i < 8; i++) { if (s.pendingIntercept) resolveLadder(s, "observe"); endTurn(s); }
+  assertEq(s.seaNumbers[key(10, 5)].value, 0, "mine adjacent but invisible from the air");
+});
+CarrierTests.add("full-opposition scripted win (seed 9)", () => {
+  const s = createGame(9);
+  let guard = 0;
+  while (!s.outcome && guard++ < 80) {
+    for (const sh of s.ships.filter((x) => x.kind === "tanker")) {
+      while (sh.movesLeft > 0 && !sh.destroyed && !sh.exited) {
+        const cells = legalMoveCells(s, sh.id).filter((c) => c.x < sh.x);
+        if (!cells.length) break;
+        cells.sort((a, b) => Math.abs(a.y - 5) - Math.abs(b.y - 5));
+        applyAction(s, { type: "move", shipId: sh.id, x: cells[0].x, y: cells[0].y });
+      }
+    }
+    if (s.pendingIntercept) resolveLadder(s, "observe");
+    endTurn(s);
+  }
+  assert(s.outcome && s.outcome.win, `seed 9 should win under full opposition, got ${JSON.stringify(s.outcome)}`);
+});
 </script>
 <script>
 "use strict";
@@ -1569,9 +1642,12 @@ at 100 the region is at war and you lose. Quiet turns cool it down.</p>
     return;
   }
   if (s.pendingIntercept) {
-    box.innerHTML = `<h3>Intercept — contact ${s.pendingIntercept.sigId} (${
-      contactLabel(s, findSignalById(s, s.pendingIntercept.sigKind, s.pendingIntercept.sigId) || { kind: s.pendingIntercept.sigKind, ref: {} })
-    })</h3><p>Choose your action:</p><p id="ladderbtns"></p>`;
+    const sig = findSignalById(s, s.pendingIntercept.sigKind, s.pendingIntercept.sigId);
+    const label = sig ? contactLabel(s, sig) : "unknown";
+    const title = label === "unknown"
+      ? `unknown contact near (${sig ? sig.x : "?"},${sig ? sig.y : "?"})`
+      : label;
+    box.innerHTML = `<h3>Intercept — ${title}</h3><p>Choose your action:</p><p id="ladderbtns"></p>`;
     overlay.classList.remove("hidden");
     const p = box.querySelector("#ladderbtns");
     for (const [step, label] of LADDER_STEPS) {
@@ -1588,7 +1664,7 @@ at 100 the region is at war and you lose. Quiet turns cool it down.</p>
 <p>${{ "convoy-through": "The convoy is through.", convoy: "Too many tankers lost.",
        war: "Escalation reached 100 — regional war.", airliner: "A civilian airliner was shot down." }[s.outcome.reason]}</p>
 <p>Tankers through: ${t.filter((x) => x.exited).length}/4 · Escalation peak: ${s.escalationPeak}
- · Turns: ${s.turn} · Grade: <b>${s.outcome.grade}</b></p>
+ · Turns: ${s.turn - 1} · Grade: <b>${s.outcome.grade}</b></p>
 <p><button id="btnNew">New game (new seed)</button></p>`;
     overlay.classList.remove("hidden");
     document.getElementById("btnNew").onclick = () => {
