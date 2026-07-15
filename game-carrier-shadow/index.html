@@ -5,8 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Carrier Shadow</title>
 <style>
-  /* UI styles arrive in Task 15 */
-  body { margin: 0; background: #0a1420; color: #cfe3f5; font-family: ui-monospace, monospace; }
+  body { margin: 0; background: #0a1420; color: #cfe3f5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #wrap { display: flex; gap: 12px; padding: 12px; max-width: 1200px; margin: 0 auto; }
+  #left { flex: 1 1 auto; min-width: 0; }
+  #topbar { display: flex; align-items: center; gap: 16px; padding: 8px 4px; font-size: 14px; flex-wrap: wrap; }
+  #escwrap { flex: 1 1 160px; height: 14px; background: #14243a; border: 1px solid #2b4a6b; border-radius: 7px; overflow: hidden; }
+  #escbar { height: 100%; width: 0%; background: #4a9; transition: width .3s, background .3s; }
+  #board { display: block; width: 100%; border: 1px solid #2b4a6b; background: #0d1b2e; touch-action: manipulation; }
+  #panel { width: 290px; flex: 0 0 290px; display: flex; flex-direction: column; gap: 8px; }
+  #actions button, #controls button { background: #14324e; color: #cfe3f5; border: 1px solid #2b4a6b;
+    border-radius: 4px; padding: 6px 10px; margin: 2px; cursor: pointer; font: inherit; }
+  #actions button:hover, #controls button:hover { background: #1d4468; }
+  #log { background: #0d1b2e; border: 1px solid #2b4a6b; padding: 8px; height: 320px;
+    overflow-y: auto; font-size: 12px; line-height: 1.5; }
+  #log .warning { color: #ffcf66; } #log .combat { color: #ff8a7a; }
+  #log .escalation { color: #ff8a7a; } #log .intel { color: #7ad0ff; }
+  #log .outcome { color: #fff; font-weight: bold; } #log .air { color: #b9a7ff; }
+  .viewbtn.active { background: #2b6a9b !important; }
+  #overlay { position: fixed; inset: 0; background: rgba(4,10,18,.88); display: flex;
+    align-items: center; justify-content: center; z-index: 10; }
+  #overlay > div { max-width: 560px; background: #0d1b2e; border: 1px solid #2b4a6b;
+    border-radius: 8px; padding: 24px; font-size: 14px; line-height: 1.6; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -1227,7 +1247,178 @@ CarrierTests.add("uiOptions lists per-selection capabilities", () => {
 });
 </script>
 <script>
-// UI arrives in Task 15.
+"use strict";
+document.body.insertAdjacentHTML("afterbegin", `
+<div id="wrap">
+  <div id="left">
+    <div id="topbar">
+      <b>CARRIER SHADOW</b>
+      <span id="turnlbl"></span>
+      <span>Escalation</span><div id="escwrap"><div id="escbar"></div></div><span id="esclbl"></span>
+      <span id="reslbl"></span>
+    </div>
+    <div id="controls">
+      <button class="viewbtn active" id="btnSea">SEA</button>
+      <button class="viewbtn" id="btnAir">AIR</button>
+      <button id="btnEnd">End Turn (Space)</button>
+    </div>
+    <canvas id="board"></canvas>
+  </div>
+  <div id="panel">
+    <div id="selinfo">Click a unit or the carrier.</div>
+    <div id="actions"></div>
+    <div id="log"></div>
+  </div>
+</div>
+<div id="overlay"><div id="overlaybox"></div></div>
+`);
+
+const CELL = 44, PAD = 20, STRIP = 56; // carrier strip on the right
+const canvas = document.getElementById("board");
+canvas.width = PAD * 2 + W * CELL + STRIP;
+canvas.height = PAD * 2 + H * CELL;
+const ctx = canvas.getContext("2d");
+
+const ui = {
+  state: createGame(((Math.random() * 2 ** 31) | 0) >>> 0),  // UI may use Math.random for the seed only
+  view: "sea", selection: null, pendingLaunch: null,
+  render() { drawBoard(); drawTopbar(); drawPanel(); drawLog(); maybeOverlay(); },
+};
+window.ui = ui;
+
+const TER_FILL = { [TER.WATER]: "#123252", [TER.IRAN]: "#4a3b2a", [TER.OMAN]: "#3a4030", [TER.EXIT]: "#144a3a" };
+function cellRect(x, y) { return [PAD + x * CELL, PAD + y * CELL, CELL, CELL]; }
+
+function drawBoard() {
+  const s = ui.state;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const [px, py, w, h] = cellRect(x, y);
+    ctx.fillStyle = TER_FILL[MAP[y][x]];
+    ctx.fillRect(px, py, w - 1, h - 1);
+  }
+  // carrier strip
+  ctx.fillStyle = "#0e2740";
+  ctx.fillRect(PAD + W * CELL + 4, PAD, STRIP - 8, H * CELL);
+  ctx.fillStyle = "#cfe3f5"; ctx.font = "18px monospace"; ctx.textAlign = "center";
+  ctx.fillText("CV", PAD + W * CELL + STRIP / 2, PAD + (CARRIER_POS.y + 0.6) * CELL);
+  ctx.font = "10px monospace";
+  ctx.fillText("GULF OF", PAD + W * CELL + STRIP / 2, PAD + 14);
+  ctx.fillText("OMAN", PAD + W * CELL + STRIP / 2, PAD + 26);
+
+  if (ui.view === "sea") drawSeaLayer(s); else drawAirLayer(s);
+  drawShips(s);
+  drawAircraft(s);
+  drawSelection(s);
+}
+function drawSeaLayer(s) {
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const [k, e] of Object.entries(s.seaNumbers)) {
+    const { x, y } = unkey(k); const [px, py] = cellRect(x, y);
+    ctx.fillStyle = e.stale ? "#5a6b7a" : "#7ad0ff";
+    ctx.font = "16px monospace";
+    ctx.fillText(String(e.value), px + CELL / 2, py + CELL / 2);
+    if (e.content === "mine") { ctx.fillStyle = "#ff8a7a"; ctx.font = "10px monospace"; ctx.fillText("MINE", px + CELL / 2, py + CELL - 8); }
+    if (e.content === "boat") { ctx.fillStyle = e.stale ? "#5a6b7a" : "#ffcf66"; ctx.font = "10px monospace"; ctx.fillText("SHIP", px + CELL / 2, py + CELL - 8); }
+  }
+  const SEA_MARK = { mine: "⚑", ship: "▣", clear: "✓" };
+  for (const [k, m] of Object.entries(s.marks.sea)) {
+    const { x, y } = unkey(k); const [px, py] = cellRect(x, y);
+    ctx.fillStyle = "#ffcf66"; ctx.font = "13px monospace";
+    ctx.fillText(SEA_MARK[m], px + 10, py + 12);
+  }
+}
+function drawAirLayer(s) {
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const [k, e] of Object.entries(s.airNumbers)) {
+    const { x, y } = unkey(k); const [px, py] = cellRect(x, y);
+    const stale = e.turn < s.turn - 1;
+    ctx.fillStyle = stale ? "#5a6b7a" : "#b9a7ff";
+    ctx.font = "16px monospace";
+    ctx.fillText(String(e.value), px + CELL / 2, py + CELL / 2);
+  }
+  const AIR_MARK = { hostile: "▲", civ: "△", drone: "◇", radar: "⚡", false: "✕" };
+  for (const [k, m] of Object.entries(s.marks.air)) {
+    const { x, y } = unkey(k); const [px, py] = cellRect(x, y);
+    ctx.fillStyle = "#ffcf66"; ctx.font = "13px monospace";
+    ctx.fillText(AIR_MARK[m], px + 10, py + 12);
+  }
+  // identified contacts render at their live positions
+  for (const sig of airSignals(s)) {
+    const lbl = contactLabel(s, sig);
+    if (lbl === "unknown") continue;
+    const [px, py] = cellRect(sig.x, sig.y);
+    ctx.fillStyle = lbl === "airliner" ? "#8fd18f" : "#ff8a7a";
+    ctx.font = "11px monospace";
+    ctx.fillText(lbl === "false echo" ? "✕" : lbl.toUpperCase().slice(0, 5), px + CELL / 2, py + 10);
+  }
+  if (s.sam.revealedUntil >= s.turn && !s.sam.destroyed) {
+    const [px, py] = cellRect(s.sam.x, s.sam.y);
+    ctx.fillStyle = "#ff8a7a"; ctx.font = "13px monospace";
+    ctx.fillText("⚡SAM", px + CELL / 2, py + CELL / 2);
+  }
+}
+const SHIP_GLYPH = { tanker: "T", frigate: "F", minesweeper: "M" };
+function drawShips(s) {
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "bold 15px monospace";
+  for (const sh of s.ships) {
+    if (sh.destroyed || sh.exited) continue;
+    const [px, py] = cellRect(sh.x, sh.y);
+    ctx.fillStyle = sh.kind === "tanker" ? "#8fd18f" : "#7ad0ff";
+    if (sh.crippled) ctx.fillStyle = "#ffcf66";
+    ctx.fillText(SHIP_GLYPH[sh.kind] + sh.id.slice(1), px + CELL / 2, py + CELL / 2);
+  }
+  if (s.rescue) {
+    const [px, py] = cellRect(s.rescue.x, s.rescue.y);
+    ctx.fillStyle = "#ffcf66"; ctx.fillText("🛟", px + CELL / 2, py + CELL / 2);
+  }
+}
+function drawAircraft(s) {
+  ctx.font = "13px monospace";
+  for (const ac of s.aircraft) {
+    if (ac.leg === "done" || ac.downed) continue;
+    const px = ac.x >= W ? PAD + W * CELL + STRIP / 2 - CELL / 2 : cellRect(ac.x, 0)[0];
+    const [, py] = cellRect(Math.min(ac.x, W - 1), ac.y);
+    ctx.fillStyle = ac.kind === "surveillance" ? "#b9a7ff" : "#7ad0ff";
+    ctx.fillText(ac.kind === "surveillance" ? "✈S" : "✈", px + CELL / 2, py + 10);
+  }
+}
+function drawSelection(s) {
+  const sel = ui.selection;
+  if (!sel) return;
+  const opts = uiOptions(s, sel);
+  ctx.strokeStyle = "#ffcf66"; ctx.lineWidth = 2;
+  for (const c of opts.moves) {
+    const [px, py, w, h] = cellRect(c.x, c.y);
+    ctx.strokeRect(px + 2, py + 2, w - 5, h - 5);
+  }
+  if (sel.kind === "ship") {
+    const sh = shipById(s, sel.id);
+    const [px, py, w, h] = cellRect(sh.x, sh.y);
+    ctx.strokeStyle = "#fff"; ctx.strokeRect(px, py, w - 1, h - 1);
+  }
+}
+function drawTopbar() {
+  const s = ui.state;
+  document.getElementById("turnlbl").textContent = `Turn ${s.turn}`;
+  const bar = document.getElementById("escbar");
+  bar.style.width = `${s.escalation}%`;
+  const posture = postureOf(s.escalation);
+  bar.style.background = { shadowing: "#4a9", harassment: "#fc6", conflict: "#f75", war: "#f33" }[posture];
+  document.getElementById("esclbl").textContent = `${s.escalation} (${posture})`;
+  const r = s.resources;
+  document.getElementById("reslbl").textContent =
+    `Sorties ${r.sorties} · Surveil ${r.surveillance} · Refuel ${r.refuel} · Helo ${r.helo}`;
+}
+function drawLog() {
+  const el = document.getElementById("log");
+  el.innerHTML = ui.state.log.slice(-80)
+    .map((l) => `<div class="${l.kind}">T${l.turn} ${l.text}</div>`).join("");
+  el.scrollTop = el.scrollHeight;
+}
+function drawPanel() { /* filled by Task 16 (interaction); harmless no-op until then */ }
+function maybeOverlay() { /* filled by Task 16 */ }
+ui.render();
 </script>
 </body>
 </html>
