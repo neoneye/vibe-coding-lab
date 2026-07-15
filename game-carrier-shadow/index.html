@@ -110,6 +110,26 @@ function postureOf(esc) {
 }
 function logEvent(state, kind, text) { state.log.push({ turn: state.turn, kind, text }); }
 
+// ============ escalation engine ============
+function addEscalation(state, kindKey) {
+  const amount = ESCALATION[kindKey];
+  if (amount === undefined) throw new Error(`unknown escalation ${kindKey}`);
+  state.escalation = Math.min(100, state.escalation + amount);
+  state.escalationPeak = Math.max(state.escalationPeak, state.escalation);
+  if (kindKey !== "reconFlight") state.aggressiveThisTurn = true;
+  logEvent(state, "escalation", `Escalation +${amount} (${kindKey}) → ${state.escalation}.`);
+  if (state.escalation >= 100 && !state.outcome) {
+    state.outcome = { win: false, reason: "war", grade: "F" };
+    logEvent(state, "outcome", "Escalation reached 100: regional war. Mission failed.");
+  }
+}
+function decayEscalation(state) {
+  if (!state.aggressiveThisTurn && state.escalation > 0) state.escalation -= 1;
+  state.escalation = Math.min(100, state.escalation + state.escalationBleed);
+  state.escalationPeak = Math.max(state.escalationPeak, state.escalation);
+  state.aggressiveThisTurn = false;
+}
+
 // ============ sonar and sea numbers ============
 function sonarRange(ship) {
   return ship.kind === "frigate" ? 2 : ship.kind === "minesweeper" ? 3 : 0;
@@ -449,6 +469,31 @@ CarrierTests.add("radar sweep stamps a 3x3 of correct numbers", () => {
   assertEq(s.airNumbers[key(10, 4)].value, 0, "drone's own cell counts neighbors only");
   assertEq(Object.keys(s.airNumbers).length, 9);
   assert(f1.sensorUsed);
+});
+
+CarrierTests.add("escalation table, peak, decay, war", () => {
+  const s = createGame(7);
+  addEscalation(s, "radarLock");
+  assertEq(s.escalation, 3); assert(s.aggressiveThisTurn);
+  addEscalation(s, "mannedShootdown");
+  assertEq(s.escalation, 23); assertEq(s.escalationPeak, 23);
+  decayEscalation(s);           // aggressive turn: no decay
+  assertEq(s.escalation, 23);
+  decayEscalation(s);           // quiet turn: -1
+  assertEq(s.escalation, 22);
+  s.escalationBleed = 1;        // lost pilot: +1/turn overrides quiet decay net 0
+  decayEscalation(s);
+  assertEq(s.escalation, 22);
+  s.escalation = 95; s.escalationBleed = 0;
+  addEscalation(s, "mannedShootdown");
+  assertEq(s.escalation, 100);
+  assertEq(s.outcome.reason, "war");
+});
+CarrierTests.add("recon flight is not aggressive", () => {
+  const s = createGame(7);
+  addEscalation(s, "reconFlight");
+  assertEq(s.escalation, 1);
+  assert(!s.aggressiveThisTurn, "recon does not block decay");
 });
 </script>
 <script>
