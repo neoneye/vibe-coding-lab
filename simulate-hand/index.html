@@ -299,6 +299,36 @@ const POSES = {
     [23, -0.10], [24, 1.50], [25, 1.80], [26, 0.70]]),
 };
 
+// ---- actuator stress ----
+const STRESS_VIS_MAX = 400, LIMIT_K = 150;
+function computeStress(world, dofFrames, contacts, sensors, angles) {
+  const stress = new Array(DOF_TABLE.length).fill(0);
+  for (let j = 0; j < DOF_TABLE.length; j++) {
+    const d = DOF_TABLE[j];
+    const { jointPos, axis } = dofFrames[j];
+    let v = 0;
+    if (d.kind === 't') {
+      for (const c of contacts) v += c.pressure * v3dot(c.n, axis);
+      v = Math.abs(v);
+    } else {
+      const desc = DESCENDANTS[d.bone];
+      for (const c of contacts) {
+        if (!desc.includes(sensors[c.sensor].bone)) continue;
+        const r = v3sub(c.pos, jointPos);
+        const F = v3scale(c.n, c.pressure);
+        v += v3dot(v3cross(r, F), axis);
+      }
+      v = Math.abs(v);
+    }
+    const span = d.max - d.min, m = 0.06 * span;
+    const a = clamp(angles[j], d.min, d.max);
+    if (a > d.max - m) v += LIMIT_K * (a - (d.max - m)) / m;
+    if (a < d.min + m) v += LIMIT_K * ((d.min + m) - a) / m;
+    stress[j] = v;
+  }
+  return stress;
+}
+
 // ---- tests ----
 HandTests.add('quat: 90deg about X takes Y to Z', () => {
   const v = qrot(qaa([1,0,0], Math.PI/2), [0,1,0]);
@@ -509,6 +539,40 @@ HandTests.add('poses: all 27 entries within DoF limits', () => {
       v >= DOF_TABLE[j].min - 1e-9 && v <= DOF_TABLE[j].max + 1e-9,
       k + '[' + j + '] ' + DOF_TABLE[j].name));
   }
+});
+HandTests.add('stress: zero without contacts or limit strain', () => {
+  const a = defaultAngles();
+  const { world, dofFrames } = computePose(a);
+  const s = computeStress(world, dofFrames, [], generateSensors(), a);
+  HandTests.assert(s.every(v => v === 0), 'all zero');
+});
+HandTests.add('stress: joint at its limit strains even with no contact', () => {
+  const a = defaultAngles(); a[13] = DOF_TABLE[13].max; // Index PIP maxed
+  const { world, dofFrames } = computePose(a);
+  const s = computeStress(world, dofFrames, [], generateSensors(), a);
+  HandTests.assert(s[13] > 0, 'limit strain on PIP');
+  HandTests.assert(s[12] === 0, 'MCP unaffected');
+});
+HandTests.add('stress: grasping the sphere loads finger flexors and wrist', () => {
+  const ss = generateSensors();
+  const a = POSES.sphere;
+  const { world, dofFrames } = computePose(a);
+  const obj = { type: 'sphere', pos: OBJ_DEFS.sphere.ready.slice(), quat: [0,0,0,1] };
+  const cs = computeContacts(world, ss, obj);
+  const s = computeStress(world, dofFrames, cs, ss, a);
+  HandTests.assert(s[16] > 0, 'middle MCP flex loaded');
+  HandTests.assert(s[3] + s[4] + s[5] > 0, 'wrist rotations feel the grip');
+});
+HandTests.add('stress: squeezing deeper raises flexor stress', () => {
+  const ss = generateSensors();
+  const obj = { type: 'sphere', pos: OBJ_DEFS.sphere.ready.slice(), quat: [0,0,0,1] };
+  const load = pose => {
+    const { world, dofFrames } = computePose(pose);
+    const cs = computeContacts(world, ss, obj);
+    return computeStress(world, dofFrames, cs, ss, pose)[12];
+  };
+  const deeper = POSES.sphere.slice(); deeper[12] = Math.min(DOF_TABLE[12].max, deeper[12] + 0.25);
+  HandTests.assert(load(deeper) > load(POSES.sphere), 'more flexion -> more stress');
 });
 HandTests.add('SKELETON: 17 bones, parents precede children, digits mapped', () => {
   HandTests.assert(SKELETON.length === 17);
