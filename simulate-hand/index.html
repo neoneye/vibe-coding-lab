@@ -197,6 +197,54 @@ function objNormal(obj, p) {
   ]);
 }
 
+// ---- skin sensors & contact model ----
+const K_PRESSURE = 40, P_CLAMP = 80;
+function generateSensors() {
+  const sensors = [];
+  for (let iy = 0; iy < 5; iy++) {          // palm 5x5 grid on front face
+    for (let ix = 0; ix < 5; ix++) {
+      sensors.push({ bone: 1, digit: 'palm',
+        offset: [-2.6 + ix * 1.4, 1.6 + iy * 1.6, 1.35], normal: [0, 0, 1] });
+    }
+  }
+  const RING_ANGLES = [-1.05, -0.35, 0.35, 1.05]; // radians around palmar side
+  const chains = [[2, 3, 4], [5, 6, 7], [8, 9, 10], [11, 12, 13], [14, 15, 16]];
+  for (const chain of chains) {
+    for (let k = 0; k < 3; k++) {
+      const b = chain[k], { len, radius } = SKELETON[b];
+      const digit = digitOf(b);
+      const fracs = k === 2 ? [0.25, 0.55, 0.85] : [0.3, 0.7];
+      for (const f of fracs) {
+        for (const a of RING_ANGLES) {
+          sensors.push({ bone: b, digit,
+            offset: [Math.sin(a) * radius, len * f, Math.cos(a) * radius],
+            normal: v3norm([Math.sin(a), 0, Math.cos(a)]) });
+        }
+      }
+      if (k === 2) sensors.push({ bone: b, digit,               // fingertip pad
+        offset: [0, len + radius * 0.5, radius * 0.3],
+        normal: v3norm([0, 0.8, 0.6]) });
+    }
+  }
+  return sensors;
+}
+function sensorWorld(world, s) {
+  const w = world[s.bone];
+  return { pos: v3add(w.pos, qrot(w.quat, s.offset)), normal: qrot(w.quat, s.normal) };
+}
+function computeContacts(world, sensors, obj) {
+  const out = [];
+  for (let i = 0; i < sensors.length; i++) {
+    const { pos, normal } = sensorWorld(world, sensors[i]);
+    const d = objSdf(obj, pos);
+    if (d >= 0) continue;
+    const n = objNormal(obj, pos);
+    if (v3dot(normal, n) > 0.25) continue;   // sensor faces away from surface
+    out.push({ sensor: i, pos, pressure: Math.min(-d * K_PRESSURE, P_CLAMP), n });
+  }
+  return out;
+}
+
 // ---- tests ----
 HandTests.add('quat: 90deg about X takes Y to Z', () => {
   const v = qrot(qaa([1,0,0], Math.PI/2), [0,1,0]);
@@ -307,6 +355,46 @@ HandTests.add('OBJ_DEFS: ready positions sit in front of the palm', () => {
     const r = OBJ_DEFS[k].ready;
     HandTests.assert(r[2] > 1.5 && r[1] > 16 && r[1] < 26, k + ' ready pos plausible');
   }
+});
+HandTests.add('sensors: count in range, fingertips denser than proximal', () => {
+  const ss = generateSensors();
+  HandTests.assert(ss.length >= 150 && ss.length <= 260, 'got ' + ss.length);
+  const per = {}; ss.forEach(s => per[s.bone] = (per[s.bone] || 0) + 1);
+  HandTests.assert(per[7] > per[5], 'index distal denser than proximal');
+  HandTests.assert(per[1] >= 20, 'palm has a grid');
+  ss.forEach(s => HandTests.assertApprox(v3len(s.normal), 1, 1e-6));
+});
+HandTests.add('sensors: palmar bias — normals face +Z at zero pose', () => {
+  const { world } = computePose(new Array(27).fill(0));
+  const ss = generateSensors();
+  let fwd = 0;
+  for (const s of ss) { if (sensorWorld(world, s).normal[2] > 0.2) fwd++; }
+  HandTests.assert(fwd / ss.length > 0.7, 'most sensors face palm side');
+});
+HandTests.add('contact: sphere pressed onto palm produces palm contacts', () => {
+  const { world } = computePose(new Array(27).fill(0));
+  const ss = generateSensors();
+  const obj = { type: 'sphere', pos: [0.6, 19.5, 3.6], quat: [0,0,0,1] };
+  const cs = computeContacts(world, ss, obj);
+  HandTests.assert(cs.length > 0, 'expected contacts');
+  HandTests.assert(cs.some(c => ss[c.sensor].digit === 'palm'), 'palm touched');
+  cs.forEach(c => HandTests.assert(c.pressure > 0 && c.pressure <= P_CLAMP));
+});
+HandTests.add('contact: deeper penetration -> higher pressure', () => {
+  const { world } = computePose(new Array(27).fill(0));
+  const ss = generateSensors();
+  const p1 = computeContacts(world, ss, { type: 'sphere', pos: [0.6, 19.5, 4.0], quat: [0,0,0,1] });
+  const p2 = computeContacts(world, ss, { type: 'sphere', pos: [0.6, 19.5, 3.2], quat: [0,0,0,1] });
+  const sum = cs => cs.reduce((a, c) => a + c.pressure, 0);
+  HandTests.assert(sum(p2) > sum(p1), 'closer sphere presses harder');
+});
+HandTests.add('contact: pencil touches far fewer sensors than sphere', () => {
+  const { world } = computePose(defaultAngles());
+  const ss = generateSensors();
+  const sp = computeContacts(world, ss, { type: 'sphere', pos: OBJ_DEFS.sphere.ready.slice(), quat: [0,0,0,1] });
+  const pc = computeContacts(world, ss, { type: 'pencil', pos: [1.2, 28.0, 2.0], quat: OBJ_DEFS.pencil.quat0.slice() });
+  HandTests.assert(pc.length > 0, 'pencil makes some contact');
+  HandTests.assert(pc.length < Math.max(sp.length, 8), 'pencil band is thin');
 });
 HandTests.add('SKELETON: 17 bones, parents precede children, digits mapped', () => {
   HandTests.assert(SKELETON.length === 17);
