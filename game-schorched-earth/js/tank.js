@@ -65,13 +65,15 @@ window.SE = window.SE || {};
         };
     };
 
-    Tank.prototype.draw = function (ctx, isActive) {
+    // barrelColor comes from the renderer (contrast-picked against the sky);
+    // black is the default when none is given.
+    Tank.prototype.draw = function (ctx, isActive, barrelColor) {
         if (!this.alive) return;
         var x = this.x, y = this.y;
 
         // barrel
         var m = this.muzzle();
-        ctx.strokeStyle = '#222';
+        ctx.strokeStyle = barrelColor || '#000000';
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.moveTo(x, y - 4);

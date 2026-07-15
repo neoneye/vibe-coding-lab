@@ -591,14 +591,42 @@ window.SE = window.SE || {};
 
     // ---------------------------------------------------------------- render
 
+    var SKY_STOPS = [
+        { at: 0,    c: [11, 16, 38] },    // #0b1026
+        { at: 0.55, c: [51, 37, 74] },    // #33254a
+        { at: 0.8,  c: [122, 59, 77] },   // #7a3b4d
+        { at: 1,    c: [201, 111, 58] }   // #c96f3a
+    ];
+
     function drawSky() {
         var grad = ctx.createLinearGradient(0, 0, 0, H);
-        grad.addColorStop(0, '#0b1026');
-        grad.addColorStop(0.55, '#33254a');
-        grad.addColorStop(0.8, '#7a3b4d');
-        grad.addColorStop(1, '#c96f3a');
+        SKY_STOPS.forEach(function (s) {
+            grad.addColorStop(s.at, 'rgb(' + s.c.join(',') + ')');
+        });
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, W, H);
+    }
+
+    function skyLuminanceAt(frac) {
+        frac = Math.max(0, Math.min(1, frac));
+        var c = SKY_STOPS[SKY_STOPS.length - 1].c;
+        for (var i = 1; i < SKY_STOPS.length; i++) {
+            if (frac <= SKY_STOPS[i].at) {
+                var a = SKY_STOPS[i - 1], b = SKY_STOPS[i];
+                var t = (frac - a.at) / (b.at - a.at);
+                c = [0, 1, 2].map(function (k) {
+                    return a.c[k] + (b.c[k] - a.c[k]) * t;
+                });
+                break;
+            }
+        }
+        return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+    }
+
+    // Cannon is black by default; against a dark sky (high-altitude tanks)
+    // black disappears, so switch to light steel. Sampled at barrel height.
+    function barrelColorAt(y) {
+        return skyLuminanceAt((y - 16) / H) < 0.3 ? '#cfd8e4' : '#000000';
     }
 
     function drawTerrain(hm) {
@@ -654,7 +682,8 @@ window.SE = window.SE || {};
             var active = currentTank();
             game.tanks.forEach(function (t) {
                 t.draw(ctx, state === 'playing' && t === active &&
-                    (game.phase === 'aim' || game.phase === 'aiThink'));
+                    (game.phase === 'aim' || game.phase === 'aiThink'),
+                    barrelColorAt(t.y));
             });
             game.projectiles.forEach(function (p) { p.draw(ctx); });
             game.explosions.forEach(drawExplosion);
@@ -728,7 +757,7 @@ window.SE = window.SE || {};
         requestAnimationFrame(frame);
     }
 
-    SE.game = { init: init };
+    SE.game = { init: init, barrelColorAt: barrelColorAt };
 
     if (typeof document !== 'undefined') {
         if (document.readyState === 'loading') {

@@ -31,6 +31,9 @@ check('USA flag: 7 alternating stripes + starred canton',
             usa.stripes[0] === usa.stripes[2] && usa.stripes[1] === '#ffffff' &&
             usa.canton && !!usa.canton.color && !!usa.canton.stars;
     })());
+check('barrel contrast: light steel high up (dark sky), black low down',
+    SE.game.barrelColorAt(60) === '#cfd8e4' &&
+    SE.game.barrelColorAt(580) === '#000000');
 check('6 weapons, baby missile unlimited',
     SE.WEAPONS.length === 6 && SE.WEAPONS[0].ammo === Infinity);
 
