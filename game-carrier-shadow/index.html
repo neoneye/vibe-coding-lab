@@ -323,6 +323,13 @@ function applyAction(state, action) {
       break;
     }
     case "ladder": { resolveLadder(state, action.step); break; }
+    case "rescue": {
+      if (!state.rescue || state.resources.helo <= 0) throw new Error("illegal rescue");
+      state.resources.helo--;
+      logEvent(state, "air", `Helicopter recovers the crew at (${state.rescue.x},${state.rescue.y}).`);
+      state.rescue = null;
+      break;
+    }
     default: throw new Error(`unknown action ${action.type}`);
   }
   return events;
@@ -636,11 +643,67 @@ function checkOutcome(state) {
 }
 function gradeGame(state) { return "A"; }   // real formula in Task 13
 
+function samPhase(state) {
+  const sam = state.sam;
+  if (!sam || sam.destroyed) return;
+  if (state.turn >= sam.relocateAt) {
+    const c = seededCell(state, (x, y) => terrainAt(x, y) === TER.IRAN && !(x === sam.x && y === sam.y));
+    sam.x = c.x; sam.y = c.y; sam.relocateAt += SAM_RELOCATE_EVERY;
+  }
+  const posture = postureOf(state.escalation);
+  for (const ac of state.aircraft) {
+    if (ac.downed || ac.leg === "done") continue;
+    if (chebyshev(ac, sam) > SAM_RADIUS) continue;
+    if (posture === "shadowing") {
+      logEvent(state, "warning", "Radar warning: weak — estimated threat 1–2 cells away, identification unknown.");
+    } else if (posture === "harassment") {
+      sam.revealedUntil = state.turn + 1;
+      logEvent(state, "warning", "Radar warning: STRONG — tracking radar locked.");
+    } else {
+      sam.revealedUntil = state.turn + 2;
+      if (rngNext(state) < SAM_HIT_CHANCE) {
+        ac.downed = true;
+        state.rescue = { x: ac.x, y: ac.y, deadline: state.turn + RESCUE_WINDOW, aircraftId: ac.id };
+        logEvent(state, "combat", `SAM launch — ${ac.id} is hit and goes down. Crew in the water at (${ac.x},${ac.y}).`);
+      } else {
+        logEvent(state, "combat", `SAM launch — ${ac.id} evades. Site position glimpsed.`);
+      }
+    }
+  }
+}
+function fighterThreats(state) {
+  for (const ef of state.eFighters) {
+    if (ef.downed) continue;
+    const surv = state.aircraft.find((a) => a.kind === "surveillance" && !a.downed
+      && a.leg === "station" && chebyshev(a, ef) <= 1);
+    if (!surv) continue;
+    const cap = state.aircraft.find((a) => a.tasking === "cap" && a.leg === "station"
+      && !a.downed && chebyshev(a, surv) <= 2);
+    if (cap) {
+      logEvent(state, "air", "CAP drives off a bandit closing on the surveillance aircraft.");
+    } else {
+      // Spec: unescorted surveillance reached by a fighter is lost (manned crew -> rescue window).
+      surv.downed = true;
+      state.rescue = { x: surv.x, y: surv.y, deadline: state.turn + RESCUE_WINDOW, aircraftId: surv.id };
+      logEvent(state, "combat", `Surveillance aircraft ${surv.id} shot down — crew in the water at (${surv.x},${surv.y}).`);
+    }
+  }
+}
+function rescueDeadline(state) {
+  if (state.rescue && state.turn >= state.rescue.deadline) {
+    state.rescue = null;
+    state.escalationBleed += 1;
+    logEvent(state, "escalation", "Pilot lost. Political pressure mounts: +1 escalation per turn.");
+  }
+}
+
 function endTurn(state) {
   if (state.outcome) return [];
   if (state.pendingIntercept) throw new Error("resolve the intercept first");
   const events = [];
   resolveAircraft(state, events);
+  samPhase(state);
+  fighterThreats(state);
   moveBoats(state); moveDrones(state); moveEFighters(state); moveAirliners(state);
   capEngagements(state);
   droneSpotting(state);
@@ -648,6 +711,7 @@ function endTurn(state) {
   mineStrikes(state);
   resolveExits(state);
   checkOutcome(state);
+  rescueDeadline(state);
   decayEscalation(state);
   state.turn++;
   for (const sh of state.ships) { sh.movesLeft = shipSpeed(sh); sh.sensorUsed = false; }
@@ -1028,6 +1092,50 @@ CarrierTests.add("strike sinks an identified boat and escalates +12", () => {
   while (!b.sunk && s.turn < 12) { if (s.pendingIntercept) resolveLadder(s, "observe"); endTurn(s); }
   assert(b.sunk, "boat sunk by strike");
   assert(s.escalation >= ESCALATION.attackVessel - 4, "attackVessel escalation applied (minus decay)");
+});
+
+CarrierTests.add("SAM warns under shadowing, is sweepable under harassment, fires under conflict", () => {
+  const s = createGame(7);
+  s.drones = []; s.eFighters = []; s.airliners = []; s.boats = []; s.mines = [];
+  // station on row 3 (always water, and within SAM_RADIUS of any coast SAM at y <= 2)
+  applyAction(s, { type: "launch", mission: "cap", x: s.sam.x, y: 3 });
+  const ac = s.aircraft[0];
+  while (ac.leg === "transit") endTurn(s);
+  assert(s.log.some((l) => l.text.startsWith("Radar warning: weak")), "weak warning logged");
+  s.escalation = 40;
+  endTurn(s);
+  assert(s.sam.revealedUntil >= s.turn - 1, "emitting SAM revealed under harassment");
+  const s2 = createGame(7);
+  s2.drones = []; s2.eFighters = []; s2.airliners = []; s2.boats = []; s2.mines = [];
+  s2.escalation = 70;
+  applyAction(s2, { type: "launch", mission: "cap", x: s2.sam.x, y: 3 });
+  let fired = false;
+  for (let i = 0; i < 12 && !fired; i++) {
+    if (s2.pendingIntercept) resolveLadder(s2, "observe");
+    endTurn(s2);
+    fired = s2.log.some((l) => l.text.includes("SAM"));
+  }
+  assert(fired, "SAM engages under conflict");
+});
+CarrierTests.add("SAM relocates on schedule", () => {
+  const s = createGame(7);
+  s.drones = []; s.eFighters = []; s.airliners = []; s.boats = []; s.mines = [];
+  const before = { x: s.sam.x, y: s.sam.y };
+  for (let i = 0; i < SAM_RELOCATE_EVERY + 1; i++) endTurn(s);
+  assert(s.sam.x !== before.x || s.sam.y !== before.y, "moved");
+  assertEq(terrainAt(s.sam.x, s.sam.y), TER.IRAN, "still on Iranian coast");
+});
+CarrierTests.add("rescue: helo saves pilot, missing the window bleeds escalation", () => {
+  const s = createGame(7);
+  s.rescue = { x: 10, y: 3, deadline: s.turn + RESCUE_WINDOW, aircraftId: "ac1" };
+  applyAction(s, { type: "rescue" });
+  assertEq(s.resources.helo, 0); assertEq(s.rescue, null);
+  const s2 = createGame(7);
+  s2.drones = []; s2.eFighters = []; s2.airliners = []; s2.boats = []; s2.mines = [];
+  s2.rescue = { x: 10, y: 3, deadline: s2.turn, aircraftId: "ac1" };
+  endTurn(s2);
+  assertEq(s2.escalationBleed, 1, "pilot lost bleeds escalation");
+  assertEq(s2.rescue, null);
 });
 </script>
 <script>
