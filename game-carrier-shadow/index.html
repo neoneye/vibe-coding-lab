@@ -110,6 +110,39 @@ function postureOf(esc) {
 }
 function logEvent(state, kind, text) { state.log.push({ turn: state.turn, kind, text }); }
 
+// ============ ship movement ============
+function shipById(state, id) { return state.ships.find((s) => s.id === id); }
+function shipSpeed(ship) {
+  if (ship.destroyed || ship.exited) return 0;
+  const base = ship.kind === "frigate" ? 2 : 1;
+  return ship.crippled ? 1 : base;
+}
+function occupiedByShip(state, x, y) {
+  return state.ships.some((s) => !s.destroyed && !s.exited && s.x === x && s.y === y);
+}
+function legalMoveCells(state, shipId) {
+  const ship = shipById(state, shipId);
+  if (!ship || ship.movesLeft <= 0 || state.outcome) return [];
+  return neighbors8(ship.x, ship.y)
+    .filter((c) => isWaterCell(c.x, c.y) && !occupiedByShip(state, c.x, c.y));
+}
+function applyAction(state, action) {
+  const events = [];
+  switch (action.type) {
+    case "move": {
+      const ok = legalMoveCells(state, action.shipId)
+        .some((c) => c.x === action.x && c.y === action.y);
+      if (!ok) throw new Error(`illegal move ${JSON.stringify(action)}`);
+      const ship = shipById(state, action.shipId);
+      ship.x = action.x; ship.y = action.y; ship.movesLeft--;
+      events.push({ type: "moved", shipId: ship.id, x: ship.x, y: ship.y });
+      break;
+    }
+    default: throw new Error(`unknown action ${action.type}`);
+  }
+  return events;
+}
+
 // ============ helpers for seeded placement ============
 function seededCell(state, pred) {
   for (let i = 0; i < 10000; i++) {
@@ -141,6 +174,7 @@ function createGame(seed) {
     aircraft: [], seaNumbers: {}, airNumbers: {}, marks: { sea: {}, air: {} },
     log: [], pendingIntercept: null, rescue: null, outcome: null,
   };
+  state.ships.forEach((s) => { s.movesLeft = shipSpeed(s); });
   const taken = new Set();
   const free = (x, y) => !taken.has(key(x, y));
   for (let i = 0; i < 4; i++) {
@@ -241,6 +275,33 @@ CarrierTests.add("postureOf thresholds", () => {
   assertEq(postureOf(30), "harassment"); assertEq(postureOf(59), "harassment");
   assertEq(postureOf(60), "conflict"); assertEq(postureOf(99), "conflict");
   assertEq(postureOf(100), "war");
+});
+
+CarrierTests.add("ship movement rules", () => {
+  const s = createGame(7);
+  const f1 = shipById(s, "f1");
+  assertEq(shipSpeed(f1), 2);
+  assertEq(shipSpeed(shipById(s, "t1")), 1);
+  const cells = legalMoveCells(s, "f1");
+  assert(cells.length > 0, "frigate can move");
+  for (const c of cells) {
+    assert(isWaterCell(c.x, c.y), "moves onto water only");
+    assert(!s.ships.some((sh) => !sh.destroyed && !sh.exited && sh.x === c.x && sh.y === c.y),
+      "no stacking");
+  }
+  const dest = cells[0];
+  applyAction(s, { type: "move", shipId: "f1", x: dest.x, y: dest.y });
+  assertEq({ x: f1.x, y: f1.y }, dest);
+  assertEq(f1.movesLeft, 1, "frigate has second step");
+  applyAction(s, { type: "move", shipId: "f1", x: f1.x, y: f1.y + 1 });
+  assertEq(f1.movesLeft, 0);
+  assertEq(legalMoveCells(s, "f1"), [], "no moves left");
+});
+CarrierTests.add("illegal moves throw", () => {
+  const s = createGame(7);
+  let threw = false;
+  try { applyAction(s, { type: "move", shipId: "t1", x: 0, y: 0 }); } catch { threw = true; }
+  assert(threw, "cannot move onto land / far cell");
 });
 </script>
 <script>
