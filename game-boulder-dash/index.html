@@ -926,17 +926,27 @@ const ColosseumTests = {
                   "#c26f3a", "#4a8a86", "#a04a6a", "#7a7a4a", "#4a5aa0"];
   const SKINS = ["#e8b98a", "#c9955e", "#a06a3c", "#7c4c28"];
   const spectators = [];
+  const WINE_STALL = { x: CW - 168, y: CH - 58 };
   (function buildAudience() {
     let id = 0;
-    const add = (x, y, depth) => {
+    const add = (x, y, depth, axis = "x") => {
+      const i = id++;
+      if (hash(i, 7) < 0.12) return;   // empty seat: off for a bathroom break
+      // keep the wine stall corner clear
+      if (x > WINE_STALL.x - 12 && x < WINE_STALL.x + 64 && y > WINE_STALL.y - 14) return;
       spectators.push({
-        x, y, depth,
-        tunic: TUNICS[Math.floor(hash(id, 1) * TUNICS.length)],
-        skin: SKINS[Math.floor(hash(id, 2) * SKINS.length)],
-        phase: hash(id, 3) * Math.PI * 2,
-        zeal: 0.5 + hash(id, 4),           // how eagerly they cheer
+        x: x + (hash(i, 5) - 0.5) * 7,       // nobody sits exactly on the mark
+        y: y + (hash(i, 6) - 0.5) * 4,
+        depth,
+        tunic: TUNICS[Math.floor(hash(i, 1) * TUNICS.length)],
+        skin: SKINS[Math.floor(hash(i, 2) * SKINS.length)],
+        phase: hash(i, 3) * Math.PI * 2,
+        zeal: 0.5 + hash(i, 4),              // how eagerly they cheer
+        walker: hash(i, 8) < 0.06,           // off to fetch wine
+        axis,
+        wspeed: 0.03 + hash(i, 9) * 0.04,
+        wrange: 40 + hash(i, 10) * 70,
       });
-      id++;
     };
     // top stands: 3 tiers above playfield (leave gap for emperor box)
     for (let tier = 0; tier < 3; tier++) {
@@ -956,8 +966,8 @@ const ColosseumTests = {
     // side stands: 3 columns each
     for (let tier = 0; tier < 3; tier++) {
       for (let y = PF_Y + 18 + (tier % 2) * 8; y < PF_Y + PF_H - 6; y += 17) {
-        add(PF_X - 16 - tier * 22, y, tier);
-        add(PF_X + PF_W + 16 + tier * 22, y, tier);
+        add(PF_X - 16 - tier * 22, y, tier, "y");
+        add(PF_X + PF_W + 16 + tier * 22, y, tier, "y");
       }
     }
   })();
@@ -1015,6 +1025,26 @@ const ColosseumTests = {
       drawColumn(16, y, 22);
       drawColumn(CW - 16, y, 22);
     }
+    // wine stall in the bottom stands (where the walkers are headed)
+    const wsx = WINE_STALL.x, wsy = WINE_STALL.y;
+    px(ctx, wsx, wsy + 4, 3, 26, "#6a4a2a");            // awning posts
+    px(ctx, wsx + 49, wsy + 4, 3, 26, "#6a4a2a");
+    px(ctx, wsx - 2, wsy - 4, 56, 8, "#a32a2a");        // striped awning
+    for (let k = 4; k < 56; k += 10) px(ctx, wsx - 2 + k, wsy - 4, 5, 8, "#e0d6c2");
+    // vendor behind the counter
+    px(ctx, wsx + 22, wsy + 10, 9, 12, "#ece6da");
+    ctx.fillStyle = "#c9955e";
+    ctx.beginPath(); ctx.arc(wsx + 26.5, wsy + 7, 3.5, 0, 7); ctx.fill();
+    px(ctx, wsx + 23, wsy + 2, 8, 3, "#3a2a1a");
+    px(ctx, wsx, wsy + 22, 52, 12, "#6a4a2a");          // counter
+    px(ctx, wsx, wsy + 22, 52, 3, "#8a6a3a");
+    // amphorae of wine
+    for (const ax of [wsx + 8, wsx + 42]) {
+      ctx.fillStyle = "#b56a42";
+      ctx.beginPath(); ctx.ellipse(ax, wsy + 18, 4, 6, 0, 0, 7); ctx.fill();
+      px(ctx, ax - 2, wsy + 9, 4, 4, "#b56a42");
+      px(ctx, ax - 3, wsy + 8, 6, 2, "#8a4a2a");
+    }
     // arena wall ring just outside the playfield
     px(ctx, PF_X - 8, PF_Y - 8, PF_W + 16, PF_H + 16, "#8a8071");
     px(ctx, PF_X - 8, PF_Y - 8, PF_W + 16, 3, "#a39a89");
@@ -1025,19 +1055,34 @@ const ColosseumTests = {
     for (const s of spectators) {
       const excited = Math.min(1, cheer * s.zeal);
       const bob = Math.sin(crowdPhase * (0.8 + s.zeal * 0.3) + s.phase);
-      const y = s.y + bob * (1 + excited * 2.5);
+      let wx = s.x, wy = s.y + bob * (1 + excited * 2.5);
+      let hasCup = false, walking = false;
+      if (s.walker) {
+        // pacing to the wine seller and back (triangle wave along the row)
+        const u = (crowdPhase * s.wspeed + s.phase) % 2;
+        const tri = u < 1 ? u : 2 - u;
+        const off = (tri - 0.5) * s.wrange;
+        if (s.axis === "x") wx += off; else wy = s.y + off;
+        wy += Math.sin(crowdPhase * 6 + s.phase) * 0.8; // footsteps
+        hasCup = u >= 1;                                // returning with wine
+        walking = true;
+      }
       // body
       ctx.fillStyle = s.tunic;
-      ctx.fillRect(s.x - 4, y - 3, 8, 7);
+      ctx.fillRect(wx - 4, wy - 3, 8, 7);
       // head
       ctx.fillStyle = s.skin;
-      ctx.beginPath(); ctx.arc(s.x, y - 6, 3, 0, 7); ctx.fill();
-      // arms up when cheering
-      if (excited > 0.45 && bob > -0.2) {
+      ctx.beginPath(); ctx.arc(wx, wy - 6, 3, 0, 7); ctx.fill();
+      if (hasCup) {
+        px(ctx, wx + 4, wy - 3, 3, 3, "#8a2a3a");   // cup of wine
+        px(ctx, wx + 4, wy - 4, 3, 1, "#e0b64c");
+      }
+      // arms up when cheering (walkers have their hands full)
+      if (!walking && excited > 0.45 && bob > -0.2) {
         ctx.strokeStyle = s.skin; ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(s.x - 4, y - 2); ctx.lineTo(s.x - 7, y - 9);
-        ctx.moveTo(s.x + 4, y - 2); ctx.lineTo(s.x + 7, y - 9);
+        ctx.moveTo(wx - 4, wy - 2); ctx.lineTo(wx - 7, wy - 9);
+        ctx.moveTo(wx + 4, wy - 2); ctx.lineTo(wx + 7, wy - 9);
         ctx.stroke();
       }
     }
