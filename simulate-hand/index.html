@@ -176,9 +176,9 @@ function sdfCapsuleY(p, half, r) {
   return v3len([p[0], p[1] - y, p[2]]) - r;
 }
 const OBJ_DEFS = {
-  sphere: { r: 3.0,  ready: [0.6, 20.0, 4.2], restY: 3.0,  quat0: [0, 0, 0, 1] },
-  cube:   { h: [2.4, 2.4, 2.4], ready: [0.6, 20.0, 4.0], restY: 2.4, quat0: [0, 0, 0, 1] },
-  pencil: { r: 0.45, half: 9.0, ready: [1.2, 21.0, 3.4], restY: 0.45,
+  sphere: { r: 3.0,  ready: [0.6, 19.5, 4.0], restY: 3.0,  quat0: [0, 0, 0, 1] },
+  cube:   { h: [2.4, 2.4, 2.4], ready: [0.6, 21.0, 3.6], restY: 2.4, quat0: [0, 0, 0, 1] },
+  pencil: { r: 0.45, half: 9.0, ready: [0.6, 20.5, 2.8], restY: 0.45,
             quat0: qaa([0, 0, 1], Math.PI / 2) }, // held/lying horizontally
 };
 function objSdf(obj, p) {
@@ -244,6 +244,60 @@ function computeContacts(world, sensors, obj) {
   }
   return out;
 }
+
+// ---- grasp logic & canned poses ----
+const GRASP = { attachForce: 30, attachOpp: 0.25, attachGroups: 2, detachForce: 10 };
+function evalGrasp(contacts, sensors) {
+  let force = 0; const net = [0, 0, 0]; const groups = new Set();
+  for (const c of contacts) {
+    force += c.pressure;
+    net[0] += c.n[0] * c.pressure; net[1] += c.n[1] * c.pressure; net[2] += c.n[2] * c.pressure;
+    if (c.pressure > 2) groups.add(sensors[c.sensor].digit);
+  }
+  if (force < 1e-9) return { force: 0, opposition: 0, groups: 0 };
+  return { force, opposition: 1 - v3len(net) / force, groups: groups.size };
+}
+function updateGrasp(state, g) {
+  if (!state.attached) {
+    if (g.force >= GRASP.attachForce && g.opposition >= GRASP.attachOpp && g.groups >= GRASP.attachGroups)
+      state.attached = true;
+  } else if (g.force < GRASP.detachForce) {
+    state.attached = false;
+  }
+  return state;
+}
+function relToRoot(root, obj) {
+  return { pos: qrotInv(root.quat, v3sub(obj.pos, root.pos)),
+           quat: qmul(qconj(root.quat), obj.quat) };
+}
+function applyRel(root, rel) {
+  return { pos: v3add(root.pos, qrot(root.quat, rel.pos)),
+           quat: qmul(root.quat, rel.quat) };
+}
+function makePose(over) {
+  const a = defaultAngles();
+  for (const [j, v] of over) a[j] = v;
+  return a;
+}
+// DoF indices: 6..10 thumb, 11..14 index, 15..18 middle, 19..22 ring, 23..26 pinky
+const POSES = {
+  open: defaultAngles(),
+  sphere: makePose([[6, 0.55], [7, 0.55], [9, 0.55], [10, 0.45],
+    [11, 0.05], [12, 1.05], [13, 1.19], [14, 0.63],
+    [16, 1.12], [17, 1.26], [18, 0.63],
+    [19, -0.05], [20, 1.12], [21, 1.26], [22, 0.63],
+    [23, -0.10], [24, 1.05], [25, 1.19], [26, 0.63]]),
+  cube: makePose([[6, 0.50], [7, 0.45], [9, 0.45], [10, 0.35],
+    [11, 0.05], [12, 0.96], [13, 1.12], [14, 0.56],
+    [16, 1.04], [17, 1.20], [18, 0.56],
+    [19, -0.05], [20, 1.04], [21, 1.20], [22, 0.56],
+    [23, -0.10], [24, 0.96], [25, 1.12], [26, 0.56]]),
+  pencil: makePose([[6, 0.60], [7, 0.70], [9, 0.70], [10, 0.80],
+    [11, 0.00], [12, 1.50], [13, 1.80], [14, 0.70],
+    [16, 1.50], [17, 1.80], [18, 0.70],
+    [19, -0.05], [20, 1.50], [21, 1.80], [22, 0.70],
+    [23, -0.10], [24, 1.50], [25, 1.80], [26, 0.70]]),
+};
 
 // ---- tests ----
 HandTests.add('quat: 90deg about X takes Y to Z', () => {
@@ -395,6 +449,66 @@ HandTests.add('contact: pencil touches far fewer sensors than sphere', () => {
   const pc = computeContacts(world, ss, { type: 'pencil', pos: [1.2, 28.0, 2.0], quat: OBJ_DEFS.pencil.quat0.slice() });
   HandTests.assert(pc.length > 0, 'pencil makes some contact');
   HandTests.assert(pc.length < Math.max(sp.length, 8), 'pencil band is thin');
+});
+HandTests.add('grasp: open hand near object -> no attach', () => {
+  const ss = generateSensors();
+  const { world } = computePose(defaultAngles());
+  const obj = { type: 'sphere', pos: OBJ_DEFS.sphere.ready.slice(), quat: [0,0,0,1] };
+  const g = evalGrasp(computeContacts(world, ss, obj), ss);
+  const st = { attached: false };
+  updateGrasp(st, g);
+  HandTests.assert(!st.attached, 'open hand must not grasp');
+});
+HandTests.add('grasp: each canned pose attaches its object', () => {
+  const ss = generateSensors();
+  for (const k of ['sphere', 'cube', 'pencil']) {
+    const { world } = computePose(POSES[k]);
+    const obj = { type: k, pos: OBJ_DEFS[k].ready.slice(), quat: OBJ_DEFS[k].quat0.slice() };
+    const g = evalGrasp(computeContacts(world, ss, obj), ss);
+    const st = { attached: false };
+    updateGrasp(st, g);
+    HandTests.assert(st.attached,
+      k + ': force=' + g.force.toFixed(1) + ' opp=' + g.opposition.toFixed(2) + ' groups=' + g.groups);
+  }
+});
+HandTests.add('grasp: hysteresis — light residual contact keeps hold, none releases', () => {
+  const st = { attached: true };
+  updateGrasp(st, { force: 15, opposition: 0.1, groups: 1 });
+  HandTests.assert(st.attached, 'force 15 above detach threshold');
+  updateGrasp(st, { force: 2, opposition: 0, groups: 0 });
+  HandTests.assert(!st.attached, 'force 2 releases');
+});
+HandTests.add('grasp: attach transform round-trips through root motion', () => {
+  const a = POSES.sphere.slice();
+  const root0 = computePose(a).world[0];
+  const obj = { type: 'sphere', pos: OBJ_DEFS.sphere.ready.slice(), quat: [0,0,0,1] };
+  const rel = relToRoot(root0, obj);
+  a[0] = 6; a[1] = 8; a[4] = 0.8; // move + yaw the wrist
+  const root1 = computePose(a).world[0];
+  const moved = applyRel(root1, rel);
+  const back = applyRel(root0, rel);
+  HandTests.assert(v3len(v3sub(back.pos, obj.pos)) < 1e-9, 'identity round-trip');
+  HandTests.assert(v3len(v3sub(moved.pos, obj.pos)) > 4, 'object follows wrist');
+});
+HandTests.add('contacts: cube grasp normals axis-aligned, sphere normals diverse', () => {
+  const ss = generateSensors();
+  const axisAligned = n => Math.max(Math.abs(n[0]), Math.abs(n[1]), Math.abs(n[2])) > 0.95;
+  const cubeObj = { type: 'cube', pos: OBJ_DEFS.cube.ready.slice(), quat: [0,0,0,1] };
+  const cubeCs = computeContacts(computePose(POSES.cube).world, ss, cubeObj);
+  HandTests.assert(cubeCs.length > 0, 'cube contacts exist');
+  const aligned = cubeCs.filter(c => axisAligned(c.n)).length;
+  HandTests.assert(aligned / cubeCs.length > 0.6, 'cube pressure follows faces/edges');
+  const sphObj = { type: 'sphere', pos: OBJ_DEFS.sphere.ready.slice(), quat: [0,0,0,1] };
+  const sphCs = computeContacts(computePose(POSES.sphere).world, ss, sphObj);
+  HandTests.assert(sphCs.some(c => !axisAligned(c.n)), 'sphere normals are radial/diverse');
+});
+HandTests.add('poses: all 27 entries within DoF limits', () => {
+  for (const k of Object.keys(POSES)) {
+    HandTests.assert(POSES[k].length === 27, k);
+    POSES[k].forEach((v, j) => HandTests.assert(
+      v >= DOF_TABLE[j].min - 1e-9 && v <= DOF_TABLE[j].max + 1e-9,
+      k + '[' + j + '] ' + DOF_TABLE[j].name));
+  }
 });
 HandTests.add('SKELETON: 17 bones, parents precede children, digits mapped', () => {
   HandTests.assert(SKELETON.length === 17);
