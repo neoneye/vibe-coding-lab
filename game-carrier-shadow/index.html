@@ -641,7 +641,13 @@ function checkOutcome(state) {
     logEvent(state, "outcome", "Two tankers lost. Mission failed.");
   }
 }
-function gradeGame(state) { return "A"; }   // real formula in Task 13
+function gradeGame(state) {
+  const r = state.resources;
+  const exited = state.ships.filter((s) => s.kind === "tanker" && s.exited).length;
+  const score = 25 * exited + 3 * (r.sorties + r.surveillance + r.refuel + r.helo)
+    - 0.5 * state.escalationPeak - 0.5 * (state.turn - 1);
+  return score >= 90 ? "A" : score >= 75 ? "B" : score >= 60 ? "C" : "D";
+}
 
 function samPhase(state) {
   const sam = state.sam;
@@ -1136,6 +1142,48 @@ CarrierTests.add("rescue: helo saves pilot, missing the window bleeds escalation
   endTurn(s2);
   assertEq(s2.escalationBleed, 1, "pilot lost bleeds escalation");
   assertEq(s2.rescue, null);
+});
+CarrierTests.add("gradeGame formula", () => {
+  const s = createGame(7);
+  s.turn = 21; s.escalationPeak = 20;
+  s.resources = { sorties: 3, surveillance: 1, refuel: 1, helo: 1 };
+  for (const id of ["t1", "t2", "t3", "t4"]) shipById(s, id).exited = true;
+  // score = 100 + 18 - 10 - 10 = 98 -> A
+  assertEq(gradeGame(s), "A");
+  shipById(s, "t4").exited = false;
+  // score = 75 + 18 - 10 - 10 = 73 -> C
+  assertEq(gradeGame(s), "C");
+});
+CarrierTests.add("scripted playthrough: sail the convoy west and win", () => {
+  const s = createGame(3);
+  s.mines = []; s.boats = [];            // clean corridor: this test locks the convoy/turn loop
+  s.drones = []; s.eFighters = [];       // no CAP prompts
+  let guard = 0;
+  while (!s.outcome && guard++ < 80) {
+    // steer only the tankers: escorts stay east so they never park on the 4 exit cells
+    for (const sh of s.ships.filter((x) => x.kind === "tanker")) {
+      while (sh.movesLeft > 0 && !sh.destroyed && !sh.exited) {
+        const cells = legalMoveCells(s, sh.id).filter((c) => c.x < sh.x);
+        if (!cells.length) break;
+        cells.sort((a, b) => Math.abs(a.y - 5) - Math.abs(b.y - 5));
+        applyAction(s, { type: "move", shipId: sh.id, x: cells[0].x, y: cells[0].y });
+      }
+    }
+    endTurn(s);
+  }
+  assert(s.outcome && s.outcome.win, `convoy should win, got ${JSON.stringify(s.outcome)}`);
+  assert(["A", "B", "C", "D"].includes(s.outcome.grade));
+});
+CarrierTests.add("full-opposition game runs 40 turns without error and stays deterministic", () => {
+  const run = (seed) => {
+    const s = createGame(seed);
+    for (let i = 0; i < 40 && !s.outcome; i++) {
+      if (s.pendingIntercept) resolveLadder(s, "observe");
+      endTurn(s);
+    }
+    return JSON.stringify(s);
+  };
+  assertEq(run(99), run(99), "identical replay");
 });
 </script>
 <script>
