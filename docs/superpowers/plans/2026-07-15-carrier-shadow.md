@@ -1578,7 +1578,9 @@ function fighterThreats(state) {
   }
 }
 function rescueDeadline(state) {
-  if (state.rescue && state.turn > state.rescue.deadline) {
+  // >= because this runs before turn++: shootdown at T (deadline T+3) expires
+  // during turn T+3's endTurn, giving exactly RESCUE_WINDOW orders phases.
+  if (state.rescue && state.turn >= state.rescue.deadline) {
     state.rescue = null;
     state.escalationBleed += 1;
     logEvent(state, "escalation", "Pilot lost. Political pressure mounts: +1 escalation per turn.");
