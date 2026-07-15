@@ -1,0 +1,1443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Colosseum Dash</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #1c1611;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    max-width: 100vw; max-height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script id="shared-code">
+"use strict";
+// ============================================================================
+// Colosseum Dash engine — pure JS, no DOM, deterministic (no Math.random).
+// Classic Boulder Dash cell simulation: single top-to-bottom left-to-right
+// scan per tick, falling/rolling objects, wall-following beasts, 3x3
+// explosions. Theme: gladiator digs arena sand for gold; lions = fireflies
+// (turn left, explode to space), elephants = butterflies (turn right,
+// explode to gold).
+// ============================================================================
+
+const T = {
+  EMPTY: 0, SAND: 1, STEEL: 2, BRICK: 3, STONE: 4, GOLD: 5,
+  PLAYER: 6, LION: 7, ELEPHANT: 8, EXIT: 9, BOOM: 10,
+};
+
+const CHAR2TYPE = {
+  " ": T.EMPTY, ".": T.SAND, "#": T.STEEL, "+": T.BRICK, "o": T.STONE,
+  "$": T.GOLD, "@": T.PLAYER, "L": T.LION, "E": T.ELEPHANT, "X": T.EXIT,
+};
+const TYPE2CHAR = {};
+for (const [c, t] of Object.entries(CHAR2TYPE)) TYPE2CHAR[t] = c;
+TYPE2CHAR[T.BOOM] = "!";
+
+// Directions: 0=up 1=right 2=down 3=left
+const DX = [0, 1, 0, -1];
+const DY = [-1, 0, 1, 0];
+const DIR = { UP: 0, RIGHT: 1, DOWN: 2, LEFT: 3, NONE: -1 };
+
+const TICK_MS = 150;
+const BOOM_TICKS = 3;
+
+// Objects a stone/gold will roll off when resting on them.
+function isRounded(t) { return t === T.STONE || t === T.GOLD || t === T.BRICK; }
+
+const LEVELS = [
+  {
+    name: "Training Grounds", numeral: "I", quota: 10, time: 100,
+    map: [
+      "##########################",
+      "#......o........o......$.#",
+      "#..$.....................#",
+      "#....++++++......o....o..#",
+      "#....+$..o+..............#",
+      "#....+.o..+....$....++++.#",
+      "#....+.++++.........+$$..#",
+      "#..o................++++.#",
+      "#..........o$............#",
+      "#...$....................#",
+      "#.@..........o...o.....$.#",
+      "#.....$..o...........o...#",
+      "#..o.......$....$........#",
+      "#........................#",
+      "###################X######",
+    ],
+  },
+  {
+    name: "The Lions' Den", numeral: "II", quota: 12, time: 120,
+    map: [
+      "##########################",
+      "#.@...................$$.#",
+      "#...o.....o......o.......#",
+      "#..++++++++....++++++++..#",
+      "#..+  L   +....+  L   +..#",
+      "#..+ .... +....+ .... +..#",
+      "#..+ .$$. +....+ .$$. +..#",
+      "#..+ .... +....+ .... +..#",
+      "#..+      +....+      +..#",
+      "#..++++.+++....+++.++++..#",
+      "#.....o......$..o........#",
+      "#.$....o...$......o....$.#",
+      "#....o.......o......o..$.#",
+      "#.$..................o.$.#",
+      "#############X############",
+    ],
+  },
+  {
+    name: "Elephant March", numeral: "III", quota: 18, time: 130,
+    map: [
+      "##########################",
+      "#.@......o.......o.......#",
+      "#...$..................$.#",
+      "#.....+++ +++++++ +++....#",
+      "#.....+  E          +....#",
+      "#.....+ ..o$...$o.. +....#",
+      "#.....+ ........... +....#",
+      "#.....+ ...$...$... +....#",
+      "#.....+ ........... +....#",
+      "#.....+         E   +....#",
+      "#.....+++++++++++++++....#",
+      "#..$...................$.#",
+      "#......o....$....o......$#",
+      "#...$.................$..#",
+      "#############X############",
+    ],
+  },
+  {
+    name: "The Emperor's Games", numeral: "IV", quota: 15, time: 90,
+    map: [
+      "##########################",
+      "#.@...o....o.....o....o.$#",
+      "#........................#",
+      "#.++++++++....++++++++++.#",
+      "#.+  L   +....+$.o$..o.+.#",
+      "#.+ .$$. +....+.o$..$..+.#",
+      "#.+      +....+++++.++++.#",
+      "#.++++.+++......o........#",
+      "#....$.....o........o..$.#",
+      "#....o......++++ +++++++.#",
+      "#...........+  E       +.#",
+      "#.$...o.o...+          +.#",
+      "#...o...$...++++++++++++.#",
+      "#.$....o.................#",
+      "#############X############",
+    ],
+  },
+];
+
+function makeGame(level, levelIndex) {
+  const rows = level.map;
+  const h = rows.length;
+  const w = rows[0].length;
+  for (let y = 0; y < h; y++) {
+    if (rows[y].length !== w) {
+      throw new Error(`ragged map row ${y}: len ${rows[y].length}, expected ${w}`);
+    }
+  }
+  const n = w * h;
+  const g = {
+    w, h, level, levelIndex: levelIndex ?? -1,
+    type: new Uint8Array(n),
+    falling: new Uint8Array(n),
+    dir: new Uint8Array(n),
+    boomStage: new Uint8Array(n),
+    boomInto: new Uint8Array(n),
+    scanned: new Uint8Array(n),
+    px: -1, py: -1, exitX: -1, exitY: -1, exitOpen: false,
+    collected: 0, quota: level.quota, timeLimit: level.time,
+    ticks: 0, state: "playing", cause: null,
+    moves: [], events: [],
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = rows[y][x];
+      const t = CHAR2TYPE[c];
+      if (t === undefined) throw new Error(`bad map char '${c}' at ${x},${y}`);
+      const i = y * w + x;
+      g.type[i] = t;
+      if (t === T.PLAYER) { g.px = x; g.py = y; }
+      if (t === T.EXIT) { g.exitX = x; g.exitY = y; }
+      if (t === T.LION) g.dir[i] = DIR.LEFT;
+      if (t === T.ELEPHANT) g.dir[i] = DIR.RIGHT;
+    }
+  }
+  if (g.px < 0) throw new Error("map has no player");
+  return g;
+}
+
+function createGame(levelIndex) {
+  return makeGame(LEVELS[levelIndex], levelIndex);
+}
+
+function timeLeft(g) {
+  return Math.max(0, g.timeLimit - Math.floor(g.ticks * TICK_MS / 1000));
+}
+
+function explode(g, cx, cy, into, cause) {
+  g.events.push(into === T.GOLD ? "goldboom" : "boom");
+  let killed = false;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x < 0 || y < 0 || x >= g.w || y >= g.h) continue;
+      const i = y * g.w + x;
+      const t = g.type[i];
+      if (t === T.STEEL || t === T.EXIT) continue;
+      if (t === T.PLAYER) killed = true;
+      g.type[i] = T.BOOM;
+      g.boomStage[i] = BOOM_TICKS;
+      g.boomInto[i] = into;
+      g.falling[i] = 0;
+      g.scanned[i] = 1;
+    }
+  }
+  if (killed) {
+    g.state = "dead";
+    g.cause = cause || "crushed";
+    g.events.push("death");
+  }
+}
+
+function moveCell(g, from, to, type) {
+  g.type[to] = type;
+  g.dir[to] = g.dir[from];
+  g.falling[to] = g.falling[from];
+  g.type[from] = T.EMPTY;
+  g.falling[from] = 0;
+  g.scanned[to] = 1;
+  g.moves.push({
+    fx: from % g.w, fy: (from / g.w) | 0,
+    tx: to % g.w, ty: (to / g.w) | 0, type,
+  });
+}
+
+function movePlayer(g, d) {
+  const nx = g.px + DX[d], ny = g.py + DY[d];
+  if (nx < 0 || ny < 0 || nx >= g.w || ny >= g.h) return;
+  const from = g.py * g.w + g.px;
+  const to = ny * g.w + nx;
+  const t = g.type[to];
+  if (t === T.EMPTY || t === T.SAND || t === T.GOLD) {
+    if (t === T.SAND) g.events.push("dig");
+    if (t === T.GOLD) {
+      g.collected++;
+      g.events.push("gold");
+      if (!g.exitOpen && g.collected >= g.quota) {
+        g.exitOpen = true;
+        g.events.push("exit-open");
+      }
+    }
+    g.dir[from] = d;
+    moveCell(g, from, to, T.PLAYER);
+    g.px = nx; g.py = ny;
+  } else if (t === T.STONE && (d === DIR.LEFT || d === DIR.RIGHT) && !g.falling[to]) {
+    const beyond = to + (d === DIR.RIGHT ? 1 : -1);
+    if (g.type[beyond] === T.EMPTY) {
+      g.moves.push({ fx: nx, fy: ny, tx: nx + DX[d], ty: ny, type: T.STONE });
+      g.type[beyond] = T.STONE;
+      g.falling[beyond] = 0;
+      g.scanned[beyond] = 1;
+      g.type[to] = T.EMPTY;
+      g.dir[from] = d;
+      moveCell(g, from, to, T.PLAYER);
+      g.px = nx; g.py = ny;
+      g.events.push("push");
+    }
+  } else if (t === T.EXIT && g.exitOpen) {
+    g.moves.push({ fx: g.px, fy: g.py, tx: nx, ty: ny, type: T.PLAYER });
+    g.type[from] = T.EMPTY;
+    g.px = nx; g.py = ny;
+    g.state = "won";
+    g.events.push("win");
+  }
+}
+
+function updateFalling(g, x, y, i) {
+  const below = i + g.w;
+  const bt = g.type[below];
+  if (bt === T.EMPTY) {
+    g.falling[i] = 1;
+    moveCell(g, i, below, g.type[i]);
+    return;
+  }
+  if (g.falling[i]) {
+    if (bt === T.PLAYER) { explode(g, x, y + 1, T.EMPTY, "crushed"); return; }
+    if (bt === T.LION) { explode(g, x, y + 1, T.EMPTY, null); return; }
+    if (bt === T.ELEPHANT) { explode(g, x, y + 1, T.GOLD, null); return; }
+  }
+  if (isRounded(bt)) {
+    const li = i - 1, ri = i + 1;
+    if (g.type[li] === T.EMPTY && g.type[li + g.w] === T.EMPTY) {
+      g.falling[i] = 1;
+      moveCell(g, i, li, g.type[i]);
+      return;
+    }
+    if (g.type[ri] === T.EMPTY && g.type[ri + g.w] === T.EMPTY) {
+      g.falling[i] = 1;
+      moveCell(g, i, ri, g.type[i]);
+      return;
+    }
+  }
+  if (g.falling[i]) {
+    g.falling[i] = 0;
+    g.events.push("thud");
+  }
+}
+
+function updateBeast(g, x, y, i) {
+  const isLion = g.type[i] === T.LION;
+  // Explode when touching the gladiator (4-neighborhood).
+  for (let d = 0; d < 4; d++) {
+    const nx = x + DX[d], ny = y + DY[d];
+    if (nx < 0 || ny < 0 || nx >= g.w || ny >= g.h) continue;
+    if (g.type[ny * g.w + nx] === T.PLAYER) {
+      explode(g, x, y, isLion ? T.EMPTY : T.GOLD, "beast");
+      return;
+    }
+  }
+  const d = g.dir[i];
+  // Lions hug the left wall (try left turn first); elephants the right.
+  const first = isLion ? (d + 3) % 4 : (d + 1) % 4;
+  const canGo = (dd) => {
+    const nx = x + DX[dd], ny = y + DY[dd];
+    if (nx < 0 || ny < 0 || nx >= g.w || ny >= g.h) return false;
+    return g.type[ny * g.w + nx] === T.EMPTY;
+  };
+  if (canGo(first)) {
+    g.dir[i] = first;
+    moveCell(g, i, (y + DY[first]) * g.w + (x + DX[first]), g.type[i]);
+  } else if (canGo(d)) {
+    moveCell(g, i, (y + DY[d]) * g.w + (x + DX[d]), g.type[i]);
+  } else {
+    g.dir[i] = isLion ? (d + 1) % 4 : (d + 3) % 4;
+  }
+}
+
+// One simulation step. inputDir: DIR.* or DIR.NONE. Returns the game.
+// Keeps ticking explosions while state === "dead" so death animates.
+function tick(g, inputDir = DIR.NONE) {
+  if (g.state !== "playing" && g.state !== "dead") return g;
+  g.moves = [];
+  g.events = [];
+  g.scanned.fill(0);
+  if (g.state === "playing") {
+    g.ticks++;
+    if (timeLeft(g) <= 0) {
+      explode(g, g.px, g.py, T.EMPTY, "time");
+    } else if (inputDir >= 0) {
+      movePlayer(g, inputDir);
+    }
+  }
+  for (let y = 0; y < g.h; y++) {
+    for (let x = 0; x < g.w; x++) {
+      const i = y * g.w + x;
+      if (g.scanned[i]) continue;
+      const t = g.type[i];
+      if (t === T.BOOM) {
+        if (--g.boomStage[i] <= 0) {
+          g.type[i] = g.boomInto[i];
+          g.falling[i] = 0;
+        }
+      } else if (t === T.STONE || t === T.GOLD) {
+        updateFalling(g, x, y, i);
+      } else if (t === T.LION || t === T.ELEPHANT) {
+        updateBeast(g, x, y, i);
+      }
+    }
+  }
+  return g;
+}
+
+function serialize(g) {
+  const out = [];
+  for (let y = 0; y < g.h; y++) {
+    let row = "";
+    for (let x = 0; x < g.w; x++) row += TYPE2CHAR[g.type[y * g.w + x]];
+    out.push(row);
+  }
+  return out.join("\n");
+}
+
+// ============================================================================
+// Tests — run via `node test.mjs` (extracts this block).
+// ============================================================================
+
+const ColosseumTests = {
+  fixture(rows, opts = {}) {
+    return makeGame({ name: "fixture", numeral: "T", quota: opts.quota ?? 99, time: opts.time ?? 999, map: rows });
+  },
+
+  run() {
+    const results = [];
+    const test = (name, fn) => {
+      try { fn(); results.push([name, null]); }
+      catch (e) { results.push([name, e]); }
+    };
+    const assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
+    const assertGrid = (g, rows, msg) => {
+      const got = serialize(g);
+      const want = rows.join("\n");
+      if (got !== want) throw new Error(`${msg || "grid mismatch"}\nwant:\n${want}\ngot:\n${got}`);
+    };
+    const F = (rows, opts) => this.fixture(rows, opts);
+
+    test("stone falls through empty and rests on sand", () => {
+      const g = F([
+        "#####",
+        "# o #",
+        "#   #",
+        "#..@#",
+        "#####",
+      ]);
+      tick(g);
+      assertGrid(g, ["#####", "#   #", "# o #", "#..@#", "#####"], "after 1 tick");
+      assert(g.falling[2 * 5 + 2] === 1, "stone marked falling");
+      tick(g);
+      assertGrid(g, ["#####", "#   #", "# o #", "#..@#", "#####"], "resting on sand");
+      assert(g.falling[2 * 5 + 2] === 0, "stone no longer falling");
+      assert(g.events.includes("thud"), "thud event on landing");
+    });
+
+    test("gold falls like a stone", () => {
+      const g = F([
+        "#####",
+        "# $ #",
+        "#   #",
+        "#..@#",
+        "#####",
+      ]);
+      tick(g);
+      assert(serialize(g).split("\n")[2] === "# $ #", "gold fell one cell");
+    });
+
+    test("stone rolls off a rounded object", () => {
+      const g = F([
+        "#####",
+        "# o #",
+        "# o #",
+        "#..@#",
+        "#####",
+      ]);
+      tick(g); // top stone rolls left off the lower stone
+      assertGrid(g, ["#####", "#o  #", "# o #", "#..@#", "#####"], "rolled left");
+      tick(g); // and falls down the gap
+      assertGrid(g, ["#####", "#   #", "#oo #", "#..@#", "#####"], "fell after roll");
+      tick(g);
+      assert(serialize(g).split("\n")[2] === "#oo #", "both settled side by side");
+    });
+
+    test("stone does not roll when sides blocked", () => {
+      const g = F([
+        "#####",
+        "#+o+#",
+        "#+o+#",
+        "#..@#",
+        "#####",
+      ]);
+      tick(g);
+      assertGrid(g, ["#####", "#+o+#", "#+o+#", "#..@#", "#####"], "stack stays");
+    });
+
+    test("falling stone crushes lion into empty explosion", () => {
+      const g = F([
+        "#######",
+        "#  o  #",
+        "#     #",
+        "#..L..#",
+        "#.....#",
+        "#..@..#",
+        "#######",
+      ]);
+      tick(g); // stone falls to row 2, falling=1
+      tick(g); // stone lands on lion -> explosion
+      assert(serialize(g).includes("!"), "explosion cells present");
+      for (let k = 0; k < BOOM_TICKS; k++) tick(g);
+      const s = serialize(g).split("\n");
+      assert(!serialize(g).includes("L"), "lion gone");
+      assert(!serialize(g).includes("!"), "explosion cleared");
+      assert(s[3] === "#.   .#", "explosion left empty space");
+    });
+
+    test("falling stone crushes elephant into gold", () => {
+      const g = F([
+        "#######",
+        "#  o  #",
+        "#     #",
+        "#..E..#",
+        "#.....#",
+        "#..@..#",
+        "#######",
+      ]);
+      tick(g);
+      tick(g);
+      for (let k = 0; k < BOOM_TICKS; k++) tick(g);
+      const s = serialize(g);
+      assert(!s.includes("E"), "elephant gone");
+      assert((s.match(/\$/g) || []).length >= 6, `gold rains from elephant, got:\n${s}`);
+    });
+
+    test("falling stone kills the gladiator", () => {
+      const g = F([
+        "#####",
+        "# o #",
+        "#   #",
+        "# @ #",
+        "#####",
+      ]);
+      tick(g);
+      tick(g);
+      assert(g.state === "dead", "player dead");
+      assert(g.cause === "crushed", "cause is crushed");
+    });
+
+    test("stationary stone on head does not kill", () => {
+      const g = F([
+        "#####",
+        "# o #",
+        "# @ #",
+        "# . #",
+        "#####",
+      ]);
+      tick(g);
+      assert(g.state === "playing", "stone never fell, player alive");
+    });
+
+    test("lion follows left-hand wall around a ring", () => {
+      const g = F([
+        "#######",
+        "#L    #",
+        "# ### #",
+        "#     #",
+        "#######",
+        "#.@...#",
+        "#######",
+      ]);
+      // Ring corridor is the empty cells; lion should loop and revisit start.
+      const start = serialize(g).indexOf("L");
+      const positions = new Set();
+      let returned = false;
+      for (let k = 0; k < 40; k++) {
+        tick(g);
+        const p = serialize(g).indexOf("L");
+        positions.add(p);
+        if (k > 2 && p === start) { returned = true; break; }
+      }
+      assert(returned, "lion returned to start (loops)");
+      assert(positions.size >= 6, `lion visited ${positions.size} cells`);
+    });
+
+    test("lion adjacent to gladiator explodes and kills", () => {
+      const g = F([
+        "#####",
+        "#@L #",
+        "#...#",
+        "#...#",
+        "#####",
+      ]);
+      tick(g);
+      assert(g.state === "dead", "player dead from lion");
+      assert(g.cause === "beast", "cause is beast");
+    });
+
+    test("collecting quota opens exit; entering wins", () => {
+      const g = F([
+        "#####",
+        "#@$X#",
+        "#####",
+      ], { quota: 1 });
+      tick(g, DIR.RIGHT);
+      assert(g.collected === 1, "gold collected");
+      assert(g.exitOpen, "exit open at quota");
+      assert(g.events.includes("exit-open"), "exit-open event");
+      tick(g, DIR.RIGHT);
+      assert(g.state === "won", "entered exit and won");
+    });
+
+    test("closed exit blocks the gladiator", () => {
+      const g = F([
+        "#####",
+        "#@X$#",
+        "#####",
+      ], { quota: 1 });
+      tick(g, DIR.RIGHT);
+      assert(g.px === 1 && g.state === "playing", "blocked by closed exit");
+    });
+
+    test("push stone into empty; refuse when blocked", () => {
+      const g = F([
+        "######",
+        "#@o .#",
+        "######",
+      ]);
+      tick(g, DIR.RIGHT);
+      assert(serialize(g).split("\n")[1] === "# @o.#", "stone pushed right");
+      const g2 = F([
+        "#####",
+        "#@o##",
+        "#####",
+      ]);
+      tick(g2, DIR.RIGHT);
+      assert(g2.px === 1, "push refused when blocked");
+    });
+
+    test("timer runs out kills player", () => {
+      const g = F([
+        "####",
+        "#@X#",
+        "####",
+      ], { time: 1 });
+      const need = Math.ceil(1000 / TICK_MS) + 1;
+      for (let k = 0; k < need + BOOM_TICKS + 1; k++) tick(g);
+      assert(g.state === "dead" && g.cause === "time", "died from timeout");
+    });
+
+    test("deterministic: identical input scripts give identical states", () => {
+      const script = [];
+      const dirs = [DIR.DOWN, DIR.RIGHT, DIR.RIGHT, DIR.DOWN, DIR.LEFT, DIR.UP];
+      for (let k = 0; k < 300; k++) script.push(dirs[k % dirs.length]);
+      const runOnce = () => {
+        const g = createGame(0);
+        for (const d of script) tick(g, d);
+        return serialize(g) + `|${g.collected}|${g.state}`;
+      };
+      assert(runOnce() === runOnce(), "two runs identical");
+    });
+
+    test("all shipped levels are valid and winnable on paper", () => {
+      for (let li = 0; li < LEVELS.length; li++) {
+        const g = createGame(li); // throws on ragged rows / bad chars
+        if (g.exitX < 0) throw new Error(`level ${li} has no exit`);
+        let gold = 0, elephants = 0;
+        for (let i = 0; i < g.w * g.h; i++) {
+          if (g.type[i] === T.GOLD) gold++;
+          if (g.type[i] === T.ELEPHANT) elephants++;
+        }
+        const potential = gold + elephants * 9;
+        if (potential < LEVELS[li].quota) {
+          throw new Error(`level ${li} quota ${LEVELS[li].quota} > potential gold ${potential}`);
+        }
+      }
+    });
+
+    test("level 1 is winnable: scripted walkthrough reaches the exit", () => {
+      const U = DIR.UP, R = DIR.RIGHT, D = DIR.DOWN, L = DIR.LEFT;
+      const script = [
+        U, R, R,                            // gold at (4,9)
+        D, D, R, R,                         // gold at (6,11)
+        D, R, R, R, R, R,                   // gold at (11,12)
+        R, R, R, R, R,                      // gold at (16,12)
+        R, R, R, U, U, R, R, R, R,          // gold at (23,10)
+        U, R, U, U, U, L, L, L,             // pocket gold at (22,6) and (21,6)
+        R, R, R, U, U, U, U, U, L,          // gold at (23,1)
+        D, D, D, L, L, L, L, L, L, L, D, L, // gold at (15,5)
+        D, D, D, L, L, L,                   // gold at (12,8) -> quota reached
+        D, D, D, D, D,                      // descend clear of the stone at (13,10)
+        R, R, R, R, R, R, R, D,             // walk to the portcullis
+      ];
+      const g = createGame(0);
+      for (const d of script) {
+        tick(g, d);
+        if (g.state !== "playing") break;
+      }
+      assert(g.collected >= g.quota, `collected ${g.collected}/${g.quota}`);
+      assert(g.state === "won", `expected won, got ${g.state} (${g.cause || "-"})`);
+    });
+
+    test("levels are stable: 300 idle ticks kill nobody", () => {
+      for (let li = 0; li < LEVELS.length; li++) {
+        const g = createGame(li);
+        const beasts0 = serialize(g).split("").filter((c) => c === "L" || c === "E").length;
+        for (let k = 0; k < 300; k++) tick(g);
+        assert(g.state === "playing", `level ${li}: player died idle (${g.cause})`);
+        const beasts1 = serialize(g).split("").filter((c) => c === "L" || c === "E").length;
+        assert(beasts1 === beasts0, `level ${li}: beasts died without player action`);
+      }
+    });
+
+    let ok = true;
+    for (const [name, err] of results) {
+      if (err) {
+        ok = false;
+        console.error(`FAIL  ${name}\n      ${err.message.split("\n").join("\n      ")}`);
+      } else {
+        console.log(`ok    ${name}`);
+      }
+    }
+    console.log(ok ? `\n${results.length} tests passed` : `\nFAILURES`);
+    return ok;
+  },
+};
+</script>
+
+<script>
+"use strict";
+// ============================================================================
+// Presentation: canvas renderer, Colosseum stands with animated audience,
+// procedural pixel-art sprites, WebAudio sfx, input and game flow.
+// ============================================================================
+
+(() => {
+  const TILE = 24;
+  const PF_TW = 26, PF_TH = 15;           // playfield in tiles (all levels)
+  const PF_W = PF_TW * TILE, PF_H = PF_TH * TILE;
+  const STAND = 84;                        // stands margin on all sides
+  const HUD_H = 30;
+  const CW = PF_W + STAND * 2;             // 792
+  const CH = PF_H + STAND * 2 + HUD_H;     // 558
+  const PF_X = STAND, PF_Y = STAND + HUD_H;
+
+  const canvas = document.getElementById("game");
+  canvas.width = CW; canvas.height = CH;
+  const ctx = canvas.getContext("2d");
+
+  function fitCanvas() {
+    const s = Math.min(window.innerWidth / CW, window.innerHeight / CH);
+    canvas.style.width = `${Math.floor(CW * s)}px`;
+    canvas.style.height = `${Math.floor(CH * s)}px`;
+  }
+  window.addEventListener("resize", fitCanvas);
+  fitCanvas();
+
+  // ---- deterministic hash for per-cell texture variation ----
+  function hash(x, y, salt = 0) {
+    let h = (x * 374761393 + y * 668265263 + salt * 1442695041) | 0;
+    h = (h ^ (h >> 13)) * 1274126177 | 0;
+    return ((h ^ (h >> 16)) >>> 0) / 4294967296;
+  }
+
+  // ==========================================================================
+  // Sprites — each drawn procedurally into an offscreen canvas, some with
+  // multiple animation frames.
+  // ==========================================================================
+  function sprite(draw, frames = 1) {
+    const cvs = [];
+    for (let f = 0; f < frames; f++) {
+      const c = document.createElement("canvas");
+      c.width = TILE; c.height = TILE;
+      const g = c.getContext("2d");
+      draw(g, f);
+      cvs.push(c);
+    }
+    return cvs;
+  }
+  function px(g, x, y, w, h, color) { g.fillStyle = color; g.fillRect(x, y, w, h); }
+
+  const SPR = {};
+
+  SPR.sand = sprite((g) => {
+    px(g, 0, 0, TILE, TILE, "#c9a25e");
+    for (let k = 0; k < 26; k++) {
+      const x = Math.floor(hash(k, 7) * TILE), y = Math.floor(hash(3, k) * TILE);
+      px(g, x, y, 2, 2, hash(k, k) < 0.5 ? "#b78d4c" : "#dcb772");
+    }
+    px(g, 0, 0, TILE, 2, "#d8b26c");
+  });
+
+  SPR.empty = sprite((g) => {
+    px(g, 0, 0, TILE, TILE, "#6b5636");
+    for (let k = 0; k < 10; k++) {
+      const x = Math.floor(hash(k, 31) * TILE), y = Math.floor(hash(17, k) * TILE);
+      px(g, x, y, 2, 1, "#61492e");
+    }
+  });
+
+  SPR.steel = sprite((g) => {
+    px(g, 0, 0, TILE, TILE, "#7d7668");
+    px(g, 0, 0, TILE, 11, "#877f70");
+    px(g, 0, 11, TILE, 2, "#5a5347");
+    px(g, 0, 23, TILE, 1, "#5a5347");
+    px(g, 11, 2, 2, 9, "#5a5347");
+    px(g, 4, 13, 2, 10, "#5a5347");
+    px(g, 18, 13, 2, 10, "#5a5347");
+    px(g, 0, 0, TILE, 2, "#9a9181");
+  });
+
+  SPR.brick = sprite((g) => {
+    px(g, 0, 0, TILE, TILE, "#b56a42");
+    px(g, 0, 0, TILE, 1, "#cf8657");
+    px(g, 0, 7, TILE, 2, "#7e4526");
+    px(g, 0, 15, TILE, 2, "#7e4526");
+    px(g, 0, 23, TILE, 1, "#7e4526");
+    px(g, 8, 0, 2, 7, "#7e4526");
+    px(g, 16, 9, 2, 6, "#7e4526");
+    px(g, 6, 17, 2, 6, "#7e4526");
+  });
+
+  SPR.stone = sprite((g) => {
+    // column drum seen from above: fluted disc
+    px(g, 0, 0, TILE, TILE, "rgba(0,0,0,0)");
+    g.fillStyle = "rgba(40,28,14,0.35)";
+    g.beginPath(); g.ellipse(13, 14, 10, 9, 0, 0, 7); g.fill();
+    g.fillStyle = "#cfc6b6";
+    g.beginPath(); g.arc(12, 11, 10, 0, 7); g.fill();
+    g.fillStyle = "#e6ded0";
+    g.beginPath(); g.arc(10, 9, 7, 0, 7); g.fill();
+    g.strokeStyle = "#a99f8d"; g.lineWidth = 1;
+    for (let a = 0; a < 8; a++) {
+      const ang = a * Math.PI / 4 + 0.3;
+      g.beginPath();
+      g.moveTo(12 + Math.cos(ang) * 4, 11 + Math.sin(ang) * 4);
+      g.lineTo(12 + Math.cos(ang) * 9.5, 11 + Math.sin(ang) * 9.5);
+      g.stroke();
+    }
+    g.strokeStyle = "#8e8371";
+    g.beginPath(); g.arc(12, 11, 9.6, 0, 7); g.stroke();
+    g.fillStyle = "#f4eee2";
+    g.beginPath(); g.arc(9, 8, 2.4, 0, 7); g.fill();
+  });
+
+  SPR.gold = sprite((g, f) => {
+    const coin = (x, y, r) => {
+      g.fillStyle = "#8a5a12";
+      g.beginPath(); g.arc(x + 1, y + 1, r, 0, 7); g.fill();
+      g.fillStyle = "#f5c93c";
+      g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+      g.fillStyle = "#ffe98a";
+      g.beginPath(); g.arc(x - r * 0.3, y - r * 0.3, r * 0.45, 0, 7); g.fill();
+      g.strokeStyle = "#c79a1e";
+      g.beginPath(); g.arc(x, y, r * 0.7, 0, 7); g.stroke();
+    };
+    coin(8, 17, 5); coin(16, 17, 5); coin(12, 10, 6);
+    // sparkle rotates through frames
+    const sx = [5, 19, 12, 8][f], sy = [7, 9, 4, 14][f];
+    px(g, sx - 1, sy - 4, 2, 8, "#ffffff");
+    px(g, sx - 4, sy - 1, 8, 2, "#ffffff");
+  }, 4);
+
+  SPR.exitClosed = sprite((g) => {
+    px(g, 0, 0, TILE, TILE, "#2a2118");
+    g.fillStyle = "#6f675a";
+    for (let x = 2; x < TILE; x += 5) px(g, x, 0, 2, TILE, "#6f675a");
+    for (let y = 3; y < TILE; y += 6) px(g, 0, y, TILE, 2, "#7d7668");
+    px(g, 0, 0, TILE, 2, "#9a9181");
+  });
+
+  SPR.exitOpen = sprite((g, f) => {
+    px(g, 0, 0, TILE, TILE, f ? "#ffd54a" : "#b8860b");
+    px(g, 3, 3, TILE - 6, TILE - 6, f ? "#fff3b0" : "#ffd54a");
+    px(g, 0, 0, TILE, 3, "#6f675a");
+    for (let x = 2; x < TILE; x += 5) px(g, x, 0, 2, 5, "#6f675a");
+  }, 2);
+
+  SPR.player = sprite((g, f) => {
+    const legL = f === 0 ? 2 : 4, legR = f === 0 ? 4 : 2;
+    // legs
+    px(g, 8, 24 - legL, 3, legL, "#8a5a3a");
+    px(g, 13, 24 - legR, 3, legR, "#8a5a3a");
+    // tunic
+    px(g, 6, 12, 12, 9, "#a32222");
+    px(g, 6, 12, 12, 2, "#c33a3a");
+    // belt
+    px(g, 6, 17, 12, 2, "#e0b64c");
+    // arms: shield (left), sword (right)
+    px(g, 2, 12, 4, 7, "#3f6ea5");   // shield
+    px(g, 3, 13, 2, 5, "#6f9cd0");
+    px(g, 18, 9, 2, 9, "#c8c8c8");   // sword blade
+    px(g, 17, 16, 4, 2, "#8a5a12");  // hilt
+    // head + helmet with crest
+    px(g, 8, 5, 8, 7, "#e0a878");
+    px(g, 7, 3, 10, 4, "#b08d2a");
+    px(g, 7, 3, 10, 1, "#d8b64c");
+    px(g, 10, 0, 4, 4, "#c22");      // crest
+    px(g, 9, 8, 2, 2, "#442");       // eyes
+    px(g, 13, 8, 2, 2, "#442");
+  }, 2);
+
+  SPR.lion = sprite((g, f) => {
+    // body
+    px(g, 3, 11, 15, 8, "#c9913c");
+    px(g, 3, 11, 15, 2, "#dba852");
+    // legs
+    const o = f ? 1 : 0;
+    px(g, 4 + o, 19, 3, 4, "#b07c2e");
+    px(g, 13 - o, 19, 3, 4, "#b07c2e");
+    // tail with tuft
+    px(g, 1, 9 + o, 2, 6, "#b07c2e");
+    px(g, 0, 7 + o, 3, 3, "#7a4d16");
+    // mane
+    g.fillStyle = "#8a5514";
+    g.beginPath(); g.arc(17, 11, 7, 0, 7); g.fill();
+    // face
+    g.fillStyle = "#dba852";
+    g.beginPath(); g.arc(17, 11, 4.5, 0, 7); g.fill();
+    px(g, 15, 9, 2, 2, "#301c05");
+    px(g, 19, 9, 2, 2, "#301c05");
+    px(g, 17, 12, 2, 2, "#5a3a0e");
+    // ears
+    px(g, 12, 4, 3, 3, "#8a5514");
+    px(g, 19, 4, 3, 3, "#8a5514");
+  }, 2);
+
+  SPR.elephant = sprite((g, f) => {
+    const o = f ? 1 : 0;
+    // body
+    px(g, 2, 8, 16, 11, "#8f959e");
+    px(g, 2, 8, 16, 2, "#a6acb5");
+    // legs
+    px(g, 3 + o, 19, 4, 5, "#7c828b");
+    px(g, 12 - o, 19, 4, 5, "#7c828b");
+    // head
+    px(g, 14, 5, 9, 10, "#8f959e");
+    // ear
+    g.fillStyle = "#767c85";
+    g.beginPath(); g.arc(15, 10, 5, 0, 7); g.fill();
+    // trunk
+    px(g, 21, 12, 3, 8 + o, "#8f959e");
+    px(g, 20, 18 + o, 3, 3, "#8f959e");
+    // tusk
+    px(g, 19, 14, 2, 4, "#f2ead6");
+    // eye
+    px(g, 19, 8, 2, 2, "#26262c");
+  }, 2);
+
+  SPR.boomA = sprite((g) => {
+    g.fillStyle = "#ff9a2a";
+    g.beginPath(); g.arc(12, 12, 11, 0, 7); g.fill();
+    g.fillStyle = "#ffd54a";
+    g.beginPath(); g.arc(12, 12, 8, 0, 7); g.fill();
+    g.fillStyle = "#fff7d0";
+    g.beginPath(); g.arc(12, 12, 4, 0, 7); g.fill();
+  });
+  SPR.boomB = sprite((g) => {
+    g.strokeStyle = "#ff9a2a"; g.lineWidth = 3;
+    g.beginPath(); g.arc(12, 12, 9, 0, 7); g.stroke();
+    g.strokeStyle = "#b3541e"; g.lineWidth = 2;
+    g.beginPath(); g.arc(12, 12, 11.2, 0, 7); g.stroke();
+  });
+
+  // ==========================================================================
+  // Audience — spectators generated once, animated every frame.
+  // ==========================================================================
+  const TUNICS = ["#b8433a", "#3e6fa3", "#c2953a", "#5d8a48", "#8a5aa0",
+                  "#c26f3a", "#4a8a86", "#a04a6a", "#7a7a4a", "#4a5aa0"];
+  const SKINS = ["#e8b98a", "#c9955e", "#a06a3c", "#7c4c28"];
+  const spectators = [];
+  (function buildAudience() {
+    let id = 0;
+    const add = (x, y, depth) => {
+      spectators.push({
+        x, y, depth,
+        tunic: TUNICS[Math.floor(hash(id, 1) * TUNICS.length)],
+        skin: SKINS[Math.floor(hash(id, 2) * SKINS.length)],
+        phase: hash(id, 3) * Math.PI * 2,
+        zeal: 0.5 + hash(id, 4),           // how eagerly they cheer
+      });
+      id++;
+    };
+    // top stands: 3 tiers above playfield (leave gap for emperor box)
+    for (let tier = 0; tier < 3; tier++) {
+      const y = PF_Y - 16 - tier * 22;
+      for (let x = PF_X - STAND + 14 + (tier % 2) * 7; x < PF_X + PF_W + STAND - 14; x += 14) {
+        if (Math.abs(x - CW / 2) < 64 && tier < 2) continue; // emperor box
+        add(x, y, tier);
+      }
+    }
+    // bottom stands: 3 tiers
+    for (let tier = 0; tier < 3; tier++) {
+      const y = PF_Y + PF_H + 22 + tier * 22;
+      for (let x = PF_X - STAND + 14 + (tier % 2) * 7; x < PF_X + PF_W + STAND - 14; x += 14) {
+        add(x, y, tier);
+      }
+    }
+    // side stands: 3 columns each
+    for (let tier = 0; tier < 3; tier++) {
+      for (let y = PF_Y + 18 + (tier % 2) * 8; y < PF_Y + PF_H - 6; y += 17) {
+        add(PF_X - 16 - tier * 22, y, tier);
+        add(PF_X + PF_W + 16 + tier * 22, y, tier);
+      }
+    }
+  })();
+
+  function drawStandsBase() {
+    // full backdrop
+    px(ctx, 0, 0, CW, CH, "#2b241c");
+    // tier steps (concentric rectangles)
+    const tiers = [
+      { pad: 0, c: "#4a4033" },
+      { pad: 26, c: "#564a3a" },
+      { pad: 52, c: "#635543" },
+    ];
+    for (const t of tiers) {
+      px(ctx, t.pad, HUD_H + t.pad, CW - t.pad * 2, CH - HUD_H - t.pad * 2, t.c);
+    }
+    // arena wall ring just outside the playfield
+    px(ctx, PF_X - 8, PF_Y - 8, PF_W + 16, PF_H + 16, "#8a8071");
+    px(ctx, PF_X - 8, PF_Y - 8, PF_W + 16, 3, "#a39a89");
+    px(ctx, PF_X - 4, PF_Y - 4, PF_W + 8, PF_H + 8, "#3a3128");
+  }
+
+  function drawAudience(t, cheer, thumb) {
+    for (const s of spectators) {
+      const excited = Math.min(1, cheer * s.zeal);
+      const bob = Math.sin(t * 0.004 * (1 + excited * 2) + s.phase);
+      const y = s.y + bob * (1 + excited * 2.5);
+      // body
+      ctx.fillStyle = s.tunic;
+      ctx.fillRect(s.x - 4, y - 3, 8, 7);
+      // head
+      ctx.fillStyle = s.skin;
+      ctx.beginPath(); ctx.arc(s.x, y - 6, 3, 0, 7); ctx.fill();
+      // arms up when cheering
+      if (excited > 0.45 && bob > -0.2) {
+        ctx.strokeStyle = s.skin; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(s.x - 4, y - 2); ctx.lineTo(s.x - 7, y - 9);
+        ctx.moveTo(s.x + 4, y - 2); ctx.lineTo(s.x + 7, y - 9);
+        ctx.stroke();
+      }
+    }
+    // emperor's box, top center
+    const bx = CW / 2, by = HUD_H + 30;
+    px(ctx, bx - 58, by - 14, 116, 46, "#57306b");
+    px(ctx, bx - 58, by - 14, 116, 5, "#e0b64c");
+    px(ctx, bx - 58, by + 28, 116, 4, "#e0b64c");
+    px(ctx, bx - 52, by - 26, 8, 14, "#e0b64c");   // banner poles
+    px(ctx, bx + 44, by - 26, 8, 14, "#e0b64c");
+    px(ctx, bx - 50, by - 30, 4, 10, "#a32222");
+    px(ctx, bx + 46, by - 30, 4, 10, "#a32222");
+    // emperor: white toga, laurel
+    ctx.fillStyle = "#ece6da";
+    ctx.fillRect(bx - 7, by + 2, 14, 22);
+    ctx.fillStyle = "#e8b98a";
+    ctx.beginPath(); ctx.arc(bx, by - 2, 6, 0, 7); ctx.fill();
+    ctx.strokeStyle = "#6d8a3a"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(bx, by - 3, 6.5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+    // verdict arm
+    if (thumb !== 0) {
+      ctx.strokeStyle = "#e8b98a"; ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(bx + 7, by + 8);
+      ctx.lineTo(bx + 18, thumb > 0 ? by - 2 : by + 18);
+      ctx.stroke();
+      ctx.fillStyle = thumb > 0 ? "#e0b64c" : "#a32222";
+      ctx.fillRect(bx + 15, (thumb > 0 ? by - 8 : by + 16), 7, 7);
+    }
+  }
+
+  // ==========================================================================
+  // Audio — WebAudio synth sfx, lazy context.
+  // ==========================================================================
+  let ac = null, muted = false, noiseBuf = null;
+  function audio() {
+    if (!ac) {
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (ac.state === "suspended") ac.resume();
+    return ac;
+  }
+  function env(gainNode, t0, peak, dur) {
+    gainNode.gain.setValueAtTime(0.0001, t0);
+    gainNode.gain.exponentialRampToValueAtTime(peak, t0 + 0.01);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  }
+  function blip(freq, dur, type = "square", peak = 0.12, slide = 0) {
+    if (muted) return;
+    const a = audio(), t0 = a.currentTime;
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t0);
+    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t0 + dur);
+    env(g, t0, peak, dur);
+    o.connect(g).connect(a.destination);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  function noise(dur, filterFreq, peak = 0.2, sweepTo = 0) {
+    if (muted) return;
+    const a = audio(), t0 = a.currentTime;
+    const src = a.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    const f = a.createBiquadFilter(); f.type = "lowpass";
+    f.frequency.setValueAtTime(filterFreq, t0);
+    if (sweepTo) f.frequency.exponentialRampToValueAtTime(sweepTo, t0 + dur);
+    const g = a.createGain();
+    env(g, t0, peak, dur);
+    src.connect(f).connect(g).connect(a.destination);
+    src.start(t0); src.stop(t0 + dur + 0.05);
+  }
+  const SFX = {
+    dig: () => noise(0.08, 900, 0.10),
+    gold: () => { blip(880, 0.09, "sine", 0.10); setTimeout(() => blip(1320, 0.14, "sine", 0.10), 60); },
+    push: () => noise(0.12, 300, 0.12),
+    thud: () => { blip(90, 0.12, "sine", 0.16, -40); noise(0.09, 220, 0.10); },
+    boom: () => { noise(0.5, 1600, 0.25, 120); blip(60, 0.4, "sawtooth", 0.10, -30); },
+    goldboom: () => { noise(0.4, 1600, 0.2, 200); setTimeout(() => SFX.gold(), 160); },
+    "exit-open": () => [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.16, "triangle", 0.12), i * 110)),
+    win: () => [523, 659, 784, 1047, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.2, "triangle", 0.13), i * 130)),
+    death: () => [400, 300, 220, 150].forEach((f, i) => setTimeout(() => blip(f, 0.2, "sawtooth", 0.10), i * 140)),
+    cheer: () => noise(0.9, 2500, 0.14, 600),
+    tick: () => blip(1200, 0.05, "square", 0.06),
+  };
+
+  // ==========================================================================
+  // Game flow
+  // ==========================================================================
+  let mode = "title";       // title | intro | play | deathwait | gameover | victory
+  let game = null;
+  let levelIndex = 0;
+  let lives = 3;
+  let score = 0;
+  let cheer = 0;             // 0..1 crowd excitement
+  let thumb = 0;             // emperor: -1 down, 0 none, 1 up
+  let modeTimer = 0;
+  let deathTicks = 0;
+  let acc = 0, lastTs = 0;
+
+  // input: stack of held directions, most recent wins
+  const held = [];
+  const KEYD = {
+    ArrowUp: DIR.UP, ArrowRight: DIR.RIGHT, ArrowDown: DIR.DOWN, ArrowLeft: DIR.LEFT,
+    w: DIR.UP, d: DIR.RIGHT, s: DIR.DOWN, a: DIR.LEFT,
+    W: DIR.UP, D: DIR.RIGHT, S: DIR.DOWN, A: DIR.LEFT,
+  };
+  window.addEventListener("keydown", (e) => {
+    if (e.repeat) return;
+    const d = KEYD[e.key];
+    if (d !== undefined) {
+      e.preventDefault();
+      const i = held.indexOf(d);
+      if (i >= 0) held.splice(i, 1);
+      held.push(d);
+    } else if (e.key === "Enter") {
+      advance();
+    } else if (e.key === "r" || e.key === "R") {
+      if (mode === "play") loseLife("retreat");
+    } else if (e.key === "m" || e.key === "M") {
+      muted = !muted;
+    } else if (e.key === "p" || e.key === "P") {
+      if (mode === "play") mode = "pause";
+      else if (mode === "pause") mode = "play";
+    }
+    audio();
+  });
+  window.addEventListener("keyup", (e) => {
+    const d = KEYD[e.key];
+    if (d !== undefined) {
+      const i = held.indexOf(d);
+      if (i >= 0) held.splice(i, 1);
+    }
+  });
+
+  function currentDir() { return held.length ? held[held.length - 1] : DIR.NONE; }
+
+  function startLevel() {
+    game = createGame(levelIndex);
+    mode = "intro";
+    modeTimer = 0;
+    thumb = 0;
+    deathTicks = 0;
+  }
+
+  function advance() {
+    if (mode === "title") { levelIndex = 0; lives = 3; score = 0; startLevel(); }
+    else if (mode === "intro") { mode = "play"; }
+    else if (mode === "gameover" || mode === "victory") { mode = "title"; }
+  }
+
+  function loseLife(cause) {
+    lives--;
+    thumb = -1;
+    SFX.death();
+    if (lives <= 0) {
+      mode = "gameover";
+    } else {
+      mode = "deathwait";
+    }
+    modeTimer = 0;
+  }
+
+  function handleEvents(evts) {
+    for (const ev of evts) {
+      if (ev === "gold") { score += 10; cheer = Math.min(1, cheer + 0.35); SFX.gold(); if (cheer > 0.6) SFX.cheer(); }
+      else if (ev === "goldboom") { score += 25; cheer = 1; SFX.goldboom(); SFX.cheer(); }
+      else if (ev === "boom") { SFX.boom(); cheer = Math.min(1, cheer + 0.5); SFX.cheer(); }
+      else if (ev === "dig") SFX.dig();
+      else if (ev === "push") SFX.push();
+      else if (ev === "thud") SFX.thud();
+      else if (ev === "exit-open") { SFX["exit-open"](); cheer = 1; SFX.cheer(); }
+      else if (ev === "win") { score += 100 + timeLeft(game) * 2; thumb = 1; cheer = 1; SFX.win(); SFX.cheer(); }
+    }
+  }
+
+  // ==========================================================================
+  // Rendering
+  // ==========================================================================
+  function tileSprite(t, i, frame) {
+    switch (t) {
+      case T.SAND: return SPR.sand[0];
+      case T.STEEL: return SPR.steel[0];
+      case T.BRICK: return SPR.brick[0];
+      case T.STONE: return SPR.stone[0];
+      case T.GOLD: return SPR.gold[frame % 4];
+      case T.PLAYER: return SPR.player[frame % 2];
+      case T.LION: return SPR.lion[frame % 2];
+      case T.ELEPHANT: return SPR.elephant[frame % 2];
+      default: return null;
+    }
+  }
+
+  function drawBeastSprite(t, sxp, syp, frame, dirv) {
+    // flip horizontally when facing left
+    const s = tileSprite(t, 0, frame);
+    if (dirv === DIR.LEFT) {
+      ctx.save();
+      ctx.translate(sxp + TILE, syp);
+      ctx.scale(-1, 1);
+      ctx.drawImage(s, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.drawImage(s, sxp, syp);
+    }
+  }
+
+  function drawPlayfield(g, alpha, t) {
+    const frame = Math.floor(t / 160) % 4;
+    const walkFrame = Math.floor(t / 120) % 2;
+    // cells that moved this tick get drawn interpolated instead
+    const movedTargets = new Set();
+    for (const m of g.moves) movedTargets.add(m.ty * g.w + m.tx);
+
+    for (let y = 0; y < g.h; y++) {
+      for (let x = 0; x < g.w; x++) {
+        const i = y * g.w + x;
+        const sx = PF_X + x * TILE, sy = PF_Y + y * TILE;
+        const tt = g.type[i];
+        ctx.drawImage(SPR.empty[0], sx, sy);
+        if (tt === T.EMPTY || movedTargets.has(i)) continue;
+        if (tt === T.BOOM) {
+          ctx.drawImage((g.boomStage[i] >= 2 ? SPR.boomA : SPR.boomB)[0], sx, sy);
+        } else if (tt === T.EXIT) {
+          ctx.drawImage(g.exitOpen ? SPR.exitOpen[frame % 2] : SPR.exitClosed[0], sx, sy);
+        } else if (tt === T.PLAYER || tt === T.LION || tt === T.ELEPHANT) {
+          drawBeastSprite(tt, sx, sy, walkFrame, g.dir[i]);
+        } else {
+          const s = tileSprite(tt, 0, frame);
+          if (s) ctx.drawImage(s, sx, sy);
+        }
+      }
+    }
+    // interpolated movers on top
+    for (const m of g.moves) {
+      const ix = PF_X + (m.fx + (m.tx - m.fx) * alpha) * TILE;
+      const iy = PF_Y + (m.fy + (m.ty - m.fy) * alpha) * TILE;
+      if (m.type === T.PLAYER || m.type === T.LION || m.type === T.ELEPHANT) {
+        const dv = m.type === T.PLAYER
+          ? g.dir[g.py * g.w + g.px]
+          : g.dir[m.ty * g.w + m.tx];
+        drawBeastSprite(m.type, ix, iy, walkFrame, dv);
+      } else {
+        const s = tileSprite(m.type, 0, frame);
+        if (s) ctx.drawImage(s, ix, iy);
+      }
+    }
+  }
+
+  function roman(n) {
+    const table = [[10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+    let out = "";
+    for (const [v, sym] of table) while (n >= v) { out += sym; n -= v; }
+    return out;
+  }
+
+  function drawHUD(g) {
+    px(ctx, 0, 0, CW, HUD_H, "#171310");
+    ctx.fillStyle = "#e0b64c";
+    ctx.font = "bold 16px Georgia, serif";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    const goldStr = `${g.collected}/${g.quota}`;
+    // coin icon
+    ctx.beginPath(); ctx.arc(16, HUD_H / 2, 7, 0, 7); ctx.fillStyle = "#f5c93c"; ctx.fill();
+    ctx.strokeStyle = "#8a5a12"; ctx.stroke();
+    ctx.fillStyle = g.collected >= g.quota ? "#7ce07c" : "#f0e6d2";
+    ctx.fillText(goldStr, 30, HUD_H / 2 + 1);
+    ctx.fillStyle = "#f0e6d2";
+    ctx.textAlign = "center";
+    ctx.fillText(`${LEVELS[levelIndex].name}  ·  LEVEL ${LEVELS[levelIndex].numeral}`, CW / 2, HUD_H / 2 + 1);
+    ctx.textAlign = "right";
+    const tl = timeLeft(g);
+    ctx.fillStyle = tl <= 10 ? "#ff6a5a" : "#f0e6d2";
+    ctx.fillText(`⌛ ${tl}`, CW - 150, HUD_H / 2 + 1);
+    // lives as little shields
+    for (let k = 0; k < lives; k++) {
+      const x = CW - 130 + k * 14;
+      px(ctx, x, 8, 9, 11, "#3f6ea5");
+      px(ctx, x + 2, 10, 5, 7, "#6f9cd0");
+      px(ctx, x + 4, 8, 1, 11, "#2c4d74");
+    }
+    ctx.fillStyle = "#f0e6d2";
+    ctx.fillText(`${score}`, CW - 14, HUD_H / 2 + 1);
+  }
+
+  function overlay(alpha = 0.65) {
+    ctx.fillStyle = `rgba(12,8,4,${alpha})`;
+    ctx.fillRect(PF_X - 8, PF_Y - 8, PF_W + 16, PF_H + 16);
+  }
+
+  function centerText(lines, y0) {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    let y = y0;
+    for (const [text, font, color, gap] of lines) {
+      ctx.font = font;
+      ctx.fillStyle = color;
+      ctx.fillText(text, CW / 2, y);
+      y += gap;
+    }
+  }
+
+  function drawTitle(t) {
+    drawStandsBase();
+    drawAudience(t, 0.25, 0);
+    overlay(0.5);
+    // big sprites flanking the title
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(SPR.player[Math.floor(t / 300) % 2], CW / 2 - 300, HUD_H + 66, 72, 72);
+    ctx.drawImage(SPR.lion[Math.floor(t / 300) % 2], CW / 2 + 228, HUD_H + 66, 72, 72);
+    ctx.restore();
+    centerText([
+      ["COLOSSEVM DASH", "bold 44px Georgia, serif", "#e0b64c", 40],
+      ["A Boulder Dash tale of the Roman arena", "16px Georgia, serif", "#cbb794", 90],
+      ["Dig the sand · gather the gold · beware lions and elephants", "15px Georgia, serif", "#f0e6d2", 26],
+      ["Crush an elephant and it bursts into gold", "15px Georgia, serif", "#f0e6d2", 56],
+      ["ARROWS / WASD move · R retreat · P pause · M mute", "14px Georgia, serif", "#9a8c72", 30],
+      [Math.floor(t / 500) % 2 ? "PRESS ENTER" : " ", "bold 20px Georgia, serif", "#7ce07c", 0],
+    ], HUD_H + 96);
+  }
+
+  function render(t, alpha) {
+    if (mode === "title") { drawTitle(t); return; }
+    drawStandsBase();
+    drawAudience(t, cheer, thumb);
+    if (game) {
+      drawPlayfield(game, mode === "play" ? alpha : 1, t);
+      drawHUD(game);
+    }
+    if (mode === "intro") {
+      overlay();
+      centerText([
+        [`LEVEL ${LEVELS[levelIndex].numeral}`, "bold 34px Georgia, serif", "#e0b64c", 44],
+        [LEVELS[levelIndex].name.toUpperCase(), "bold 24px Georgia, serif", "#f0e6d2", 48],
+        [`Gather ${LEVELS[levelIndex].quota} gold to raise the gate`, "16px Georgia, serif", "#cbb794", 30],
+        [`${LEVELS[levelIndex].time} seconds · ${lives} ${lives === 1 ? "life" : "lives"}`, "16px Georgia, serif", "#cbb794", 60],
+        [Math.floor(t / 500) % 2 ? "PRESS ENTER" : " ", "bold 18px Georgia, serif", "#7ce07c", 0],
+      ], HUD_H + 130);
+    } else if (mode === "pause") {
+      overlay();
+      centerText([["PAVSA", "bold 34px Georgia, serif", "#e0b64c", 40],
+                  ["press P to resume", "16px Georgia, serif", "#cbb794", 0]], CH / 2 - 30);
+    } else if (mode === "deathwait") {
+      overlay(0.45);
+      const causeText = {
+        crushed: "Crushed beneath the stone",
+        beast: "The beasts of the arena prevail",
+        time: "The emperor grew impatient",
+        retreat: "A tactical retreat",
+      }[game.cause] || "Slain";
+      centerText([
+        ["THE CROWD ROARS", "bold 30px Georgia, serif", "#ff6a5a", 42],
+        [causeText, "18px Georgia, serif", "#f0e6d2", 34],
+        [`${lives} ${lives === 1 ? "life" : "lives"} remaining`, "16px Georgia, serif", "#cbb794", 0],
+      ], CH / 2 - 60);
+    } else if (mode === "gameover") {
+      overlay();
+      centerText([
+        ["POLLICE VERSO", "bold 36px Georgia, serif", "#ff6a5a", 40],
+        ["The emperor turns his thumb. Game over.", "17px Georgia, serif", "#f0e6d2", 36],
+        [`Final score: ${score}`, "17px Georgia, serif", "#e0b64c", 60],
+        [Math.floor(t / 500) % 2 ? "PRESS ENTER" : " ", "bold 18px Georgia, serif", "#7ce07c", 0],
+      ], CH / 2 - 80);
+    } else if (mode === "victory") {
+      overlay();
+      centerText([
+        ["RVDIS DONATVS", "bold 36px Georgia, serif", "#e0b64c", 42],
+        ["You are granted the wooden sword — freedom!", "17px Georgia, serif", "#f0e6d2", 30],
+        ["All four games of the Colosseum are won.", "16px Georgia, serif", "#cbb794", 40],
+        [`Final score: ${score}`, "18px Georgia, serif", "#e0b64c", 60],
+        [Math.floor(t / 500) % 2 ? "PRESS ENTER" : " ", "bold 18px Georgia, serif", "#7ce07c", 0],
+      ], CH / 2 - 90);
+    }
+  }
+
+  // ==========================================================================
+  // Main loop
+  // ==========================================================================
+  function frame(ts) {
+    if (!lastTs) lastTs = ts;
+    const dt = Math.min(100, ts - lastTs);
+    lastTs = ts;
+    cheer = Math.max(0, cheer - dt / 2500);
+
+    if (mode === "play") {
+      acc += dt;
+      while (acc >= TICK_MS) {
+        acc -= TICK_MS;
+        tick(game, currentDir());
+        handleEvents(game.events);
+        if (game.state === "dead") {
+          deathTicks++;
+          if (deathTicks > BOOM_TICKS + 2) loseLife(game.cause);
+        } else if (game.state === "won") {
+          mode = "won-wait";
+          modeTimer = 0;
+        }
+        const tl = timeLeft(game);
+        if (game.state === "playing" && tl <= 10 && tl !== lastTickWarn) {
+          lastTickWarn = tl;
+          SFX.tick();
+        }
+      }
+    } else if (mode === "won-wait") {
+      modeTimer += dt;
+      // keep the crowd going wild
+      cheer = 1;
+      if (modeTimer > 1600) {
+        levelIndex++;
+        if (levelIndex >= LEVELS.length) { mode = "victory"; }
+        else startLevel();
+      }
+    } else if (mode === "deathwait") {
+      modeTimer += dt;
+      if (modeTimer > 2200) startLevel();
+    }
+
+    render(ts, Math.min(1, acc / TICK_MS));
+    requestAnimationFrame(frame);
+  }
+  let lastTickWarn = -1;
+
+  // Debug/screenshot hook: drive the game synchronously (rAF does not
+  // advance under headless virtual time; see repo notes).
+  window.__colosseum = {
+    start(li) {
+      muted = true;
+      levelIndex = li; lives = 3; score = 0;
+      startLevel();
+      mode = "play";
+    },
+    step(n = 1, dir = DIR.NONE) { for (let k = 0; k < n; k++) tick(game, dir); },
+    setCheer(c) { cheer = c; },
+    draw(t = 1000) { render(t, 1); },
+    game: () => game,
+  };
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
