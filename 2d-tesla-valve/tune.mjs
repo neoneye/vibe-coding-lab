@@ -8,7 +8,9 @@ const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.h
 const src = html.match(/<script id="shared-code">([\s\S]*?)<\/script>/)[1];
 const lib = new Function(`${src}; return { buildValveMask, LBM, PROBE_X };`)();
 
-const DEV = 3500, MEASURE = 1500;
+// Steady-state window (matches the test protocol; earlier windows catch a
+// transient that overstates diodicity).
+const DEV = 8000, MEASURE = 4000;
 
 function measure(force, tau, dir) {
   const sim = new lib.LBM({ geo: lib.buildValveMask(), tau, forceX: dir * force });
