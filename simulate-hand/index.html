@@ -583,7 +583,159 @@ HandTests.add('SKELETON: 17 bones, parents precede children, digits mapped', () 
 });
 </script>
 <script type="module">
-// rendering + UI added in later tasks
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+
+const SKIN = new THREE.Color(0.91, 0.72, 0.60);
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.body.insertAdjacentHTML('beforeend',
+    '<p style="padding:2em">WebGL is unavailable in this browser — the hand simulator cannot run.</p>');
+  throw e;
+}
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0e13);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 500);
+camera.position.set(20, 26, 36);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 18, 0);
+controls.enableDamping = true;
+
+scene.add(new THREE.HemisphereLight(0x8899bb, 0x222833, 0.9));
+const sun = new THREE.DirectionalLight(0xffeedd, 1.6);
+sun.position.set(25, 45, 25);
+sun.castShadow = true;
+sun.shadow.camera.left = -30; sun.shadow.camera.right = 30;
+sun.shadow.camera.top = 40; sun.shadow.camera.bottom = -10;
+sun.shadow.mapSize.set(2048, 2048);
+scene.add(sun);
+
+const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 48),
+  new THREE.MeshStandardMaterial({ color: 0x161a22, roughness: 0.95 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+scene.add(ground);
+scene.add(new THREE.GridHelper(60, 30, 0x2a3242, 0x1c2230));
+
+// ---- bones (bind pose = all angles zero) ----
+const bindPose = computePose(new Array(27).fill(0));
+const threeBones = SKELETON.map((b, i) => {
+  const bone = new THREE.Bone();
+  bone.name = b.name;
+  const l = bindPose.locals[i];
+  bone.position.fromArray(l.pos);
+  bone.quaternion.fromArray(l.quat);
+  return bone;
+});
+SKELETON.forEach((b, i) => { if (b.parent >= 0) threeBones[b.parent].add(threeBones[i]); });
+
+// ---- geometry parts, authored in bind-pose world space, rigid-bound per bone ----
+function bindPart(geo, boneIdx) {
+  if (geo.index) geo = geo.toNonIndexed();   // RoundedBox is non-indexed, Capsule is indexed
+  const w = bindPose.world[boneIdx];
+  const m = new THREE.Matrix4().compose(
+    new THREE.Vector3().fromArray(w.pos),
+    new THREE.Quaternion().fromArray(w.quat), new THREE.Vector3(1, 1, 1));
+  geo.applyMatrix4(m);
+  const n = geo.attributes.position.count;
+  const si = new Uint16Array(n * 4);
+  for (let k = 0; k < n; k++) si[k * 4] = boneIdx;
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+  const sw = new Float32Array(n * 4);
+  for (let k = 0; k < n; k++) sw[k * 4] = 1;
+  geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+  return geo;
+}
+const parts = [];
+parts.push(bindPart(new RoundedBoxGeometry(7.2, 9.6, 2.7, 4, 1.1)
+  .translate(0.1, 4.8, 0), 1));                       // palm
+parts.push(bindPart(new RoundedBoxGeometry(4.2, 3.2, 2.5, 3, 1.0)
+  .translate(0, -0.4, 0), 0));                        // wrist stub
+for (let b = 2; b < SKELETON.length; b++) {
+  const { len, radius } = SKELETON[b];
+  parts.push(bindPart(new THREE.CapsuleGeometry(radius, len, 4, 14)
+    .translate(0, len / 2, 0), b));                   // phalanx spans joint->joint
+}
+for (const p of parts) { delete p.attributes.uv; }    // uniform attributes for merge
+const handGeo = BufferGeometryUtils.mergeGeometries(parts);
+const nv = handGeo.attributes.position.count;
+const colors = new Float32Array(nv * 3);
+for (let i = 0; i < nv; i++) { colors[i*3] = SKIN.r; colors[i*3+1] = SKIN.g; colors[i*3+2] = SKIN.b; }
+handGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+const handMesh = new THREE.SkinnedMesh(handGeo,
+  new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.05 }));
+handMesh.castShadow = true;
+handMesh.add(threeBones[0]);
+handMesh.bind(new THREE.Skeleton(threeBones));
+scene.add(handMesh);
+
+// ---- objects ----
+function hexPencil() {
+  const g = new THREE.CylinderGeometry(OBJ_DEFS.pencil.r, OBJ_DEFS.pencil.r,
+    OBJ_DEFS.pencil.half * 2 - 1.6, 6);
+  const tip = new THREE.CylinderGeometry(0.02, OBJ_DEFS.pencil.r, 1.6, 6)
+    .translate(0, OBJ_DEFS.pencil.half - 0.8, 0);
+  for (const geo of [g, tip]) delete geo.attributes.uv;
+  return BufferGeometryUtils.mergeGeometries([g, tip]);
+}
+const objectMeshes = {
+  sphere: new THREE.Mesh(new THREE.SphereGeometry(OBJ_DEFS.sphere.r, 40, 24),
+    new THREE.MeshStandardMaterial({ color: 0x4ea1ff, roughness: 0.35 })),
+  cube: new THREE.Mesh(new RoundedBoxGeometry(4.8, 4.8, 4.8, 3, 0.25),
+    new THREE.MeshStandardMaterial({ color: 0xff9b42, roughness: 0.5 })),
+  pencil: new THREE.Mesh(hexPencil(),
+    new THREE.MeshStandardMaterial({ color: 0xf3c93e, roughness: 0.6 })),
+};
+for (const m of Object.values(objectMeshes)) { m.castShadow = true; m.visible = false; scene.add(m); }
+
+const sim = {
+  angles: defaultAngles(),
+  obj: null,                      // {type, pos, quat} shared-code object state
+  grasp: { attached: false }, rel: null,
+  sensors: generateSensors(),
+};
+function setObject(type) {
+  for (const [k, m] of Object.entries(objectMeshes)) m.visible = k === type;
+  sim.obj = { type, pos: OBJ_DEFS[type].ready.slice(), quat: OBJ_DEFS[type].quat0.slice() };
+  sim.grasp.attached = false; sim.rel = null;
+}
+
+function applyPoseToBones(pose) {
+  for (let i = 0; i < threeBones.length; i++) {
+    threeBones[i].position.fromArray(pose.locals[i].pos);
+    threeBones[i].quaternion.fromArray(pose.locals[i].quat);
+  }
+}
+function renderOnce() {
+  const pose = computePose(sim.angles);
+  applyPoseToBones(pose);
+  if (sim.obj) {
+    objectMeshes[sim.obj.type].position.fromArray(sim.obj.pos);
+    objectMeshes[sim.obj.type].quaternion.fromArray(sim.obj.quat);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  return pose;
+}
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+setObject('sphere');
+renderOnce();
+window.__engineReady = true;
+(function loop() { requestAnimationFrame(loop); renderOnce(); })();
 </script>
 </body>
 </html>
