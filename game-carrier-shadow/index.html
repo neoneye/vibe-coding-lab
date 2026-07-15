@@ -45,6 +45,20 @@ function rngInt(state, n) { return Math.floor(rngNext(state) * n); }
 const W = 20, H = 12;
 const TER = { WATER: 0, IRAN: 1, OMAN: 2, EXIT: 3 };
 const CARRIER_POS = { x: 20, y: 5 };
+const ESCALATION = {
+  reconFlight: 1, radarLock: 3, airspaceViolation: 5, warningShot: 6,
+  droneShootdown: 8, attackVessel: 12, mannedShootdown: 20,
+};
+const SAM_RADIUS = 3;
+const SAM_RELOCATE_EVERY = 6;
+const SAM_HIT_CHANCE = 0.35;
+const BOAT_HIT_UNSPOTTED = 0.5;
+const BOAT_HIT_SPOTTED = 0.9;
+const FIGHTER_STATION_TURNS = 3;
+const SURVEIL_STATION_TURNS = 4;
+const AIRCRAFT_SPEED = 4;
+const RESCUE_WINDOW = 3;
+const SPOT_DURATION = 3;
 // I = Iranian coast, O = Omani coast, E = exit zone, ~ = water. 20 chars x 12 rows.
 const MAP_ROWS = [
   "IIIIIIIIIIIIIIIIIIII",
@@ -81,6 +95,93 @@ function stepToward(from, to) {
   return { x: from.x + Math.sign(to.x - from.x), y: from.y + Math.sign(to.y - from.y) };
 }
 
+// ============ implementation: ship starts, posture, logging ============
+const SHIP_STARTS = [
+  { id: "t1", kind: "tanker", x: 18, y: 4 }, { id: "t2", kind: "tanker", x: 18, y: 5 },
+  { id: "t3", kind: "tanker", x: 19, y: 4 }, { id: "t4", kind: "tanker", x: 19, y: 5 },
+  { id: "f1", kind: "frigate", x: 17, y: 4 }, { id: "f2", kind: "frigate", x: 17, y: 6 },
+  { id: "m1", kind: "minesweeper", x: 17, y: 5 },
+];
+function postureOf(esc) {
+  if (esc >= 100) return "war";
+  if (esc >= 60) return "conflict";
+  if (esc >= 30) return "harassment";
+  return "shadowing";
+}
+function logEvent(state, kind, text) { state.log.push({ turn: state.turn, kind, text }); }
+
+// ============ helpers for seeded placement ============
+function seededCell(state, pred) {
+  for (let i = 0; i < 10000; i++) {
+    const x = rngInt(state, W), y = rngInt(state, H);
+    if (pred(x, y)) return { x, y };
+  }
+  throw new Error("no legal cell found");
+}
+function clampCell(c) {
+  return { x: Math.min(W - 1, Math.max(0, c.x)), y: Math.min(H - 1, Math.max(0, c.y)) };
+}
+function makeOrbit(c) {
+  return [c, { x: c.x + 1, y: c.y }, { x: c.x + 1, y: c.y + 1 }, { x: c.x, y: c.y + 1 }].map(clampCell);
+}
+function makeTrack(c) {
+  return [c, { x: c.x + 2, y: c.y }, { x: c.x + 3, y: c.y + 1 }, { x: c.x + 2, y: c.y + 2 },
+          { x: c.x, y: c.y + 2 }, { x: c.x - 1, y: c.y + 1 }].map(clampCell);
+}
+
+// ============ game creation ============
+function createGame(seed) {
+  const state = {
+    seed, rngState: seed >>> 0, turn: 1,
+    escalation: 0, escalationPeak: 0, escalationBleed: 0, aggressiveThisTurn: false,
+    resources: { sorties: 6, surveillance: 2, refuel: 1, helo: 1 },
+    ships: SHIP_STARTS.map((s) => ({ ...s, movesLeft: 0, sensorUsed: false,
+      crippled: false, destroyed: false, exited: false, spottedUntil: 0 })),
+    mines: [], boats: [], sam: null, drones: [], eFighters: [], echoes: [], airliners: [],
+    aircraft: [], seaNumbers: {}, airNumbers: {}, marks: { sea: {}, air: {} },
+    log: [], pendingIntercept: null, rescue: null, outcome: null,
+  };
+  const taken = new Set();
+  const free = (x, y) => !taken.has(key(x, y));
+  for (let i = 0; i < 4; i++) {
+    const c = seededCell(state, (x, y) => terrainAt(x, y) === TER.WATER && x >= 4 && free(x, y)
+      && state.ships.every((sh) => chebyshev({ x, y }, sh) >= 3));
+    taken.add(key(c.x, c.y));
+    state.mines.push({ ...c, cleared: false });
+  }
+  for (let i = 0; i < 2; i++) {
+    const c = seededCell(state, (x, y) => isWaterCell(x, y) && x >= 8 && x <= 15 && free(x, y));
+    taken.add(key(c.x, c.y));
+    const waypoints = [];
+    for (let j = 0; j < 3; j++) {
+      waypoints.push(seededCell(state, (x, y) => isWaterCell(x, y) && x >= 6 && x <= 16));
+    }
+    state.boats.push({ id: `b${i + 1}`, ...c, waypoints, wpIndex: 0, sunk: false });
+  }
+  const samCell = seededCell(state, (x, y) => terrainAt(x, y) === TER.IRAN);
+  state.sam = { ...samCell, revealedUntil: 0, relocateAt: SAM_RELOCATE_EVERY, destroyed: false };
+  for (let i = 0; i < 3; i++) {
+    const c = seededCell(state, (x, y) => y >= 2 && y <= 9);
+    state.drones.push({ id: `d${i + 1}`, ...c, orbit: makeOrbit(c), orbitIndex: 0, downed: false });
+  }
+  for (let i = 0; i < 2; i++) {
+    const c = seededCell(state, (x, y) => x >= 10 && y >= 2 && y <= 9);
+    state.eFighters.push({ id: `ef${i + 1}`, ...c, track: makeTrack(c), trackIndex: 0, downed: false });
+  }
+  for (let i = 0; i < 4; i++) {
+    const c = seededCell(state, (x, y) => free(x, y));
+    taken.add(key(c.x, c.y));
+    state.echoes.push({ ...c, identified: false });
+  }
+  for (let i = 0; i < 8; i++) {
+    const dir = i % 2 ? -1 : 1;
+    state.airliners.push({ id: `al${i + 1}`, spawnTurn: 2 + 4 * i, row: i % 2 ? 7 : 2,
+      dir, x: dir === 1 ? 0 : W - 1, y: i % 2 ? 7 : 2, active: false, gone: false });
+  }
+  logEvent(state, "info", "Mission start: escort 4 tankers to the western exit zone.");
+  return state;
+}
+
 CarrierTests.add("smoke", () => assertEq(1 + 1, 2));
 CarrierTests.add("rng deterministic per seed", () => {
   const a = { rngState: 42 }, b = { rngState: 42 }, c = { rngState: 43 };
@@ -111,6 +212,35 @@ CarrierTests.add("geometry helpers", () => {
   assertEq(chebyshev({ x: 1, y: 1 }, { x: 4, y: 3 }), 3);
   assertEq(stepToward({ x: 0, y: 0 }, { x: 5, y: 5 }), { x: 1, y: 1 });
   assertEq(stepToward({ x: 2, y: 2 }, { x: 2, y: 2 }), { x: 2, y: 2 });
+});
+
+CarrierTests.add("createGame places the specced opposition legally", () => {
+  const s = createGame(7);
+  assertEq(s.mines.length, 4); assertEq(s.boats.length, 2);
+  assertEq(s.drones.length, 3); assertEq(s.eFighters.length, 2);
+  assertEq(s.echoes.length, 4); assertEq(s.airliners.length, 8);
+  assertEq(s.ships.length, 7);
+  for (const m of s.mines) {
+    assert(terrainAt(m.x, m.y) === TER.WATER && m.x >= 4, "mine in open water");
+    for (const sh of s.ships) assert(chebyshev(m, sh) >= 3, "mine clear of starts");
+  }
+  const mineKeys = new Set(s.mines.map((m) => key(m.x, m.y)));
+  assertEq(mineKeys.size, 4, "mines unique");
+  for (const b of s.boats) assert(isWaterCell(b.x, b.y) && b.x >= 8 && b.x <= 15);
+  assertEq(terrainAt(s.sam.x, s.sam.y), TER.IRAN, "SAM on Iranian coast");
+  assertEq(s.resources, { sorties: 6, surveillance: 2, refuel: 1, helo: 1 });
+  assertEq(s.turn, 1); assertEq(s.escalation, 0); assertEq(s.outcome, null);
+});
+CarrierTests.add("createGame is deterministic per seed", () => {
+  assertEq(createGame(11), createGame(11));
+  const a = createGame(11), b = createGame(12);
+  assert(JSON.stringify(a) !== JSON.stringify(b), "different seeds differ");
+});
+CarrierTests.add("postureOf thresholds", () => {
+  assertEq(postureOf(0), "shadowing"); assertEq(postureOf(29), "shadowing");
+  assertEq(postureOf(30), "harassment"); assertEq(postureOf(59), "harassment");
+  assertEq(postureOf(60), "conflict"); assertEq(postureOf(99), "conflict");
+  assertEq(postureOf(100), "war");
 });
 </script>
 <script>
