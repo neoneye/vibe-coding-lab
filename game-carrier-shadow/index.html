@@ -134,6 +134,30 @@ function markStaleSeaNumbers(state, oldPos, newPos) {
   }
 }
 
+// ============ air signals and radar sweep ============
+function airSignals(state) {
+  const out = [];
+  for (const d of state.drones) if (!d.downed) out.push({ x: d.x, y: d.y, kind: "drone", ref: d });
+  for (const f of state.eFighters) if (!f.downed) out.push({ x: f.x, y: f.y, kind: "efighter", ref: f });
+  for (const a of state.airliners) if (a.active && !a.gone) out.push({ x: a.x, y: a.y, kind: "airliner", ref: a });
+  for (const e of state.echoes) if (!e.identified) out.push({ x: e.x, y: e.y, kind: "echo", ref: e });
+  if (state.sam && !state.sam.destroyed && state.sam.revealedUntil >= state.turn) {
+    out.push({ x: state.sam.x, y: state.sam.y, kind: "sam", ref: state.sam });
+  }
+  return out;
+}
+function airSignalsAdjacent(state, x, y) {
+  const sig = airSignals(state);
+  return sig.filter((s) => chebyshev(s, { x, y }) === 1).length;
+}
+function sweepFootprint(state, cx, cy, radius) {
+  for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
+    const x = cx + dx, y = cy + dy;
+    if (!inBounds(x, y)) continue;
+    state.airNumbers[key(x, y)] = { value: airSignalsAdjacent(state, x, y), turn: state.turn };
+  }
+}
+
 // ============ ship movement ============
 function shipById(state, id) { return state.ships.find((s) => s.id === id); }
 function shipSpeed(ship) {
@@ -184,6 +208,16 @@ function applyAction(state, action) {
       const k = key(action.x, action.y);
       if (action.mark == null) delete state.marks[action.layer][k];
       else state.marks[action.layer][k] = action.mark;
+      break;
+    }
+    case "sweep": {
+      const ship = shipById(state, action.shipId);
+      if (!ship || ship.kind !== "frigate" || ship.sensorUsed || ship.crippled || ship.destroyed
+          || chebyshev(ship, action) > 3) throw new Error("illegal sweep");
+      ship.sensorUsed = true;
+      sweepFootprint(state, action.x, action.y, 1);
+      logEvent(state, "intel", `Radar sweep centered (${action.x},${action.y}).`);
+      events.push({ type: "swept", x: action.x, y: action.y });
       break;
     }
     default: throw new Error(`unknown action ${action.type}`);
@@ -389,6 +423,32 @@ CarrierTests.add("marks are bookkeeping", () => {
   assertEq(s.marks.sea[key(5, 5)], "mine");
   applyAction(s, { type: "mark", layer: "sea", x: 5, y: 5, mark: null });
   assertEq(s.marks.sea[key(5, 5)], undefined);
+});
+
+CarrierTests.add("airSignals collects the right kinds", () => {
+  const s = createGame(7);
+  s.drones = [{ id: "d1", x: 5, y: 5, orbit: [], orbitIndex: 0, downed: false }];
+  s.eFighters = []; s.echoes = [{ x: 6, y: 5, identified: false }];
+  s.airliners = [{ id: "al1", spawnTurn: 1, row: 2, dir: 1, x: 7, y: 2, active: true, gone: false }];
+  s.sam.revealedUntil = 0;
+  const sig = airSignals(s);
+  assertEq(sig.length, 3);
+  s.echoes[0].identified = true;
+  assertEq(airSignals(s).length, 2, "identified echo stops counting");
+  s.sam.revealedUntil = s.turn;
+  assertEq(airSignals(s).length, 3, "emitting SAM counts");
+});
+CarrierTests.add("radar sweep stamps a 3x3 of correct numbers", () => {
+  const s = createGame(7);
+  s.drones = [{ id: "d1", x: 10, y: 4, orbit: [], orbitIndex: 0, downed: false }];
+  s.eFighters = []; s.echoes = []; s.airliners = [];
+  const f1 = shipById(s, "f1"); f1.x = 10; f1.y = 6; f1.sensorUsed = false;
+  applyAction(s, { type: "sweep", shipId: "f1", x: 10, y: 5 });
+  assertEq(s.airNumbers[key(10, 5)].value, 1, "drone adjacent to center");
+  assertEq(s.airNumbers[key(9, 5)].value, 1);
+  assertEq(s.airNumbers[key(10, 4)].value, 0, "drone's own cell counts neighbors only");
+  assertEq(Object.keys(s.airNumbers).length, 9);
+  assert(f1.sensorUsed);
 });
 </script>
 <script>
