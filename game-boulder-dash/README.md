@@ -25,9 +25,11 @@ left-to-right scan per tick, falling/rolling physics, 3×3 explosions. The
 audience in the stands is reactive — every gold pickup draws scattered
 applause and a swell of crowd roar (a looping WebAudio noise bed that follows
 the excitement level), and explosions and victories bring the house down.
-Caesar watches from his box: on a win he salutes you with a wave and a
-thumbs-up; when you fall he lifts his chin, puts a hand on his hip, and gives
-a slow, dismissive thumbs-down while the crowd howls.
+Caesar watches from his box with Cleopatra at his side, attended by servant
+girls — two sway palm fans over the royals, one bears a tray with a gold jug.
+On a win Caesar salutes you with a wave and a thumbs-up and Cleopatra raises
+a hand with him; when you fall he lifts his chin, puts a hand on his hip, and
+gives a slow, dismissive thumbs-down while the crowd howls.
 
 ## Levels
 
