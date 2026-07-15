@@ -134,6 +134,36 @@ const DOF_TABLE = [
 ];
 function defaultAngles() { return DOF_TABLE.map(d => d.def); }
 
+// ---- forward kinematics ----
+function computePose(angles) {
+  const world = [], locals = [];
+  const dofFrames = new Array(DOF_TABLE.length);
+  for (let b = 0; b < SKELETON.length; b++) {
+    const bone = SKELETON[b];
+    const parent = bone.parent >= 0 ? world[bone.parent] : { pos: [0,0,0], quat: [0,0,0,1] };
+    let lpos = bone.pos.slice();
+    let lquat = bone.bind ? bone.bind.slice() : [0, 0, 0, 1];
+    if (b === 0) {
+      lpos = v3add(WRIST_HOME, [angles[0], angles[1], angles[2]]);
+      for (let j = 0; j < 3; j++) dofFrames[j] = { jointPos: lpos.slice(), axis: DOF_TABLE[j].axis.slice() };
+    }
+    const jointPos = v3add(parent.pos, qrot(parent.quat, lpos));
+    for (let j = 0; j < DOF_TABLE.length; j++) {
+      const d = DOF_TABLE[j];
+      if (d.bone !== b || d.kind !== 'r') continue;
+      const wq = qmul(parent.quat, lquat);
+      dofFrames[j] = { jointPos, axis: v3norm(qrot(wq, d.axis)) };
+      lquat = qmul(lquat, qaa(d.axis, clamp(angles[j], d.min, d.max)));
+    }
+    world.push({ pos: jointPos, quat: qmul(parent.quat, lquat) });
+    locals.push({ pos: lpos, quat: lquat });
+  }
+  return { world, locals, dofFrames };
+}
+function tipPos(world, b) {
+  return v3add(world[b].pos, qrot(world[b].quat, [0, SKELETON[b].len, 0]));
+}
+
 // ---- tests ----
 HandTests.add('quat: 90deg about X takes Y to Z', () => {
   const v = qrot(qaa([1,0,0], Math.PI/2), [0,1,0]);
@@ -153,6 +183,63 @@ HandTests.add('DOF_TABLE has 27 valid entries', () => {
     HandTests.assert(!names.has(d.name), 'dup name: ' + d.name); names.add(d.name);
     HandTests.assert(d.bone >= 0 && d.bone < 17, 'bad bone: ' + d.name);
   }
+});
+HandTests.add('FK: neutral pose index fingertip position', () => {
+  const { world } = computePose(new Array(27).fill(0));
+  const tip = tipPos(world, 7); // index3
+  HandTests.assertApprox(tip[0], 3.0, 1e-6);
+  HandTests.assertApprox(tip[1], 14 + 1 + 8.2 + 4.5 + 2.6 + 2.4, 1e-6);
+  HandTests.assertApprox(tip[2], 0, 1e-6);
+});
+HandTests.add('FK: MCP flexion curls index toward palm side (+Z), monotonic', () => {
+  let prevZ = -1;
+  for (const f of [0.3, 0.6, 0.9, 1.2]) {
+    const a = new Array(27).fill(0); a[12] = f; // Index MCP flex
+    const tip = tipPos(computePose(a).world, 7);
+    HandTests.assert(tip[2] > prevZ, 'z should grow with flexion');
+    prevZ = tip[2];
+  }
+  HandTests.assert(prevZ > 5, 'flexed tip well past palm plane');
+});
+HandTests.add('FK: full fist brings fingertip near palm', () => {
+  const a = new Array(27).fill(0);
+  a[12] = 1.5; a[13] = 1.8; a[14] = 1.3; // index MCP/PIP/DIP
+  const tip = tipPos(computePose(a).world, 7);
+  const palmCenter = [1.5, 14 + 5.5, 0];
+  HandTests.assert(v3len(v3sub(tip, palmCenter)) < 7, 'fist tip near palm');
+});
+HandTests.add('FK: wrist translation shifts every bone equally', () => {
+  const a = new Array(27).fill(0); a[0] = 5; a[1] = -3; a[2] = 2;
+  const w0 = computePose(new Array(27).fill(0)).world;
+  const w1 = computePose(a).world;
+  for (let b = 0; b < 17; b++) {
+    const d = v3sub(w1[b].pos, w0[b].pos);
+    HandTests.assertApprox(d[0], 5, 1e-9); HandTests.assertApprox(d[1], -3, 1e-9);
+    HandTests.assertApprox(d[2], 2, 1e-9);
+  }
+});
+HandTests.add('FK: wrist yaw swings fingertips around Y at the wrist', () => {
+  const a = new Array(27).fill(0); a[4] = Math.PI / 2;
+  const tip = tipPos(computePose(a).world, 7);
+  HandTests.assert(Math.abs(tip[2]) > 1, 'yaw moves tip in z (x lever arm)');
+  HandTests.assertApprox(tip[1], 14 + 1 + 8.2 + 4.5 + 2.6 + 2.4, 1e-6, 'height unchanged');
+});
+HandTests.add('FK: thumb points sideways at neutral, opposes when flexed', () => {
+  const zero = tipPos(computePose(new Array(27).fill(0)).world, 4);
+  HandTests.assert(zero[0] > 5, 'thumb tip on +X side at zero pose');
+  const a = new Array(27).fill(0);
+  a[6] = 0.6; a[7] = 0.8; a[9] = 0.6; a[10] = 0.5;
+  const opp = tipPos(computePose(a).world, 4);
+  HandTests.assert(opp[2] > 2, 'opposed thumb comes in front of palm (+Z)');
+  HandTests.assert(opp[0] < zero[0] - 2, 'opposed thumb moves toward palm center');
+});
+HandTests.add('FK: dofFrames axes are unit and jointPos matches bone origin', () => {
+  const { world, dofFrames } = computePose(defaultAngles());
+  for (let j = 0; j < 27; j++) {
+    HandTests.assertApprox(v3len(dofFrames[j].axis), 1, 1e-9, DOF_TABLE[j].name);
+  }
+  const d = v3sub(dofFrames[12].jointPos, world[5].pos);
+  HandTests.assert(v3len(d) < 1e-9, 'index MCP frame at index1 origin');
 });
 HandTests.add('SKELETON: 17 bones, parents precede children, digits mapped', () => {
   HandTests.assert(SKELETON.length === 17);
