@@ -888,7 +888,7 @@ function genLightSprites() {
 }
 
 // ---------------------------------------------------------------- audio
-let AC = null, humNodes = null;
+let AC = null, humNodes = null, lampBuzz = null, lampHumLevel = 0;
 function audioInit() {
   if (AC) return;
   try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { AC = null; }
@@ -901,6 +901,14 @@ function audioInit() {
   osc.connect(flt); osc2.connect(flt); flt.connect(g); g.connect(AC.destination);
   osc.start(); osc2.start();
   humNodes = { g, flt };
+  // sodium-lamp ballast buzz: 120Hz mains rasp whose gain rides the
+  // player-to-lamp distance (driven from updateLamps)
+  const bo = AC.createOscillator(); bo.type = 'sawtooth'; bo.frequency.value = 120;
+  const bf = AC.createBiquadFilter(); bf.type = 'bandpass'; bf.frequency.value = 650; bf.Q.value = 1.8;
+  const bg = AC.createGain(); bg.gain.value = 0;
+  bo.connect(bf); bf.connect(bg); bg.connect(AC.destination);
+  bo.start();
+  lampBuzz = { g: bg };
 }
 function tone(freq, dur, type, vol, slideTo) {
   if (!AC) return;
@@ -1434,7 +1442,7 @@ function updateSeen(dt) {
 
 // ---------------------------------------------------------------- lamps
 function updateLamps(dt) {
-  let nearGlow = 0;
+  let buzz = 0;
   for (const L of lamps) {
     // sodium vapor: slow warm waver, occasional dropout + restrike sputter
     const base = 0.78 + 0.22 * Math.sin(gameTime * 1.13 + L.phase) * Math.sin(gameTime * 0.37 + L.phase * 2.7);
@@ -1446,10 +1454,13 @@ function updateLamps(dt) {
     }
     if (L.offT > 0) { L.offT -= dt; L.glow = Math.random() < 0.22 ? base * 0.6 : 0.04; }
     else L.glow = base;
-    const dd = dist2(player.x, player.y, L.x, L.y);
-    if (dd < 36) nearGlow = Math.max(nearGlow, (1 - Math.sqrt(dd) / 6) * L.glow);
+    // ballast buzz: quadratic falloff to silence at 6 tiles, and a dropped-out
+    // lamp stops humming (glow ~0) until it restrikes
+    const d = Math.sqrt(dist2(player.x, player.y, L.x, L.y));
+    if (d < 6) buzz += (1 - d / 6) * (1 - d / 6) * L.glow;
   }
-  if (humNodes) humNodes.g.gain.value = 0.012 + 0.011 * nearGlow;   // ballast buzz swells near lamps
+  lampHumLevel = Math.min(1, buzz);
+  if (lampBuzz) lampBuzz.g.gain.setTargetAtTime(lampHumLevel * 0.055, AC.currentTime, 0.08);
   // geiger crackle near the waste barrels
   let hot = 0;
   for (const ws of wasteSpots) {
@@ -2188,7 +2199,7 @@ genLightSprites();
 resetGame();
 if (/[?&]auto/.test(location.search)) { mode = 'play'; }
 if (/[?&]debug/.test(location.search)) {
-  window.__dbg = { player, enemies, props, items, doors, lamps, seen, map, seepSpots, floorDecals, rotate, setMode: m => { mode = m; }, getMode: () => mode, getAudioState: () => (AC ? AC.state : 'none') };
+  window.__dbg = { player, enemies, props, items, doors, lamps, seen, map, seepSpots, floorDecals, rotate, setMode: m => { mode = m; }, getMode: () => mode, getAudioState: () => (AC ? AC.state : 'none'), getLampHum: () => lampHumLevel };
 }
 requestAnimationFrame(frame);
 </script>
