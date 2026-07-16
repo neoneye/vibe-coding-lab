@@ -977,6 +977,136 @@ const sfx = {
   bosstalk: () => tone(70, 0.35, 'sawtooth', 0.18, 55),
 };
 
+// ---------------------------------------------------------------- music
+// "March of the Marble Floor" — the menu/pause march. 16 bars of E minor,
+// 126 BPM, 8th-note grid (8 tokens per bar, 128 steps). Structure
+// A A' B A'': a rising 4-note fanfare hook (E-G-B-E) answered by falling
+// phrases; B-major bars give the dominant its military bite.
+// Tokens: pitch+octave starts a note, '.' extends it, '-' is a rest,
+// '|' is a cosmetic bar line. Drums: K kick, S snare.
+const MARCH = { bpm: 126 };
+MARCH.lead = [
+  'E4 .  G4 .  B4 .  E5 .  | D5 .  B4 D5  B4 .  G4  . | C5 .  A4 C5  A4 .  F#4 . | B4 .   .   .  B3 . B3  .',
+  'E4 .  G4 .  B4 .  E5 .  | D5 .  B4 D5  B4 .  G4  . | C5 .  A4 C5  A4 .  F#4 . | B4 A4  G4 F#4 E4 . .   .',
+  'G4 .  G4 A4 B4 .  B4 .  | C5 .  B4 A4  B4 .  G4  . | A4 .  A4 B4  C5 .  C5  . | D#5 .  C#5 B4 A4 . F#4 .',
+  'E4 .  G4 .  B4 .  E5 .  | D5 .  B4 D5  B4 .  G4  . | C5 .  A4 C5  A4 .  F#4 . | E5 .   B4  .  E4 . .   .',
+].join(' | ');
+// off-beat chord stabs; progression Em G Am B / Em G Am Em / C G Am B / Em G Am Em
+MARCH.harmony = [
+  '- G3 - G3 - G3 - G3 | - B3 - B3 - B3 - B3 | - C4 - C4 - C4 - C4 | - D#4 - D#4 - D#4 - D#4',
+  '- G3 - G3 - G3 - G3 | - B3 - B3 - B3 - B3 | - C4 - C4 - C4 - C4 | - G3  - G3  - G3  - G3',
+  '- E4 - E4 - E4 - E4 | - B3 - B3 - B3 - B3 | - C4 - C4 - C4 - C4 | - D#4 - D#4 - D#4 - D#4',
+  '- G3 - G3 - G3 - G3 | - B3 - B3 - B3 - B3 | - C4 - C4 - C4 - C4 | - G3  - G3  - G3  - G3',
+].join(' | ');
+// oom-pah root/fifth quarters over the same progression
+MARCH.bass = [
+  'E2 . B2 . E2 . B2 . | G2 . D3 . G2 . D3 . | A2 . E3 . A2 . E3 . | B2 . F#3 . B2 . F#3 .',
+  'E2 . B2 . E2 . B2 . | G2 . D3 . G2 . D3 . | A2 . E3 . A2 . E3 . | E2 . B2  . E2 . B2  .',
+  'C3 . G3 . C3 . G3 . | G2 . D3 . G2 . D3 . | A2 . E3 . A2 . E3 . | B2 . F#3 . B2 . F#3 .',
+  'E2 . B2 . E2 . B2 . | G2 . D3 . G2 . D3 . | A2 . E3 . A2 . E3 . | E2 . B2  . E2 . B2  .',
+].join(' | ');
+// kick on 1/3, snare on 2/4; roll fills close each 4-bar phrase
+MARCH.drums = [
+  'K - S - K - S - | K - S - K - S - | K - S - K - S - | K - S - K - S S',
+  'K - S - K - S - | K - S - K - S - | K - S - K - S - | K - S - K - S S',
+  'K - S - K - S - | K - S - K - S - | K - S - K - S - | K - S - K - S S',
+  'K - S - K - S - | K - S - K - S - | K - S - K - S - | K - S - S S S S',
+].join(' | ');
+
+const NOTE_SEMI = { C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5, 'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11 };
+function parseTrack(s) {
+  const notes = []; let steps = 0;
+  for (const tok of s.split(/\s+/)) {
+    if (tok === '' || tok === '|') continue;
+    if (tok === '.') { if (notes.length) notes[notes.length - 1].dur++; steps++; continue; }
+    if (tok === '-') { steps++; continue; }
+    const m = /^([A-G]#?)(\d)$/.exec(tok);
+    const semi = NOTE_SEMI[m[1]] + 12 * (+m[2] + 1);
+    notes.push({ step: steps, dur: 1, freq: 440 * Math.pow(2, (semi - 69) / 12) });
+    steps++;
+  }
+  return { notes, steps };
+}
+function parseDrums(s) {
+  const hits = []; let steps = 0;
+  for (const tok of s.split(/\s+/)) {
+    if (tok === '' || tok === '|') continue;
+    if (tok === 'K' || tok === 'S') hits.push({ step: steps, kind: tok });
+    steps++;
+  }
+  return { hits, steps };
+}
+const marchLead = parseTrack(MARCH.lead), marchHarm = parseTrack(MARCH.harmony),
+      marchBass = parseTrack(MARCH.bass), marchDrums = parseDrums(MARCH.drums);
+const MARCH_STEPS = marchLead.steps;
+const MARCH_STEP_DUR = 60 / MARCH.bpm / 2;        // one 8th note
+
+// scheduled chip voice: sustain then quick release, into musicBus
+function mnote(freq, t0, dur, type, vol) {
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.setValueAtTime(vol, t0 + dur * 0.7);
+  g.gain.linearRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(musicBus);
+  o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function mkick(t0) {
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(110, t0);
+  o.frequency.exponentialRampToValueAtTime(40, t0 + 0.09);
+  g.gain.setValueAtTime(0.5, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.1);
+  o.connect(g); g.connect(musicBus);
+  o.start(t0); o.stop(t0 + 0.12);
+}
+function msnare(t0) {
+  const n = (AC.sampleRate * 0.08) | 0, buf = AC.createBuffer(1, n, AC.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const src = AC.createBufferSource(); src.buffer = buf;
+  const f = AC.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 900;
+  const g = AC.createGain(); g.gain.value = 0.3;
+  src.connect(f); f.connect(g); g.connect(musicBus);
+  src.start(t0);
+}
+
+let musicOn = false, musicMuted = false, musicTimer = null, musicStep = 0, musicNextT = 0;
+function musicTick() {
+  if (!AC) return;
+  const ahead = AC.currentTime + 0.18;
+  while (musicNextT < ahead) {
+    const t = musicNextT, s = musicStep;
+    for (const n of marchLead.notes) if (n.step === s) mnote(n.freq, t, n.dur * MARCH_STEP_DUR - 0.03, 'square', 0.05);
+    for (const n of marchHarm.notes) if (n.step === s) mnote(n.freq, t, 0.12, 'sawtooth', 0.022);
+    for (const n of marchBass.notes) if (n.step === s) mnote(n.freq, t, 0.2, 'triangle', 0.11);
+    for (const h of marchDrums.hits) if (h.step === s) (h.kind === 'K' ? mkick : msnare)(t);
+    musicStep = (s + 1) % MARCH_STEPS;
+    musicNextT = t + MARCH_STEP_DUR;
+  }
+}
+function musicStart() {
+  if (musicOn || !AC) return;
+  musicOn = true;
+  musicStep = 0; musicNextT = AC.currentTime + 0.05;   // always restart at the hook
+  musicBus.gain.cancelScheduledValues(AC.currentTime);
+  musicBus.gain.setTargetAtTime(musicMuted ? 0 : 1, AC.currentTime, 0.06);
+  musicTimer = setInterval(musicTick, 30);
+  musicTick();
+}
+function musicStop() {
+  if (!musicOn) return;
+  musicOn = false;
+  clearInterval(musicTimer); musicTimer = null;
+  musicBus.gain.cancelScheduledValues(AC.currentTime);
+  musicBus.gain.setTargetAtTime(0, AC.currentTime, 0.12);   // ~0.4s fade-out
+}
+function toggleMusicMute() {
+  musicMuted = !musicMuted;
+  if (AC && musicOn) musicBus.gain.setTargetAtTime(musicMuted ? 0 : 1, AC.currentTime, 0.06);
+  say(musicMuted ? 'MUSIC OFF — M TO RESTORE' : 'MUSIC ON');
+}
+
 // ---------------------------------------------------------------- state
 const player = {
   x: 19.5, y: 43.5, dirX: 0, dirY: -1, planeX: FOV_PLANE, planeY: 0,
@@ -2200,7 +2330,7 @@ genLightSprites();
 resetGame();
 if (/[?&]auto/.test(location.search)) { mode = 'play'; }
 if (/[?&]debug/.test(location.search)) {
-  window.__dbg = { player, enemies, props, items, doors, lamps, seen, map, seepSpots, floorDecals, rotate, setMode: m => { mode = m; }, getMode: () => mode, getAudioState: () => (AC ? AC.state : 'none'), getLampHum: () => lampHumLevel, setPaused: p => { paused = p; }, getBuses: () => ({ game: gameBus ? gameBus.gain.value : -1, music: musicBus ? musicBus.gain.value : -1 }) };
+  window.__dbg = { player, enemies, props, items, doors, lamps, seen, map, seepSpots, floorDecals, rotate, setMode: m => { mode = m; }, getMode: () => mode, getAudioState: () => (AC ? AC.state : 'none'), getLampHum: () => lampHumLevel, setPaused: p => { paused = p; }, getBuses: () => ({ game: gameBus ? gameBus.gain.value : -1, music: musicBus ? musicBus.gain.value : -1 }), musicStart, musicStop, getMusic: () => ({ on: musicOn, muted: musicMuted, step: musicStep, gain: musicBus ? musicBus.gain.value : -1, steps: [marchLead.steps, marchHarm.steps, marchBass.steps, marchDrums.steps] }) };
 }
 requestAnimationFrame(frame);
 </script>
