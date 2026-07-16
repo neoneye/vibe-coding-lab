@@ -888,17 +888,19 @@ function genLightSprites() {
 }
 
 // ---------------------------------------------------------------- audio
-let AC = null, humNodes = null, lampBuzz = null, lampHumLevel = 0;
+let AC = null, gameBus = null, musicBus = null, humNodes = null, lampBuzz = null, lampHumLevel = 0;
 function audioInit() {
   if (AC) return;
   try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { AC = null; }
   if (!AC) return;
+  gameBus = AC.createGain(); gameBus.connect(AC.destination);
+  musicBus = AC.createGain(); musicBus.gain.value = 0; musicBus.connect(AC.destination);
   // fluorescent hum + room tone
   const osc = AC.createOscillator(); osc.type = 'sawtooth'; osc.frequency.value = 60;
   const osc2 = AC.createOscillator(); osc2.type = 'sine'; osc2.frequency.value = 120;
   const g = AC.createGain(); g.gain.value = 0.012;
   const flt = AC.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = 300;
-  osc.connect(flt); osc2.connect(flt); flt.connect(g); g.connect(AC.destination);
+  osc.connect(flt); osc2.connect(flt); flt.connect(g); g.connect(gameBus);
   osc.start(); osc2.start();
   humNodes = { g, flt };
   // sodium-lamp ballast buzz: 120Hz mains rasp whose gain rides the
@@ -906,7 +908,7 @@ function audioInit() {
   const bo = AC.createOscillator(); bo.type = 'sawtooth'; bo.frequency.value = 120;
   const bf = AC.createBiquadFilter(); bf.type = 'bandpass'; bf.frequency.value = 650; bf.Q.value = 1.8;
   const bg = AC.createGain(); bg.gain.value = 0;
-  bo.connect(bf); bf.connect(bg); bg.connect(AC.destination);
+  bo.connect(bf); bf.connect(bg); bg.connect(gameBus);
   bo.start();
   lampBuzz = { g: bg };
 }
@@ -916,7 +918,7 @@ function tone(freq, dur, type, vol, slideTo) {
   o.type = type || 'square'; o.frequency.value = freq;
   if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), AC.currentTime + dur);
   g.gain.value = vol || 0.1; g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
-  o.connect(g); g.connect(AC.destination); o.start(); o.stop(AC.currentTime + dur + 0.02);
+  o.connect(g); g.connect(gameBus); o.start(); o.stop(AC.currentTime + dur + 0.02);
 }
 function noiseBurst(dur, vol, freq) {
   if (!AC) return;
@@ -925,7 +927,7 @@ function noiseBurst(dur, vol, freq) {
   const src = AC.createBufferSource(); src.buffer = buf;
   const flt = AC.createBiquadFilter(); flt.type = 'bandpass'; flt.frequency.value = freq || 900; flt.Q.value = 0.7;
   const g = AC.createGain(); g.gain.value = vol || 0.2;
-  src.connect(flt); flt.connect(g); g.connect(AC.destination); src.start();
+  src.connect(flt); flt.connect(g); g.connect(gameBus); src.start();
 }
 // rusty hinge: a stick-slip squeal — sawtooth with jittering pitch through a
 // resonant bandpass, gain stuttering as the hinge catches and slips
@@ -944,7 +946,7 @@ function doorCreak(vol, dur, f0) {
   const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f0 * 1.6; bp.Q.value = 5;
   const g = AC.createGain();
   g.gain.setValueCurveAtTime(gn, t0, dur);
-  o.connect(bp); bp.connect(g); g.connect(AC.destination);
+  o.connect(bp); bp.connect(g); g.connect(gameBus);
   o.start(t0); o.stop(t0 + dur + 0.05);
 }
 const sfx = {
@@ -2157,11 +2159,10 @@ function frame(now) {
   lastT = now;
   gameTime += (mode === 'play' && !paused) ? dt : dt * 0.4;
 
-  // pause silences everything: park the whole AudioContext
+  // pause ducks the game bus; menu/pause music rides its own bus
   if (AC) {
-    const wantAudio = !(mode === 'play' && paused);
-    if (!wantAudio && AC.state === 'running') AC.suspend();
-    else if (wantAudio && AC.state === 'suspended') AC.resume();
+    const gameAudible = !(mode === 'play' && paused);
+    gameBus.gain.setTargetAtTime(gameAudible ? 1 : 0, AC.currentTime, 0.05);
   }
   if (msgT > 0) msgT -= dt;
 
@@ -2199,7 +2200,7 @@ genLightSprites();
 resetGame();
 if (/[?&]auto/.test(location.search)) { mode = 'play'; }
 if (/[?&]debug/.test(location.search)) {
-  window.__dbg = { player, enemies, props, items, doors, lamps, seen, map, seepSpots, floorDecals, rotate, setMode: m => { mode = m; }, getMode: () => mode, getAudioState: () => (AC ? AC.state : 'none'), getLampHum: () => lampHumLevel };
+  window.__dbg = { player, enemies, props, items, doors, lamps, seen, map, seepSpots, floorDecals, rotate, setMode: m => { mode = m; }, getMode: () => mode, getAudioState: () => (AC ? AC.state : 'none'), getLampHum: () => lampHumLevel, setPaused: p => { paused = p; }, getBuses: () => ({ game: gameBus ? gameBus.gain.value : -1, music: musicBus ? musicBus.gain.value : -1 }) };
 }
 requestAnimationFrame(frame);
 </script>
