@@ -2,7 +2,9 @@
 
 Date: 2026-07-16
 Project: `3d-game-basement/`
-Status: approved
+Status: shipped, but muted by default (owner call 2026-07-16 — neither
+composition passed the listen gate; engine and both tunes' history stay in
+git, M is an undocumented toggle for auditioning future retunes)
 
 ## Goal
 

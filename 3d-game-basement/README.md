@@ -29,7 +29,6 @@ marble. You live in the mold. Tonight you take the pipe and go upstairs.
 | Shift | sneak (guards spot you later, aim worse) |
 | Tab (hold) | map |
 | F | fullscreen (Esc leaves) |
-| M | music on/off (title, pause, dead, win screens) |
 
 ## Progression
 
@@ -53,8 +52,8 @@ wing side chamber) → the throne hall.
   gas-masked billboard mirrored across the glass plane and clipped, column by
   column, to the screen columns that actually hit mirror glass — grime
   streaks and panel frames cut into it.
-- WebAudio-synthesized sound (hum, shots, alarm, stings) plus a sequenced
-  16-bar chiptune march on the title/pause/dead/win screens — gameplay
-  itself stays music-free.
+- WebAudio-synthesized sound (hum, shots, alarm, stings). A sequenced
+  chiptune march for the menu screens lives in the code but ships muted
+  pending a better tune.
 - URL params: `?auto` skips the title screen; `?debug` exposes
   `window.__dbg` (player/enemies/doors) for scripted testing.
