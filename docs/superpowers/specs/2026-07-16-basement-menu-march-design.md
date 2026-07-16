@@ -25,6 +25,16 @@ head.
 
 ## The track
 
+> **Retune 2026-07-16:** after shipping, the owner supplied a reference
+> track (`basement1.m4a`). Spectral analysis put it at ~96 BPM in C minor
+> with i–bVI–bVII harmony (Cm/Ab/Bb + Fm and a major-V), a C5→G5 leap
+> answered by an Ab5–F5–G5 descent, Eb–F–D–Eb turn figures, and a held
+> C6→B5→G5 climax. The march was recomposed around those gestures:
+> C minor, 96 BPM, progression Cm Ab Bb Cm / Cm Ab Fm G / Ab Bb Cm G /
+> Cm Ab Bb Cm. Engine, grid (8 tokens/bar, 128 steps), and all other
+> sections below are unchanged; original composition details below
+> describe v1.
+
 - ~16-bar loop, E minor, ~126 BPM, seamless wrap.
 - March skeleton: root–fifth oom-pah bass, snare on backbeats with roll fills,
   a short punchy 4-note hook that opens the melody and recurs.
