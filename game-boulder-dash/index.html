@@ -431,6 +431,25 @@ function fitCanvasMetrics(innerW, innerH, dpr, cw, ch) {
   return { pxW, pxH, cssW: pxW / dpr, cssH: pxH / dpr, sx: pxW / cw, sy: pxH / ch };
 }
 
+// Roman garment/hair attributes for one spectator seat. rnd(salt) must be a
+// deterministic [0,1) source for the seat, so a seat always dresses the same.
+function spectatorLook(rnd) {
+  const g = rnd(21);
+  const look = {
+    garment: g < 0.45 ? "tunic" : g < 0.70 ? "toga" : "stola",
+    hairIdx: Math.floor(rnd(22) * 5),
+    pallaUp: false, bun: false, praetexta: false, bald: false,
+  };
+  if (look.garment === "toga") look.praetexta = rnd(23) < 0.15;
+  if (look.garment === "stola") {
+    look.pallaUp = rnd(24) < 0.5;
+    look.bun = !look.pallaUp;
+  } else {
+    look.bald = rnd(25) < 0.1;
+  }
+  return look;
+}
+
 // ============================================================================
 // Tests — run via `node test.mjs` (extracts this block).
 // ============================================================================
@@ -688,6 +707,29 @@ const ColosseumTests = {
       assert(tiny.pxW >= 1 && tiny.pxH >= 1, "never a zero-sized canvas");
     });
 
+    test("audience: Roman garment mix with coherent accessories", () => {
+      // mirrors the presentation hash(): seat id + salt, unsigned final shift
+      const h = (i, salt) => {
+        let x = (i * 374761393 + salt * 668265263) | 0;
+        x = (x ^ (x >> 13)) * 1274126177 | 0;
+        return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+      };
+      const n = { tunic: 0, toga: 0, stola: 0 };
+      for (let i = 0; i < 4000; i++) {
+        const L = spectatorLook((salt) => h(i, salt));
+        n[L.garment]++;
+        assert(L.hairIdx >= 0 && L.hairIdx < 5, "hair index in range");
+        if (L.pallaUp || L.bun) assert(L.garment === "stola", "palla/bun only with a stola");
+        if (L.garment === "stola") assert(L.pallaUp !== L.bun, "stola: palla up or bun, never both");
+        if (L.praetexta) assert(L.garment === "toga", "purple stripe only on a toga");
+        if (L.bald) assert(L.garment !== "stola", "matrons are never bald");
+      }
+      const f = (k) => n[k] / 4000;
+      assert(Math.abs(f("tunic") - 0.45) < 0.05, `tunic share ~45%, got ${f("tunic")}`);
+      assert(Math.abs(f("toga") - 0.25) < 0.05, `toga share ~25%, got ${f("toga")}`);
+      assert(Math.abs(f("stola") - 0.30) < 0.05, `stola share ~30%, got ${f("stola")}`);
+    });
+
     test("input: a tap released before the next tick still moves once", () => {
       const inp = createInput();
       inputPress(inp, DIR.RIGHT);
@@ -881,7 +923,8 @@ const ColosseumTests = {
   function hash(x, y, salt = 0) {
     let h = (x * 374761393 + y * 668265263 + salt * 1442695041) | 0;
     h = (h ^ (h >> 13)) * 1274126177 | 0;
-    return ((h ^ (h >> 16)) >>> 0) / 4294967296;
+    // unsigned final shift: a signed one cancels bit 31 and caps output at 0.5
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   }
 
   // ==========================================================================
