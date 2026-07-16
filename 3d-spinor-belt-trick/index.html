@@ -287,6 +287,72 @@ const cube = new THREE.Mesh(
 );
 scene.add(cube);
 
+// --- Belts: one ribbon per cube face, from face center to wall anchor ---
+const SEG = 64;            // samples along each belt
+const HALF_W = 0.14;       // ribbon half-width
+
+function makeStripeTexture() {
+  const c = document.createElement("canvas");
+  c.width = 64; c.height = 8;
+  const g = c.getContext("2d");
+  g.fillStyle = "#d97b29";           // belt front body
+  g.fillRect(0, 0, 64, 8);
+  g.fillStyle = "#f5e9d0";           // center stripe
+  g.fillRect(24, 0, 16, 8);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const frontMat = new THREE.MeshLambertMaterial({ map: makeStripeTexture(), side: THREE.FrontSide });
+const backMat = new THREE.MeshLambertMaterial({ color: 0x30507a, side: THREE.BackSide });
+
+// Ribbon width direction at rest, one per entry in DIRS (must be ⊥ to it).
+const WIDTH_DIRS = [[0,1,0], [0,1,0], [1,0,0], [1,0,0], [1,0,0], [1,0,0]];
+
+const belts = DIRS.map((d, di) => {
+  const face = d.map(c => c * (CUBE / 2 + 0.01));
+  const wall = d.map(c => c * (ROOM / 2 - 0.04));
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array((SEG + 1) * 2 * 3);
+  const uvs = new Float32Array((SEG + 1) * 2 * 2);
+  const indices = [];
+  for (let i = 0; i <= SEG; i++) {
+    uvs[(i * 2) * 2] = 0;     uvs[(i * 2) * 2 + 1] = i / SEG;
+    uvs[(i * 2 + 1) * 2] = 1; uvs[(i * 2 + 1) * 2 + 1] = i / SEG;
+    if (i < SEG) {
+      const a = i * 2, b = i * 2 + 1, c2 = i * 2 + 2, e = i * 2 + 3;
+      indices.push(a, b, c2, b, e, c2);
+    }
+  }
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  scene.add(new THREE.Mesh(geometry, frontMat));
+  scene.add(new THREE.Mesh(geometry, backMat));
+  return { face, wall, w0: WIDTH_DIRS[di], geometry };
+});
+
+function updateBelts(t) {
+  for (const belt of belts) {
+    const pos = belt.geometry.attributes.position.array;
+    for (let i = 0; i <= SEG; i++) {
+      const u = i / SEG;
+      const center = beltPoint(u, t, belt.face, belt.wall);
+      const wv = qRotateVec(beltQuat(u, t), belt.w0);
+      pos[i * 6 + 0] = center[0] - wv[0] * HALF_W;
+      pos[i * 6 + 1] = center[1] - wv[1] * HALF_W;
+      pos[i * 6 + 2] = center[2] - wv[2] * HALF_W;
+      pos[i * 6 + 3] = center[0] + wv[0] * HALF_W;
+      pos[i * 6 + 4] = center[1] + wv[1] * HALF_W;
+      pos[i * 6 + 5] = center[2] + wv[2] * HALF_W;
+    }
+    belt.geometry.attributes.position.needsUpdate = true;
+    belt.geometry.computeVertexNormals();
+    belt.geometry.computeBoundingSphere();
+  }
+}
+
 // --- Controls / animation state ---
 const angleSlider = document.getElementById("angle");
 const angleVal = document.getElementById("angleVal");
@@ -326,6 +392,7 @@ function renderFrame() {
   const t = angleDeg / 720;
   const q = cubeQuat(t);
   cube.quaternion.set(q.x, q.y, q.z, q.w);
+  updateBelts(t);
   angleSlider.value = angleDeg;
   angleVal.textContent = `${Math.round(angleDeg)}°`;
   controls.update();
