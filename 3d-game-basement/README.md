@@ -28,6 +28,7 @@ marble. You live in the mold. Tonight you take the pipe and go upstairs.
 | 1 / 2 / 3 | fists / lead pipe / slingshot |
 | Shift | sneak (guards spot you later, aim worse) |
 | Tab (hold) | map |
+| F | fullscreen (Esc leaves) |
 
 ## Progression
 

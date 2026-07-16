@@ -25,7 +25,8 @@ Open `index.html` in any modern browser. That's it.
 | Tab / Shift+Tab | Cycle weapon |
 | Space | Fire |
 | M | Toggle sound |
-| Esc | Quit to menu |
+| F | Fullscreen |
+| Esc | Leave fullscreen, else quit to menu |
 
 The HUD buttons mirror everything for mouse play.
 

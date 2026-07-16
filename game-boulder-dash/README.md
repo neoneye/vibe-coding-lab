@@ -55,6 +55,7 @@ box is a proper temple front with fluted columns and a pediment.
 | R | Retreat (restart level, costs a life) |
 | P | Pause |
 | M | Mute |
+| F | Fullscreen (Esc leaves) |
 
 ## Development
 

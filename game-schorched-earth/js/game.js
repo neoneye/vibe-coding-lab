@@ -424,7 +424,9 @@ window.SE = window.SE || {};
     function onKeyDown(e) {
         if (state !== 'playing') return;
         if (e.key === 'Escape') {
-            if (window.confirm('Quit to menu?')) quitToTitle();
+            // leaving fullscreen comes first; press Escape again to quit
+            if (document.fullscreenElement) document.exitFullscreen();
+            else if (window.confirm('Quit to menu?')) quitToTitle();
             return;
         }
         if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'Tab'].indexOf(e.key) >= 0) {
@@ -530,6 +532,15 @@ window.SE = window.SE || {};
             SE.audio.unlock();
             if (e.key === 'm' || e.key === 'M') {
                 banner(SE.audio.toggleMute() ? 'Sound off' : 'Sound on', 900);
+            }
+            // F toggles fullscreen on every screen; Escape (or the browser's
+            // native handling) leaves. fitToViewport refits on resize.
+            if ((e.key === 'f' || e.key === 'F') && !e.repeat) {
+                if (document.fullscreenElement) document.exitFullscreen();
+                else document.documentElement.requestFullscreen().catch(function () {});
+            }
+            if (e.key === 'Escape' && document.fullscreenElement) {
+                document.exitFullscreen();
             }
         });
     }
