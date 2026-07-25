@@ -609,6 +609,121 @@ MoatTests.add("census narrative is plain deadpan prose", () => {
   assert(typeof text === "string" && text.length > 10, "narrative must be prose");
   assert(!/[!]/.test(text), "no exclamation marks in event copy");
 });
+
+// ============ handler hours: the day's currency ============
+// One pool funds the census, inspection, maintenance, the vet and the airspace
+// watch. A thorough count is three hours not spent looking at culvert 4.
+const BRIEFING_ACTIONS = [
+  { id: "inspect-structure", label: "Inspect a structure", hours: 1.5,
+    description: "Reveals true integrity for one perimeter element." },
+  { id: "grate-maintenance", label: "Grate and culvert maintenance", hours: 2,
+    description: "Restores culvert integrity. Nobody wants to spend the morning on it." },
+  { id: "bank-repair", label: "Bank and fence repair", hours: 2.5,
+    description: "Restores bank angle and fence line. Silt builds a ramp if left." },
+  { id: "vet-visit", label: "Veterinary call-out", hours: 2,
+    description: "Treats the worst-affected animal. Costs money as well as hours." },
+  { id: "airspace-watch", label: "Airspace watch", hours: 1,
+    description: "Someone looks up. Nobody budgets for this." },
+  { id: "staff-rest", label: "Rostered rest", hours: 1.5,
+    description: "Hours spent not working. Reduces fatigue, which is how incidents start." },
+];
+
+function dailyHandlerHours(state) {
+  const raw = state.staff.handlers * 6;
+  return Math.round(raw * (1 - clamp01(state.staff.fatigue) * 0.45) * 4) / 4;
+}
+
+function hoursRemaining(state) {
+  return Math.round((state.hours.budget - state.hours.spent) * 100) / 100;
+}
+
+function beginDay(state) {
+  state.hours.budget = dailyHandlerHours(state);
+  state.hours.spent = 0;
+  state.hours.allocations = {};
+  logEvent(state, `Morning briefing. ${state.hours.budget} handler-hours available.`, "info");
+}
+
+function allocateHours(state, actionId, amount) {
+  const action = BRIEFING_ACTIONS.find(a => a.id === actionId);
+  if (!action) return false;
+  const cost = amount === undefined ? action.hours : amount;
+  if (cost > hoursRemaining(state) + 1e-9) return false;
+  state.hours.spent += cost;
+  state.hours.allocations[actionId] = (state.hours.allocations[actionId] || 0) + cost;
+  return true;
+}
+
+function endDay(state) {
+  const load = state.hours.budget > 0 ? clamp01(state.hours.spent / state.hours.budget) : 0;
+  const rest = (state.hours.allocations["staff-rest"] || 0) * 0.04;
+  state.staff.fatigue = clamp01(state.staff.fatigue + load * 0.12 - 0.07 - rest);
+}
+
+// ============ tests: handler hours ============
+MoatTests.add("more handlers means more hours", () => {
+  const s = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  s.staff.fatigue = 0;
+  s.staff.handlers = 2; const few = dailyHandlerHours(s);
+  s.staff.handlers = 5; const many = dailyHandlerHours(s);
+  assert(many > few, `more handlers must yield more hours: ${many} vs ${few}`);
+});
+
+MoatTests.add("fatigue reduces the available pool", () => {
+  const s = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  s.staff.handlers = 3;
+  s.staff.fatigue = 0; const fresh = dailyHandlerHours(s);
+  s.staff.fatigue = 0.9; const tired = dailyHandlerHours(s);
+  assert(tired < fresh, `fatigue must cost hours: ${tired} vs ${fresh}`);
+  assert(tired > 0, "a tired crew still turns up");
+});
+
+MoatTests.add("beginDay refills the pool and clears allocations", () => {
+  const s = createState({ seed: 2, clientId: "voss", crocCount: 12 });
+  s.hours.spent = 5; s.hours.allocations = { "vet-visit": 2 };
+  beginDay(s);
+  assertEq(s.hours.spent, 0);
+  assertEq(s.hours.allocations, {});
+  assert(s.hours.budget > 0, "pool must be refilled");
+});
+
+MoatTests.add("allocations draw down the same pool the census uses", () => {
+  const s = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  beginDay(s);
+  const budget = s.hours.budget;
+  runCensus(s, "thorough");                       // 3 hours
+  assertClose(hoursRemaining(s), budget - 3, 0.001);
+  assertEq(allocateHours(s, "vet-visit", 2), true);
+  assertClose(hoursRemaining(s), budget - 5, 0.001);
+});
+
+MoatTests.add("allocation fails when the pool is exhausted", () => {
+  const s = createState({ seed: 4, clientId: "voss", crocCount: 12 });
+  beginDay(s);
+  s.hours.spent = s.hours.budget - 0.5;
+  assertEq(allocateHours(s, "grate-maintenance", 2), false);
+  assertClose(hoursRemaining(s), 0.5, 0.001, "a failed allocation must not spend anything");
+});
+
+MoatTests.add("a long day raises fatigue and a short one lets it recover", () => {
+  const busy = createState({ seed: 5, clientId: "voss", crocCount: 12 });
+  const quiet = createState({ seed: 5, clientId: "voss", crocCount: 12 });
+  for (const s of [busy, quiet]) { s.staff.fatigue = 0.4; beginDay(s); }
+  busy.hours.spent = busy.hours.budget;
+  quiet.hours.spent = 0;
+  endDay(busy); endDay(quiet);
+  assert(busy.staff.fatigue > quiet.staff.fatigue, "working the full pool must tire the crew");
+  assert(quiet.staff.fatigue < 0.4, "a quiet day must let fatigue recover");
+});
+
+MoatTests.add("every briefing action declares hours and a description", () => {
+  assert(BRIEFING_ACTIONS.length >= 6, "expected the full action list");
+  for (const a of BRIEFING_ACTIONS) {
+    assert(typeof a.id === "string" && a.id.length > 0, "action needs an id");
+    assert(a.hours > 0, `${a.id} must cost hours`);
+    assert(typeof a.description === "string" && a.description.length > 0, `${a.id} needs a description`);
+  }
+});
 </script>
 <script>
 "use strict";
