@@ -186,6 +186,255 @@ MoatTests.add("activity is always clamped to 0..100", () => {
     assert(a >= 0 && a <= 100, `activity out of range: ${a}`);
   }
 });
+
+// ============ constants ============
+const CROC_NAMES = [
+  "Ambrose", "Beatrix", "Cornelius", "Dagmar", "Edwina", "Ferdinand",
+  "Griselda", "Horace", "Ingeborg", "Jasper", "Klaus", "Lavinia",
+  "Mortimer", "Nerissa", "Ozymandias", "Perpetua", "Quintus", "Rosalind",
+  "Sigmund", "Theodora", "Ulric", "Vespasia", "Wilhelm", "Xanthe",
+];
+const HOURS_PER_DAY = 24;
+
+// ============ state construction ============
+function createState({ seed, clientId, crocCount }) {
+  const state = {
+    seed, rngState: seed >>> 0, clientId,
+    day: 1, hour: 6, contractDays: 40,
+    crocs: [], licensedHeadcount: crocCount,
+    facility: {
+      heaterSetpoint: 26, shadeCoverage: 0.4, waterDepth: 2.0,
+      filtration: 0.6, baskingPlatforms: Math.ceil(crocCount * 0.6),
+      feedIntervalDays: 5, feedVolume: 1.0,
+    },
+    env: {
+      baseAmbient: 24, ambient: 24, waterTemp: 24, turbidity: 0.45, ammonia: 0.1,
+      waterLevel: 0.55, weather: "clear", weatherDaysLeft: 0, powered: true,
+    },
+    staff: { handlers: 3, vet: 0.5, guards: 2, pr: 0, fatigue: 0.1 },
+    hours: { budget: 0, spent: 0, allocations: {} },
+    structures: [], money: 50000, satisfaction: 70, activity: 0,
+    lastFedDay: 0, feedTimesLog: [],
+    log: [], redFlags: [], pending: [],
+    ledger: {
+      minor: 0, serious: 0, fatal: 0, breaches: 0, breachesSuccessful: 0,
+      welfareFindings: 0, welfareCritical: 0, lostAnimals: 0, fatalities: 0,
+    },
+    status: "running",
+  };
+  for (let i = 0; i < crocCount; i++) {
+    state.crocs.push({
+      id: i + 1,
+      name: CROC_NAMES[i % CROC_NAMES.length] + (i >= CROC_NAMES.length ? " II" : ""),
+      sex: rngNext(state) < 0.45 ? "f" : "m",
+      length: 2.4 + rngNext(state) * 2.2,
+      health: 0.88 + rngNext(state) * 0.12,
+      hunger: 0.25 + rngNext(state) * 0.2,
+      bodyTemp: 24, stress: 0.1,
+      state: "submerged", present: true,
+      x: 0.05 + rngNext(state) * 0.9, y: 0.05 + rngNext(state) * 0.9,
+    });
+  }
+  state.env.ambient = ambientTemp(state);
+  state.env.waterTemp = waterTempFor(state);
+  recomputeActivity(state);
+  return state;
+}
+
+function logEvent(state, text, kind) {
+  state.log.push({ day: state.day, hour: state.hour, text, kind: kind || "info" });
+  if (state.log.length > 400) state.log.shift();
+}
+
+// ============ environment ============
+function ambientTemp(state) {
+  const seasonal = Math.sin(((state.day % 360) / 360) * Math.PI * 2) * 6;
+  const daily = Math.sin(((state.hour - 9) / 24) * Math.PI * 2) * 5;
+  const weatherOffset = { clear: 0, rain: -3, storm: -5, coldsnap: -14, heat: 9 }[state.env.weather] || 0;
+  const base = state.env.baseAmbient !== undefined ? state.env.baseAmbient : 24;
+  return base + seasonal + daily + weatherOffset;
+}
+
+// Heaters only add heat, and only while there is power to run them.
+function waterTempFor(state) {
+  const air = state.env.ambient;
+  const set = state.facility.heaterSetpoint;
+  if (set <= air || !state.env.powered) return air;
+  return air + (set - air) * 0.75;
+}
+
+function baskingAccessFor(state) {
+  const wanting = state.crocs.filter(c => c.present).length;
+  if (wanting === 0) return 1;
+  const capacity = state.facility.baskingPlatforms;
+  const shadePenalty = clamp01(state.facility.shadeCoverage) * 0.25;
+  return clamp01(capacity / wanting) * (1 - shadePenalty);
+}
+
+function meanOf(state, key) {
+  const present = state.crocs.filter(c => c.present);
+  if (present.length === 0) return 0;
+  return present.reduce((sum, c) => sum + c[key], 0) / present.length;
+}
+function meanHunger(state) { return meanOf(state, "hunger"); }
+function meanHealth(state) { return meanOf(state, "health"); }
+
+function seasonFactorFor(state) {
+  return state.env.ambient < 18 ? 0.85 : 1;
+}
+
+function recomputeActivity(state) {
+  state.activity = computeActivity({
+    waterTemp: state.env.waterTemp,
+    baskingAccess: baskingAccessFor(state),
+    hunger: meanHunger(state),
+    hour: state.hour,
+    seasonFactor: seasonFactorFor(state),
+    health: meanHealth(state),
+  });
+  return state.activity;
+}
+
+// ============ hourly tick ============
+function tickHour(state) {
+  state.hour++;
+  if (state.hour >= HOURS_PER_DAY) { state.hour = 0; state.day++; }
+
+  state.env.ambient = ambientTemp(state);
+  state.env.waterTemp = waterTempFor(state);
+
+  // Water quality: waste in, filtration out. Calibrated so the default filtration
+  // setting exactly holds twelve animals — overstocking or a cut budget is what breaks it.
+  const load = state.crocs.filter(c => c.present).length * 0.0011;
+  const cleared = state.facility.filtration * (state.env.powered ? 0.022 : 0);
+  state.env.ammonia = clamp01(state.env.ammonia + load - cleared);
+  // Turbidity tracks ammonia and settles slowly toward what filtration allows.
+  const targetTurbidity = clamp01(0.75 - state.facility.filtration * 0.55 + state.env.ammonia * 0.3);
+  state.env.turbidity += (targetTurbidity - state.env.turbidity) * 0.02;
+
+  updateCrocs(state);
+  recomputeActivity(state);
+}
+
+function updateCrocs(state) {
+  const feedable = state.env.waterTemp >= 20;
+  for (const c of state.crocs) {
+    if (!c.present) continue;
+    c.bodyTemp += (state.env.waterTemp - c.bodyTemp) * 0.12;
+    // Metabolism runs on temperature: cold animals barely burn anything.
+    const metabolic = feedable ? 0.0032 * clamp01((state.env.waterTemp - 18) / 14) : 0.0002;
+    c.hunger = clamp01(c.hunger + metabolic);
+
+    // Health pressures: ammonia, starvation, crowding stress, cold.
+    let drift = 0.0004;                                   // baseline recovery
+    if (state.env.ammonia > 0.5) drift -= (state.env.ammonia - 0.5) * 0.0035;
+    if (c.hunger > 0.85) drift -= (c.hunger - 0.85) * 0.006;
+    if (state.env.waterTemp < 18) drift -= (18 - state.env.waterTemp) * 0.0006;
+    if (c.stress > 0.6) drift -= (c.stress - 0.6) * 0.002;
+    c.health = clamp01(c.health + drift);
+
+    const crowding = clamp01(1 - baskingAccessFor(state));
+    c.stress = clamp01(c.stress + crowding * 0.0015 - 0.0008);
+
+    // Behaviour state, used by the renderer and the census.
+    if (state.env.waterTemp < 20) c.state = "submerged";
+    else if (state.hour >= 9 && state.hour < 16 && rngNext(state) < 0.35) c.state = "basking";
+    else if (rngNext(state) < 0.2) c.state = "hidden";
+    else if (state.activity > 55 && rngNext(state) < 0.4) c.state = "patrolling";
+    else c.state = "submerged";
+  }
+}
+
+// ============ tests: state and tick ============
+MoatTests.add("createState builds the requested number of crocodiles", () => {
+  const s = createState({ seed: 7, clientId: "voss", crocCount: 12 });
+  assertEq(s.crocs.length, 12);
+  assertEq(s.day, 1);
+  assertEq(s.hour, 6);
+  assert(s.crocs.every(c => c.present), "all animals start present");
+  assert(s.crocs.every(c => c.health > 0.8), "animals start healthy");
+  assertEq(new Set(s.crocs.map(c => c.id)).size, 12, "ids must be unique");
+});
+
+MoatTests.add("createState is reproducible from its seed", () => {
+  const a = createState({ seed: 42, clientId: "voss", crocCount: 12 });
+  const b = createState({ seed: 42, clientId: "voss", crocCount: 12 });
+  assertEq(a.crocs.map(c => c.length), b.crocs.map(c => c.length));
+});
+
+MoatTests.add("tickHour advances the clock and rolls over the day", () => {
+  const s = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  s.hour = 23;
+  const day = s.day;
+  tickHour(s);
+  assertEq(s.hour, 0);
+  assertEq(s.day, day + 1);
+});
+
+MoatTests.add("hunger rises while unfed", () => {
+  const s = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  s.crocs.forEach(c => { c.hunger = 0.2; });
+  s.env.waterTemp = 29;
+  for (let i = 0; i < 72; i++) tickHour(s);
+  assert(meanHunger(s) > 0.2, `hunger should rise when unfed, got ${meanHunger(s)}`);
+});
+
+MoatTests.add("crocodiles do not get hungry when too cold to feed", () => {
+  const warm = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  const cold = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  for (const s of [warm, cold]) s.crocs.forEach(c => { c.hunger = 0.2; });
+  warm.facility.heaterSetpoint = 30; cold.facility.heaterSetpoint = 0;
+  warm.env.baseAmbient = 30; cold.env.baseAmbient = 12;
+  for (let i = 0; i < 72; i++) { tickHour(warm); tickHour(cold); }
+  assert(meanHunger(cold) < meanHunger(warm), "metabolism must slow in the cold");
+});
+
+MoatTests.add("basking access falls when platforms are scarce", () => {
+  const s = createState({ seed: 5, clientId: "voss", crocCount: 12 });
+  s.facility.baskingPlatforms = 12;
+  const plenty = baskingAccessFor(s);
+  s.facility.baskingPlatforms = 2;
+  const scarce = baskingAccessFor(s);
+  assert(scarce < plenty, `crowding must reduce basking access: ${scarce} vs ${plenty}`);
+  assert(scarce >= 0 && plenty <= 1, "basking access stays in 0..1");
+});
+
+MoatTests.add("ammonia accumulates without filtration and clears with it", () => {
+  const dirty = createState({ seed: 9, clientId: "voss", crocCount: 12 });
+  const clean = createState({ seed: 9, clientId: "voss", crocCount: 12 });
+  dirty.facility.filtration = 0; clean.facility.filtration = 1;
+  dirty.env.ammonia = 0.3; clean.env.ammonia = 0.3;
+  for (let i = 0; i < 120; i++) { tickHour(dirty); tickHour(clean); }
+  assert(dirty.env.ammonia > clean.env.ammonia, `filtration must help: ${dirty.env.ammonia} vs ${clean.env.ammonia}`);
+});
+
+MoatTests.add("bad water quality erodes health", () => {
+  const s = createState({ seed: 11, clientId: "voss", crocCount: 12 });
+  s.facility.filtration = 0;
+  s.env.ammonia = 0.95;
+  const before = meanHealth(s);
+  for (let i = 0; i < 240; i++) tickHour(s);
+  assert(meanHealth(s) < before, `health should decline in filthy water: ${meanHealth(s)} vs ${before}`);
+});
+
+MoatTests.add("recomputeActivity stores the derived value on state", () => {
+  const s = createState({ seed: 13, clientId: "voss", crocCount: 12 });
+  s.env.ambient = 30; s.facility.heaterSetpoint = 30; s.hour = 20;
+  s.env.waterTemp = waterTempFor(s);
+  s.crocs.forEach(c => { c.hunger = 0.7; });
+  const a = recomputeActivity(s);
+  assertEq(a, s.activity);
+  assert(a > 0, "warm hungry animals at dusk are not torpid");
+});
+
+MoatTests.add("logEvent records entries with a timestamp and kind", () => {
+  const s = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  logEvent(s, "Grate inspected, culvert 4.", "maintenance");
+  assertEq(s.log.length, 1);
+  assertEq(s.log[0].kind, "maintenance");
+  assertEq(s.log[0].day, 1);
+  assertEq(s.log[0].hour, 6);
+});
 </script>
 <script>
 "use strict";
