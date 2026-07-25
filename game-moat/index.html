@@ -1837,6 +1837,239 @@ MoatTests.add("reporting to the client costs standing now and halves the penalty
   assert(s.satisfaction < satisfaction, "an early report costs standing");
   assertEq(s.reportedMissing, true, "the disclosure must be recorded for grading");
 });
+
+// ============ intrusion and egress ============
+// Every method reads the same activity value the player is tuning for welfare. A
+// hungry, hot moat has a hard perimeter and an infirmary; a comfortable one has
+// happy crocodiles and security theatre.
+function feedSchedulePredictable(state) {
+  const log = state.feedTimesLog;
+  if (log.length < 3) return state.facility.feedIntervalDays <= 6;
+  const gaps = [];
+  for (let i = 1; i < log.length; i++) gaps.push(log[i] - log[i - 1]);
+  const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  const variance = gaps.reduce((a, g) => a + (g - mean) ** 2, 0) / gaps.length;
+  return variance < 1.5;
+}
+
+function deterrence(state) {
+  const a = state.activity;
+  if (a < 25) return 0.05;      // a decorative ditch
+  if (a < 45) return 0.35;      // deters the timid, not the determined
+  if (a < 70) return 0.8;
+  return 0.9;
+}
+
+const INTRUSION_METHODS = [
+  { id: "plank-bridge", label: "Plank bridge over the narrow point",
+    viability: (s) => {
+      const bank = s.structures.find(st => st.id === "bank-fence").integrity;
+      return clamp01(0.45 * (1 - deterrence(s) * 0.55) + (1 - bank) * 0.3);
+    },
+    narrative: (s, r) => r.success
+      ? "A section of scaffold board was found spanning the north narrow point at first light. It had been there some hours."
+      : "A section of scaffold board was recovered from the north bank. It did not reach." },
+  { id: "cold-morning", label: "Crossing on a cold morning",
+    viability: (s) => clamp01(0.9 - deterrence(s) * 0.95),
+    narrative: (s, r) => r.success
+      ? "Wet footprints on the inner coping, running from the water to the service door. The animals did not move."
+      : "An attempt was made at the north bank shortly before dawn. Two animals were sufficiently awake to end it." },
+  { id: "feed-time", label: "Crossing during the feed window",
+    viability: (s) => (feedSchedulePredictable(s) ? clamp01(0.65 - deterrence(s) * 0.3) : 0.12),
+    narrative: (s, r) => r.success
+      ? "Entry was made on the south side during the feed window, while every animal in the facility was at the north gate."
+      : "An attempt during the feed window was interrupted. One animal had not gone to the gate." },
+  { id: "bait-distraction", label: "Bait thrown to draw the animals off",
+    viability: (s) => clamp01(0.25 + meanHunger(s) * 0.55 - deterrence(s) * 0.2),
+    narrative: (s, r) => r.success
+      ? "Approximately six kilograms of butcher's offal were recovered from the east bank. The animals went to it. Everything else followed."
+      : "Offal was thrown to the east bank. The animals were not hungry enough to care and the attempt was abandoned." },
+  { id: "swim-under", label: "Swimming beneath the animals",
+    viability: (s) => {
+      const depth = clamp01((s.facility.waterDepth - 1) / 3);
+      const placid = clamp01(1 - s.activity / 100);
+      return clamp01(depth * placid * 0.85);
+    },
+    narrative: (s, r) => r.success
+      ? "A wetsuit and a diving regulator were recovered from the inner bank. The moat is deep enough to pass beneath a basking animal, which is a sentence that should have appeared in the design review."
+      : "A swimmer was detected in the water column and withdrew. The animals were closer to the surface than expected." },
+  { id: "culvert", label: "Through the culvert",
+    viability: (s) => {
+      const grate = s.structures.find(st => st.id === "culvert-grate").integrity;
+      return clamp01((1 - grate) * 0.9);
+    },
+    narrative: (s, r) => r.success
+      ? "Culvert 4 was entered from the outfall. The grate was displaced, not cut. It has been displaced before."
+      : "Culvert 4 shows fresh tooling on the grate. The grate held." },
+  { id: "bribed-handler", label: "A member of staff was approached",
+    viability: (s) => clamp01(clamp01(s.staff.fatigue) * 0.55 + (s.staff.pr > 0 ? 0 : 0.1)),
+    narrative: (s, r) => r.success
+      ? "The feed roster and the census timings were in the possession of a person who should not have had them. The source is not in doubt and is no longer employed."
+      : "A member of the handling team reported being approached in a car park and offered money for the feed roster." },
+  { id: "drone-line", label: "Line dropped by drone",
+    viability: (s) => clamp01(0.5 - (s.hours.allocations["airspace-watch"] ? 0.35 : 0)),
+    narrative: (s, r) => r.success
+      ? "A climbing line was found anchored to the inner parapet. Nobody was watching the airspace, because nobody has ever been funded to watch the airspace."
+      : "A drone was observed over the south moat and withdrew when the watch team illuminated it." },
+];
+
+function pickIntrusionMethod(state) {
+  const weighted = INTRUSION_METHODS.map(m => ({ m, v: m.viability(state) })).filter(x => x.v > 0.01);
+  if (weighted.length === 0) return INTRUSION_METHODS[0];
+  const total = weighted.reduce((sum, x) => sum + x.v, 0);
+  let roll = rngNext(state) * total;
+  for (const x of weighted) {
+    roll -= x.v;
+    if (roll <= 0) return x.m;
+  }
+  return weighted[weighted.length - 1].m;
+}
+
+function resolveIntrusion(state, method) {
+  state.ledger.breaches++;
+  const success = rngNext(state) < method.viability(state);
+  // Guards and watch coverage decide whether the facility ever finds out.
+  const watch = clamp01(state.staff.guards * 0.22 + (state.hours.allocations["airspace-watch"] ? 0.15 : 0));
+  const detected = rngNext(state) < clamp01(watch + (success ? 0.25 : 0.55));
+  const egress = Boolean(state.contract && state.contract.egress);
+  const narrative = method.narrative(state, { success });
+
+  if (success) {
+    state.ledger.breachesSuccessful++;
+    state.satisfaction -= egress ? 25 : 15;
+  }
+  if (detected) {
+    logEvent(state, narrative, success ? "serious" : "minor");
+    state.ledger[success ? "serious" : "minor"]++;
+  } else if (success) {
+    addRedFlag(state, `A successful ${egress ? "egress" : "entry"} on day ${state.day} was never detected: ${method.label.toLowerCase()}.`);
+  }
+  return { success, detected, narrative };
+}
+
+function maybeAttemptIntrusion(state) {
+  const base = state.contract ? state.contract.intrusionRate : 0.18;
+  const opportunism = clamp01(1 - deterrence(state)) * 0.25;
+  if (rngNext(state) > clamp01(base + opportunism)) return null;
+  return resolveIntrusion(state, pickIntrusionMethod(state));
+}
+
+// ============ tests: intrusion ============
+MoatTests.add("all eight methods are implemented with viability functions", () => {
+  const ids = INTRUSION_METHODS.map(m => m.id).sort();
+  assertEq(ids, ["bait-distraction", "bribed-handler", "cold-morning", "culvert", "drone-line", "feed-time", "plank-bridge", "swim-under"]);
+  for (const m of INTRUSION_METHODS) {
+    assert(typeof m.viability === "function", `${m.id} needs viability`);
+    assert(typeof m.narrative === "function", `${m.id} needs narrative`);
+  }
+});
+
+MoatTests.add("viability is always a probability", () => {
+  const s = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  for (const activity of [0, 20, 50, 80, 100]) {
+    s.activity = activity;
+    for (const m of INTRUSION_METHODS) {
+      const v = m.viability(s);
+      assert(v >= 0 && v <= 1, `${m.id} viability out of range at activity ${activity}: ${v}`);
+    }
+  }
+});
+
+MoatTests.add("a torpid moat is the best time to cross", () => {
+  const s = createState({ seed: 2, clientId: "voss", crocCount: 12 });
+  const cold = INTRUSION_METHODS.find(m => m.id === "cold-morning");
+  s.activity = 10; const whenTorpid = cold.viability(s);
+  s.activity = 75; const whenAggressive = cold.viability(s);
+  assert(whenTorpid > whenAggressive, `torpor must open the perimeter: ${whenTorpid} vs ${whenAggressive}`);
+});
+
+MoatTests.add("well-fed placid animals invite a swim-under", () => {
+  const s = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  s.facility.waterDepth = 3.5;
+  s.crocs.forEach(c => { c.hunger = 0.05; });
+  s.activity = 30; const placidDeep = INTRUSION_METHODS.find(m => m.id === "swim-under").viability(s);
+  s.facility.waterDepth = 1.0;
+  s.activity = 80; const shallowAlert = INTRUSION_METHODS.find(m => m.id === "swim-under").viability(s);
+  assert(placidDeep > shallowAlert, "deep water and placid animals must be exploitable");
+});
+
+MoatTests.add("hungry animals can be drawn off with bait", () => {
+  const s = createState({ seed: 4, clientId: "voss", crocCount: 12 });
+  const bait = INTRUSION_METHODS.find(m => m.id === "bait-distraction");
+  s.crocs.forEach(c => { c.hunger = 0.95; });
+  const hungry = bait.viability(s);
+  s.crocs.forEach(c => { c.hunger = 0.05; });
+  const fed = bait.viability(s);
+  assert(hungry > fed, "hunger is a lever the other side can pull too");
+});
+
+MoatTests.add("a regular feeding schedule is a published timetable", () => {
+  const s = createState({ seed: 5, clientId: "voss", crocCount: 12 });
+  s.facility.feedIntervalDays = 3; s.day = 25;
+  assertEq(feedSchedulePredictable(s), true);
+  s.feedTimesLog = [1, 4, 9, 11, 18];       // irregular
+  assertEq(feedSchedulePredictable(s), false);
+});
+
+MoatTests.add("a neglected culvert is a route in both directions", () => {
+  const s = createState({ seed: 6, clientId: "voss", crocCount: 12 });
+  const culvert = INTRUSION_METHODS.find(m => m.id === "culvert");
+  s.structures.find(st => st.id === "culvert-grate").integrity = 1;
+  const sound = culvert.viability(s);
+  s.structures.find(st => st.id === "culvert-grate").integrity = 0.1;
+  const failed = culvert.viability(s);
+  assert(failed > sound, "a failed grate must be exploitable");
+});
+
+MoatTests.add("airspace watch is the only counter to a drone line", () => {
+  const s = createState({ seed: 7, clientId: "voss", crocCount: 12 });
+  const drone = INTRUSION_METHODS.find(m => m.id === "drone-line");
+  const unwatched = drone.viability(s);
+  s.hours.allocations = { "airspace-watch": 1 };
+  const watched = drone.viability(s);
+  assert(watched < unwatched, "somebody looking up must help");
+});
+
+MoatTests.add("a bribed handler needs a tired, unhappy crew", () => {
+  const s = createState({ seed: 8, clientId: "voss", crocCount: 12 });
+  const bribe = INTRUSION_METHODS.find(m => m.id === "bribed-handler");
+  s.staff.fatigue = 0.05; const rested = bribe.viability(s);
+  s.staff.fatigue = 0.95; const exhausted = bribe.viability(s);
+  assert(exhausted > rested, "morale is a security control");
+});
+
+MoatTests.add("intrusion resolution updates the ledger", () => {
+  const s = createState({ seed: 9, clientId: "voss", crocCount: 12 });
+  s.activity = 5;
+  const result = resolveIntrusion(s, INTRUSION_METHODS.find(m => m.id === "cold-morning"));
+  assertEq(s.ledger.breaches, 1, "every attempt is a breach event");
+  assertEq(s.ledger.breachesSuccessful, result.success ? 1 : 0);
+  assert(typeof result.narrative === "string" && result.narrative.length > 0, "narrative required");
+});
+
+MoatTests.add("a torpid moat lets more attempts through than an optimal one", () => {
+  const rate = (activity) => {
+    let through = 0;
+    for (let seed = 1; seed <= 150; seed++) {
+      const s = createState({ seed, clientId: "voss", crocCount: 12 });
+      s.activity = activity;
+      if (resolveIntrusion(s, pickIntrusionMethod(s)).success) through++;
+    }
+    return through;
+  };
+  assert(rate(8) > rate(60), "the whole game rests on this");
+});
+
+MoatTests.add("an undetected successful intrusion becomes a red flag", () => {
+  let flagged = 0;
+  for (let seed = 1; seed <= 150; seed++) {
+    const s = createState({ seed, clientId: "voss", crocCount: 12 });
+    s.activity = 5; s.staff.guards = 0;
+    const r = resolveIntrusion(s, INTRUSION_METHODS.find(m => m.id === "cold-morning"));
+    if (r.success && !r.detected && s.redFlags.length > 0) flagged++;
+  }
+  assert(flagged > 0, "what you never noticed must still be counted at close-out");
+});
 </script>
 <script>
 "use strict";
@@ -2372,6 +2605,7 @@ function onMorningBriefing(s) {
   const fired = maybeFireIncident(s);
   ui.overnightIncident = fired && s.log.length > logBefore ? fired : null;
   ui.overnightText = ui.overnightIncident ? s.log[s.log.length - 1].text : "";
+  maybeAttemptIntrusion(s);
   tickWeather(s);
   endDay(s);
   beginDay(s);
