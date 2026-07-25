@@ -872,11 +872,13 @@ MoatTests.add("every briefing action declares hours and a description", () => {
 // ============ containment structures ============
 // The perimeter is not the moat. It is everything the moat touches, and every part
 // of it decays behind a value the player cannot see without spending hours on it.
+// Rates are set so that an element left alone crosses the danger threshold around
+// day 25-30 of a contract. Slower than this and neglect never costs anything.
 const STRUCTURE_DEFS = [
-  { id: "overflow-drain", name: "Overflow and storm drains", decayPerDay: 0.006, escapeRoute: true },
-  { id: "culvert-grate",  name: "Culvert grates",            decayPerDay: 0.008, escapeRoute: true },
-  { id: "service-bridge", name: "Service bridge",            decayPerDay: 0.004, escapeRoute: false },
-  { id: "bank-fence",     name: "Bank angle and fence line", decayPerDay: 0.007, escapeRoute: true },
+  { id: "overflow-drain", name: "Overflow and storm drains", decayPerDay: 0.018, escapeRoute: true },
+  { id: "culvert-grate",  name: "Culvert grates",            decayPerDay: 0.024, escapeRoute: true },
+  { id: "service-bridge", name: "Service bridge",            decayPerDay: 0.012, escapeRoute: false },
+  { id: "bank-fence",     name: "Bank angle and fence line", decayPerDay: 0.020, escapeRoute: true },
 ];
 
 function createStructures(state) {
@@ -1015,6 +1017,375 @@ MoatTests.add("briefing maintenance allocations repair the right things", () => 
   applyBriefingMaintenance(s);
   assert(grate.integrity > 0.4, "grate maintenance must repair the grate");
   assert(bank.integrity > 0.4, "bank repair must repair the bank");
+});
+
+// ============ incident engine ============
+// Incidents fire from a weighted table conditioned on current state. No incident is
+// random noise: every weight is gated on something the player did or failed to do.
+function addRedFlag(state, text) {
+  state.redFlags.push({ day: state.day, text });
+}
+
+function setWeather(state, weather, days) {
+  state.env.weather = weather;
+  state.env.weatherDaysLeft = days;
+}
+
+const INCIDENTS = [
+  {
+    id: "cold-snap", cooldown: 12, category: "environmental",
+    title: "Cold snap forecast for the next three days",
+    weight: (s) => (s.env.ambient < 22 && s.env.weather !== "coldsnap" ? 3 : 0.5),
+    apply: (s) => {
+      setWeather(s, "coldsnap", 3);
+      logEvent(s, "Cold snap forecast. Three days. The animals will stop moving and the moat will stop working at the same time.", "minor");
+      s.ledger.minor++;
+    },
+  },
+  {
+    id: "power-cut", cooldown: 18, category: "environmental",
+    title: "Supply failure at the site transformer",
+    weight: (s) => (s.facility.heaterSetpoint > 15 || s.facility.filtration > 0.3 ? 2 : 0.4),
+    apply: (s) => {
+      s.env.powered = false;
+      s.pending.push({ day: s.day + 2, kind: "power-restored" });
+      logEvent(s, "Supply failure at the site transformer. Heaters and pumps are offline. Contractor attending within forty-eight hours.", "serious");
+      s.ledger.serious++;
+    },
+  },
+  {
+    id: "heavy-rain", cooldown: 5, category: "environmental",
+    title: "Heavy rain overnight",
+    weight: (s) => (s.env.weather === "rain" || s.env.weather === "storm" ? 3 : 1.5),
+    apply: (s) => {
+      setWeather(s, "storm", 2);
+      const drain = s.structures.find(st => st.id === "overflow-drain");
+      const rise = 0.12 + (1 - drain.integrity) * 0.25;
+      s.env.waterLevel = clamp01(s.env.waterLevel + rise);
+      logEvent(s, `Heavy rain overnight. Water line up. Freeboard to the coping stone now ${((1 - s.env.waterLevel) * 100).toFixed(0)} per cent of nominal.`, "minor");
+      s.ledger.minor++;
+    },
+  },
+  {
+    id: "algae-bloom", cooldown: 10, category: "environmental",
+    title: "Filter media clogged, bloom developing",
+    weight: (s) => (s.facility.filtration < 0.4 || s.env.ammonia > 0.5 ? 2.5 : 0),
+    apply: (s) => {
+      s.env.ammonia = clamp01(s.env.ammonia + 0.25);
+      s.env.turbidity = clamp01(s.env.turbidity + 0.3);
+      s.pending.push({ day: s.day + 4, kind: "bloom-worsens" });
+      logEvent(s, "Filter media clogged. Bloom developing. Four days before this becomes an inspector's finding.", "minor");
+      s.ledger.minor++;
+    },
+  },
+  {
+    id: "territorial-fight", cooldown: 7, category: "animal",
+    title: "Territorial dispute at the basking platforms",
+    weight: (s) => {
+      const males = s.crocs.filter(c => c.present && c.sex === "m").length;
+      if (males < 2) return 0;
+      const crowding = 1 - baskingAccessFor(s);
+      return crowding > 0.25 ? crowding * 6 : 0;
+    },
+    apply: (s) => {
+      const present = s.crocs.filter(c => c.present);
+      const victim = present[rngInt(s, present.length)];
+      victim.health = clamp01(victim.health - 0.28);
+      victim.stress = clamp01(victim.stress + 0.35);
+      logEvent(s, `Territorial dispute at the platforms. ${victim.name} came off worse. Veterinary attention advised.`, "serious");
+      s.ledger.serious++;
+      s.ledger.welfareFindings++;
+    },
+  },
+  {
+    id: "hunger-strike", cooldown: 12, category: "animal",
+    title: "One animal has refused food",
+    weight: (s) => (s.crocs.some(c => c.present && c.hunger > 0.7) ? 1.5 : 0),
+    apply: (s) => {
+      const candidates = s.crocs.filter(c => c.present && c.hunger > 0.7);
+      const c = candidates[rngInt(s, candidates.length)];
+      logEvent(s, `${c.name} has refused food for three weeks. This is within normal range for the species. It does not look within normal range.`, "info");
+    },
+  },
+  {
+    id: "nesting", cooldown: 30, category: "animal",
+    title: "A clutch has been laid behind the north planting",
+    weight: (s) => {
+      const females = s.crocs.filter(c => c.present && c.sex === "f" && c.health > 0.8).length;
+      return females >= 1 && s.env.waterTemp > 27 ? 1.2 : 0;
+    },
+    apply: (s) => {
+      const hatchlings = 3 + rngInt(s, 4);
+      const startId = Math.max(...s.crocs.map(c => c.id)) + 1;
+      for (let i = 0; i < hatchlings; i++) {
+        s.crocs.push({
+          id: startId + i, name: `Hatchling ${startId + i}`, sex: rngNext(s) < 0.5 ? "f" : "m",
+          length: 0.3, health: 0.9, hunger: 0.3, bodyTemp: s.env.waterTemp, stress: 0.1,
+          state: "hidden", present: true, x: rngNext(s), y: rngNext(s),
+        });
+      }
+      logEvent(s, `A clutch has hatched behind the north planting. ${hatchlings} animals. The facility is now over its licensed headcount and the permit is annual.`, "serious");
+      s.ledger.serious++;
+    },
+  },
+  {
+    id: "the-learner", cooldown: 999, category: "animal",
+    title: "One animal has learned the feeding schedule",
+    weight: (s) => (s.facility.feedIntervalDays <= 6 && s.day > 10 ? 1.8 : 0),
+    apply: (s) => {
+      s.learnerActive = true;
+      const present = s.crocs.filter(c => c.present);
+      const c = present[rngInt(s, present.length)];
+      logEvent(s, `${c.name} has begun waiting at the feed gate at the same hour each day, whether or not it is a feed day.`, "info");
+    },
+  },
+  {
+    id: "escape-via-drain", cooldown: 9, category: "animal",
+    title: "Route open at a degraded structure",
+    weight: (s) => {
+      const routes = s.structures.filter(st => {
+        const def = STRUCTURE_DEFS.find(d => d.id === st.id);
+        return def.escapeRoute && st.integrity < 0.3;
+      });
+      if (routes.length === 0) return 0;
+      const worst = Math.min(...routes.map(r => r.integrity));
+      return (0.3 - worst) * 25;
+    },
+    apply: (s) => {
+      const present = s.crocs.filter(c => c.present);
+      if (present.length === 0) return;
+      // Smaller animals leave first: a juvenile fits a gap an adult cannot.
+      const sorted = [...present].sort((a, b) => a.length - b.length);
+      const leaver = sorted[0];
+      leaver.present = false;
+      s.ledger.lostAnimals++;
+      s.escapedIds = s.escapedIds || [];
+      s.escapedIds.push(leaver.id);
+      s.pending.push({ day: s.day + 2 + rngInt(s, 4), kind: "sighting-reported", crocId: leaver.id });
+      // Deliberately silent: the player finds out at the morning census, or does not.
+      addRedFlag(s, `${leaver.name} left the facility via a degraded structure on day ${s.day}.`);
+    },
+  },
+];
+
+// A transformer that fails every fortnight is not a facility, it is a farce. Each
+// incident sits out a cooldown after firing so the log reads like a year of records.
+const DEFAULT_COOLDOWN = 6;
+
+function onCooldown(state, incident) {
+  const last = (state.incidentHistory || {})[incident.id];
+  if (last === undefined) return false;
+  return state.day - last < (incident.cooldown || DEFAULT_COOLDOWN);
+}
+
+function incidentWeights(state) {
+  const bias = (state.contract && state.contract.incidentBias) || {};
+  return INCIDENTS
+    .filter(incident => !onCooldown(state, incident))
+    .map(incident => ({ incident, weight: incident.weight(state) * (bias[incident.id] || 1) }))
+    .filter(w => w.weight > 0);
+}
+
+function pickIncident(state) {
+  const weights = incidentWeights(state);
+  if (weights.length === 0) return null;
+  const total = weights.reduce((sum, w) => sum + w.weight, 0);
+  let roll = rngNext(state) * total;
+  for (const w of weights) {
+    roll -= w.weight;
+    if (roll <= 0) return w.incident;
+  }
+  return weights[weights.length - 1].incident;
+}
+
+function applyIncident(state, incident) {
+  incident.apply(state);
+}
+
+function maybeFireIncident(state) {
+  // A well-run facility should be quiet. Pressure rises only with neglect, so the
+  // log fills up because of the player rather than because of the calendar.
+  const pressure = 0.16
+    + (1 - meanHealth(state)) * 0.4
+    + clamp01(state.staff.fatigue) * 0.3
+    + (1 - weakestStructure(state).integrity) * 0.3;
+  if (rngNext(state) > clamp01(pressure)) return null;
+  const incident = pickIncident(state);
+  if (incident) {
+    applyIncident(state, incident);
+    state.incidentHistory = state.incidentHistory || {};
+    state.incidentHistory[incident.id] = state.day;
+  }
+  return incident;
+}
+
+function applyVetVisit(state) {
+  if (!state.hours.allocations["vet-visit"]) return;
+  const present = state.crocs.filter(c => c.present);
+  if (present.length === 0) return;
+  const worst = present.reduce((a, b) => (a.health <= b.health ? a : b));
+  worst.health = clamp01(worst.health + 0.3);
+  worst.stress = clamp01(worst.stress - 0.2);
+  state.money -= 1200;
+  logEvent(state, `Veterinary call-out. ${worst.name} examined and treated.`, "maintenance");
+}
+
+function resolvePending(state) {
+  const due = state.pending.filter(p => p.day <= state.day);
+  state.pending = state.pending.filter(p => p.day > state.day);
+  for (const p of due) {
+    if (p.kind === "power-restored") {
+      state.env.powered = true;
+      logEvent(state, "Supply restored. Pumps and heaters back on line.", "info");
+    } else if (p.kind === "bloom-worsens") {
+      state.env.ammonia = clamp01(state.env.ammonia + 0.3);
+      state.ledger.welfareFindings++;
+      logEvent(state, "Water quality has continued to deteriorate. This is now documented.", "serious");
+    } else if (p.kind === "sighting-reported") {
+      const c = state.crocs.find(x => x.id === p.crocId);
+      logEvent(state, `A member of the grounds staff reports seeing an animal outside the perimeter, near the service road. ${c ? c.name : "One animal"} remains unaccounted for.`, "serious");
+      state.satisfaction -= 15;
+      state.ledger.serious++;
+    }
+  }
+}
+
+function tickWeather(state) {
+  if (state.env.weatherDaysLeft > 0) {
+    state.env.weatherDaysLeft--;
+    if (state.env.weatherDaysLeft === 0) state.env.weather = "clear";
+  }
+}
+
+// ============ tests: incident engine ============
+MoatTests.add("every incident declares the required fields", () => {
+  assert(INCIDENTS.length >= 9, `expected at least 9 incidents, got ${INCIDENTS.length}`);
+  const seen = new Set();
+  for (const inc of INCIDENTS) {
+    assert(typeof inc.id === "string" && !seen.has(inc.id), `duplicate or missing id: ${inc.id}`);
+    seen.add(inc.id);
+    assert(["environmental", "animal", "human", "external"].includes(inc.category), `${inc.id} bad category`);
+    assert(typeof inc.title === "string" && inc.title.length > 0, `${inc.id} needs a title`);
+    assert(typeof inc.weight === "function", `${inc.id} needs a weight function`);
+    assert(typeof inc.apply === "function", `${inc.id} needs an apply function`);
+  }
+});
+
+MoatTests.add("incident copy stays deadpan", () => {
+  for (const inc of INCIDENTS) {
+    assert(!/[!]/.test(inc.title), `${inc.id} title uses an exclamation mark`);
+  }
+});
+
+MoatTests.add("weights are never negative", () => {
+  const s = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  for (const inc of INCIDENTS) {
+    const w = inc.weight(s);
+    assert(w >= 0 && Number.isFinite(w), `${inc.id} produced weight ${w}`);
+  }
+});
+
+MoatTests.add("no incident is random noise: preconditions gate the weight", () => {
+  const s = createState({ seed: 2, clientId: "voss", crocCount: 12 });
+  const byId = id => INCIDENTS.find(i => i.id === id);
+
+  // A territorial fight needs males and insufficient basking capacity.
+  s.facility.baskingPlatforms = 40;
+  assertEq(byId("territorial-fight").weight(s), 0, "ample basking means no fight");
+  s.facility.baskingPlatforms = 1;
+  assert(byId("territorial-fight").weight(s) > 0, "crowding must make a fight possible");
+
+  // Algae bloom needs poor filtration.
+  s.facility.filtration = 1; s.env.ammonia = 0.05;
+  assertEq(byId("algae-bloom").weight(s), 0, "clean water does not bloom");
+  s.facility.filtration = 0.05; s.env.ammonia = 0.7;
+  assert(byId("algae-bloom").weight(s) > 0, "neglected water must bloom");
+
+  // An escape via drain needs a degraded escape route.
+  s.structures.forEach(st => { st.integrity = 1; });
+  assertEq(byId("escape-via-drain").weight(s), 0, "sound structures do not leak crocodiles");
+  s.structures.find(st => st.id === "culvert-grate").integrity = 0.1;
+  assert(byId("escape-via-drain").weight(s) > 0, "a failed grate must open a route");
+});
+
+MoatTests.add("incidentWeights excludes impossible incidents", () => {
+  const s = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  s.structures.forEach(st => { st.integrity = 1; });
+  const ids = incidentWeights(s).map(w => w.incident.id);
+  assert(!ids.includes("escape-via-drain"), "zero-weight incidents must not be candidates");
+});
+
+MoatTests.add("pickIncident is reproducible for a given seed", () => {
+  const mk = () => {
+    const s = createState({ seed: 77, clientId: "voss", crocCount: 12 });
+    s.structures.find(st => st.id === "culvert-grate").integrity = 0.1;
+    s.facility.baskingPlatforms = 1;
+    return s;
+  };
+  const a = mk(), b = mk();
+  const ra = [0, 0, 0, 0, 0].map(() => { const i = pickIncident(a); return i ? i.id : null; });
+  const rb = [0, 0, 0, 0, 0].map(() => { const i = pickIncident(b); return i ? i.id : null; });
+  assertEq(ra, rb);
+});
+
+MoatTests.add("a cold snap drives the moat torpid", () => {
+  const s = createState({ seed: 4, clientId: "voss", crocCount: 12 });
+  s.env.baseAmbient = 24; s.facility.heaterSetpoint = 0;
+  INCIDENTS.find(i => i.id === "cold-snap").apply(s);
+  for (let h = 0; h < 24; h++) tickHour(s);
+  assertEq(activityBand(s.activity), "torpid", `expected torpid, got ${s.activity}`);
+});
+
+MoatTests.add("a power cut stops heating and filtration together", () => {
+  const s = createState({ seed: 5, clientId: "voss", crocCount: 12 });
+  s.facility.filtration = 1; s.facility.heaterSetpoint = 30;
+  s.env.baseAmbient = 12; s.env.ammonia = 0.2;
+  INCIDENTS.find(i => i.id === "power-cut").apply(s);
+  const ammoniaBefore = s.env.ammonia;
+  for (let h = 0; h < 24; h++) tickHour(s);
+  assertEq(s.env.powered, false);
+  assert(s.env.waterTemp < 20, `unheated water must fall: ${s.env.waterTemp}`);
+  assert(s.env.ammonia > ammoniaBefore, "filtration is off, so quality must degrade");
+});
+
+MoatTests.add("heavy rain raises the water level toward the coping stone", () => {
+  const s = createState({ seed: 6, clientId: "voss", crocCount: 12 });
+  const before = s.env.waterLevel;
+  INCIDENTS.find(i => i.id === "heavy-rain").apply(s);
+  assert(s.env.waterLevel > before, "rain must raise the water line");
+});
+
+MoatTests.add("nesting puts the facility over its licensed headcount", () => {
+  const s = createState({ seed: 8, clientId: "voss", crocCount: 12 });
+  s.crocs[0].sex = "f"; s.crocs[0].health = 0.95;
+  const licensed = s.licensedHeadcount;
+  INCIDENTS.find(i => i.id === "nesting").apply(s);
+  assert(s.crocs.filter(c => c.present).length > licensed, "a clutch exceeds the permit");
+});
+
+MoatTests.add("an escape removes an animal and records it as unaccounted", () => {
+  const s = createState({ seed: 9, clientId: "voss", crocCount: 12 });
+  s.structures.find(st => st.id === "culvert-grate").integrity = 0.05;
+  INCIDENTS.find(i => i.id === "escape-via-drain").apply(s);
+  assertEq(s.crocs.filter(c => c.present).length, 11);
+  assertEq(s.ledger.lostAnimals, 1);
+});
+
+MoatTests.add("an escape is not announced to the player", () => {
+  const s = createState({ seed: 10, clientId: "voss", crocCount: 12 });
+  s.structures.find(st => st.id === "culvert-grate").integrity = 0.05;
+  const logBefore = s.log.length;
+  INCIDENTS.find(i => i.id === "escape-via-drain").apply(s);
+  assertEq(s.log.length, logBefore, "the player learns this from the census, not a notification");
+  assert(s.redFlags.length > 0, "an undiscovered escape is a red flag");
+});
+
+MoatTests.add("the vet call-out treats the worst-affected animal", () => {
+  const s = createState({ seed: 11, clientId: "voss", crocCount: 12 });
+  s.crocs[3].health = 0.25;
+  s.hours.allocations = { "vet-visit": 2 };
+  applyVetVisit(s);
+  assert(s.crocs[3].health > 0.25, "the vet must treat the sickest animal");
 });
 </script>
 <script>
@@ -1512,7 +1883,11 @@ function setSpeed(n) {
 // arrives at six with a clipboard, which is when the day is planned and paid for.
 function onMorningBriefing(s) {
   applyBriefingMaintenance(s);
+  applyVetVisit(s);
   decayStructures(s);
+  resolvePending(s);
+  ui.overnightIncident = maybeFireIncident(s);
+  tickWeather(s);
   endDay(s);
   beginDay(s);
   setSpeed(0);
