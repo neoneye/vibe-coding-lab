@@ -358,6 +358,7 @@ function createState({ seed, clientId, crocCount }) {
       x: 0.05 + rngNext(state) * 0.9, y: 0.05 + rngNext(state) * 0.9,
     });
   }
+  state.structures = createStructures(state);
   state.env.ambient = ambientTemp(state);
   state.env.waterTemp = waterTempFor(state);
   recomputeActivity(state);
@@ -867,6 +868,154 @@ MoatTests.add("every briefing action declares hours and a description", () => {
     assert(typeof a.description === "string" && a.description.length > 0, `${a.id} needs a description`);
   }
 });
+
+// ============ containment structures ============
+// The perimeter is not the moat. It is everything the moat touches, and every part
+// of it decays behind a value the player cannot see without spending hours on it.
+const STRUCTURE_DEFS = [
+  { id: "overflow-drain", name: "Overflow and storm drains", decayPerDay: 0.006, escapeRoute: true },
+  { id: "culvert-grate",  name: "Culvert grates",            decayPerDay: 0.008, escapeRoute: true },
+  { id: "service-bridge", name: "Service bridge",            decayPerDay: 0.004, escapeRoute: false },
+  { id: "bank-fence",     name: "Bank angle and fence line", decayPerDay: 0.007, escapeRoute: true },
+];
+
+function createStructures(state) {
+  return STRUCTURE_DEFS.map(def => ({
+    id: def.id, name: def.name,
+    integrity: 0.9 + rngNext(state) * 0.1,
+    knownIntegrity: null,
+    lastInspectedDay: 0,
+  }));
+}
+
+function decayStructures(state) {
+  const weather = state.env.weather;
+  for (const st of state.structures) {
+    const def = STRUCTURE_DEFS.find(d => d.id === st.id);
+    let rate = def.decayPerDay * (0.6 + rngNext(state) * 0.8);
+    if (weather === "storm") rate *= st.id === "overflow-drain" ? 3.5 : 1.8;
+    else if (weather === "rain") rate *= st.id === "overflow-drain" ? 1.8 : 1.2;
+    // Silt builds a ramp: dirty water degrades the bank faster.
+    if (st.id === "bank-fence") rate *= 1 + state.env.ammonia;
+    st.integrity = clamp01(st.integrity - rate);
+  }
+}
+
+function inspectStructure(state, id) {
+  const st = state.structures.find(x => x.id === id);
+  if (!st) return 0;
+  st.knownIntegrity = st.integrity;
+  st.lastInspectedDay = state.day;
+  logEvent(state, `${st.name} inspected. Integrity ${(st.integrity * 100).toFixed(0)} per cent.`, "maintenance");
+  return st.integrity;
+}
+
+function repairStructure(state, id, amount) {
+  const st = state.structures.find(x => x.id === id);
+  if (!st) return;
+  st.integrity = clamp01(st.integrity + amount);
+  st.knownIntegrity = st.integrity;
+}
+
+function weakestStructure(state) {
+  return state.structures.reduce((a, b) => (a.integrity <= b.integrity ? a : b));
+}
+
+function applyBriefingMaintenance(state) {
+  const alloc = state.hours.allocations;
+  if (alloc["inspect-structure"]) {
+    // Inspect whatever has gone longest without being looked at.
+    const target = state.structures.reduce((a, b) => (a.lastInspectedDay <= b.lastInspectedDay ? a : b));
+    inspectStructure(state, target.id);
+  }
+  if (alloc["grate-maintenance"]) {
+    repairStructure(state, "culvert-grate", 0.35);
+    repairStructure(state, "overflow-drain", 0.15);
+    logEvent(state, "Replaced grate, culvert 4 (north). Previous grate found displaced, not damaged. No animals unaccounted for at time of inspection. Recommend reviewing what displaced it.", "maintenance");
+  }
+  if (alloc["bank-repair"]) {
+    repairStructure(state, "bank-fence", 0.4);
+    repairStructure(state, "service-bridge", 0.2);
+  }
+}
+
+// ============ tests: structures ============
+MoatTests.add("a new facility has all four perimeter elements", () => {
+  const s = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  const ids = s.structures.map(x => x.id).sort();
+  assertEq(ids, ["bank-fence", "culvert-grate", "overflow-drain", "service-bridge"]);
+  assert(s.structures.every(x => x.integrity > 0.8), "structures start sound");
+});
+
+MoatTests.add("true integrity starts unknown", () => {
+  const s = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  assert(s.structures.every(x => x.knownIntegrity === null), "nothing is known until inspected");
+});
+
+MoatTests.add("integrity decays over time", () => {
+  const s = createState({ seed: 2, clientId: "voss", crocCount: 12 });
+  const before = s.structures.map(x => x.integrity);
+  for (let d = 0; d < 30; d++) decayStructures(s);
+  const after = s.structures.map(x => x.integrity);
+  for (let i = 0; i < before.length; i++) {
+    assert(after[i] < before[i], `${s.structures[i].id} should decay`);
+  }
+});
+
+MoatTests.add("storms accelerate decay", () => {
+  const calm = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  const rough = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  rough.env.weather = "storm";
+  for (let d = 0; d < 20; d++) { decayStructures(calm); decayStructures(rough); }
+  const drain = x => x.structures.find(y => y.id === "overflow-drain").integrity;
+  assert(drain(rough) < drain(calm), "storms must batter the drain harder");
+});
+
+MoatTests.add("inspection reveals the true value", () => {
+  const s = createState({ seed: 4, clientId: "voss", crocCount: 12 });
+  for (let d = 0; d < 40; d++) decayStructures(s);
+  const truth = s.structures.find(x => x.id === "culvert-grate").integrity;
+  assertClose(inspectStructure(s, "culvert-grate"), truth, 1e-9);
+  assertClose(s.structures.find(x => x.id === "culvert-grate").knownIntegrity, truth, 1e-9);
+  assertEq(s.structures.find(x => x.id === "culvert-grate").lastInspectedDay, s.day);
+});
+
+MoatTests.add("knownIntegrity goes stale as the real value keeps dropping", () => {
+  const s = createState({ seed: 5, clientId: "voss", crocCount: 12 });
+  inspectStructure(s, "bank-fence");
+  const known = s.structures.find(x => x.id === "bank-fence").knownIntegrity;
+  for (let d = 0; d < 30; d++) decayStructures(s);
+  const st = s.structures.find(x => x.id === "bank-fence");
+  assertClose(st.knownIntegrity, known, 1e-9, "the clipboard does not update itself");
+  assert(st.integrity < st.knownIntegrity, "reality has moved on");
+});
+
+MoatTests.add("repair raises integrity and never exceeds one", () => {
+  const s = createState({ seed: 6, clientId: "voss", crocCount: 12 });
+  const st = s.structures.find(x => x.id === "culvert-grate");
+  st.integrity = 0.3;
+  repairStructure(s, "culvert-grate", 0.4);
+  assertClose(st.integrity, 0.7, 1e-9);
+  repairStructure(s, "culvert-grate", 5);
+  assertClose(st.integrity, 1, 1e-9);
+});
+
+MoatTests.add("weakestStructure finds the worst element by true integrity", () => {
+  const s = createState({ seed: 7, clientId: "voss", crocCount: 12 });
+  s.structures.find(x => x.id === "service-bridge").integrity = 0.11;
+  assertEq(weakestStructure(s).id, "service-bridge");
+});
+
+MoatTests.add("briefing maintenance allocations repair the right things", () => {
+  const s = createState({ seed: 8, clientId: "voss", crocCount: 12 });
+  const grate = s.structures.find(x => x.id === "culvert-grate");
+  const bank = s.structures.find(x => x.id === "bank-fence");
+  grate.integrity = 0.4; bank.integrity = 0.4;
+  s.hours.allocations = { "grate-maintenance": 2, "bank-repair": 2.5 };
+  applyBriefingMaintenance(s);
+  assert(grate.integrity > 0.4, "grate maintenance must repair the grate");
+  assert(bank.integrity > 0.4, "bank repair must repair the bank");
+});
 </script>
 <script>
 "use strict";
@@ -1362,6 +1511,8 @@ function setSpeed(n) {
 // The operating day runs 06:00 to 06:00. The night passes unattended; the manager
 // arrives at six with a clipboard, which is when the day is planned and paid for.
 function onMorningBriefing(s) {
+  applyBriefingMaintenance(s);
+  decayStructures(s);
   endDay(s);
   beginDay(s);
   setSpeed(0);
