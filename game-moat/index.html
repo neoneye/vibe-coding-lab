@@ -331,7 +331,7 @@ function createState({ seed, clientId, crocCount }) {
   const state = {
     seed, rngState: seed >>> 0, clientId,
     day: 1, hour: 6, contractDays: 40,
-    crocs: [], licensedHeadcount: licensed,
+    crocs: [], licensedHeadcount: licensed, stockedAtStart: stocked,
     facility: {
       heaterSetpoint: 26, shadeCoverage: 0.4, waterDepth: 2.0,
       filtration: 0.6, baskingPlatforms: Math.ceil(stocked * 0.6),
@@ -437,8 +437,11 @@ function tickHour(state) {
 
   // Water quality: waste in, filtration out. Calibrated so the default filtration
   // setting exactly holds twelve animals — overstocking or a cut budget is what breaks it.
+  // Calibrated so a nominal twelve animals sit clean at moderate filtration, while an
+  // overstocked moat of thirty needs filtration near maximum. Overstocking must be
+  // expensive to keep clean, not impossible.
   const load = state.crocs.filter(c => c.present).length * 0.0011;
-  const cleared = state.facility.filtration * (state.env.powered ? 0.022 : 0);
+  const cleared = state.facility.filtration * (state.env.powered ? 0.038 : 0);
   state.env.ammonia = clamp01(state.env.ammonia + load - cleared);
   // Turbidity tracks ammonia and settles slowly toward what filtration allows.
   const targetTurbidity = clamp01(0.75 - state.facility.filtration * 0.55 + state.env.ammonia * 0.3);
@@ -810,6 +813,9 @@ function endDay(state) {
   const load = state.hours.budget > 0 ? clamp01(state.hours.spent / state.hours.budget) : 0;
   const rest = (state.hours.allocations["staff-rest"] || 0) * 0.04;
   state.staff.fatigue = clamp01(state.staff.fatigue + load * 0.12 - 0.07 - rest);
+  // A client's memory fades on the days nothing happens, which is the only way an
+  // uneventful contract can end well.
+  state.satisfaction = clamp(state.satisfaction + 0.8, 0, 100);
 }
 
 // ============ tests: handler hours ============
@@ -1543,7 +1549,9 @@ INCIDENTS.push(
       if (s.crocs.filter(c => c.present).length > s.licensedHeadcount) findings.push("headcount exceeds the licensed figure");
       if (s.env.waterTemp < 18) findings.push("thermal provision inadequate; animals unable to feed");
       s.ledger.welfareFindings += findings.length;
-      const critical = findings.length >= 3 || meanHealth(s) < 0.35;
+      // An overstocked moat is the client's decision and is documented as such, so it
+      // alone must not carry a contract into suspension.
+      const critical = findings.length >= 4 || meanHealth(s) < 0.35;
       if (critical) {
         s.ledger.welfareCritical++;
         s.status = "failed";
@@ -2138,7 +2146,7 @@ const CLIENTS = [
     difficulty: "Hardest — active opposition",
     blurb: "A holding facility for a rival organisation's captured personnel. The inmates are competent, bored, professionally trained in escape, and unionised. This is the only contract where getting out matters more than getting in, and the opposition probes your schedule rather than waiting for an opening.",
     days: 60, crocCount: 20, licensedHeadcount: 20, baseAmbient: 29,
-    startMoney: 75000, startSatisfaction: 70, intrusionRate: 0.42, egress: true,
+    startMoney: 75000, startSatisfaction: 70, intrusionRate: 0.26, egress: true,
     staff: { handlers: 4, vet: 1, guards: 5, pr: 0, fatigue: 0.1 },
     modifiers: { heatingCostMultiplier: 1, filtrationCostMultiplier: 1, budgetMultiplier: 1.2, pressFailsContract: false },
     incidentBias: { "bribe-attempt": 3, "the-learner": 2, "guard-initiative": 1.5 },
@@ -2233,6 +2241,184 @@ MoatTests.add("applyClientToState stamps the contract onto the state", () => {
   assertEq(s.contract.id, "zanjabar");
   assertEq(s.contractDays, getClient("zanjabar").days);
   assertEq(s.env.baseAmbient, getClient("zanjabar").baseAmbient);
+});
+
+// ============ grading and close-out ============
+const LETTERS = ["A", "B", "C", "D", "F"];
+
+function scoreToLetter(score) {
+  if (score >= 0.85) return "A";
+  if (score >= 0.7) return "B";
+  if (score >= 0.55) return "C";
+  if (score >= 0.4) return "D";
+  return "F";
+}
+
+function welfareGrade(state) {
+  const health = meanHealth(state);
+  const water = 1 - clamp01(state.env.ammonia);
+  const stocking = clamp01(baskingAccessFor(state));
+  const findings = state.ledger.welfareFindings;
+  const critical = state.ledger.welfareCritical;
+  let score = health * 0.5 + water * 0.25 + stocking * 0.25 - findings * 0.05;
+  if (critical > 0) score = 0;
+  return { letter: scoreToLetter(clamp01(score)), findings, critical };
+}
+
+function contractOver(state) {
+  return state.status !== "running" || state.day > state.contractDays;
+}
+
+function gradeContract(state) {
+  const welfare = welfareGrade(state);
+  const present = state.crocs.filter(c => c.present).length;
+  // A repelled attempt is the system working, so it costs a little. Only a successful
+  // breach is a containment failure.
+  const attempts = Math.max(0, state.ledger.breaches - state.ledger.breachesSuccessful);
+  const containment = clamp01(1 - state.ledger.breachesSuccessful * 0.15 - attempts * 0.008);
+  const incidentPenalty = clamp01(state.ledger.minor * 0.015 + state.ledger.serious * 0.06 + state.ledger.fatal * 0.5);
+  const welfareScore = 1 - LETTERS.indexOf(welfare.letter) * 0.22;
+  const satisfaction = clamp01(state.satisfaction / 100);
+
+  const score = clamp01(welfareScore * 0.35 + containment * 0.3 + satisfaction * 0.2 + (1 - incidentPenalty) * 0.15);
+  let letter = scoreToLetter(score);
+  let hardGated = null;
+
+  // Welfare and containment are both hard-gated. No other figure on the page moves these.
+  if (welfare.critical > 0) {
+    letter = "F";
+    hardGated = "Critical welfare finding. The licence was suspended.";
+  } else if (state.ledger.fatalities > 0) {
+    if (LETTERS.indexOf(letter) < LETTERS.indexOf("D")) letter = "D";
+    hardGated = "A fatality occurred. No other figure on this page changes that.";
+  } else if (state.ledger.lostAnimals > 0) {
+    if (LETTERS.indexOf(letter) < LETTERS.indexOf("D")) letter = "D";
+    hardGated = state.reportedMissing
+      ? "An animal left the facility. It was reported when it was suspected, which is the only reason this page is not worse."
+      : "An animal left the facility. No other figure on this page changes that.";
+  }
+
+  return {
+    client: state.contract ? state.contract.name : state.clientId,
+    site: state.contract ? state.contract.site : "",
+    days: Math.min(state.day, state.contractDays),
+    welfare, breaches: state.ledger.breaches,
+    breachesSuccessful: state.ledger.breachesSuccessful,
+    incidents: { minor: state.ledger.minor, serious: state.ledger.serious, fatal: state.ledger.fatal },
+    satisfaction: Math.round(clamp01(state.satisfaction / 100) * 100),
+    // Measured against the animals handed over, not the licence: the question a
+    // close-out answers is whether any of them left.
+    censusFinal: { counted: present, expected: state.stockedAtStart || state.licensedHeadcount,
+                   ok: present >= (state.stockedAtStart || state.licensedHeadcount) },
+    redFlags: state.redFlags.length,
+    terminated: state.status === "failed",
+    letter, hardGated, seed: state.seed,
+  };
+}
+
+function renderReportCard(r) {
+  const pad = (label, value) => label.padEnd(27) + value;
+  const lines = [
+    `CONTRACT CLOSE-OUT: ${(r.site || r.client).toUpperCase()}`,
+    "",
+    pad("Days operated", String(r.days)),
+    pad("Animal welfare grade", `${r.welfare.letter}     (${r.welfare.findings} findings, ${r.welfare.critical} critical)`),
+    pad("Containment record", `${r.breaches} breach${r.breaches === 1 ? "" : "es"}, ${r.breachesSuccessful} successful`),
+    pad("Incidents", `${r.incidents.minor} minor, ${r.incidents.serious} serious, ${r.incidents.fatal} fatal`),
+    pad("Client satisfaction", `${r.satisfaction}%`),
+    pad("Final census", `${r.censusFinal.counted} of ${r.censusFinal.expected}  ${r.censusFinal.ok ? "✅" : "❌"}`),
+    "",
+    pad("Overall", r.letter),
+    pad("Seed", String(r.seed)),
+  ];
+  if (r.redFlags > 0) lines.push("", `⚠️  Uncategorized red flags: ${r.redFlags}`);
+  if (r.hardGated) lines.push("", r.hardGated);
+  return lines.join("\n");
+}
+
+// ============ tests: grading ============
+function finishedState(seed) {
+  const s = createState({ seed, clientId: "voss", crocCount: 12 });
+  s.day = s.contractDays + 1;
+  return s;
+}
+
+MoatTests.add("a clean contract grades well", () => {
+  const s = finishedState(1);
+  s.satisfaction = 88; s.env.ammonia = 0.05;
+  s.facility.baskingPlatforms = 14;
+  s.crocs.forEach(c => { c.health = 0.95; });
+  const r = gradeContract(s);
+  assert(["A", "B"].includes(r.letter), `expected a good grade, got ${r.letter}`);
+  assertEq(r.hardGated, null);
+});
+
+MoatTests.add("a fatality caps the grade regardless of everything else", () => {
+  const s = finishedState(2);
+  s.satisfaction = 100; s.env.ammonia = 0; s.facility.baskingPlatforms = 14;
+  s.crocs.forEach(c => { c.health = 1; });
+  s.ledger.fatalities = 1;
+  const r = gradeContract(s);
+  assertEq(r.letter, "D", "a perfect contract with a fatality is not a good contract");
+  assert(r.hardGated && r.hardGated.length > 0, "the gate must be explained");
+});
+
+MoatTests.add("a lost animal caps the grade regardless of everything else", () => {
+  const s = finishedState(3);
+  s.satisfaction = 100; s.facility.baskingPlatforms = 14;
+  s.crocs.forEach(c => { c.health = 1; });
+  s.ledger.lostAnimals = 1;
+  const r = gradeContract(s);
+  assertEq(r.letter, "D");
+});
+
+MoatTests.add("a critical welfare finding fails the contract outright", () => {
+  const s = finishedState(4);
+  s.satisfaction = 100;
+  s.ledger.welfareCritical = 1;
+  assertEq(gradeContract(s).letter, "F");
+});
+
+MoatTests.add("welfare grade reflects health, water and stocking", () => {
+  const good = finishedState(5);
+  good.env.ammonia = 0.05; good.facility.baskingPlatforms = 14;
+  good.crocs.forEach(c => { c.health = 0.96; });
+  const bad = finishedState(5);
+  bad.env.ammonia = 0.8; bad.facility.baskingPlatforms = 1;
+  bad.crocs.forEach(c => { c.health = 0.5; });
+  bad.ledger.welfareFindings = 4;
+  assert(welfareGrade(good).letter < welfareGrade(bad).letter, "letters sort so that A beats D");
+});
+
+MoatTests.add("the report card counts undiscovered events separately", () => {
+  const s = finishedState(6);
+  addRedFlag(s, "Something happened that nobody wrote down.");
+  const r = gradeContract(s);
+  assertEq(r.redFlags, 1);
+});
+
+MoatTests.add("the report card carries the seed so a run is reproducible", () => {
+  const s = finishedState(7);
+  assertEq(gradeContract(s).seed, s.seed);
+});
+
+MoatTests.add("renderReportCard produces the fixed-width close-out block", () => {
+  const s = finishedState(8);
+  const text = renderReportCard(gradeContract(s));
+  assert(text.includes("CONTRACT CLOSE-OUT"), "header required");
+  assert(text.includes("Days operated"), "days line required");
+  assert(text.includes("Client satisfaction"), "satisfaction line required");
+  assert(text.includes("Final census"), "census line required");
+});
+
+MoatTests.add("contractOver is true past the contract length or on failure", () => {
+  const s = createState({ seed: 9, clientId: "voss", crocCount: 12 });
+  assertEq(contractOver(s), false);
+  s.day = s.contractDays + 1;
+  assertEq(contractOver(s), true);
+  const failed = createState({ seed: 9, clientId: "voss", crocCount: 12 });
+  failed.status = "failed";
+  assertEq(contractOver(failed), true);
 });
 </script>
 <script>
@@ -2763,6 +2949,37 @@ function setSpeed(n) {
 
 // The operating day runs 06:00 to 06:00. The night passes unattended; the manager
 // arrives at six with a clipboard, which is when the day is planned and paid for.
+// ============ close-out ============
+function openCloseOut(s) {
+  ui.modalOpen = true;
+  setSpeed(0);
+  $("modal").hidden = false;
+  const r = gradeContract(s);
+
+  const progress = loadProgress();
+  if (!r.terminated && !progress.completed.includes(s.clientId)) progress.completed.push(s.clientId);
+  const prior = progress.grades[s.clientId];
+  if (!prior || LETTERS.indexOf(r.letter) < LETTERS.indexOf(prior)) progress.grades[s.clientId] = r.letter;
+  saveProgress(progress);
+  clearSave();
+
+  // The things that happened and were never discovered. Revealed only now.
+  const flags = s.redFlags.length ? `
+    <div class="section"><h3>Matters not raised at the time</h3>
+      ${s.redFlags.map(f => `<div class="entry serious"><div class="ts">Day ${f.day}</div><div>${esc(f.text)}</div></div>`).join("")}
+    </div>` : `<div class="hint" style="margin-top:10px">Nothing occurred that was not written down. This is the best outcome available.</div>`;
+
+  $("modal-body").innerHTML = `
+    <h2>${r.terminated ? "Contract terminated" : "Contract close-out"}</h2>
+    <div class="sub">${esc(r.client)}</div>
+    <pre class="card">${esc(renderReportCard(r))}</pre>
+    ${flags}
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+      <button class="primary" id="back-to-contracts">Return to contracts</button>
+    </div>`;
+  $("back-to-contracts").addEventListener("click", () => openContractSelect());
+}
+
 function onMorningBriefing(s) {
   applyBriefingMaintenance(s);
   applyVetVisit(s);
@@ -2778,7 +2995,9 @@ function onMorningBriefing(s) {
   maybeAttemptIntrusion(s);
   tickWeather(s);
   endDay(s);
+  if (contractOver(s)) { openCloseOut(s); return; }
   beginDay(s);
+  saveGame(s);
   setSpeed(0);
   openBriefing();
 }
@@ -2819,6 +3038,30 @@ function saveProgress(p) {
   catch (e) { /* storage unavailable */ }
 }
 
+const SAVE_KEY = "moat.save";
+
+function saveGame(s) {
+  try {
+    // contract is a reference into CLIENTS; rehydrated on load rather than stored.
+    const { contract, ...rest } = s;
+    localStorage.setItem(SAVE_KEY, JSON.stringify(rest));
+  } catch (e) { /* storage unavailable */ }
+}
+
+function loadGame() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    applyClientToState(s);
+    return s;
+  } catch (e) { return null; }
+}
+
+function clearSave() {
+  try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* storage unavailable */ }
+}
+
 function seedFor(clientId) {
   let h = 2166136261;
   for (const ch of clientId) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
@@ -2844,15 +3087,32 @@ function openContractSelect() {
     </div>`;
   }).join("");
 
+  const saved = loadGame();
+  const resume = saved ? `
+    <div class="opt" style="border-color:var(--accent)">
+      <div><div class="lbl">Resume — ${esc(getClient(saved.clientId).site)}</div>
+      <div class="desc">Day ${saved.day} of ${saved.contractDays}.</div></div>
+      <button id="resume-btn">Resume</button>
+    </div>` : "";
+
   $("modal-body").innerHTML = `
     <h2>Contracts</h2>
     <div class="sub">A fence merely delays an intruder. A moat makes a statement. A statement requires paperwork.</div>
+    ${resume}
     ${cards}
     <div class="section" style="margin-top:12px">
       <div class="ctrl-head"><span>Seed</span><span class="val" id="seed-val"></span></div>
       <div class="hint">Runs are reproducible. The seed is printed on the close-out report.</div>
       <input id="seed-input" type="text" style="width:100%;margin-top:5px;background:#1f232a;border:1px solid var(--line);color:var(--fg);font:inherit;padding:4px 6px">
     </div>`;
+
+  if (saved) $("resume-btn").addEventListener("click", () => {
+    ui.state = saved;
+    ui.censusObs = null; ui.overnightIncident = null; ui.logLen = 0;
+    renderControls();
+    renderLog();
+    openBriefing();
+  });
 
   $("modal-body").querySelectorAll("[data-contract]").forEach(b => b.addEventListener("click", () => {
     const raw = $("seed-input").value.trim();
