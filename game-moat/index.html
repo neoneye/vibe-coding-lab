@@ -45,11 +45,14 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 #speed-controls { margin-left: auto; display: flex; gap: 4px; }
 #speed-controls button.on { background: var(--accent); color: #1a1a1a; border-color: var(--accent); }
 
+/* min-height:0 is load-bearing: without it the grid rows size to content and a long
+   log stretches the whole layout, taking the canvas with it. */
+#controls, #log, #view { min-height: 0; min-width: 0; }
 #controls, #log { overflow-y: auto; background: var(--panel); }
 #controls { border-right: 1px solid var(--line); padding: 10px 12px; }
 #log { border-left: 1px solid var(--line); padding: 10px 12px; }
-#view { display: flex; align-items: center; justify-content: center; padding: 10px; min-width: 0; }
-#moat { width: 100%; height: 100%; max-height: 100%; display: block; }
+#view { display: flex; align-items: stretch; justify-content: center; padding: 10px; overflow: hidden; }
+#moat { flex: 1 1 auto; display: block; }
 
 .section { margin-bottom: 15px; }
 .section > h3 {
@@ -80,6 +83,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .entry.fatal { border-left: 2px solid var(--alert); padding-left: 7px; background: #2a1e1e; }
 .entry.census { border-left: 2px solid #4a6270; padding-left: 7px; }
 .entry.maintenance .ts { color: #7d8a95; }
+.entry.day { border-bottom: 1px solid var(--line); opacity: 0.55; }
+.entry.day > div:last-child { font-size: 11px; }
 
 #modal {
   position: fixed; inset: 0; background: rgba(10, 11, 13, 0.86);
@@ -779,7 +784,7 @@ function beginDay(state) {
   state.hours.budget = dailyHandlerHours(state);
   state.hours.spent = 0;
   state.hours.allocations = {};
-  logEvent(state, `Morning briefing. ${state.hours.budget} handler-hours available.`, "info");
+  logEvent(state, `${state.hours.budget} handler-hours rostered.`, "day");
 }
 
 function allocateHours(state, actionId, amount) {
@@ -1024,33 +1029,239 @@ function fitCanvas(canvas) {
   return { ctx, w: rect.width, h: rect.height };
 }
 
-function render() {
+const TAU = Math.PI * 2;
+
+function render(dt) {
   renderTopbar();
   const s = ui.state;
   if (!s) return;
   const { ctx, w, h } = fitCanvas($("moat"));
+  advanceAnimation(s, dt || 0);
   drawMoat(ctx, w, h, s);
 }
 
-// Placeholder view; replaced by the layered renderer in Task 7.
+// Render-only motion. The simulation never reads these, so smoothing the picture
+// cannot affect determinism. Torpid animals barely move, which is the clearest
+// read on the dial the player gets.
+function advanceAnimation(s, dt) {
+  const secs = Math.min(dt, 100) / 1000;
+  for (const c of s.crocs) {
+    if (c.ang === undefined) { c.ang = c.x * TAU; c.rad = c.y; c.platform = null; }
+    const speed = c.state === "patrolling" ? 0.055 + (s.activity / 100) * 0.16
+      : c.state === "submerged" ? 0.012 + (s.activity / 100) * 0.03 : 0;
+    c.ang = (c.ang + speed * secs * (c.id % 2 ? 1 : -1) + TAU) % TAU;
+    const targetRad = c.state === "basking" ? 0.08 : c.state === "patrolling" ? 0.5 : c.rad;
+    c.rad += (targetRad - c.rad) * Math.min(1, secs * 1.2);
+  }
+}
+
+// Flat two-tone top-down silhouette: tail about half the total length, tapered
+// torso, four short limbs. Naturalistic shading would fight the control-room register.
+function crocSprite(ctx, x, y, ang, L, body, back) {
+  const W = L * 0.24;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(ang);
+  ctx.fillStyle = body;
+  // tail
+  ctx.beginPath();
+  ctx.moveTo(-L * 0.5, 0);
+  ctx.lineTo(-L * 0.08, -W * 0.46);
+  ctx.lineTo(-L * 0.08, W * 0.46);
+  ctx.closePath();
+  ctx.fill();
+  // limbs
+  for (const [lx, ly] of [[0.16, 1], [0.16, -1], [-0.06, 1], [-0.06, -1]]) {
+    ctx.beginPath();
+    ctx.moveTo(L * lx, ly * W * 0.3);
+    ctx.lineTo(L * (lx - 0.09), ly * W * 0.95);
+    ctx.lineTo(L * (lx + 0.03), ly * W * 0.9);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // torso
+  ctx.beginPath();
+  ctx.ellipse(L * 0.07, 0, L * 0.27, W * 0.56, 0, 0, TAU);
+  ctx.fill();
+  // head
+  ctx.fillStyle = back;
+  ctx.beginPath();
+  ctx.moveTo(L * 0.3, -W * 0.36);
+  ctx.lineTo(L * 0.53, -W * 0.15);
+  ctx.lineTo(L * 0.53, W * 0.15);
+  ctx.lineTo(L * 0.3, W * 0.36);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawMoat(ctx, w, h, s) {
+  const cx = w / 2, cy = h / 2;
+  const outer = Math.min(w, h) * 0.43;
+  const width = outer * 0.35;
+  const inner = outer - width;
+  const turb = clamp01(s.env.turbidity);
+  const level = clamp01(s.env.waterLevel);
+
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#1b1f22";
+
+  // --- ground and compound ---
+  ctx.fillStyle = "#1a1d1f";
   ctx.fillRect(0, 0, w, h);
-  const cx = w / 2, cy = h / 2, outer = Math.min(w, h) * 0.44, inner = outer * 0.62;
-  ctx.fillStyle = `rgb(${44 + s.env.turbidity * 40}, ${74 - s.env.turbidity * 26}, ${78 - s.env.turbidity * 36})`;
-  ctx.beginPath(); ctx.arc(cx, cy, outer, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = "#23282b";
-  ctx.beginPath(); ctx.arc(cx, cy, inner, 0, Math.PI * 2); ctx.fill();
-  const mid = (outer + inner) / 2;
-  s.crocs.filter(c => c.present && c.state !== "hidden").forEach((c, i) => {
-    const a = c.x * Math.PI * 2;
-    const r = mid + (c.y - 0.5) * (outer - inner) * 0.5;
-    ctx.globalAlpha = c.state === "submerged" ? 0.35 : 1;
-    ctx.fillStyle = c.state === "basking" ? "#8a8258" : "#4f6b4a";
-    ctx.beginPath(); ctx.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 4, 0, Math.PI * 2); ctx.fill();
-  });
+  ctx.fillStyle = "#242826";
+  ctx.beginPath(); ctx.arc(cx, cy, outer + width * 0.5, 0, TAU); ctx.fill();
+
+  // --- water (layer 1). Clear teal to opaque brown as turbidity rises. ---
+  const wr = outer - width * (1 - level) * 0.12;      // a flood creeps up the coping
+  const wi = inner + width * (1 - level) * 0.12;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, wr, 0, TAU);
+  ctx.arc(cx, cy, wi, 0, TAU, true);
+  ctx.clip();
+  ctx.fillStyle = `rgb(${Math.round(38 + turb * 54)}, ${Math.round(78 - turb * 30)}, ${Math.round(82 - turb * 44)})`;
+  ctx.fillRect(0, 0, w, h);
+  // a few slack surface bands, fainter in murk
+  ctx.globalAlpha = 0.06 * (1 - turb * 0.7);
+  ctx.strokeStyle = "#cfe6e2";
+  for (let r = wi + 6; r < wr; r += 11) {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
+  }
   ctx.globalAlpha = 1;
+
+  const mid = (wi + wr) / 2;
+  const place = (c) => {
+    const r = wi + clamp01(c.rad) * (wr - wi);
+    return [cx + Math.cos(c.ang) * r, cy + Math.sin(c.ang) * r];
+  };
+  const sizeOf = (c) => clamp(width * 0.30 * (c.length / 3.4), 7, width * 0.62);
+
+  // --- submerged animals (layer 2). Murky water genuinely hides them. ---
+  ctx.globalAlpha = 0.22 + 0.34 * (1 - turb);
+  for (const c of s.crocs) {
+    if (!c.present || c.state !== "submerged") continue;
+    const [x, y] = place(c);
+    crocSprite(ctx, x, y, c.ang + Math.PI / 2, sizeOf(c), "#22403c", "#1d3835");
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // --- banks and structures (layer 3) ---
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "#3a4048";                          // coping stone
+  ctx.beginPath(); ctx.arc(cx, cy, outer, 0, TAU); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, inner, 0, TAU); ctx.stroke();
+
+  // the compound: a secure facility, drawn as a site plan rather than a picture
+  ctx.fillStyle = "#2b2f33";
+  ctx.beginPath(); ctx.arc(cx, cy, inner - 2, 0, TAU); ctx.fill();
+  ctx.strokeStyle = "#383e44"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, inner * 0.86, 0, TAU); ctx.stroke();   // inner wall
+  const bw = inner * 0.78, bh = inner * 0.30;
+  for (const oy of [-bh * 1.05, bh * 0.15]) {                            // two cell blocks
+    ctx.fillStyle = "#33383e";
+    ctx.fillRect(cx - bw / 2, cy + oy, bw, bh * 0.8);
+    ctx.strokeStyle = "#414850";
+    ctx.strokeRect(cx - bw / 2, cy + oy, bw, bh * 0.8);
+    ctx.strokeStyle = "#3a4047";                                          // cell divisions
+    for (let i = 1; i < 9; i++) {
+      const x = cx - bw / 2 + (bw / 9) * i;
+      ctx.beginPath(); ctx.moveTo(x, cy + oy); ctx.lineTo(x, cy + oy + bh * 0.8); ctx.stroke();
+    }
+  }
+  ctx.fillStyle = "#5f5a50";
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("BLOCK A", cx, cy - bh * 1.05 - 5);
+  ctx.fillText("BLOCK B", cx, cy + bh * 0.15 - 5);
+  ctx.fillText("EXERCISE YARD", cx, cy + bh * 1.35);
+
+  // basking platforms on the inner bank, capacity-limited
+  const platforms = Math.max(0, Math.min(s.facility.baskingPlatforms, 26));
+  const platPos = [];
+  for (let i = 0; i < platforms; i++) {
+    const a = (i / platforms) * TAU + 0.15;
+    const r = inner + width * 0.17;
+    const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r;
+    platPos.push([px, py, a]);
+    ctx.save();
+    ctx.translate(px, py); ctx.rotate(a + Math.PI / 2);
+    ctx.fillStyle = "#514c40";
+    ctx.fillRect(-width * 0.15, -width * 0.07, width * 0.3, width * 0.14);
+    ctx.restore();
+  }
+
+  // service bridge: has to exist, is the obvious weak point, the client insists it be decorative
+  const bridge = (s.structures || []).find(x => x.id === "service-bridge");
+  ctx.save();
+  ctx.translate(cx, cy); ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = "#4a4438";
+  ctx.fillRect(inner - 4, -width * 0.12, width + 8, width * 0.24);
+  ctx.strokeStyle = "#5d5647"; ctx.lineWidth = 1;
+  ctx.strokeRect(inner - 4, -width * 0.12, width + 8, width * 0.24);
+  ctx.restore();
+
+  // culvert grates at the compass points
+  const grate = (s.structures || []).find(x => x.id === "culvert-grate");
+  for (let i = 0; i < 4; i++) {
+    const a = i * (TAU / 4) + Math.PI / 4;
+    const px = cx + Math.cos(a) * (outer + 1), py = cy + Math.sin(a) * (outer + 1);
+    ctx.save();
+    ctx.translate(px, py); ctx.rotate(a);
+    ctx.fillStyle = "#3f4650";
+    ctx.fillRect(-2, -7, 12, 14);
+    ctx.strokeStyle = "#585f6a"; ctx.lineWidth = 1;
+    for (let g = -5; g <= 5; g += 3) { ctx.beginPath(); ctx.moveTo(-1, g); ctx.lineTo(9, g); ctx.stroke(); }
+    ctx.restore();
+  }
+
+  // --- surfaced animals (layer 4) ---
+  let basked = 0;
+  for (const c of s.crocs) {
+    if (!c.present || c.state === "hidden" || c.state === "submerged") continue;
+    let x, y, ang;
+    if (c.state === "basking" && basked < platPos.length) {
+      const [px, py, pa] = platPos[basked++];
+      x = px; y = py; ang = pa + Math.PI / 2;
+    } else {
+      [x, y] = place(c); ang = c.ang + Math.PI / 2;
+    }
+    crocSprite(ctx, x, y, ang, sizeOf(c), c.state === "basking" ? "#6d6a4a" : "#3f6350", "#2c4a3c");
+  }
+
+  // --- staff (layer 5) ---
+  ctx.fillStyle = "#b8b0a0";
+  for (let i = 0; i < s.staff.handlers; i++) {
+    const a = (i / Math.max(1, s.staff.handlers)) * TAU + s.hour * 0.09;
+    const r = outer + width * 0.28;
+    ctx.beginPath(); ctx.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 2.6, 0, TAU); ctx.fill();
+  }
+  ctx.fillStyle = "#7f93a8";                            // guards posted at the bridge
+  for (let i = 0; i < s.staff.guards; i++) {
+    ctx.beginPath();
+    ctx.arc(cx + (i - (s.staff.guards - 1) / 2) * 9, cy - outer - width * 0.16, 2.6, 0, TAU);
+    ctx.fill();
+  }
+
+  // --- overlays (layer 6) ---
+  ctx.textAlign = "left";
+  ctx.font = "10px ui-monospace, monospace";
+  const failing = (s.structures || []).filter(x => x.knownIntegrity !== null && x.knownIntegrity !== undefined && x.knownIntegrity < 0.35);
+  if (failing.length) {
+    ctx.fillStyle = "#b4544a";
+    ctx.fillText(`INTEGRITY BELOW THRESHOLD: ${failing.map(f => f.name).join(", ").toUpperCase()}`, 12, h - 26);
+  }
+  if (ui.censusObs && ui.censusObs.short) {
+    ctx.fillStyle = "#b4544a";
+    ctx.fillText("MORNING COUNT SHORT — ONE OR MORE ANIMALS UNACCOUNTED", 12, h - 12);
+  }
+  if (!s.env.powered) {
+    ctx.fillStyle = "#c8a45c";
+    ctx.fillText("SUPPLY FAILURE — HEATERS AND PUMPS OFFLINE", 12, 18);
+  }
+  const band = activityBand(s.activity);
+  ctx.fillStyle = "#6a655a";
+  ctx.fillText(`${s.env.waterTemp.toFixed(1)} °C · ${BAND_LABEL[band].toUpperCase()}`, 12, h - 40);
 }
 
 // ============ briefing ============
@@ -1171,7 +1382,7 @@ function frame(now) {
     refreshReadouts();
     if (ui.state.log.length !== ui.logLen) { ui.logLen = ui.state.log.length; renderLog(); }
   }
-  render();
+  render(ui.modalOpen ? 0 : dt * Math.max(ui.speed, 0));
   requestAnimationFrame(frame);
 }
 
