@@ -63,6 +63,129 @@ MoatTests.add("rng differs across seeds and stays in range", () => {
     assert(Number.isInteger(k) && k >= 0 && k < 7, `rngInt out of range: ${k}`);
   }
 });
+
+// ============ thermal response and the torpor dial ============
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+function clamp01(v) { return clamp(v, 0, 1); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// Ectotherm response curve. Dead below 16 C, plateau 30-34 C, heat stress above 35 C.
+function tempResponse(effTemp) {
+  if (effTemp <= 16) return 0;
+  if (effTemp < 30) return clamp01((effTemp - 16) / 14);
+  if (effTemp <= 34) return 1;
+  return clamp01(lerp(1, 0.25, (effTemp - 34) / 8));
+}
+
+// Crocodiles are crepuscular/nocturnal: quiet at midday, active at dusk and after dark.
+function dielFactor(hour) {
+  const h = ((hour % 24) + 24) % 24;
+  if (h >= 10 && h < 16) return 0.78;          // midday lull
+  if (h >= 19 || h < 2) return 1.18;           // dusk into night
+  if (h >= 4 && h < 8) return 1.1;             // dawn
+  return 0.95;
+}
+
+function computeActivity({ waterTemp, baskingAccess, hunger, hour, seasonFactor, health }) {
+  // Basking lets an animal run warmer than the water it sits in.
+  const effTemp = waterTemp + 4.5 * clamp01(baskingAccess);
+  const thermal = tempResponse(effTemp);
+  const appetite = 0.6 + 0.55 * clamp01(hunger);   // hungry animals are alert
+  const vigour = 0.45 + 0.55 * clamp01(health);
+  // Gain trimmed so the frenzied band is reached only by genuine extremes rather
+  // than by any warm hungry evening, which otherwise saturates the top of the range.
+  const raw = 82 * thermal * appetite * dielFactor(hour) * clamp(seasonFactor, 0.5, 1.2) * vigour;
+  return clamp(Math.round(raw), 0, 100);
+}
+
+function activityBand(activity) {
+  if (activity < 25) return "torpid";
+  if (activity < 45) return "low";
+  if (activity < 70) return "optimal";
+  if (activity < 90) return "aggressive";
+  return "frenzied";
+}
+
+const BAND_LABEL = {
+  torpid: "Torpid", low: "Low", optimal: "Optimal", aggressive: "Aggressive", frenzied: "Frenzied",
+};
+
+// ============ tests: torpor dial ============
+MoatTests.add("activityBand maps the spec's ranges", () => {
+  assertEq(activityBand(0), "torpid");
+  assertEq(activityBand(24), "torpid");
+  assertEq(activityBand(25), "low");
+  assertEq(activityBand(44), "low");
+  assertEq(activityBand(45), "optimal");
+  assertEq(activityBand(69), "optimal");
+  assertEq(activityBand(70), "aggressive");
+  assertEq(activityBand(89), "aggressive");
+  assertEq(activityBand(90), "frenzied");
+  assertEq(activityBand(100), "frenzied");
+});
+
+MoatTests.add("cold water makes crocodiles torpid", () => {
+  const a = computeActivity({ waterTemp: 14, baskingAccess: 0, hunger: 1, hour: 20, seasonFactor: 0.85, health: 1 });
+  assertEq(activityBand(a), "torpid", `expected torpid, got ${a}`);
+});
+
+MoatTests.add("warm water with moderate hunger reaches the optimal band", () => {
+  const a = computeActivity({ waterTemp: 29, baskingAccess: 0.6, hunger: 0.5, hour: 12, seasonFactor: 1, health: 1 });
+  assertEq(activityBand(a), "optimal", `expected optimal, got ${a}`);
+});
+
+MoatTests.add("warm, hungry and nocturnal pushes past optimal", () => {
+  const warmHungryNight = computeActivity({ waterTemp: 31, baskingAccess: 0.8, hunger: 1, hour: 21, seasonFactor: 1, health: 1 });
+  assert(warmHungryNight >= 70, `expected aggressive or above, got ${warmHungryNight}`);
+});
+
+MoatTests.add("activity rises monotonically with water temperature up to the optimum", () => {
+  let prev = -1;
+  for (let t = 14; t <= 30; t++) {
+    const a = computeActivity({ waterTemp: t, baskingAccess: 0.5, hunger: 0.5, hour: 12, seasonFactor: 1, health: 1 });
+    assert(a >= prev, `activity dipped at ${t} degrees: ${a} < ${prev}`);
+    prev = a;
+  }
+});
+
+MoatTests.add("heat stress above 35 degrees reduces activity", () => {
+  const opt = computeActivity({ waterTemp: 32, baskingAccess: 0.5, hunger: 0.5, hour: 12, seasonFactor: 1, health: 1 });
+  const hot = computeActivity({ waterTemp: 40, baskingAccess: 0.5, hunger: 0.5, hour: 12, seasonFactor: 1, health: 1 });
+  assert(hot < opt, `overheated animals should be less active: ${hot} vs ${opt}`);
+});
+
+MoatTests.add("hunger raises activity and feeding lowers it", () => {
+  const base = { waterTemp: 29, baskingAccess: 0.5, hour: 12, seasonFactor: 1, health: 1 };
+  const hungry = computeActivity({ ...base, hunger: 1 });
+  const fed = computeActivity({ ...base, hunger: 0 });
+  assert(hungry > fed, `hungry animals must be more active: ${hungry} vs ${fed}`);
+});
+
+MoatTests.add("poor health suppresses activity", () => {
+  const base = { waterTemp: 29, baskingAccess: 0.5, hunger: 0.6, hour: 12, seasonFactor: 1 };
+  assert(computeActivity({ ...base, health: 0.3 }) < computeActivity({ ...base, health: 1 }), "sick animals must be less active");
+});
+
+MoatTests.add("crocodiles are crepuscular: dusk beats midday", () => {
+  assert(dielFactor(20) > dielFactor(12), "dusk should exceed midday");
+  assert(dielFactor(5) > dielFactor(12), "dawn should exceed midday");
+  for (let h = 0; h < 24; h++) {
+    const d = dielFactor(h);
+    assert(d >= 0.7 && d <= 1.2, `dielFactor(${h}) out of range: ${d}`);
+  }
+});
+
+MoatTests.add("activity is always clamped to 0..100", () => {
+  const extremes = [
+    { waterTemp: -5, baskingAccess: 0, hunger: 0, hour: 3, seasonFactor: 0.85, health: 0 },
+    { waterTemp: 60, baskingAccess: 1, hunger: 1, hour: 21, seasonFactor: 1, health: 1 },
+    { waterTemp: 33, baskingAccess: 1, hunger: 1, hour: 20, seasonFactor: 1, health: 1 },
+  ];
+  for (const e of extremes) {
+    const a = computeActivity(e);
+    assert(a >= 0 && a <= 100, `activity out of range: ${a}`);
+  }
+});
 </script>
 <script>
 "use strict";
