@@ -1241,6 +1241,12 @@ function resolvePending(state) {
       state.env.ammonia = clamp01(state.env.ammonia + 0.3);
       state.ledger.welfareFindings++;
       logEvent(state, "Water quality has continued to deteriorate. This is now documented.", "serious");
+    } else if (p.kind === "moat-refilled") {
+      state.env.waterLevel = 0.55;
+      logEvent(state, "Moat refilled and the animals returned to water. The outfall repair was not carried out, the contractor having attended without the part.", "maintenance");
+    } else if (p.kind === "protest-ends") {
+      state.protestActive = false;
+      logEvent(state, "The group at the main gate has dispersed. They have said they will return, and there is no reason to doubt them.", "info");
     } else if (p.kind === "sighting-reported") {
       const c = state.crocs.find(x => x.id === p.crocId);
       logEvent(state, `A member of the grounds staff reports seeing an animal outside the perimeter, near the service road. ${c ? c.name : "One animal"} remains unaccounted for.`, "serious");
@@ -1386,6 +1392,450 @@ MoatTests.add("the vet call-out treats the worst-affected animal", () => {
   s.hours.allocations = { "vet-visit": 2 };
   applyVetVisit(s);
   assert(s.crocs[3].health > 0.25, "the vet must treat the sickest animal");
+});
+
+// ============ handler incident resolution ============
+// Most incidents resolve as skill minus fatigue against activity. A tired handler at
+// high croc activity is how people get hurt, and the player caused both numbers.
+function resolveHandlerIncident(state, severityBase) {
+  const skill = 0.5 + Math.min(state.staff.handlers, 6) * 0.08;
+  const exposure = clamp01(state.activity / 100);
+  const margin = skill - clamp01(state.staff.fatigue);
+  const risk = clamp01(severityBase * exposure * (1 - margin) * 2.2);
+  const roll = rngNext(state);
+  const injured = roll < risk;
+  // A torpid animal cannot hurt anyone; handlers work in the water at that level.
+  const fatal = injured && state.activity >= 70 && rngNext(state) < risk * 0.35;
+  if (fatal) {
+    state.ledger.fatal++; state.ledger.fatalities++;
+    state.satisfaction -= 25;
+  } else if (injured) {
+    state.ledger.serious++;
+    state.satisfaction -= 6;
+  }
+  return { injured, fatal };
+}
+
+// ============ human and external incidents ============
+INCIDENTS.push(
+  {
+    id: "client-wants-to-swim", cooldown: 20, category: "human",
+    title: "The client would like to swim in it",
+    weight: (s) => (s.clientId === "voss" ? 2.5 : 0.8),
+    apply: (s) => {
+      logEvent(s, "The client would like to be photographed in the moat. He has been drinking. He is not asking.", "serious");
+    },
+    choices: [
+      { label: "Refuse. Cite the insurance position.", apply: (s) => {
+        s.satisfaction -= 12;
+        logEvent(s, "Request declined on insurance grounds. The client was not pleased and said so to two of his guests.", "info");
+      } },
+      { label: "Permit it. Chill the water first, brief two handlers.", hours: 3, apply: (s) => {
+        s.facility.heaterSetpoint = Math.max(10, s.facility.heaterSetpoint - 10);
+        s.env.waterTemp = waterTempFor(s);
+        recomputeActivity(s);
+        const r = resolveHandlerIncident(s, 0.8);
+        if (r.fatal) logEvent(s, "The client entered the water. The animals were not as inactive as the readings suggested. Emergency services attended.", "fatal");
+        else if (r.injured) logEvent(s, "The client entered the water and was bitten on the calf. He has described it as the best night of his life.", "serious");
+        else { s.satisfaction += 8; logEvent(s, "The client entered the water for ninety seconds. The photograph was taken. Nothing happened.", "info"); }
+      } },
+      { label: "Permit it. Do nothing else.", apply: (s) => {
+        const r = resolveHandlerIncident(s, 1);
+        if (r.fatal) logEvent(s, "The client entered the water. Emergency services attended. The contract is under review.", "fatal");
+        else if (r.injured) logEvent(s, "The client entered the water and required sixteen stitches.", "serious");
+        else {
+          s.satisfaction += 10;
+          logEvent(s, "The client entered the water and came out again. The photograph has been posted.", "info");
+          addRedFlag(s, `The client swam in an unprepared moat on day ${s.day} and was not harmed. This was luck.`);
+        }
+      } },
+    ],
+  },
+  {
+    id: "the-guests-child", cooldown: 14, category: "human",
+    title: "A guest's child is at the rail unaccompanied",
+    weight: (s) => (s.satisfaction > 50 && s.day > 5 ? 1.4 : 0.6),
+    apply: (s) => {
+      const bank = s.structures.find(st => st.id === "bank-fence");
+      const railFails = rngNext(s) < (1 - bank.integrity) * 0.6;
+      if (!railFails) {
+        logEvent(s, "A guest's child was found at the moat rail during the reception, unaccompanied, for a period estimated at four minutes. The rail held. Recommend a stanchion review.", "minor");
+        s.ledger.minor++;
+        return;
+      }
+      const r = resolveHandlerIncident(s, 0.7);
+      if (r.fatal) {
+        logEvent(s, "A guest's child reached the water at the north rail. The outcome is recorded in the incident file and this report will not restate it.", "fatal");
+      } else if (r.injured) {
+        logEvent(s, "A guest's child reached the water at the north rail and was recovered by Handler Osei. Injuries to the child's forearm. Handler Osei has been given the week.", "serious");
+      } else {
+        logEvent(s, "A guest's child reached the water at the north rail and was recovered before contact. Nothing happened. Everyone present understood exactly what had nearly happened.", "minor");
+        s.ledger.minor++;
+        addRedFlag(s, `A child reached the water on day ${s.day}. The rail had already failed inspection criteria.`);
+      }
+    },
+  },
+  {
+    id: "contractor-drains-moat", cooldown: 25, category: "human",
+    title: "Contractor attended for scheduled repair",
+    weight: (s) => (s.day > 6 ? 1.1 : 0),
+    apply: (s) => {
+      s.env.waterLevel = 0.08;
+      s.crocs.forEach(c => { c.stress = clamp01(c.stress + 0.3); });
+      s.pending.push({ day: s.day + 2, kind: "moat-refilled" });
+      logEvent(s, "The moat was drained this morning for scheduled repair to the outfall. The works order was raised in March. Nobody on site was notified, including the handling team, who arrived to find the animals on the floor of an empty ditch.", "serious");
+      s.ledger.serious++;
+      s.ledger.welfareFindings++;
+    },
+  },
+  {
+    id: "handler-slip", cooldown: 8, category: "human",
+    title: "Handler slipped on the wet walkway",
+    weight: (s) => 1.2 + clamp01(s.staff.fatigue) * 2.5,
+    apply: (s) => {
+      const r = resolveHandlerIncident(s, 0.5);
+      if (r.fatal) logEvent(s, "Handler entered the water at the south walkway following a slip. The animals were at full activity. Next of kin have been informed.", "fatal");
+      else if (r.injured) logEvent(s, "Handler slipped on the south walkway and entered the water to the waist before being recovered. Lacerations to the left leg. Reportable.", "serious");
+      else { logEvent(s, "Handler slipped on the south walkway. No entry to the water. The walkway has been on the maintenance list since February.", "minor"); s.ledger.minor++; }
+    },
+  },
+  {
+    id: "delivery-driver", cooldown: 12, category: "human",
+    title: "Delivery driver took the service bridge",
+    weight: (s) => {
+      const bridge = s.structures.find(st => st.id === "service-bridge");
+      return 0.8 + (1 - bridge.integrity) * 2.5;
+    },
+    apply: (s) => {
+      logEvent(s, "A delivery driver crossed the service bridge at 14:20 because the routing application told him to. He reports that nobody stopped him and that he did not see the signage. He is correct on both points.", "minor");
+      s.ledger.minor++;
+      s.satisfaction -= 3;
+    },
+  },
+  {
+    id: "guard-initiative", cooldown: 15, category: "human",
+    title: "A guard decided to test the moat",
+    weight: (s) => (s.staff.guards > 0 ? 0.9 + (s.staff.pr === 0 ? 0.8 : 0) : 0),
+    apply: (s) => {
+      const r = resolveHandlerIncident(s, 0.65);
+      if (r.fatal) logEvent(s, "A member of the security team entered the water to establish whether the animals would react. They did.", "fatal");
+      else if (r.injured) logEvent(s, "A member of the security team lowered himself into the moat on a rope to demonstrate that the animals were sluggish. He required treatment. He maintains that the demonstration was successful.", "serious");
+      else { logEvent(s, "A member of the security team was found throwing gravel at the animals to see what they would do. He has been reminded that this is documented in his induction.", "minor"); s.ledger.minor++; }
+    },
+  },
+  {
+    id: "welfare-inspector", cooldown: 16, category: "external",
+    title: "Welfare inspection, unannounced",
+    weight: (s) => (s.day > 8 ? 1.6 : 0),
+    apply: (s) => {
+      const findings = [];
+      if (s.env.ammonia > 0.55) findings.push("water quality outside acceptable parameters");
+      if (baskingAccessFor(s) < 0.5) findings.push("insufficient basking capacity for the stocked headcount");
+      if (meanHealth(s) < 0.65) findings.push("body condition below standard across multiple animals");
+      if (s.crocs.filter(c => c.present).length > s.licensedHeadcount) findings.push("headcount exceeds the licensed figure");
+      if (s.env.waterTemp < 18) findings.push("thermal provision inadequate; animals unable to feed");
+      s.ledger.welfareFindings += findings.length;
+      const critical = findings.length >= 3 || meanHealth(s) < 0.35;
+      if (critical) {
+        s.ledger.welfareCritical++;
+        s.status = "failed";
+        logEvent(s, `Welfare inspection. ${findings.length} findings, of which the inspector has categorised at least one as critical. The licence is suspended with immediate effect and the contract is terminated.`, "fatal");
+      } else if (findings.length > 0) {
+        s.satisfaction -= findings.length * 5;
+        logEvent(s, `Welfare inspection. ${findings.length} finding(s): ${findings.join("; ")}. Remedial period of fourteen days.`, "serious");
+      } else {
+        logEvent(s, "Welfare inspection. No findings. The inspector stayed for forty minutes and asked about the filtration contract.", "info");
+      }
+    },
+  },
+  {
+    id: "journalist-drone", cooldown: 14, category: "external",
+    title: "Drone over the south moat",
+    weight: (s) => (s.day > 4 ? 1.3 : 0),
+    apply: (s) => {
+      if (s.staff.pr > 0) {
+        s.satisfaction -= 4;
+        logEvent(s, "A drone operated by a regional title overflew the south moat for eleven minutes. The press officer supplied a statement the same afternoon and the piece ran as a business feature.", "minor");
+        s.ledger.minor++;
+        return;
+      }
+      s.satisfaction -= 18;
+      s.ledger.serious++;
+      if (s.contract && s.contract.modifiers && s.contract.modifiers.pressFailsContract) {
+        s.status = "failed";
+        logEvent(s, "Aerial photographs of the vault moat were published this morning. The client retained this firm on the express condition of absolute discretion. The contract is terminated.", "fatal");
+      } else {
+        logEvent(s, "Aerial photographs of the moat were published under a headline this office will not reproduce. No statement was offered, because there is nobody employed here to offer one.", "serious");
+      }
+    },
+  },
+  {
+    id: "insurance-auditor", cooldown: 20, category: "external",
+    title: "Insurance auditor reviewed the incident log",
+    weight: (s) => (s.day > 12 ? 1.2 : 0),
+    apply: (s) => {
+      const undisclosed = s.redFlags.length;
+      if (undisclosed > 0) {
+        s.insuranceVoid = true;
+        s.satisfaction -= 10;
+        logEvent(s, `Insurance audit. The log does not match the site. ${undisclosed} matter(s) appear to have occurred without an entry being raised. Cover is withdrawn pending review, which in practice means cover is withdrawn.`, "serious");
+        s.ledger.serious++;
+      } else if (s.ledger.serious + s.ledger.fatal === 0) {
+        s.money += 6000;
+        logEvent(s, "Insurance audit. The log is clean and the premium has been reduced accordingly. The auditor described the file as the dullest he had read this year and meant it kindly.", "info");
+      } else {
+        logEvent(s, "Insurance audit. The log is complete and the incidents are documented. Premium unchanged.", "info");
+      }
+    },
+  },
+  {
+    id: "activist-protest", cooldown: 18, category: "external",
+    title: "Protest at the main gate",
+    weight: (s) => (s.day > 7 ? 1.1 : 0),
+    apply: (s) => {
+      s.pending.push({ day: s.day + 3, kind: "protest-ends" });
+      s.protestActive = true;
+      s.satisfaction -= 6;
+      logEvent(s, "Approximately thirty people are at the main gate with placards concerning the welfare of the animals. They are non-violent, well organised, correct on two of their four points, and expected to remain for several days.", "minor");
+      s.ledger.minor++;
+    },
+  },
+  {
+    id: "bribe-attempt", cooldown: 16, category: "human",
+    title: "A member of staff was approached",
+    weight: (s) => clamp01(s.staff.fatigue) * 3,
+    apply: (s) => {
+      if (rngNext(s) < clamp01(s.staff.fatigue)) {
+        s.scheduleLeaked = true;
+        addRedFlag(s, `The feed roster and census timings left the facility on day ${s.day}. This was not reported at the time.`);
+      } else {
+        logEvent(s, "A handler reports being approached in a supermarket car park and offered a sum of money for the feed roster. He declined and reported it the same day, which is more than the roster is worth.", "minor");
+        s.ledger.minor++;
+      }
+    },
+  },
+  {
+    id: "efficiency-consultant", cooldown: 14, category: "external",
+    title: "Efficiency consultant attended site",
+    weight: (s) => (s.clientId === "marchetti" && s.day > 5 ? 2.5 : 0),
+    apply: (s) => {
+      logEvent(s, "The client's efficiency consultant has completed his review. He recommends a reduction in handling staff and questions the filtration line item, which he has described as discretionary.", "minor");
+      s.ledger.minor++;
+    },
+    choices: [
+      { label: "Accept the recommendation.", apply: (s) => {
+        s.staff.handlers = Math.max(1, s.staff.handlers - 1);
+        s.satisfaction += 8;
+        logEvent(s, "One handling post has been removed from the establishment. The client is pleased with the saving.", "info");
+      } },
+      { label: "Refuse, in writing, with reasons.", apply: (s) => {
+        s.satisfaction -= 9;
+        logEvent(s, "The recommendation was declined in writing. The letter is on file and will be produced at the inquiry, should there be one.", "info");
+      } },
+    ],
+  },
+  {
+    id: "ceremonial-visit", cooldown: 10, category: "external",
+    title: "State visit scheduled past the moat",
+    weight: (s) => (s.clientId === "zanjabar" && s.day > 3 ? 3 : 0),
+    apply: (s) => {
+      s.facility.feedVolume = Math.min(1.6, s.facility.feedVolume + 0.4);
+      s.ceremonialDay = s.day + 2;
+      logEvent(s, "A state visit will pass the moat in two days. The animals are required to be visible, magnificent and on the platforms, which means well fed, which means placid, on the one day the perimeter carries a motorcade.", "minor");
+      s.ledger.minor++;
+    },
+  },
+  {
+    id: "resupply-delay", cooldown: 12, category: "external",
+    title: "Resupply convoy delayed",
+    weight: (s) => (s.clientId === "halcyon" ? 2.5 : 0),
+    apply: (s) => {
+      s.facility.feedVolume = Math.max(0.4, s.facility.feedVolume - 0.35);
+      s.money -= 800;
+      logEvent(s, "The resupply convoy will not arrive this week. Feed volume has been reduced accordingly. The nearest veterinary practice remains two hundred kilometres away and is aware of our situation in general terms.", "minor");
+      s.ledger.minor++;
+    },
+  },
+  {
+    id: "sandstorm", cooldown: 9, category: "environmental",
+    title: "Sandstorm across the site",
+    weight: (s) => (s.clientId === "halcyon" ? 2.2 : 0),
+    apply: (s) => {
+      s.env.turbidity = clamp01(s.env.turbidity + 0.35);
+      s.env.ammonia = clamp01(s.env.ammonia + 0.12);
+      logEvent(s, "Sandstorm across the site overnight. The water is opaque and the filtration intake is blinded. A count today would not be worth the hours.", "minor");
+      s.ledger.minor++;
+    },
+  },
+);
+
+// ============ census responses ============
+function censusResponse(state, responseId) {
+  if (responseId === "assume-miscount") {
+    state.assumedMiscount = true;
+    return;
+  }
+  if (responseId === "recount") {
+    const obs = runCensus(state, "thorough");
+    logEvent(state, `Repeat count. ${censusNarrative(state, obs)}`, "census");
+    return;
+  }
+  if (responseId === "drain-search") {
+    state.hours.spent = state.hours.budget;
+    state.searchedToday = true;
+    state.env.waterLevel = 0.1;
+    state.satisfaction -= 12;
+    state.crocs.forEach(c => { c.stress = clamp01(c.stress + 0.3); });
+    const missing = (state.escapedIds || []).length;
+    logEvent(state, missing > 0
+      ? `Moat drained and searched. ${missing} animal(s) confirmed absent from the facility. Recovery operation opened.`
+      : "Moat drained and searched. All animals accounted for. The client watched the entire operation from the terrace.",
+      "census");
+    return;
+  }
+  if (responseId === "report-client") {
+    state.reportedMissing = true;
+    state.satisfaction -= 8;
+    logEvent(state, "Client notified that one animal is unaccounted for pending confirmation. The notification was received badly and correctly.", "census");
+  }
+}
+
+// ============ tests: human and external incidents ============
+MoatTests.add("the full incident table is present and covers every category", () => {
+  assert(INCIDENTS.length >= 24, `expected at least 24 incidents, got ${INCIDENTS.length}`);
+  for (const cat of ["environmental", "animal", "human", "external"]) {
+    assert(INCIDENTS.some(i => i.category === cat), `no incidents in category ${cat}`);
+  }
+  for (const id of ["client-wants-to-swim", "the-guests-child", "welfare-inspector", "guard-initiative", "contractor-drains-moat"]) {
+    assert(INCIDENTS.some(i => i.id === id), `marquee incident missing: ${id}`);
+  }
+});
+
+MoatTests.add("handler incidents get worse with fatigue and activity", () => {
+  const trial = (fatigue, activity) => {
+    let injuries = 0;
+    for (let seed = 1; seed <= 200; seed++) {
+      const s = createState({ seed, clientId: "voss", crocCount: 12 });
+      s.staff.fatigue = fatigue; s.activity = activity;
+      if (resolveHandlerIncident(s, 0.5).injured) injuries++;
+    }
+    return injuries;
+  };
+  assert(trial(0.9, 85) > trial(0.05, 30), "tired handlers at high activity must be hurt more often");
+});
+
+MoatTests.add("a frenzied moat can produce a fatality; a torpid one cannot", () => {
+  let fatalities = 0;
+  for (let seed = 1; seed <= 300; seed++) {
+    const s = createState({ seed, clientId: "voss", crocCount: 12 });
+    s.staff.fatigue = 0.95; s.activity = 98;
+    if (resolveHandlerIncident(s, 0.9).fatal) fatalities++;
+  }
+  assert(fatalities > 0, "a frenzied moat with an exhausted crew must occasionally kill someone");
+
+  let torpidFatalities = 0;
+  for (let seed = 1; seed <= 300; seed++) {
+    const s = createState({ seed, clientId: "voss", crocCount: 12 });
+    s.staff.fatigue = 0.95; s.activity = 5;
+    if (resolveHandlerIncident(s, 0.9).fatal) torpidFatalities++;
+  }
+  assertEq(torpidFatalities, 0, "a torpid animal cannot kill a handler");
+});
+
+MoatTests.add("the welfare inspector audits real state, not a die roll", () => {
+  const clean = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  clean.env.ammonia = 0.05; clean.facility.baskingPlatforms = 12; clean.crocs.forEach(c => { c.health = 0.95; });
+  const filthy = createState({ seed: 1, clientId: "voss", crocCount: 12 });
+  filthy.env.ammonia = 0.9; filthy.facility.baskingPlatforms = 1; filthy.crocs.forEach(c => { c.health = 0.4; });
+  const inspector = INCIDENTS.find(i => i.id === "welfare-inspector");
+  inspector.apply(clean); inspector.apply(filthy);
+  assert(filthy.ledger.welfareFindings > clean.ledger.welfareFindings, "the inspector must find what is actually there");
+});
+
+MoatTests.add("a critical inspection failure ends the contract", () => {
+  const s = createState({ seed: 2, clientId: "voss", crocCount: 12 });
+  s.env.ammonia = 1; s.facility.baskingPlatforms = 1; s.crocs.forEach(c => { c.health = 0.2; });
+  INCIDENTS.find(i => i.id === "welfare-inspector").apply(s);
+  assert(s.ledger.welfareCritical > 0, "catastrophic welfare must register as critical");
+  assertEq(s.status, "failed", "a critical finding is contract-ending");
+});
+
+MoatTests.add("the journalist drone is harmless with a PR officer and costly without", () => {
+  const withPr = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  const without = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  withPr.staff.pr = 1; without.staff.pr = 0;
+  const drone = INCIDENTS.find(i => i.id === "journalist-drone");
+  drone.apply(withPr); drone.apply(without);
+  assert(without.satisfaction < withPr.satisfaction, "the PR officer must earn their salary here");
+});
+
+MoatTests.add("the client who wants to swim offers a real choice", () => {
+  const inc = INCIDENTS.find(i => i.id === "client-wants-to-swim");
+  assert(Array.isArray(inc.choices) && inc.choices.length >= 2, "this must be a decision, not a notification");
+  for (const c of inc.choices) {
+    assert(typeof c.label === "string" && c.label.length > 0, "each choice needs a label");
+    assert(typeof c.apply === "function", "each choice needs an effect");
+  }
+});
+
+MoatTests.add("the guest's child resolves against activity", () => {
+  const inc = INCIDENTS.find(i => i.id === "the-guests-child");
+  let bad = 0;
+  for (let seed = 1; seed <= 120; seed++) {
+    const s = createState({ seed, clientId: "voss", crocCount: 12 });
+    s.activity = 95;
+    s.structures.forEach(st => { st.integrity = 0.1; });
+    inc.apply(s);
+    if (s.ledger.fatal > 0 || s.ledger.serious > 0) bad++;
+  }
+  assert(bad > 0, "a frenzied moat and an unattended child must sometimes go wrong");
+
+  let calmBad = 0;
+  for (let seed = 1; seed <= 120; seed++) {
+    const s = createState({ seed, clientId: "voss", crocCount: 12 });
+    s.activity = 8;
+    s.structures.forEach(st => { st.integrity = 0.1; });
+    inc.apply(s);
+    if (s.ledger.fatal > 0) calmBad++;
+  }
+  assertEq(calmBad, 0, "torpid animals do not take a child");
+});
+
+MoatTests.add("the contractor drains the moat without asking", () => {
+  const s = createState({ seed: 5, clientId: "voss", crocCount: 12 });
+  const before = s.env.waterLevel;
+  INCIDENTS.find(i => i.id === "contractor-drains-moat").apply(s);
+  assert(s.env.waterLevel < before, "the moat must actually drain");
+});
+
+// ============ tests: census responses ============
+MoatTests.add("assuming a miscount is free and sometimes wrong", () => {
+  const s = createState({ seed: 6, clientId: "voss", crocCount: 12 });
+  s.crocs[0].present = false; s.ledger.lostAnimals = 1;
+  const money = s.money, satisfaction = s.satisfaction;
+  censusResponse(s, "assume-miscount");
+  assertEq(s.money, money, "assuming a miscount costs nothing up front");
+  assertEq(s.satisfaction, satisfaction, "and nothing in standing either");
+});
+
+MoatTests.add("draining and searching finds a missing animal but wrecks the day", () => {
+  const s = createState({ seed: 7, clientId: "voss", crocCount: 12 });
+  beginDay(s);
+  s.crocs[0].present = false; s.escapedIds = [s.crocs[0].id];
+  const satisfaction = s.satisfaction;
+  censusResponse(s, "drain-search");
+  assert(s.satisfaction < satisfaction, "the client sees an empty moat");
+  assert(s.searchedToday === true, "the search must be recorded");
+  assertEq(hoursRemaining(s), 0, "a drain and search consumes the whole day");
+});
+
+MoatTests.add("reporting to the client costs standing now and halves the penalty later", () => {
+  const s = createState({ seed: 8, clientId: "voss", crocCount: 12 });
+  s.crocs[0].present = false;
+  const satisfaction = s.satisfaction;
+  censusResponse(s, "report-client");
+  assert(s.satisfaction < satisfaction, "an early report costs standing");
+  assertEq(s.reportedMissing, true, "the disclosure must be recorded for grading");
 });
 </script>
 <script>
@@ -1789,9 +2239,12 @@ function openBriefing() {
   ui.modalOpen = true;
   ui.censusObs = null;
   ui.censusDone = false;
+  ui.censusResponded = false;
+  ui.choiceResolved = false;
   $("modal").hidden = false;
   renderBriefing();
 }
+
 
 function closeBriefing() {
   ui.modalOpen = false;
@@ -1829,18 +2282,44 @@ function renderBriefing() {
     <div class="section"><h3>Count</h3>
       <div style="margin-bottom:8px">${esc(censusNarrative(s, obs))}</div>
       ${obs.healthFlags.length ? `<div class="hint">${obs.healthFlags.map(f => esc(f.name + " — " + f.note)).join("<br>")}</div>` : ""}
-      ${obs.short ? renderCensusResponses() : ""}
+      ${obs.short && !ui.censusResponded ? renderCensusResponses() : ""}
+    </div>` : "";
+
+  // Overnight events the player must answer before the day can start.
+  const inc = ui.overnightIncident;
+  const pendingChoice = inc && inc.choices && !ui.choiceResolved;
+  const overnight = inc ? `
+    <div class="section"><h3>Overnight</h3>
+      <div class="lbl" style="margin-bottom:2px">${esc(inc.title)}</div>
+      <div class="hint" style="margin-bottom:8px">${esc(ui.overnightText || "")}</div>
+      ${pendingChoice ? inc.choices.map((c, i) =>
+        `<div class="opt"><div><div class="lbl">${esc(c.label)}</div>${c.hours ? `<div class="desc">${c.hours} handler-hours</div>` : ""}</div><button data-choice="${i}">Select</button></div>`
+      ).join("") : ""}
     </div>` : "";
 
   $("modal-body").innerHTML = `
     <h2>Morning briefing — day ${s.day}</h2>
     <div class="sub">${s.hours.budget} handler-hours available. ${hoursRemaining(s)} unspent.</div>
+    ${overnight}
     <div class="section"><h3>Census</h3>${censusRows}</div>
     ${censusResult}
     <div class="section"><h3>Allocations</h3>${actionRows}</div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
-      <button class="primary" id="begin-day">Begin day</button>
+      <button class="primary" id="begin-day" ${pendingChoice ? "disabled" : ""}>Begin day</button>
     </div>`;
+
+  $("modal-body").querySelectorAll("[data-choice]").forEach(b => b.addEventListener("click", () => {
+    const c = inc.choices[Number(b.dataset.choice)];
+    if (c.hours) s.hours.spent = Math.min(s.hours.budget, s.hours.spent + c.hours);
+    c.apply(s);
+    ui.choiceResolved = true;
+    renderBriefing();
+  }));
+  $("modal-body").querySelectorAll("[data-resp]").forEach(b => b.addEventListener("click", () => {
+    censusResponse(s, b.dataset.resp);
+    ui.censusResponded = true;
+    renderBriefing();
+  }));
 
   $("modal-body").querySelectorAll("[data-census]").forEach(b => b.addEventListener("click", () => {
     ui.censusObs = runCensus(s, b.dataset.census);
@@ -1886,7 +2365,13 @@ function onMorningBriefing(s) {
   applyVetVisit(s);
   decayStructures(s);
   resolvePending(s);
-  ui.overnightIncident = maybeFireIncident(s);
+  // Silent incidents (an animal leaving via a failed grate) write no record on
+  // purpose. Announcing them here would hand the player what the census exists to
+  // withhold, so the briefing shows an event only if it actually logged one.
+  const logBefore = s.log.length;
+  const fired = maybeFireIncident(s);
+  ui.overnightIncident = fired && s.log.length > logBefore ? fired : null;
+  ui.overnightText = ui.overnightIncident ? s.log[s.log.length - 1].text : "";
   tickWeather(s);
   endDay(s);
   beginDay(s);
