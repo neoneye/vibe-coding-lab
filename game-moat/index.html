@@ -435,6 +435,180 @@ MoatTests.add("logEvent records entries with a timestamp and kind", () => {
   assertEq(s.log[0].day, 1);
   assertEq(s.log[0].hour, 6);
 });
+
+// ============ the morning census ============
+// The count is an observation, not a state read. It can only ever undercount, so
+// "12 of 12" proves everything is present and a short count is always ambiguous.
+const CENSUS_DEPTHS = {
+  cursory:  { hours: 0.25, label: "Cursory (15 min)",  missMultiplier: 6 },
+  standard: { hours: 1,    label: "Standard (1 hr)",   missMultiplier: 1 },
+  thorough: { hours: 3,    label: "Thorough (3 hr)",   missMultiplier: 0.15 },
+};
+
+function censusAvailable(state, depth) {
+  if (depth === "thorough") return state.env.turbidity <= 0.3;
+  return Boolean(CENSUS_DEPTHS[depth]);
+}
+
+// Probability that a present animal is missed by the observer. Turbidity dominates
+// and does so steeply: clear water is nearly reliable, murky water is where a
+// headcount stops being a fact. Kept low per animal so that across a full moat a
+// short count stays a rare, alarming event rather than daily background noise.
+function missChance(state, croc, depth) {
+  const d = CENSUS_DEPTHS[depth];
+  const water = 0.08 * Math.pow(clamp01(state.env.turbidity), 2.25);
+  const concealment = croc.state === "hidden" ? 1 : croc.state === "submerged" ? 0.4 : 0;
+  return clamp01(water * d.missMultiplier * (1 + concealment) * (1 + clamp01(state.staff.fatigue)));
+}
+
+function runCensus(state, depth) {
+  const d = CENSUS_DEPTHS[depth] || CENSUS_DEPTHS.standard;
+  state.hours.spent += d.hours;
+
+  const present = state.crocs.filter(c => c.present);
+  const missedIds = [];
+  for (const c of present) {
+    if (rngNext(state) < missChance(state, c, depth)) missedIds.push(c.id);
+  }
+  const counted = present.length - missedIds.length;
+  const expected = state.licensedHeadcount;
+
+  const obs = {
+    depth, expected, counted, actualPresent: present.length,
+    missedIds, healthFlags: [], kind: "count", low: counted, high: counted,
+    short: counted < expected,
+  };
+
+  if (depth === "cursory") {
+    // Too quick to commit to a number; the observer offers a band around what they saw.
+    const spread = 1 + rngInt(state, 2);
+    obs.kind = "range";
+    obs.low = Math.max(0, counted - spread);
+    obs.high = counted + spread;
+    obs.short = obs.high < expected;
+  }
+
+  if (depth === "thorough") {
+    for (const c of present) {
+      if (c.health < 0.7) obs.healthFlags.push({ id: c.id, name: c.name, note: "condition below standard" });
+      else if (c.hunger > 0.9) obs.healthFlags.push({ id: c.id, name: c.name, note: "has not fed in some time" });
+      else if (c.stress > 0.7) obs.healthFlags.push({ id: c.id, name: c.name, note: "showing stress behaviour" });
+    }
+  }
+  return obs;
+}
+
+function censusNarrative(state, obs) {
+  const clarity = state.env.turbidity > 0.6 ? " Water clarity poor." : "";
+  if (obs.kind === "range") {
+    return `${obs.low}–${obs.high} animals observed. The count was not held long enough to be worth much.${clarity}`;
+  }
+  if (!obs.short) {
+    const flags = obs.healthFlags.length
+      ? ` ${obs.healthFlags.length} animal(s) flagged for review.`
+      : "";
+    return `${obs.counted} of ${obs.expected} confirmed.${flags}${clarity}`;
+  }
+  return `${obs.counted} of ${obs.expected} — ${obs.expected - obs.counted} unaccounted.${clarity}`;
+}
+
+// ============ tests: census ============
+function censusFixture(seed) {
+  const s = createState({ seed, clientId: "voss", crocCount: 12 });
+  s.env.turbidity = 0.2;
+  s.staff.fatigue = 0;
+  return s;
+}
+
+MoatTests.add("thorough census needs clear water", () => {
+  const s = censusFixture(1);
+  s.env.turbidity = 0.2;
+  assertEq(censusAvailable(s, "thorough"), true);
+  s.env.turbidity = 0.6;
+  assertEq(censusAvailable(s, "thorough"), false);
+  assertEq(censusAvailable(s, "standard"), true);
+});
+
+MoatTests.add("a thorough census in clear water finds every animal", () => {
+  const s = censusFixture(2);
+  const obs = runCensus(s, "thorough");
+  assertEq(obs.kind, "count");
+  assertEq(obs.counted, 12);
+  assertEq(obs.short, false);
+  assert(Array.isArray(obs.healthFlags), "thorough census reports health flags");
+});
+
+MoatTests.add("a cursory census reports a range, not a number", () => {
+  const s = censusFixture(3);
+  const obs = runCensus(s, "cursory");
+  assertEq(obs.kind, "range");
+  assert(obs.low <= obs.high, "range must be ordered");
+  assert(obs.high - obs.low >= 2, "cursory ranges are wide enough to be useless");
+});
+
+MoatTests.add("murky water causes false short counts even when nothing is missing", () => {
+  let shortCounts = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    const s = censusFixture(seed);
+    s.env.turbidity = 0.85;
+    const obs = runCensus(s, "standard");
+    assertEq(obs.actualPresent, 12, "no animal is actually missing in this fixture");
+    if (obs.short) shortCounts++;
+  }
+  assert(shortCounts > 0, "murky water must sometimes produce a short count");
+  assert(shortCounts < 60, "murky water must not always produce a short count");
+});
+
+MoatTests.add("clear water produces fewer false short counts than murky water", () => {
+  const countShort = (turbidity) => {
+    let n = 0;
+    for (let seed = 1; seed <= 60; seed++) {
+      const s = censusFixture(seed);
+      s.env.turbidity = turbidity;
+      if (runCensus(s, "standard").short) n++;
+    }
+    return n;
+  };
+  assert(countShort(0.15) < countShort(0.9), "clarity must improve confidence");
+});
+
+MoatTests.add("the census never reports more animals than are present", () => {
+  for (let seed = 1; seed <= 40; seed++) {
+    const s = censusFixture(seed);
+    s.crocs[0].present = false;               // one genuinely gone
+    s.env.turbidity = 0.5;
+    const obs = runCensus(s, "standard");
+    assertEq(obs.actualPresent, 11);
+    assert(obs.counted <= 11, `counted ${obs.counted} of an actual 11`);
+    assertEq(obs.short, true, "a genuinely missing animal always reads short on a standard count");
+  }
+});
+
+MoatTests.add("a cursory range can hide a genuinely missing animal", () => {
+  let reassured = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    const s = censusFixture(seed);
+    s.crocs[0].present = false;
+    const obs = runCensus(s, "cursory");
+    if (obs.high >= obs.expected) reassured++;
+  }
+  assert(reassured > 0, "cursory counts must be capable of false reassurance");
+});
+
+MoatTests.add("running a census spends handler hours", () => {
+  const s = censusFixture(4);
+  s.hours.budget = 8; s.hours.spent = 0;
+  runCensus(s, "thorough");
+  assertClose(s.hours.spent, 3, 0.001, "thorough census costs three handler-hours");
+});
+
+MoatTests.add("census narrative is plain deadpan prose", () => {
+  const s = censusFixture(5);
+  const obs = runCensus(s, "standard");
+  const text = censusNarrative(s, obs);
+  assert(typeof text === "string" && text.length > 10, "narrative must be prose");
+  assert(!/[!]/.test(text), "no exclamation marks in event copy");
+});
 </script>
 <script>
 "use strict";
