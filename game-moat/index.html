@@ -320,14 +320,21 @@ const CROC_NAMES = [
 const HOURS_PER_DAY = 24;
 
 // ============ state construction ============
+// Omitting crocCount takes the client's own stocking, which may deliberately exceed
+// what the moat is licensed for. Passing it explicitly means that count is the
+// licensed figure too, which is what the tests want.
 function createState({ seed, clientId, crocCount }) {
+  const client = getClient(clientId);
+  const stocked = crocCount !== undefined ? crocCount : (client ? client.crocCount : 12);
+  const licensed = crocCount !== undefined ? crocCount
+    : (client && client.licensedHeadcount) || stocked;
   const state = {
     seed, rngState: seed >>> 0, clientId,
     day: 1, hour: 6, contractDays: 40,
-    crocs: [], licensedHeadcount: crocCount,
+    crocs: [], licensedHeadcount: licensed,
     facility: {
       heaterSetpoint: 26, shadeCoverage: 0.4, waterDepth: 2.0,
-      filtration: 0.6, baskingPlatforms: Math.ceil(crocCount * 0.6),
+      filtration: 0.6, baskingPlatforms: Math.ceil(stocked * 0.6),
       feedIntervalDays: 5, feedVolume: 1.0,
     },
     env: {
@@ -345,7 +352,7 @@ function createState({ seed, clientId, crocCount }) {
     },
     status: "running",
   };
-  for (let i = 0; i < crocCount; i++) {
+  for (let i = 0; i < stocked; i++) {
     state.crocs.push({
       id: i + 1,
       name: CROC_NAMES[i % CROC_NAMES.length] + (i >= CROC_NAMES.length ? " II" : ""),
@@ -362,6 +369,7 @@ function createState({ seed, clientId, crocCount }) {
   state.env.ambient = ambientTemp(state);
   state.env.waterTemp = waterTempFor(state);
   recomputeActivity(state);
+  applyClientToState(state);
   return state;
 }
 
@@ -2070,6 +2078,162 @@ MoatTests.add("an undetected successful intrusion becomes a red flag", () => {
   }
   assert(flagged > 0, "what you never noticed must still be counted at close-out");
 });
+
+// ============ clients ============
+// Each contract is a map, a modifier set and a personality that generates its own
+// incidents. Deliberately, floridly fictional.
+const CLIENTS = [
+  {
+    id: "voss", name: "Sir Aurelian Voss", site: "Voss Point",
+    difficulty: "Tutorial-plus",
+    blurb: "Crypto fortune, second act. Wants the moat visible from orbit and has told the press so. Insists on forty animals in a moat rated for twenty-four. Money is not your constraint. Voss is your constraint.",
+    days: 40, crocCount: 30, licensedHeadcount: 24, baseAmbient: 27,
+    startMoney: 90000, startSatisfaction: 72, intrusionRate: 0.14, egress: false,
+    staff: { handlers: 4, vet: 0.5, guards: 2, pr: 0, fatigue: 0.1 },
+    modifiers: { heatingCostMultiplier: 1, filtrationCostMultiplier: 1, budgetMultiplier: 1.4, pressFailsContract: false },
+    incidentBias: { "client-wants-to-swim": 3, "journalist-drone": 2, "the-guests-child": 2, "territorial-fight": 1.5 },
+  },
+  {
+    id: "marchetti", name: "The Marchetti Group", site: "Marchetti data centre perimeter",
+    difficulty: "Medium — budget starvation",
+    blurb: "Corporate client. Wants ROI metrics and quarterly reporting, and has already decided your budget is thirty per cent too high. Will cut the filtration line first. Sends a consultant who recommends fewer handlers.",
+    days: 45, crocCount: 12, licensedHeadcount: 12, baseAmbient: 17,
+    startMoney: 28000, startSatisfaction: 65, intrusionRate: 0.2, egress: false,
+    staff: { handlers: 2, vet: 0.25, guards: 2, pr: 0, fatigue: 0.15 },
+    modifiers: { heatingCostMultiplier: 1.2, filtrationCostMultiplier: 1.4, budgetMultiplier: 0.6, pressFailsContract: false },
+    incidentBias: { "efficiency-consultant": 4, "algae-bloom": 2, "power-cut": 1.5 },
+  },
+  {
+    id: "zanjabar", name: "The Kingdom of Zanjabar", site: "Zanjabar royal palace",
+    difficulty: "Medium-hard — scheduled visibility",
+    blurb: "Prestige contract. Handlers in ceremonial black, a public parade route past the moat, state visits. The animals must look magnificent on demand, which means well fed and basking, which means placid, on exactly the days the perimeter matters most.",
+    days: 40, crocCount: 16, licensedHeadcount: 16, baseAmbient: 33,
+    startMoney: 70000, startSatisfaction: 75, intrusionRate: 0.18, egress: false,
+    staff: { handlers: 4, vet: 1, guards: 4, pr: 1, fatigue: 0.1 },
+    modifiers: { heatingCostMultiplier: 0.5, filtrationCostMultiplier: 1, budgetMultiplier: 1.1, pressFailsContract: false },
+    incidentBias: { "ceremonial-visit": 5, "activist-protest": 2, "journalist-drone": 1.5 },
+  },
+  {
+    id: "halcyon", name: "Halcyon Deep", site: "Halcyon Deep bunker community",
+    difficulty: "Hard — resource scarcity",
+    blurb: "Preppers. The moat must be self-sustaining off-grid: solar heating, no municipal water, no vet within two hundred kilometres. Residents are armed, opinionated, and will help.",
+    days: 50, crocCount: 10, licensedHeadcount: 10, baseAmbient: 21,
+    startMoney: 34000, startSatisfaction: 68, intrusionRate: 0.16, egress: false,
+    staff: { handlers: 2, vet: 0, guards: 3, pr: 0, fatigue: 0.12 },
+    modifiers: { heatingCostMultiplier: 1.8, filtrationCostMultiplier: 2, budgetMultiplier: 0.75, pressFailsContract: false },
+    incidentBias: { "resupply-delay": 4, "sandstorm": 3, "guard-initiative": 2, "power-cut": 2 },
+  },
+  {
+    id: "halloway", name: "Baroness Ingrid Halloway", site: "Halloway alpine vault",
+    difficulty: "Hard — thermal cascade",
+    blurb: "Art collector. The moat is indoors, underground, at altitude, in winter. Heating dominates the budget and every power flicker is a crisis. She pays for absolute discretion: any press event ends the contract.",
+    days: 45, crocCount: 8, licensedHeadcount: 8, baseAmbient: 9,
+    startMoney: 80000, startSatisfaction: 70, intrusionRate: 0.15, egress: false,
+    staff: { handlers: 3, vet: 0.5, guards: 2, pr: 0, fatigue: 0.1 },
+    modifiers: { heatingCostMultiplier: 3, filtrationCostMultiplier: 1.2, budgetMultiplier: 1, pressFailsContract: true },
+    incidentBias: { "power-cut": 3.5, "cold-snap": 3, "journalist-drone": 1.5 },
+  },
+  {
+    id: "aviary", name: "The Aviary", site: "The Aviary holding facility",
+    difficulty: "Hardest — active opposition",
+    blurb: "A holding facility for a rival organisation's captured personnel. The inmates are competent, bored, professionally trained in escape, and unionised. This is the only contract where getting out matters more than getting in, and the opposition probes your schedule rather than waiting for an opening.",
+    days: 60, crocCount: 20, licensedHeadcount: 20, baseAmbient: 29,
+    startMoney: 75000, startSatisfaction: 70, intrusionRate: 0.42, egress: true,
+    staff: { handlers: 4, vet: 1, guards: 5, pr: 0, fatigue: 0.1 },
+    modifiers: { heatingCostMultiplier: 1, filtrationCostMultiplier: 1, budgetMultiplier: 1.2, pressFailsContract: false },
+    incidentBias: { "bribe-attempt": 3, "the-learner": 2, "guard-initiative": 1.5 },
+  },
+];
+
+function getClient(id) { return CLIENTS.find(c => c.id === id); }
+function campaignOrder() { return CLIENTS.map(c => c.id); }
+
+function clientUnlocked(progress, id) {
+  if (id !== "aviary") return true;
+  const required = campaignOrder().filter(x => x !== "aviary");
+  return required.every(x => (progress.completed || []).includes(x));
+}
+
+function applyClientToState(state) {
+  const c = getClient(state.clientId);
+  if (!c) return;
+  state.contract = c;
+  state.contractDays = c.days;
+  state.env.baseAmbient = c.baseAmbient;
+  state.env.ambient = c.baseAmbient;
+  state.money = c.startMoney;
+  state.satisfaction = c.startSatisfaction;
+  Object.assign(state.staff, c.staff || {});
+  state.env.ambient = ambientTemp(state);
+  state.env.waterTemp = waterTempFor(state);
+  recomputeActivity(state);
+}
+
+// ============ tests: clients and campaign ============
+MoatTests.add("all six contracts exist in campaign order", () => {
+  assertEq(campaignOrder(), ["voss", "marchetti", "zanjabar", "halcyon", "halloway", "aviary"]);
+  for (const id of campaignOrder()) {
+    const c = getClient(id);
+    assert(c, `missing client ${id}`);
+    assert(c.days >= 30 && c.days <= 60, `${id} contract length out of the spec's range: ${c.days}`);
+    assert(typeof c.blurb === "string" && c.blurb.length > 20, `${id} needs a blurb`);
+  }
+});
+
+MoatTests.add("the Aviary is gated behind the other five", () => {
+  assertEq(clientUnlocked({ completed: [] }, "voss"), true);
+  assertEq(clientUnlocked({ completed: [] }, "aviary"), false);
+  assertEq(clientUnlocked({ completed: ["voss", "marchetti", "zanjabar", "halcyon", "halloway"] }, "aviary"), true);
+});
+
+MoatTests.add("Voss overstocks the moat past its licensed rating", () => {
+  const s = createState({ seed: 1, clientId: "voss", crocCount: getClient("voss").crocCount });
+  assert(s.crocs.length > 24, "Voss insists on more animals than the moat is rated for");
+  assert(baskingAccessFor(s) < 1, "an overstocked moat cannot give everyone a platform");
+});
+
+MoatTests.add("Halloway is a permanent thermal emergency", () => {
+  const halloway = createState({ seed: 2, clientId: "halloway", crocCount: 12 });
+  const voss = createState({ seed: 2, clientId: "voss", crocCount: 12 });
+  halloway.facility.heaterSetpoint = 0; voss.facility.heaterSetpoint = 0;
+  for (let h = 0; h < 24; h++) { tickHour(halloway); tickHour(voss); }
+  assert(halloway.env.waterTemp < voss.env.waterTemp, "the alpine vault must be colder");
+  assertEq(getClient("halloway").modifiers.pressFailsContract, true, "Halloway pays for discretion");
+});
+
+MoatTests.add("Marchetti starves the budget", () => {
+  assert(getClient("marchetti").modifiers.budgetMultiplier < 1, "the consultant has already been through the numbers");
+  assert(getClient("marchetti").startMoney < getClient("voss").startMoney, "corporate pays less");
+});
+
+MoatTests.add("the Aviary is the only egress contract", () => {
+  const egress = campaignOrder().filter(id => getClient(id).egress);
+  assertEq(egress, ["aviary"]);
+  assert(getClient("aviary").intrusionRate > getClient("voss").intrusionRate, "the henchmen probe actively");
+});
+
+MoatTests.add("client-specific incidents only fire on their own contract", () => {
+  const marchetti = createState({ seed: 3, clientId: "marchetti", crocCount: 12 });
+  const voss = createState({ seed: 3, clientId: "voss", crocCount: 12 });
+  marchetti.day = 20; voss.day = 20;
+  const consultant = INCIDENTS.find(i => i.id === "efficiency-consultant");
+  assert(consultant.weight(marchetti) > 0, "the consultant belongs to Marchetti");
+  assertEq(consultant.weight(voss), 0, "and nowhere else");
+});
+
+MoatTests.add("incident bias scales weights without inventing candidates", () => {
+  const s = createState({ seed: 4, clientId: "voss", crocCount: 12 });
+  s.structures.forEach(st => { st.integrity = 1; });
+  const ids = incidentWeights(s).map(w => w.incident.id);
+  assert(!ids.includes("escape-via-drain"), "bias must not resurrect an impossible incident");
+});
+
+MoatTests.add("applyClientToState stamps the contract onto the state", () => {
+  const s = createState({ seed: 5, clientId: "zanjabar", crocCount: getClient("zanjabar").crocCount });
+  assertEq(s.contract.id, "zanjabar");
+  assertEq(s.contractDays, getClient("zanjabar").days);
+  assertEq(s.env.baseAmbient, getClient("zanjabar").baseAmbient);
+});
 </script>
 <script>
 "use strict";
@@ -2199,7 +2363,13 @@ function refreshReadouts() {
 
 function renderTopbar() {
   const s = ui.state;
-  if (!s) return;
+  if (!s) {
+    $("clock").textContent = "—";
+    $("activity-readout").textContent = "—";
+    $("census-readout").textContent = "—";
+    $("hours-readout").textContent = "—";
+    return;
+  }
   const band = activityBand(s.activity);
   $("clock").textContent = `Day ${s.day} · ${String(s.hour).padStart(2, "0")}:00`;
   $("activity-readout").innerHTML = `<span class="band-${band}">${s.activity} ${BAND_LABEL[band]}</span>`;
@@ -2631,8 +2801,72 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+// ============ campaign progress ============
+// All storage access is guarded: opened from a file:// URL with storage disabled,
+// the game degrades to a single session rather than a blank screen.
+const PROGRESS_KEY = "moat.progress";
+
+function loadProgress() {
+  try {
+    const raw = localStorage.getItem(PROGRESS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* storage unavailable */ }
+  return { completed: [], grades: {} };
+}
+
+function saveProgress(p) {
+  try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(p)); }
+  catch (e) { /* storage unavailable */ }
+}
+
+function seedFor(clientId) {
+  let h = 2166136261;
+  for (const ch of clientId) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return (h >>> 0) % 100000;
+}
+
+function openContractSelect() {
+  ui.modalOpen = true;
+  ui.state = null;
+  setSpeed(0);
+  $("modal").hidden = false;
+  const progress = loadProgress();
+  const cards = CLIENTS.map(c => {
+    const unlocked = clientUnlocked(progress, c.id);
+    const grade = progress.grades[c.id];
+    return `<div class="opt" style="align-items:flex-start">
+      <div style="flex:1">
+        <div class="lbl">${esc(c.name)}${grade ? ` <span style="color:var(--accent)">— closed at ${grade}</span>` : ""}</div>
+        <div class="desc" style="margin:2px 0 4px">${esc(c.site)} · ${c.days} days · ${c.crocCount} animals · ${esc(c.difficulty)}</div>
+        <div class="desc">${esc(unlocked ? c.blurb : "Requires completion of the preceding five contracts.")}</div>
+      </div>
+      <button data-contract="${c.id}" ${unlocked ? "" : "disabled"}>Accept</button>
+    </div>`;
+  }).join("");
+
+  $("modal-body").innerHTML = `
+    <h2>Contracts</h2>
+    <div class="sub">A fence merely delays an intruder. A moat makes a statement. A statement requires paperwork.</div>
+    ${cards}
+    <div class="section" style="margin-top:12px">
+      <div class="ctrl-head"><span>Seed</span><span class="val" id="seed-val"></span></div>
+      <div class="hint">Runs are reproducible. The seed is printed on the close-out report.</div>
+      <input id="seed-input" type="text" style="width:100%;margin-top:5px;background:#1f232a;border:1px solid var(--line);color:var(--fg);font:inherit;padding:4px 6px">
+    </div>`;
+
+  $("modal-body").querySelectorAll("[data-contract]").forEach(b => b.addEventListener("click", () => {
+    const raw = $("seed-input").value.trim();
+    const seed = raw === "" ? seedFor(b.dataset.contract) : (parseInt(raw, 10) || seedFor(b.dataset.contract));
+    startContract(b.dataset.contract, seed);
+  }));
+}
+
 function startContract(clientId, seed) {
-  ui.state = createState({ seed, clientId, crocCount: 12 });
+  ui.state = createState({ seed, clientId });
+  ui.censusObs = null;
+  ui.overnightIncident = null;
+  ui.logLen = 0;
+  logEvent(ui.state, `Contract commenced. ${getClient(clientId).site}. ${ui.state.crocs.length} animals on site against a licensed figure of ${ui.state.licensedHeadcount}.`, "info");
   beginDay(ui.state);
   renderControls();
   renderLog();
@@ -2644,7 +2878,7 @@ $("speed-controls").addEventListener("click", (e) => {
   if (b) setSpeed(Number(b.dataset.speed));
 });
 
-startContract("voss", 1234);
+openContractSelect();
 requestAnimationFrame(frame);
 </script>
 </body>
