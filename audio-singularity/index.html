@@ -61,6 +61,94 @@ function dbToGain(db) {
 }
 
 // ---------------------------------------------------------------------------
+// Parameter spec. The single source of truth for ranges, defaults and labels.
+// The UI generates every control from this table; nothing else hardcodes a
+// range or a default.
+// ---------------------------------------------------------------------------
+const PARAM_SPEC = {
+  global: { label: "Global", params: [
+    { key: "T",           label: "Approach duration",  min: 0.5,  max: 60,   def: 8,     step: 0.1,  unit: "s" },
+    { key: "p",           label: "Approach exponent",  min: 0.1,  max: 4,    def: 1.0,   step: 0.01 },
+    { key: "eps",         label: "Regularization ε", min: 1e-6, max: 0.5, def: 1e-3, log: true },
+    { key: "aftermath",   label: "Aftermath length",   min: 0,    max: 20,   def: 4,     step: 0.1,  unit: "s" },
+    { key: "mergerWidth", label: "Merger width",       min: 1e-4, max: 0.1,  def: 0.01,  log: true },
+    { key: "masterGain",  label: "Master gain",        min: -60,  max: 0,    def: -6,    step: 0.5,  unit: "dB" },
+    { key: "limiter",     label: "Limiter",            type: "bool", def: true },
+    { key: "seed",        label: "Seed",               min: 1,    max: 9999, def: 1,     step: 1 },
+  ]},
+  chirp: { label: "Chirp — black holes", params: [
+    { key: "f0",        label: "Base frequency",   min: 20,   max: 400,  def: 55,    step: 1,    unit: "Hz" },
+    { key: "expo",      label: "Exponent",         min: 0.05, max: 1.5,  def: 0.375, step: 0.005 },
+    { key: "partials",  label: "Partials",         min: 1,    max: 12,   def: 4,     step: 1 },
+    { key: "inharm",    label: "Inharmonicity",    min: 0,    max: 0.5,  def: 0,     step: 0.005 },
+    { key: "morph",     label: "Sine → saw",  min: 0,    max: 1,    def: 0.15,  step: 0.01 },
+    { key: "massRatio", label: "Mass ratio",       min: 1,    max: 10,   def: 1.4,   step: 0.05 },
+    { key: "detune",    label: "Stereo detune",    min: 0,    max: 30,   def: 6,     step: 0.5,  unit: "¢" },
+    { key: "level",     label: "Level",            min: -60,  max: 0,    def: -10,   step: 0.5,  unit: "dB" },
+  ]},
+  impacts: { label: "Impacts — ball and disk", params: [
+    { key: "rate0", label: "Base rate",       min: 0.2, max: 40,   def: 2,   step: 0.1,  unit: "Hz" },
+    { key: "q",     label: "Rate exponent",   min: 0.2, max: 3,    def: 1.0, step: 0.01 },
+    { key: "decay", label: "Decay",           min: 2,   max: 400,  def: 40,  step: 1,    unit: "ms" },
+    { key: "pitch", label: "Burst pitch",     min: 40,  max: 4000, def: 400, step: 5,    unit: "Hz" },
+    { key: "drift", label: "Pitch drift",     min: -24, max: 24,   def: 12,  step: 0.5,  unit: "st" },
+    { key: "mix",   label: "Noise → tone", min: 0, max: 1,    def: 0.5, step: 0.01 },
+    { key: "level", label: "Level",           min: -60, max: 0,    def: -8,  step: 0.5,  unit: "dB" },
+  ]},
+  ringdown: { label: "Ringdown", params: [
+    { key: "ratio",   label: "Fundamental ratio", min: 0.1, max: 4,    def: 0.7, step: 0.01 },
+    { key: "modes",   label: "Modes",             min: 1,   max: 8,    def: 3,   step: 1 },
+    { key: "spacing", label: "Mode spacing",      min: 1.0, max: 3.0,  def: 1.6, step: 0.01 },
+    { key: "q",       label: "Q",                 min: 5,   max: 2000, def: 120, step: 1 },
+    { key: "level",   label: "Level",             min: -60, max: 0,    def: -8,  step: 0.5, unit: "dB" },
+  ]},
+  field: { label: "Field", params: [
+    { key: "centre",   label: "Base centre",      min: 40,  max: 2000, def: 200,  step: 5,    unit: "Hz" },
+    { key: "tracking", label: "Centre tracking",  min: 0,   max: 1,    def: 0.6,  step: 0.01 },
+    { key: "bw",       label: "Bandwidth",        min: 0.1, max: 4,    def: 1.5,  step: 0.01, unit: "oct" },
+    { key: "bwTrack",  label: "Bandwidth track",  min: -1,  max: 1,    def: -0.3, step: 0.01 },
+    { key: "colour",   label: "White → brown", min: 0, max: 1,    def: 0.5,  step: 0.01 },
+    { key: "level",    label: "Level",            min: -60, max: 0,    def: -18,  step: 0.5,  unit: "dB" },
+  ]},
+  swarm: { label: "Swarm — the AI one", params: [
+    { key: "n0",     label: "Initial count",   min: 1,   max: 16,   def: 2,   step: 1 },
+    { key: "k",      label: "Growth exponent", min: 0,   max: 2,    def: 0.6, step: 0.01 },
+    { key: "nmax",   label: "Max count",       min: 1,   max: 64,   def: 48,  step: 1 },
+    { key: "band",   label: "Pitch centre",    min: 100, max: 4000, def: 900, step: 10,  unit: "Hz" },
+    { key: "spread", label: "Pitch spread",    min: 0,   max: 4,    def: 2,   step: 0.01, unit: "oct" },
+    { key: "decay",  label: "Voice decay",     min: 5,   max: 500,  def: 90,  step: 1,   unit: "ms" },
+    { key: "jitter", label: "Retrigger jitter", min: 0,  max: 1,    def: 0.5, step: 0.01 },
+    { key: "level",  label: "Level",           min: -60, max: 0,    def: -14, step: 0.5, unit: "dB" },
+  ]},
+};
+
+const PARAM_GROUPS = Object.keys(PARAM_SPEC);
+const VOICE_GROUPS = ["chirp", "impacts", "ringdown", "field", "swarm"];
+
+function defaultParams() {
+  const out = {};
+  for (const g of PARAM_GROUPS) {
+    out[g] = {};
+    for (const s of PARAM_SPEC[g].params) out[g][s.key] = s.def;
+  }
+  out.mute = { chirp: false, impacts: false, ringdown: false, field: false, swarm: false };
+  out.solo = null;
+  return out;
+}
+
+function clampParams(p) {
+  for (const g of PARAM_GROUPS) {
+    for (const s of PARAM_SPEC[g].params) {
+      if (s.type === "bool") { p[g][s.key] = !!p[g][s.key]; continue; }
+      let v = Number(p[g][s.key]);
+      if (!isFinite(v)) v = s.def;
+      p[g][s.key] = Math.min(s.max, Math.max(s.min, v));
+    }
+  }
+  return p;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 const SingularityTests = (function () {
@@ -126,10 +214,52 @@ const SingularityTests = (function () {
     approx("clock: -60 dB is silence-ish", dbToGain(-60), 0.001, 1e-6);
   }
 
+  function testParams() {
+    const groups = ["global", "chirp", "impacts", "ringdown", "field", "swarm"];
+    check("params: all groups present", groups.every(g => PARAM_SPEC[g] && PARAM_SPEC[g].params.length > 0));
+
+    let count = 0;
+    const d = defaultParams();
+    for (const g of groups) {
+      for (const s of PARAM_SPEC[g].params) {
+        count++;
+        check("params: " + g + "." + s.key + " has a default", d[g][s.key] !== undefined);
+        if (s.type === "bool") continue;
+        check("params: " + g + "." + s.key + " default in range",
+          d[g][s.key] >= s.min && d[g][s.key] <= s.max,
+          "def=" + s.def + " min=" + s.min + " max=" + s.max);
+        check("params: " + g + "." + s.key + " has a label", typeof s.label === "string" && s.label.length > 0);
+      }
+    }
+    check("params: 42 parameters total", count === 42, "count=" + count);
+
+    // Log-scaled parameters must be strictly positive at both ends.
+    for (const g of groups) {
+      for (const s of PARAM_SPEC[g].params) {
+        if (s.log) check("params: log param " + g + "." + s.key + " is positive", s.min > 0 && s.max > 0);
+      }
+    }
+
+    // defaultParams returns a fresh object each call, so the UI cannot mutate
+    // the spec by editing a params object.
+    const d2 = defaultParams();
+    d2.chirp.f0 = 999;
+    check("params: defaults are not shared", defaultParams().chirp.f0 === 55);
+
+    // Clamping pulls out-of-range values back in.
+    const bad = defaultParams();
+    bad.chirp.f0 = 1e9;
+    bad.swarm.nmax = -5;
+    const fixed = clampParams(bad);
+    check("params: clamp upper", fixed.chirp.f0 === 400);
+    check("params: clamp lower", fixed.swarm.nmax === 1);
+  }
+
   function run() {
     failures = 0; total = 0;
     testRng();
     testClock();
+    testParams();
     console.log((total - failures) + "/" + total + " checks passed");
     return failures === 0;
   }
