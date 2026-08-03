@@ -42,6 +42,11 @@
   .voice-btns { margin-left: auto; display: flex; gap: 6px; }
   .voice-btns button { padding: 2px 9px; font-size: 0.7rem; }
   .collapsed .params { display: none; }
+  .panel.viz { padding: 0; overflow: hidden; }
+  canvas#spectro { width: 100%; height: 220px; display: block; }
+  canvas#clock { width: 100%; height: 90px; display: block; }
+  .meters { padding: 8px 12px; gap: 8px; }
+  .readout.warn { color: #ffb4b4; background: #33121c; }
 </style>
 </head>
 <body>
@@ -67,6 +72,20 @@
 
   <div class="panel">
     <div class="row" id="presetRow"></div>
+  </div>
+
+  <div class="panel viz">
+    <canvas id="spectro"></canvas>
+  </div>
+  <div class="panel viz">
+    <canvas id="clock"></canvas>
+    <div class="row meters">
+      <span class="readout" id="mD">D = 1</span>
+      <span class="readout" id="mChirp">chirp 55 Hz</span>
+      <span class="readout" id="mRate">events 2.0/s</span>
+      <span class="readout" id="mSwarm">swarm 2</span>
+      <span class="readout warn" id="mCap" hidden>rate cap binding</span>
+    </div>
   </div>
 
   <div id="panels"></div>
@@ -2032,7 +2051,163 @@ function refreshReadouts() {
   const m = App.meters();
   document.getElementById("phaseOut").textContent = m ? m.phase : phaseFor(App.x, App.params.global.mergerWidth);
   document.getElementById("xOut").textContent = "x = " + App.x.toFixed(App.x < 0.01 ? 6 : 3);
+  drawSpectrogram();
+  drawClock();
+  drawMeters();
   requestAnimationFrame(refreshReadouts);
+}
+
+// HiDPI: size the backing store in device pixels, never CSS-stretch a
+// logical-size buffer.
+function fitCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(cv.clientWidth * dpr);
+  const h = Math.round(cv.clientHeight * dpr);
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; return true; }
+  return false;
+}
+
+const SPEC_MIN_HZ = 20, SPEC_MAX_HZ = 22050;
+let specData = null;
+
+function yForHz(hz, h) {
+  const t = Math.log(Math.max(SPEC_MIN_HZ, hz) / SPEC_MIN_HZ) / Math.log(SPEC_MAX_HZ / SPEC_MIN_HZ);
+  return h - t * h;
+}
+
+function drawSpectrogram() {
+  const cv = document.getElementById("spectro");
+  const resized = fitCanvas(cv);
+  const ctx = cv.getContext("2d");
+  const w = cv.width, h = cv.height;
+  if (resized) { ctx.fillStyle = "#05060f"; ctx.fillRect(0, 0, w, h); }
+  if (!App.analyser) return;
+
+  if (!specData || specData.length !== App.analyser.frequencyBinCount) {
+    specData = new Uint8Array(App.analyser.frequencyBinCount);
+  }
+  App.analyser.getByteFrequencyData(specData);
+
+  // Scroll left by one column, then draw the newest column on the right.
+  ctx.drawImage(cv, -2, 0);
+  ctx.fillStyle = "#05060f";
+  ctx.fillRect(w - 2, 0, 2, h);
+
+  const nyquist = App.ctx ? App.ctx.sampleRate / 2 : 24000;
+  for (let y = 0; y < h; y++) {
+    const t = 1 - y / h;
+    const hz = SPEC_MIN_HZ * Math.pow(SPEC_MAX_HZ / SPEC_MIN_HZ, t);
+    const bin = Math.min(specData.length - 1, Math.round(hz / nyquist * specData.length));
+    const v = specData[bin] / 255;
+    if (v < 0.02) continue;
+    const r = Math.round(40 + 215 * Math.pow(v, 0.8));
+    const g = Math.round(30 + 120 * Math.pow(v, 1.6));
+    const b = Math.round(90 + 165 * Math.pow(v, 0.5));
+    ctx.fillStyle = "rgb(" + r + "," + g + "," + b + ")";
+    ctx.fillRect(w - 2, y, 2, 1);
+  }
+
+  // The regularization ceiling: the frequency the chirp cannot pass.
+  const P = App.params;
+  const sr = App.ctx ? App.ctx.sampleRate : 48000;
+  const ceiling = chirpFreq(0, P.chirp.f0, P.chirp.expo, P.global.eps, sr);
+  const dpr2 = window.devicePixelRatio || 1;
+  const cy = yForHz(ceiling, h);
+  ctx.strokeStyle = "rgba(255,150,120,0.55)";
+  ctx.setLineDash([6, 6]);
+  ctx.lineWidth = Math.max(1, dpr2);
+  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "rgba(255,180,150,0.85)";
+  ctx.font = (11 * dpr2) + "px ui-monospace, monospace";
+  ctx.fillText("regularization ceiling " + Math.round(ceiling) + " Hz", 8, Math.max(14 * dpr2, cy - 6 * dpr2));
+
+  // When the unclamped ceiling exceeds Nyquist the chirp folds back down the
+  // spectrum. That aliasing is a real consequence of removing the
+  // regularization, not a defect - so it gets named rather than hidden.
+  const unclamped = P.chirp.f0 * Math.pow(P.global.eps, -P.chirp.expo);
+  if (unclamped > 0.45 * sr) {
+    ctx.fillStyle = "rgba(255,140,140,0.9)";
+    ctx.fillText("ceiling above Nyquist — chirp is aliasing", 8, h - 8 * dpr2);
+  }
+}
+
+const CLOCK_MIN_X = 1e-6;
+function xToPixel(x, w) {
+  const approachW = w * 0.82;
+  if (x >= 0) {
+    const cl = Math.max(CLOCK_MIN_X, Math.min(1, x));
+    const t = 1 - Math.log10(cl / CLOCK_MIN_X) / Math.log10(1 / CLOCK_MIN_X);
+    return t * approachW;
+  }
+  const span = App.params.global.aftermath / App.params.global.T || 1;
+  return approachW + Math.min(1, -x / span) * (w - approachW);
+}
+
+function drawClock() {
+  const cv = document.getElementById("clock");
+  fitCanvas(cv);
+  const ctx = cv.getContext("2d");
+  const w = cv.width, h = cv.height;
+  const dpr = window.devicePixelRatio || 1;
+
+  ctx.fillStyle = "#070818";
+  ctx.fillRect(0, 0, w, h);
+
+  // Decade gridlines: 1, 0.1, ... 1e-6.
+  ctx.font = (10 * dpr) + "px ui-monospace, monospace";
+  for (let d = 0; d <= 6; d++) {
+    const x = Math.pow(10, -d);
+    const px = xToPixel(x, w);
+    ctx.strokeStyle = "rgba(120,132,200,0.18)";
+    ctx.lineWidth = dpr;
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h - 18 * dpr); ctx.stroke();
+    ctx.fillStyle = "rgba(130,142,205,0.65)";
+    ctx.fillText(d === 0 ? "1" : "1e-" + d, px + 3 * dpr, h - 6 * dpr);
+  }
+
+  // The singularity itself.
+  const tstar = xToPixel(0, w);
+  ctx.strokeStyle = "rgba(255,120,140,0.8)";
+  ctx.lineWidth = 2 * dpr;
+  ctx.beginPath(); ctx.moveTo(tstar, 0); ctx.lineTo(tstar, h - 18 * dpr); ctx.stroke();
+
+  // Recent impact onsets, so the crowding and fusion is visible.
+  const m = App.meters();
+  if (m && m.recentEvents) {
+    ctx.strokeStyle = "rgba(150,230,255,0.75)";
+    ctx.lineWidth = dpr;
+    for (const ex of m.recentEvents) {
+      const px = xToPixel(ex, w);
+      ctx.beginPath();
+      ctx.moveTo(px, h * 0.15);
+      ctx.lineTo(px, h * 0.5);
+      ctx.stroke();
+    }
+  }
+
+  // Playhead.
+  const px = xToPixel(App.x, w);
+  ctx.fillStyle = "#ffe9a8";
+  ctx.fillRect(px - dpr, 0, 2 * dpr, h - 18 * dpr);
+
+  // Phase label.
+  const phase = m ? m.phase : phaseFor(App.x, App.params.global.mergerWidth);
+  ctx.fillStyle = phase === PHASE_MERGER ? "#ffb0c0"
+                : phase === PHASE_AFTERMATH ? "#a8d8ff" : "#b7c4ff";
+  ctx.font = "600 " + (11 * dpr) + "px ui-monospace, monospace";
+  ctx.fillText(phase, 8 * dpr, 16 * dpr);
+}
+
+function drawMeters() {
+  const m = App.meters();
+  if (!m) return;
+  document.getElementById("mD").textContent =
+    "D = " + (m.D >= 1000 ? m.D.toExponential(2) : m.D.toFixed(2));
+  document.getElementById("mChirp").textContent = "chirp " + Math.round(m.chirpHz) + " Hz";
+  document.getElementById("mRate").textContent = "events " + m.eventRate.toFixed(1) + "/s";
+  document.getElementById("mSwarm").textContent = "swarm " + m.swarmCount;
+  document.getElementById("mCap").hidden = !m.capBinding;
 }
 
 // Log-scaled sliders map their 0..1000 position geometrically between min and max.
