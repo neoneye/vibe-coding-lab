@@ -562,6 +562,235 @@ function makeSwarm(sampleRate, rng) {
 }
 
 // ---------------------------------------------------------------------------
+// Limiter. Envelope-follower gain reduction into a soft knee. Output magnitude
+// is strictly below 1.0 while enabled.
+// ---------------------------------------------------------------------------
+const LIMIT_THRESHOLD = 0.85;
+
+function softClip(s) {
+  const a = Math.abs(s);
+  if (a <= LIMIT_THRESHOLD) return s;
+  const shaped = LIMIT_THRESHOLD +
+    (1 - LIMIT_THRESHOLD) * Math.tanh((a - LIMIT_THRESHOLD) / (1 - LIMIT_THRESHOLD));
+  return s < 0 ? -shaped : shaped;
+}
+
+function makeLimiter(sampleRate) {
+  const rel = Math.exp(-1 / (0.002 * sampleRate));
+  let envelope = 0;
+  return {
+    reset() { envelope = 0; },
+    process(s) {
+      if (!isFinite(s)) return 0;
+      const a = Math.abs(s);
+      envelope = a > envelope ? a : envelope * rel;
+      const g = envelope > LIMIT_THRESHOLD ? LIMIT_THRESHOLD / envelope : 1;
+      return softClip(s * g);
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Engine. Owns the voices and the limiter, but NOT the transport: the caller
+// advances x and calls setClock. That is what lets scrubbing, playback and
+// offline rendering share one code path.
+// ---------------------------------------------------------------------------
+function createEngine(params, sampleRate, seed) {
+  const rng = makeRng(seed);
+  const voices = {
+    chirp:    makeChirp(sampleRate),
+    impacts:  makeImpacts(sampleRate, rng),
+    ringdown: makeRingdown(sampleRate),
+    field:    makeField(sampleRate, rng),
+    swarm:    makeSwarm(sampleRate, rng),
+  };
+  const limL = makeLimiter(sampleRate);
+  const limR = makeLimiter(sampleRate);
+  let P = clampParams(params);
+  let xPrev = 1, xTarget = 1;
+  let prevPhase = PHASE_APPROACH;
+  const meters = {
+    phase: PHASE_APPROACH, x: 1, D: 1, chirpHz: 0,
+    eventRate: 0, swarmCount: 1, capBinding: false, recentEvents: [],
+  };
+
+  function pushParams() {
+    for (const g of VOICE_GROUPS) voices[g].setParams(P[g]);
+  }
+  pushParams();
+
+  function audible(name) {
+    if (P.solo) return P.solo === name;
+    return !P.mute[name];
+  }
+
+  return {
+    setParams(next) { P = clampParams(next); pushParams(); },
+    setClock(x) { xTarget = x; },
+    reset() {
+      for (const g of VOICE_GROUPS) voices[g].reset();
+      limL.reset(); limR.reset();
+      xPrev = xTarget;
+      prevPhase = phaseFor(xTarget, P.global.mergerWidth);
+    },
+    render(L, R, frames) {
+      L.fill(0); R.fill(0);
+      const mw = P.global.mergerWidth;
+      const phase = phaseFor(xTarget, mw);
+
+      // Entering MERGER from the approach fires the ringdown once, seeded with
+      // the chirp's terminal frequency. Scrubbing back re-arms everything.
+      if (prevPhase === PHASE_APPROACH && phase !== PHASE_APPROACH) {
+        voices.ringdown.trigger(
+          chirpFreq(mw, P.chirp.f0, P.chirp.expo, P.global.eps, sampleRate));
+      } else if (prevPhase !== PHASE_APPROACH && phase === PHASE_APPROACH) {
+        for (const g of VOICE_GROUPS) voices[g].reset();
+      }
+      prevPhase = phase;
+
+      const ck = {
+        x0: xPrev, x1: xTarget,
+        p: P.global.p, eps: P.global.eps,
+        mergerWidth: mw,
+        gateCoef: 1 - Math.exp(-1 / (0.015 * sampleRate)),
+      };
+
+      for (const g of VOICE_GROUPS) if (audible(g)) voices[g].render(L, R, frames, ck);
+
+      const mg = dbToGain(P.global.masterGain);
+      if (P.global.limiter) {
+        for (let i = 0; i < frames; i++) {
+          L[i] = limL.process(L[i] * mg);
+          R[i] = limR.process(R[i] * mg);
+        }
+      } else {
+        for (let i = 0; i < frames; i++) {
+          L[i] = isFinite(L[i]) ? L[i] * mg : 0;
+          R[i] = isFinite(R[i]) ? R[i] * mg : 0;
+        }
+      }
+
+      xPrev = xTarget;
+      meters.phase = phase;
+      meters.x = xTarget;
+      meters.D = divergence(xTarget, P.global.p, P.global.eps);
+      meters.chirpHz = voices.chirp.lastFreq;
+      meters.eventRate = eventRate(xTarget, P.impacts.rate0, P.impacts.q, P.global.eps);
+      meters.swarmCount = voices.swarm.activeCount;
+      meters.capBinding = voices.impacts.capBinding;
+      meters.recentEvents = voices.impacts.recentEvents;
+    },
+    readMeters() { return meters; },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Presets. Points in one parameter space, not separate models.
+// ---------------------------------------------------------------------------
+const PRESETS = [
+  { id: "black-hole-merger", name: "Black Hole Merger", params: {
+    global:   { T: 10, p: 1.0, eps: 1e-3, aftermath: 6, masterGain: -6 },
+    chirp:    { f0: 45, partials: 5, massRatio: 1.6, level: -4 },
+    impacts:  { level: -60 },
+    ringdown: { ratio: 0.8, modes: 3, q: 300, level: -4 },
+    field:    { centre: 120, tracking: 0.5, bwTrack: -0.4, level: -20 },
+    swarm:    { level: -60 },
+  }},
+  { id: "bouncing-ball", name: "Bouncing Ball", params: {
+    global:   { T: 12, p: 1.0, eps: 3e-3, aftermath: 2, masterGain: -6 },
+    chirp:    { level: -60 },
+    impacts:  { rate0: 1.2, q: 1.0, decay: 18, pitch: 320, drift: 14, mix: 0.35, level: -4 },
+    ringdown: { level: -60 },
+    field:    { level: -34 },
+    swarm:    { level: -60 },
+  }},
+  { id: "eulers-disk", name: "Euler's Disk", params: {
+    global:   { T: 16, p: 1.0, eps: 1.5e-3, aftermath: 3, masterGain: -6 },
+    chirp:    { level: -60 },
+    impacts:  { rate0: 3, q: 1.0, decay: 160, pitch: 240, drift: 4, mix: 0.8, level: -6 },
+    ringdown: { ratio: 1.2, modes: 2, q: 600, level: -12 },
+    field:    { centre: 300, tracking: 0.35, bw: 2.2, level: -26 },
+    swarm:    { level: -60 },
+  }},
+  { id: "ai-singularity", name: "AI Singularity", params: {
+    global:   { T: 20, p: 2.2, eps: 8e-4, aftermath: 6, masterGain: -8 },
+    chirp:    { f0: 30, partials: 3, morph: 0.35, level: -18 },
+    impacts:  { rate0: 0.8, q: 1.2, decay: 25, pitch: 900, drift: 18, mix: 0.6, level: -16 },
+    ringdown: { ratio: 0.5, modes: 5, q: 400, level: -10 },
+    field:    { centre: 160, tracking: 0.75, bw: 2.0, bwTrack: -0.5, colour: 0.7, level: -16 },
+    swarm:    { n0: 3, k: 0.75, nmax: 56, band: 1100, spread: 2.6, decay: 70, jitter: 0.7, level: -6 },
+  }},
+  { id: "hard-wall", name: "Hard Wall", params: {
+    global:   { T: 6, p: 3.0, eps: 1e-6, aftermath: 3, masterGain: -12 },
+    chirp:    { f0: 60, partials: 8, morph: 0.6, level: -6 },
+    impacts:  { rate0: 6, q: 2.0, decay: 8, pitch: 700, drift: 20, mix: 0.3, level: -6 },
+    ringdown: { ratio: 0.4, modes: 6, q: 90, level: -8 },
+    field:    { centre: 400, tracking: 0.9, bwTrack: 0.4, level: -12 },
+    swarm:    { n0: 6, k: 1.2, nmax: 64, spread: 3.2, decay: 40, level: -8 },
+  }},
+  { id: "gentle-landing", name: "Gentle Landing", params: {
+    global:   { T: 14, p: 0.7, eps: 0.12, aftermath: 8, masterGain: -6 },
+    chirp:    { f0: 70, partials: 3, morph: 0.05, level: -8 },
+    impacts:  { rate0: 1.5, q: 0.8, decay: 120, pitch: 300, drift: 6, mix: 0.75, level: -14 },
+    ringdown: { ratio: 1.0, modes: 4, spacing: 1.9, q: 900, level: -4 },
+    field:    { centre: 180, tracking: 0.4, bw: 1.2, bwTrack: -0.5, colour: 0.8, level: -22 },
+    swarm:    { n0: 2, k: 0.4, nmax: 20, band: 700, spread: 1.4, decay: 200, level: -18 },
+  }},
+];
+
+function applyPreset(id) {
+  const preset = PRESETS.find(p => p.id === id);
+  const out = defaultParams();
+  if (!preset) return out;
+  for (const g of Object.keys(preset.params)) {
+    Object.assign(out[g], preset.params[g]);
+  }
+  return clampParams(out);
+}
+
+// ---------------------------------------------------------------------------
+// Offline render. Sweeps x linearly in real time from 1 to -aftermath/T, which
+// is exactly what Play does live. Knobs are frozen; only the clock moves.
+//
+// This is the only offline render loop. renderOffline runs it to completion in
+// one call for tests; the WAV export drives it a slice per animation frame so
+// the page stays responsive. Both get identical audio.
+// ---------------------------------------------------------------------------
+function makeOfflineRenderer(params, sampleRate, seed) {
+  const P = clampParams(params);
+  const T = P.global.T;
+  const frames = Math.floor((T + P.global.aftermath) * sampleRate);
+  const L = new Float32Array(frames), R = new Float32Array(frames);
+  const eng = createEngine(P, sampleRate, seed);
+  const BLOCK = 512;
+  const bl = new Float32Array(BLOCK), br = new Float32Array(BLOCK);
+  let cursor = 0;
+
+  return {
+    frames, L, R,
+    done() { return cursor >= frames; },
+    advance(maxFrames) {
+      const stop = Math.min(frames, cursor + maxFrames);
+      while (cursor < stop) {
+        const n = Math.min(BLOCK, frames - cursor);
+        eng.setClock(1 - ((cursor + n) / sampleRate) / T);
+        eng.render(bl, br, n);
+        L.set(bl.subarray(0, n), cursor);
+        R.set(br.subarray(0, n), cursor);
+        cursor += n;
+      }
+      return cursor;
+    },
+  };
+}
+
+function renderOffline(params, sampleRate, seed) {
+  const r = makeOfflineRenderer(params, sampleRate, seed);
+  r.advance(r.frames);
+  return { L: r.L, R: r.R };
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 const SingularityTests = (function () {
@@ -1109,6 +1338,178 @@ const SingularityTests = (function () {
     }
   }
 
+  function testLimiter() {
+    const lim = makeLimiter(48000);
+    check("limiter: passes quiet signal through", Math.abs(lim.process(0.3) - 0.3) < 1e-6);
+    let worst = 0;
+    for (let i = 0; i < 20000; i++) worst = Math.max(worst, Math.abs(lim.process(Math.sin(i * 0.05) * 40)));
+    check("limiter: bounds hot signal under 1.0", worst < 1.0, "worst=" + worst);
+    check("limiter: hot signal is still audible", worst > 0.5, "worst=" + worst);
+    check("limiter: handles non-finite input", isFinite(lim.process(NaN)) && isFinite(lim.process(Infinity)));
+  }
+
+  function testEngine() {
+    const sr = 48000;
+    const P = defaultParams();
+    const eng = createEngine(P, sr, 1);
+    const L = new Float32Array(1024), R = new Float32Array(1024);
+
+    eng.setClock(0.5);
+    eng.render(L, R, 1024);
+    let peak = 0; for (let i = 0; i < 1024; i++) peak = Math.max(peak, Math.abs(L[i]));
+    check("engine: makes sound in approach", peak > 1e-4, "peak=" + peak);
+
+    // render overwrites its buffer rather than adding to it, unlike a voice.
+    const dirtyL = new Float32Array(1024).fill(9), dirtyR = new Float32Array(1024).fill(9);
+    eng.setClock(0.5);
+    eng.render(dirtyL, dirtyR, 1024);
+    check("engine: overwrites the output buffer",
+      dirtyL.every(s => Math.abs(s) <= 1), "max=" + Math.max(...dirtyL));
+
+    const m = eng.readMeters();
+    check("engine: meters report phase", m.phase === PHASE_APPROACH);
+    check("engine: meters report chirp frequency", m.chirpHz > 0);
+    check("engine: meters report swarm count", m.swarmCount >= 1);
+    relApprox("engine: meters report D", m.D, divergence(0.5, P.global.p, P.global.eps), 1e-6);
+
+    // Crossing into MERGER triggers the ringdown; crossing back re-arms it.
+    eng.setClock(0); eng.render(L, R, 1024);
+    check("engine: merger phase reported", eng.readMeters().phase === PHASE_MERGER);
+    eng.setClock(-0.5); eng.render(L, R, 1024);
+    check("engine: aftermath phase reported", eng.readMeters().phase === PHASE_AFTERMATH);
+    let tail = 0; for (let i = 0; i < 1024; i++) tail = Math.max(tail, Math.abs(L[i]));
+    check("engine: aftermath still rings", tail > 1e-5, "tail=" + tail);
+
+    // Scrubbing backward through MERGER re-arms the ringdown, so crossing again
+    // fires it a second time rather than staying spent.
+    const eng4 = createEngine(defaultParams(), sr, 1);
+    const L4 = new Float32Array(1024), R4 = new Float32Array(1024);
+    function ringPeakAfterCrossing(e) {
+      e.setParams((function () { const q = defaultParams(); q.solo = "ringdown"; return q; })());
+      e.setClock(0.5);  e.render(L4, R4, 1024);   // approach
+      e.setClock(-0.5); e.render(L4, R4, 1024);   // cross into aftermath
+      let pk = 0; for (let i = 0; i < 1024; i++) pk = Math.max(pk, Math.abs(L4[i]));
+      return pk;
+    }
+    const firstCross = ringPeakAfterCrossing(eng4);
+    check("engine: ringdown fires on first crossing", firstCross > 1e-5, "peak=" + firstCross);
+    eng4.setClock(0.9); eng4.render(L4, R4, 1024);  // scrub back into APPROACH
+    const secondCross = ringPeakAfterCrossing(eng4);
+    check("engine: ringdown re-arms after scrubbing back", secondCross > 1e-5,
+      "peak=" + secondCross);
+
+    // Solo and mute.
+    const P2 = defaultParams();
+    P2.mute.chirp = true; P2.mute.impacts = true; P2.mute.ringdown = true;
+    P2.mute.field = true; P2.mute.swarm = true;
+    const eng2 = createEngine(P2, sr, 1);
+    eng2.setClock(0.5);
+    const L2 = new Float32Array(1024), R2 = new Float32Array(1024);
+    eng2.render(L2, R2, 1024);
+    check("engine: all muted is silent", L2.every(s => s === 0));
+
+    const P3 = defaultParams();
+    P3.solo = "field";
+    const eng3 = createEngine(P3, sr, 1);
+    eng3.setClock(0.5);
+    const L3 = new Float32Array(1024), R3 = new Float32Array(1024);
+    eng3.render(L3, R3, 1024);
+    check("engine: solo produces sound", L3.some(s => s !== 0));
+
+    // Solo overrides mute: a muted voice that is soloed is still heard.
+    const P4 = defaultParams();
+    P4.solo = "field"; P4.mute.field = true;
+    const eng5 = createEngine(P4, sr, 1);
+    eng5.setClock(0.5);
+    const L5 = new Float32Array(1024), R5 = new Float32Array(1024);
+    eng5.render(L5, R5, 1024);
+    check("engine: solo overrides mute", L5.some(s => s !== 0));
+  }
+
+  function testPresets() {
+    check("presets: six presets", PRESETS.length === 6, "n=" + PRESETS.length);
+    const ids = PRESETS.map(p => p.id);
+    for (const id of ["black-hole-merger", "bouncing-ball", "eulers-disk",
+                      "ai-singularity", "hard-wall", "gentle-landing"]) {
+      check("presets: has " + id, ids.indexOf(id) >= 0);
+    }
+    check("presets: ids are unique", new Set(ids).size === ids.length);
+    for (const p of PRESETS) {
+      check("presets: " + p.id + " has a name", typeof p.name === "string" && p.name.length > 0);
+      const full = applyPreset(p.id);
+      for (const g of PARAM_GROUPS) {
+        for (const s of PARAM_SPEC[g].params) {
+          if (s.type === "bool") continue;
+          check("presets: " + p.id + " " + g + "." + s.key + " in range",
+            full[g][s.key] >= s.min && full[g][s.key] <= s.max,
+            "value=" + full[g][s.key]);
+        }
+      }
+    }
+    check("presets: hard wall uses the smallest epsilon",
+      applyPreset("hard-wall").global.eps <= 1e-5);
+    check("presets: gentle landing is heavily regularized",
+      applyPreset("gentle-landing").global.eps >= 0.05);
+  }
+
+  function testOfflineRender() {
+    const sr = 8000; // low rate keeps the test suite fast
+
+    for (const preset of PRESETS) {
+      const P = applyPreset(preset.id);
+      P.global.T = 1.5;
+      P.global.aftermath = 0.5;
+      const out = renderOffline(P, sr, 1);
+      const expectedFrames = Math.floor((1.5 + 0.5) * sr);
+      check("offline: " + preset.id + " length", out.L.length === expectedFrames,
+        "len=" + out.L.length + " expected=" + expectedFrames);
+      check("offline: " + preset.id + " left is finite", out.L.every(Number.isFinite));
+      check("offline: " + preset.id + " right is finite", out.R.every(Number.isFinite));
+      let peak = 0;
+      for (let i = 0; i < out.L.length; i++) {
+        peak = Math.max(peak, Math.abs(out.L[i]), Math.abs(out.R[i]));
+      }
+      check("offline: " + preset.id + " peak under 1.0 with limiter", peak <= 1.0, "peak=" + peak);
+      check("offline: " + preset.id + " is not silent", peak > 0.01, "peak=" + peak);
+    }
+
+    // Determinism: same seed, byte-identical output.
+    const P = applyPreset("ai-singularity");
+    P.global.T = 1; P.global.aftermath = 0.5;
+    const a = renderOffline(P, sr, 7);
+    const b = renderOffline(P, sr, 7);
+    let identical = a.L.length === b.L.length;
+    for (let i = 0; identical && i < a.L.length; i++) {
+      if (a.L[i] !== b.L[i] || a.R[i] !== b.R[i]) identical = false;
+    }
+    check("offline: same seed is byte-identical", identical);
+
+    const c = renderOffline(P, sr, 8);
+    let differs = false;
+    for (let i = 0; i < a.L.length; i++) if (a.L[i] !== c.L[i]) { differs = true; break; }
+    check("offline: different seed differs", differs);
+
+    // Slicing the renderer the way the WAV export does must produce byte-identical
+    // audio to running it in one call. This is what lets the export share the loop.
+    const sliced = makeOfflineRenderer(P, sr, 7);
+    let guard = 0;
+    while (!sliced.done() && guard++ < 10000) sliced.advance(777);
+    check("offline: sliced render terminates", sliced.done());
+    check("offline: sliced render has the same length", sliced.frames === a.L.length);
+    let sameAsOneShot = true;
+    for (let i = 0; i < a.L.length; i++) {
+      if (sliced.L[i] !== a.L[i] || sliced.R[i] !== a.R[i]) { sameAsOneShot = false; break; }
+    }
+    check("offline: sliced render matches one-shot render", sameAsOneShot);
+
+    // Limiter off can exceed 1.0 on a hostile preset - that is the point.
+    const hot = applyPreset("hard-wall");
+    hot.global.T = 1; hot.global.aftermath = 0.2; hot.global.limiter = false;
+    hot.global.masterGain = 0;
+    const h = renderOffline(hot, sr, 1);
+    check("offline: hard wall stays finite without the limiter", h.L.every(Number.isFinite));
+  }
+
   function run() {
     failures = 0; total = 0;
     testRng();
@@ -1120,6 +1521,10 @@ const SingularityTests = (function () {
     testRingdown();
     testField();
     testSwarm();
+    testLimiter();
+    testEngine();
+    testPresets();
+    testOfflineRender();
     console.log((total - failures) + "/" + total + " checks passed");
     return failures === 0;
   }
