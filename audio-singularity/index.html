@@ -35,6 +35,32 @@ function makeRng(seed) {
 }
 
 // ---------------------------------------------------------------------------
+// The clock. Everything derives from x, the normalized time to singularity:
+//   x = 1  start of approach
+//   x = 0  the singularity, t*
+//   x < 0  aftermath
+// One divergence factor is shared by every voice, so the regularization floor
+// eps caps every infinity in the system at once.
+// ---------------------------------------------------------------------------
+const PHASE_APPROACH  = "APPROACH";
+const PHASE_MERGER    = "MERGER";
+const PHASE_AFTERMATH = "AFTERMATH";
+
+function divergence(x, p, eps) {
+  return Math.pow(Math.max(Math.abs(x), eps), -p);
+}
+
+function phaseFor(x, mergerWidth) {
+  if (x > mergerWidth) return PHASE_APPROACH;
+  if (x < -mergerWidth) return PHASE_AFTERMATH;
+  return PHASE_MERGER;
+}
+
+function dbToGain(db) {
+  return db <= -60 ? 0.001 : Math.pow(10, db / 20);
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 const SingularityTests = (function () {
@@ -72,9 +98,38 @@ const SingularityTests = (function () {
     check("rng: seed 0 does not lock up", rZero() !== rZero());
   }
 
+  function testClock() {
+    // Divergence is 1 at the start of the approach.
+    approx("clock: D(1) = 1", divergence(1, 1.0, 1e-3), 1, 1e-12);
+    // Power law holds away from the floor.
+    relApprox("clock: D(0.01, p=1)", divergence(0.01, 1.0, 1e-6), 100, 1e-12);
+    relApprox("clock: D(0.01, p=2)", divergence(0.01, 2.0, 1e-6), 10000, 1e-12);
+    // The regularization floor caps the divergence, and epsilon is the cap.
+    relApprox("clock: D(0) capped by eps", divergence(0, 1.0, 1e-3), 1000, 1e-12);
+    relApprox("clock: D below floor is flat", divergence(1e-9, 1.0, 1e-3), 1000, 1e-12);
+    relApprox("clock: ceiling is eps^-p", divergence(0, 1.5, 1e-2), Math.pow(1e-2, -1.5), 1e-12);
+    // The aftermath mirrors the approach.
+    approx("clock: D is symmetric in x", divergence(-0.01, 1.0, 1e-6), divergence(0.01, 1.0, 1e-6), 1e-9);
+
+    // Phase boundaries land exactly on +/- mergerWidth.
+    const w = 0.01;
+    check("clock: above width is APPROACH", phaseFor(0.0100001, w) === PHASE_APPROACH);
+    check("clock: exactly +width is MERGER", phaseFor(w, w) === PHASE_MERGER);
+    check("clock: zero is MERGER", phaseFor(0, w) === PHASE_MERGER);
+    check("clock: exactly -width is MERGER", phaseFor(-w, w) === PHASE_MERGER);
+    check("clock: below -width is AFTERMATH", phaseFor(-0.0100001, w) === PHASE_AFTERMATH);
+    check("clock: start is APPROACH", phaseFor(1, w) === PHASE_APPROACH);
+
+    // Decibel helper.
+    approx("clock: 0 dB is unity", dbToGain(0), 1, 1e-12);
+    approx("clock: -6 dB is ~0.5", dbToGain(-6), 0.5012, 1e-3);
+    approx("clock: -60 dB is silence-ish", dbToGain(-60), 0.001, 1e-6);
+  }
+
   function run() {
     failures = 0; total = 0;
     testRng();
+    testClock();
     console.log((total - failures) + "/" + total + " checks passed");
     return failures === 0;
   }
