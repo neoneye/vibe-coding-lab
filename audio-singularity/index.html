@@ -285,7 +285,10 @@ function makeChirp(sampleRate) {
 
       for (let i = 0; i < frames; i++) {
         const x = ck.x0 + (ck.x1 - ck.x0) * (i / frames);
-        const target = Math.abs(x) <= ck.mergerWidth || x < 0 ? 0 : 1;
+        // The inspiral runs all the way to t* itself, not to mergerWidth -- that
+        // band is phase bookkeeping for the ringdown trigger, not a chirp gate.
+        // eps (via chirpFreq's floor) is what caps the terminal frequency here.
+        const target = x < 0 ? 0 : 1;
         gate += (target - gate) * ck.gateCoef;
         const f = chirpFreq(x, P.f0, P.expo, ck.eps, sampleRate);
         this.lastFreq = f;
@@ -719,10 +722,11 @@ function createEngine(params, sampleRate, seed) {
       const phase = phaseFor(xTarget, mw);
 
       // Entering MERGER from the approach fires the ringdown once, seeded with
-      // the chirp's terminal frequency. Scrubbing back re-arms everything.
+      // the chirp's terminal frequency (x=0, i.e. t* itself -- the chirp now
+      // sweeps all the way there). Scrubbing back re-arms everything.
       if (prevPhase === PHASE_APPROACH && phase !== PHASE_APPROACH) {
         voices.ringdown.trigger(
-          chirpFreq(mw, P.chirp.f0, P.chirp.expo, P.global.eps, sampleRate));
+          chirpFreq(0, P.chirp.f0, P.chirp.expo, P.global.eps, sampleRate));
       } else if (prevPhase !== PHASE_APPROACH && phase === PHASE_APPROACH) {
         for (const g of VOICE_GROUPS) voices[g].reset();
       }
@@ -1103,6 +1107,44 @@ const SingularityTests = (function () {
     }
     let peak4 = 0; for (let i = 0; i < n; i++) peak4 = Math.max(peak4, Math.abs(L4[i]));
     check("chirp: gated off in aftermath", peak4 < 1e-4, "peak=" + peak4);
+
+    // The inspiral now runs to t* itself: inside the merger band but still
+    // on the approach side (0 < x <= mergerWidth), the chirp must still be
+    // audible. Under the old "gate on |x| <= mergerWidth" this was silence.
+    v.reset();
+    const L5 = new Float32Array(n), R5 = new Float32Array(n);
+    for (let b = 0; b < 40; b++) {
+      L5.fill(0); R5.fill(0);
+      v.render(L5, R5, n,
+        { x0: 0.005, x1: 0.005, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+    }
+    let peak5 = 0; for (let i = 0; i < n; i++) peak5 = Math.max(peak5, Math.abs(L5[i]));
+    check("chirp: audible inside the merger band (x = mergerWidth/2)",
+      peak5 > 0.001, "peak=" + peak5);
+
+    // eps now genuinely governs the chirp's terminal frequency, since the
+    // inspiral sweeps all the way to x=0 where chirpFreq's eps floor bites.
+    // A tight eps and a loose eps should differ by orders of magnitude, and
+    // both should match the closed form f0 * eps^-expo (clamped to Nyquist).
+    function terminalFreq(epsVal) {
+      const w = makeChirp(sr);
+      w.setParams(P.chirp);
+      w.reset();
+      const Lw = new Float32Array(n), Rw = new Float32Array(n);
+      w.render(Lw, Rw, n,
+        { x0: 0, x1: 0, p: 1, eps: epsVal, mergerWidth: 0.01, gateCoef: 0.002 });
+      return w.lastFreq;
+    }
+    const fTight = terminalFreq(1e-6);
+    const fLoose = terminalFreq(0.5);
+    const expectedTight = chirpFreq(0, P.chirp.f0, P.chirp.expo, 1e-6, sr);
+    const expectedLoose = chirpFreq(0, P.chirp.f0, P.chirp.expo, 0.5, sr);
+    relApprox("chirp: terminal frequency at tight eps matches closed form",
+      fTight, expectedTight, 1e-9);
+    relApprox("chirp: terminal frequency at loose eps matches closed form",
+      fLoose, expectedLoose, 1e-9);
+    check("chirp: eps contrast spans orders of magnitude at the terminal frequency",
+      fTight > fLoose * 50, "tight=" + fTight + " loose=" + fLoose);
   }
 
   function testImpacts() {
@@ -1532,6 +1574,30 @@ const SingularityTests = (function () {
     const secondCross = ringPeakAfterCrossing(eng4);
     check("engine: ringdown re-arms after scrubbing back", secondCross > 1e-5,
       "peak=" + secondCross);
+
+    // The ringdown is now seeded from the chirp's terminal frequency at x=0
+    // (chirpFreq(0, ...)), not the frequency at mergerWidth, so a tight eps
+    // must produce an audibly higher-pitched ringdown than a loose eps.
+    // Zero-crossing count in the block right after triggering is the
+    // observable stand-in for "higher frequency".
+    function ringdownZeroCrossings(epsVal) {
+      const p = defaultParams();
+      p.solo = "ringdown";
+      p.global.eps = epsVal;
+      const e = createEngine(p, sr, 1);
+      const Lz = new Float32Array(1024), Rz = new Float32Array(1024);
+      e.setClock(0.5);  e.render(Lz, Rz, 1024);   // approach, primes prevPhase
+      e.setClock(-0.5); e.render(Lz, Rz, 1024);   // crosses into aftermath, fires trigger
+      let crossings = 0;
+      for (let i = 1; i < 1024; i++) {
+        if ((Lz[i - 1] < 0) !== (Lz[i] < 0)) crossings++;
+      }
+      return crossings;
+    }
+    const zcTight = ringdownZeroCrossings(1e-6);
+    const zcLoose = ringdownZeroCrossings(0.5);
+    check("engine: ringdown seeded from terminal frequency (tight eps rings higher)",
+      zcTight > zcLoose, "tight=" + zcTight + " loose=" + zcLoose);
 
     // Solo and mute.
     const P2 = defaultParams();
