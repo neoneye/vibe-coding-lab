@@ -123,7 +123,11 @@ const SingularityTests = (function () {
     check("rng: in range [0,1)", seqA.every(v => v >= 0 && v < 1));
     const mean = seqA.reduce((s, v) => s + v, 0) / seqA.length;
     approx("rng: roughly uniform mean", mean, 0.5, 0.1);
-    check("rng: seed 0 does not lock up", makeRng(0)() !== makeRng(0)());
+    // Seed 0 must not degenerate into a frozen state (xorshift locks up on 0,
+    // so makeRng coerces it to 1). Compare successive draws from ONE instance -
+    // comparing two fresh seed-0 instances would always be equal by design.
+    const z = makeRng(0);
+    check("rng: seed 0 does not lock up", z() !== z());
   }
 
   function run() {
