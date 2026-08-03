@@ -2092,8 +2092,11 @@ function fitCanvas(cv) {
 const SPEC_MIN_HZ = 20, SPEC_MAX_HZ = 22050;
 let specData = null;
 
+// A ceiling above SPEC_MAX_HZ (the axis maximum) pins to the top edge
+// (y = 0) rather than being drawn off-canvas above it.
 function yForHz(hz, h) {
-  const t = Math.log(Math.max(SPEC_MIN_HZ, hz) / SPEC_MIN_HZ) / Math.log(SPEC_MAX_HZ / SPEC_MIN_HZ);
+  const clamped = Math.min(SPEC_MAX_HZ, Math.max(SPEC_MIN_HZ, hz));
+  const t = Math.log(clamped / SPEC_MIN_HZ) / Math.log(SPEC_MAX_HZ / SPEC_MIN_HZ);
   return h - t * h;
 }
 
@@ -2102,6 +2105,7 @@ function drawSpectrogram() {
   const resized = fitCanvas(cv);
   const ctx = cv.getContext("2d");
   const w = cv.width, h = cv.height;
+  const dpr = window.devicePixelRatio || 1;
   if (resized) { ctx.fillStyle = "#05060f"; ctx.fillRect(0, 0, w, h); }
   if (!App.analyser) return;
 
@@ -2110,10 +2114,15 @@ function drawSpectrogram() {
   }
   App.analyser.getByteFrequencyData(specData);
 
+  // Column width in device pixels, scaled by dpr so history density and
+  // scroll speed are consistent across displays. The scroll offset and the
+  // column width must stay equal or the newest column leaves a gap / overwrites history.
+  const col = Math.max(1, Math.round(2 * dpr));
+
   // Scroll left by one column, then draw the newest column on the right.
-  ctx.drawImage(cv, -2, 0);
+  ctx.drawImage(cv, -col, 0);
   ctx.fillStyle = "#05060f";
-  ctx.fillRect(w - 2, 0, 2, h);
+  ctx.fillRect(w - col, 0, col, h);
 
   const nyquist = App.ctx ? App.ctx.sampleRate / 2 : 24000;
   for (let y = 0; y < h; y++) {
@@ -2126,23 +2135,26 @@ function drawSpectrogram() {
     const g = Math.round(30 + 120 * Math.pow(v, 1.6));
     const b = Math.round(90 + 165 * Math.pow(v, 0.5));
     ctx.fillStyle = "rgb(" + r + "," + g + "," + b + ")";
-    ctx.fillRect(w - 2, y, 2, 1);
+    // 1 device pixel tall, stepped one device pixel at a time - correct as-is.
+    ctx.fillRect(w - col, y, col, 1);
   }
 
   // The regularization ceiling: the frequency the chirp cannot pass.
   const P = App.params;
   const sr = App.ctx ? App.ctx.sampleRate : 48000;
   const ceiling = chirpFreq(0, P.chirp.f0, P.chirp.expo, P.global.eps, sr);
-  const dpr2 = window.devicePixelRatio || 1;
   const cy = yForHz(ceiling, h);
+  const aboveRange = ceiling > SPEC_MAX_HZ;
   ctx.strokeStyle = "rgba(255,150,120,0.55)";
-  ctx.setLineDash([6, 6]);
-  ctx.lineWidth = Math.max(1, dpr2);
+  ctx.setLineDash([6 * dpr, 6 * dpr]);
+  ctx.lineWidth = Math.max(1, dpr);
   ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
   ctx.setLineDash([]);
   ctx.fillStyle = "rgba(255,180,150,0.85)";
-  ctx.font = (11 * dpr2) + "px ui-monospace, monospace";
-  ctx.fillText("regularization ceiling " + Math.round(ceiling) + " Hz", 8, Math.max(14 * dpr2, cy - 6 * dpr2));
+  ctx.font = (11 * dpr) + "px ui-monospace, monospace";
+  const ceilLabel = "regularization ceiling " + Math.round(ceiling) + " Hz" +
+    (aboveRange ? " (above displayed range)" : "");
+  ctx.fillText(ceilLabel, 8 * dpr, Math.max(14 * dpr, cy - 6 * dpr));
 
   // When the unclamped ceiling exceeds Nyquist the chirp folds back down the
   // spectrum. That aliasing is a real consequence of removing the
@@ -2150,7 +2162,7 @@ function drawSpectrogram() {
   const unclamped = P.chirp.f0 * Math.pow(P.global.eps, -P.chirp.expo);
   if (unclamped > 0.45 * sr) {
     ctx.fillStyle = "rgba(255,140,140,0.9)";
-    ctx.fillText("ceiling above Nyquist — chirp is aliasing", 8, h - 8 * dpr2);
+    ctx.fillText("ceiling above Nyquist — chirp is aliasing", 8 * dpr, h - 8 * dpr);
   }
 }
 
