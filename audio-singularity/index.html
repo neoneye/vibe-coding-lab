@@ -258,6 +258,115 @@ function makeChirp(sampleRate) {
 }
 
 // ---------------------------------------------------------------------------
+// Impacts. The ball and the disk are the same voice with different decay and
+// tone. Onsets accumulate geometrically at t*; eps makes the total count
+// finite, and MAX_EVENT_RATE guarantees it even at the smallest eps.
+//
+// The rattle-to-pitch fusion around 20 Hz is emergent. Nothing special-cases it.
+// ---------------------------------------------------------------------------
+const MAX_EVENT_RATE = 4000;
+const MAX_GRAINS = 256;
+
+function eventRate(x, rate0, q, eps) {
+  return Math.min(rate0 * Math.pow(Math.max(Math.abs(x), eps), -q), MAX_EVENT_RATE);
+}
+
+// Closed form for the number of onsets over a linear sweep x: 1 -> 0 in T
+// seconds, ignoring the hard cap:
+//   N = rate0 * T * ( integral of max(u,eps)^-q du over u in [0,1] )
+function expectedEventCount(rate0, q, eps, T) {
+  let integral;
+  if (Math.abs(q - 1) < 1e-12) {
+    integral = Math.log(1 / eps) + 1;
+  } else {
+    integral = (1 - Math.pow(eps, 1 - q)) / (1 - q) + Math.pow(eps, 1 - q);
+  }
+  return rate0 * T * integral;
+}
+
+// Test/analysis helper: runs the same scheduler the voice uses, over a linear
+// sweep, and returns the x value at each onset.
+function collectImpactOnsets(rate0, q, eps, T, sampleRate, maxEvents) {
+  const dt = 1 / sampleRate;
+  const total = Math.floor(T * sampleRate);
+  const out = [];
+  let phase = 0;
+  for (let i = 0; i < total && out.length < maxEvents; i++) {
+    const x = 1 - i / total;
+    phase += eventRate(x, rate0, q, eps) * dt;
+    while (phase >= 1 && out.length < maxEvents) { phase -= 1; out.push(x); }
+  }
+  return out;
+}
+
+function makeImpacts(sampleRate, rng) {
+  const gPhase = new Float64Array(MAX_GRAINS);
+  const gInc   = new Float64Array(MAX_GRAINS);
+  const gEnv   = new Float64Array(MAX_GRAINS);
+  const gCoef  = new Float64Array(MAX_GRAINS);
+  const gPan   = new Float64Array(MAX_GRAINS);
+  const gMix   = new Float64Array(MAX_GRAINS);
+  let next = 0, schedPhase = 0, P = null;
+  const voice = {
+    capBinding: false,
+    recentEvents: [],
+    setParams(p) { P = p; },
+    reset() {
+      gEnv.fill(0); gPhase.fill(0); schedPhase = 0; next = 0;
+      voice.recentEvents.length = 0; voice.capBinding = false;
+    },
+    render(L, R, frames, ck) {
+      if (!P) return;
+      const dt = 1 / sampleRate;
+      const g = dbToGain(P.level) * 0.6;
+      const nyq = 0.45 * sampleRate;
+      const envCoef = Math.exp(-1 / (Math.max(P.decay, 1) * 0.001 * sampleRate));
+      voice.capBinding = false;
+
+      for (let i = 0; i < frames; i++) {
+        const x = ck.x0 + (ck.x1 - ck.x0) * (i / frames);
+        const uncapped = P.rate0 * Math.pow(Math.max(Math.abs(x), ck.eps), -P.q);
+        if (uncapped > MAX_EVENT_RATE) voice.capBinding = true;
+        // Impacts stop once the singularity has passed.
+        if (x > -ck.mergerWidth) {
+          schedPhase += Math.min(uncapped, MAX_EVENT_RATE) * dt;
+          while (schedPhase >= 1) {
+            schedPhase -= 1;
+            // Pitch brightens as contact time shortens over the run.
+            const drifted = P.pitch * Math.pow(2, (P.drift / 12) * (1 - Math.max(0, Math.min(1, x))));
+            gPhase[next] = 0;
+            gInc[next]   = 2 * Math.PI * Math.min(drifted, nyq) / sampleRate;
+            gEnv[next]   = 1;
+            gCoef[next]  = envCoef;
+            gPan[next]   = rng();
+            gMix[next]   = P.mix;
+            next = (next + 1) % MAX_GRAINS;
+            voice.recentEvents.push(x);
+            if (voice.recentEvents.length > 64) voice.recentEvents.shift();
+          }
+        }
+
+        let sl = 0, sr = 0;
+        for (let k = 0; k < MAX_GRAINS; k++) {
+          const e = gEnv[k];
+          if (e < 1e-5) continue;
+          gPhase[k] += gInc[k];
+          const tone = Math.sin(gPhase[k]);
+          const noise = rng() * 2 - 1;
+          const s = (tone * gMix[k] + noise * (1 - gMix[k])) * e;
+          gEnv[k] = e * gCoef[k];
+          sl += s * (1 - gPan[k] * 0.6);
+          sr += s * (1 - (1 - gPan[k]) * 0.6);
+        }
+        L[i] += sl * g;
+        R[i] += sr * g;
+      }
+    }
+  };
+  return voice;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 const SingularityTests = (function () {
@@ -474,6 +583,63 @@ const SingularityTests = (function () {
     check("chirp: gated off in aftermath", peak4 < 1e-4, "peak=" + peak4);
   }
 
+  function testImpacts() {
+    // Rate law and its hard cap.
+    relApprox("impacts: rate at x=1", eventRate(1, 2, 1, 1e-3), 2, 1e-12);
+    relApprox("impacts: rate at x=0.01", eventRate(0.01, 2, 1, 1e-6), 200, 1e-12);
+    relApprox("impacts: floor caps rate", eventRate(0, 2, 1, 1e-3), 2000, 1e-12);
+    check("impacts: hard cap binds below the floor",
+      eventRate(0, 2, 1, 1e-6) === MAX_EVENT_RATE);
+    check("impacts: rate never exceeds the cap",
+      [1, 0.1, 1e-3, 1e-6, 0].every(x => eventRate(x, 40, 3, 1e-6) <= MAX_EVENT_RATE));
+
+    // With q = 1 the onsets are exactly geometric: x_n = exp(-n/(rate0*T)).
+    const rate0 = 2, T = 8, RT = rate0 * T;
+    const onsets = collectImpactOnsets(rate0, 1, 1e-3, T, 48000, 40);
+    check("impacts: produced onsets", onsets.length === 40, "got=" + onsets.length);
+    for (const n of [1, 5, 20, 40]) {
+      relApprox("impacts: onset " + n + " is geometric",
+        onsets[n - 1], Math.exp(-n / RT), 0.01);
+    }
+    // Successive intervals share a constant ratio - the Zeno accumulation.
+    const r = Math.exp(-1 / RT);
+    for (const n of [2, 10, 30]) {
+      relApprox("impacts: interval ratio at n=" + n, onsets[n] / onsets[n - 1], r, 0.02);
+    }
+
+    // Total event count matches the closed-form integral, and is finite.
+    // Each pair is chosen so the hard cap does NOT bind, since the closed form
+    // ignores the cap: rate0 * eps^-q must stay below MAX_EVENT_RATE.
+    for (const [q, eps] of [[1, 1e-3], [1, 1e-2], [0.5, 1e-3], [2, 0.05]]) {
+      const expected = expectedEventCount(rate0, q, eps, T);
+      const actual = collectImpactOnsets(rate0, q, eps, T, 48000, 1e7).length;
+      check("impacts: count is finite for q=" + q + " eps=" + eps, isFinite(expected) && expected > 0);
+      relApprox("impacts: count matches integral q=" + q + " eps=" + eps, actual, expected, 0.03);
+    }
+
+    // Even at the smallest epsilon the count stays bounded by the cap.
+    const capped = collectImpactOnsets(2, 1, 1e-6, 8, 48000, 1e7).length;
+    check("impacts: capped count is bounded", capped < 4000 * 8 + 10, "count=" + capped);
+
+    // Rendering.
+    const sr = 48000, n = 8192;
+    const v = makeImpacts(sr, makeRng(1));
+    const P = defaultParams();
+    v.setParams(P.impacts);
+    const L = new Float32Array(n), R = new Float32Array(n);
+    // A slow sweep so several events land inside the block.
+    v.render(L, R, n, { x0: 0.02, x1: 0.015, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+    let peak = 0; for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(L[i]));
+    check("impacts: makes sound", peak > 0.001, "peak=" + peak);
+    check("impacts: output is finite", L.every(Number.isFinite) && R.every(Number.isFinite));
+    check("impacts: reports recent events", v.recentEvents.length > 0);
+    check("impacts: cap not binding at eps=1e-3", v.capBinding === false);
+
+    v.reset();
+    v.render(L, R, n, { x0: 0, x1: 0, p: 1, eps: 1e-6, mergerWidth: 0.01, gateCoef: 0.002 });
+    check("impacts: reports cap binding at eps=1e-6", v.capBinding === true);
+  }
+
   function run() {
     failures = 0; total = 0;
     testRng();
@@ -481,6 +647,7 @@ const SingularityTests = (function () {
     testParams();
     testWav();
     testChirp();
+    testImpacts();
     console.log((total - failures) + "/" + total + " checks passed");
     return failures === 0;
   }
