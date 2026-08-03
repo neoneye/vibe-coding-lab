@@ -12,10 +12,64 @@
     color: #d8dced;
     min-height: 100vh;
   }
+  header { text-align: center; padding: 28px 16px 6px; }
+  header h1 { font-size: 2rem; font-weight: 300; letter-spacing: 0.12em; color: #b7c4ff; }
+  header p { font-size: 0.85rem; color: #6f77a8; margin-top: 6px; max-width: 640px;
+             margin-left: auto; margin-right: auto; line-height: 1.5; }
+  .container { max-width: 980px; margin: 0 auto; padding: 16px;
+               display: flex; flex-direction: column; gap: 14px; }
+  .panel { background: #0a0b18; border: 1px solid #232748; border-radius: 12px; padding: 12px 14px; }
+  .panel > h2 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.14em;
+                text-transform: uppercase; color: #7f88c8; margin-bottom: 10px;
+                cursor: pointer; display: flex; align-items: center; gap: 10px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .transport .row { margin-bottom: 8px; }
+  .transport .row:last-child { margin-bottom: 0; }
+  .transport label { font-size: 0.8rem; color: #7f88c8; }
+  #scrub { flex: 1; min-width: 200px; }
+  button { background: #1b1f3d; color: #cdd4ff; border: 1px solid #333a6e;
+           border-radius: 7px; padding: 7px 14px; font-size: 0.85rem; cursor: pointer; }
+  button:hover { background: #262c55; }
+  button.active { background: #3a2f6b; border-color: #6a58c0; color: #ffffff; }
+  .readout { font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem;
+             color: #8fa0e8; background: #10132a; padding: 4px 9px; border-radius: 5px; }
+  .chk { font-size: 0.8rem; color: #7f88c8; display: flex; align-items: center; gap: 5px; }
+  .params { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 18px; }
+  .param { display: flex; flex-direction: column; gap: 2px; }
+  .param .lab { display: flex; justify-content: space-between; font-size: 0.74rem; color: #767ea8; }
+  .param .val { font-family: ui-monospace, Menlo, monospace; color: #9fb0f0; }
+  .param input[type=range] { width: 100%; }
+  .voice-btns { margin-left: auto; display: flex; gap: 6px; }
+  .voice-btns button { padding: 2px 9px; font-size: 0.7rem; }
+  .collapsed .params { display: none; }
 </style>
 </head>
 <body>
-<div class="container"><h1>Audio Singularity</h1></div>
+<header>
+  <h1>Audio Singularity</h1>
+  <p>Black holes, a bouncing ball, a spinning disk and the AI singularity are the same shape: something diverges at a finite time.</p>
+</header>
+
+<div class="container">
+  <div class="panel transport">
+    <div class="row">
+      <button id="playBtn">Play</button>
+      <label class="chk"><input type="checkbox" id="loopChk"> Loop</label>
+      <span class="readout" id="phaseOut">APPROACH</span>
+      <span class="readout" id="xOut">x = 1.000</span>
+    </div>
+    <div class="row">
+      <label for="scrub">Time to singularity</label>
+      <input type="range" id="scrub" min="0" max="1000" value="0" step="1">
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row" id="presetRow"></div>
+  </div>
+
+  <div id="panels"></div>
+</div>
 
 <script id="shared-code">
 "use strict";
@@ -1656,7 +1710,251 @@ const SingularityTests = (function () {
 
 <script>
 "use strict";
-// Application layer added in later tasks.
+
+const App = {
+  ctx: null,
+  node: null,
+  analyser: null,
+  engine: null,
+  params: applyPreset("black-hole-merger"),
+  presetId: "black-hole-merger",
+  x: 1,
+  playing: false,
+  loop: false,
+  lastTime: 0,
+  usingWorklet: false,
+  workletMeters: null,
+
+  // In the worklet path the audio-thread engine is the one rendering, so it
+  // owns the meters and posts them back. On the fallback path the main-thread
+  // engine renders and its meters are read directly.
+  meters() {
+    if (this.usingWorklet) return this.workletMeters;
+    return this.engine ? this.engine.readMeters() : null;
+  },
+
+  setX(x) {
+    const P = this.params.global;
+    this.x = Math.max(-P.aftermath / P.T, Math.min(1, x));
+    if (this.engine) this.engine.setClock(this.x);
+  },
+
+  rebuildEngine() {
+    if (!this.ctx) return;
+    this.engine = createEngine(this.params, this.ctx.sampleRate, this.params.global.seed);
+    this.engine.setClock(this.x);
+    if (this.node && this.node.port) {
+      this.node.port.postMessage({ type: "params", params: this.params });
+    }
+  },
+
+  pushParams() {
+    if (this.engine) this.engine.setParams(this.params);
+    if (this.node && this.node.port) {
+      this.node.port.postMessage({ type: "params", params: this.params });
+    }
+  },
+
+  play() {
+    this.ensureAudio().then(() => {
+      if (this.x <= -this.params.global.aftermath / this.params.global.T + 1e-9) this.setX(1);
+      this.playing = true;
+      this.lastTime = performance.now();
+      document.getElementById("playBtn").textContent = "Pause";
+    });
+  },
+
+  pause() {
+    this.playing = false;
+    document.getElementById("playBtn").textContent = "Play";
+  },
+
+  // The transport is an automated hand on the scrub: x advances linearly in
+  // real time, because a finite-time singularity genuinely arrives.
+  tick() {
+    if (this.playing) {
+      const now = performance.now();
+      const dt = Math.min(0.1, (now - this.lastTime) / 1000);
+      this.lastTime = now;
+      const P = this.params.global;
+      let nx = this.x - dt / P.T;
+      const floor = -P.aftermath / P.T;
+      if (nx <= floor) {
+        if (this.loop) { nx = 1; if (this.engine) this.engine.reset(); }
+        else { nx = floor; this.pause(); }
+      }
+      this.setX(nx);
+    }
+  },
+
+  async ensureAudio() {
+    if (this.ctx) { if (this.ctx.state === "suspended") await this.ctx.resume(); return; }
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.engine = createEngine(this.params, this.ctx.sampleRate, this.params.global.seed);
+    this.engine.setClock(this.x);
+
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 2048;
+    this.analyser.smoothingTimeConstant = 0.35;
+
+    const core = document.getElementById("shared-code").textContent;
+    let ok = false;
+    try {
+      const src = core + "\n" + WORKLET_GLUE;
+      const url = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
+      await this.ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      this.node = new AudioWorkletNode(this.ctx, "singularity-processor", { outputChannelCount: [2] });
+      this.node.port.onmessage = (e) => {
+        if (e.data.type === "meters") this.workletMeters = e.data.meters;
+      };
+      this.node.port.postMessage({ type: "init", params: this.params, seed: this.params.global.seed });
+      ok = true;
+      this.usingWorklet = true;
+    } catch (e) {
+      console.warn("AudioWorklet unavailable, falling back to ScriptProcessorNode:", e);
+    }
+
+    if (!ok) {
+      // Same engine, main-thread host. Required under file:// on some browsers.
+      this.node = this.ctx.createScriptProcessor(2048, 0, 2);
+      this.node.onaudioprocess = (ev) => {
+        const L = ev.outputBuffer.getChannelData(0);
+        const R = ev.outputBuffer.getChannelData(1);
+        this.engine.setClock(this.x);
+        this.engine.render(L, R, L.length);
+      };
+      this.usingWorklet = false;
+    }
+
+    this.node.connect(this.analyser);
+    this.analyser.connect(this.ctx.destination);
+    if (this.ctx.state === "suspended") await this.ctx.resume();
+  },
+};
+
+// Worklet host. Appended to the shared-code source so the processor runs the
+// identical engine; only the transport plumbing differs.
+const WORKLET_GLUE = `
+class SingularityProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.engine = null;
+    this.x = 1;
+    this.port.onmessage = (e) => {
+      const d = e.data;
+      if (d.type === "init") {
+        this.engine = createEngine(d.params, sampleRate, d.seed);
+      } else if (d.type === "params" && this.engine) {
+        this.engine.setParams(d.params);
+      } else if (d.type === "clock") {
+        this.x = d.x;
+      } else if (d.type === "reset" && this.engine) {
+        this.engine.reset();
+      }
+    };
+  }
+  process(inputs, outputs) {
+    const out = outputs[0];
+    if (!this.engine) return true;
+    this.engine.setClock(this.x);
+    this.engine.render(out[0], out[1], out[0].length);
+    // Post meters back roughly every 2048 frames so the UI has something to
+    // draw. The audio thread is the only place the real engine state lives.
+    this.frames = (this.frames || 0) + out[0].length;
+    if (this.frames >= 2048) {
+      this.frames = 0;
+      this.port.postMessage({ type: "meters", meters: this.engine.readMeters() });
+    }
+    return true;
+  }
+}
+registerProcessor("singularity-processor", SingularityProcessor);
+`;
+
+// The transport runs on animation frames and pushes x to whichever audio path
+// is live. The worklet gets it by message; the fallback reads App.x directly
+// inside onaudioprocess.
+function pumpClock() {
+  App.tick();
+  if (App.usingWorklet && App.node && App.node.port) {
+    App.node.port.postMessage({ type: "clock", x: App.x });
+  }
+  requestAnimationFrame(pumpClock);
+}
+
+// The scrub slider is log-mapped across the approach so most of its travel
+// covers the last decade before t*. Position 0 = x 1 (far), 1000 = deepest.
+const SCRUB_MIN_X = 1e-6;
+function scrubToX(v) {
+  const t = v / 1000;
+  if (t <= 0.85) {
+    const u = t / 0.85; // 1 down to SCRUB_MIN_X, logarithmic
+    return Math.pow(10, (1 - u) * Math.log10(1 / SCRUB_MIN_X)) * SCRUB_MIN_X;
+  }
+  const u = (t - 0.85) / 0.15; // into the aftermath
+  return -u * (App.params.global.aftermath / App.params.global.T);
+}
+function xToScrub(x) {
+  if (x >= 0) {
+    const cl = Math.max(SCRUB_MIN_X, Math.min(1, x));
+    const u = 1 - Math.log10(cl / SCRUB_MIN_X) / Math.log10(1 / SCRUB_MIN_X);
+    return Math.round(u * 0.85 * 1000);
+  }
+  const span = App.params.global.aftermath / App.params.global.T || 1;
+  return Math.round((0.85 + Math.min(1, -x / span) * 0.15) * 1000);
+}
+
+function buildPresetRow() {
+  const row = document.getElementById("presetRow");
+  row.innerHTML = "";
+  for (const p of PRESETS) {
+    const b = document.createElement("button");
+    b.textContent = p.name;
+    b.dataset.id = p.id;
+    b.className = p.id === App.presetId ? "active" : "";
+    b.onclick = () => {
+      App.presetId = p.id;
+      App.params = applyPreset(p.id);
+      App.setX(1);
+      App.rebuildEngine();
+      buildPresetRow();
+      buildPanels();
+    };
+    row.appendChild(b);
+  }
+}
+
+document.getElementById("playBtn").onclick = () => App.playing ? App.pause() : App.play();
+document.getElementById("loopChk").onchange = (e) => { App.loop = e.target.checked; };
+
+const scrub = document.getElementById("scrub");
+scrub.oninput = () => {
+  App.pause();
+  App.ensureAudio();
+  App.setX(scrubToX(Number(scrub.value)));
+};
+
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && e.target.tagName !== "INPUT") {
+    e.preventDefault();
+    App.playing ? App.pause() : App.play();
+  }
+});
+
+function refreshReadouts() {
+  scrub.value = String(xToScrub(App.x));
+  const m = App.meters();
+  document.getElementById("phaseOut").textContent = m ? m.phase : phaseFor(App.x, App.params.global.mergerWidth);
+  document.getElementById("xOut").textContent = "x = " + App.x.toFixed(App.x < 0.01 ? 6 : 3);
+  requestAnimationFrame(refreshReadouts);
+}
+
+function buildPanels() {}
+
+buildPresetRow();
+requestAnimationFrame(pumpClock);
+requestAnimationFrame(refreshReadouts);
 </script>
 </body>
 </html>
