@@ -1374,7 +1374,10 @@ Assembles the voices behind one interface, adds the limiter, defines the six pre
   - `readMeters() -> { phase, x, D, chirpHz, eventRate, swarmCount, capBinding, recentEvents }`
   - `PRESETS` — array of `{ id, name, params }` where `params` is a nested partial overlay merged onto `defaultParams()`
   - `applyPreset(id) -> params` (a full, clamped params object)
-  - `renderOffline(params, sampleRate, seed) -> { L: Float32Array, R: Float32Array }` rendering `T + aftermath` seconds with `x` sweeping linearly from `1` to `−aftermath/T`
+  - `makeOfflineRenderer(params, sampleRate, seed) -> { frames, L, R, advance(maxFrames) -> framesDone, done() -> boolean }` — an incremental renderer owning the only offline render loop. `advance` renders at most `maxFrames` more frames and returns the running total.
+  - `renderOffline(params, sampleRate, seed) -> { L: Float32Array, R: Float32Array }` — a thin wrapper that advances the renderer to completion in one call. Renders `T + aftermath` seconds with `x` sweeping linearly from `1` to `−aftermath/T`.
+
+  Task 12's WAV export drives the **same** `makeOfflineRenderer` a slice at a time so it can yield to the browser. There is exactly one offline render loop in the codebase, and `renderOffline`'s tests cover it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1531,6 +1534,19 @@ Add inside the `SingularityTests` IIFE:
     let differs = false;
     for (let i = 0; i < a.L.length; i++) if (a.L[i] !== c.L[i]) { differs = true; break; }
     check("offline: different seed differs", differs);
+
+    // Slicing the renderer the way the WAV export does must produce byte-identical
+    // audio to running it in one call. This is what lets the export share the loop.
+    const sliced = makeOfflineRenderer(P, sr, 7);
+    let guard = 0;
+    while (!sliced.done() && guard++ < 10000) sliced.advance(777);
+    check("offline: sliced render terminates", sliced.done());
+    check("offline: sliced render has the same length", sliced.frames === a.L.length);
+    let sameAsOneShot = true;
+    for (let i = 0; i < a.L.length; i++) {
+      if (sliced.L[i] !== a.L[i] || sliced.R[i] !== a.R[i]) { sameAsOneShot = false; break; }
+    }
+    check("offline: sliced render matches one-shot render", sameAsOneShot);
 
     // Limiter off can exceed 1.0 on a hostile preset - that is the point.
     const hot = applyPreset("hard-wall");
@@ -1746,25 +1762,43 @@ function applyPreset(id) {
 // ---------------------------------------------------------------------------
 // Offline render. Sweeps x linearly in real time from 1 to -aftermath/T, which
 // is exactly what Play does live. Knobs are frozen; only the clock moves.
+//
+// This is the only offline render loop. renderOffline runs it to completion in
+// one call for tests; the WAV export drives it a slice per animation frame so
+// the page stays responsive. Both get identical audio.
 // ---------------------------------------------------------------------------
-function renderOffline(params, sampleRate, seed) {
+function makeOfflineRenderer(params, sampleRate, seed) {
   const P = clampParams(params);
   const T = P.global.T;
-  const totalSeconds = T + P.global.aftermath;
-  const frames = Math.floor(totalSeconds * sampleRate);
+  const frames = Math.floor((T + P.global.aftermath) * sampleRate);
   const L = new Float32Array(frames), R = new Float32Array(frames);
   const eng = createEngine(P, sampleRate, seed);
   const BLOCK = 512;
   const bl = new Float32Array(BLOCK), br = new Float32Array(BLOCK);
+  let cursor = 0;
 
-  for (let i = 0; i < frames; i += BLOCK) {
-    const n = Math.min(BLOCK, frames - i);
-    eng.setClock(1 - ((i + n) / sampleRate) / T);
-    eng.render(bl, br, n);
-    L.set(bl.subarray(0, n), i);
-    R.set(br.subarray(0, n), i);
-  }
-  return { L, R };
+  return {
+    frames, L, R,
+    done() { return cursor >= frames; },
+    advance(maxFrames) {
+      const stop = Math.min(frames, cursor + maxFrames);
+      while (cursor < stop) {
+        const n = Math.min(BLOCK, frames - cursor);
+        eng.setClock(1 - ((cursor + n) / sampleRate) / T);
+        eng.render(bl, br, n);
+        L.set(bl.subarray(0, n), cursor);
+        R.set(br.subarray(0, n), cursor);
+        cursor += n;
+      }
+      return cursor;
+    },
+  };
+}
+
+function renderOffline(params, sampleRate, seed) {
+  const r = makeOfflineRenderer(params, sampleRate, seed);
+  r.advance(r.frames);
+  return { L: r.L, R: r.R };
 }
 ```
 
@@ -2612,8 +2646,8 @@ EOF
 - Modify: `audio-singularity/index.html` (markup, `<style>`, application `<script>`)
 
 **Interfaces:**
-- Consumes: `renderOffline`, `encodeWav` from Tasks 8 and 4; `App.params`, `App.presetId` from Task 9.
-- Produces: `exportWav()` — chunked offline render with a progress indicator, then a download.
+- Consumes: `makeOfflineRenderer`, `clampParams`, `encodeWav` from Tasks 8, 3 and 4; `App.params`, `App.presetId` from Task 9.
+- Produces: `exportWav()` — drives the shared offline renderer a slice per animation frame, then downloads. **Do not write a second render loop here**; `makeOfflineRenderer.advance` is the only one, and it is what the tests cover.
 
 - [ ] **Step 1: Add the export controls**
 
@@ -2647,8 +2681,10 @@ Add to `<style>`:
 Append to the application script:
 
 ```js
-// Renders offline in chunks so a 60 s + 20 s job at 48 kHz does not freeze the
-// page. Knobs are frozen for the whole render; only the clock sweeps.
+// Drives the shared offline renderer one slice per animation frame, so a
+// 60 s + 20 s job at 48 kHz does not freeze the page. Knobs are frozen for the
+// whole render; only the clock sweeps. The render loop itself lives in
+// makeOfflineRenderer and is covered by the tests.
 function exportWav() {
   const rate = Number(document.getElementById("expRate").value);
   const depth = Number(document.getElementById("expDepth").value);
@@ -2659,28 +2695,15 @@ function exportWav() {
   const P = clampParams(JSON.parse(JSON.stringify(App.params)));
   const seed = P.global.seed;
   const totalSeconds = P.global.T + P.global.aftermath;
-  const frames = Math.floor(totalSeconds * rate);
-  const L = new Float32Array(frames), R = new Float32Array(frames);
-  const eng = createEngine(P, rate, seed);
-  const BLOCK = 512;
-  const bl = new Float32Array(BLOCK), br = new Float32Array(BLOCK);
+  const renderer = makeOfflineRenderer(P, rate, seed);
   const CHUNK_FRAMES = rate; // about one second of audio per animation frame
-  let i = 0;
 
   function step() {
-    const stop = Math.min(frames, i + CHUNK_FRAMES);
-    while (i < stop) {
-      const n = Math.min(BLOCK, frames - i);
-      eng.setClock(1 - ((i + n) / rate) / P.global.T);
-      eng.render(bl, br, n);
-      L.set(bl.subarray(0, n), i);
-      R.set(br.subarray(0, n), i);
-      i += n;
-    }
-    out.textContent = "rendering " + Math.round(100 * i / frames) + "%";
-    if (i < frames) { requestAnimationFrame(step); return; }
+    const doneFrames = renderer.advance(CHUNK_FRAMES);
+    out.textContent = "rendering " + Math.round(100 * doneFrames / renderer.frames) + "%";
+    if (!renderer.done()) { requestAnimationFrame(step); return; }
 
-    const bytes = encodeWav(L, R, rate, depth);
+    const bytes = encodeWav(renderer.L, renderer.R, rate, depth);
     const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
     const a = document.createElement("a");
     a.href = url;
@@ -2697,8 +2720,6 @@ function exportWav() {
 
 document.getElementById("exportBtn").onclick = exportWav;
 ```
-
-Note this deliberately mirrors `renderOffline` rather than calling it, because the chunking must yield to the browser between slices. The tested code path is `renderOffline`; keep the two loops identical in structure so a change to one is obviously needed in the other.
 
 - [ ] **Step 3: Verify in a browser**
 
