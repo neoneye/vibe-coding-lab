@@ -1733,6 +1733,16 @@ const App = {
     return this.engine ? this.engine.readMeters() : null;
   },
 
+  // Resets whichever engine is actually rendering. On the worklet path the
+  // main-thread engine is inert, so resetting it would be a no-op.
+  resetEngine() {
+    if (this.usingWorklet && this.node && this.node.port) {
+      this.node.port.postMessage({ type: "reset" });
+    } else if (this.engine) {
+      this.engine.reset();
+    }
+  },
+
   setX(x) {
     const P = this.params.global;
     this.x = Math.max(-P.aftermath / P.T, Math.min(1, x));
@@ -1780,7 +1790,7 @@ const App = {
       let nx = this.x - dt / P.T;
       const floor = -P.aftermath / P.T;
       if (nx <= floor) {
-        if (this.loop) { nx = 1; if (this.engine) this.engine.reset(); }
+        if (this.loop) { nx = 1; this.resetEngine(); }
         else { nx = floor; this.pause(); }
       }
       this.setX(nx);
@@ -1807,6 +1817,12 @@ const App = {
       this.node = new AudioWorkletNode(this.ctx, "singularity-processor", { outputChannelCount: [2] });
       this.node.port.onmessage = (e) => {
         if (e.data.type === "meters") this.workletMeters = e.data.meters;
+      };
+      // A runtime failure inside process()/onmessage after construction is not
+      // recovered from (we don't tear down and rebuild on ScriptProcessorNode
+      // here) — this only makes an otherwise-silent stall visible in the console.
+      this.node.onprocessorerror = (e) => {
+        console.error("AudioWorklet processor failed after construction; audio may have stopped:", e);
       };
       this.node.port.postMessage({ type: "init", params: this.params, seed: this.params.global.seed });
       ok = true;
@@ -1893,7 +1909,9 @@ function scrubToX(v) {
     return Math.pow(10, (1 - u) * Math.log10(1 / SCRUB_MIN_X)) * SCRUB_MIN_X;
   }
   const u = (t - 0.85) / 0.15; // into the aftermath
-  return -u * (App.params.global.aftermath / App.params.global.T);
+  // When aftermath is 0 this is -u * 0, which would otherwise yield -0.
+  // Normalise to +0 so xToScrub's `x >= 0` branch test is unambiguous below.
+  return -u * (App.params.global.aftermath / App.params.global.T) || 0;
 }
 function xToScrub(x) {
   if (x >= 0) {
