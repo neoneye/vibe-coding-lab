@@ -57,6 +57,7 @@
       <label class="chk"><input type="checkbox" id="loopChk"> Loop</label>
       <span class="readout" id="phaseOut">APPROACH</span>
       <span class="readout" id="xOut">x = 1.000</span>
+      <span class="readout" id="epsOut">ceiling ×1000</span>
     </div>
     <div class="row">
       <label for="scrub">Time to singularity</label>
@@ -1968,9 +1969,133 @@ function refreshReadouts() {
   requestAnimationFrame(refreshReadouts);
 }
 
-function buildPanels() {}
+// Log-scaled sliders map their 0..1000 position geometrically between min and max.
+function sliderToValue(spec, pos) {
+  const t = pos / 1000;
+  if (spec.log) return spec.min * Math.pow(spec.max / spec.min, t);
+  const v = spec.min + (spec.max - spec.min) * t;
+  return spec.step ? Math.round(v / spec.step) * spec.step : v;
+}
+function valueToSlider(spec, v) {
+  if (spec.log) return Math.round(1000 * Math.log(v / spec.min) / Math.log(spec.max / spec.min));
+  return Math.round(1000 * (v - spec.min) / (spec.max - spec.min));
+}
+function formatValue(spec, v) {
+  let s;
+  if (spec.log && v < 0.01) s = v.toExponential(1);
+  else if (Math.abs(v) >= 100) s = v.toFixed(0);
+  else if (Math.abs(v) >= 10) s = v.toFixed(1);
+  else s = v.toFixed(spec.step && spec.step >= 1 ? 0 : 3);
+  return s + (spec.unit ? " " + spec.unit : "");
+}
+
+function buildPanels() {
+  const host = document.getElementById("panels");
+  host.innerHTML = "";
+
+  for (const g of PARAM_GROUPS) {
+    const panel = document.createElement("div");
+    panel.className = "panel";
+
+    const h = document.createElement("h2");
+    h.textContent = PARAM_SPEC[g].label;
+    h.onclick = () => panel.classList.toggle("collapsed");
+    panel.appendChild(h);
+
+    if (VOICE_GROUPS.indexOf(g) >= 0) {
+      const btns = document.createElement("span");
+      btns.className = "voice-btns";
+      for (const kind of ["solo", "mute"]) {
+        const b = document.createElement("button");
+        b.textContent = kind === "solo" ? "S" : "M";
+        b.title = kind === "solo" ? "Solo" : "Mute";
+        const isOn = () => kind === "solo" ? App.params.solo === g : App.params.mute[g];
+        b.className = isOn() ? "active" : "";
+        b.onclick = (ev) => {
+          ev.stopPropagation();
+          if (kind === "solo") App.params.solo = App.params.solo === g ? null : g;
+          else App.params.mute[g] = !App.params.mute[g];
+          App.pushParams();
+          buildPanels();
+        };
+        btns.appendChild(b);
+      }
+      h.appendChild(btns);
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "params";
+
+    for (const spec of PARAM_SPEC[g].params) {
+      const wrap = document.createElement("div");
+      wrap.className = "param";
+
+      if (spec.type === "bool") {
+        const lab = document.createElement("label");
+        lab.className = "chk";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!App.params[g][spec.key];
+        cb.onchange = () => {
+          if (spec.key === "limiter" && !cb.checked) {
+            const go = confirm(
+              "Turning the limiter off lets this instrument produce very loud, " +
+              "unbounded output. Lower your volume first.\n\nDisable the limiter?");
+            if (!go) { cb.checked = true; return; }
+          }
+          App.params[g][spec.key] = cb.checked;
+          App.pushParams();
+        };
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(" " + spec.label));
+        wrap.appendChild(lab);
+        grid.appendChild(wrap);
+        continue;
+      }
+
+      const lab = document.createElement("div");
+      lab.className = "lab";
+      const name = document.createElement("span");
+      name.textContent = spec.label;
+      const val = document.createElement("span");
+      val.className = "val";
+      val.textContent = formatValue(spec, App.params[g][spec.key]);
+      lab.appendChild(name); lab.appendChild(val);
+
+      const sl = document.createElement("input");
+      sl.type = "range"; sl.min = "0"; sl.max = "1000"; sl.step = "1";
+      sl.value = String(valueToSlider(spec, App.params[g][spec.key]));
+      sl.oninput = () => {
+        const v = sliderToValue(spec, Number(sl.value));
+        App.params[g][spec.key] = v;
+        val.textContent = formatValue(spec, v);
+        if (g === "global" && spec.key === "seed") App.rebuildEngine();
+        else App.pushParams();
+        if (g === "global" && spec.key === "eps") updateEpsReadout();
+      };
+
+      wrap.appendChild(lab);
+      wrap.appendChild(sl);
+      grid.appendChild(wrap);
+    }
+
+    panel.appendChild(grid);
+    host.appendChild(panel);
+  }
+  updateEpsReadout();
+}
+
+// Epsilon is the headline knob, so show its consequence: the divergence ceiling.
+function updateEpsReadout() {
+  const el = document.getElementById("epsOut");
+  if (!el) return;
+  const P = App.params.global;
+  const ceiling = Math.pow(P.eps, -P.p);
+  el.textContent = "ceiling ×" + (ceiling >= 1000 ? ceiling.toExponential(1) : ceiling.toFixed(0));
+}
 
 buildPresetRow();
+buildPanels();
 requestAnimationFrame(pumpClock);
 requestAnimationFrame(refreshReadouts);
 </script>
