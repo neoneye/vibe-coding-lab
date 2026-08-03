@@ -567,6 +567,16 @@ function makeSwarm(sampleRate, rng) {
 // ---------------------------------------------------------------------------
 const LIMIT_THRESHOLD = 0.85;
 
+// softClip bounds arbitrary input to strictly under 1.0, so it is exported
+// on its own for that general guarantee. Inside makeLimiter below, though,
+// its tanh knee never actually engages: the envelope follower has
+// instantaneous attack (envelope = a > envelope ? a : envelope * rel), so
+// envelope is always >= |s|, which means the gain-reduced signal |s * g|
+// is always <= LIMIT_THRESHOLD before softClip sees it, i.e. it always
+// takes the early "a <= LIMIT_THRESHOLD" return. The call is kept anyway as
+// defence in depth: if the envelope's attack behaviour is ever changed to
+// something non-instantaneous, softClip is what stops the output from
+// exceeding 1.0.
 function softClip(s) {
   const a = Math.abs(s);
   if (a <= LIMIT_THRESHOLD) return s;
@@ -585,6 +595,8 @@ function makeLimiter(sampleRate) {
       const a = Math.abs(s);
       envelope = a > envelope ? a : envelope * rel;
       const g = envelope > LIMIT_THRESHOLD ? LIMIT_THRESHOLD / envelope : 1;
+      // softClip's knee is unreachable here (see comment on softClip) —
+      // retained as a guard, not because it currently shapes anything.
       return softClip(s * g);
     }
   };
@@ -756,23 +768,38 @@ function applyPreset(id) {
 // one call for tests; the WAV export drives it a slice per animation frame so
 // the page stays responsive. Both get identical audio.
 // ---------------------------------------------------------------------------
+const OFFLINE_BLOCK = 512;
+
 function makeOfflineRenderer(params, sampleRate, seed) {
   const P = clampParams(params);
   const T = P.global.T;
   const frames = Math.floor((T + P.global.aftermath) * sampleRate);
   const L = new Float32Array(frames), R = new Float32Array(frames);
   const eng = createEngine(P, sampleRate, seed);
-  const BLOCK = 512;
-  const bl = new Float32Array(BLOCK), br = new Float32Array(BLOCK);
+  const bl = new Float32Array(OFFLINE_BLOCK), br = new Float32Array(OFFLINE_BLOCK);
   let cursor = 0;
 
   return {
     frames, L, R,
     done() { return cursor >= frames; },
+    // Renders in whole blocks of OFFLINE_BLOCK frames, completing the block
+    // that contains maxFrames — it does NOT stop partway through a block.
+    // So one call advances the cursor by at least one block (while frames
+    // remain) and by at most maxFrames + OFFLINE_BLOCK - 1 frames; it does
+    // not render "at most maxFrames" frames despite the parameter name.
+    //
+    // This is deliberate: block boundaries are fixed multiples of
+    // OFFLINE_BLOCK measured from zero, independent of how the caller
+    // slices its advance() calls. Each block's eng.setClock(...) value is a
+    // pure function of cursor, so a sliced render (WAV export, one slice
+    // per animation frame) reaches the exact same block boundaries and the
+    // exact same clock values as a one-shot render, and therefore produces
+    // byte-identical audio. Clamping a block's size to maxFrames would make
+    // the clock sweep depend on the caller's slice sizes and break that.
     advance(maxFrames) {
       const stop = Math.min(frames, cursor + maxFrames);
       while (cursor < stop) {
-        const n = Math.min(BLOCK, frames - cursor);
+        const n = Math.min(OFFLINE_BLOCK, frames - cursor);
         eng.setClock(1 - ((cursor + n) / sampleRate) / T);
         eng.render(bl, br, n);
         L.set(bl.subarray(0, n), cursor);
@@ -1493,14 +1520,46 @@ const SingularityTests = (function () {
     // audio to running it in one call. This is what lets the export share the loop.
     const sliced = makeOfflineRenderer(P, sr, 7);
     let guard = 0;
-    while (!sliced.done() && guard++ < 10000) sliced.advance(777);
+    let maxAdvance = 0, minAdvance = Infinity, prevCursor = 0;
+    while (!sliced.done() && guard++ < 10000) {
+      const cursor = sliced.advance(777);
+      const delta = cursor - prevCursor;
+      if (delta > maxAdvance) maxAdvance = delta;
+      if (delta < minAdvance) minAdvance = delta;
+      prevCursor = cursor;
+    }
     check("offline: sliced render terminates", sliced.done());
     check("offline: sliced render has the same length", sliced.frames === a.L.length);
+    check("offline: advance(n) never advances more than n + OFFLINE_BLOCK - 1 frames",
+      maxAdvance <= 777 + OFFLINE_BLOCK - 1, "maxAdvance=" + maxAdvance);
+    check("offline: advance(n) always advances at least 1 frame while work remains",
+      minAdvance >= 1, "minAdvance=" + minAdvance);
     let sameAsOneShot = true;
     for (let i = 0; i < a.L.length; i++) {
       if (sliced.L[i] !== a.L[i] || sliced.R[i] !== a.R[i]) { sameAsOneShot = false; break; }
     }
     check("offline: sliced render matches one-shot render", sameAsOneShot);
+
+    // Caller-independence: block boundaries are fixed multiples of OFFLINE_BLOCK
+    // measured from zero, not from the caller's slice sizes, so slicing at any
+    // granularity must reach the exact same clock values at the exact same
+    // sample positions and therefore produce byte-identical audio to the
+    // one-shot render. Check several granularities, including one that is an
+    // exact multiple of OFFLINE_BLOCK (no remainder block) and one of 1
+    // (worst case: one frame requested per call).
+    for (const gran of [1, 100, 777, 5000, 1024]) {
+      const g = makeOfflineRenderer(P, sr, 7);
+      let iterations = 0;
+      const maxIterations = Math.ceil(g.frames / gran) + 2;
+      while (!g.done() && iterations++ < maxIterations) g.advance(gran);
+      check("offline: granularity " + gran + " render terminates", g.done(),
+        "iterations=" + iterations);
+      let same = g.frames === a.L.length;
+      for (let i = 0; same && i < a.L.length; i++) {
+        if (g.L[i] !== a.L[i] || g.R[i] !== a.R[i]) same = false;
+      }
+      check("offline: granularity " + gran + " matches one-shot render", same);
+    }
 
     // Limiter off can exceed 1.0 on a hostile preset - that is the point.
     const hot = applyPreset("hard-wall");
