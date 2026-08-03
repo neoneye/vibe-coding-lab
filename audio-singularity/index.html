@@ -825,7 +825,10 @@ const PRESETS = [
   }},
   { id: "hard-wall", name: "Hard Wall", params: {
     global:   { T: 6, p: 3.0, eps: 1e-6, aftermath: 3, masterGain: -12 },
-    chirp:    { f0: 60, partials: 8, morph: 0.6, level: -6 },
+    // expo above the physical 0.375 on purpose: it drives the unclamped ceiling
+    // (60 * 1e6^0.6 = 238 kHz) far past Nyquist, so this preset genuinely folds
+    // and aliases rather than merely getting harsh. That is what "hard wall" means.
+    chirp:    { f0: 60, expo: 0.6, partials: 8, morph: 0.6, level: -6 },
     impacts:  { rate0: 6, q: 2.0, decay: 8, pitch: 700, drift: 20, mix: 0.3, level: -6 },
     ringdown: { ratio: 0.4, modes: 6, q: 90, level: -8 },
     field:    { centre: 400, tracking: 0.9, bwTrack: 0.4, level: -12 },
@@ -1670,6 +1673,25 @@ const SingularityTests = (function () {
       applyPreset("hard-wall").global.eps <= 1e-5);
     check("presets: gentle landing is heavily regularized",
       applyPreset("gentle-landing").global.eps >= 0.05);
+
+    // Hard Wall must genuinely alias, not merely get harsh: its unclamped
+    // ceiling has to exceed Nyquist so the chirp folds. Every other preset must
+    // stay below it, so folding reads as this preset's character, not a bug.
+    const SR = 48000, NYQ = 0.45 * SR;
+    function unclampedCeiling(id) {
+      const P = applyPreset(id);
+      return P.chirp.f0 * Math.pow(P.global.eps, -P.chirp.expo);
+    }
+    check("presets: hard wall folds past Nyquist",
+      unclampedCeiling("hard-wall") > NYQ, "ceiling=" + unclampedCeiling("hard-wall"));
+    check("presets: hard wall's chirp is actually clamped",
+      chirpFreq(0, applyPreset("hard-wall").chirp.f0, applyPreset("hard-wall").chirp.expo,
+        applyPreset("hard-wall").global.eps, SR) === NYQ);
+    for (const id of ["black-hole-merger", "bouncing-ball", "eulers-disk",
+                      "ai-singularity", "gentle-landing"]) {
+      check("presets: " + id + " stays under Nyquist",
+        unclampedCeiling(id) <= NYQ, "ceiling=" + unclampedCeiling(id));
+    }
   }
 
   function testOfflineRender() {
