@@ -193,6 +193,71 @@ function encodeWav(L, R, sampleRate, bitDepth) {
 }
 
 // ---------------------------------------------------------------------------
+// Voices. Every voice is { setParams, reset, render(L, R, frames, clock) }.
+// render ADDS into L and R. clock = { x0, x1, p, eps, mergerWidth, gateCoef }
+// where x is interpolated linearly from x0 to x1 across the block, which keeps
+// scrubbing and playback free of zipper noise.
+// ---------------------------------------------------------------------------
+
+const MAX_AMP_GROWTH = 16; // caps the physical f^(2/3) amplitude law
+
+function oscShape(phase, morph) {
+  const s = Math.sin(phase);
+  const t = (phase / (2 * Math.PI)) % 1;
+  const saw = 2 * (t < 0 ? t + 1 : t) - 1;
+  return s * (1 - morph) + saw * morph;
+}
+
+function chirpFreq(x, f0, expo, eps, sampleRate) {
+  return Math.min(f0 * Math.pow(Math.max(Math.abs(x), eps), -expo), 0.45 * sampleRate);
+}
+
+function makeChirp(sampleRate) {
+  const MAXP = 12;
+  const phL = new Float64Array(MAXP), phR = new Float64Array(MAXP);
+  let P = null, gate = 1;
+
+  return {
+    setParams(p) { P = p; },
+    reset() { phL.fill(0); phR.fill(0); gate = 1; },
+    lastFreq: 0,
+    render(L, R, frames, ck) {
+      if (!P) return;
+      const g = dbToGain(P.level) * 0.2;
+      const nyq = 0.45 * sampleRate;
+      const detune = Math.pow(2, P.detune / 1200);
+      const np = Math.round(P.partials);
+
+      for (let i = 0; i < frames; i++) {
+        const x = ck.x0 + (ck.x1 - ck.x0) * (i / frames);
+        const target = Math.abs(x) <= ck.mergerWidth || x < 0 ? 0 : 1;
+        gate += (target - gate) * ck.gateCoef;
+        const f = chirpFreq(x, P.f0, P.expo, ck.eps, sampleRate);
+        this.lastFreq = f;
+        if (gate < 1e-4) continue;
+
+        const amp = Math.min(Math.pow(f / P.f0, 2 / 3), MAX_AMP_GROWTH);
+        let sl = 0, sr = 0;
+        for (let k = 0; k < np; k++) {
+          const ratio = (k + 1) * (1 + P.inharm * k * k * 0.02);
+          const fk = f * ratio;
+          if (fk > nyq) break;
+          const w = Math.pow(P.massRatio, -k * 0.5) / (k + 1);
+          phL[k] += 2 * Math.PI * fk / sampleRate;
+          phR[k] += 2 * Math.PI * fk * detune / sampleRate;
+          if (phL[k] > 1e6) { phL[k] %= 2 * Math.PI; phR[k] %= 2 * Math.PI; }
+          sl += w * oscShape(phL[k], P.morph);
+          sr += w * oscShape(phR[k], P.morph);
+        }
+        const a = g * amp * gate;
+        L[i] += sl * a;
+        R[i] += sr * a;
+      }
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 const SingularityTests = (function () {
@@ -346,12 +411,76 @@ const SingularityTests = (function () {
     check("wav16: clamps negative overs", dvh.getInt16(48, true) === -32768);
   }
 
+  function testChirp() {
+    const HUGE = 1e9; // large sample rate so the Nyquist clamp never bites
+
+    // The real inspiral law, across three decades.
+    for (const x of [1, 0.1, 0.01, 0.001]) {
+      relApprox("chirp: power law at x=" + x,
+        chirpFreq(x, 55, 0.375, 1e-9, HUGE), 55 * Math.pow(x, -0.375), 1e-3);
+    }
+    approx("chirp: unity at x=1", chirpFreq(1, 55, 0.375, 1e-9, HUGE), 55, 1e-9);
+
+    // The regularization floor is the frequency ceiling.
+    relApprox("chirp: ceiling at eps=1e-3",
+      chirpFreq(0, 55, 0.375, 1e-3, 48000), 55 * Math.pow(1e-3, -0.375), 1e-12);
+    relApprox("chirp: ceiling at eps=1e-6",
+      chirpFreq(0, 55, 0.375, 1e-6, 48000), 55 * Math.pow(1e-6, -0.375), 1e-12);
+    check("chirp: ceiling below eps=1e-6 is under Nyquist",
+      chirpFreq(0, 55, 0.375, 1e-6, 48000) < 0.45 * 48000);
+
+    // Beyond that, Nyquist clamps.
+    approx("chirp: Nyquist clamp bites at eps=1e-9",
+      chirpFreq(0, 55, 0.375, 1e-9, 48000), 0.45 * 48000, 1e-9);
+    check("chirp: never exceeds Nyquist clamp",
+      chirpFreq(0, 400, 0.375, 1e-12, 48000) <= 0.45 * 48000);
+
+    // Symmetric in the aftermath.
+    approx("chirp: symmetric across t*",
+      chirpFreq(-0.01, 55, 0.375, 1e-9, HUGE), chirpFreq(0.01, 55, 0.375, 1e-9, HUGE), 1e-9);
+
+    // Rendering produces sound during the approach and silence well past merger.
+    const sr = 48000, n = 4096;
+    const v = makeChirp(sr);
+    const P = defaultParams();
+    v.setParams(P.chirp);
+    const L = new Float32Array(n), R = new Float32Array(n);
+    v.render(L, R, n, { x0: 0.5, x1: 0.5, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+    let peak = 0; for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(L[i]));
+    check("chirp: makes sound during approach", peak > 0.001, "peak=" + peak);
+    check("chirp: output is finite", L.every(Number.isFinite) && R.every(Number.isFinite));
+
+    // render adds rather than overwrites.
+    const L2 = new Float32Array(n).fill(0.25), R2 = new Float32Array(n).fill(0.25);
+    v.reset();
+    v.render(L2, R2, n, { x0: 0.5, x1: 0.5, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+    check("chirp: render is additive", L2[0] !== 0 && Math.abs(L2[10] - 0.25) > 1e-9);
+
+    // Stereo detune makes the channels differ.
+    v.reset();
+    const L3 = new Float32Array(n), R3 = new Float32Array(n);
+    v.render(L3, R3, n, { x0: 0.5, x1: 0.5, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+    let diff = 0; for (let i = 0; i < n; i++) diff += Math.abs(L3[i] - R3[i]);
+    check("chirp: detune decorrelates channels", diff > 0.01, "diff=" + diff);
+
+    // The gate closes past merger.
+    v.reset();
+    const L4 = new Float32Array(n), R4 = new Float32Array(n);
+    for (let b = 0; b < 40; b++) {
+      L4.fill(0); R4.fill(0);
+      v.render(L4, R4, n, { x0: -0.5, x1: -0.5, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+    }
+    let peak4 = 0; for (let i = 0; i < n; i++) peak4 = Math.max(peak4, Math.abs(L4[i]));
+    check("chirp: gated off in aftermath", peak4 < 1e-4, "peak=" + peak4);
+  }
+
   function run() {
     failures = 0; total = 0;
     testRng();
     testClock();
     testParams();
     testWav();
+    testChirp();
     console.log((total - failures) + "/" + total + " checks passed");
     return failures === 0;
   }
