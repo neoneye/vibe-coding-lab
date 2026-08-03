@@ -375,6 +375,171 @@ function makeImpacts(sampleRate, rng) {
 }
 
 // ---------------------------------------------------------------------------
+// Ringdown. Damped sinusoids, triggered once on entering MERGER. Decay time is
+// tau = Q / (pi * f), which is the standard quasinormal-mode relation.
+// ---------------------------------------------------------------------------
+function makeRingdown(sampleRate) {
+  const MAXM = 8;
+  const ph = new Float64Array(MAXM), inc = new Float64Array(MAXM);
+  const env = new Float64Array(MAXM), coef = new Float64Array(MAXM);
+  const amp = new Float64Array(MAXM);
+  let P = null;
+
+  return {
+    setParams(p) { P = p; },
+    reset() { env.fill(0); ph.fill(0); },
+    trigger(baseFreq) {
+      if (!P) return;
+      const nyq = 0.45 * sampleRate;
+      const f0 = Math.max(20, baseFreq * P.ratio);
+      const modes = Math.round(P.modes);
+      for (let k = 0; k < MAXM; k++) {
+        if (k >= modes) { env[k] = 0; continue; }
+        const f = Math.min(f0 * Math.pow(P.spacing, k), nyq);
+        ph[k] = 0;
+        inc[k] = 2 * Math.PI * f / sampleRate;
+        env[k] = 1;
+        amp[k] = 1 / (k + 1);
+        coef[k] = Math.exp(-Math.PI * f / (P.q * sampleRate));
+      }
+    },
+    render(L, R, frames, ck) {
+      if (!P) return;
+      const g = dbToGain(P.level) * 0.35;
+      for (let i = 0; i < frames; i++) {
+        let s = 0;
+        for (let k = 0; k < MAXM; k++) {
+          if (env[k] < 1e-6) continue;
+          ph[k] += inc[k];
+          if (ph[k] > 1e6) ph[k] %= 2 * Math.PI;
+          s += Math.sin(ph[k]) * env[k] * amp[k];
+          env[k] *= coef[k];
+        }
+        L[i] += s * g;
+        R[i] += s * g;
+      }
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Field. Bandpassed noise whose centre and bandwidth track the divergence.
+// Negative bandwidth tracking narrows the band as t* nears, which reads as
+// focusing rather than as growing noise.
+// ---------------------------------------------------------------------------
+function makeField(sampleRate, rng) {
+  let lp = 0, low = 0, band = 0, P = null;
+
+  return {
+    setParams(p) { P = p; },
+    reset() { lp = 0; low = 0; band = 0; },
+    render(L, R, frames, ck) {
+      if (!P) return;
+      const g = dbToGain(P.level) * 0.9;
+      const nyq = 0.45 * sampleRate;
+      for (let i = 0; i < frames; i++) {
+        const x = ck.x0 + (ck.x1 - ck.x0) * (i / frames);
+        const D = divergence(x, ck.p, ck.eps);
+
+        const fc = Math.max(20, Math.min(nyq, P.centre * Math.pow(D, P.tracking)));
+        const bwOct = Math.max(0.05, Math.min(6, P.bw * Math.pow(D, P.bwTrack)));
+        const Q = 1 / (2 * Math.sinh(Math.LN2 / 2 * bwOct));
+        const f = Math.min(1.4, 2 * Math.sin(Math.PI * fc / sampleRate));
+        const damp = Math.min(1.6, 1 / Q);
+
+        // White to brown via a one-pole lowpass blend.
+        const white = rng() * 2 - 1;
+        lp = lp * 0.97 + white * 0.03;
+        const src = white * (1 - P.colour) + lp * 8 * P.colour;
+
+        // Chamberlin state-variable filter, bandpass output.
+        low += f * band;
+        const high = src - low - damp * band;
+        band += f * high;
+        if (!isFinite(low) || !isFinite(band)) { low = 0; band = 0; }
+
+        const s = Math.max(-4, Math.min(4, band)) * g;
+        L[i] += s;
+        R[i] += s * 0.85;
+      }
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Swarm. The AI one: not one thing getting louder, but more and more things
+// arriving at once until they smear.
+// ---------------------------------------------------------------------------
+const SWARM_MAX = 64;
+
+function swarmCount(D, n0, k, nmax) {
+  return Math.max(1, Math.min(Math.min(nmax, SWARM_MAX), Math.round(n0 * Math.pow(D, k))));
+}
+
+function makeSwarm(sampleRate, rng) {
+  const ph    = new Float64Array(SWARM_MAX);
+  const inc   = new Float64Array(SWARM_MAX);
+  const env   = new Float64Array(SWARM_MAX);
+  const coef  = new Float64Array(SWARM_MAX);
+  const timer = new Float64Array(SWARM_MAX);
+  const baseR = new Float64Array(SWARM_MAX);
+  const pan   = new Float64Array(SWARM_MAX);
+  for (let k = 0; k < SWARM_MAX; k++) {
+    baseR[k] = 2 + 6 * rng();
+    timer[k] = rng() / baseR[k];
+    pan[k] = rng();
+  }
+  let P = null;
+  const voice = {
+    activeCount: 1,
+    setParams(p) { P = p; },
+    reset() {
+      env.fill(0); ph.fill(0);
+      for (let k = 0; k < SWARM_MAX; k++) timer[k] = rng() / baseR[k];
+      voice.activeCount = 1;
+    },
+    render(L, R, frames, ck) {
+      if (!P) return;
+      const dt = 1 / sampleRate;
+      const g = dbToGain(P.level) * 0.5;
+      const nyq = 0.45 * sampleRate;
+      const envCoef = Math.exp(-1 / (Math.max(P.decay, 1) * 0.001 * sampleRate));
+
+      for (let i = 0; i < frames; i++) {
+        const x = ck.x0 + (ck.x1 - ck.x0) * (i / frames);
+        const D = divergence(x, ck.p, ck.eps);
+        const n = swarmCount(D, P.n0, P.k, P.nmax);
+        voice.activeCount = n;
+        const accel = Math.pow(D, 0.25);
+
+        let sl = 0, sr = 0;
+        for (let k = 0; k < n; k++) {
+          timer[k] -= dt;
+          if (timer[k] <= 0) {
+            const jit = 1 + P.jitter * (2 * rng() - 1) * 0.5;
+            timer[k] = Math.max(0.002, jit / (baseR[k] * accel));
+            const f = P.band * Math.pow(2, (rng() - 0.5) * P.spread);
+            ph[k] = 0;
+            inc[k] = 2 * Math.PI * Math.min(f, nyq) / sampleRate;
+            env[k] = 1;
+            coef[k] = envCoef;
+          }
+          if (env[k] < 1e-5) continue;
+          ph[k] += inc[k];
+          const s = Math.sin(ph[k]) * env[k];
+          env[k] *= coef[k];
+          sl += s * (1 - pan[k] * 0.7);
+          sr += s * (1 - (1 - pan[k]) * 0.7);
+        }
+        L[i] += sl * g;
+        R[i] += sr * g;
+      }
+    }
+  };
+  return voice;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 const SingularityTests = (function () {
@@ -727,6 +892,100 @@ const SingularityTests = (function () {
     }
   }
 
+  function testRingdown() {
+    const sr = 48000, n = 4096;
+    const v = makeRingdown(sr);
+    const P = defaultParams();
+    v.setParams(P.ringdown);
+    const ck = { x0: -0.5, x1: -0.5, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 };
+
+    // Silent until triggered.
+    const L0 = new Float32Array(n), R0 = new Float32Array(n);
+    v.render(L0, R0, n, ck);
+    check("ringdown: silent before trigger", L0.every(s => s === 0));
+
+    // Sounds after triggering.
+    v.trigger(700);
+    const L1 = new Float32Array(n), R1 = new Float32Array(n);
+    v.render(L1, R1, n, ck);
+    let peak1 = 0; for (let i = 0; i < n; i++) peak1 = Math.max(peak1, Math.abs(L1[i]));
+    check("ringdown: sounds after trigger", peak1 > 0.001, "peak=" + peak1);
+    check("ringdown: output is finite", L1.every(Number.isFinite));
+
+    // And decays.
+    for (let b = 0; b < 20; b++) { L1.fill(0); R1.fill(0); v.render(L1, R1, n, ck); }
+    let peak2 = 0; for (let i = 0; i < n; i++) peak2 = Math.max(peak2, Math.abs(L1[i]));
+    check("ringdown: decays over time", peak2 < peak1 * 0.9, "p1=" + peak1 + " p2=" + peak2);
+
+    // Higher Q decays more slowly.
+    function tailPeak(qv) {
+      const w = makeRingdown(sr);
+      const p = defaultParams(); p.ringdown.q = qv;
+      w.setParams(p.ringdown); w.trigger(700);
+      const A = new Float32Array(n), B = new Float32Array(n);
+      for (let b = 0; b < 15; b++) { A.fill(0); B.fill(0); w.render(A, B, n, ck); }
+      let pk = 0; for (let i = 0; i < n; i++) pk = Math.max(pk, Math.abs(A[i]));
+      return pk;
+    }
+    check("ringdown: higher Q rings longer", tailPeak(1000) > tailPeak(20));
+
+    // reset silences it.
+    v.reset();
+    const L3 = new Float32Array(n), R3 = new Float32Array(n);
+    v.render(L3, R3, n, ck);
+    check("ringdown: reset silences", L3.every(s => s === 0));
+  }
+
+  function testField() {
+    const sr = 48000, n = 4096;
+    const v = makeField(sr, makeRng(1));
+    const P = defaultParams();
+    v.setParams(P.field);
+    const L = new Float32Array(n), R = new Float32Array(n);
+    v.render(L, R, n, { x0: 0.5, x1: 0.5, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+    let peak = 0; for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(L[i]));
+    check("field: makes sound", peak > 1e-5, "peak=" + peak);
+    check("field: output is finite", L.every(Number.isFinite) && R.every(Number.isFinite));
+
+    // Stays finite and bounded when the divergence is extreme.
+    v.reset();
+    const L2 = new Float32Array(n), R2 = new Float32Array(n);
+    v.render(L2, R2, n, { x0: 0, x1: 0, p: 4, eps: 1e-6, mergerWidth: 0.01, gateCoef: 0.002 });
+    check("field: finite at extreme divergence", L2.every(Number.isFinite));
+    let peak2 = 0; for (let i = 0; i < n; i++) peak2 = Math.max(peak2, Math.abs(L2[i]));
+    check("field: filter does not blow up", peak2 < 100, "peak=" + peak2);
+  }
+
+  function testSwarm() {
+    // Population growth law and its caps.
+    check("swarm: at least one voice", swarmCount(1, 2, 0.6, 48) >= 1);
+    check("swarm: grows with divergence",
+      swarmCount(100, 2, 0.6, 48) > swarmCount(1, 2, 0.6, 48));
+    check("swarm: capped at nmax", swarmCount(1e12, 2, 0.6, 48) === 48);
+    check("swarm: never exceeds 64", swarmCount(1e12, 16, 2, 64) === 64);
+    check("swarm: k=0 means no growth", swarmCount(1e6, 3, 0, 48) === 3);
+    relApprox("swarm: obeys n0 * D^k", swarmCount(1000, 2, 0.5, 64), 2 * Math.sqrt(1000), 0.01);
+
+    const sr = 48000, n = 8192;
+    const v = makeSwarm(sr, makeRng(1));
+    const P = defaultParams();
+    v.setParams(P.swarm);
+    const L = new Float32Array(n), R = new Float32Array(n);
+    v.render(L, R, n, { x0: 0.05, x1: 0.04, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+    let peak = 0; for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(L[i]));
+    check("swarm: makes sound", peak > 1e-4, "peak=" + peak);
+    check("swarm: output is finite", L.every(Number.isFinite) && R.every(Number.isFinite));
+    check("swarm: reports its population", v.activeCount >= 1 && v.activeCount <= 48,
+      "count=" + v.activeCount);
+
+    // Population is larger nearer the singularity.
+    const early = makeSwarm(sr, makeRng(1)); early.setParams(P.swarm);
+    early.render(new Float32Array(n), new Float32Array(n), n,
+      { x0: 0.9, x1: 0.9, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+    check("swarm: denser near t*", v.activeCount > early.activeCount,
+      "near=" + v.activeCount + " far=" + early.activeCount);
+  }
+
   function run() {
     failures = 0; total = 0;
     testRng();
@@ -735,6 +994,9 @@ const SingularityTests = (function () {
     testWav();
     testChirp();
     testImpacts();
+    testRingdown();
+    testField();
+    testSwarm();
     console.log((total - failures) + "/" + total + " checks passed");
     return failures === 0;
   }
