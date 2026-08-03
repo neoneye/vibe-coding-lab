@@ -267,8 +267,12 @@ function makeChirp(sampleRate) {
 const MAX_EVENT_RATE = 4000;
 const MAX_GRAINS = 256;
 
+function uncappedEventRate(x, rate0, q, eps) {
+  return rate0 * Math.pow(Math.max(Math.abs(x), eps), -q);
+}
+
 function eventRate(x, rate0, q, eps) {
-  return Math.min(rate0 * Math.pow(Math.max(Math.abs(x), eps), -q), MAX_EVENT_RATE);
+  return Math.min(uncappedEventRate(x, rate0, q, eps), MAX_EVENT_RATE);
 }
 
 // Closed form for the number of onsets over a linear sweep x: 1 -> 0 in T
@@ -325,7 +329,11 @@ function makeImpacts(sampleRate, rng) {
 
       for (let i = 0; i < frames; i++) {
         const x = ck.x0 + (ck.x1 - ck.x0) * (i / frames);
-        const uncapped = P.rate0 * Math.pow(Math.max(Math.abs(x), ck.eps), -P.q);
+        const uncapped = uncappedEventRate(x, P.rate0, P.q, ck.eps);
+        // capBinding is evaluated every sample regardless of the mergerWidth
+        // gate below, so it can read true for a block where no scheduling
+        // happened. That's fine: it reports "the rate law is saturated
+        // here", not "events were dropped".
         if (uncapped > MAX_EVENT_RATE) voice.capBinding = true;
         // Impacts stop once the singularity has passed.
         if (x > -ck.mergerWidth) {
@@ -621,6 +629,61 @@ const SingularityTests = (function () {
     const capped = collectImpactOnsets(2, 1, 1e-6, 8, 48000, 1e7).length;
     check("impacts: capped count is bounded", capped < 4000 * 8 + 10, "count=" + capped);
 
+    // The hard cap's actual purpose: at q=1 above, the uncapped count is
+    // finite for any eps, so a loose "< 4000*8+10" bound would pass even
+    // with the cap removed. At q=2 with a tiny eps the uncapped integral
+    // genuinely diverges to astronomical scale, and only the cap keeps
+    // collectImpactOnsets both terminating and bounded.
+    {
+      const qc = 2, epsc = 1e-6, rate0c = 2, Tc = 8;
+      const uncappedTotal = expectedEventCount(rate0c, qc, epsc, Tc);
+      const capLimit = MAX_EVENT_RATE * Tc;
+      check("impacts: uncapped count diverges for q=2, eps=1e-6",
+        isFinite(uncappedTotal) && uncappedTotal > 100 * capLimit,
+        "uncapped=" + uncappedTotal + " capLimit=" + capLimit);
+      const actualCapped = collectImpactOnsets(rate0c, qc, epsc, Tc, 48000, 1e7).length;
+      check("impacts: scheduler terminates and stays bounded for q=2, eps=1e-6",
+        actualCapped <= capLimit, "actual=" + actualCapped + " capLimit=" + capLimit);
+      check("impacts: eventRate saturates at MAX_EVENT_RATE for q=2, eps=1e-6",
+        eventRate(0, rate0c, qc, epsc) === MAX_EVENT_RATE);
+    }
+
+    // render's own scheduler is independent code from collectImpactOnsets;
+    // prove they agree by driving render over the same 1 -> 0 sweep in
+    // small blocks and comparing the tail of recentEvents against the
+    // validated helper.
+    {
+      const rate0r = 20, qr = 1, epsr = 0.1, Tr = 8, srR = 48000;
+      const full = collectImpactOnsets(rate0r, qr, epsr, Tr, srR, 1e7);
+      check("impacts: render-vs-collect setup produces enough onsets",
+        full.length > 64, "got=" + full.length);
+
+      const vr = makeImpacts(srR, makeRng(7));
+      const Pr = defaultParams();
+      Pr.impacts.rate0 = rate0r;
+      Pr.impacts.q = qr;
+      vr.setParams(Pr.impacts);
+      const total = Math.floor(Tr * srR);
+      const blockSize = 512;
+      const Lb = new Float32Array(blockSize), Rb = new Float32Array(blockSize);
+      for (let s = 0; s < total; s += blockSize) {
+        const x0 = 1 - s / total;
+        const x1 = 1 - (s + blockSize) / total;
+        Lb.fill(0); Rb.fill(0);
+        vr.render(Lb, Rb, blockSize, { x0, x1, p: 1, eps: epsr, mergerWidth: 0.01, gateCoef: 0.002 });
+      }
+      const got = vr.recentEvents;
+      check("impacts: render scheduling produced onsets to compare",
+        got.length >= 10, "got=" + got.length);
+      const expectedTail = full.slice(-got.length);
+      const nCompare = Math.min(10, got.length);
+      for (let k = 1; k <= nCompare; k++) {
+        const idx = got.length - k;
+        relApprox("impacts: render onset matches collectImpactOnsets tail[-" + k + "]",
+          got[idx], expectedTail[idx], 0.02);
+      }
+    }
+
     // Rendering.
     const sr = 48000, n = 8192;
     const v = makeImpacts(sr, makeRng(1));
@@ -638,6 +701,30 @@ const SingularityTests = (function () {
     v.reset();
     v.render(L, R, n, { x0: 0, x1: 0, p: 1, eps: 1e-6, mergerWidth: 0.01, gateCoef: 0.002 });
     check("impacts: reports cap binding at eps=1e-6", v.capBinding === true);
+
+    // Scheduling stops once the singularity has passed. Prove this isn't
+    // vacuous by first confirming the same voice DOES append onsets at a
+    // positive x, then confirming no new onsets are appended once rendered
+    // well into the aftermath.
+    {
+      const vc = makeImpacts(sr, makeRng(5));
+      vc.setParams(P.impacts);
+      const Lc = new Float32Array(n), Rc = new Float32Array(n);
+
+      vc.reset();
+      // Same slow, close-to-merger sweep already proven to produce onsets above.
+      vc.render(Lc, Rc, n, { x0: 0.02, x1: 0.015, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+      const before = vc.recentEvents.slice();
+      check("impacts: appends onsets before merger (baseline for cutoff test)",
+        before.length > 0, "count=" + before.length);
+
+      Lc.fill(0); Rc.fill(0);
+      vc.render(Lc, Rc, n, { x0: -0.5, x1: -0.5, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
+      const after = vc.recentEvents;
+      check("impacts: no new onsets scheduled well into the aftermath",
+        after.length === before.length && after.every((x, idx) => x === before[idx]),
+        "before=" + JSON.stringify(before) + " after=" + JSON.stringify(after));
+    }
   }
 
   function run() {
