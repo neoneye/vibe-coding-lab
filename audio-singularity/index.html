@@ -47,6 +47,8 @@
   canvas#clock { width: 100%; height: 90px; display: block; }
   .meters { padding: 8px 12px; gap: 8px; }
   .readout.warn { color: #ffb4b4; background: #33121c; }
+  select { background: #10132a; color: #cdd4ff; border: 1px solid #333a6e;
+           border-radius: 5px; padding: 4px 7px; font-size: 0.8rem; }
 </style>
 </head>
 <body>
@@ -89,6 +91,20 @@
   </div>
 
   <div id="panels"></div>
+
+  <div class="panel">
+    <h2>Export</h2>
+    <div class="row">
+      <label class="chk">Sample rate
+        <select id="expRate"><option value="48000">48000</option><option value="44100">44100</option></select>
+      </label>
+      <label class="chk">Bit depth
+        <select id="expDepth"><option value="16">16-bit PCM</option><option value="32">32-bit float</option></select>
+      </label>
+      <button id="exportBtn">Export WAV</button>
+      <span class="readout" id="expOut">ready</span>
+    </div>
+  </div>
 </div>
 
 <script id="shared-code">
@@ -2398,6 +2414,45 @@ buildPresetRow();
 buildPanels();
 requestAnimationFrame(pumpClock);
 requestAnimationFrame(refreshReadouts);
+
+// Drives the shared offline renderer one slice per animation frame, so a
+// 60 s + 20 s job at 48 kHz does not freeze the page. Knobs are frozen for the
+// whole render; only the clock sweeps. The render loop itself lives in
+// makeOfflineRenderer and is covered by the tests.
+function exportWav() {
+  const rate = Number(document.getElementById("expRate").value);
+  const depth = Number(document.getElementById("expDepth").value);
+  const out = document.getElementById("expOut");
+  const btn = document.getElementById("exportBtn");
+  btn.disabled = true;
+
+  const P = clampParams(JSON.parse(JSON.stringify(App.params)));
+  const seed = P.global.seed;
+  const totalSeconds = P.global.T + P.global.aftermath;
+  const renderer = makeOfflineRenderer(P, rate, seed);
+  const CHUNK_FRAMES = rate; // about one second of audio per animation frame
+
+  function step() {
+    const doneFrames = renderer.advance(CHUNK_FRAMES);
+    out.textContent = "rendering " + Math.round(100 * doneFrames / renderer.frames) + "%";
+    if (!renderer.done()) { requestAnimationFrame(step); return; }
+
+    const bytes = encodeWav(renderer.L, renderer.R, rate, depth);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "audio-singularity-" + App.presetId + "-seed" + seed + ".wav";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    out.textContent = totalSeconds.toFixed(1) + " s exported";
+    btn.disabled = false;
+  }
+  requestAnimationFrame(step);
+}
+
+document.getElementById("exportBtn").onclick = exportWav;
 </script>
 </body>
 </html>
