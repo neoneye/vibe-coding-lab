@@ -1980,14 +1980,31 @@ function valueToSlider(spec, v) {
   if (spec.log) return Math.round(1000 * Math.log(v / spec.min) / Math.log(spec.max / spec.min));
   return Math.round(1000 * (v - spec.min) / (spec.max - spec.min));
 }
+// Number of decimals a given slider step warrants: an integer step (>= 1)
+// is exact by construction, so it always renders with zero decimals; a
+// fractional step (e.g. 0.01) renders with just enough decimals to show it
+// (2, here). The tiny epsilon guards against log10 landing a hair below an
+// integer boundary due to float rounding (e.g. log10(0.01) ~ -1.999999...).
+function stepDecimals(step) {
+  if (step >= 1) return 0;
+  return Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
+}
+
 function formatValue(spec, v) {
   let s;
   if (spec.log && v < 0.01) s = v.toExponential(1);
+  else if (spec.step) s = v.toFixed(stepDecimals(spec.step));
   else if (Math.abs(v) >= 100) s = v.toFixed(0);
   else if (Math.abs(v) >= 10) s = v.toFixed(1);
-  else s = v.toFixed(spec.step && spec.step >= 1 ? 0 : 3);
+  else s = v.toFixed(3);
   return s + (spec.unit ? " " + spec.unit : "");
 }
+
+// Panel collapse state, keyed by group name. buildPanels() destroys and
+// recreates the whole #panels tree (solo/mute toggles and preset switches
+// both trigger a rebuild), so collapse state can't live on the DOM nodes
+// themselves — it has to survive here instead.
+const collapsedGroups = new Set();
 
 function buildPanels() {
   const host = document.getElementById("panels");
@@ -1995,11 +2012,15 @@ function buildPanels() {
 
   for (const g of PARAM_GROUPS) {
     const panel = document.createElement("div");
-    panel.className = "panel";
+    panel.className = "panel" + (collapsedGroups.has(g) ? " collapsed" : "");
 
     const h = document.createElement("h2");
     h.textContent = PARAM_SPEC[g].label;
-    h.onclick = () => panel.classList.toggle("collapsed");
+    h.onclick = () => {
+      if (collapsedGroups.has(g)) collapsedGroups.delete(g);
+      else collapsedGroups.add(g);
+      panel.classList.toggle("collapsed");
+    };
     panel.appendChild(h);
 
     if (VOICE_GROUPS.indexOf(g) >= 0) {
@@ -2066,12 +2087,16 @@ function buildPanels() {
       sl.type = "range"; sl.min = "0"; sl.max = "1000"; sl.step = "1";
       sl.value = String(valueToSlider(spec, App.params[g][spec.key]));
       sl.oninput = () => {
-        const v = sliderToValue(spec, Number(sl.value));
+        // Every step in the current PARAM_SPEC divides (max - min) evenly, so
+        // Math.round in sliderToValue never overshoots today — but that's a
+        // property of how the table happens to be authored, not something
+        // this code enforces. Clamp so the range guarantee is structural.
+        const v = Math.min(spec.max, Math.max(spec.min, sliderToValue(spec, Number(sl.value))));
         App.params[g][spec.key] = v;
         val.textContent = formatValue(spec, v);
         if (g === "global" && spec.key === "seed") App.rebuildEngine();
         else App.pushParams();
-        if (g === "global" && spec.key === "eps") updateEpsReadout();
+        if (g === "global" && (spec.key === "eps" || spec.key === "p")) updateEpsReadout();
       };
 
       wrap.appendChild(lab);
