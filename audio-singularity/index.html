@@ -774,6 +774,9 @@ function createEngine(params, sampleRate, seed) {
         gateCoef: 1 - Math.exp(-1 / (0.015 * sampleRate)),
       };
 
+      const chirpAudible = audible("chirp");
+      const impactsAudible = audible("impacts");
+      const swarmAudible = audible("swarm");
       for (const g of VOICE_GROUPS) if (audible(g)) voices[g].render(L, R, frames, ck);
 
       const mg = dbToGain(P.global.masterGain);
@@ -793,11 +796,16 @@ function createEngine(params, sampleRate, seed) {
       meters.phase = phase;
       meters.x = xTarget;
       meters.D = divergence(xTarget, P.global.p, P.global.eps);
-      meters.chirpHz = voices.chirp.lastFreq;
-      meters.eventRate = eventRate(xTarget, P.impacts.rate0, P.impacts.q, P.global.eps);
-      meters.swarmCount = voices.swarm.activeCount;
-      meters.capBinding = voices.impacts.capBinding;
-      meters.recentEvents = voices.impacts.recentEvents;
+      // A voice's meter fields are only touched inside its own render(),
+      // which is skipped entirely when the voice isn't audible. Without this
+      // override the readout freezes at whatever it last showed before the
+      // mute rather than reflecting what is actually sounding now.
+      meters.chirpHz = chirpAudible ? voices.chirp.lastFreq : 0;
+      meters.eventRate = impactsAudible
+        ? eventRate(xTarget, P.impacts.rate0, P.impacts.q, P.global.eps) : 0;
+      meters.swarmCount = swarmAudible ? voices.swarm.activeCount : 0;
+      meters.capBinding = impactsAudible ? voices.impacts.capBinding : false;
+      meters.recentEvents = impactsAudible ? voices.impacts.recentEvents : [];
     },
     readMeters() { return meters; },
   };
@@ -1665,6 +1673,163 @@ const SingularityTests = (function () {
     check("engine: solo overrides mute", L5.some(s => s !== 0));
   }
 
+  // A voice's meter fields (chirpHz, capBinding, eventRate, recentEvents,
+  // swarmCount) are only touched inside that voice's own render(), which the
+  // engine skips entirely when the voice is inaudible. Without an explicit
+  // override at the engine level, muting a voice freezes its readout at
+  // whatever it last showed rather than reporting "not sounding".
+  function testMeterMuting() {
+    const sr = 48000;
+
+    // Chirp: chirpHz would otherwise freeze at its last nonzero reading.
+    {
+      const P = defaultParams();
+      const eng = createEngine(P, sr, 1);
+      const L = new Float32Array(1024), R = new Float32Array(1024);
+      eng.setClock(0.5);
+      eng.render(L, R, 1024);
+      const active = eng.readMeters();
+      check("meters: chirp reports a frequency while audible", active.chirpHz > 0,
+        "chirpHz=" + active.chirpHz);
+
+      P.mute.chirp = true;
+      eng.setParams(P);
+      L.fill(0); R.fill(0);
+      eng.render(L, R, 1024);
+      const muted = eng.readMeters();
+      check("meters: chirp frequency reads inactive while muted", muted.chirpHz === 0,
+        "chirpHz=" + muted.chirpHz);
+
+      P.mute.chirp = false;
+      eng.setParams(P);
+      L.fill(0); R.fill(0);
+      eng.render(L, R, 1024);
+      const back = eng.readMeters();
+      check("meters: chirp frequency returns after unmuting", back.chirpHz > 0,
+        "chirpHz=" + back.chirpHz);
+    }
+
+    // Impacts: capBinding, eventRate and recentEvents would otherwise freeze.
+    // eps is set tiny so capBinding is genuinely true while audible (proving
+    // the muted "false" reading is an override, not a value that was already
+    // false regardless of mute state).
+    {
+      const P = defaultParams();
+      P.global.eps = 1e-6;
+      const eng = createEngine(P, sr, 1);
+      const L = new Float32Array(4096), R = new Float32Array(4096);
+      eng.setClock(0);
+      eng.render(L, R, 4096);
+      const active = eng.readMeters();
+      check("meters: impacts capBinding reads true while audible and saturated",
+        active.capBinding === true);
+      check("meters: impacts reports recent events while audible",
+        active.recentEvents.length > 0, "n=" + active.recentEvents.length);
+
+      P.mute.impacts = true;
+      eng.setParams(P);
+      L.fill(0); R.fill(0);
+      eng.setClock(0);
+      eng.render(L, R, 4096);
+      const muted = eng.readMeters();
+      check("meters: impacts capBinding reads inactive while muted despite saturation",
+        muted.capBinding === false);
+      check("meters: impacts eventRate reads inactive while muted", muted.eventRate === 0,
+        "eventRate=" + muted.eventRate);
+      check("meters: impacts recentEvents reads empty while muted",
+        muted.recentEvents.length === 0, "n=" + muted.recentEvents.length);
+
+      P.mute.impacts = false;
+      eng.setParams(P);
+      L.fill(0); R.fill(0);
+      eng.setClock(0);
+      eng.render(L, R, 4096);
+      const back = eng.readMeters();
+      check("meters: impacts capBinding returns after unmuting", back.capBinding === true);
+      check("meters: impacts recentEvents populate again after unmuting",
+        back.recentEvents.length > 0, "n=" + back.recentEvents.length);
+    }
+
+    // Swarm: swarmCount would otherwise freeze at its last population.
+    {
+      const P = defaultParams();
+      const eng = createEngine(P, sr, 1);
+      const L = new Float32Array(1024), R = new Float32Array(1024);
+      eng.setClock(0.05);
+      eng.render(L, R, 1024);
+      const active = eng.readMeters();
+      check("meters: swarm reports a nonzero population while audible", active.swarmCount >= 1,
+        "swarmCount=" + active.swarmCount);
+
+      P.mute.swarm = true;
+      eng.setParams(P);
+      L.fill(0); R.fill(0);
+      eng.render(L, R, 1024);
+      const muted = eng.readMeters();
+      check("meters: swarm population reads inactive while muted", muted.swarmCount === 0,
+        "swarmCount=" + muted.swarmCount);
+
+      P.mute.swarm = false;
+      eng.setParams(P);
+      L.fill(0); R.fill(0);
+      eng.render(L, R, 1024);
+      const back = eng.readMeters();
+      check("meters: swarm population returns after unmuting", back.swarmCount >= 1,
+        "swarmCount=" + back.swarmCount);
+    }
+  }
+
+  // The rattle-to-pitch fusion around 20 Hz is the spec's "single most
+  // important sound in the instrument": as the discrete event rate climbs
+  // past that, the ear stops hearing a rhythm and starts hearing a pitch.
+  // It must be emergent from the scheduler alone, never special-cased. This
+  // renders the impacts voice in isolation at a constant, well-above-
+  // threshold event rate and confirms the audio itself has real periodic
+  // energy at that rate and its harmonics, and not at unrelated frequencies.
+  // A small Goertzel filter measures single-bin energy; deterministic seed.
+  function testImpactsFusion() {
+    const sr = 48000;
+    const R = 120; // Hz, comfortably above the ~20 Hz fusion threshold
+    const P = defaultParams();
+    // Defaults: rate0=2, q=1, so eventRate(x) = rate0 * |x|^-q. Solve for the
+    // x that makes the (unheld, constant) rate exactly R.
+    const x = P.impacts.rate0 / R;
+    const v = makeImpacts(sr, makeRng(42));
+    v.setParams(P.impacts);
+    const n = 1 << 15; // tens of cycles at R, plenty for Goertzel to resolve
+    const L = new Float32Array(n), Rch = new Float32Array(n);
+    v.render(L, Rch, n, { x0: x, x1: x, p: 1, eps: P.global.eps, mergerWidth: 0.01, gateCoef: 0.002 });
+
+    function goertzelPower(samples, freq) {
+      const omega = 2 * Math.PI * freq / sr;
+      const coeff = 2 * Math.cos(omega);
+      let s1 = 0, s2 = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const s0 = samples[i] + coeff * s1 - s2;
+        s2 = s1; s1 = s0;
+      }
+      const real = s1 - s2 * Math.cos(omega);
+      const imag = s2 * Math.sin(omega);
+      return (real * real + imag * imag) / (samples.length * samples.length);
+    }
+
+    const atR = goertzelPower(L, R);
+    const at2R = goertzelPower(L, 2 * R);
+    const offHarmonicFreqs = [95, 155, 180, 300];
+    const offHarmonic = offHarmonicFreqs.map(f => goertzelPower(L, f));
+    const maxOff = Math.max(...offHarmonic);
+
+    check("impacts: fusion has real energy at the event rate R", atR > 0, "atR=" + atR);
+    check("impacts: fusion has real energy at the second harmonic 2R", at2R > 0, "at2R=" + at2R);
+    check("impacts: fusion energy at R dominates off-harmonic bins",
+      atR > maxOff * 4,
+      "atR=" + atR + " maxOff=" + maxOff + " offBins=" + JSON.stringify(offHarmonicFreqs) +
+        "=" + JSON.stringify(offHarmonic));
+    check("impacts: fusion energy at 2R dominates off-harmonic bins",
+      at2R > maxOff * 4,
+      "at2R=" + at2R + " maxOff=" + maxOff);
+  }
+
   function testPresets() {
     check("presets: six presets", PRESETS.length === 6, "n=" + PRESETS.length);
     const ids = PRESETS.map(p => p.id);
@@ -1673,13 +1838,39 @@ const SingularityTests = (function () {
       check("presets: has " + id, ids.indexOf(id) >= 0);
     }
     check("presets: ids are unique", new Set(ids).size === ids.length);
+
+    // applyPreset always ends in clampParams, which only ever pulls a value
+    // back into [min, max] -- it can never reject a key. So a preset that
+    // writes a wrong-but-in-range value is invisible to a pure range check,
+    // and a typo'd key (e.g. chirp: { levl: -4 }) is worse: clampParams only
+    // iterates PARAM_SPEC keys, so Object.assign silently carries the typo'd
+    // key into the params object and the intended value never applies, with
+    // nothing downstream ever raising it. This checks the actual defect
+    // surface: every group name a preset touches must be a real PARAM_SPEC
+    // group, and every key inside that group must be a real spec key.
     for (const p of PRESETS) {
       check("presets: " + p.id + " has a name", typeof p.name === "string" && p.name.length > 0);
-      const full = applyPreset(p.id);
+      for (const g of Object.keys(p.params)) {
+        const groupExists = PARAM_GROUPS.indexOf(g) >= 0;
+        check("presets: " + p.id + " group " + g + " exists in PARAM_SPEC", groupExists);
+        if (!groupExists) continue;
+        const validKeys = new Set(PARAM_SPEC[g].params.map(s => s.key));
+        for (const key of Object.keys(p.params[g])) {
+          check("presets: " + p.id + " " + g + "." + key + " is a known PARAM_SPEC key",
+            validKeys.has(key));
+        }
+      }
+    }
+
+    // A small representative sample of the range guarantee, kept cheaply as
+    // documentation of intent. This cannot catch a wrong-but-in-range preset
+    // value (see above) -- the unknown-key checks are what do real work here.
+    for (const id of ["black-hole-merger", "hard-wall"]) {
+      const full = applyPreset(id);
       for (const g of PARAM_GROUPS) {
         for (const s of PARAM_SPEC[g].params) {
           if (s.type === "bool") continue;
-          check("presets: " + p.id + " " + g + "." + s.key + " in range",
+          check("presets: " + id + " " + g + "." + s.key + " in range",
             full[g][s.key] >= s.min && full[g][s.key] <= s.max,
             "value=" + full[g][s.key]);
         }
@@ -1822,6 +2013,8 @@ const SingularityTests = (function () {
     testSwarm();
     testLimiter();
     testEngine();
+    testMeterMuting();
+    testImpactsFusion();
     testPresets();
     testOfflineRender();
     console.log((total - failures) + "/" + total + " checks passed");
@@ -1873,12 +2066,22 @@ const App = {
     if (this.engine) this.engine.setClock(this.x);
   },
 
+  // Rebuilds whichever engine is actually rendering, so a seed change (or a
+  // preset switch, which also calls this) genuinely re-seeds the RNG and
+  // discards old voice state instead of just pushing new params onto it.
+  // The worklet's RNG is created once inside its own createEngine call and
+  // is only re-seeded by "init", so on that path a fresh engine has to be
+  // requested by message rather than built here and forgotten. Mirrors
+  // resetEngine()'s routing.
   rebuildEngine() {
     if (!this.ctx) return;
-    this.engine = createEngine(this.params, this.ctx.sampleRate, this.params.global.seed);
-    this.engine.setClock(this.x);
-    if (this.node && this.node.port) {
-      this.node.port.postMessage({ type: "params", params: this.params });
+    if (this.usingWorklet) {
+      if (this.node && this.node.port) {
+        this.node.port.postMessage({ type: "init", params: this.params, seed: this.params.global.seed });
+      }
+    } else {
+      this.engine = createEngine(this.params, this.ctx.sampleRate, this.params.global.seed);
+      this.engine.setClock(this.x);
     }
   },
 
