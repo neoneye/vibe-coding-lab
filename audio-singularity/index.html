@@ -149,6 +149,50 @@ function clampParams(p) {
 }
 
 // ---------------------------------------------------------------------------
+// WAV encoding. Stereo only. bitDepth 16 = PCM, 32 = IEEE float.
+// ---------------------------------------------------------------------------
+function encodeWav(L, R, sampleRate, bitDepth) {
+  const bytesPerSample = bitDepth === 32 ? 4 : 2;
+  const frames = L.length;
+  const dataBytes = frames * 2 * bytesPerSample;
+  const buf = new ArrayBuffer(44 + dataBytes);
+  const dv = new DataView(buf);
+  let o = 0;
+
+  function writeStr(s) { for (let i = 0; i < s.length; i++) dv.setUint8(o++, s.charCodeAt(i)); }
+  function writeU32(v) { dv.setUint32(o, v, true); o += 4; }
+  function writeU16(v) { dv.setUint16(o, v, true); o += 2; }
+
+  writeStr("RIFF");
+  writeU32(36 + dataBytes);
+  writeStr("WAVE");
+  writeStr("fmt ");
+  writeU32(16);
+  writeU16(bitDepth === 32 ? 3 : 1);
+  writeU16(2);
+  writeU32(sampleRate);
+  writeU32(sampleRate * 2 * bytesPerSample);
+  writeU16(2 * bytesPerSample);
+  writeU16(bitDepth === 32 ? 32 : 16);
+  writeStr("data");
+  writeU32(dataBytes);
+
+  for (let i = 0; i < frames; i++) {
+    for (const ch of [L, R]) {
+      const v = ch[i];
+      if (bitDepth === 32) {
+        dv.setFloat32(o, v, true); o += 4;
+      } else {
+        const c = Math.max(-1, Math.min(1, v));
+        dv.setInt16(o, c < 0 ? Math.round(c * 32768) : Math.round(c * 32767), true);
+        o += 2;
+      }
+    }
+  }
+  return new Uint8Array(buf);
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 const SingularityTests = (function () {
@@ -255,11 +299,59 @@ const SingularityTests = (function () {
     check("params: clamp lower", fixed.swarm.nmax === 1);
   }
 
+  function testWav() {
+    const n = 100;
+    const L = new Float32Array(n), R = new Float32Array(n);
+    for (let i = 0; i < n; i++) { L[i] = Math.sin(i * 0.1); R[i] = -Math.sin(i * 0.1); }
+
+    function str(bytes, off, len) {
+      let s = ""; for (let i = 0; i < len; i++) s += String.fromCharCode(bytes[off + i]); return s;
+    }
+    function u32(bytes, off) {
+      return bytes[off] | (bytes[off+1] << 8) | (bytes[off+2] << 16) | (bytes[off+3] << 24);
+    }
+    function u16(bytes, off) { return bytes[off] | (bytes[off+1] << 8); }
+
+    const w16 = encodeWav(L, R, 48000, 16);
+    check("wav16: RIFF magic",  str(w16, 0, 4) === "RIFF");
+    check("wav16: WAVE magic",  str(w16, 8, 4) === "WAVE");
+    check("wav16: fmt chunk",   str(w16, 12, 4) === "fmt ");
+    check("wav16: data chunk",  str(w16, 36, 4) === "data");
+    check("wav16: format is PCM",   u16(w16, 20) === 1);
+    check("wav16: stereo",          u16(w16, 22) === 2);
+    check("wav16: sample rate",     u32(w16, 24) === 48000);
+    check("wav16: byte rate",       u32(w16, 28) === 48000 * 2 * 2);
+    check("wav16: block align",     u16(w16, 32) === 4);
+    check("wav16: bits per sample", u16(w16, 34) === 16);
+    check("wav16: data size",       u32(w16, 40) === n * 2 * 2);
+    check("wav16: total length",    w16.length === 44 + n * 2 * 2, "len=" + w16.length);
+    check("wav16: riff size field", u32(w16, 4) === w16.length - 8);
+
+    const w32 = encodeWav(L, R, 44100, 32);
+    check("wav32: format is float", u16(w32, 20) === 3);
+    check("wav32: sample rate",     u32(w32, 24) === 44100);
+    check("wav32: bits per sample", u16(w32, 34) === 32);
+    check("wav32: total length",    w32.length === 44 + n * 2 * 4, "len=" + w32.length);
+
+    // Round-trip a 32-bit float sample: interleaved, left channel first.
+    const dv = new DataView(w32.buffer, w32.byteOffset, w32.byteLength);
+    approx("wav32: first left sample round-trips",  dv.getFloat32(44, true), L[0], 1e-7);
+    approx("wav32: first right sample round-trips", dv.getFloat32(48, true), R[0], 1e-7);
+
+    // 16-bit clamps rather than wrapping.
+    const hot = new Float32Array([2.0, -2.0]);
+    const wh = encodeWav(hot, hot, 48000, 16);
+    const dvh = new DataView(wh.buffer, wh.byteOffset, wh.byteLength);
+    check("wav16: clamps positive overs", dvh.getInt16(44, true) === 32767);
+    check("wav16: clamps negative overs", dvh.getInt16(48, true) === -32768);
+  }
+
   function run() {
     failures = 0; total = 0;
     testRng();
     testClock();
     testParams();
+    testWav();
     console.log((total - failures) + "/" + total + " checks passed");
     return failures === 0;
   }
