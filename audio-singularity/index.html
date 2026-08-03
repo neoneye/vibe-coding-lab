@@ -568,15 +568,23 @@ function makeSwarm(sampleRate, rng) {
 const LIMIT_THRESHOLD = 0.85;
 
 // softClip bounds arbitrary input to strictly under 1.0, so it is exported
-// on its own for that general guarantee. Inside makeLimiter below, though,
-// its tanh knee never actually engages: the envelope follower has
-// instantaneous attack (envelope = a > envelope ? a : envelope * rel), so
-// envelope is always >= |s|, which means the gain-reduced signal |s * g|
-// is always <= LIMIT_THRESHOLD before softClip sees it, i.e. it always
-// takes the early "a <= LIMIT_THRESHOLD" return. The call is kept anyway as
-// defence in depth: if the envelope's attack behaviour is ever changed to
-// something non-instantaneous, softClip is what stops the output from
-// exceeding 1.0.
+// on its own for that general guarantee. Inside makeLimiter below, its tanh
+// knee is live and load-bearing, not dead code: the envelope follower's
+// attack is instantaneous (envelope = a > envelope ? a : envelope * rel),
+// but its release is exponential, so after a loud sample the envelope decays
+// while a following, slightly quieter sample can still exceed the decayed
+// envelope. Concretely: feed 1.0 then 0.995 into a fresh limiter. After the
+// first sample envelope = 1.0. On the second, 0.995 <= 1.0 takes the release
+// branch, so envelope decays to ~0.9896 - now below the current sample's
+// magnitude. Gain is 0.85 / 0.9896 ~= 0.859, giving |s * g| ~= 0.855, which
+// is over LIMIT_THRESHOLD (0.85). That is exactly the "a > LIMIT_THRESHOLD"
+// branch softClip takes, and this is not a corner case: a hot sine sweep
+// engages the knee on roughly 10% of samples (see testLimiter's kneeHits
+// assertions). Gain reduction alone leaves the signal slightly over
+// threshold whenever the envelope's release dips below a rising sample
+// within the release window; softClip is what catches those and guarantees
+// |output| < 1.0 for any finite input. Removing the softClip call below
+// would let the output exceed LIMIT_THRESHOLD.
 function softClip(s) {
   const a = Math.abs(s);
   if (a <= LIMIT_THRESHOLD) return s;
@@ -589,15 +597,20 @@ function makeLimiter(sampleRate) {
   const rel = Math.exp(-1 / (0.002 * sampleRate));
   let envelope = 0;
   return {
-    reset() { envelope = 0; },
+    kneeHits: 0,
+    reset() { envelope = 0; this.kneeHits = 0; },
     process(s) {
       if (!isFinite(s)) return 0;
       const a = Math.abs(s);
       envelope = a > envelope ? a : envelope * rel;
       const g = envelope > LIMIT_THRESHOLD ? LIMIT_THRESHOLD / envelope : 1;
-      // softClip's knee is unreachable here (see comment on softClip) —
-      // retained as a guard, not because it currently shapes anything.
-      return softClip(s * g);
+      const gained = s * g;
+      // softClip's knee genuinely engages here (see comment on softClip):
+      // the envelope's exponential release can dip below a rising sample,
+      // leaving |gained| slightly over LIMIT_THRESHOLD. kneeHits counts
+      // those occurrences so the claim is checked, not just asserted.
+      if (Math.abs(gained) > LIMIT_THRESHOLD) this.kneeHits++;
+      return softClip(gained);
     }
   };
 }
@@ -784,9 +797,12 @@ function makeOfflineRenderer(params, sampleRate, seed) {
     done() { return cursor >= frames; },
     // Renders in whole blocks of OFFLINE_BLOCK frames, completing the block
     // that contains maxFrames — it does NOT stop partway through a block.
-    // So one call advances the cursor by at least one block (while frames
-    // remain) and by at most maxFrames + OFFLINE_BLOCK - 1 frames; it does
-    // not render "at most maxFrames" frames despite the parameter name.
+    // For maxFrames >= 1, with frames remaining, one call renders at least
+    // one whole OFFLINE_BLOCK-frame block and at most
+    // maxFrames + OFFLINE_BLOCK - 1 frames; it does not render "at most
+    // maxFrames" frames despite the parameter name. advance(0) is a no-op
+    // (stop === cursor, the loop body never runs). When fewer frames remain
+    // than requested, it stops exactly at `frames` with no overshoot.
     //
     // This is deliberate: block boundaries are fixed multiples of
     // OFFLINE_BLOCK measured from zero, independent of how the caller
@@ -1373,6 +1389,43 @@ const SingularityTests = (function () {
     check("limiter: bounds hot signal under 1.0", worst < 1.0, "worst=" + worst);
     check("limiter: hot signal is still audible", worst > 0.5, "worst=" + worst);
     check("limiter: handles non-finite input", isFinite(lim.process(NaN)) && isFinite(lim.process(Infinity)));
+
+    // softClip's knee is live inside the limiter, not dead code: the hot sine
+    // sweep above should engage it on a meaningful fraction of samples.
+    check("limiter: hot signal engages softClip's knee", lim.kneeHits > 100,
+      "kneeHits=" + lim.kneeHits);
+
+    // A quiet signal well under threshold should never engage the knee.
+    const quiet = makeLimiter(48000);
+    for (let i = 0; i < 20000; i++) quiet.process(Math.sin(i * 0.05) * 0.3);
+    check("limiter: quiet signal never engages softClip's knee", quiet.kneeHits === 0,
+      "kneeHits=" + quiet.kneeHits);
+
+    // Worked counterexample from the softClip comment: 1.0 then 0.995. The
+    // envelope's exponential release lets the second sample's gain-reduced
+    // magnitude exceed LIMIT_THRESHOLD, proving the knee is reachable even
+    // on a tiny, deterministic input.
+    const two = makeLimiter(48000);
+    two.process(1.0);
+    two.process(0.995);
+    check("limiter: 1.0 then 0.995 engages softClip's knee", two.kneeHits > 0,
+      "kneeHits=" + two.kneeHits);
+
+    // At a much lower sample rate the release coefficient is far smaller
+    // (more decay per sample), so the same "loud sample, then a slightly
+    // quieter one" pattern produces a large, unmistakable overshoot: without
+    // softClip this pair would output well over 1.0; with it, the tanh knee
+    // pulls it back under 1.0 with room to spare. This is the assertion that
+    // actually fails if the softClip(gained) call is ever swapped for a bare
+    // `gained` (the hot-sine assertions above are numerically too close to
+    // 1.0 to catch that regression on their own).
+    const extreme = makeLimiter(100);
+    extreme.process(200);
+    const extremeOut = extreme.process(1.902);
+    check("limiter: softClip pulls a large release-window overshoot back under 1.0",
+      Math.abs(extremeOut) < 1.0, "extremeOut=" + extremeOut);
+    check("limiter: large release-window overshoot engages softClip's knee",
+      extreme.kneeHits > 0, "kneeHits=" + extreme.kneeHits);
   }
 
   function testEngine() {
@@ -1534,6 +1587,15 @@ const SingularityTests = (function () {
       maxAdvance <= 777 + OFFLINE_BLOCK - 1, "maxAdvance=" + maxAdvance);
     check("offline: advance(n) always advances at least 1 frame while work remains",
       minAdvance >= 1, "minAdvance=" + minAdvance);
+
+    // advance(0) is documented as a no-op: stop === cursor, so the render
+    // loop never executes and the cursor is left unchanged.
+    const zeroAdvance = makeOfflineRenderer(P, sr, 7);
+    const cursorBefore = zeroAdvance.advance(0);
+    const cursorAfter = zeroAdvance.advance(0);
+    check("offline: advance(0) is a no-op and leaves the cursor unchanged",
+      cursorBefore === 0 && cursorAfter === 0,
+      "cursorBefore=" + cursorBefore + " cursorAfter=" + cursorAfter);
     let sameAsOneShot = true;
     for (let i = 0; i < a.L.length; i++) {
       if (sliced.L[i] !== a.L[i] || sliced.R[i] !== a.R[i]) { sameAsOneShot = false; break; }
