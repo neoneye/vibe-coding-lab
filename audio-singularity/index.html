@@ -431,8 +431,9 @@ function makeField(sampleRate, rng) {
   let lp = 0, low = 0, band = 0, P = null;
 
   return {
+    resets: 0,
     setParams(p) { P = p; },
-    reset() { lp = 0; low = 0; band = 0; },
+    reset() { lp = 0; low = 0; band = 0; this.resets = 0; },
     render(L, R, frames, ck) {
       if (!P) return;
       const g = dbToGain(P.level) * 0.9;
@@ -445,9 +446,22 @@ function makeField(sampleRate, rng) {
         const bwOct = Math.max(0.05, Math.min(6, P.bw * Math.pow(D, P.bwTrack)));
         const Q = 1 / (2 * Math.sinh(Math.LN2 / 2 * bwOct));
         const f = Math.min(1.4, 2 * Math.sin(Math.PI * fc / sampleRate));
-        const damp = Math.min(1.6, 1 / Q);
+        // The SVF's joint stability condition is f^2 + 2*f*damp < 4 (its state
+        // matrix has det = 1 - f*damp, trace = 2 - f^2 - f*damp). Clamping f
+        // and damp independently permits combinations well outside that
+        // region, where the filter blows up and repeatedly trips the
+        // non-finite reset below. A very wide band at a high centre frequency
+        // is simply not realisable here, so damp is capped at the stability
+        // limit with a small margin.
+        const fSafe = Math.max(1e-4, f);
+        const dampMax = Math.max(0.01, Math.min(1.6, 0.95 * (4 - fSafe * fSafe) / (2 * fSafe)));
+        const damp = Math.min(dampMax, 1 / Q);
 
-        // White to brown via a one-pole lowpass blend.
+        // White to brown via a one-pole lowpass blend. The one-pole has unity
+        // DC gain but attenuates white-noise RMS by roughly 0.123x, so the x8
+        // is loudness compensation for the brown path. lp is bounded by +/-1,
+        // so src can reach +/-8 at colour = 1; that is contained below by the
+        // +/-4 output clamp.
         const white = rng() * 2 - 1;
         lp = lp * 0.97 + white * 0.03;
         const src = white * (1 - P.colour) + lp * 8 * P.colour;
@@ -456,7 +470,7 @@ function makeField(sampleRate, rng) {
         low += f * band;
         const high = src - low - damp * band;
         band += f * high;
-        if (!isFinite(low) || !isFinite(band)) { low = 0; band = 0; }
+        if (!isFinite(low) || !isFinite(band)) { low = 0; band = 0; this.resets++; }
 
         const s = Math.max(-4, Math.min(4, band)) * g;
         L[i] += s;
@@ -512,17 +526,25 @@ function makeSwarm(sampleRate, rng) {
         voice.activeCount = n;
         const accel = Math.pow(D, 0.25);
 
+        // Population n controls how many slots may retrigger, not how many
+        // may ring out. A slot already sounding keeps decaying and audible
+        // even if the population later shrinks below it - otherwise it
+        // freezes at a non-zero envelope and pops back in (or cuts off) when
+        // the population changes again.
         let sl = 0, sr = 0;
-        for (let k = 0; k < n; k++) {
-          timer[k] -= dt;
-          if (timer[k] <= 0) {
-            const jit = 1 + P.jitter * (2 * rng() - 1) * 0.5;
-            timer[k] = Math.max(0.002, jit / (baseR[k] * accel));
-            const f = P.band * Math.pow(2, (rng() - 0.5) * P.spread);
-            ph[k] = 0;
-            inc[k] = 2 * Math.PI * Math.min(f, nyq) / sampleRate;
-            env[k] = 1;
-            coef[k] = envCoef;
+        for (let k = 0; k < SWARM_MAX; k++) {
+          if (env[k] < 1e-5 && k >= n) continue;
+          if (k < n) {
+            timer[k] -= dt;
+            if (timer[k] <= 0) {
+              const jit = 1 + P.jitter * (2 * rng() - 1) * 0.5;
+              timer[k] = Math.max(0.002, jit / (baseR[k] * accel));
+              const f = P.band * Math.pow(2, (rng() - 0.5) * P.spread);
+              ph[k] = 0;
+              inc[k] = 2 * Math.PI * Math.min(f, nyq) / sampleRate;
+              env[k] = 1;
+              coef[k] = envCoef;
+            }
           }
           if (env[k] < 1e-5) continue;
           ph[k] += inc[k];
@@ -954,6 +976,41 @@ const SingularityTests = (function () {
     check("field: finite at extreme divergence", L2.every(Number.isFinite));
     let peak2 = 0; for (let i = 0; i < n; i++) peak2 = Math.max(peak2, Math.abs(L2[i]));
     check("field: filter does not blow up", peak2 < 100, "peak=" + peak2);
+
+    // The Chamberlin SVF's joint stability condition is f^2 + 2*f*damp < 4.
+    // Clamping f and damp independently (rather than jointly) permits
+    // combinations well outside that region: with bwTrack at its +1 extreme
+    // and a large bw, bwOct saturates at its clamp of 6, driving damp to its
+    // old independent clamp of 1.6 while f sits at its clamp of 1.4 -
+    // f^2 + 2*f*damp = 1.96 + 4.48 = 6.44, far outside the stable region.
+    // Sweep several extreme corners of the parameter space and require the
+    // filter to stay bounded and never trip the non-finite reset.
+    function sweepFieldCorner(name, overrides) {
+      const fv = makeField(sr, makeRng(3));
+      const fp = defaultParams();
+      Object.assign(fp.field, overrides);
+      fv.setParams(fp.field);
+      const nn = 8192;
+      const Lf = new Float32Array(nn), Rf = new Float32Array(nn);
+      fv.render(Lf, Rf, nn, { x0: 0, x1: 0, p: 4, eps: 1e-6, mergerWidth: 0.01, gateCoef: 0.002 });
+      check("field: " + name + " is finite", Lf.every(Number.isFinite) && Rf.every(Number.isFinite));
+      let pk = 0; for (let i = 0; i < nn; i++) pk = Math.max(pk, Math.abs(Lf[i]));
+      check("field: " + name + " peak is bounded", pk < 100, "peak=" + pk);
+      check("field: " + name + " never trips the non-finite reset",
+        fv.resets === 0, "resets=" + fv.resets);
+    }
+    // The reviewer's exact unstable corner.
+    sweepFieldCorner("bwTrack=+1 extreme", {
+      bwTrack: 1, bw: 4, centre: 2000, tracking: 1
+    });
+    // Mirror corner with negative bandwidth tracking, same extreme D.
+    sweepFieldCorner("bwTrack=-1 extreme", {
+      bwTrack: -1, bw: 4, centre: 2000, tracking: 1
+    });
+    // Fully brown colour at the same extreme corner.
+    sweepFieldCorner("colour=1 extreme", {
+      bwTrack: 1, bw: 4, centre: 2000, tracking: 1, colour: 1
+    });
   }
 
   function testSwarm() {
@@ -984,6 +1041,72 @@ const SingularityTests = (function () {
       { x0: 0.9, x1: 0.9, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 });
     check("swarm: denser near t*", v.activeCount > early.activeCount,
       "near=" + v.activeCount + " far=" + early.activeCount);
+
+    // A shrinking population must not freeze already-sounding voices. If
+    // env[k]/timer[k] were only touched for k < n, slots at or above n would
+    // freeze at whatever envelope they held when the population dropped, and
+    // pop back in (or vanish) as a step discontinuity when the population
+    // changes again. Warm up many voices at high population, drop to low
+    // population, then return to high population, and check that neither
+    // transition produces a discontinuity.
+    //
+    // A raw single-sample delta does not reliably expose this: the swarm
+    // mixes tones up near a few kHz, so ordinary phase advancement already
+    // produces sample-to-sample deltas of the same order as the bug's jump,
+    // swamping the signal. Short-window RMS energy either side of a
+    // transition does discriminate: with the bug, dropping from 48 to 2
+    // retrigger-eligible slots instantly drops the number of slots actually
+    // sounding too, so local energy collapses; growing back to 48 instantly
+    // resurrects the frozen slots at their stale, undecayed envelope, so
+    // local energy spikes. With the fix, already-ringing slots keep decaying
+    // smoothly through both transitions, so local energy stays continuous.
+    {
+      const sw = makeSwarm(sr, makeRng(9));
+      const Psw = defaultParams();
+      sw.setParams(Psw.swarm);
+      const ckHi = { x0: 0, x1: 0, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 };
+      const ckLo = { x0: 1, x1: 1, p: 1, eps: 1e-3, mergerWidth: 0.01, gateCoef: 0.002 };
+      const W = 200;
+      function rmsWindow(arr, s, e) {
+        let ss = 0; for (let i = s; i < e; i++) ss += arr[i] * arr[i];
+        return Math.sqrt(ss / (e - s));
+      }
+
+      // Phase A: high population, long enough for most of the 48 available
+      // slots to have retriggered and be actively ringing.
+      const hiN = 8192;
+      const LA = new Float32Array(hiN), RA = new Float32Array(hiN);
+      sw.render(LA, RA, hiN, ckHi);
+      const countA = sw.activeCount;
+      const rmsATail = rmsWindow(LA, hiN - W, hiN);
+
+      // Phase B: low population, immediately after.
+      const loN = 4096;
+      const LB = new Float32Array(loN), RB = new Float32Array(loN);
+      sw.render(LB, RB, loN, ckLo);
+      const countB = sw.activeCount;
+      const rmsBHead = rmsWindow(LB, 0, W);
+      const rmsBTail = rmsWindow(LB, loN - W, loN);
+
+      // Phase C: back to high population.
+      const LC = new Float32Array(hiN), RC = new Float32Array(hiN);
+      sw.render(LC, RC, hiN, ckHi);
+      const countC = sw.activeCount;
+      const rmsCHead = rmsWindow(LC, 0, W);
+
+      check("swarm: continuity test exercises a real population change",
+        countA !== countB && countB !== countC,
+        "A=" + countA + " B=" + countB + " C=" + countC);
+
+      const ratioAB = rmsBHead / rmsATail;
+      const ratioBC = rmsCHead / rmsBTail;
+      check("swarm: no energy collapse when population shrinks",
+        ratioAB > 0.4,
+        "ratioAB=" + ratioAB + " rmsATail=" + rmsATail + " rmsBHead=" + rmsBHead);
+      check("swarm: no energy spike when population grows back",
+        ratioBC < 3.0,
+        "ratioBC=" + ratioBC + " rmsBTail=" + rmsBTail + " rmsCHead=" + rmsCHead);
+    }
   }
 
   function run() {
