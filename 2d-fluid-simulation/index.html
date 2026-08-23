@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>2D Fluid Simulation</title>
+<style>
+:root{
+  --accent:#6fd3ff;
+  --panel-bg:rgba(9,17,27,.86);
+  --panel-border:rgba(120,180,255,.14);
+  --txt:#cfe6f7;
+  --txt-dim:#8fa9bd;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;background:#02080f;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  -webkit-user-select:none;user-select:none}
+canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none}
+#bg{z-index:0}
+#fx{z-index:1}
+#hud{position:fixed;top:10px;left:14px;z-index:5;color:var(--txt);pointer-events:none;
+  text-shadow:0 1px 4px rgba(0,0,0,.7)}
+#hud h1{margin:0;font-size:15px;font-weight:650;letter-spacing:.04em}
+#hud p{margin:2px 0 0;font-size:11px;color:var(--txt-dim)}
+#hints{position:fixed;left:14px;bottom:12px;z-index:5;display:flex;gap:6px;flex-wrap:wrap;
+  max-width:min(70vw,720px);pointer-events:none}
+#hints span{font-size:10.5px;color:var(--txt-dim);background:rgba(8,16,26,.55);
+  border:1px solid var(--panel-border);border-radius:20px;padding:3px 9px;backdrop-filter:blur(6px)}
+#panelToggle{position:fixed;top:10px;right:12px;z-index:7;background:rgba(9,17,27,.8);
+  color:var(--txt);border:1px solid var(--panel-border);border-radius:8px;padding:6px 12px;
+  font-size:13px;cursor:pointer;backdrop-filter:blur(8px)}
+#panelToggle:hover{color:var(--accent);border-color:var(--accent)}
+#panel{position:fixed;top:0;right:0;bottom:0;width:308px;z-index:6;background:var(--panel-bg);
+  border-left:1px solid var(--panel-border);backdrop-filter:blur(14px);
+  overflow-y:auto;overscroll-behavior:contain;padding:10px 14px 40px;
+  transition:transform .25s ease;font-size:12.5px;color:var(--txt)}
+#panel.hidden{transform:translateX(105%)}
+#panel::-webkit-scrollbar{width:8px}
+#panel::-webkit-scrollbar-thumb{background:rgba(120,180,255,.18);border-radius:4px}
+details{border-bottom:1px solid var(--panel-border);padding:4px 0 10px}
+summary{cursor:pointer;list-style:none;font-size:11px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--accent);padding:7px 2px 5px;display:flex;align-items:center;gap:6px}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"\25B8";font-size:10px;transition:transform .15s;color:var(--txt-dim)}
+details[open] summary::before{transform:rotate(90deg)}
+.row{display:flex;align-items:center;gap:8px;padding:2.5px 2px}
+.row .lbl{flex:1.1;color:var(--txt-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row output{flex:none;width:48px;text-align:right;font-variant-numeric:tabular-nums;
+  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--txt)}
+input[type=range]{flex:1.6;appearance:none;-webkit-appearance:none;height:3px;border-radius:2px;
+  background:linear-gradient(90deg,var(--accent) var(--fill,50%),rgba(130,170,200,.22) var(--fill,50%));
+  outline:none;cursor:pointer;padding:0;margin:0}
+input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:13px;height:13px;
+  border-radius:50%;background:#dff4ff;border:2px solid var(--accent);box-shadow:0 1px 4px rgba(0,0,0,.5)}
+input[type=range]::-moz-range-thumb{width:11px;height:11px;border-radius:50%;background:#dff4ff;
+  border:2px solid var(--accent)}
+.chk{display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer;color:var(--txt-dim)}
+.chk input{accent-color:var(--accent);width:14px;height:14px;margin:0}
+select{flex:1.6;background:#0d1a28;color:var(--txt);border:1px solid var(--panel-border);
+  border-radius:6px;padding:4px 6px;font-size:12px;outline:none}
+.btnrow{display:flex;gap:6px;padding:6px 2px 2px;flex-wrap:wrap}
+button.act{flex:1;background:rgba(111,211,255,.08);color:var(--txt);border:1px solid var(--panel-border);
+  border-radius:7px;padding:6px 8px;font-size:11.5px;cursor:pointer;min-width:70px}
+button.act:hover{background:rgba(111,211,255,.18);border-color:var(--accent);color:#fff}
+button.warn:hover{background:rgba(255,110,110,.16);border-color:#ff8f8f;color:#ffd9d9}
+.note{font-size:10.5px;color:var(--txt-dim);padding:4px 2px;line-height:1.5}
+#stats .srow{display:flex;justify-content:space-between;padding:2.5px 2px;color:var(--txt-dim)}
+#stats .srow b{color:var(--txt);font-weight:500;font-variant-numeric:tabular-nums;
+  font-family:ui-monospace,Menlo,monospace}
+@media (max-width:700px){
+  #panel{width:min(88vw,308px)}
+  #hints{max-width:52vw}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <filter id="goo">
+    <feGaussianBlur id="gooBlur" stdDeviation="5"/>
+    <feColorMatrix id="gooMat" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -10"/>
+  </filter>
+</svg>
+
+<canvas id="bg"></canvas>
+<canvas id="fx"></canvas>
+
+<div id="hud">
+  <h1>2D Fluid Simulation</h1>
+  <p>double-density relaxation &middot; <span id="hudCount">0</span> particles</p>
+</div>
+
+<div id="hints">
+  <span>drag water: stir</span><span>drag obstacle: move</span><span>double-click: add obstacle</span>
+  <span>right-click obstacle: delete</span><span>space: pause</span><span>R: reset water</span>
+</div>
+
+<button id="panelToggle">Controls</button>
+<aside id="panel"></aside>
+
+<script id="sim">
+'use strict';
+const SIM = (() => {
+  const MAXP = 8000;
+  const X = new Float32Array(MAXP), Y = new Float32Array(MAXP);
+  const VX = new Float32Array(MAXP), VY = new Float32Array(MAXP);
+  const OX = new Float32Array(MAXP), OY = new Float32Array(MAXP);
+  const RHO = new Float32Array(MAXP), RHON = new Float32Array(MAXP);
+  const PR = new Float32Array(MAXP), PN = new Float32Array(MAXP);
+
+  let N = 0;
+  let W = 160, H = 100;
+  let baseRho0 = 1.4;
+  let emitAcc = 0;
+  let tickCount = 0;
+
+  const obstacles = [];
+  const tool = { x: 0, y: 0, active: false };
+
+  const cfg = {
+    paused: false,
+    timeScale: 1,
+    gravity: 0.22,
+    gravityAngle: 0,
+    linearDrag: 0.002,
+    wallBounce: 0.15,
+    maxSpeed: 6.5,
+    radius: 3.0,
+    spacing: 1.9,
+    fillPercent: 40,
+    restDensity: 0.92,
+    stiffness: 0.14,
+    nearStiffness: 0.35,
+    viscosity: 0.08,
+    viscosityQ: 0.06,
+    maxParticles: 3500,
+    faucetOn: false,
+    faucetX: 50,
+    faucetRate: 140,
+    faucetSpread: 1.4,
+    faucetSpeed: 2.4,
+    toolMode: 'push',
+    toolStrength: 0.35,
+    toolRadius: 12,
+    obstacleRadius: 6
+  };
+
+  const hash = new Map();
+  const pool = [];
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+  function cellKey(cx, cy) { return cx * 1024 + cy; }
+
+  function buildHash() {
+    for (const a of hash.values()) pool.push(a);
+    hash.clear();
+    const inv = 1 / cfg.radius;
+    for (let i = 0; i < N; i++) {
+      const k = cellKey(Math.floor(X[i] * inv), Math.floor(Y[i] * inv));
+      let a = hash.get(k);
+      if (!a) { a = pool.pop() || []; a.length = 0; hash.set(k, a); }
+      a.push(i);
+    }
+  }
+
+  function densityAndPressure() {
+    const inv = 1 / cfg.radius, h2 = cfg.radius * cfg.radius;
+    const k = cfg.stiffness, kn = cfg.nearStiffness;
+    const rho0 = baseRho0 * cfg.restDensity;
+    for (let i = 0; i < N; i++) {
+      const xi = X[i], yi = Y[i];
+      const cx = Math.floor(xi * inv), cy = Math.floor(yi * inv);
+      let rho = 0, rhon = 0;
+      for (let oy = -1; oy <= 1; oy++) {
+        const gy = cy + oy;
+        for (let ox = -1; ox <= 1; ox++) {
+          const a = hash.get(cellKey(cx + ox, gy));
+          if (!a) continue;
+          for (let m = 0; m < a.length; m++) {
+            const j = a[m];
+            if (j === i) continue;
+            const dx = X[j] - xi, dy = Y[j] - yi;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < h2) {
+              const t = 1 - Math.sqrt(d2) * inv;
+              rho += t * t;
+              rhon += t * t * t;
+            }
+          }
+        }
+      }
+      RHO[i] = rho;
+      RHON[i] = rhon;
+      PR[i] = k * (rho - rho0);
+      PN[i] = kn * rhon;
+    }
+  }
+
+  function relax() {
+    const inv = 1 / cfg.radius, h2 = cfg.radius * cfg.radius;
+    const maxD = cfg.radius * 0.3;
+    for (let i = 0; i < N; i++) {
+      const Pi = PR[i], Pni = PN[i];
+      const xi = X[i], yi = Y[i];
+      const cx = Math.floor(xi * inv), cy = Math.floor(yi * inv);
+      let dxi = 0, dyi = 0;
+      for (let oy = -1; oy <= 1; oy++) {
+        const gy = cy + oy;
+        for (let ox = -1; ox <= 1; ox++) {
+          const a = hash.get(cellKey(cx + ox, gy));
+          if (!a) continue;
+          for (let m = 0; m < a.length; m++) {
+            const j = a[m];
+            if (j === i) continue;
+            const dx = X[j] - xi, dy = Y[j] - yi;
+            const d2 = dx * dx + dy * dy;
+            if (d2 >= h2 || d2 === 0) continue;
+            const d = Math.sqrt(d2);
+            const t = 1 - d * inv;
+            let Dm = Pi * t + Pni * t * t;
+            let Dx = Dm * dx / d, Dy = Dm * dy / d;
+            if (Dm > maxD) { Dx *= maxD / Dm; Dy *= maxD / Dm; }
+            else if (Dm < -maxD) { Dx *= -maxD / Dm; Dy *= -maxD / Dm; }
+            const hx = Dx * 0.5, hy = Dy * 0.5;
+            X[j] += hx; Y[j] += hy;
+            dxi -= hx; dyi -= hy;
+          }
+        }
+      }
+      X[i] += dxi;
+      Y[i] += dyi;
+    }
+  }
+
+  function viscosity() {
+    const inv = 1 / cfg.radius, h2 = cfg.radius * cfg.radius;
+    const sig = cfg.viscosity, bq = cfg.viscosityQ;
+    if (sig === 0 && bq === 0) return;
+    for (let i = 0; i < N; i++) {
+      const xi = X[i], yi = Y[i], vxi = VX[i], vyi = VY[i];
+      const cx = Math.floor(xi * inv), cy = Math.floor(yi * inv);
+      for (let oy = -1; oy <= 1; oy++) {
+        const gy = cy + oy;
+        for (let ox = -1; ox <= 1; ox++) {
+          const a = hash.get(cellKey(cx + ox, gy));
+          if (!a) continue;
+          for (let m = 0; m < a.length; m++) {
+            const j = a[m];
+            if (j <= i) continue;
+            const dx = X[j] - xi, dy = Y[j] - yi;
+            const d2 = dx * dx + dy * dy;
+            if (d2 >= h2 || d2 === 0) continue;
+            const d = Math.sqrt(d2);
+            const rx = dx / d, ry = dy / d;
+            const u = (vxi - VX[j]) * rx + (vyi - VY[j]) * ry;
+            if (u > 0) {
+              let I = (1 - d * inv) * (sig * u + bq * u * u) * 0.5;
+              if (I > u * 0.5) I = u * 0.5;
+              VX[i] -= I * rx; VY[i] -= I * ry;
+              VX[j] += I * rx; VY[j] += I * ry;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function applyForces() {
+    const ga = cfg.gravityAngle * Math.PI / 180;
+    const gx = Math.sin(ga) * cfg.gravity, gy = Math.cos(ga) * cfg.gravity;
+    const dmp = 1 - cfg.linearDrag;
+    for (let i = 0; i < N; i++) {
+      VX[i] = (VX[i] + gx) * dmp;
+      VY[i] = (VY[i] + gy) * dmp;
+    }
+    if (!tool.active) return;
+    const tr = cfg.toolRadius, tr2 = tr * tr, st = cfg.toolStrength;
+    const mode = cfg.toolMode;
+    for (let i = 0; i < N; i++) {
+      const dx = X[i] - tool.x, dy = Y[i] - tool.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > tr2 || d2 === 0) continue;
+      const d = Math.sqrt(d2);
+      let fall = 1 - d / tr;
+      fall *= fall;
+      const f = st * fall;
+      let ux, uy;
+      if (mode === 'attract') { ux = -dx / d; uy = -dy / d; }
+      else if (mode === 'swirl') { ux = -dy / d; uy = dx / d; }
+      else { ux = dx / d; uy = dy / d; }
+      VX[i] += ux * f;
+      VY[i] += uy * f;
+    }
+  }
+
+  function spawn(x, y, vx, vy) {
+    if (N >= MAXP) return;
+    X[N] = x; Y[N] = y; VX[N] = vx; VY[N] = vy;
+    OX[N] = x; OY[N] = y;
+    N++;
+  }
+
+  function faucet(dt) {
+    if (!cfg.faucetOn) return;
+    emitAcc += cfg.faucetRate * dt;
+    while (emitAcc >= 1) {
+      emitAcc -= 1;
+      if (N >= Math.min(cfg.maxParticles, MAXP)) return;
+      const pad = 1.5;
+      const sx = clamp(W * cfg.faucetX / 100 + (Math.random() - 0.5) * 2 * cfg.faucetSpread, pad, W - pad);
+      spawn(sx, -1.5 + Math.random(), (Math.random() - 0.5) * 0.8, cfg.faucetSpeed);
+    }
+  }
+
+  function resolveAll(keepV) {
+    const pr = cfg.radius * 0.28, pad = 0.4, e = cfg.wallBounce;
+    for (let o = 0; o < obstacles.length; o++) {
+      obstacles[o]._md = obstacles[o].r + pr;
+    }
+    for (let i = 0; i < N; i++) {
+      const svx = VX[i], svy = VY[i];
+      const px0 = X[i], py0 = Y[i];
+      let vx = svx, vy = svy;
+      if (X[i] < pad) { X[i] = pad; if (vx < 0) vx *= -e; }
+      else if (X[i] > W - pad) { X[i] = W - pad; if (vx > 0) vx *= -e; }
+      if (Y[i] < pad) { Y[i] = pad; if (vy < 0) vy *= -e; }
+      else if (Y[i] > H - pad) { Y[i] = H - pad; if (vy > 0) { vy *= -e; vx *= 0.96; } }
+      for (let o = 0; o < obstacles.length; o++) {
+        const ob = obstacles[o];
+        const md = ob._md;
+        const dx = X[i] - ob.x, dy = Y[i] - ob.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < md * md) {
+          const d = Math.sqrt(d2) || 1e-6;
+          const nx = dx / d, ny = dy / d;
+          X[i] = ob.x + nx * md;
+          Y[i] = ob.y + ny * md;
+          const evx = vx - ob.vx, evy = vy - ob.vy;
+          const vn = evx * nx + evy * ny;
+          if (vn < 0) {
+            const bx = evx - (1 + e) * vn * nx;
+            const by = evy - (1 + e) * vn * ny;
+            vx = bx * 0.98 + ob.vx * 0.85;
+            vy = by * 0.98 + ob.vy * 0.85;
+          } else {
+            vx = evx * 0.9 + ob.vx * 0.35 + ob.vx * 0.65;
+            vy = evy * 0.9 + ob.vy * 0.35 + ob.vy * 0.65;
+          }
+        }
+      }
+      if (keepV) {
+        OX[i] += X[i] - px0;
+        OY[i] += Y[i] - py0;
+        VX[i] = svx; VY[i] = svy;
+      } else {
+        VX[i] = vx; VY[i] = vy;
+      }
+    }
+  }
+
+  function moveObstacles() {
+    for (let o = 0; o < obstacles.length; o++) {
+      const ob = obstacles[o];
+      if (ob.tx !== null) {
+        const nx = ob.x + (ob.tx - ob.x) * 0.55;
+        const ny = ob.y + (ob.ty - ob.y) * 0.55;
+        ob.vx = nx - ob.x;
+        ob.vy = ny - ob.y;
+        ob.x = nx; ob.y = ny;
+      } else {
+        ob.vx *= 0.3; ob.vy *= 0.3;
+      }
+    }
+  }
+
+  function tick() {
+    tickCount++;
+    moveObstacles();
+    faucet(1);
+    applyForces();
+    for (let i = 0; i < N; i++) {
+      OX[i] = X[i]; OY[i] = Y[i];
+      X[i] += VX[i]; Y[i] += VY[i];
+    }
+    buildHash();
+    densityAndPressure();
+    relax();
+    for (let i = 0; i < N; i++) {
+      VX[i] = X[i] - OX[i];
+      VY[i] = Y[i] - OY[i];
+    }
+    resolveAll(false);
+    const ms = cfg.maxSpeed, ms2 = ms * ms;
+    for (let i = 0; i < N; i++) {
+      const s2 = VX[i] * VX[i] + VY[i] * VY[i];
+      if (!isFinite(s2)) {
+        X[i] = Math.random() * W; Y[i] = -2;
+        VX[i] = 0; VY[i] = 0;
+        OX[i] = X[i]; OY[i] = Y[i];
+        continue;
+      }
+      if (s2 > ms2) {
+        const f = ms / Math.sqrt(s2);
+        VX[i] *= f; VY[i] *= f;
+      }
+      OX[i] = X[i] - VX[i];
+      OY[i] = Y[i] - VY[i];
+    }
+  }
+
+  function measureRho(i) {
+    const inv = 1 / cfg.radius, h2 = cfg.radius * cfg.radius;
+    const xi = X[i], yi = Y[i];
+    const cx = Math.floor(xi * inv), cy = Math.floor(yi * inv);
+    let rho = 0;
+    for (let oy = -1; oy <= 1; oy++) {
+      const gy = cy + oy;
+      for (let ox = -1; ox <= 1; ox++) {
+        const a = hash.get(cellKey(cx + ox, gy));
+        if (!a) continue;
+        for (let m = 0; m < a.length; m++) {
+          const j = a[m];
+          if (j === i) continue;
+          const dx = X[j] - xi, dy = Y[j] - yi;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < h2) {
+            const t = 1 - Math.sqrt(d2) * inv;
+            rho += t * t;
+          }
+        }
+      }
+    }
+    return rho;
+  }
+
+  function calibrate() {
+    if (N === 0) return;
+    buildHash();
+    const samples = [];
+    const stride = Math.max(1, Math.ceil(N / 256));
+    for (let i = 0; i < N; i += stride) samples.push(measureRho(i));
+    samples.sort((a, b) => a - b);
+    baseRho0 = clamp(samples[samples.length >> 1] || 1.4, 0.2, 30);
+  }
+
+  function addObstacle(x, y, r) {
+    r = clamp(r, 2, 30);
+    obstacles.push({
+      x: clamp(x, r + 0.5, W - r - 0.5),
+      y: clamp(y, r + 0.5, H - r - 0.5),
+      r, vx: 0, vy: 0, tx: null, ty: null
+    });
+  }
+
+  function defaultObstacles() {
+    obstacles.length = 0;
+    addObstacle(W * 0.28, H * 0.52, 7);
+    addObstacle(W * 0.52, H * 0.68, 5);
+    addObstacle(W * 0.74, H * 0.36, 8);
+  }
+
+  function randomizeObstacles() {
+    obstacles.length = 0;
+    const count = 3 + Math.floor(Math.random() * 3);
+    for (let c = 0; c < count; c++) {
+      const r = 4 + Math.random() * 6;
+      let ok = false, x = 0, y = 0;
+      for (let t = 0; t < 25 && !ok; t++) {
+        x = W * (0.12 + Math.random() * 0.76);
+        y = H * (0.12 + Math.random() * 0.62);
+        ok = true;
+        for (const ob of obstacles) {
+          const dx = ob.x - x, dy = ob.y - y;
+          if (dx * dx + dy * dy < (ob.r + r + 3) * (ob.r + r + 3)) { ok = false; break; }
+        }
+      }
+      if (ok) addObstacle(x, y, r);
+    }
+  }
+
+  function reset(seedObstacles) {
+    N = 0;
+    emitAcc = 0;
+    const s = cfg.spacing, rowH = s * 0.88;
+    const cap = Math.min(cfg.maxParticles, MAXP);
+    const yTop = H * (1 - cfg.fillPercent / 100);
+    let row = 0;
+    outer:
+    for (let y = H - 1; y > yTop; y -= rowH, row++) {
+      const off = row % 2 ? s * 0.5 : 0;
+      for (let x = 1 + off; x < W - 1; x += s) {
+        if (N >= cap) break outer;
+        spawn(x + (Math.random() - 0.5) * 0.15, y, 0, 0);
+      }
+    }
+    if (seedObstacles) defaultObstacles();
+    calibrate();
+  }
+
+  function setDims(w, h) {
+    W = w; H = h;
+    for (const ob of obstacles) {
+      ob.x = clamp(ob.x, ob.r + 0.5, W - ob.r - 0.5);
+      ob.y = clamp(ob.y, ob.r + 0.5, H - ob.r - 0.5);
+    }
+  }
+
+  return {
+    cfg, tool, obstacles,
+    X, Y, VX, VY, RHO,
+    tick, reset, calibrate, resolveAll, moveObstacles,
+    addObstacle, randomizeObstacles,
+    clearObstacles: () => { obstacles.length = 0; },
+    setDims,
+    count: () => N,
+    time: () => tickCount,
+    dims: () => ({ w: W, h: H })
+  };
+})();
+</script>
+<script>
+'use strict';
+(() => {
+const $ = id => document.getElementById(id);
+const cfg = SIM.cfg;
+Object.assign(cfg, {
+  renderMode: 'liquid',
+  hue: 205,
+  blobScale: 2,
+  gooBlur: 5,
+  gooContrast: 24,
+  gooThresh: 0.42,
+  renderScale: 0.75,
+  trails: false,
+  showGrid: true,
+  theme: 'abyss'
+});
+
+const bg = $('bg'), fx = $('fx');
+const bctx = bg.getContext('2d');
+const fctx = fx.getContext('2d');
+const gooBlurEl = $('gooBlur'), gooMatEl = $('gooMat');
+
+const THEMES = {
+  abyss:    { top:'#071a2c', bot:'#02080f', grid:'rgba(130,190,255,.055)', ob1:'#54687c', ob2:'#202b37',
+              rim:'rgba(185,225,255,.30)', light:false },
+  midnight: { top:'#15152a', bot:'#06060e', grid:'rgba(165,160,255,.05)',  ob1:'#5b5674', ob2:'#242038',
+              rim:'rgba(215,205,255,.30)', light:false },
+  reef:     { top:'#04303a', bot:'#01141b', grid:'rgba(120,255,230,.05)',  ob1:'#44756e', ob2:'#16302c',
+              rim:'rgba(175,255,240,.30)', light:false },
+  ink:      { top:'#f0f4fa', bot:'#d3dfec', grid:'rgba(30,60,100,.09)',   ob1:'#93a6ba', ob2:'#54677b',
+              rim:'rgba(35,55,85,.45)',   light:true }
+};
+
+const view = { us: 1, ox: 0, cw: 0, ch: 0, dpr: 1 };
+let sprite = null;
+let dragOb = null, grabDX = 0, grabDY = 0;
+const pointer = { x: 0, y: 0, inside: false };
+let fpsEMA = 60;
+const dotColors = [];
+
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+function toWorld(e) {
+  return { x: (e.clientX - view.ox) / view.us, y: e.clientY / view.us };
+}
+
+function resize() {
+  view.cw = window.innerWidth;
+  view.ch = window.innerHeight;
+  view.dpr = window.devicePixelRatio || 1;
+  const q = cfg.renderScale;
+  bg.width = Math.round(view.cw * view.dpr);
+  bg.height = Math.round(view.ch * view.dpr);
+  fx.width = Math.max(64, Math.round(view.cw * view.dpr * q));
+  fx.height = Math.max(64, Math.round(view.ch * view.dpr * q));
+  const H = 100;
+  const W = clamp(H * view.cw / Math.max(view.ch, 1), 50, 240);
+  SIM.setDims(W, H);
+  view.us = view.ch / H;
+  view.ox = (view.cw - W * view.us) / 2;
+  const bs = view.dpr * view.us;
+  const fs = view.dpr * q * view.us;
+  bctx.setTransform(bs, 0, 0, bs, view.dpr * view.ox, 0);
+  fctx.setTransform(fs, 0, 0, fs, view.dpr * q * view.ox, 0);
+}
+
+function buildSprite() {
+  const th = THEMES[cfg.theme];
+  const s = document.createElement('canvas');
+  s.width = s.height = 96;
+  const g = s.getContext('2d');
+  const grd = g.createRadialGradient(48, 48, 0, 48, 48, 48);
+  const h = cfg.hue;
+  if (th.light) {
+    grd.addColorStop(0, `hsla(${h},78%,42%,.95)`);
+    grd.addColorStop(0.45, `hsla(${h},72%,52%,.55)`);
+    grd.addColorStop(1, `hsla(${h},70%,55%,0)`);
+  } else {
+    grd.addColorStop(0, `hsla(${h},95%,76%,.9)`);
+    grd.addColorStop(0.4, `hsla(${h},90%,58%,.42)`);
+    grd.addColorStop(1, `hsla(${h},90%,55%,0)`);
+  }
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 96, 96);
+  sprite = s;
+}
+
+function updateGoo() {
+  gooBlurEl.setAttribute('stdDeviation', String(cfg.gooBlur));
+  const A = cfg.gooContrast, C = -(A * cfg.gooThresh).toFixed(2);
+  gooMatEl.setAttribute('values',
+    `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${A} ${C}`);
+  fx.style.filter = cfg.renderMode === 'liquid' ? 'url(#goo)' : 'none';
+}
+let bgGrad = null, bgGradKey = '';
+function drawBackground() {
+  const th = THEMES[cfg.theme];
+  if (bgGradKey !== cfg.theme) {
+    bgGradKey = cfg.theme;
+    bgGrad = bctx.createLinearGradient(0, 0, 0, 100);
+    bgGrad.addColorStop(0, th.top);
+    bgGrad.addColorStop(1, th.bot);
+  }
+  bctx.setTransform(1, 0, 0, 1, 0, 0);
+  bctx.fillStyle = th.bot;
+  bctx.fillRect(0, 0, bg.width, bg.height);
+  const { w: W } = SIM.dims();
+  bctx.fillStyle = bgGrad;
+  bctx.fillRect(-4, -4, W + 8, 108);
+  if (cfg.showGrid) {
+    bctx.strokeStyle = th.grid;
+    bctx.lineWidth = 0.15;
+    bctx.beginPath();
+    for (let x = 0; x <= W + 0.1; x += 10) { bctx.moveTo(x, 0); bctx.lineTo(x, 100); }
+    for (let y = 0; y <= 100.1; y += 10) { bctx.moveTo(0, y); bctx.lineTo(W, y); }
+    bctx.stroke();
+  }
+  if (cfg.faucetOn) {
+    const sx = W * cfg.faucetX / 100;
+    bctx.beginPath();
+    bctx.moveTo(sx - 1.7, -2.5);
+    bctx.lineTo(sx + 1.7, -2.5);
+    bctx.lineTo(sx + 1.05, 1.3);
+    bctx.lineTo(sx - 1.05, 1.3);
+    bctx.closePath();
+    bctx.fillStyle = th.ob1;
+    bctx.fill();
+    bctx.strokeStyle = th.rim;
+    bctx.lineWidth = 0.22;
+    bctx.stroke();
+  }
+  for (let i = SIM.obstacles.length - 1; i >= 0; i--) {
+    const ob = SIM.obstacles[i];
+    const g = bctx.createRadialGradient(ob.x - ob.r * 0.35, ob.y - ob.r * 0.4, ob.r * 0.1,
+      ob.x, ob.y, ob.r);
+    g.addColorStop(0, th.ob1);
+    g.addColorStop(1, th.ob2);
+    bctx.beginPath();
+    bctx.arc(ob.x, ob.y, ob.r, 0, 6.2832);
+    bctx.fillStyle = g;
+    bctx.fill();
+    bctx.strokeStyle = ob === dragOb ? '#7fd4ff' : th.rim;
+    bctx.lineWidth = ob === dragOb ? 0.45 : 0.28;
+    bctx.stroke();
+  }
+  if (pointer.inside && !dragOb && toolActive()) {
+    bctx.beginPath();
+    bctx.arc(pointer.x, pointer.y, cfg.toolRadius, 0, 6.2832);
+    bctx.strokeStyle = 'rgba(255,255,255,.35)';
+    bctx.lineWidth = 0.25;
+    bctx.stroke();
+    bctx.beginPath();
+    bctx.arc(pointer.x, pointer.y, 0.45, 0, 6.2832);
+    bctx.fillStyle = 'rgba(255,255,255,.55)';
+    bctx.fill();
+  }
+  bctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (!THEMES[cfg.theme].light) {
+    const vg = bctx.createRadialGradient(bg.width / 2, bg.height / 2, Math.min(bg.width, bg.height) * 0.45,
+      bg.width / 2, bg.height / 2, Math.max(bg.width, bg.height) * 0.75);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,.38)');
+    bctx.fillStyle = vg;
+    bctx.fillRect(0, 0, bg.width, bg.height);
+  }
+}
+
+function dotColor(speed) {
+  const ms = cfg.maxSpeed || 1;
+  let s = speed / ms;
+  if (s > 1) s = 1;
+  const idx = Math.round(s * 31);
+  let c = dotColors[idx];
+  if (!c) {
+    const hue = THEMES[cfg.theme].light ? 215 - s * 160 : 205 + s * 130;
+    const lig = THEMES[cfg.theme].light ? 34 + s * 26 : 42 + s * 40;
+    c = `hsl(${hue.toFixed(0)},88%,${lig.toFixed(0)}%)`;
+    dotColors[idx] = c;
+  }
+  return c;
+}
+
+function drawFluid() {
+  const { w: W } = SIM.dims();
+  const X = SIM.X, Y = SIM.Y, VX = SIM.VX, VY = SIM.VY;
+  const n = SIM.count();
+  fctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (cfg.trails) {
+    fctx.globalCompositeOperation = 'destination-out';
+    fctx.fillStyle = 'rgba(0,0,0,.16)';
+    fctx.fillRect(0, 0, fx.width, fx.height);
+  } else {
+    fctx.clearRect(0, 0, fx.width, fx.height);
+  }
+  const fs = view.dpr * cfg.renderScale * view.us;
+  fctx.setTransform(fs, 0, 0, fs, view.dpr * cfg.renderScale * view.ox, 0);
+  if (cfg.renderMode === 'liquid') {
+    fctx.globalCompositeOperation = THEMES[cfg.theme].light ? 'source-over' : 'lighter';
+    const r = cfg.radius * cfg.blobScale * 0.5;
+    for (let i = 0; i < n; i++) {
+      fctx.drawImage(sprite, X[i] - r, Y[i] - r, r * 2, r * 2);
+    }
+  } else {
+    fctx.globalCompositeOperation = 'source-over';
+    const r = cfg.radius * 0.34;
+    for (let i = 0; i < n; i++) {
+      fctx.beginPath();
+      fctx.arc(X[i], Y[i], r, 0, 6.2832);
+      fctx.fillStyle = dotColor(Math.hypot(VX[i], VY[i]));
+      fctx.fill();
+    }
+  }
+  fctx.globalCompositeOperation = 'source-over';
+}
+function toolActive() { return SIM.tool.active; }
+
+let last = performance.now(), acc = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > 0.05) dt = 0.05;
+  if (dt > 0) fpsEMA += (1 / dt - fpsEMA) * 0.06;
+  if (cfg.paused) {
+    acc = 0;
+    if (dragOb) {
+      SIM.moveObstacles();
+      SIM.resolveAll(true);
+    }
+  } else {
+    acc += dt * 60 * cfg.timeScale;
+    let steps = 0;
+    while (acc >= 1 && steps < 4) { acc -= 1; SIM.tick(); steps++; }
+    if (acc > 4) acc = 0;
+  }
+  drawBackground();
+  drawFluid();
+}
+
+setInterval(() => {
+  $('stFps').textContent = fpsEMA.toFixed(0);
+  const n = SIM.count();
+  $('stN').textContent = n + ' / ' + cfg.maxParticles;
+  $('stObs').textContent = SIM.obstacles.length;
+  $('stTick').textContent = SIM.time();
+  $('hudCount').textContent = n;
+}, 400);
+
+function hitTest(w) {
+  for (let i = SIM.obstacles.length - 1; i >= 0; i--) {
+    const ob = SIM.obstacles[i];
+    const dx = w.x - ob.x, dy = w.y - ob.y;
+    if (dx * dx + dy * dy < (ob.r + 1.2) * (ob.r + 1.2)) return ob;
+  }
+  return null;
+}
+
+function setDragTarget(ob, w) {
+  const { w: W } = SIM.dims();
+  ob.tx = clamp(w.x + grabDX, ob.r + 0.5, W - ob.r - 0.5);
+  ob.ty = clamp(w.y + grabDY, ob.r + 0.5, 99.5);
+}
+
+fx.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  fx.setPointerCapture(e.pointerId);
+  const w = toWorld(e);
+  pointer.x = w.x; pointer.y = w.y; pointer.inside = true;
+  const ob = hitTest(w);
+  if (ob) {
+    dragOb = ob;
+    grabDX = ob.x - w.x;
+    grabDY = ob.y - w.y;
+    setDragTarget(ob, w);
+  } else {
+    SIM.tool.x = w.x;
+    SIM.tool.y = w.y;
+    SIM.tool.active = true;
+  }
+});
+
+window.addEventListener('pointermove', e => {
+  const w = toWorld(e);
+  pointer.x = w.x; pointer.y = w.y;
+  pointer.inside = e.target === fx || dragOb || SIM.tool.active;
+  if (dragOb) setDragTarget(dragOb, w);
+  else if (SIM.tool.active) { SIM.tool.x = w.x; SIM.tool.y = w.y; }
+  else if (e.target === fx) {
+    fx.style.cursor = hitTest(w) ? 'grab' : 'crosshair';
+  }
+  if (!e.target) pointer.inside = false;
+});
+
+function endPointer() {
+  if (dragOb) { dragOb.tx = null; dragOb.ty = null; dragOb = null; }
+  SIM.tool.active = false;
+}
+window.addEventListener('pointerup', endPointer);
+window.addEventListener('pointercancel', endPointer);
+
+fx.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  const ob = hitTest(toWorld(e));
+  if (ob) {
+    if (dragOb === ob) endPointer();
+    SIM.obstacles.splice(SIM.obstacles.indexOf(ob), 1);
+  }
+});
+
+fx.addEventListener('dblclick', e => {
+  const w = toWorld(e);
+  if (!hitTest(w)) SIM.addObstacle(w.x, w.y, cfg.obstacleRadius);
+});
+const onChange = {
+  radius: () => SIM.calibrate(),
+  hue: () => { buildSprite(); },
+  theme: () => { buildSprite(); dotColors.length = 0; },
+  blobScale: () => {},
+  gooBlur: updateGoo,
+  gooContrast: updateGoo,
+  gooThresh: updateGoo,
+  renderMode: updateGoo,
+  renderScale: resize
+};
+
+const GROUPS = [
+  { title: 'Simulation', open: true, items: [
+    { t: 'btns', buttons: [
+      { id: 'btnPause', label: 'Pause', fn: togglePause },
+      { label: 'Step', fn: () => { if (cfg.paused) SIM.tick(); } },
+      { label: 'Reset', fn: () => SIM.reset(false) }
+    ]},
+    { t: 'range', k: 'timeScale', label: 'Time scale', min: 0.1, max: 2, step: 0.05 },
+    { t: 'range', k: 'gravity', label: 'Gravity', min: 0, max: 0.8, step: 0.01 },
+    { t: 'range', k: 'gravityAngle', label: 'Gravity tilt \u00B0', min: -90, max: 90, step: 1 },
+    { t: 'range', k: 'linearDrag', label: 'Linear drag', min: 0, max: 0.02, step: 0.0005, fmt: v => v.toFixed(4) },
+    { t: 'range', k: 'wallBounce', label: 'Wall bounce', min: 0, max: 0.9, step: 0.01 },
+    { t: 'range', k: 'maxSpeed', label: 'Max speed', min: 2, max: 14, step: 0.5 }
+  ]},
+  { title: 'Fluid', open: true, items: [
+    { t: 'range', k: 'radius', label: 'Interaction radius', min: 2.2, max: 4.5, step: 0.05 },
+    { t: 'range', k: 'stiffness', label: 'Stiffness', min: 0.01, max: 0.5, step: 0.005 },
+    { t: 'range', k: 'nearStiffness', label: 'Near stiffness', min: 0.02, max: 1, step: 0.01 },
+    { t: 'range', k: 'restDensity', label: 'Rest density \u00D7', min: 0.7, max: 1.3, step: 0.01 },
+    { t: 'range', k: 'viscosity', label: 'Viscosity', min: 0, max: 0.5, step: 0.01 },
+    { t: 'range', k: 'viscosityQ', label: 'Quadratic viscosity', min: 0, max: 0.5, step: 0.01 },
+    { t: 'range', k: 'spacing', label: 'Spacing (reset)', min: 1.3, max: 2.8, step: 0.05 },
+    { t: 'range', k: 'fillPercent', label: 'Water amount % (reset)', min: 5, max: 80, step: 1 },
+    { t: 'range', k: 'maxParticles', label: 'Max particles', min: 300, max: 8000, step: 100 }
+  ]},
+  { title: 'Faucet', open: false, items: [
+    { t: 'check', k: 'faucetOn', label: 'Enable faucet' },
+    { t: 'range', k: 'faucetX', label: 'Position %', min: 2, max: 98, step: 1 },
+    { t: 'range', k: 'faucetRate', label: 'Flow rate /s', min: 10, max: 500, step: 5 },
+    { t: 'range', k: 'faucetSpread', label: 'Spread', min: 0, max: 8, step: 0.1 },
+    { t: 'range', k: 'faucetSpeed', label: 'Pour speed', min: 0.5, max: 6, step: 0.1 }
+  ]},
+  { title: 'Pointer tool', open: false, items: [
+    { t: 'sel', k: 'toolMode', label: 'Mode', opts: ['push', 'attract', 'swirl'] },
+    { t: 'range', k: 'toolRadius', label: 'Radius', min: 3, max: 35, step: 0.5 },
+    { t: 'range', k: 'toolStrength', label: 'Strength', min: 0.02, max: 1.2, step: 0.02 }
+  ]},
+  { title: 'Obstacles', open: true, items: [
+    { t: 'range', k: 'obstacleRadius', label: 'New obstacle size', min: 3, max: 16, step: 0.5 },
+    { t: 'btns', buttons: [
+      { label: 'Add', fn: () => { const d = SIM.dims(); SIM.addObstacle(d.w * (0.15 + Math.random() * 0.7), 10 + Math.random() * 40, cfg.obstacleRadius); } },
+      { label: 'Randomize', fn: () => SIM.randomizeObstacles() },
+      { label: 'Clear', warn: true, fn: () => SIM.clearObstacles() }
+    ]},
+    { t: 'note', text: 'Drag to move \u00B7 double-click to add at cursor \u00B7 right-click to delete. Moving obstacles push the water around.' }
+  ]},
+  { title: 'Graphics', open: false, items: [
+    { t: 'sel', k: 'renderMode', label: 'Render', opts: ['liquid', 'particles'] },
+    { t: 'sel', k: 'theme', label: 'Theme', opts: ['abyss', 'midnight', 'reef', 'ink'] },
+    { t: 'range', k: 'hue', label: 'Water hue', min: 160, max: 320, step: 2 },
+    { t: 'range', k: 'blobScale', label: 'Blob size', min: 1.2, max: 3.4, step: 0.05 },
+    { t: 'range', k: 'gooBlur', label: 'Surface tension blur', min: 2, max: 14, step: 0.5 },
+    { t: 'range', k: 'gooContrast', label: 'Edge contrast', min: 6, max: 40, step: 1 },
+    { t: 'range', k: 'gooThresh', label: 'Edge threshold', min: 0.2, max: 0.6, step: 0.01 },
+    { t: 'range', k: 'renderScale', label: 'Render scale', min: 0.35, max: 1, step: 0.05 },
+    { t: 'check', k: 'trails', label: 'Motion trails' },
+    { t: 'check', k: 'showGrid', label: 'Show grid' }
+  ]},
+  { title: 'Stats', open: true, stats: true, items: [] }
+];
+
+function togglePause() {
+  cfg.paused = !cfg.paused;
+  const b = document.getElementById('btnPause');
+  if (b) b.textContent = cfg.paused ? 'Resume' : 'Pause';
+}
+
+function buildPanel() {
+  const panel = document.getElementById('panel');
+  for (const g of GROUPS) {
+    const det = document.createElement('details');
+    if (g.open) det.open = true;
+    const sum = document.createElement('summary');
+    sum.textContent = g.title;
+    det.appendChild(sum);
+    for (const it of g.items) {
+      if (it.t === 'range') {
+        const row = document.createElement('div');
+        row.className = 'row';
+        const lbl = document.createElement('span');
+        lbl.className = 'lbl';
+        lbl.textContent = it.label;
+        const inp = document.createElement('input');
+        inp.type = 'range';
+        inp.min = it.min; inp.max = it.max; inp.step = it.step;
+        inp.value = cfg[it.k];
+        const out = document.createElement('output');
+        const fmt = it.fmt || (v => (+v).toFixed(String(it.step).includes('.') ? String(it.step).split('.')[1].length : 0));
+        out.textContent = fmt(cfg[it.k]);
+        const paint = () => {
+          const pct = (cfg[it.k] - it.min) / (it.max - it.min) * 100;
+          inp.style.setProperty('--fill', pct + '%');
+        };
+        inp.addEventListener('input', () => {
+          cfg[it.k] = parseFloat(inp.value);
+          out.textContent = fmt(cfg[it.k]);
+          paint();
+          if (onChange[it.k]) onChange[it.k]();
+        });
+        paint();
+        row.append(lbl, inp, out);
+        det.appendChild(row);
+      } else if (it.t === 'check') {
+        const row = document.createElement('label');
+        row.className = 'chk';
+        const inp = document.createElement('input');
+        inp.type = 'checkbox';
+        inp.checked = !!cfg[it.k];
+        inp.addEventListener('change', () => {
+          cfg[it.k] = inp.checked;
+          if (onChange[it.k]) onChange[it.k]();
+        });
+        const sp = document.createElement('span');
+        sp.textContent = it.label;
+        row.append(inp, sp);
+        det.appendChild(row);
+      } else if (it.t === 'sel') {
+        const row = document.createElement('div');
+        row.className = 'row';
+        const lbl = document.createElement('span');
+        lbl.className = 'lbl';
+        lbl.textContent = it.label;
+        const sel = document.createElement('select');
+        for (const o of it.opts) {
+          const op = document.createElement('option');
+          op.value = o; op.textContent = o;
+          sel.appendChild(op);
+        }
+        sel.value = cfg[it.k];
+        sel.addEventListener('change', () => {
+          cfg[it.k] = sel.value;
+          if (onChange[it.k]) onChange[it.k]();
+        });
+        row.append(lbl, sel);
+        det.appendChild(row);
+      } else if (it.t === 'btns') {
+        const row = document.createElement('div');
+        row.className = 'btnrow';
+        for (const bd of it.buttons) {
+          const b = document.createElement('button');
+          b.className = 'act' + (bd.warn ? ' warn' : '');
+          if (bd.id) b.id = bd.id;
+          b.textContent = bd.label;
+          b.addEventListener('click', bd.fn);
+          row.appendChild(b);
+        }
+        det.appendChild(row);
+      } else if (it.t === 'note') {
+        const p = document.createElement('div');
+        p.className = 'note';
+        p.textContent = it.text;
+        det.appendChild(p);
+      }
+    }
+    if (g.stats) {
+      const rows = [['FPS', 'stFps'], ['Particles', 'stN'], ['Obstacles', 'stObs'], ['Sim ticks', 'stTick']];
+      for (const [name, id] of rows) {
+        const r = document.createElement('div');
+        r.className = 'srow';
+        r.innerHTML = '<span>' + name + '</span><b id="' + id + '">-</b>';
+        det.appendChild(r);
+      }
+    }
+    panel.appendChild(det);
+  }
+}
+document.getElementById('panelToggle').addEventListener('click', () => {
+  document.getElementById('panel').classList.toggle('hidden');
+});
+
+window.addEventListener('keydown', e => {
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON') return;
+  if (e.code === 'Space') { e.preventDefault(); togglePause(); }
+  else if (e.code === 'KeyR') SIM.reset(false);
+  else if (e.code === 'KeyS') { if (cfg.paused) SIM.tick(); }
+  else if (e.code === 'KeyG') cfg.showGrid = !cfg.showGrid;
+});
+
+window.addEventListener('resize', resize);
+
+buildPanel();
+resize();
+buildSprite();
+updateGoo();
+SIM.reset(true);
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
