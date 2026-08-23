@@ -45,7 +45,7 @@ table.readout td:last-child { text-align: right; font-variant-numeric: tabular-n
 </head>
 <body>
 <h1>2D Skin Texture</h1>
-<p class="subtitle">Seamlessly tiling procedural skin — subsurface veins, vitiligo, pigment, freckles, pores, and bump-mapped lighting.</p>
+<p class="subtitle">Seamlessly tiling procedural skin — veins and arteries, fine capillaries, subsurface translucency, vitiligo, pigment, freckles, pores, and bump-mapped lighting.</p>
 <div class="layout">
   <div class="panel canvas-wrap">
     <canvas id="display-canvas" width="640" height="640"></canvas>
@@ -83,9 +83,15 @@ table.readout td:last-child { text-align: right; font-variant-numeric: tabular-n
       </label>
     </fieldset>
     <fieldset class="panel">
-      <legend>Veins</legend>
-      <label class="slider">Visibility: <span id="vein-visibility-value"></span>
+      <legend>Blood vessels</legend>
+      <label class="slider">Veins (return blood): <span id="vein-visibility-value"></span>
         <input type="range" id="vein-visibility" min="0" max="100" step="1" value="25">
+      </label>
+      <label class="slider">Arteries: <span id="arteries-value"></span>
+        <input type="range" id="arteries" min="0" max="100" step="1" value="20">
+      </label>
+      <label class="slider">Capillaries (fine): <span id="capillaries-value"></span>
+        <input type="range" id="capillaries" min="0" max="100" step="1" value="30">
       </label>
       <label class="slider">Width: <span id="vein-width-value"></span>
         <input type="range" id="vein-width" min="0" max="100" step="1" value="22">
@@ -264,16 +270,18 @@ class Field {
 
 class SkinEngine {
   static FIELDS = [
-    new Field({ name: "warpX",    basePeriod: 3,  maxOctaves: 1, seedOffset: 11 }),
-    new Field({ name: "warpY",    basePeriod: 3,  maxOctaves: 1, seedOffset: 23 }),
-    new Field({ name: "vein",     basePeriod: 4,  maxOctaves: 3, seedOffset: 37, gain: 0.6 }),
-    new Field({ name: "veinFine", basePeriod: 12, maxOctaves: 1, seedOffset: 53 }),
-    new Field({ name: "pigment",  basePeriod: 3,  maxOctaves: 3, seedOffset: 71 }),
-    new Field({ name: "vitiligo", basePeriod: 4,  maxOctaves: 2, seedOffset: 89 }),
-    new Field({ name: "freckle",  basePeriod: 24, maxOctaves: 1, seedOffset: 101 }),
-    new Field({ name: "pore",     basePeriod: 48, maxOctaves: 1, seedOffset: 113 }),
-    new Field({ name: "bump",     basePeriod: 3,  maxOctaves: 4, seedOffset: 131 }),
-    new Field({ name: "wrinkle",  basePeriod: 9,  maxOctaves: 1, seedOffset: 149 }),
+    new Field({ name: "warpX",     basePeriod: 3,  maxOctaves: 1, seedOffset: 11 }),
+    new Field({ name: "warpY",     basePeriod: 3,  maxOctaves: 1, seedOffset: 23 }),
+    new Field({ name: "vein",      basePeriod: 4,  maxOctaves: 3, seedOffset: 37, gain: 0.6 }),
+    new Field({ name: "veinFine",  basePeriod: 12, maxOctaves: 1, seedOffset: 53 }),
+    new Field({ name: "artery",    basePeriod: 5,  maxOctaves: 1, seedOffset: 167 }),
+    new Field({ name: "capillary", basePeriod: 18, maxOctaves: 1, seedOffset: 179 }),
+    new Field({ name: "pigment",   basePeriod: 3,  maxOctaves: 3, seedOffset: 71 }),
+    new Field({ name: "vitiligo",  basePeriod: 4,  maxOctaves: 2, seedOffset: 89 }),
+    new Field({ name: "freckle",   basePeriod: 24, maxOctaves: 1, seedOffset: 101 }),
+    new Field({ name: "pore",      basePeriod: 48, maxOctaves: 1, seedOffset: 113 }),
+    new Field({ name: "bump",      basePeriod: 3,  maxOctaves: 4, seedOffset: 131 }),
+    new Field({ name: "wrinkle",   basePeriod: 9,  maxOctaves: 1, seedOffset: 149 }),
   ];
 
   constructor({ size }) {
@@ -289,7 +297,7 @@ class SkinEngine {
     for (const f of SkinEngine.FIELDS) {
       let key = common;
       if (f.maxOctaves > 1) key += "|" + p.detail;
-      if (f.name === "vein" || f.name === "veinFine") key += "|" + p.veinScale;
+      if (f.name === "vein" || f.name === "veinFine" || f.name === "artery") key += "|" + p.veinScale;
       f.invalidate(key);
     }
   }
@@ -320,7 +328,8 @@ class SkinEngine {
   _buildOctave(f, octave) {
     const size = this.size, p = this.params;
     if (!f.data || f.data.length !== size * size) f.data = new Float32Array(size * size);
-    const scale = (f.name === "vein" || f.name === "veinFine") ? p.veinScale / 5 : p.scale / 4;
+    const scale = (f.name === "vein" || f.name === "veinFine" || f.name === "artery")
+      ? p.veinScale / 5 : p.scale / 4;
     let period = Math.max(2, Math.round(f.basePeriod * scale));
     f.curPeriod = period;
     period <<= octave;
@@ -383,6 +392,8 @@ class SkinEngine {
         const wx = F.warpX[i] * warpPx, wy = F.warpY[i] * warpPx;
         const vn = sampleBilinear(F.vein, size, x + wx, y + wy);
         const vf = sampleBilinear(F.veinFine, size, x + wx, y + wy);
+        const va = sampleBilinear(F.artery, size, x + wx, y + wy);
+        const vc = sampleBilinear(F.capillary, size, x + wx, y + wy);
         // Soft wide streaks (blurred vessels seen through skin), not hard ridges.
         const softW = 0.03 + (p.veinWidth / 100) * 0.18;
         let soft = clamp01(1 - Math.abs(vn) / softW);
@@ -391,6 +402,13 @@ class SkinEngine {
         let fine = clamp01(1 - Math.abs(vf) / fineW) * 0.30;
         fine = fine * fine * (3 - 2 * fine);
         const vMask = Math.min(1, soft + fine * (0.2 + 0.8 * soft));
+        // Arteries: finer pipes, warmer blood; capillaries: dense red micro-net.
+        const artW = 0.02 + (p.veinWidth / 100) * 0.12;
+        let art = clamp01(1 - Math.abs(va) / artW);
+        art = art * art * art;
+        const capW = 0.035 + (p.veinWidth / 100) * 0.045;
+        let cap = clamp01(1 - Math.abs(vc) / capW);
+        cap = cap * cap;
 
         const pm = clamp01(0.5 + F.pigment[i] * pigAmt * 1.6);
         let cr = tone[0] + (melanin[0] - tone[0]) * pm;
@@ -425,6 +443,26 @@ class SkinEngine {
         const glow = vMask * seeThrough * (0.55 + 0.25 * vmask) * 0.35;
         cr += 0.50 * glow; cg += 0.12 * glow; cb += 0.10 * glow;
 
+        // Arteries: finer, warmer pipes running near the veins.
+        const artVis = p.arteries / 100;
+        if (artVis > 0) {
+          const artC = mix3([0.82, 0.34, 0.30], tone, 0.30);
+          const amix = Math.min(1, art * artVis * hide * (0.40 + 0.60 * seeThrough));
+          cr += (artC[0] - cr) * amix;
+          cg += (artC[1] - cg) * amix;
+          cb += (artC[2] - cb) * amix;
+        }
+
+        // Capillaries: faint dense red web, stronger where skin is pale/thin.
+        const capVis = p.capillaries / 100;
+        if (capVis > 0) {
+          const capC = mix3([0.78, 0.36, 0.32], tone, 0.42);
+          const cmix = Math.min(1, cap * capVis * (0.35 + 0.65 * seeThrough) * (1 + 0.4 * vmask));
+          cr += (capC[0] - cr) * cmix;
+          cg += (capC[1] - cg) * cmix;
+          cb += (capC[2] - cb) * cmix;
+        }
+
         const wreg = clamp01(0.5 + F.bump[i] * 0.8);
         const wl = sstep(0.88, 0.985, 1 - Math.abs(F.wrinkle[i])) * wrinkleAmt * wreg;
         const shade = 1 - wl * 0.10;
@@ -436,6 +474,7 @@ class SkinEngine {
 
         let h = F.bump[i] * undAmt;
         h -= vMask * veinDepth;
+        h -= art * veinDepth * 0.4;
         h -= wl * 0.08;
         h -= pl * 0.10;
         height[i] = h;
@@ -486,7 +525,7 @@ const SkinTests = {
       seed: 42, scale: 4, detail: 3,
       tone: [0.93, 0.73, 0.54], veinColor: [0.42, 0.50, 0.77],
       pigment: 35, freckles: 25,
-      veinVisibility: 25, veinWidth: 22, veinScale: 5, veinDepth: 6,
+      veinVisibility: 25, arteries: 20, capillaries: 30, veinWidth: 22, veinScale: 5, veinDepth: 6,
       vitiligo: 10, vitiligoSoftness: 25, seeThrough: 45,
       undulation: 18, pores: 45, wrinkles: 5,
       lightAzimuth: 135, lightElevation: 40, specular: 30,
@@ -618,7 +657,7 @@ function hexToRgb(hex) {
 
 const SLIDER_IDS = [
   "seed", "scale", "detail", "pigment", "freckles",
-  "vein-visibility", "vein-width", "vein-scale", "vein-depth",
+  "vein-visibility", "arteries", "capillaries", "vein-width", "vein-scale", "vein-depth",
   "vitiligo", "vitiligo-softness", "see-through",
   "undulation", "pores", "wrinkles",
   "light-azimuth", "light-elevation", "specular",
@@ -636,7 +675,8 @@ function currentParams() {
     tone: hexToRgb(document.getElementById("tone").value),
     veinColor: hexToRgb(document.getElementById("vein-color").value),
     pigment: val("pigment"), freckles: val("freckles"),
-    veinVisibility: val("vein-visibility"), veinWidth: val("vein-width"),
+    veinVisibility: val("vein-visibility"), arteries: val("arteries"),
+    capillaries: val("capillaries"), veinWidth: val("vein-width"),
     veinScale: val("vein-scale"), veinDepth: val("vein-depth"),
     vitiligo: val("vitiligo"), vitiligoSoftness: val("vitiligo-softness"),
     seeThrough: val("see-through"),
@@ -661,7 +701,7 @@ document.getElementById("tile-preview").addEventListener("change", () => { needs
 
 const DEFAULTS = {
   seed: 42, scale: 4, detail: 3, tone: "#edb98a", pigment: 35, freckles: 25,
-  "vein-visibility": 25, "vein-width": 22, "vein-scale": 5, "vein-depth": 6,
+  "vein-visibility": 25, arteries: 20, capillaries: 30, "vein-width": 22, "vein-scale": 5, "vein-depth": 6,
   "vein-color": "#6b7fc4", vitiligo: 10, "vitiligo-softness": 25, "see-through": 45,
   undulation: 18, pores: 45, wrinkles: 5,
   "light-azimuth": 135, "light-elevation": 40, specular: 30,
@@ -694,7 +734,8 @@ document.getElementById("random-btn").addEventListener("click", () => {
     tone: hslToHex(rnd(8, 38), rnd(30, 60), rnd(55, 80)),
     pigment: rnd(10, 70),
     freckles: Math.random() < 0.4 ? 0 : rnd(10, 60),
-    "vein-visibility": rnd(15, 70), "vein-width": rnd(8, 45),
+    "vein-visibility": rnd(15, 70), arteries: rnd(0, 45), capillaries: rnd(10, 60),
+    "vein-width": rnd(8, 45),
     "vein-scale": rnd(3, 8), "vein-depth": rnd(0, 45),
     "vein-color": hslToHex(rnd(200, 260), rnd(30, 60), rnd(45, 65)),
     vitiligo: Math.random() < 0.55 ? 0 : rnd(8, 45),
