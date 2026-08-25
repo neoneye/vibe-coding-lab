@@ -77,12 +77,14 @@ function poll(){
   const convOK=registry['convTable']&&String(registry['convTable'].innerHTML).indexOf('HS\u00b2/tr G~')>=0;
   if(!(dataOK&&convOK)){
     if(Date.now()-pollStart<15000){
-      // retry the guarded handlers; they no-op until their inputs exist
-      ['mixRun','convRun'].forEach(id=>{ try{ const el=registry[id]; if(el&&typeof el[id]==='function') el[id](); }catch(e){} });
+      // retry the guarded handlers through their wired entry points
+      ['mixRun','convRun'].forEach(id=>call(id,'onclick'));
       setTimeout(poll,300); return;
     }
     console.error('poll deadline exceeded (dataOK='+!!dataOK+' convOK='+!!convOK+')');
   }
+  const efReady=()=>registry['efStats']&&registry['efStats']._children.length>=8;
+  if(!efReady()&&Date.now()-pollStart<20000){ setTimeout(()=>{ poll(); },500); return; }
   inspect();
 }
 setTimeout(poll,100);

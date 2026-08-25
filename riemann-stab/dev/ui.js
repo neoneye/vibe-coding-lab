@@ -635,8 +635,10 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
         const fStar=Rb-(Rb-Rx)*(Rb-Rx)/(Ra+Rb-2*Rx);
         const nominal=2-fStar;
         const afd=[
-          ['R(ψ₀) analytic',fmt(Ra,7),'var(--dim)'],
-          ['R(ψ_MT) analytic',fmt(Rb,7),'var(--dim)'],
+          ['R(ψ₀), midpoint quadrature',fmt(Ra,7),'var(--dim)'],
+          ['R(ψ₀), closed form', '4/3','var(--green)'],
+          ['R(ψ_MT), midpoint quadrature',fmt(Rb,7),'var(--dim)'],
+          ['R(ψ_MT), closed form ½+cot(1/√2)/√2',(0.5+Math.cos(1/Math.SQRT2)/(Math.SQRT2*Math.sin(1/Math.SQRT2))).toFixed(7),'var(--green)'],
           ['cross R₀,ₘₜ quadrature',fmt(Rx,7),'var(--red)'],
           ['dip condition M < min(R)',(Rx<Math.min(Ra,Rb)?'holds':'fails'),Rx<Math.min(Ra,Rb)?'var(--teal)':'var(--red)'],
           ['optimal indicator weight w*',fmt(wStar,6),'var(--accent)'],
