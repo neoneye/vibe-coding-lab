@@ -26,12 +26,13 @@ certificates — precisely the incoherence flagged in review. The residual gap
 between this skeleton's ≈0.6730071 and the manuscript's published
 0.6730085279… is NOT an o(N) effect: after dividing by N, little-o remainders
 vanish and cannot shift a limiting proportion. It traces instead to (a) the
-coarse rational enclosure R_hi = 1327501/10^6 exceeding c_MT^-1 by ~1.7e-6
-and (b) normalization differences between my defect scaling (×4035000) and
-the manuscript's (/1345000). Both are unresolved coefficient/enclosure
-issues, not asymptotic remainders. The numerical validation was performed
-interactively during development and is not preserved as a runnable
-script in this repository.
+coarse rational enclosure R_hi = 1327501/10^6 used for c_MT^-1 in my skeleton,
+which exceeds the true value by ~1.7×10⁻⁶, and (b) normalization differences
+between my defect scaling (×4035000) and the manuscript's. A correct
+computation requires rederiving both constants at matching precision.
+
+The numerical validation described here was performed interactively during
+development and is not preserved as a runnable script.
 
 ## Machine-checkable residue
 
