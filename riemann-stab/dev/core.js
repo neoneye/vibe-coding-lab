@@ -297,10 +297,50 @@ function jacobiEigen(Ain,n){
   return ev.sort((a,b)=>b-a);
 }
 
+
+// ---------- Weil explicit formula, centered-window test (strong zero signal) ------
+// Fhat(xi) = exp(-(xi-tau0)^2/w^2) + exp(-(xi+tau0)^2/w^2)   (even, Schwartz)
+// F(u)     = (w/sqrt(pi)) exp(-w^2 u^2 /4) cos(tau0 u)        (exact inverse transform)
+function fhatPair(tau,tau0,w){ const d1=(tau-tau0)/w, d2=(tau+tau0)/w;
+  return Math.exp(-d1*d1)+Math.exp(-d2*d2); }
+function fCenter(u,tau0,w){ return (w/Math.sqrt(Math.PI))*Math.exp(-w*w*u*u/4)*Math.cos(tau0*u); }
+function polesCenter(tau0,w){ // Fhat(i/2)+Fhat(-i/2) = 2 e^{(1/4-tau0^2)/w^2} cos(tau0/w)
+  return 2*Math.exp((0.25-tau0*tau0)/(w*w))*Math.cos(tau0/w);
+}
+function explicitFormulaSidesCenter(tau0,w, zerosUpTo, Tzeros, Xmax, quadStep){
+  // zero side: 2 * sum over computed ordinates (conjugates included)
+  let sz=0;
+  for(const g of zerosUpTo) sz += fhatPair(g,tau0,w);
+  sz*=2;
+  // tail estimate: zeros above Tzeros contribute ~ int density * fhat
+  let tail=0;
+  for(let t=Tzeros;t<Tzeros+2200;t+=1){
+    tail += (Math.log(t/(2*Math.PI))/(2*Math.PI))*fhatPair(t,tau0,w);
+  }
+  tail*=2; // conjugates
+  const poles=polesCenter(tau0,w);
+  // archimedean integral over the effective support of Fhat
+  let arch=0;
+  const TAU_MAX=Math.max(700, tau0+3.5*w);
+  for(let tau=quadStep/2; tau<TAU_MAX; tau+=quadStep){
+    arch += fhatPair(tau,tau0,w)*muArch(tau);
+  }
+  arch *= 2*quadStep;
+  const lam=sieveLambda(Xmax);
+  let prime=0;
+  for(let n=2;n<=Xmax;n++){
+    const Lv=lam[n];
+    if(Lv>0) prime += Lv/Math.sqrt(n)*fCenter(Math.log(n),tau0,w);
+  }
+  prime*=2;
+  return {zeroSide:sz, rhs:poles+arch-prime, poles:poles, arch:arch, prime:prime,
+          tailEst:tail, zeroSidePlusTail: sz+tail};
+}
+
 const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,
-  gaussF,gaussFhat,explicitFormulaSides,normalizedSpacings,jacobiEigen};
+  gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
 if(typeof module!=='undefined'&&module.exports) module.exports=RH;
 if(typeof window!=='undefined') window.RH=RH;

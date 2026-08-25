@@ -123,15 +123,16 @@ console.log('--- argument principle / xi ---');
   ok('N_box[1,100]=29',Math.abs(c100-29)<0.05,c100.toFixed(4));
 }
 
-console.log('--- explicit formula (Gaussian test) ---');
+console.log('--- explicit formula (centered window: zeros AND primes populated) ---');
 {
   const zs=M.findZeros(10,600,0.18);
   console.log('   zeros found up to 600:',zs.length);
-  for(const alpha of [0.18,0.3]){
-    const r=M.explicitFormulaSides(alpha,zs,12000,0.01);
-    const rel=Math.abs(r.zeroSide-r.rhs)/Math.max(1e-9,Math.abs(r.poles));
-    console.log(`   alpha=${alpha}: zero=${r.zeroSide.toFixed(6)} rhs=${r.rhs.toFixed(6)} (poles ${r.poles.toFixed(4)} arch ${r.arch.toFixed(4)} prime ${r.prime.toFixed(4)}) rel=${rel.toExponential(2)}`);
-    ok('explicit formula alpha='+alpha,rel<5e-5,rel);
+  for(const [tau0,w] of [[150,1.5],[300,2],[400,3]]){
+    const r=M.explicitFormulaSidesCenter(tau0,w,zs,600,12000,0.002);
+    const rel=Math.abs(r.zeroSide-r.rhs)/Math.abs(r.zeroSide);
+    const signal=Math.abs(r.prime)>0.05&&Math.abs(r.arch)>0.05;
+    console.log(`   tau0=${tau0} w=${w}: zero=${r.zeroSide.toFixed(5)} poles=${r.poles.toFixed(5)} arch=${r.arch.toFixed(5)} prime=${r.prime.toFixed(5)} rhs=${r.rhs.toFixed(5)} rel=${rel.toExponential(2)}`);
+    ok('explicit formula tau0='+tau0,rel<1e-9&&signal,'rel='+rel+' signal='+signal);
   }
 }
 

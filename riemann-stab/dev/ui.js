@@ -4,7 +4,7 @@ if(typeof document==='undefined') return; // allows node --check / headless smok
 const RH=window.RH;
 const $=id=>document.getElementById(id);
 const fmt=(x,d)=>Number(x).toFixed(d===undefined?6:d);
-const sci=(x)=>{const a=Math.abs(x);return a===0?'0':a<1e-4||a>=1e6?x.toExponential(3):fmt(x,Math.max(2,Math.min(12,Math.round(4-Math.log10(a)))))};
+const sci=x=>{const a=Math.abs(x);return a===0?'0':a<1e-4||a>=1e6?x.toExponential(3):fmt(x,Math.max(2,Math.min(12,Math.round(4-Math.log10(a)))))};
 
 // ---------- canvas helpers ----------
 function setupCanvas(cv){
@@ -15,7 +15,6 @@ function setupCanvas(cv){
   const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
   return {ctx,w,h};
 }
-function clear(cv,S){ S.ctx.clearRect(0,0,S.w,S.h); }
 
 // ---------- async chunk runner ----------
 function runChunks(thunks,onDone,barId){
@@ -37,8 +36,8 @@ let _zeros600=null;
 function getZeros600(cb){
   if(_zeros600) return cb(_zeros600);
   const zs=[];
-  const chunks=[]; 
-  for(let t=10;t<600;t+=20){ const a=t,b=Math.min(t+20,600); chunks.push(()=>{ const part=RH.findZeros(a,b,0.18); zs.push(...part); }); }
+  const chunks=[];
+  for(let t=10;t<600;t+=20){ const a=t,b=Math.min(t+20,600); chunks.push(()=>{ zs.push(...RH.findZeros(a,b,0.18)); }); }
   runChunks(chunks,()=>{_zeros600=zs;cb(zs);});
 }
 
@@ -52,6 +51,24 @@ const REF=[14.134725141734693,21.022039638771554,25.010857580145688,
   87.42527461340404,88.809111207634466,92.491899270558484,94.651344040519888,
   95.870634228245310,98.831194218193646,101.31785100573139];
 
+// ---------- argument principle (parametrized mesh) ----------
+function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
+  mesh=mesh||0.05;
+  const pts=[];
+  for(let y=tLo;y<tHi;y+=mesh) pts.push(RH.xiLog({re:sigmaHi,im:y}));
+  for(let x=sigmaHi;x>sigmaLo;x-=mesh) pts.push(RH.xiLog({re:x,im:tHi}));
+  for(let y=tHi;y>tLo;y-=mesh) pts.push(RH.xiLog({re:sigmaLo,im:y}));
+  for(let x=sigmaLo;x<sigmaHi;x+=mesh) pts.push(RH.xiLog({re:x,im:tLo}));
+  pts.push(RH.xiLog({re:sigmaHi,im:tLo}));
+  let tot=0,minAbs=Infinity;
+  for(let i=0;i<pts.length;i++){
+    minAbs=Math.min(minAbs,Math.exp(pts[i].re));
+    if(i){ let dd=pts[i].im-pts[i-1].im;
+      while(dd>Math.PI)dd-=2*Math.PI; while(dd<-Math.PI)dd+=2*Math.PI; tot+=dd; }
+  }
+  return {winding:tot/(2*Math.PI),minAbs:minAbs};
+}
+
 /* =====================================================================
    §1 ladder chart
 ===================================================================== */
@@ -63,34 +80,34 @@ const REF=[14.134725141734693,21.022039638771554,25.010857580145688,
     {label:'Selberg 1942 — positive proportion', frac:null},
     {label:'Levinson 1974 — 1/3', frac:1/3},
     {label:'Conrey 1989 — 2/5', frac:0.4},
+    {label:'Feng / Bui–Conrey–Young 2011–12 — ~41%', frac:0.41},
     {label:'Pratt–Robles–Zaharescu–Zeindler 2020 — 5/12 (simple)', frac:5/12},
     {label:'Alpöge–Furman 2026 — 2/3 (simple, unconditional)', frac:2/3, hot:true},
     {label:'Alpöge–Furman 2026 — Montgomery–Taylor window', frac:0.672503, hot:true},
   ];
-  const x0=330, x1=S.w-90, yTop=26, dy=38;
+  const x0=340, x1=S.w-90, yTop=22, dy=34;
   const ctx=S.ctx;
   ctx.font='13px '+getComputedStyle(document.body).getPropertyValue('--mono');
-  // gridlines
   for(const g of [0,0.25,0.5,0.75,1.0]){
     const x=x0+(x1-x0)*g;
     ctx.strokeStyle='#20242f';ctx.beginPath();ctx.moveTo(x,yTop-6);ctx.lineTo(x,yTop+dy*data.length);ctx.stroke();
     ctx.fillStyle='#5d5a68';ctx.fillText(Math.round(g*100)+'%',x-12,yTop+dy*data.length+16);
   }
-  data.forEach((d,i)=>{
+  data.forEach((dd,i)=>{
     const y=yTop+i*dy;
-    ctx.fillStyle=d.hot?'#e0b458':'#9a97a3';
+    ctx.fillStyle=dd.hot?'#e0b458':'#9a97a3';
     ctx.textAlign='right';
-    ctx.fillText(d.label,x0-12,y+13);
+    ctx.fillText(dd.label,x0-12,y+13);
     ctx.textAlign='left';
-    if(d.frac===null||d.frac===-1){
-      ctx.strokeStyle=d.hot?'#e0b458':'#5ec4b6';
+    if(dd.frac===null||dd.frac===-1){
+      ctx.strokeStyle=dd.hot?'#e0b458':'#5ec4b6';
       ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(x0,y+9);ctx.lineTo(x0+(x1-x0)*0.04,y+9);ctx.stroke();ctx.setLineDash([]);
-      ctx.fillStyle='#5d5a68';ctx.fillText(d.frac===-1?'∞':'>0',x0+(x1-x0)*0.04+8,y+13);
+      ctx.fillStyle='#5d5a68';ctx.fillText(dd.frac===-1?'∞':'>0',x0+(x1-x0)*0.04+8,y+13);
     }else{
-      ctx.fillStyle=d.hot?'rgba(224,180,88,.85)':'rgba(94,196,182,.75)';
-      ctx.fillRect(x0,y,(x1-x0)*d.frac,17);
+      ctx.fillStyle=dd.hot?'rgba(224,180,88,.85)':'rgba(94,196,182,.75)';
+      ctx.fillRect(x0,y,(x1-x0)*dd.frac,16);
       ctx.fillStyle='#e8e6df';
-      ctx.fillText((100*d.frac).toFixed(2)+'%',x0+(x1-x0)*d.frac+8,y+13);
+      ctx.fillText((100*dd.frac).toFixed(2)+'%',x0+(x1-x0)*dd.frac+8,y+13);
     }
   });
 })();
@@ -111,75 +128,50 @@ const REF=[14.134725141734693,21.022039638771554,25.010857580145688,
     ['imaginary residue of e^{iθ}ζ(1/2+it) at t=137.2', ()=> Math.abs(RH.bigZimagResidual(137.2))],
     ['θ(t) exact vs asymptotic series, t=50', ()=> Math.abs(RH.theta(50)-RH.thetaAsym(50))],
     ['live-found γ₁ minus reference γ₁=14.134725141734693', ()=>{
-        const zs=RH.findZeros(13,16,0.2); return Math.abs(zs[0]-14.134725141734693);
+        const zsx=RH.findZeros(13,16,0.2); return Math.abs(zsx[0]-14.134725141734693);
      }],
-    ['argument principle: #zeros ξ in strip, Im∈[1,50] (expect exactly 10)', ()=>{
-        return Math.abs(argCountBox(-1,2,1,50)/ (2*Math.PI) - 10);
+    ['argument principle: winding #zeros ξ, Im∈[1,50] (expect exactly 10)', ()=>{
+        return Math.abs(argCountBox(-1,2,1,50,0.05).winding-10);
      }],
-    ['Weil explicit formula, Gaussian α=1/3: |zero side − prime side| (rel.)', ()=>{
-        const zs=RH.findZeros(10,105,0.2);
-        const r=RH.explicitFormulaSides(1/3,zs,12000,0.02);
-        return Math.abs(r.zeroSide-r.rhs)/Math.max(1,r.poles);
-     }],
+    ['Weil explicit formula @τ₀=150,w=1.5: rel. |zeros − primes| side', ()=>{
+        const zsx=RH.findZeros(10,105,0.2);
+        const r=RH.explicitFormulaSidesCenter(150,1.5,zsx,105,12000,0.002);
+        return Math.abs(r.zeroSide-r.rhs)/Math.max(1e-9,Math.abs(r.zeroSide));
+     }]
   ];
-  const dots=[];
+  const rows=[];
   tests.forEach(t=>{
     const row=document.createElement('div');row.className='st-row';
     row.innerHTML='<span class="st-dot"></span><span class="st-name">'+t[0]+'</span><span class="st-val mono"></span>';
-    box.appendChild(row);dots.push(row);
+    box.appendChild(row);rows.push(row);
   });
-  const bar=$('selftestBar');
   runChunks(tests.map((t,i)=>()=>{
       let val,err=null;
       try{ val=t[1](); }catch(e){ err=e; }
-      const dot=dots[i].querySelector('.st-dot'), out=dots[i].querySelector('.st-val');
+      const dot=rows[i].querySelector('.st-dot'), out=rows[i].querySelector('.st-val');
       const pass=!err&&val<1e-8;
       dot.className='st-dot '+(pass?'pass':'fail');
       out.textContent=err?('error: '+err.message):sci(val);
       out.style.color=pass?'var(--green)':'var(--red)';
-      if(bar)bar.firstElementChild.style.width=(100*(i+1)/tests.length)+'%';
     }),()=>{},null);
-  // constants readout appended under panel
-  const note=document.createElement('div');
-  note.className='mono small';note.style.marginTop='10px';note.style.color='var(--dim)';
+  // §7 constants readout
   const c=0.5+Math.cos(1/Math.SQRT2)/(Math.SQRT2*Math.sin(1/Math.SQRT2));
-  note.innerHTML='c<sup>−1</sup><sub>MT</sub> = '+c.toFixed(6)+
-   '&emsp;⇒&ensp;2−c<sup>−1</sup><sub>MT</sub> = <span style="color:var(--accent)">'+(2-c).toFixed(6)+'</span>'+
-   '&emsp;⇒&ensp;½(3−c<sup>−1</sup><sub>MT</sub>) = <span style="color:var(--accent)">'+(0.5*(3-c)).toFixed(6)+'</span>';
   $('constantsBox').innerHTML=
    'R(ψ₀)=4/3 ⇒ 2−R = <span style="color:var(--green)">0.666667 = 2/3</span><br>'+
-   'R(ψ<sub>MT</sub>)=c<sup>−1</sup><sub>MT</sub> ⇒ 2−R = <span style="color:var(--accent)">'+(2-c).toFixed(6)+'</span>&emsp;(the 67.25%)<br>'+
-   '½(3−R) = <span style="color:var(--accent)">'+(0.5*(3-c)).toFixed(6)+'</span>&emsp;(the 83.62%, distinct)<br>'+
-   '<span class="dim">ceiling over all bandwidth-one certificates ≈ 0.682 · under-RH SDP record 0.6792</span>';
+   'R(ψ<sub>MT</sub>)=c<sup>−1</sup><sub>MT</sub> ⇒ 2−R = <span style="color:var(--accent)">'+(2-c).toFixed(6)+'</span>&emsp;(the 0.6725…)<br>'+
+   '½(3−R) = <span style="color:var(--accent)">'+(0.5*(3-c)).toFixed(6)+'</span>&emsp;(distinct, w/ MT window)<br>'+
+   '<span class="dim">ceiling over bandwidth-one certificates ≈ 0.682 · under-RH SDP record 0.6792</span>';
 })();
-
-// ---------- argument principle (shared) ----------
-function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
-  const pts=[];
-  const stepT=0.05, stepS=0.05;
-  for(let y=tLo;y<tHi;y+=stepT) pts.push(RH.xiLog({re:sigmaHi,im:y}));
-  for(let x=sigmaHi;x>sigmaLo;x-=stepS) pts.push(RH.xiLog({re:x,im:tHi}));
-  for(let y=tHi;y>tLo;y-=stepT) pts.push(RH.xiLog({re:sigmaLo,im:y}));
-  for(let x=sigmaLo;x<sigmaHi;x+=stepS) pts.push(RH.xiLog({re:x,im:tLo}));
-  pts.push(RH.xiLog({re:sigmaHi,im:tLo}));
-  let tot=0,minAbs=Infinity;
-  for(let i=0;i<pts.length;i++){
-    minAbs=Math.min(minAbs,Math.exp(pts[i].re));
-    if(i){ let d=pts[i].im-pts[i-1].im;
-      while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI; tot+=d; }
-  }
-  return {winding:tot/(2*Math.PI),minAbs:minAbs};
-}
 
 /* =====================================================================
    §3 Lab A — Z(t) explorer
 ===================================================================== */
 (function(){
   const cv=$('zplot'); if(!cv) return;
-  let t0=0,t1=60, lastZeros=null;
+  let t0=0,t1=60;
   function plot(){
     const S=setupCanvas(cv); const ctx=S.ctx;
-    let lo=t0,hi=t1;
+    const lo=t0,hi=t1;
     if(hi-lo<0.02)return;
     const n=Math.min(1400,Math.max(400,Math.floor((hi-lo)*22)));
     let mn=Infinity,mx=-Infinity; const vals=new Array(n);
@@ -188,7 +180,6 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
     if(mx-mn<1e-9){mx=mn+1;}
     const pad=(mx-mn)*0.12; mn-=pad;mx+=pad;
     const X=t=>(t-lo)/(hi-lo)*(S.w-64)+48, Y=v=>S.h-(v-mn)/(mx-mn)*(S.h-40)-22;
-    // axes
     ctx.strokeStyle='#262c3a';ctx.beginPath();ctx.moveTo(48,10);ctx.lineTo(48,S.h-22);ctx.lineTo(S.w-10,S.h-22);ctx.stroke();
     ctx.font='12px monospace';ctx.fillStyle='#5d5a68';
     for(let k=0;k<=4;k++){ const v=mn+(mx-mn)*k/4;
@@ -196,20 +187,17 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
       ctx.strokeStyle='#1a1f2c';ctx.beginPath();ctx.moveTo(48,Y(v));ctx.lineTo(S.w-10,Y(v));ctx.stroke(); }
     for(let k=0;k<=6;k++){ const t=lo+(hi-lo)*k/6;
       ctx.fillText(fmt(t,hi-lo>60?0:2),X(t)-10,S.h-6); }
-    // Gram points
     if($('zpGram').checked){
-      let n0=Math.ceil(RH.theta(lo)/Math.PI), nn=Math.floor(RH.theta(hi)/Math.PI);
+      const n0=Math.ceil(RH.theta(lo)/Math.PI), nn=Math.floor(RH.theta(hi)/Math.PI);
       if(nn-n0<800){ for(let g=n0;g<=nn;g++){ const p=RH.gramPoint(g);
           if(p<lo||p>hi)continue; const x=X(p);
           ctx.strokeStyle='rgba(224,180,88,.35)';ctx.beginPath();ctx.moveTo(x,10);ctx.lineTo(x,S.h-22);ctx.stroke();
-          ctx.fillStyle='rgba(224,180,88,.55)';ctx.fillText(g,x+2,18); } }
+          ctx.fillStyle='rgba(224,180,88,.55)';ctx.fillText(String(g),x+2,18); } }
     }
-    // curve
     ctx.strokeStyle='#5ec4b6';ctx.lineWidth=1.6;ctx.beginPath();
     for(let i=0;i<n;i++){ const t=lo+(hi-lo)*i/(n-1);
       if(i===0)ctx.moveTo(X(t),Y(vals[i]));else ctx.lineTo(X(t),Y(vals[i])); }
     ctx.stroke();
-    // zero line emphasis
     if(mn<0&&mx>0){ctx.strokeStyle='rgba(224,95,95,.6)';ctx.setLineDash([2,4]);
       ctx.beginPath();ctx.moveTo(48,Y(0));ctx.lineTo(S.w-10,Y(0));ctx.stroke();ctx.setLineDash([]);}
     ctx.lineWidth=1;
@@ -220,36 +208,37 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
       d.innerHTML='<span class="k">'+k+'</span><span class="v">'+v+'</span>';st.appendChild(d);};
     add('zeros found in view', zeros?zeros.length:'—');
     const vm=T=>RH.theta(T)/Math.PI+1;
-    add('von Mangoldt main term ≈', zeros?fmt(vm(t1)-vm(t0),1)+' ±S':'—');
+    add('von Mangoldt main term ≈', zeros?fmt(vm(t1)-vm(t0),1)+' ± S':'—');
     if(zeros&&t0>=10&&t1<=102){
       let worst=0,cnt=0;
       for(const r of REF) if(r>t0&&r<t1){ cnt++;
         let best=1e9; for(const z of zeros) best=Math.min(best,Math.abs(z-r)); worst=Math.max(worst,best); }
-      add('reference zeros in view',cnt);
+      add('reference zeros in view',String(cnt));
       add('max |computed − reference|', worst>0?worst.toExponential(2):'< 1e−12');
     }
   }
   function doFind(){
     const btn=$('zpFind');btn.disabled=true;
     const zeros=RH.findZeros(t0,t1,0.15);
-    lastZeros=zeros;
     refreshStats(zeros);
     const tbl=$('zpTable'),wrap=$('zpTableWrap');
-    let rows='<tr><th>#</th><th>t (computed)</th><th>Z′ magnitude</th></tr>';
+    let rows='<tr><th>#</th><th>t (computed)</th><th>|Z′| at zero</th></tr>';
     zeros.slice(0,120).forEach((z,i)=>{
-      const h=1e-5, d=(RH.bigZ(z+h)-RH.bigZ(z-h))/(2*h);
-      rows+='<tr><td>'+(i+1)+'</td><td class="num">'+z.toFixed(12)+'</td><td class="num">'+sci(Math.abs(d))+
-        (Math.abs(d)>0.5?' <span class="green">simple</span>':' <span class="red">?</span>')+'</td></tr>';
+      const h=1e-5, dv=(RH.bigZ(z+h)-RH.bigZ(z-h))/(2*h);
+      rows+='<tr><td>'+(i+1)+'</td><td class="num">'+z.toFixed(12)+'</td><td class="num">'+sci(Math.abs(dv))+
+        (Math.abs(dv)>0.5?' <span class="green">simple</span>':' <span class="red">?</span>')+'</td></tr>';
     });
     tbl.innerHTML=rows; wrap.style.display='block';
     plot(); btn.disabled=false;
   }
-  function syncRange(){ t0=parseFloat($('zpT0').value);t1=parseFloat($('zpT1').value);
+  function syncRange(){
+    t0=parseFloat($('zpT0').value);t1=parseFloat($('zpT1').value);
     if(!(t1>t0)){t1=t0+1;$('zpT1').value=t1;}
     if(t1-t0>1500){t1=t0+1500;$('zpT1').value=t1;}
     if(t0<-50){t0=-50;$('zpT0').value=t0;}
     if(t1>5000){t1=5000;$('zpT1').value=t1;}
-    lastZeros=null;refreshStats(null);plot(); }
+    refreshStats(null);plot();
+  }
   $('zpFind').onclick=doFind;
   $('zpZoomIn').onclick=()=>{const m=(t0+t1)/2;t0=m-(t1-t0)/4;t1=m+(t1-t0)/2;syncRange();};
   $('zpZoomOut').onclick=()=>{const m=(t0+t1)/2,w=(t1-t0);t0=m-w;t1=m+w;syncRange();};
@@ -257,12 +246,11 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
   $('zpGram').onchange=plot;
   window.addEventListener('resize',()=>plot());
   syncRange();
-  // pre-load some found zeros quietly for first paint
   setTimeout(doFind,300);
 })();
 
 /* =====================================================================
-   §4 Lab B — completeness audit
+   §4 Lab B — completeness audit (counts compared, mesh cross-checked)
 ===================================================================== */
 (function(){
   const slider=$('auditT'); if(!slider) return;
@@ -271,58 +259,78 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
     const T=parseFloat(slider.value); $('auditRun').disabled=true;
     const st=$('auditStats'); st.innerHTML='';
     const verdict=$('auditVerdict');verdict.innerHTML='';
-    const chunks=[]; let result=null;
-    chunks.push(()=>{ result=argCountBox(-1,2,1,T); });
-    let zeros=null;
-    chunks.push(()=>{ zeros=RH.findZeros(2,T,0.15); });
-    runChunks(chunks,()=>{
+    const thunks=[]; let coarse=null,fine=null,zeros=null;
+    thunks.push(()=>{ coarse=argCountBox(-1,2,1,T,0.05); });
+    thunks.push(()=>{ fine=argCountBox(-1,2,1,T,0.025); });
+    thunks.push(()=>{ zeros=RH.findZeros(2,T,0.15); });
+    runChunks(thunks,()=>{
       $('auditRun').disabled=false;
-      const w=result.winding;
-      const resid=Math.abs(w-Math.round(w));
-      const add=(k,v)=>{const d=document.createElement('div');d.className='stat';
-        d.innerHTML='<span class="k">'+k+'</span><span class="v">'+v+'</span>';st.appendChild(d);};
-      add('Δarg ξ / 2π (all zeros in box)', fmt(w,4));
-      add('nearest integer', Math.round(w));
-      add('integrality residual', resid.toExponential(2));
-      add('min |ξ| on contour', result.minAbs.toExponential(2));
-      add('sign changes of Z(t), 2<t<T', zeros.length);
-      const okAll=resid<0.02&&result.minAbs>1e-9;
-      verdict.innerHTML='<div class="verdict '+(okAll?'ok':'warn')+'">'+
-        (okAll
-          ? 'VERDICT — every zero counted in the box lies on the critical line: '+Math.round(w)+' zeros, '
-            +zeros.length+' sign changes, counts agree. No off-line zero up to t = '+T+' (to numerical resolution).'
-          : 'INCONCLUSIVE — contour grazed something (residual '+resid.toExponential(2)+', min|ξ|='+result.minAbs.toExponential(2)+'). '
-            +'Nudge T slightly; this is the standard operational hazard of the method.')+'</div>';
+      const w=coarse.winding, k=Math.round(w);
+      const resid=Math.abs(w-k);
+      const meshAgrees=Math.abs(fine.winding-Math.round(fine.winding))<0.02 &&
+                        Math.round(fine.winding)===k;
+      const countsAgree=(k===zeros.length);
+      const okAll=resid<0.02&&countsAgree&&meshAgrees;
+      const add=(kv,v)=>{const d=document.createElement('div');d.className='stat';
+        d.innerHTML='<span class="k">'+kv+'</span><span class="v">'+v+'</span>';st.appendChild(d);};
+      add('Δarg ξ / 2π — box count (coarse mesh)', fmt(w,4));
+      add('box count (half mesh)', fmt(fine.winding,4)+(meshAgrees?' ✓':' ✗'));
+      add('nearest integer', String(k));
+      add('sign changes of Z(t), 2<t<T', String(zeros.length));
+      add('min |ξ| sampled on contour', sci(coarse.minAbs)+' <span class="dim">(informational)</span>');
+      if(okAll){
+        verdict.innerHTML='<div class="verdict ok">VERDICT — box count ('+k+') equals sign-change count ('+zeros.length+
+          ') at both meshes: every zero of ζ with 2 &lt; t &lt; '+T+' lies on the critical line, simply, to numerical resolution.</div>';
+      }else if(!countsAgree&&resid<0.02&&meshAgrees){
+        verdict.innerHTML='<div class="verdict warn"><b>COUNT MISMATCH</b> — box contains '+k+' zeros but Z(t) shows '+zeros.length+
+          ' sign changes. Either a multiple/tangent zero sits in range, or numerics slipped. This discrepancy pattern is exactly what a real off-line '
+          +'or multiple zero would look like — treat as a finding, not a certificate.</div>';
+      }else{
+        verdict.innerHTML='<div class="verdict warn">INCONCLUSIVE — winding residual '+resid.toExponential(2)+
+          ' or meshes disagree ('+fmt(fine.winding,4)+' vs '+fmt(w,4)+'). Nudge T; operational hazard of the method.</div>';
+      }
     },'auditBar');
   };
 })();
 
 /* =====================================================================
-   §5 Lab C — explicit formula
+   §5 Lab C — explicit formula, centered windows
 ===================================================================== */
 (function(){
-  if(!$('efAlpha')) return;
-  $('efAlpha').oninput=()=>{$('efAlphaLabel').textContent='α = '+(parseInt($('efAlpha').value)/100).toFixed(2);};
-  $('efRun').onclick=()=>{
-    const alpha=parseInt($('efAlpha').value)/100;
+  if(!$('efTau')) return;
+  $('efTau').oninput=()=>{$('efTauLabel').textContent='τ₀ = '+$('efTau').value;};
+  $('efW').oninput=()=>{$('efWLabel').textContent='w = '+(parseInt($('efW').value)/10).toFixed(1);};
+  function run(){
+    if($('efRun').disabled) return;
+    const tau0=parseInt($('efTau').value), w=parseInt($('efW').value)/10;
     $('efRun').disabled=true;
     getZeros600((zs)=>{
-      const r=RH.explicitFormulaSides(alpha,zs,12000,0.012);
+      const r=RH.explicitFormulaSidesCenter(tau0,w,zs,600,12000,Math.min(0.01,Math.max(0.001,w/400)));
       const st=$('efStats'); st.innerHTML='';
       const add=(k,v,col)=>{const d=document.createElement('div');d.className='stat';
         d.innerHTML='<span class="k">'+k+'</span><span class="v"'+(col?' style="color:'+col+'"':'')+'>'+v+'</span>';st.appendChild(d);};
-      add('zero side  Σ F̂(γ) (+ conjugates)','<b>'+fmt(r.zeroSide,6)+'</b>','#5ec4b6');
-      add('pole terms F̂(±i/2)',fmt(r.poles,4));
-      add('+ gamma integral ∫F̂·μ',fmt(r.arch,4));
-      add('− 2Σ Λ(n)/√n·F(log n)',fmt(r.prime,4),'#e05f5f');
-      add('= right-hand side','<b>'+fmt(r.rhs,6)+'</b>');
-      const diff=Math.abs(r.zeroSide-r.rhs), scale=Math.max(1,Math.abs(r.poles));
-      add('|difference| (relative to scale)',diff.toExponential(2), diff/scale<1e-5?'var(--green)':'var(--red)');
-      $('efVerdict').innerHTML='<div class="verdict '+(diff/scale<1e-5?'ok':'warn')+'">The zeros your machine found sing the same song as the primes. '
-        +'Relative disagreement: '+(diff/scale).toExponential(1)+'. This is the identity whose positivity form is equivalent to RH.</div>';
+      add('zero side Σ F̂(γ) (+conjugates)','<b>'+fmt(r.zeroSide,5)+'</b>','#5ec4b6');
+      add('pole terms F̂(±i/2)',fmt(r.poles,5));
+      add('+ gamma integral ∫F̂·μ',fmt(r.arch,5));
+      add('− 2Σ Λ(n)/√n · F(log n)',fmt(r.prime,5),'#e05f5f');
+      add('= right-hand side','<b>'+fmt(r.rhs,5)+'</b>');
+      const diff=Math.abs(r.zeroSide-r.rhs);
+      const rel=diff/Math.max(1e-9,Math.abs(r.zeroSide));
+      const signal=Math.abs(r.prime)>0.02&&Math.abs(r.arch)>0.05&&Math.abs(r.zeroSide)>0.2;
+      const good=rel<1e-6&&signal;
+      add('|difference| / |zero side|',rel.toExponential(2),good?'var(--green)':'var(--red)');
+      verdict_html($('efVerdict'),good,
+        'The zeros near τ₀='+tau0+' and the primes sing the same number, to relative disagreement '+rel.toExponential(1)+
+        '. Both sides are genuinely loaded here (prime-side contribution '+fmt(r.prime,3)+' against archimedean '+fmt(r.arch,3)+').',
+        !signal?'One of the sides went quiet at this (τ₀,w) — widen w or move τ₀.':'Disagreement above quadrature noise — nudge the sliders.');
       $('efRun').disabled=false;
     });
-  };
+    function verdict_html(el,good,msgA,msgB){
+      el.innerHTML='<div class="verdict '+(good?'ok':'warn')+'">'+(good?msgA:msgB)+'</div>';
+    }
+  }
+  $('efRun').onclick=run;
+  setTimeout(run,800);
 })();
 
 /* =====================================================================
@@ -337,34 +345,37 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
       const nb=60,lo=0,hi=3,bw=(hi-lo)/nb; const bins=new Array(nb).fill(0);
       for(const d of sp){ if(d>=lo&&d<hi) bins[Math.floor((d-lo)/bw)]++; }
       const total=sp.length;
+      const surmise=x=>32*x*x/(Math.PI*Math.PI)*Math.exp(-4*x*x/Math.PI);
+      const poisson=x=>Math.exp(-x);
+      const ymax=1.15;
       const S=setupCanvas($('pcHist'));const ctx=S.ctx;
-      const ymax=Math.max(0.9,32/(Math.PI*Math.PI)*Math.exp(-4/Math.PI*0))*1.15;
       const Y=x=>S.h-24-x/ymax*(S.h-44), X=x=>24+x/hi*(S.w-40);
       ctx.strokeStyle='#262c3a';ctx.beginPath();ctx.moveTo(24,S.h-24);ctx.lineTo(S.w-16,S.h-24);ctx.stroke();
       ctx.font='12px monospace';ctx.fillStyle='#5d5a68';
       for(let g=0;g<=3;g+=0.5){ctx.fillText(fmt(g,1),X(g)-6,S.h-8);}
-      // curves first
       const curve=(f,color)=>{ctx.strokeStyle=color;ctx.lineWidth=1.6;ctx.beginPath();
         for(let i=0;i<=180;i++){const x=i/180*hi;const px=X(x),py=Y(f(x));
           if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);}ctx.stroke();ctx.lineWidth=1;};
-      curve(x=>Math.exp(-x),'#e05f5f');
-      curve(x=>32*x*x/(Math.PI*Math.PI)*Math.exp(-4*x*x/Math.PI),'#e0b458');
-      // bars
+      curve(poisson,'#e05f5f');
+      curve(surmise,'#e0b458');
       bins.forEach((c,i)=>{ const dens=c/(total*bw);
         ctx.fillStyle='rgba(94,196,182,.55)';
-        const hpx=Y(0)-Y(dens); ctx.fillRect(X(lo+i*bw)+1,Y(dens),(S.w-40)/nb-2,hpx); });
-      // stats
+        ctx.fillRect(X(lo+i*bw)+1,Y(dens),(S.w-40)/nb-2,Y(0)-Y(dens)); });
       const mean=sp.reduce((a,b)=>a+b,0)/sp.length;
       const min=Math.min.apply(null,sp);
       const below=sp.filter(d=>d<0.2).length;
+      // surmise P(delta<0.2) by quadrature — computed, not asserted
+      let pSurmise=0; const qn=2000,hh=0.2/qn;
+      for(let i=0;i<=qn;i++){ const x=i*hh; const fval=surmise(x);
+        pSurmise+=(i===0||i===qn?0.5:1)*fval*hh; }
       const st=$('pcStats');st.innerHTML='';
       const add=(k,v)=>{const d=document.createElement('div');d.className='stat';
         d.innerHTML='<span class="k">'+k+'</span><span class="v">'+v+'</span>';st.appendChild(d);};
-      add('zeros used',zs.length);
+      add('zeros used',String(zs.length));
       add('mean normalized spacing',fmt(mean,4));
       add('smallest gap δ_min (Lehmer watch)',min.toFixed(4), min<0.1?'var(--red)':'var(--accent)');
-      add('gaps with δ < 0.2',below+' ('+(100*below/total).toFixed(1)+'%)');
-      add('GUE prediction for δ<0.2', '~0.6%');
+      add('observed share δ < 0.2', below+' ('+(100*below/total).toFixed(2)+'%)');
+      add('surmise P(δ < 0.2)', (100*pSurmise).toFixed(2)+'%');
       $('pcStatus').textContent='done — '+total+' spacings';
       btn.disabled=false;
     });
@@ -372,33 +383,105 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
 })();
 
 /* =====================================================================
-   §8 Lab E — inertia playground (Q, the off-line part)
+   §8 Lab E — two panels: exact chain + real-zero Q
 ===================================================================== */
+// ---- E·i: exact algebraic chain in an idealized orthonormal frame ----
+(function(){
+  const s2s=$('cS2'); if(!s2s) return;
+  const N_TOTAL=24;
+  function build(s2,p,soff){
+    const s1=N_TOTAL-s2-p;
+    const dim=s1+s2+2*p;
+    const mk=()=>{const M=[];for(let i=0;i<dim;i++)M.push(new Array(dim).fill(0));return M;};
+    const G=mk(),P1=mk();
+    const outer=(M,x,y,f)=>{for(let i=0;i<dim;i++)for(let j=0;j<dim;j++)M[i][j]+=f*x[i]*y[j];};
+    let slot=0;
+    // doubled on-line zeros: one slot each, vv^T counted twice -> trace 2, rank 1
+    for(let k=0;k<s2;k++){
+      const v=new Array(dim).fill(0); v[slot]=1; slot++;
+      outer(G,v,v,2);
+    }
+    // off-line pairs: two slots; v = a + i*b, a=sqrt(1+s^2)*e, b=s*f
+    // vv^T + conj(v)conj(v)^T = 2(aa^T - bb^T): trace 2, inertia (1,1)
+    for(let k=0;k<p;k++){
+      const ei=slot++, fi=slot++;
+      const a=new Array(dim).fill(0), b=new Array(dim).fill(0);
+      a[ei]=Math.sqrt(1+soff*soff); b[fi]=soff;
+      outer(G,a,a,2); outer(G,b,b,-2);
+    }
+    // simple on-line zeros: remaining slots, land in both G and P1
+    for(let k=0;k<s1;k++){
+      const v=new Array(dim).fill(0); v[slot]=1; slot++;
+      outer(G,v,v,1); outer(P1,v,v,1);
+    }
+    return {G,P1,dim,s1,N:s1+2*s2+2*p};
+  }
+  function diag(M,n){let tr=0,hs=0;for(let i=0;i<n;i++){tr+=M[i][i];for(let j=0;j<n;j++)hs+=M[i][j]*M[i][j];}return{tr,hs};}
+  function posNeg(M,n){const ev=RH.jacobiEigen(M,n);
+    const sc=Math.max.apply(null,ev.map(Math.abs).concat([1e-12]));
+    return {pos:ev.filter(e=>e>1e-9*sc).length, neg:ev.filter(e=>e<-1e-9*sc).length, ev};}
+  function update(){
+    const s2=parseInt($('cS2').value), p=parseInt($('cPairs').value), soff=parseInt($('cOff').value)/100;
+    $('cS2Label').textContent='s₂ = '+s2;
+    $('cPairsLabel').textContent='p = '+p;
+    $('cOffLabel').textContent='s = '+soff.toFixed(2);
+    const s1=N_TOTAL-s2-p;
+    if(s1<0)return;
+    const r=build(s2,p,soff);
+    const n=r.dim;
+    const g=diag(r.G,n), p1=diag(r.P1,n);
+    // Q' = G - P1 built explicitly:
+    const Qp=[];for(let i=0;i<n;i++){Qp.push(new Array(n).fill(0));
+      for(let j=0;j<n;j++)Qp[i][j]=r.G[i][j]-r.P1[i][j];}
+    const qq=posNeg(Qp,n);
+    const B=4*g.tr-2*r.N-g.hs;
+    const st=$('cStats'); st.innerHTML='';
+    const add=(k,v,col)=>{const d=document.createElement('div');d.className='stat';
+      d.innerHTML='<span class="k">'+k+'</span><span class="v"'+(col?' style="color:'+col+'"':'')+'>'+v+'</span>';st.appendChild(d);};
+    add('N = s₁+2s₂+2p',String(r.N));
+    add('tr G̃ (=N?)',fmt(g.tr,3),Math.abs(g.tr-r.N)<1e-9?'var(--green)':'var(--red)');
+    add('rank P₁ (should be s₁='+s1+')',String(rk.pos),rk.pos===s1?'var(--green)':'var(--red)');
+    add('n₊(Q′) ≤ s₂+p = '+(s2+p),String(qq.pos),qq.pos<=s2+p?'var(--green)':'var(--red)');
+    add('bound B = 4tr−2N−‖G̃‖²_HS',fmt(B,3),'var(--accent)');
+    add('rank P₁ ≥ B ?',(rk.pos>=B-1e-9?'holds':'VIOLATED'),rk.pos>=B-1e-9?'var(--green)':'var(--red)');
+    add('slack: rank P₁ − B',fmt(rk.pos-B,3),'var(--teal)');
+    $('cVerdict').innerHTML='<div class="verdict ok">Watch the bookkeeping: doubling zeros keeps rank fixed while trace grows, and the flat charge-4 term eats the slack — '
+      +'with p = 0 the inequality closes to exact equality (m² ≥ 3m−2 at work). Off-line pairs donate their positive directions into Q′, counted through n₊ ≤ s₂+p. '
+      +'What an orthonormal toy frame cannot show is the ⅔ itself: there, R(ψ) &gt; 1 comes from real window overlap — Beam 2&rsquo;s analytic input.</div>';
+  }
+  s2s.oninput=update;$('cPairs').oninput=update;$('cOff').oninput=update;
+  update();
+})();
+
+// ---- E·ii: Q from real zeros near t=400 ----
 (function(){
   const cv=$('gSpec'); if(!cv) return;
-  let base=null; // {L,d,alphas,gammaList,a}
-  function phiHatQuad(x,y,nodes,u0,u1){
-    const L=base.L;
-    const f=u=>{ const c=Math.cos(Math.SQRT2*u/L); if(c<=0)return {re:0,im:0};
+  let base=null;
+  function phiHatQuad(x,y){
+    const L=base.L,u0=-L/2,u1=L/2,nodes=2400;
+    let re=0,im=0;const h=(u1-u0)/nodes;
+    for(let i=0;i<=nodes;i++){
+      const w=(i===0||i===nodes)?1:(i%2?4:2);
+      const u=u0+i*h;
+      const c=Math.cos(Math.SQRT2*u/L);
+      if(c<=0)continue;
       const e=Math.exp(-y*u)*Math.sqrt(c);
-      return {re:e*Math.cos(-x*u), im:e*Math.sin(-x*u)}; };
-    let re=0,im=0; const h=(u1-u0)/nodes;
-    for(let i=0;i<=nodes;i++){ const w=(i===0||i===nodes)?1:(i%2?4:2);
-      const v=f(u0+i*h); re+=w*v.re; im+=w*v.im; }
-    return {re:re*h/3, im:im*h/3};
+      re+=w*e*Math.cos(-x*u); im+=w*e*Math.sin(-x*u);
+    }
+    return {re:re*h/3,im:im*h/3};
   }
   function Qmat(p,beta){
     const {alphas,gammaList,L,a,d}=base;
-    const Q=[]; for(let i=0;i<d;i++)Q.push(new Array(d).fill(0));
+    const Q=[];for(let i=0;i<d;i++)Q.push(new Array(d).fill(0));
     const norm=1/(a*L*L);
-    function addTerm(v1,v2,m){ for(let i=0;i<d;i++)for(let j=0;j<d;j++)
-        Q[i][j]+=m*(v1[i].re*v2[j].re - v1[i].im*v2[j].im); }
+    const addTerm=(v1,v2,m)=>{for(let i=0;i<d;i++)for(let j=0;j<d;j++)
+      Q[i][j]+=m*(v1[i].re*v2[j].re-v1[i].im*v2[j].im);};
     for(let idx=0;idx<p;idx++){
       const gr=gammaList[idx], dy=0.5-beta;
-      const v=alphas.map(al=>phiHatQuad(gr-al,dy,2400,-L/2,L/2));
-      addTerm(v,v,norm);                       // rho
+      const v=alphas.map(al=>phiHatQuad(gr-al,dy));
+      addTerm(v,v,norm);
       const vc=v.map(z=>({re:z.re,im:-z.im}));
-      addTerm(vc,vc,norm);                     // partner 1-conj(rho): 2(aa^T-bb^T) total
+      addTerm(vc,vc,norm);
     }
     return Q;
   }
@@ -406,7 +489,7 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
     const S=setupCanvas(cv);const ctx=S.ctx;
     const d=ev.length;
     const mx=Math.max.apply(null,ev.map(Math.abs).concat([1e-12]));
-    const mid=S.h/2, sc=(S.h/2-30)/mx, bw=(S.w-80)/d;
+    const mid=S.h/2, sc=(S.h/2-26)/mx, bw=(S.w-80)/d;
     ctx.strokeStyle='#262c3a';ctx.beginPath();ctx.moveTo(30,mid);ctx.lineTo(S.w-30,mid);ctx.stroke();
     ctx.font='12px monospace';
     ev.forEach((e,i)=>{
@@ -426,7 +509,7 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
     if(!base) return;
     if(p===0){
       draw(new Array(base.d).fill(0));
-      $('gVerdict').innerHTML='<div class="verdict ok">Q = 0: with every zero on the critical line there are no off-line pairs, and the off-line part of Weil&rsquo;s form vanishes. Move the sliders to commit violations of RH.</div>';
+      $('gVerdict').innerHTML='<div class="verdict ok">Q = 0: with every zero on the line, the off-line part of Weil&rsquo;s form vanishes.</div>';
       $('gStats').innerHTML='';
       return;
     }
@@ -436,29 +519,27 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
     const neg=ev.filter(e=>e<-1e-9*scale).length;
     const pos=ev.filter(e=>e>1e-9*scale).length;
     const st=$('gStats'); st.innerHTML='';
-    const add=(k,v)=>{const d2=document.createElement('div');d2.className='stat';
-      d2.innerHTML='<span class="k">'+k+'</span><span class="v">'+v+'</span>';st.appendChild(d2);};
-    add('off-line pairs injected',p);
-    add('inertia n₊(Q)',pos,'var(--teal)');
-    add('negative index n₋(Q)',neg, neg>0?'var(--red)':'var(--dim)');
-    add('bound respected: n₊ ≤ p', pos+' ≤ '+p+(pos<=p?' ✓':' ✗'),'var(--green)');
+    const add=(k,v)=>{const d=document.createElement('div');d.className='stat';
+      d.innerHTML='<span class="k">'+k+'</span><span class="v">'+v+'</span>';st.appendChild(d);};
+    add('off-line pairs injected',String(p));
+    add('inertia n₊(Q)',String(pos),'var(--teal)');
+    add('negative index n₋(Q)',String(neg),neg>0?'var(--red)':'var(--dim)');
+    add('bound respected: n₊ ≤ p',pos+' ≤ '+p+(pos<=p?' ✓':' ✗'),'var(--green)');
     $('gVerdict').innerHTML='<div class="verdict '+(neg>0?'warn':'ok')+'">'+
      (neg===0
-      ? 'The pair blocks are too weak against numerical resolution at this β — push β further from ½.'
-      : 'Each injected pair {ρ, 1−ρ̄} adds a signature-(1,1) block 2(aaᵀ−bbᵀ). The negative index — which Sylvester&rsquo;s law makes basis-independent, and Bombieri read as an off-line count — climbs with p, never exceeding it. In the theorem this is exactly the term 4b subtracted inside the rank–trace inequality.')+'</div>';
+      ? 'Pair blocks too weak against resolution at this β — push β further from ½.'
+      : 'Each pair {ρ, 1−ρ̄} adds a signature-(1,1) block. The negative index — basis-independent by Sylvester, read as an off-line count by Bombieri — climbs with p, never exceeding it.')+'</div>';
   }
-  // build base data lazily
   getZeros600(all=>{
     const T0=400, L=Math.log(T0/(2*Math.PI)), d=16, step=2*Math.PI/L;
     const alphas=[]; for(let k=0;k<d;k++) alphas.push(T0+k*step);
     const lo=T0-L, hi=T0+d*step+L+1;
     const gammaList=all.filter(g=>g>lo&&g<hi).slice(0,10);
     base={L,d,alphas,gammaList,a:Math.SQRT2*Math.sin(1/Math.SQRT2)};
-    $('gPairs').setAttribute('max',Math.min(8,gammaList.length));
+    $('gPairs').setAttribute('max',String(Math.min(8,gammaList.length)));
     update();
   });
   $('gPairs').oninput=update;
   $('gBeta').oninput=update;
 })();
-
 })();
