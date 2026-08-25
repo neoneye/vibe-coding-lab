@@ -75,7 +75,14 @@ const pollStart=Date.now();
 function poll(){
   const dataOK=cvRegistry['mixCanvas']&&cvRegistry['mixCanvas']._data;
   const convOK=registry['convTable']&&String(registry['convTable'].innerHTML).indexOf('HS\u00b2/tr G~')>=0;
-  if(!(dataOK&&convOK)&&Date.now()-pollStart<15000){ setTimeout(poll,250); return; }
+  if(!(dataOK&&convOK)){
+    if(Date.now()-pollStart<15000){
+      // retry the guarded handlers; they no-op until their inputs exist
+      ['mixRun','convRun'].forEach(id=>{ try{ const el=registry[id]; if(el&&typeof el[id]==='function') el[id](); }catch(e){} });
+      setTimeout(poll,300); return;
+    }
+    console.error('poll deadline exceeded (dataOK='+!!dataOK+' convOK='+!!convOK+')');
+  }
   inspect();
 }
 setTimeout(poll,100);

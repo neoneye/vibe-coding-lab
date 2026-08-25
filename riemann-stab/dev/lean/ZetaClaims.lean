@@ -19,6 +19,27 @@
     H_MT = 3/2 - cot(1/sqrt2)/sqrt2 = 0.6725007036794116457… -/
 abbrev HmtScaled : Int := 6725007036794116457
 
+/-- CONNECTED stability-chain theorem (indicator-window certificate variant,
+    all quantities in the 3×1345000 common scale):
+      hypotheses
+        hbook : zero bookkeeping            N ≥ s1+2s2+2p          [Prop 4.1]
+        hRup  : second-moment upper bound   F2 ≤ (4/3)·N           [Beam 2, R(ψ₀)=4/3]
+        hlem  : stability lemma consequence F2+s1 ≥ 2N+Df         [ext. Lemma]
+        hdef  : seven-point averaged defect Df ≥ (14991·s1−8040·N)/4035000
+                                                                    [ext. Prop F6]
+      conclusion — a simple-zero proportion claim for this window family:
+        4020009 * s1 ≥ 2681960 * N, i.e. s1/N ≥ 2681960/4020009 ≈ 0.667…
+    Fully machine-checked; the ANALYTIC inputs (Theorem-D moment, kernel
+    limit, F6 interval certificate) enter only through these hypotheses and
+    are proven elsewhere (Arb verifier / Mathlib future work). -/
+theorem indicator_stability_chain
+    (S1 S2 P N Df F2 : Int)
+    (hbook : S1 + 2 * S2 + 2 * P ≤ N)
+    (hRup : 3 * 1345000 * F2 ≤ 4 * 1345000 * N)
+    (hlem : 3 * 1345000 * F2 + 3 * 1345000 * S1 ≥ 6 * 1345000 * N + 3 * 1345000 * Df)
+    (hdef : 3 * 1345000 * Df ≥ 14991 * S1 - 8040 * N) :
+    4020009 * S1 ≥ 2681960 * N := by omega
+
 /-- Bookkeeping skeleton of eq. (1.2) of arXiv:2608.13637:
     N(I') ≥ s1 + 2*s2 + 2*p together with n₊(Q') ≤ s2 + p yields the step
     3*s1 + 4*s2 + 4*p ≤ s1 + 2*N used inside rank P₁ ≥ 4 tr G̃ − 2N − ‖G̃‖². -/

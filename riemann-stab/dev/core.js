@@ -436,7 +436,10 @@ function mixtureStats(frame,wSamples){
 //   R(psi)     = ( int psi^2 + int int |u-v| psi(u)psi(v) ) / (int psi)^2
 //   R_12(a,b)  = ( int psia psib + int int |u-v| sqrt(psia psib)(u)sqrt(psia psib)(v) )
 //                / ( int psia * int psib )
-// Validated against anchors: R(psi_0)=4/3 exactly, R(psi_MT)=c_MT^{-1}.
+// STATUS: the SINGLE-window functional is validated against two anchors
+// (R(psi_0)=4/3 exactly; R(psi_MT)=c_MT^-1 closed form). The CROSS formula
+// remains a CONJECTURED inference: no prime-side derivation or independent
+// theorem for it exists on this page.
 function psiWin(shape,s){
   const au=Math.abs(s);
   if(shape==='ind') return au<=0.5?1:0;
