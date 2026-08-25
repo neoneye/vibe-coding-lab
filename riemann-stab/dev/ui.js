@@ -630,11 +630,16 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
         cv._data={X:st.X,Y:st.Y,M:st.M,bestF:st.bestF,bestG:st.bestG,d16zeros:frame.zs.length,symViol:st.symViol};
         const dips=st.bestF<Math.min(st.X,st.Y)-1e-9;
         const undercut=st.bestG<Math.min(st.X,st.Y)-1e-9;
+        const winner=(st.X<=st.Y)?'smoothed-indicator':'Montgomery-Taylor';
+        const winVal=Math.min(st.X,st.Y);
         $('mixVerdict').innerHTML='<div class="verdict '+(dips||undercut?'ok':'warn')+'">'+
-          'With admissible C²-tapered windows at this scale, <b>neither mixture undercuts the better parent</b>: both curves run flat between '+
-          fmt(st.Y,4)+' and '+fmt(st.X,4)+', bottoming at the pure-MT endpoint. The mixed-Gram statistic would need M &lt; min(X,Y) to dive — observed '
-          'M/N̄ = '+fmt(st.M,5)+' sits above it. Consistent, at toy scale, with Montgomery–Taylor optimality among windows; testing that claim '
-          'asymptotically is out of reach for a browser.</div>';
+          'Neither mixture dips below its better parent ('+(st.X<=st.Y?'smoothed-indicator':'MT')+' = '+
+          fmt(winVal,4)+'): both curves run monotonically between endpoints and bottom out exactly there'+
+          (undercut?', with an interior undercut of '+fmt(Math.min(st.X,st.Y)-st.bestG,4):', with no interior gain')+'. '+
+          'Read this only as finite-T bookkeeping: which parent wins is a property of these two windows at t≈400, NOT evidence about '+
+          'asymptotic optimality among windows — that claim ([CCLM17]) lives at T→∞ and is untouched by a browser toy. '+
+          'The open fork: if the polarized prime-side functional R(ψ₁,ψ₂) satisfies R ≥ min(R(ψ₁),R(ψ₂)) throughout a '+
+          'meaningful family, the mixture program dies rigorously; if some pair violates it, a configuration-wise rank-two extraction lemma must first pay for itself.</div>';
         $('mixStatus').textContent='done';
       }catch(e){ console.error(e); $('mixStatus').textContent='error: '+e.message; }
       $('mixRun').disabled=false;

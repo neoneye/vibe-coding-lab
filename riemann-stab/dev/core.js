@@ -343,7 +343,9 @@ function explicitFormulaSidesCenter(tau0,w, zerosUpTo, Tzeros, Xmax, quadStep){
 // Returns per-shape {G,tr,hs,V,normJ,aInt} on a shared grid/zeros, plus zs.
 function windowFramePair(gammaList,d,T0,L,shapes){
   const step=2*Math.PI/L;
-  const EPS=L*0.20;
+  // Fixed ABSOLUTE transition width (O(1) in u), mirroring the preprint's
+  // fixed-width chi transitions -- NOT a fraction of L.
+  const EPS=0.45;
   function quintic(t){t=Math.min(1,Math.max(0,t));return t*t*t*(10-15*t+6*t*t);}
   function ampOf(shape,u){
     const au=Math.abs(u);
@@ -400,14 +402,18 @@ function mixtureStats(frame,wSamples){
   for(const w of wSamples){
     fVals.push(w*w*X+(1-w)*(1-w)*Y+2*w*(1-w)*M);
     if(fVals[fVals.length-1]<bestF){bestF=fVals[fVals.length-1];bestWf=w;}
-    const sw=Math.sqrt(w)*(Nbar/frame.sind.tr), sq=Math.sqrt(1-w)*(Nbar/frame.mt.tr);
+    // literal window mixture phi_w = sqrt(w)*phi_0 + sqrt(1-w)*phi_MT:
+    // raw amplitude functions are O(1)-comparable, so the raw transform mix
+    // IS the mixed-window transform; the reported HS^2/tr ratio is
+    // scale-invariant, so no further normalization enters.
+    const sw=Math.sqrt(w), sq=Math.sqrt(1-w);
     const Gw=[];for(let a=0;a<d;a++)Gw.push(new Array(d).fill(0));
     for(let k=0;k<frame.zs.length;k++){
       const va=frame.sind.V[k], vb=frame.mt.V[k];
       for(let a2=0;a2<d;a2++)for(let b2=0;b2<d;b2++){
         const ur=sw*va[a2].re+sq*vb[a2].re, ui=sw*va[a2].im+sq*vb[a2].im;
         const vr=sw*va[b2].re+sq*vb[b2].re, vi=sw*va[b2].im+sq*vb[b2].im;
-        Gw[a2][b2]+=(ur*vr-ui*vi)/Nbar;
+        Gw[a2][b2]+=(ur*vr-ui*vi);
       }
     }
     symViol=Math.max(symViol,(()=>{let s=0;for(let a=0;a<d;a++)for(let b=0;b<d;b++)s=Math.max(s,Math.abs(Gw[a][b]-Gw[b][a]));return s;})());

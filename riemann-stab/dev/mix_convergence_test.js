@@ -86,11 +86,33 @@ console.log('=== mixture statistics at d=16 (canonical builder) ===');
     for(let i=0;i<=400;i++){const w=i/400;const f=w*w*Xc+(1-w)*(1-w)*Yc+2*w*(1-w)*Mc;if(f<b)b=f;}
     check('counterexample (4,1,1.5): no dip', b>=Yc-1e-12, b.toFixed(6));
   }
-  // pins for DOM-smoke browser parity
+  // golden-pins regression: compare against reviewed immutable values.
+  // Ordinary runs NEVER rewrite the golden file; --update-pins regenerates it
+  // after printing a diff, for explicit manual review.
   const fs=require('fs'), path=require('path');
-  const pins={X:st.X,Y:st.Y,M:st.M,bestF:st.bestF,bestG:st.bestG,d16zeros:frame.zs.length};
-  fs.writeFileSync(path.join(__dirname,'pins.json'),JSON.stringify(pins,null,2));
-  console.log('pins.json written');
+  const r24=buildPair(zall,24);
+  const pins={X:st.X,Y:st.Y,M:st.M,bestF:st.bestF,bestG:st.bestG,d16zeros:frame.zs.length,
+              d24ratio:r24.hs.mt/r24.tr.mt,d24count:r24.zs.length};
+  const goldenPath=path.join(__dirname,'pins.golden.json');
+  const updateFlag=process.argv.includes('--update-pins');
+  if(updateFlag||!fs.existsSync(goldenPath)){
+    if(fs.existsSync(goldenPath)){
+      const oldP=JSON.parse(fs.readFileSync(goldenPath,'utf8'));
+      console.log('--update-pins diff (old -> new):');
+      for(const k of Object.keys(pins)){
+        if(JSON.stringify(oldP[k])!==JSON.stringify(pins[k]))
+          console.log('  ',k,':',JSON.stringify(oldP[k]),'->',JSON.stringify(pins[k]));
+      }
+    } else console.log('seeding golden pins');
+    fs.writeFileSync(goldenPath,JSON.stringify(pins,null,2));
+  }
+  const gold=JSON.parse(fs.readFileSync(goldenPath,'utf8'));
+  for(const k of Object.keys(pins)){
+    if(typeof pins[k]==='number'){
+      const rel=Math.abs(pins[k]-gold[k])/Math.max(1e-12,Math.abs(gold[k]));
+      check('golden parity '+k, rel<1e-9, 'got '+pins[k]+' expected '+gold[k]);
+    } else check('golden parity '+k, pins[k]===gold[k], pins[k]+' vs '+gold[k]);
+  }
 }
 
 console.log(ok?'ALL VALIDATIONS PASS':'VALIDATIONS FAILED');
