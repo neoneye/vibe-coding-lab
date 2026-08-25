@@ -25,30 +25,6 @@
     constant — that link lives in the JavaScript laboratory. -/
 abbrev HmtScaled : Int := 6725007036794116457
 
-/-- CONNECTED stability-chain theorem (indicator-window variant,
-    all quantities in the 3×1345000 common scale):
-      hypotheses
-        hbook : zero bookkeeping            N ≥ s1+2s2+2p          [Prop 4.1]
-        hRup  : second-moment upper bound   F2 ≤ (4/3)·N           [Beam 2, R(ψ₀)=4/3]
-        hlem  : stability lemma consequence F2+s1 ≥ 2N+Df         [ext. Lemma]
-        hdef  : seven-point averaged defect Df ≥ (14991·s1−8040·N)/4035000
-                                                                    [ext. Prop F6]
-      conclusion — a simple-zero proportion claim for this window family:
-        4020009 * s1 ≥ 2681960 * N, i.e. s1/N ≥ 2681960/4020009 ≈ 0.667…
-    Fully machine-checked; the ANALYTIC inputs (Theorem-D moment, kernel
-    limit, F6 interval certificate) enter only through these hypotheses and
-    are proven elsewhere (Arb verifier / Mathlib future work).
-    NOTE: indicator-window variant. The Montgomery–Taylor analogue needs an
-    irrational moment constant (c_MT^{-1}); handling it requires Mathlib
-    rationals/enclosures and is future work. -/
-theorem indicator_stability_chain
-    (S1 S2 P N Df F2 : Int)
-    (_hbook : S1 + 2 * S2 + 2 * P ≤ N)
-    (hRup : 3 * 1345000 * F2 ≤ 4 * 1345000 * N)
-    (hlem : 3 * 1345000 * F2 + 3 * 1345000 * S1 ≥ 6 * 1345000 * N + 3 * 1345000 * Df)
-    (hdef : 3 * 1345000 * Df ≥ 14991 * S1 - 8040 * N) :
-    4020009 * S1 ≥ 2681960 * N := by omega
-
 /-- Bookkeeping skeleton of eq. (1.2) of arXiv:2608.13637:
     N(I') ≥ s1 + 2*s2 + 2*p together with n₊(Q') ≤ s2 + p yields the step
     3*s1 + 4*s2 + 4*p ≤ s1 + 2*N used inside rank P₁ ≥ 4 tr G̃ − 2N − ‖G̃‖². -/
@@ -56,29 +32,21 @@ theorem chain_inequality (s1 s2 p N : Int)
     (h : s1 + 2 * s2 + 2 * p ≤ N) :
     3 * s1 + 4 * s2 + 4 * p ≤ s1 + 2 * N := by omega
 
-/-- CONNECTED certificate-with-defect theorem (general parametrized form).
+/- WITHDRAWN THEOREM SKETCH — DO NOT REINSTATE WITHOUT READING
+   dev/lean/rejected/README.md.
 
-    Hypotheses mirror the external refinement's structure at explicit
-    rational scaling:
-      hcert : the one-window certificate supplies
-                S ≥ (Hnum/Hden)·N + Df              (trace identity absorbed)
-      hdef  : the averaged overlap-defect supplies
-                Df ≥ (Anum·S − Aden·N)/Hden         (defect slope A/B)
+   Claim attempted: from hcert : S ≥ (Hnum/Hden)·N + Df and
+   hdef : Df ≥ (Anum·S − Aden·N)/Hden, conclude the proportion bound
+   (1345000*Hden − 1345000*Anum)*S ≥ (1345000*Hnum − 2680*Hden)*N.
 
-    Conclusion — cleared to integers:
-        (1345000*Hden − 1345000*Anum) * S
-          ≥ (1345000*Hnum − 2680*Hden) * N
-    i.e. the proportion claim s1/N ≥ (1345000*Hnum − 2680*Hden) /
-         (1345000*(Hden − Anum)), machine-checked for ANY admissible
-     parameter tuple with Hden > Anum. Window-specific content enters ONLY
-     through the caller's choice of (Hnum,Hden,Anum,Aden).
-
-     STATUS: WITHDRAWN — omega found a genuine integer counterexample to
-     this exact statement (Anum close to Hden makes the conclusion fail
-     while both hypotheses hold). The implication is simply not valid as
-     universally quantified over Int; a correct version needs additional
-     admissibility hypotheses tying the defect slope to the certificate
-     scale. See dev/lean/rejected/README.md for the full autopsy. -/
+   DISPOSITION: omega REFUTED this implication over Int (genuine integer
+   counterexample; see dev/lean/rejected/README.md for the constraint
+   system). The refutation exposed a real mathematical content problem:
+   pairing an indicator-window moment bound with Montgomery–Taylor-kernel
+   defect coefficients mixes two different window certificates. Any
+   correct version needs window-coherent hypotheses supplied by actual
+   analytic work — not a tactic fix.
+- -/
 -- theorem certificate_with_defect ... WITHDRAWN (see rejected note)
 
 /-- Exact arithmetic behind the external refinement's headline:

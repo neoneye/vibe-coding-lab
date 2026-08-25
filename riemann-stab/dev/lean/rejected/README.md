@@ -24,11 +24,14 @@ yields (after correcting one sign slip that omega's counterexample caught):
 The constant 2681960/4020009 encodes the defect slope pair (14991/4035000,
 8040/4035000), which is derived from the Montgomery–Taylor overlap kernel.
 Pairing it with an indicator-window moment bound mixes two different window
-certificates — precisely the incoherence flagged in review. The fully-MT
-version requires an irrational moment constant (c_MT^-1) whose rational
-enclosure shifts the bound to ≈0.6730071, below the manuscript's published
-0.6730085279…; the residual gap traces to o(N) terms this skeleton does not
-model.
+certificates — precisely the incoherence flagged in review. The residual gap
+between this skeleton's ≈0.6730071 and the manuscript's published
+0.6730085279… is NOT an o(N) effect: after dividing by N, little-o remainders
+vanish and cannot shift a limiting proportion. It traces instead to (a) the
+coarse rational enclosure R_hi = 1327501/10^6 exceeding c_MT^-1 by ~3e-7 and
+(b) normalization differences between my defect scaling (×4035000) and the
+manuscript's (/1345000). Both are unresolved coefficient/enclosure issues,
+not asymptotic remainders.
 
 ## Machine-checkable residue
 
