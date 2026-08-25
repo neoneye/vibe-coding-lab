@@ -68,17 +68,21 @@ setTimeout(()=>{
   call('zpT0','onchange'); call('zpT1','onchange'); call('zpGram','onchange');
 },400);
 
-// ---- settle & inspect ----
-// second handler pass after async caches settle
-setTimeout(()=>{
-  ['mixRun','convRun'].forEach(id=>{ try{ const el=registry[id]; if(el&&typeof el[id]==='function') {} }catch(e){} });
-},2500);
-setTimeout(()=>{
-  ['mixRun','convRun'].forEach(id=>call(id,'onclick'));
-},2600);
-setTimeout(()=>{
+// ---- settle: re-click, poll until ready, inspect with full assertions ----
+setTimeout(()=>{ ['mixRun','convRun'].forEach(id=>call(id,'onclick')); },2600);
+
+const pollStart=Date.now();
+function poll(){
+  const dataOK=cvRegistry['mixCanvas']&&cvRegistry['mixCanvas']._data;
+  const convOK=registry['convTable']&&String(registry['convTable'].innerHTML).indexOf('HS\u00b2/tr G~')>=0;
+  if(!(dataOK&&convOK)&&Date.now()-pollStart<15000){ setTimeout(poll,250); return; }
+  inspect();
+}
+setTimeout(poll,100);
+
+function inspect(){
   let fail=0;
-  // 1. self-test dots
+  if(uncaught){ fail++; console.error('FAIL uncaught exceptions:',uncaught); }
   const box=registry['selftest'];
   const rows=box ? box._children : [];
   for(const r of rows){
@@ -89,40 +93,35 @@ setTimeout(()=>{
     else console.log('selftest pass:', val.textContent);
   }
   if(rows.length!==8){ fail++; console.error('expected 8 self-test rows, saw',rows.length); }
-  // 2. lab C stats populated
   if(!registry['efStats'] || !registry['efStats']._children.length){ fail++; console.error('Lab C stats empty'); }
-  // 3. lab E-i stats populated (the former rk crash site)
   if(!registry['cStats'] || !registry['cStats']._children.length){ fail++; console.error('Lab E-i stats empty'); }
-  // 4. audit verdict present after run
-  if(registry['auditVerdict'] && String(registry['auditVerdict'].innerHTML).indexOf('verdict')<0){ fail++; console.error('Lab B verdict missing'); }
-  // 5. E-iii mixture stats populated + browser parity vs pins.json
+  if(!registry['auditVerdict'] || String(registry['auditVerdict'].innerHTML).indexOf('verdict')<0){ fail++; console.error('Lab B verdict missing'); }
   const ms=registry['mixStats'];
   if(!ms || ms._children.length<5){ fail++; console.error('E-iii mixture stats missing'); }
   else {
     const first=ms._children[0];
     const txt=(first.querySelector('.k')&&first.querySelector('.k').textContent||'')+' '+
               (first.querySelector('.v')?first.querySelector('.v').textContent:'');
-    console.log('mixture stat[0]:',txt.slice(0,70));
+    console.log('mixture stat[0]:',txt.slice(0,80));
   }
+  const convOK2=registry['convTable']&&String(registry['convTable'].innerHTML).indexOf('HS\u00b2/tr G~')>=0;
+  if(!convOK2){ fail++; console.error('convergence table missing'); }
   try{
-    const pins=JSON.parse(fs.readFileSync(path.join(__dirname,'pins.json'),'utf8'));
+    const goldenPath=require('path').join(__dirname,'pins.golden.json');
+    const golden=JSON.parse(require('fs').readFileSync(goldenPath,'utf8'));
     const data=cvRegistry['mixCanvas'] && cvRegistry['mixCanvas']._data;
     if(!data){ fail++; console.error('mixCanvas._data missing'); }
     else{
       for(const key of ['X','Y','M','bestF','bestG']){
-        const rel=Math.abs(data[key]-pins[key])/Math.max(1e-12,Math.abs(pins[key]));
-        if(rel>1e-6){ fail++; console.error('PARITY FAIL',key,'browser='+data[key],'pins='+pins[key]); }
+        const rel=Math.abs(data[key]-golden[key])/Math.max(1e-12,Math.abs(golden[key]));
+        if(rel>1e-6){ fail++; console.error('PARITY FAIL',key,'browser='+data[key],'golden='+golden[key]); }
         else console.log('parity OK:',key,data[key].toFixed(6));
       }
-      checkCount('d16zeros parity', data.d16zeros===pins.d16zeros);
+      if(data.d16zeros!==golden.d16zeros){ fail++; console.error('FAIL d16zeros parity'); }
     }
   }catch(e){ fail++; console.error('pins parity error:',e.message); }
-  function checkCount(name,cond){ if(!cond){fail++;console.error('FAIL',name);} }
-  // 6. convergence table populated
-  if(!registry['convTable'] || String(registry['convTable'].innerHTML).indexOf('HS²/tr G~')<0){ fail++; console.error('convergence table missing'); }
 
-  if(uncaught){ console.error('uncaught exceptions:',uncaught); process.exit(1); }
   if(fail){ console.error('DOM SMOKE FAILED,',fail,'issue(s)'); process.exit(1); }
-  console.log('DOM SMOKE PASS — init path clean, self-test green, handlers OK');
+  console.log('DOM SMOKE PASS \u2014 init path clean, self-test green, handlers OK, browser==golden');
   process.exit(0);
-},6000);
+}
