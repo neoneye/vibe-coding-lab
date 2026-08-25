@@ -160,7 +160,7 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
    'R(ψ₀)=4/3 ⇒ 2−R = <span style="color:var(--green)">0.666667 = 2/3</span><br>'+
    'R(ψ<sub>MT</sub>)=c<sup>−1</sup><sub>MT</sub> ⇒ 2−R = <span style="color:var(--accent)">'+(2-c).toFixed(6)+'</span>&emsp;(the 0.6725…)<br>'+
    '½(3−R) = <span style="color:var(--accent)">'+(0.5*(3-c)).toFixed(6)+'</span>&emsp;(distinct, w/ MT window)<br>'+
-   '<span class="dim">ceiling over bandwidth-one certificates ≈ 0.682 · under-RH SDP record 0.6792</span>';
+   '<span class="dim">MT optimal within 2−R(ψ) [CCLM17] · bandwidth-one certificate obstruction ≈ 0.68183 [Easley–McAleer, numerically enclosed] · under-RH SDP record 0.6792</span>';
 })();
 
 /* =====================================================================
@@ -458,15 +458,16 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
 (function(){
   const cv=$('gSpec'); if(!cv) return;
   let base=null;
-  function phiHatQuad(x,y){
+  const base_a=Math.SQRT2*Math.sin(1/Math.SQRT2);
+  function phiHatQuad(x,y,shape){
     const L=base.L,u0=-L/2,u1=L/2,nodes=2400;
+    const amp=u=>shape==='ind'?1:(c=>c<=0?0:Math.sqrt(c))(Math.cos(Math.SQRT2*u/L));
     let re=0,im=0;const h=(u1-u0)/nodes;
     for(let i=0;i<=nodes;i++){
       const w=(i===0||i===nodes)?1:(i%2?4:2);
-      const u=u0+i*h;
-      const c=Math.cos(Math.SQRT2*u/L);
-      if(c<=0)continue;
-      const e=Math.exp(-y*u)*Math.sqrt(c);
+      const u=u0+i*h, m=amp(u);
+      if(m===0)continue;
+      const e=Math.exp(-y*u)*m;
       re+=w*e*Math.cos(-x*u); im+=w*e*Math.sin(-x*u);
     }
     return {re:re*h/3,im:im*h/3};
@@ -479,7 +480,7 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
       Q[i][j]+=m*(v1[i].re*v2[j].re-v1[i].im*v2[j].im);};
     for(let idx=0;idx<p;idx++){
       const gr=gammaList[idx], dy=0.5-beta;
-      const v=alphas.map(al=>phiHatQuad(gr-al,dy));
+      const v=alphas.map(al=>phiHatQuad(gr-al,dy,'mt'));
       addTerm(v,v,norm);
       const vc=v.map(z=>({re:z.re,im:-z.im}));
       addTerm(vc,vc,norm);
@@ -504,6 +505,7 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
     ctx.fillText('λmin '+ev[d-1].toExponential(3),S.w-190,20);
   }
   function update(){
+    if(!base) return;
     const p=parseInt($('gPairs').value), beta=parseInt($('gBeta').value)/100;
     $('gPairsLabel').textContent='p = '+p;
     $('gBetaLabel').textContent='β = '+beta.toFixed(2);
@@ -526,21 +528,153 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
     add('inertia n₊(Q)',String(pos),'var(--teal)');
     add('negative index n₋(Q)',String(neg),neg>0?'var(--red)':'var(--dim)');
     add('bound respected: n₊ ≤ p',pos+' ≤ '+p+(pos<=p?' ✓':' ✗'),'var(--green)');
+    if(base.ratio!==null){
+      add('HS²/trG̃ vs c⁻¹_MT',base.ratio.toFixed(4)+' / 1.3275','var(--accent)');
+      add('asymptotic share',(100*base.ratio/1.327503).toFixed(1)+'%');
+    }
     $('gVerdict').innerHTML='<div class="verdict '+(neg>0?'warn':'ok')+'">'+
      (neg===0
       ? 'Pair blocks too weak against resolution at this β — push β further from ½.'
       : 'Each pair {ρ, 1−ρ̄} adds a signature-(1,1) block. The negative index — basis-independent by Sylvester, read as an off-line count by Bombieri — climbs with p, never exceeding it.')+'</div>';
   }
-  getZeros600(all=>{
-    const T0=400, L=Math.log(T0/(2*Math.PI)), d=16, step=2*Math.PI/L;
-    const alphas=[]; for(let k=0;k<d;k++) alphas.push(T0+k*step);
-    const lo=T0-L, hi=T0+d*step+L+1;
-    const gammaList=all.filter(g=>g>lo&&g<hi).slice(0,10);
-    base={L,d,alphas,gammaList,a:Math.SQRT2*Math.sin(1/Math.SQRT2)};
+  const T0=400, L=Math.log(T0/(2*Math.PI)), d=16, stepE=2*Math.PI/L;
+  $('convRun').onclick=()=>{
+    if(!base||!base.all){ return; }
+    const rows=[];
+    for(const dd of [8,10,12,14,16,18,20,24]){
+      const stepC=2*Math.PI/L;
+      const alphasC=[];for(let k=0;k<dd;k++)alphasC.push(T0+k*stepC);
+      const lo=T0-L,hi=T0+dd*stepC+L;
+      const zs=base.all.filter(g=>g>lo&&g<hi);
+      const normJ=1/(base.a*L*L);
+      const G=[];for(let i=0;i<dd;i++)G.push(new Array(dd).fill(0));
+      for(const gr of zs){
+        const v=alphasC.map(al=>phiHatQuad(gr-al,0,'mt'));
+        for(let i2=0;i2<dd;i2++)for(let j2=0;j2<dd;j2++)G[i2][j2]+=normJ*(v[i2].re*v[j2].re-v[i2].im*v[j2].im);
+      }
+      let tr=0,hs=0;
+      for(let i2=0;i2<dd;i2++){tr+=G[i2][i2];}
+      for(let i2=0;i2<dd;i2++)for(let j2=0;j2<dd;j2++)hs+=G[i2][j2]*G[i2][j2];
+      rows.push({d:dd,nz:zs.length,tr:tr,ratio:tr>1e-9?hs/tr:NaN});
+    }
+    let html='<tr><th>d</th><th>zeros in frame</th><th>tr G~</th><th>HS²/tr G~</th><th>share of c⁻¹_MT</th></tr>';
+    for(const r of rows){
+      html+='<tr><td>'+r.d+'</td><td class="num">'+r.nz+'</td><td class="num">'+r.tr.toFixed(3)+
+        '</td><td class="num">'+r.ratio.toFixed(4)+'</td><td class="num">'+(100*r.ratio/1.327503).toFixed(1)+'%</td></tr>';
+    }
+    html+='<tr><td colspan="5" class="small dim">asymptotic target c⁻¹_MT = 1.32750; toy-scale values sit below it and fluctuate with grid placement — no convergence claim at this scale.</td></tr>';
+    $('convTable').innerHTML=html;
+    $('convWrap').style.display='block';
+  };
+  $('convRun').disabled=true;
+
+  getZeros600(zall=>{
+    const alphas=[]; for(let k=0;k<d;k++) alphas.push(T0+k*stepE);
+    const lo=T0-L, hi=T0+d*stepE+L;
+    const gammaList=zall.filter(g=>g>lo&&g<hi).slice(0,10);
+    // zero-side second-moment ratio for the on-line compression (exploratory)
+    base={L,d,alphas,gammaList,a:base_a,ratio:null,all:zall};
+    const normJ=1/(base_a*L*L), G=[];for(let i=0;i<d;i++)G.push(new Array(d).fill(0));
+    for(const gr of gammaList){
+      const v=alphas.map(al=>phiHatQuad(gr-al,0,'mt'));
+      for(let i=0;i<d;i++)for(let j=0;j<d;j++)G[i][j]+=normJ*(v[i].re*v[j].re-v[i].im*v[j].im);
+    }
+    let tr=0,hs=0;for(let i=0;i<d;i++){tr+=G[i][i];}
+    for(let i=0;i<d;i++)for(let j=0;j<d;j++)hs+=G[i][j]*G[i][j];
+    base.ratio=tr>1e-9?hs/tr:null;
     $('gPairs').setAttribute('max',String(Math.min(8,gammaList.length)));
     update();
+    $('convRun').disabled=false;
   });
   $('gPairs').oninput=update;
   $('gBeta').oninput=update;
+
+})();
+/* =====================================================================
+   §9 E·iii — trace-normalized mixture experiment (indicator vs MT)
+===================================================================== */
+(function(){
+  const cv=$('mixCanvas'); if(!cv) return;
+  const T0m=400, Lm=Math.log(T0m/(2*Math.PI)), dm=16, stepm=2*Math.PI/Lm;
+  function phiHatQuad(x,y,shape){
+    const u0=-Lm/2,u1=Lm/2,nodes=2400;
+    const amp=u=>shape==='ind'?1:(c=>c<=0?0:Math.sqrt(c))(Math.cos(Math.SQRT2*u/Lm));
+    let re=0,im=0;const h=(u1-u0)/nodes;
+    for(let i=0;i<=nodes;i++){
+      const w=(i===0||i===nodes)?1:(i%2?4:2);
+      const u=u0+i*h, m=amp(u);
+      if(m===0)continue;
+      const e=Math.exp(-y*u)*m;
+      re+=w*e*Math.cos(-x*u); im+=w*e*Math.sin(-x*u);
+    }
+    return {re:re*h/3,im:im*h/3};
+  }
+  function buildG(shape,gammaList){
+    const alphas=[];for(let k=0;k<dm;k++)alphas.push(T0m+k*stepm);
+    const lo=T0m-Lm, hi=T0m+dm*stepm+Lm;
+    const zs=gammaList.filter(g=>g>lo&&g<hi);
+    const aInt=shape==='ind'?1:Math.SQRT2*Math.sin(1/Math.SQRT2);
+    const normJ=1/(aInt*Lm*Lm);
+    const G=[];for(let i=0;i<dm;i++)G.push(new Array(dm).fill(0));
+    for(const gr of zs){
+      const v=alphas.map(al=>phiHatQuad(gr-al,0,shape));
+      for(let i=0;i<dm;i++)for(let j=0;j<dm;j++)G[i][j]+=normJ*(v[i].re*v[j].re-v[i].im*v[j].im);
+    }
+    let tr=0,hs=0;for(let i=0;i<dm;i++){tr+=G[i][i];}for(let i=0;i<dm;i++)for(let j=0;j<dm;j++)hs+=G[i][j]*G[i][j];
+    return {G,tr,hs,nz:zs.length};
+  }
+  $('mixRun').onclick=()=>{
+    $('mixRun').disabled=true;
+    getZeros600(zall=>{
+      const g0=buildG('ind',zall), g2=buildG('mt',zall);
+      const d=g0.G.length;
+      const M12=(()=>{let t=0;for(let i=0;i<d;i++)for(let j=0;j<d;j++)t+=g0.G[i][j]*g2.G[j][i];return t;})();
+      const N=Math.max(1e-9,g0.tr);
+      const X=g0.hs/N, Y=g2.hs/N, m=M12/N;
+      // mixture curve, normalized by mixed trace w*tr0+(1-w)*tr2
+      const vals=[];
+      let bestW=0,bestV=Infinity;
+      for(let i=0;i<=200;i++){
+        const w=i/200;
+        const trMix=w*g0.tr+(1-w)*g2.tr;
+        const v=(w*w*g0.hs+(1-w)*(1-w)*g2.hs+2*w*(1-w)*M12)/Math.max(1e-9,trMix);
+        vals.push(v);
+        if(v<bestV){bestV=v;bestW=w;}
+      }
+      // draw
+      const S=setupCanvas(cv);const ctx=S.ctx;
+      const yLo=Math.min(bestV,Math.min(X,Y))*0.97, yHi=Math.max(X,Y)*1.03;
+      const Ymap=v=>S.h-26-(v-yLo)/(yHi-yLo)*(S.h-46), Xmap=w=>30+w*(S.w-56);
+      ctx.strokeStyle='#262c3a';ctx.beginPath();ctx.moveTo(30,Ymap(yLo));ctx.lineTo(S.w-26,Ymap(yLo));ctx.stroke();
+      ctx.font='12px monospace';ctx.fillStyle='#5d5a68';
+      [[Y,'X/N='+X.toFixed(4),'#5ec4b6'],[Y,'Y/N='+Y.toFixed(4),'#8ab8e8']].forEach(([yv,lab,col])=>{
+        ctx.strokeStyle='rgba(255,255,255,.14)';ctx.setLineDash([3,4]);
+        ctx.beginPath();ctx.moveTo(30,Ymap(yv));ctx.lineTo(S.w-26,Ymap(yv));ctx.stroke();ctx.setLineDash([]);
+        ctx.fillStyle=col;ctx.fillText(lab,S.w-150,Ymap(yv)-4);
+      });
+      ctx.strokeStyle='#e0b458';ctx.lineWidth=1.8;ctx.beginPath();
+      vals.forEach((v,i)=>{ const px=Xmap(i/200), py=Ymap(v); if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py); });
+      ctx.stroke();ctx.lineWidth=1;
+      ctx.fillStyle='#e05f5f';
+      ctx.fillText('best '+bestV.toFixed(5)+' @ w='+bestW.toFixed(2),40,Ymap(bestV)-8);
+      // stats & verdict
+      const st=$('mixStats'); st.innerHTML='';
+      const add=(k,v)=>{const dd=document.createElement('div');dd.className='stat';
+        dd.innerHTML='<span class="k">'+k+'</span><span class="v">'+v+'</span>';st.appendChild(dd);};
+      add('parent X/N (indicator)',fmt(X,5));
+      add('parent Y/N (MT)',fmt(Y,5));
+      add('mixed moment M₁₂/N',fmt(m,5),'var(--red)');
+      add('√(XY)/N',fmt(Math.sqrt(g0.hs*g2.hs)/N,5));
+      add('best mixture ratio','<b>'+fmt(bestV,5)+'</b> at w='+bestW.toFixed(2),'var(--accent)');
+      const dips=bestV<Math.min(X,Y)-1e-6;
+      $('mixVerdict').innerHTML='<div class="verdict '+(dips?'ok':'warn')+'">'+
+        (dips?'The mixture dips below BOTH parents (‖C‖²/N = '+fmt(bestV,5)+' < '+fmt(Math.min(X,Y),5)+
+          '): the diag(1,0)/diag(0,1) mechanism is real in live data — trace-normalized combinations are not blocked by the raw-addition inequality. '
+          +'Whether weighted multi-window certificates can be pushed toward the 0.68183 obstruction is exactly the open optimization problem.'
+         :'No dip detected at this grid — parents too correlated here.')+'</div>';
+      $('mixStatus').textContent='done';
+      $('mixRun').disabled=false;
+    });
+  };
 })();
 })();
