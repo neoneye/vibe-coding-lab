@@ -9,6 +9,7 @@ process.on('uncaughtException',e=>{ uncaught++; console.error('UNCAUGHT:',e && e
 
 // ---- minimal but faithful-enough DOM ----
 const registry={};
+const cvRegistry={};
 const call=(id,evt)=>{ try{ const el=registry[id]; if(el&&typeof el[evt]==='function') el[evt](); }
                         catch(e){ uncaught++; console.error('HANDLER FAIL',id,e&&e.message); } };
 const DEFAULT_VALUE={
@@ -33,7 +34,8 @@ function elStub(id){
     setAttribute(k,v){ if(k==='max') el._max=v; },
     getAttribute(){ return null; },
     addEventListener(){},
-    getContext(){ return makeCtx(); },
+    getContext(){ if(!el._ctx){ el._ctx=makeCtx(); if(id)cvRegistry[id]=el; } return el._ctx; },
+    _data:null,
     firstElementChild:{style:{}},
     onclick:null, oninput:null, onchange:null,
     _children:children, _q:{}, _max:null,
@@ -93,15 +95,29 @@ setTimeout(()=>{
   if(!registry['cStats'] || !registry['cStats']._children.length){ fail++; console.error('Lab E-i stats empty'); }
   // 4. audit verdict present after run
   if(registry['auditVerdict'] && String(registry['auditVerdict'].innerHTML).indexOf('verdict')<0){ fail++; console.error('Lab B verdict missing'); }
-  // 5. E-iii mixture stats populated
+  // 5. E-iii mixture stats populated + browser parity vs pins.json
   const ms=registry['mixStats'];
   if(!ms || ms._children.length<5){ fail++; console.error('E-iii mixture stats missing'); }
   else {
     const first=ms._children[0];
     const txt=(first.querySelector('.k')&&first.querySelector('.k').textContent||'')+' '+
-              (first.querySelector('.v')?first.querySelector('.v').textContent:'')+' '+first.innerHTML;
-    console.log('mixture stat[0]:', txt.slice(0,70));
+              (first.querySelector('.v')?first.querySelector('.v').textContent:'');
+    console.log('mixture stat[0]:',txt.slice(0,70));
   }
+  try{
+    const pins=JSON.parse(fs.readFileSync(path.join(__dirname,'pins.json'),'utf8'));
+    const data=cvRegistry['mixCanvas'] && cvRegistry['mixCanvas']._data;
+    if(!data){ fail++; console.error('mixCanvas._data missing'); }
+    else{
+      for(const key of ['X','Y','M','bestF','bestG']){
+        const rel=Math.abs(data[key]-pins[key])/Math.max(1e-12,Math.abs(pins[key]));
+        if(rel>1e-6){ fail++; console.error('PARITY FAIL',key,'browser='+data[key],'pins='+pins[key]); }
+        else console.log('parity OK:',key,data[key].toFixed(6));
+      }
+      checkCount('d16zeros parity', data.d16zeros===pins.d16zeros);
+    }
+  }catch(e){ fail++; console.error('pins parity error:',e.message); }
+  function checkCount(name,cond){ if(!cond){fail++;console.error('FAIL',name);} }
   // 6. convergence table populated
   if(!registry['convTable'] || String(registry['convTable'].innerHTML).indexOf('HS²/tr G~')<0){ fail++; console.error('convergence table missing'); }
 

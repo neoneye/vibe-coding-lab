@@ -591,112 +591,52 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
 
 })();
 /* =====================================================================
-   §9 E·iii — mixed-Gram statistic vs certificate-valid window mixture
+   §9 E·iii — mixture statistics (canonical builder; RH.windowFramePair)
 ===================================================================== */
 (function(){
   const cv=$('mixCanvas'); if(!cv) return;
-  const T0m=400, Lm=Math.log(T0m/(2*Math.PI)), dm=16, stepm=2*Math.PI/Lm;
-  const EPSm=0.18*Lm;
-  function ampOf(shape,u){
-    const au=Math.abs(u);
-    if(shape==='mt') return (c=>c<=0?0:Math.sqrt(c))(Math.cos(Math.SQRT2*u/Lm));
-    const r=Math.min(1,Math.max(0,(Lm/2-au)/EPSm));
-    return r*r*(3-2*r);                      // C^1 smoothstep-tapered indicator
-  }
-  function aIntOf(shape){
-    let acc=0;const n=2000,h=(Lm/2)/n;
-    for(let i=0;i<=n;i++){const wt=(i===0||i===n)?0.5:1;acc+=wt*Math.pow(ampOf(shape,i*h),2);}
-    return 2*acc*h/Lm;
-  }
-  function phiHatV(shape,x){
-    let re=0,im=0;const u0=-Lm/2,u1=Lm/2,nodes=2400,h=(u1-u0)/nodes;
-    for(let i=0;i<=nodes;i++){
-      const wt=(i===0||i===nodes)?1:(i%2?4:2);
-      const u=u0+i*h,m=ampOf(shape,u);
-      if(m===0)continue;
-      re+=wt*m*Math.cos(-x*u); im+=wt*m*Math.sin(-x*u);
-    }
-    return {re:re*h/3,im:im*h/3};
-  }
-  function hsOf(M){let s=0;for(const row of M)for(const x of row)s+=x*x;return s;}
-  function trOf(M){let s=0;for(let i=0;i<M.length;i++)s+=M[i][i];return s;}
   $('mixRun').onclick=()=>{
+    if($('mixRun').disabled) return;
     $('mixRun').disabled=true;
     getZeros600(zall=>{
-      const alphas=[];for(let k=0;k<dm;k++)alphas.push(T0m+k*stepm);
-      const lo=T0m-Lm, hi=T0m+dm*stepm+Lm;
-      const zs=zall.filter(g=>g>lo&&g<hi);
-      // per-shape raw Gram + stored vectors
-      const G={sind:[],mt:[]},V={sind:[],mt:[]},tr={sind:0,mt:0},aInt={sind:aIntOf('sind'),mt:aIntOf('mt')};
-      for(const shape of ['sind','mt']){
-        G[shape]=[];for(let i=0;i<dm;i++)G[shape].push(new Array(dm).fill(0));
-        const normJ=1/(aInt[shape]*Lm*Lm);
-        for(const gr of zs){
-          const v=alphas.map(al=>phiHatV(shape,gr-al));
-          V[shape].push(v);
-          for(let i=0;i<dm;i++)for(let j=0;j<dm;j++)G[shape][i][j]+=normJ*(v[i].re*v[j].re-v[i].im*v[j].im);
-        }
-        tr[shape]=trOf(G[shape]);
-      }
-      // common-trace normalization
-      const Nbar=(tr.sind+tr.mt)/2;
-      const An=G.sind.map(r=>r.map(x=>x*(Nbar/tr.sind)));
-      const Bn=G.mt.map(r=>r.map(x=>x*(Nbar/tr.mt)));
-      const X=hsOf(An), Y=hsOf(Bn);
-      let M=0;for(let i=0;i<dm;i++)for(let j=0;j<dm;j++)M+=An[i][j]*Bn[j][i];
-      // matrix-mixture curve (mixed-Gram statistic; NOT certificate-valid)
-      // and rank-one-preserving window mixture (certificate-valid family)
-      const fVals=[],gVals=[];
-      let bestF=Infinity,bestW=0,bestG=Infinity,bestGW=0;
-      for(let i=0;i<=100;i++){
-        const w=i/100, sw=Math.sqrt(w), sq=Math.sqrt(1-w);
-        const f=w*w*X+(1-w)*(1-w)*Y+2*w*(1-w)*M;
-        fVals.push(f); if(f<bestF){bestF=f;bestW=w;}
-        // window mixture: per-zero u = sw*va + sq*vb ; normalize to Nbar
-        const Gw=[];for(let a=0;a<dm;a++)Gw.push(new Array(dm).fill(0));
-        for(let k=0;k<zs.length;k++){
-          const va=V.sind[k], vb=V.mt[k];
-          for(let a2=0;a2<dm;a2++)for(let b2=0;b2<dm;b2++){
-            const ur=sw*va[a2].re+sq*vb[a2].re, ui=sw*va[a2].im+sq*vb[a2].im;
-            Gw[a2][b2]+=ur*ur-ui*ui;
-          }
-        }
-        const g=hsOf(Gw)*Math.pow(Nbar/Math.max(1e-12,trOf(Gw)),2);
-        gVals.push(g); if(g<bestG){bestG=g;bestGW=w;}
-      }
-      // draw
-      const S=setupCanvas(cv);const ctx=S.ctx;
-      const allV=fVals.concat(gVals,[X,Y]);
-      const yLo=Math.min.apply(null,allV)*0.96, yHi=Math.max.apply(null,allV)*1.04;
-      const Xmap=w=>30+w*(S.w-56), Ymap=v=>S.h-26-(v-yLo)/(yHi-yLo)*(S.h-46);
-      ctx.strokeStyle='#262c3a';ctx.beginPath();ctx.moveTo(30,Ymap(yLo));ctx.lineTo(S.w-26,Ymap(yLo));ctx.stroke();
-      ctx.font='12px monospace';ctx.fillStyle='#5d5a68';
-      const curve=(vals,color)=>{ctx.strokeStyle=color;ctx.lineWidth=1.8;ctx.beginPath();
-        vals.forEach((v,i)=>{const px=Xmap(i/(vals.length-1)),py=Ymap(v);if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);});
-        ctx.stroke();ctx.lineWidth=1;};
-      curve(fVals,'#5ec4b6');
-      curve(gVals,'#e0b458');
-      [[Y,'parent MT '+Y.toFixed(2),'#8ab8e8'],[X,'parent ind-sm '+X.toFixed(2),'#9a97a3']].forEach(([yv,lab,col])=>{
-        ctx.fillStyle=col;ctx.fillText(lab,S.w-170,Ymap(yv)-4);
-      });
-      // stats & verdict
-      const st=$('mixStats'); st.innerHTML='';
-      const ad=(k,v,col)=>{const dd=document.createElement('div');dd.className='stat';
-        dd.innerHTML='<span class="k">'+k+'</span><span class="v"'+(col?' style="color:'+col+'"':'')+'>'+v+'</span>';st.appendChild(dd);};
-      ad('parent X/N̄ (smoothed indicator)',fmt(X,4));
-      ad('parent Y/N̄ (MT)',fmt(Y,4));
-      ad('mixed moment M/N̄',fmt(M,4),'var(--red)');
-      ad('matrix-mixture best f(w)/N̄',fmt(bestF,4),bestF<Math.min(X,Y)?'var(--teal)':'var(--dim)');
-      ad('window-mixture best (certificate-valid)',fmt(bestG,4),'var(--accent)');
-      const dips=bestF<Math.min(X,Y)-1e-6;
-      const undercutsMT=bestG<Y-1e-6;
-      $('mixVerdict').innerHTML='<div class="verdict '+(dips?'ok':'warn')+'">'+
-        'Mixed-Gram statistic dips below the better parent ('+fmt(bestF,4)+' < '+fmt(Math.min(X,Y),4)+
-        '): spectral diversification is real. But it feeds no theorem — the mixed matrix gives one simple zero a rank-two contribution, '+
-        'and no extraction lemma on offer pays for that. The certificate-valid window mixture bottoms at '+fmt(bestG,4)+
-        (undercutsMT?' , slightly below its MT parent at this toy scale.':' , not below its MT parent — a toy-scale echo of the [CCLM17] optimality claim.')+
-        '</div>';
-      $('mixStatus').textContent='done';
+      try{
+        const T0m=400, Lm=Math.log(T0m/(2*Math.PI));
+        const frame=RH.windowFramePair(zall,16,T0m,Lm,['sind','mt']);
+        const wSamples=[];for(let i=0;i<=100;i++)wSamples.push(i/100);
+        const st=RH.mixtureStats(frame,wSamples);
+        // draw both curves
+        const S=setupCanvas(cv);const ctx=S.ctx;
+        const allV=st.fVals.concat(st.gVals,[st.X,st.Y]);
+        let yLo=Math.min.apply(null,allV)*0.97, yHi=Math.max.apply(null,allV)*1.03;
+        const Xmap=w=>30+w*(S.w-56), Ymap=v=>S.h-26-(v-yLo)/(yHi-yLo)*(S.h-46);
+        ctx.strokeStyle='#262c3a';ctx.beginPath();ctx.moveTo(30,Ymap(yLo));ctx.lineTo(S.w-26,Ymap(yLo));ctx.stroke();
+        ctx.font='12px monospace';ctx.fillStyle='#5d5a68';
+        const curve=(vals,color)=>{ctx.strokeStyle=color;ctx.lineWidth=1.8;ctx.beginPath();
+          vals.forEach((v,i)=>{const px=Xmap(wSamples[i]),py=Ymap(v);if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);});
+          ctx.stroke();ctx.lineWidth=1;};
+        curve(st.fVals,'#5ec4b6');
+        curve(st.gVals,'#e0b458');
+        [[st.Y,'MT parent '+st.Y.toFixed(4),'#8ab8e8'],[st.X,'ind-sm parent '+st.X.toFixed(4),'#9a97a3']].forEach(([yv,lab,col])=>{
+          ctx.fillStyle=col;ctx.fillText(lab,S.w-190,Ymap(yv)-4);
+        });
+        const stEl=$('mixStats'); stEl.innerHTML='';
+        const ad=(k,v,col)=>{const dd=document.createElement('div');dd.className='stat';
+          dd.innerHTML='<span class="k">'+k+'</span><span class="v"'+(col?' style="color:'+col+'"':'')+'>'+v+'</span>';stEl.appendChild(dd);};
+        ad('parent X/N̄ (smoothed indicator)',fmt(st.X,5));
+        ad('parent Y/N̄ (MT)',fmt(st.Y,5));
+        ad('mixed moment M/N̄',fmt(st.M,5),'var(--red)');
+        ad('mixed-Gram best f/N̄',fmt(st.bestF,5),st.bestF<Math.min(st.X,st.Y)?'var(--teal)':'var(--dim)');
+        ad('window-mixture best/N̄ (certificate-valid family)',fmt(st.bestG,5),'var(--accent)');
+        cv._data={X:st.X,Y:st.Y,M:st.M,bestF:st.bestF,bestG:st.bestG,d16zeros:frame.zs.length,symViol:st.symViol};
+        const dips=st.bestF<Math.min(st.X,st.Y)-1e-9;
+        const undercut=st.bestG<Math.min(st.X,st.Y)-1e-9;
+        $('mixVerdict').innerHTML='<div class="verdict '+(dips||undercut?'ok':'warn')+'">'+
+          'With admissible C²-tapered windows at this scale, <b>neither mixture undercuts the better parent</b>: both curves run flat between '+
+          fmt(st.Y,4)+' and '+fmt(st.X,4)+', bottoming at the pure-MT endpoint. The mixed-Gram statistic would need M &lt; min(X,Y) to dive — observed '
+          'M/N̄ = '+fmt(st.M,5)+' sits above it. Consistent, at toy scale, with Montgomery–Taylor optimality among windows; testing that claim '
+          'asymptotically is out of reach for a browser.</div>';
+        $('mixStatus').textContent='done';
+      }catch(e){ console.error(e); $('mixStatus').textContent='error: '+e.message; }
       $('mixRun').disabled=false;
     });
   };

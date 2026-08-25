@@ -337,10 +337,94 @@ function explicitFormulaSidesCenter(tau0,w, zerosUpTo, Tzeros, Xmax, quadStep){
           tailEst:tail, zeroSidePlusTail: sz+tail};
 }
 
+
+// ---------- canonical window-frame builder (single source of truth) ----------
+// C^2-quintic boundary tapers on BOTH windows (admissible per Remark 4.4).
+// Returns per-shape {G,tr,hs,V,normJ,aInt} on a shared grid/zeros, plus zs.
+function windowFramePair(gammaList,d,T0,L,shapes){
+  const step=2*Math.PI/L;
+  const EPS=L*0.20;
+  function quintic(t){t=Math.min(1,Math.max(0,t));return t*t*t*(10-15*t+6*t*t);}
+  function ampOf(shape,u){
+    const au=Math.abs(u);
+    if(shape==='mt') return Math.sqrt(Math.max(0,Math.cos(Math.SQRT2*u/L)))*quintic((L/2-au)/EPS);
+    if(shape==='sind') return quintic((L/2-au)/EPS);
+    throw new Error('shape');
+  }
+  function phiHatV(shape,x){
+    let re=0,im=0;const u0=-L/2,u1=L/2,nodes=2400,h=(u1-u0)/nodes;
+    for(let i=0;i<=nodes;i++){
+      const wt=(i===0||i===nodes)?1:(i%2?4:2);
+      const u=u0+i*h,m=ampOf(shape,u);
+      if(m===0)continue;
+      re+=wt*m*Math.cos(-x*u); im+=wt*m*Math.sin(-x*u);
+    }
+    return {re:re*h/3,im:im*h/3};
+  }
+  const alphas=[];for(let k=0;k<d;k++)alphas.push(T0+k*step);
+  const lo=T0-L,hi=T0+d*step+L;
+  const zs=gammaList.filter(g=>g>lo&&g<hi);
+  const out={zs:zs,alphas:alphas,d:d};
+  for(const shape of shapes||['sind','mt']){
+    // int_{-1/2}^{1/2} psi(s) ds = (1/L)*int_{-L/2}^{L/2} psi(u) du
+    const n=4000,h=(L)/n;
+    let acc=0;
+    for(let i=0;i<=n;i++){const wt=(i===0||i===n)?0.5:1;acc+=wt*Math.pow(ampOf(shape,-L/2+i*h),2);}
+    const aIntExact=acc*h/L;
+    const normJ=1/(aIntExact*L*L);
+    const G=[];for(let i=0;i<d;i++)G.push(new Array(d).fill(0));
+    const V=[];
+    for(const gr of zs){
+      const v=alphas.map(al=>phiHatV(shape,gr-al));
+      V.push(v);
+      for(let i=0;i<d;i++)for(let j=0;j<d;j++)G[i][j]+=normJ*(v[i].re*v[j].re-v[i].im*v[j].im);
+    }
+    let tr=0,hs=0;for(let i=0;i<d;i++){tr+=G[i][i];}for(let i=0;i<d;i++)for(let j=0;j<d;j++)hs+=G[i][j]*G[i][j];
+    out[shape]={G:G,V:V,tr:tr,hs:hs,normJ:normJ,aInt:aIntExact};
+  }
+  return out;
+}
+// common-trace-normalized copies + mixture statistics (all values divided by Nbar)
+function mixtureStats(frame,wSamples){
+  const d=frame.d;
+  const Nbar=(frame.sind.tr+frame.mt.tr)/2;
+  function normTo(M){const f=Nbar/trOf_(M);return M.map(r=>r.map(x=>x*f));}
+  function trOf_(M){let s=0;for(let i=0;i<M.length;i++)s+=M[i][i];return s;}
+  const An=normTo(frame.sind.G), Bn=normTo(frame.mt.G);
+  const X=hsOf_(An)/Nbar, Y=hsOf_(Bn)/Nbar;
+  let M=0;for(let i=0;i<d;i++)for(let j=0;j<d;j++)M+=An[i][j]*Bn[j][i];
+  M/=Nbar;
+  function hsOf_(M){let s=0;for(const row of M)for(const x of row)s+=x*x;return s;}
+  const fVals=[],gVals=[];
+  let bestF=Infinity,bestWf=0,bestG=Infinity,bestWg=0,symViol=0;
+  for(const w of wSamples){
+    fVals.push(w*w*X+(1-w)*(1-w)*Y+2*w*(1-w)*M);
+    if(fVals[fVals.length-1]<bestF){bestF=fVals[fVals.length-1];bestWf=w;}
+    const sw=Math.sqrt(w)*(Nbar/frame.sind.tr), sq=Math.sqrt(1-w)*(Nbar/frame.mt.tr);
+    const Gw=[];for(let a=0;a<d;a++)Gw.push(new Array(d).fill(0));
+    for(let k=0;k<frame.zs.length;k++){
+      const va=frame.sind.V[k], vb=frame.mt.V[k];
+      for(let a2=0;a2<d;a2++)for(let b2=0;b2<d;b2++){
+        const ur=sw*va[a2].re+sq*vb[a2].re, ui=sw*va[a2].im+sq*vb[a2].im;
+        const vr=sw*va[b2].re+sq*vb[b2].re, vi=sw*va[b2].im+sq*vb[b2].im;
+        Gw[a2][b2]+=(ur*vr-ui*vi)/Nbar;
+      }
+    }
+    symViol=Math.max(symViol,(()=>{let s=0;for(let a=0;a<d;a++)for(let b=0;b<d;b++)s=Math.max(s,Math.abs(Gw[a][b]-Gw[b][a]));return s;})());
+    // rescale G_w to the common trace Nbar BEFORE measuring (HS^2/tr is scale-dependent)
+    const tW=trOf_(Gw);
+    const g=(tW>1e-12)?(hsOf_(Gw)*Math.pow(Nbar/tW,2))/Nbar:NaN;
+    gVals.push(g);
+    if(isFinite(g)&&g>0&&g<bestG){bestG=g;bestWg=w;}
+  }
+  return {Nbar:Nbar,X:X,Y:Y,M:M,fVals:fVals,gVals:gVals,
+          bestF:bestF,bestWf:bestWf,bestG:bestG,bestWg:bestWg,symViol:symViol};
+}
+
 const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,
-  gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
+  windowFramePair,mixtureStats,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
 if(typeof module!=='undefined'&&module.exports) module.exports=RH;
 if(typeof window!=='undefined') window.RH=RH;
