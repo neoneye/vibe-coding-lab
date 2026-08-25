@@ -627,7 +627,31 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
         ad('mixed moment M/N̄',fmt(st.M,5),'var(--red)');
         ad('mixed-Gram best f/N̄',fmt(st.bestF,5),st.bestF<Math.min(st.X,st.Y)?'var(--teal)':'var(--dim)');
         ad('window-mixture best/N̄ (certificate-valid family)',fmt(st.bestG,5),'var(--accent)');
-        cv._data={X:st.X,Y:st.Y,M:st.M,bestF:st.bestF,bestG:st.bestG,d16zeros:frame.zs.length,symViol:st.symViol};
+        // asymptotic window functionals (paper windows psi_0 / psi_MT)
+        const Ra=RH.winFunctionalR('ind',900);
+        const Rb=RH.winFunctionalR('mt',900);
+        const Rx=RH.winCrossFunctional('ind','mt',700);
+        const wStar=(Rb-Rx)/(Ra+Rb-2*Rx);
+        const fStar=Rb-(Rb-Rx)*(Rb-Rx)/(Ra+Rb-2*Rx);
+        const nominal=2-fStar;
+        const afd=[
+          ['R(ψ₀) analytic',fmt(Ra,7),'var(--dim)'],
+          ['R(ψ_MT) analytic',fmt(Rb,7),'var(--dim)'],
+          ['cross R₀,ₘₜ quadrature',fmt(Rx,7),'var(--red)'],
+          ['dip condition M < min(R)',(Rx<Math.min(Ra,Rb)?'holds':'fails'),Rx<Math.min(Ra,Rb)?'var(--teal)':'var(--red)'],
+          ['optimal indicator weight w*',fmt(wStar,6),'var(--accent)'],
+          ['nominal mixed moment',fmt(fStar,7),'var(--accent)'],
+          ['nominal simple-zero constant 2−R',(2-fStar).toFixed(9),'var(--green)'],
+          ['gain over MT route','+'+((2-fStar)-(2-Rb)).toFixed(9),'var(--teal)']
+        ];
+        const fsEl=$('funcStats'); fsEl.innerHTML='';
+        for(const [k,v,col] of afd){
+          const dd=document.createElement('div');dd.className='stat';
+          dd.innerHTML='<span class="k">'+k+'</span><span class="v"'+(col?' style="color:'+col+'"':'')+'>'+v+'</span>';
+          fsEl.appendChild(dd);
+        }
+        cv._data={X:st.X,Y:st.Y,M:st.M,bestF:st.bestF,bestG:st.bestG,d16zeros:frame.zs.length,symViol:st.symViol,
+                  Ra:Ra,Rb:Rb,Rx:Rx,wStar:wStar,nominal:nominal};
         const dips=st.bestF<Math.min(st.X,st.Y)-1e-9;
         const undercut=st.bestG<Math.min(st.X,st.Y)-1e-9;
         const winner=(st.X<=st.Y)?'smoothed-indicator':'Montgomery-Taylor';

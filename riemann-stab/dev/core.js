@@ -417,7 +417,10 @@ function mixtureStats(frame,wSamples){
       }
     }
     symViol=Math.max(symViol,(()=>{let s=0;for(let a=0;a<d;a++)for(let b=0;b<d;b++)s=Math.max(s,Math.abs(Gw[a][b]-Gw[b][a]));return s;})());
-    // rescale G_w to the common trace Nbar BEFORE measuring (HS^2/tr is scale-dependent)
+    // rescale G_w to the common trace Nbar BEFORE measuring:
+    // HS^2(G) scales linearly under G -> lambda*G while tr(G) does too,
+    // so raw HS^2/tr is NOT comparable across normalizations; rescaling first
+    // makes every sampled value a common-trace quantity.
     const tW=trOf_(Gw);
     const g=(tW>1e-12)?(hsOf_(Gw)*Math.pow(Nbar/tW,2))/Nbar:NaN;
     gVals.push(g);
@@ -427,10 +430,67 @@ function mixtureStats(frame,wSamples){
           bestF:bestF,bestWf:bestWf,bestG:bestG,bestWg:bestWg,symViol:symViol};
 }
 
+
+// ---------- asymptotic window functionals (paper windows, s in [-1/2,1/2]) ----------
+// Inferred from Lemma 2.1 + Lemma 5.6/Theorem 5.7 normalization:
+//   R(psi)     = ( int psi^2 + int int |u-v| psi(u)psi(v) ) / (int psi)^2
+//   R_12(a,b)  = ( int psia psib + int int |u-v| sqrt(psia psib)(u)sqrt(psia psib)(v) )
+//                / ( int psia * int psib )
+// Validated against anchors: R(psi_0)=4/3 exactly, R(psi_MT)=c_MT^{-1}.
+function psiWin(shape,s){
+  const au=Math.abs(s);
+  if(shape==='ind') return au<=0.5?1:0;
+  if(shape==='mt') return au<=0.5?Math.cos(Math.SQRT2*s):0;
+  throw new Error('shape');
+}
+function winFunctionalR(shape,n){
+  n=n||1600;
+  const h=1.0/n;
+  // int psi^2
+  let p2=0;for(let i=0;i<n;i++){const x=psiWin(shape,-0.5+(i+0.5)*h);p2+=x*x;}
+  p2*=h;
+  // int psi
+  let p1=0;for(let i=0;i<n;i++){p1+=psiWin(shape,-0.5+(i+0.5)*h);}
+  p1*=h;
+  // int int |u-v| psi psi  (midpoint; kink at u=v handled by density)
+  let dbl=0;
+  for(let i=0;i<n;i++){
+    const u=-0.5+(i+0.5)*h, pu=psiWin(shape,u);
+    for(let j=0;j<n;j++){
+      const v=-0.5+(j+0.5)*h;
+      dbl+=Math.abs(u-v)*pu*psiWin(shape,v);
+    }
+  }
+  dbl*=h*h;
+  return (p2+dbl)/(p1*p1);
+}
+function winCrossFunctional(shapeA,shapeB,n){
+  n=n||1200;
+  const h=1.0/n;
+  let fg=0,pa=0,pb=0;
+  for(let i=0;i<n;i++){
+    const s=-0.5+(i+0.5)*h, a=psiWin(shapeA,s), b=psiWin(shapeB,s);
+    fg+=a*b; pa+=a; pb+=b;
+  }
+  fg*=h; pa*=h; pb*=h;
+  let dbl=0;
+  for(let i=0;i<n;i++){
+    const u=-0.5+(i+0.5)*h;
+    const wu=Math.sqrt(Math.max(0,psiWin(shapeA,u)*psiWin(shapeB,u)));
+    for(let j=0;j<n;j++){
+      const v=-0.5+(j+0.5)*h;
+      const wv=Math.sqrt(Math.max(0,psiWin(shapeA,v)*psiWin(shapeB,v)));
+      dbl+=Math.abs(u-v)*wu*wv;
+    }
+  }
+  dbl*=h*h;
+  return (fg+dbl)/(pa*pb);
+}
+
 const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,
-  windowFramePair,mixtureStats,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
+  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,winCrossFunctional,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
 if(typeof module!=='undefined'&&module.exports) module.exports=RH;
 if(typeof window!=='undefined') window.RH=RH;
