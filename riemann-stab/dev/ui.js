@@ -245,7 +245,11 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
     plot(); btn.disabled=false;
   }
   function syncRange(){ t0=parseFloat($('zpT0').value);t1=parseFloat($('zpT1').value);
-    if(!(t1>t0)){t1=t0+1;$('zpT1').value=t1;} lastZeros=null;refreshStats(null);plot(); }
+    if(!(t1>t0)){t1=t0+1;$('zpT1').value=t1;}
+    if(t1-t0>1500){t1=t0+1500;$('zpT1').value=t1;}
+    if(t0<-50){t0=-50;$('zpT0').value=t0;}
+    if(t1>5000){t1=5000;$('zpT1').value=t1;}
+    lastZeros=null;refreshStats(null);plot(); }
   $('zpFind').onclick=doFind;
   $('zpZoomIn').onclick=()=>{const m=(t0+t1)/2;t0=m-(t1-t0)/4;t1=m+(t1-t0)/2;syncRange();};
   $('zpZoomOut').onclick=()=>{const m=(t0+t1)/2,w=(t1-t0);t0=m-w;t1=m+w;syncRange();};
@@ -368,101 +372,93 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
 })();
 
 /* =====================================================================
-   §8 Lab E — inertia playground
+   §8 Lab E — inertia playground (Q, the off-line part)
 ===================================================================== */
 (function(){
-  const btnBuild=$('gBuild'); if(!btnBuild) return;
-  let state=null;
-  function phiHatQuad(x,y,nodes,u0,u1){ // ∫ sqrt(cos(√2 u/L)) e^{-i(x+iy)u} du, support [u0,u1]
-    const L=state.L;
+  const cv=$('gSpec'); if(!cv) return;
+  let base=null; // {L,d,alphas,gammaList,a}
+  function phiHatQuad(x,y,nodes,u0,u1){
+    const L=base.L;
     const f=u=>{ const c=Math.cos(Math.SQRT2*u/L); if(c<=0)return {re:0,im:0};
-      const amp=Math.sqrt(c), ph=-(x)*u, gr=-y*u;
-      const e=Math.exp(gr)*amp;
-      return {re:e*Math.cos(ph), im:e*Math.sin(ph)}; };
-    // composite Simpson
+      const e=Math.exp(-y*u)*Math.sqrt(c);
+      return {re:e*Math.cos(-x*u), im:e*Math.sin(-x*u)}; };
     let re=0,im=0; const h=(u1-u0)/nodes;
     for(let i=0;i<=nodes;i++){ const w=(i===0||i===nodes)?1:(i%2?4:2);
       const v=f(u0+i*h); re+=w*v.re; im+=w*v.im; }
-    const s=h/3; return {re:re*s, im:im*s};
+    return {re:re*h/3, im:im*h/3};
   }
-  function buildG(offBeta){
-    const {alphas,gammaList,L,a,d}=state;
-    // matrix
-    const G=[]; for(let i=0;i<d;i++){G.push(new Array(d).fill(0));}
+  function Qmat(p,beta){
+    const {alphas,gammaList,L,a,d}=base;
+    const Q=[]; for(let i=0;i<d;i++)Q.push(new Array(d).fill(0));
     const norm=1/(a*L*L);
-    for(let i=0;i<d;i++)G[i].fill(0);
-    function addTerm(v1,v2,mult){ // mult * Re( outer(v1,v2^T) )
-      for(let i=0;i<d;i++)for(let j=0;j<d;j++){
-        G[i][j]+=mult*(v1[i].re*v2[j].re - v1[i].im*v2[j].im);
-      }
-    }
-    const centerIdx=state.centerIdx;
-    gammaList.forEach((gr,idx)=>{
-      if(offBeta!==null&&idx===centerIdx) return; // skip the moved zero
-      const v=alphas.map(al=>phiHatQuad(gr-al,0,2400,-L/2,L/2));
-      addTerm(v,v,1*norm);
-    });
-    if(offBeta!==null){
-      const gr=gammaList[centerIdx];
-      const dy=0.5-offBeta; // gamma_rho imaginary part
+    function addTerm(v1,v2,m){ for(let i=0;i<d;i++)for(let j=0;j<d;j++)
+        Q[i][j]+=m*(v1[i].re*v2[j].re - v1[i].im*v2[j].im); }
+    for(let idx=0;idx<p;idx++){
+      const gr=gammaList[idx], dy=0.5-beta;
       const v=alphas.map(al=>phiHatQuad(gr-al,dy,2400,-L/2,L/2));
-      addTerm(v,v,1*norm);                    // rho
+      addTerm(v,v,norm);                       // rho
       const vc=v.map(z=>({re:z.re,im:-z.im}));
-      addTerm(vc,vc,1*norm);                  // partner 1-conj(rho)
+      addTerm(vc,vc,norm);                     // partner 1-conj(rho): 2(aa^T-bb^T) total
     }
-    return G;
+    return Q;
   }
-  function drawSpec(G,highlightNeg){
-    const ev=RH.jacobiEigen(G,state.d);
-    const S=setupCanvas($('gSpec'));const ctx=S.ctx;
+  function draw(ev){
+    const S=setupCanvas(cv);const ctx=S.ctx;
+    const d=ev.length;
     const mx=Math.max.apply(null,ev.map(Math.abs).concat([1e-12]));
-    const mid=S.h/2, sc=(S.h/2-30)/mx, bw=(S.w-80)/state.d;
+    const mid=S.h/2, sc=(S.h/2-30)/mx, bw=(S.w-80)/d;
     ctx.strokeStyle='#262c3a';ctx.beginPath();ctx.moveTo(30,mid);ctx.lineTo(S.w-30,mid);ctx.stroke();
     ctx.font='12px monospace';
     ev.forEach((e,i)=>{
       const x=45+i*bw;
-      ctx.fillStyle=e<-1e-9*mx?'#e05f5f':(e>0?'#5ec4b6':'#3a4152');
+      ctx.fillStyle=e<-1e-11*mx?'#e05f5f':(e>1e-11*mx?'#5ec4b6':'#3a4152');
       const hh=Math.max(2,Math.abs(e)*sc);
       ctx.fillRect(x,e>0?mid-hh:mid,bw*0.62,hh);
     });
     ctx.fillStyle='#5d5a68';
-    ctx.fillText('λ max '+ev[0].toExponential(3),36,20);
-    ctx.fillText('λ min '+ev[state.d-1].toExponential(3),S.w-190,20);
-    return ev;
+    ctx.fillText('λmax '+ev[0].toExponential(3),36,20);
+    ctx.fillText('λmin '+ev[d-1].toExponential(3),S.w-190,20);
   }
-  function show(ev,label,negExpected){
-    const neg=ev.filter(e=>e<-1e-9*Math.max.apply(null,ev.map(Math.abs))).length;
-    const pos=ev.filter(e=>e>1e-9*Math.max.apply(null,ev.map(Math.abs))).length;
-    $('gStatus').textContent=label+' — inertia ('+pos+'+, '+neg+'−)';
-    $('gVerdict').innerHTML=neg===0
-      ? '<div class="verdict ok">All '+state.d+' eigenvalues ≥ 0 (to floating-point noise): every zero in the window sits on the line, each contributing a rank-one positive piece. Sylvester has nothing to count.</div>'
-      : '<div class="verdict warn"><b>'+neg+' negative eigenvalue'+(neg>1?'s':'')+' appeared.</b> One off-line pair {ρ, 1−ρ̄} was injected; it contributes 2(aaᵀ−bbᵀ) — signature (1,1). '
-        +'The negative index of the compression counts off-line pairs: Bombieri&rsquo;s device, made tangible. In the real theorem this count is what Sylvester&rsquo;s law guarantees is basis-independent.</div>';
+  function update(){
+    const p=parseInt($('gPairs').value), beta=parseInt($('gBeta').value)/100;
+    $('gPairsLabel').textContent='p = '+p;
+    $('gBetaLabel').textContent='β = '+beta.toFixed(2);
+    if(!base) return;
+    if(p===0){
+      draw(new Array(base.d).fill(0));
+      $('gVerdict').innerHTML='<div class="verdict ok">Q = 0: with every zero on the critical line there are no off-line pairs, and the off-line part of Weil&rsquo;s form vanishes. Move the sliders to commit violations of RH.</div>';
+      $('gStats').innerHTML='';
+      return;
+    }
+    const ev=RH.jacobiEigen(Qmat(p,beta),base.d);
+    draw(ev);
+    const scale=Math.max.apply(null,ev.map(Math.abs));
+    const neg=ev.filter(e=>e<-1e-9*scale).length;
+    const pos=ev.filter(e=>e>1e-9*scale).length;
+    const st=$('gStats'); st.innerHTML='';
+    const add=(k,v)=>{const d2=document.createElement('div');d2.className='stat';
+      d2.innerHTML='<span class="k">'+k+'</span><span class="v">'+v+'</span>';st.appendChild(d2);};
+    add('off-line pairs injected',p);
+    add('inertia n₊(Q)',pos,'var(--teal)');
+    add('negative index n₋(Q)',neg, neg>0?'var(--red)':'var(--dim)');
+    add('bound respected: n₊ ≤ p', pos+' ≤ '+p+(pos<=p?' ✓':' ✗'),'var(--green)');
+    $('gVerdict').innerHTML='<div class="verdict '+(neg>0?'warn':'ok')+'">'+
+     (neg===0
+      ? 'The pair blocks are too weak against numerical resolution at this β — push β further from ½.'
+      : 'Each injected pair {ρ, 1−ρ̄} adds a signature-(1,1) block 2(aaᵀ−bbᵀ). The negative index — which Sylvester&rsquo;s law makes basis-independent, and Bombieri read as an off-line count — climbs with p, never exceeding it. In the theorem this is exactly the term 4b subtracted inside the rank–trace inequality.')+'</div>';
   }
-  btnBuild.onclick=()=>{
-    const T0=parseFloat($('gT0').value)||400;
-    const L=Math.log(T0/(2*Math.PI)), d=16;
-    const alphas=[],step=2*Math.PI/L;
-    for(let k=0;k<d;k++) alphas.push(T0+k*step);
+  // build base data lazily
+  getZeros600(all=>{
+    const T0=400, L=Math.log(T0/(2*Math.PI)), d=16, step=2*Math.PI/L;
+    const alphas=[]; for(let k=0;k<d;k++) alphas.push(T0+k*step);
     const lo=T0-L, hi=T0+d*step+L+1;
-    const all=_zeros600||RH.findZeros(10,600,0.18);
-    const gammaList=all.filter(g=>g>lo&&g<hi);
-    if(gammaList.length<4){$('gStatus').textContent='not enough zeros in window — raise T₀ or widen';return;}
-    // a = ∫ psi = ∫_{-1/2}^{1/2} cos(√2 s) ds = √2 sin(1/√2)
-    const a=Math.SQRT2*Math.sin(1/Math.SQRT2);
-    let ci=0,best=1e18;
-    gammaList.forEach((g,i)=>{const dd=Math.abs(g-(T0+d*step/2));if(dd<best){best=dd;ci=i;}});
-    state={L,d,alphas,gammaList,a,centerIdx:ci};
-    $('gToggle').disabled=false;
-    const G=buildG(null);
-    const ev=drawSpec(G,false);
-    show(ev,'G̃ from '+gammaList.length+' true on-line zeros',false);
-  };
-  $('gToggle').onclick=()=>{
-    if(!state)return;
-    const G=buildG(0.51);
-    const ev=drawSpec(G,true);
-    show(ev,'one zero moved to β=0.51 (+ mirror 0.49)',true);
-  };
+    const gammaList=all.filter(g=>g>lo&&g<hi).slice(0,10);
+    base={L,d,alphas,gammaList,a:Math.SQRT2*Math.sin(1/Math.SQRT2)};
+    $('gPairs').setAttribute('max',Math.min(8,gammaList.length));
+    update();
+  });
+  $('gPairs').oninput=update;
+  $('gBeta').oninput=update;
 })();
+
 })();
