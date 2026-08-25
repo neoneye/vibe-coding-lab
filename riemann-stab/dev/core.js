@@ -418,8 +418,9 @@ function mixtureStats(frame,wSamples){
     }
     symViol=Math.max(symViol,(()=>{let s=0;for(let a=0;a<d;a++)for(let b=0;b<d;b++)s=Math.max(s,Math.abs(Gw[a][b]-Gw[b][a]));return s;})());
     // rescale G_w to the common trace Nbar BEFORE measuring:
-    // HS^2(G)/tr(G) is NOT scale-invariant -- HS^2 scales linearly under
-    // G -> lambda*G -- so normalizing to a common trace first is what makes
+    // HS^2(G)/tr(G) is NOT scale-invariant -- under G -> lambda*G the
+    // squared Hilbert-Schmidt norm scales as lambda^2 while tr scales as
+    // lambda -- so normalizing to a common trace first is what makes
     // sampled values comparable across w.
     const tW=trOf_(Gw);
     const g=(tW>1e-12)?(hsOf_(Gw)*Math.pow(Nbar/tW,2))/Nbar:NaN;
