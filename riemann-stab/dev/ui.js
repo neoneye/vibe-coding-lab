@@ -133,9 +133,9 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
     ['argument principle: winding #zeros ξ, Im∈[1,50] (expect exactly 10)', ()=>{
         return Math.abs(argCountBox(-1,2,1,50,0.05).winding-10);
      }],
-    ['Weil explicit formula @τ₀=150,w=1.5: rel. |zeros − primes| side', ()=>{
-        const zsx=RH.findZeros(10,105,0.2);
-        const r=RH.explicitFormulaSidesCenter(150,1.5,zsx,105,12000,0.002);
+    ['Weil explicit formula @τ₀=60,w=1.5: rel. |zeros − primes| side', ()=>{
+        const zsx=RH.findZeros(40,95,0.15);
+        const r=RH.explicitFormulaSidesCenter(60,1.5,zsx,95,12000,0.002);
         return Math.abs(r.zeroSide-r.rhs)/Math.max(1e-9,Math.abs(r.zeroSide));
      }]
   ];
@@ -226,7 +226,7 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
     zeros.slice(0,120).forEach((z,i)=>{
       const h=1e-5, dv=(RH.bigZ(z+h)-RH.bigZ(z-h))/(2*h);
       rows+='<tr><td>'+(i+1)+'</td><td class="num">'+z.toFixed(12)+'</td><td class="num">'+sci(Math.abs(dv))+
-        (Math.abs(dv)>0.5?' <span class="green">simple</span>':' <span class="red">?</span>')+'</td></tr>';
+        (Math.abs(dv)>0.5?' <span class="green">|Z′| large</span>':' <span class="red">|Z′| small</span>')+'</td></tr>';
     });
     tbl.innerHTML=rows; wrap.style.display='block';
     plot(); btn.disabled=false;
@@ -434,6 +434,7 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
     const Qp=[];for(let i=0;i<n;i++){Qp.push(new Array(n).fill(0));
       for(let j=0;j<n;j++)Qp[i][j]=r.G[i][j]-r.P1[i][j];}
     const qq=posNeg(Qp,n);
+    const rk=posNeg(r.P1,n);
     const B=4*g.tr-2*r.N-g.hs;
     const st=$('cStats'); st.innerHTML='';
     const add=(k,v,col)=>{const d=document.createElement('div');d.className='stat';

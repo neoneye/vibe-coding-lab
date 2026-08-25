@@ -304,8 +304,8 @@ function jacobiEigen(Ain,n){
 function fhatPair(tau,tau0,w){ const d1=(tau-tau0)/w, d2=(tau+tau0)/w;
   return Math.exp(-d1*d1)+Math.exp(-d2*d2); }
 function fCenter(u,tau0,w){ return (w/Math.sqrt(Math.PI))*Math.exp(-w*w*u*u/4)*Math.cos(tau0*u); }
-function polesCenter(tau0,w){ // Fhat(i/2)+Fhat(-i/2) = 2 e^{(1/4-tau0^2)/w^2} cos(tau0/w)
-  return 2*Math.exp((0.25-tau0*tau0)/(w*w))*Math.cos(tau0/w);
+function polesCenter(tau0,w){ // Fhat(i/2)+Fhat(-i/2): 2 points x 2e^{(1/4-tau0^2)/w^2} cos(tau0/w^2)
+  return 4*Math.exp((0.25-tau0*tau0)/(w*w))*Math.cos(tau0/(w*w));
 }
 function explicitFormulaSidesCenter(tau0,w, zerosUpTo, Tzeros, Xmax, quadStep){
   // zero side: 2 * sum over computed ordinates (conjugates included)

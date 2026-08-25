@@ -136,5 +136,21 @@ console.log('--- explicit formula (centered window: zeros AND primes populated) 
   }
 }
 
+console.log('--- polesCenter vs direct complex evaluation ---');
+{
+  function direct(t0,w){
+    const t1=M.Cexp(M.Cscale(M.Cmul({re:-t0,im:0.5},{re:-t0,im:0.5}),-1/(w*w)));
+    const t2=M.Cexp(M.Cscale(M.Cmul({re:t0,im:0.5},{re:t0,im:0.5}),-1/(w*w)));
+    return 2*(t1.re+t2.re);
+  }
+  let worst=0;
+  for(const pair of [[3,3],[1,2],[60,20],[150,40]]){
+    const d=direct(pair[0],pair[1]), c=M.polesCenter(pair[0],pair[1]);
+    worst=Math.max(worst,Math.abs(d-c)/Math.max(1e-300,Math.abs(d)));
+  }
+  ok('polesCenter exact formula',worst<1e-12,'worst rel '+worst);
+  ok('pole term exercised at small tau0',Math.abs(M.polesCenter(3,3))>1);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
