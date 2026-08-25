@@ -1,9 +1,7 @@
 # Rejected derivation: connected proportion theorem (first attempt)
 
-Status: WITHDRAWN 2026-08-25. Reason: unresolved factor-2 scale
-inconsistency between the seven-point defect bound and the second-moment
-bound. Preserved here so future reviewers can reproduce exactly why the
-theorem was not shipped.
+Status: WITHDRAWN 2026-08-25. This file documents a derivation sketch
+that was attempted and withdrawn; it is NOT a reproducible proof.
 
 ## What was attempted
 
@@ -31,9 +29,9 @@ vanish and cannot shift a limiting proportion. It traces instead to (a) the
 coarse rational enclosure R_hi = 1327501/10^6 exceeding c_MT^-1 by ~1.7e-6
 and (b) normalization differences between my defect scaling (×4035000) and
 the manuscript's (/1345000). Both are unresolved coefficient/enclosure
-issues, not asymptotic remainders. The checker lives at
-dev/mix_convergence_test.js (golden-parity section); a standalone
-reproduction requires that file plus core.js from the same commit.
+issues, not asymptotic remainders. The numerical validation was performed
+interactively during development and is not preserved as a runnable
+script in this repository.
 
 ## Machine-checkable residue
 
