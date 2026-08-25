@@ -93,9 +93,8 @@ function theta(t){
 }
 // completed xi(s) = (1/2)s(s-1)pi^{-s/2} Gamma(s/2) zeta(s)
 function chi(s){ // functional-equation factor: zeta(s)=chi(s)*zeta(1-s)
-  const l={re:s.re*Math.LN2+ (s.re-1)*LOG_PI, im:s.im*Math.LN2+(s.im-1)*LOG_PI}; // 2^s pi^{s-1} in log
+  const l={re:s.re*Math.LN2+(s.re-1)*LOG_PI, im:s.im*(Math.LN2+LOG_PI)}; // log(2^s pi^{s-1})
   const shalf=Cdiv(Csub(Cexp(Cmul({re:0,im:Math.PI},Cscale(s,0.5))),Cexp(Cmul({re:0,im:-Math.PI},Cscale(s,0.5)))),{re:0,im:2});
-  // sin(pi s/2) = (e^{i pi s/2}-e^{-i pi s/2})/(2i)
   const lg=logGamma({re:1-s.re, im:-s.im});
   const tot={re:l.re+lg.re, im:l.im+lg.im};
   return Cmul(Cexp(tot),shalf);
@@ -297,10 +296,10 @@ function jacobiEigen(Ain,n){
   return ev.sort((a,b)=>b-a);
 }
 
-module.exports={
-  Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
+const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,
-  gaussF,gaussFhat,explicitFormulaSides,normalizedSpacings,jacobiEigen
-};
+  gaussF,gaussFhat,explicitFormulaSides,normalizedSpacings,jacobiEigen};
+if(typeof module!=='undefined'&&module.exports) module.exports=RH;
+if(typeof window!=='undefined') window.RH=RH;

@@ -16,9 +16,11 @@ console.log('--- logGamma / digamma ---');
   const lg5=M.logGamma({re:5,im:0});
   ok('logGamma(5)=ln24',Math.abs(lg5.re-Math.log(24))<4e-13,lg5.re);
   // complex spot-check: Gamma(1+i) ~ 0.498015668 - 0.154949828i
+  // |Gamma(1+i)|^2 = pi/sinh(pi) exactly; arg vs reference digits
   const lg1i=M.logGamma({re:1,im:1});
-  ok('logGamma(1+i)',Math.abs(lg1i.re-Math.log(Math.hypot(0.498015668,0.154949828)))<1e-11
-     && Math.abs(Math.sin(lg1i.im)*Math.hypot(0.498015668,0.154949828)-(-0.154949828))<1e-11);
+  const mod2=Math.exp(2*lg1i.re);
+  ok('logGamma(1+i) modulus',Math.abs(mod2-Math.PI/Math.sinh(Math.PI))<1e-12,mod2);
+  ok('logGamma(1+i) arg',Math.abs(lg1i.im-Math.atan2(-0.15494982830181068512,0.49801566811835604271))<1e-9,lg1i.im);
   const d=M.digamma({re:1,im:0});
   ok('psi(1)=-gamma',Math.abs(d.re+0.5772156649015329)<1e-12,d.re);
 }
@@ -85,8 +87,8 @@ console.log('--- Gram points ---');
 {
   const g0=M.gramPoint(0), g1=M.gramPoint(1), g2=M.gramPoint(2);
   ok('g0=17.84559954052',Math.abs(g0-17.84559954052400)<1e-7,g0);
-  ok('g1=20.65049407626',Math.abs(g1-20.65049407626087)<1e-7,g1);
-  ok('g2=23.32149151881',Math.abs(g2-23.32149151881886)<1e-7,g2);
+  ok('g1=23.17028270125',Math.abs(g1-23.17028270124631)<1e-7,g1);
+  ok('g2=27.67018221782',Math.abs(g2-27.67018221781634)<1e-7,g2);
   ok('theta(g0)=0',Math.abs(M.theta(g0))<1e-9);
   let viol=[];
   for(let n=0;n<=150;n++){
@@ -118,7 +120,7 @@ console.log('--- argument principle / xi ---');
   const c60=argCountBox(-1,2,1,60);
   ok('N_box[1,60]=13',Math.abs(c60-13)<0.05,c60.toFixed(4));
   const c100=argCountBox(-1,2,1,100);
-  ok('N_box[1,100]=30',Math.abs(c100-30)<0.05,c100.toFixed(4));
+  ok('N_box[1,100]=29',Math.abs(c100-29)<0.05,c100.toFixed(4));
 }
 
 console.log('--- explicit formula (Gaussian test) ---');
