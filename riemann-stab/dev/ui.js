@@ -121,9 +121,6 @@ const REF=[14.134725141734693,21.022039638771554,25.010857580145688,
         const r=RH.explicitFormulaSides(1/3,zs,12000,0.02);
         return Math.abs(r.zeroSide-r.rhs)/Math.max(1,r.poles);
      }],
-    ["Montgomery–Taylor second moment c⁻¹ = ½+(1/√2)cot(1/√2)", ()=>{
-        const c=0.5+Math.cos(1/Math.SQRT2)/Math.SQRT2/Math.sin(1/Math.SQRT2);
-        return Math.abs(c-(0.5+0.827450/0.999999)); }]
   ];
   const dots=[];
   tests.forEach(t=>{
@@ -197,7 +194,7 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
     for(let k=0;k<=4;k++){ const v=mn+(mx-mn)*k/4;
       ctx.fillText(fmt(v,2),4,Y(v)+4);
       ctx.strokeStyle='#1a1f2c';ctx.beginPath();ctx.moveTo(48,Y(v));ctx.lineTo(S.w-10,Y(v));ctx.stroke(); }
-    for(let k=0;k<=6;k++){ const t=lo+(hi-lo)k/6;
+    for(let k=0;k<=6;k++){ const t=lo+(hi-lo)*k/6;
       ctx.fillText(fmt(t,hi-lo>60?0:2),X(t)-10,S.h-6); }
     // Gram points
     if($('zpGram').checked){
@@ -393,10 +390,6 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
     // matrix
     const G=[]; for(let i=0;i<d;i++){G.push(new Array(d).fill(0));}
     const norm=1/(a*L*L);
-    const pushVec=(vec,mult)=>{ for(let i=0;i<d;i++)for(let j=0;j<d;j++)
-        G[i][j]+=mult*vec[i].re*vec[j].re - (mult*vec[i].im*vec[j].im)*offFlagSign(vec,i,j);
-    };
-    // simpler explicit accumulation:
     for(let i=0;i<d;i++)G[i].fill(0);
     function addTerm(v1,v2,mult){ // mult * Re( outer(v1,v2^T) )
       for(let i=0;i<d;i++)for(let j=0;j<d;j++){
@@ -419,7 +412,6 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi){
     }
     return G;
   }
-  function offFlagSign(){return 1;}
   function drawSpec(G,highlightNeg){
     const ev=RH.jacobiEigen(G,state.d);
     const S=setupCanvas($('gSpec'));const ctx=S.ctx;

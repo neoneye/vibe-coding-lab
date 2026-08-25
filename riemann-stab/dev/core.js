@@ -153,6 +153,7 @@ function bigZ(t){
 }
 function bigZimagResidual(t){
   const th=theta(t), z=emzeta({re:0.5,im:t});
+  const co=Math.cos(th), si=Math.sin(th);
   return si*z.re+co*z.im;
 }
 
