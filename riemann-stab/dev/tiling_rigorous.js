@@ -51,9 +51,24 @@ function nextDown(x) {
 // more than twice that, and the widening step's own rounding cannot eat the
 // margin.  This avoids nextUp/nextDown, whose BigInt bit twiddling is far too
 // slow for the tens of millions of boxes the sweep visits.
+// The relative term alone is NOT universally outward: below the smallest normal
+// double, |v| * EPSD underflows to zero and the widening vanishes.  Concretely
+// iMul([5e-324, 5e-324], [0.5, 0.5]) returned [0, 0] while the exact product is
+// 2.5e-324, excluding the truth.  The absolute floor below fixes that for every
+// magnitude at once: DENORM_GUARD is far above the whole subnormal range and
+// utterly negligible against any quantity this file computes, the smallest of
+// which (the accumulation slack) is 1e-12.
+// PRECONDITION.  rd/ru are outward for every finite double, subnormals
+// included, but not across overflow: if an operation returns +/-Infinity the
+// widening produces NaN.  Nothing here can overflow -- every quantity is a
+// weight in [0,1], a derivative bounded by a small constant, or a sum of at
+// most thirty-five such terms over a box whose coordinates are bounded by the
+// tail lemma at about 28 -- and the test file asserts that bound empirically
+// rather than leaving it as an assumption.
 const EPSD = 2.3e-16;
-const rd = v => v - Math.abs(v) * EPSD;
-const ru = v => v + Math.abs(v) * EPSD;
+const DENORM_GUARD = 1e-320;
+const rd = v => v - (Math.abs(v) * EPSD + DENORM_GUARD);
+const ru = v => v + (Math.abs(v) * EPSD + DENORM_GUARD);
 
 // Outward-rounded interval arithmetic.  An interval is a plain [lo, hi] pair.
 const iAdd = (x, y) => [rd(x[0] + y[0]), ru(x[1] + y[1])];
@@ -172,7 +187,7 @@ function cosRange(a, b) {
 }
 
 module.exports = {
-  nextUp, nextDown, iAdd, iSub, iMul, iDiv, iScale, iNeg, iWiden, iHull, iSquare,
+  nextUp, nextDown, rd, ru, iAdd, iSub, iMul, iDiv, iScale, iNeg, iWiden, iHull, iSquare,
   I_PI, I_TWO_PI, I_PI_HALF, I_SQRT2, TRIG_ERROR,
   sinPoint, cosPoint, sinRange, cosRange
 };

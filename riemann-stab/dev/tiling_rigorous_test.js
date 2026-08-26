@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const T = require('./tiling_research');
 const I = require('./tiling_interval');
 const R = require('./tiling_rigorous');
@@ -12,6 +14,68 @@ function check(name, condition, detail = '') {
 
 let seed = 987654321;
 const random = () => { seed = (1103515245 * seed + 12345) % 2147483648; return seed / 2147483648; };
+
+
+// ------------------------------------------------- outward rounding
+// The relative widening is not outward on its own: below the smallest normal
+// double, |v| * EPSD underflows and the widening vanishes.  This is the case
+// that caught it.
+const subnormalProduct = R.iMul([5e-324, 5e-324], [0.5, 0.5]);
+check('interval product encloses a subnormal exact result',
+  subnormalProduct[0] <= 2.5e-324 && 2.5e-324 <= subnormalProduct[1],
+  `${JSON.stringify(subnormalProduct)}`);
+
+// Outwardness across every magnitude regime, subnormals included.  Overflow is
+// excluded deliberately: rd/ru give NaN there, and the range assertion below is
+// what rules overflow out for this code rather than an assumption.
+const magnitudes = [0, 5e-324, 1e-320, 1e-310, 1e-308, 1e-300, 1e-100, 1e-16,
+  1, 1e3, 1e16, 1e100, 1e300];
+let outwardFailures = 0;
+for (const a of magnitudes) {
+  for (const b of magnitudes) {
+    for (const sign of [1, -1]) {
+      for (const op of [(x, y) => x * y, (x, y) => x + y, (x, y) => x - y]) {
+        const v = op(sign * a, b);
+        if (!Number.isFinite(v)) continue;
+        const lo = R.rd(v), hi = R.ru(v);
+        if (!(lo <= v && v <= hi)) outwardFailures++;
+        if (v !== 0 && !(lo < v && v < hi)) outwardFailures++;
+      }
+    }
+  }
+}
+check('outward rounding is outward at every finite magnitude', outwardFailures === 0,
+  `${outwardFailures}`);
+
+// And the precondition that rules out overflow: every quantity the box analysis
+// produces stays far inside the finite range.
+const I2 = require('./tiling_interval');
+const shippedForRange = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'tiling_additive.certificate.json'), 'utf8'));
+const widestCert = shippedForRange.certificates.reduce((a, c) => c.searchBox > a.searchBox ? c : a);
+const preparedForRange = I2.prepareCertificate(
+  {knots: widestCert.knots, a: widestCert.a, b: widestCert.b});
+const rangeScratch = I2.newScratch();
+let biggest = 0, nonFinite = 0;
+for (let trial = 0; trial < 20000; trial++) {
+  const lo = new Float64Array(6), hi = new Float64Array(6);
+  for (let k = 0; k < 6; k++) {
+    lo[k] = random() * widestCert.searchBox;
+    hi[k] = Math.min(widestCert.searchBox, lo[k] + random() * widestCert.searchBox);
+  }
+  I2.analyzeBoxRigorous(preparedForRange, lo, hi, rangeScratch);
+  if (!Number.isFinite(rangeScratch.bound)) nonFinite++;
+  biggest = Math.max(biggest, Math.abs(rangeScratch.bound));
+  for (let k = 0; k < 12; k++) {
+    if (!Number.isFinite(rangeScratch.grad[k])) nonFinite++;
+    biggest = Math.max(biggest, Math.abs(rangeScratch.grad[k]));
+  }
+}
+check('box analysis never produces a non-finite quantity', nonFinite === 0, `${nonFinite}`);
+// Observed maximum is about 1.6e3 -- a derivative enclosure over a box wide
+// enough that the natural extension is loose.  That is three hundred orders of
+// magnitude below overflow, which is what the precondition needs.
+check('and stays hundreds of orders below overflow', biggest < 1e6, `${biggest}`);
 
 // ------------------------------------------------------------ trigonometry
 // The declared error bound is what everything downstream rests on, so it is
