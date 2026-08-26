@@ -288,12 +288,45 @@ Three caveats, all real.
   programme, the sweep — would have to be redone one dimension higher.
 - The normal form itself does generalise cleanly.  For a block of `m` gaps the
   antisymmetric additive coboundaries are `u_i = u_{m-1-i}` with `sum u_i = 0`;
-  at `m = 7` that reads
+  writing `h = floor(m/2)`, an even block gives `h-1` free functions with the
+  middle pair carrying minus their sum, an odd block gives `h` free functions
+  with the centre slot carrying minus twice their sum.  At `m = 7`:
 
-  `R = F7 + a(g0)+a(g6) + b(g1)+b(g5) + c(g2)+c(g4) - 2(a+b+c)(g3)`,
+  `R = F7 + a(g0)+a(g6) + b(g1)+b(g5) + c(g2)+c(g4) - 2(a+b+c)(g3)`.
 
-  three free functions instead of two.  The sweep is the hard part: seven gaps
-  instead of six.
+### And seven dimensions turns out to be feasible
+
+`tiling_blocks.js` is the whole machinery written for a general block, and it
+earns its keep by reproducing the specialised modules exactly: `signMatrix(6)`
+is the hand-derived pair, the reduced cost agrees to `1e-15`, the amplitude
+agrees to the last bit, and the general sweep reproduces the specialised sweep
+*box for box* — 103 437 and 314 321.
+
+Two seven-gap results follow.  The isolated block minimum, the `n = 8` analogue
+of Proposition F6, is `0.004388737` at a palindrome,
+
+`(1.04427, 1.97494, 1.03979, 1.97160, 1.03979, 1.97494, 1.04427)`,
+
+against the `n = 8` chain candidate `0.004524419` — a compatibility gap of
+`1.36e-4`, the same order as at `n = 7`.  And the probe that decides whether
+any of this is actionable: **a seven-dimensional exhaustive sweep terminates.**
+44 339 boxes at `0.003`, 1 485 735 at `0.004`, and a correct refusal with an
+explicit counterexample at `0.0045`.  The monotonicity reduction still carries
+the extra dimension.
+
+One structural check came free.  At an odd block the features do *not* cancel
+pointwise on the alternating blocks the way they do at `m = 6` — but the two
+blocks' corrections are equal and opposite, so their average is still the chain
+energy, and the ceiling argument survives in the form that actually matters.
+The linear programme confirms it numerically: its cap at `m = 7` sits at exactly
+`0.004524418568`, the `n = 8` chain candidate.
+
+So the `n = 8` programme is reachable rather than merely describable.  What it
+needs is a certificate at `m = 7`, which is the same cut-generation loop with
+three free functions instead of two, and then the seven-dimensional sweep at a
+margin comparable to the one that already works at six.
+
+
 
 ## Concrete next proof program
 
