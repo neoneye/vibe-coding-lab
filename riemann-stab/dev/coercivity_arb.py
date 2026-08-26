@@ -134,6 +134,32 @@ def jacobian(L, H):
 
 
 # ------------------------------------------------------------------ Krawczyk
+def span(lo, hi):
+    """The ball enclosing [lo, hi], with both endpoints given as balls."""
+    a, b = float(arb(lo).lower()), float(arb(hi).upper())
+    mid = (arb(a) + arb(b)) / 2
+    rad = (arb(b) - arb(a)) / 2
+    return arb(mid.mid(), float(rad.upper()))
+
+
+def sqr(b):
+    """b^2, enclosed in the NONNEGATIVE reals.
+
+    Neither `b * b` nor `b ** 2` does this.  Ball multiplication does not know
+    the two factors are the same number, so `b * b` for a ball straddling zero
+    returns something straddling zero -- a valid enclosure of a product, a
+    useless one for a square -- and `b ** 2` returns nan outright when the ball
+    is centred at zero.  Feeding either into a square root, which is exactly
+    what the eigenvalue bound does, yields nan; the comparison then reads False
+    and the caller subdivides forever instead of certifying.  Fail-safe, but
+    only by accident, and it silently costs the sharpness the bound was for.
+    """
+    lo, hi = arb(b.lower()), arb(b.upper())
+    top = abs(hi) if abs(hi) > abs(lo) else abs(lo)
+    bottom = arb(0) if (lo <= 0 <= hi) else (abs(lo) if abs(lo) < abs(hi) else abs(hi))
+    return span(bottom * bottom, top * top)
+
+
 def ball(lo, hi):
     mid = (arb(lo) + arb(hi)) / 2
     rad = (arb(hi) - arb(lo)) / 2
@@ -220,8 +246,8 @@ def smallest_eigenvalue_lower(qL, qH, L, H):
                 re[alpha][beta] += e * theta.cos()
                 im[alpha][beta] -= e * theta.sin()
     a, d = re[0][0], re[1][1]
-    off2 = re[0][1] ** 2 + im[0][1] ** 2
-    disc = (((a - d) / 2) ** 2 + off2).sqrt()
+    off2 = sqr(re[0][1]) + sqr(im[0][1])
+    disc = (sqr((a - d) / 2) + off2).sqrt()
     return (a + d) / 2 - disc
 
 
@@ -324,6 +350,96 @@ def hessian_drift(L, H, r):
 def growth_constant(L, H, r, gap=None):
     """Certified c with E(g_alt+u) - E_alt >= (c/2) ||u||_2^2 for ||u||_inf <= r."""
     return arb(SHARP_TARGET if gap is None else gap) - hessian_drift(L, H, r)
+
+
+# The Schur bound above throws away every sign in the perturbation, and the
+# throw-away is expensive.  A sharper route keeps the perturbation an OPERATOR.
+# Writing the drift as a sum over the same windows the energy sums over,
+#
+#   x^T (H(g) - M) x = 2 sum_{i,s} delta_{i,s} (chi_{i,s} . x)^2
+#                   >= -2 sum_s dw_s * ||S_s x||^2,
+#
+# where S_s is the moving sum of length s and dw_s bounds |w''(D) - w''(D*)| at
+# lag s over the tube.  So H(g) >= M - 2 sum_s dw_s S_s^T S_s, and the right
+# side is translation invariant with period two -- the same Bloch problem as
+# before, with the perturbation's own symbol subtracted.  S_s^T S_s is banded
+# with kernel max(0, s - |d|).
+#
+# This matters because the two symbols peak in different places.  The moving-sum
+# Gram symbol is largest at q = 0, where it equals s^2; near q = pi, where the
+# crystal's own gap is smallest, it collapses to 0 or 1.  The Schur bound charges
+# s^2 everywhere.  Keeping the momentum dependence roughly triples the radius.
+def moving_sum_gram(s, d):
+    return max(0, s - abs(d))
+
+
+def perturbed_symbol_lower(qLo, qHi, L, H, coef):
+    q = ball(qLo, qHi)
+    re = [[arb(0), arb(0)], [arb(0), arb(0)]]
+    im = [[arb(0), arb(0)], [arb(0), arb(0)]]
+    for alpha in range(2):
+        for beta in range(2):
+            for cell in range(-6, 7):
+                offset = alpha - (2 * cell + beta)
+                entry = hessian_entry(alpha, 2 * cell + beta, L, H)
+                for s in range(1, LAGS + 1):
+                    g = moving_sum_gram(s, offset)
+                    if g:
+                        entry = entry - coef[s] * g
+                if entry.is_zero():
+                    continue
+                theta = q * cell
+                re[alpha][beta] += entry * theta.cos()
+                im[alpha][beta] -= entry * theta.sin()
+    a, d = re[0][0], re[1][1]
+    off2 = sqr(re[0][1]) + sqr(im[0][1])
+    return (a + d) / 2 - (sqr((a - d) / 2) + off2).sqrt()
+
+
+def lag_drift(L, H, s, r):
+    """max over the tube and both parities of |w''(D_{i,s}) - w''(D*_{i,s})|."""
+    worst = arb(0)
+    for parity in (0, 1):
+        d = lag_distance(s, parity, L, H)
+        wide = weight_jet(arb(d.mid(), float(d.rad()) + s * r), 3)[2]
+        point = weight_jet(d, 3)[2]
+        v = (arb(wide.rad()) + arb(point.rad())
+             + abs(arb(wide.mid()) - arb(point.mid())))
+        if v > worst:
+            worst = v
+    return worst
+
+
+def bloch_growth_positive(L, H, r, min_width=1e-9, budget=40000):
+    """Certify H(g) > 0 throughout the tube of radius r, keeping the momentum."""
+    coef = [None] + [2 * lag_drift(L, H, s, r) for s in range(1, LAGS + 1)]
+    pil = float(arb.pi().upper())
+    stack = [(0.0, pil)]
+    processed = 0
+    while stack:
+        qL, qH = stack.pop()
+        processed += 1
+        if processed > budget:
+            return False, processed
+        low = perturbed_symbol_lower(qL, qH, L, H, coef)
+        if arb(low.lower()) > 0:
+            continue
+        if qH - qL <= min_width:
+            return False, processed
+        m = (qL + qH) / 2
+        stack.append((qL, m))
+        stack.append((m, qH))
+    return True, processed
+
+
+def certified_radius_bloch(L, H, lo=0.0, hi=0.05, steps=24):
+    for _ in range(steps):
+        m = (lo + hi) / 2
+        if bloch_growth_positive(L, H, m)[0]:
+            lo = m
+        else:
+            hi = m
+    return lo
 
 
 def certified_radius(L, H, lo=0.0, hi=0.05, steps=40):
@@ -466,15 +582,24 @@ def main():
     check("the drift bound degrades monotonically, so r* is where it says",
           all(quoted[i][1] > quoted[i + 1][1] for i in range(len(quoted) - 1)))
 
+    # Keeping the momentum instead of Schur-bounding it away.
+    bloch_r = certified_radius_bloch(L, H)
+    check("keeping the momentum widens the radius", bloch_r > 3 * radius,
+          "r* = %.8f, against %.8f from the Schur bound" % (bloch_r, radius))
+    check("and it is a real limit, not the bisection window",
+          not bloch_growth_positive(L, H, bloch_r * 1.05)[0])
+
     bad = [c for c in CHECKS if not c[1]]
     print("\n%d checks, %d failed" % (len(CHECKS), len(bad)))
 
     if not bad:
-        write_transcript(L, H, E, g, gb, sharp, window, upper, radius, quoted)
+        write_transcript(L, H, E, g, gb, sharp, window, upper, radius, quoted,
+                         bloch_r)
     return 1 if bad else 0
 
 
-def write_transcript(L, H, E, g, gb, sharp, window, upper, radius, quoted):
+def write_transcript(L, H, E, g, gb, sharp, window, upper, radius, quoted,
+                     bloch_r):
     """Record what ran, hashed to this source.
 
     Nothing in this directory should quote a computed number that cannot be
@@ -505,6 +630,7 @@ def write_transcript(L, H, E, g, gb, sharp, window, upper, radius, quoted):
                       "point_upper_bound": upper,
                       "numerical_argmin_over_pi": NUMERICAL_ARGMIN},
         "quadratic_growth": {"certified_radius_sup_norm": radius,
+                             "certified_radius_bloch": bloch_r,
                              "constant_at_radius":
                                  {str(r): c for r, c in quoted}},
         "checks": [{"name": n, "ok": ok} for n, ok, _ in CHECKS],

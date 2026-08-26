@@ -920,24 +920,49 @@ convex, gives
 
 `E(g_alt + u) - E_alt >= (c/2) ||u||_2^2`  whenever  `||u||_inf <= r`,
 
-with `c = 1.6612 - drift(r)` certified positive out to
+with `c = 1.6612 - drift(r)` certified positive out to a radius that depends
+entirely on how the drift is bounded.
 
-**`r* = 0.00695574`.**
+**The Schur bound, and why it is wasteful.**  Bounding `||Delta||_2` by the row
+sum discards every sign in the perturbation, and gives `r* = 0.00695574`.  The
+sharper route keeps the drift an *operator*.  Written over the same windows the
+energy sums over,
 
-| `r` | growth constant `c/2` |
+`x^T (H(g) - M) x = 2 sum_{i,s} delta_{i,s} (chi_{i,s} . x)^2 >= -2 sum_s dw_s ||S_s x||^2`,
+
+with `S_s` the moving sum of length `s`, so `H(g) >= M - 2 sum_s dw_s S_s^T S_s`
+— and the right-hand side is translation invariant with period two, which is the
+same one-variable Bloch problem as the gap, with the perturbation's own symbol
+subtracted.  `S_s^T S_s` is banded with kernel `max(0, s - |d|)`.
+
+This is worth doing because the two symbols peak in different places.  The
+moving-sum Gram symbol is largest at `q = 0`, where it equals `s^2`; near
+`q = pi`, where the crystal's own gap is smallest, it collapses to `0` or `1`.
+The Schur bound charges `s^2` everywhere.  Keeping the momentum triples the
+radius:
+
+**`r* = 0.02144507`**,  against `0.00695574`.
+
+| `r` | growth constant `c/2` (Schur) |
 | --- | --- |
 | `0.001` | `0.721009` |
 | `0.003` | `0.491623` |
 | `0.005` | `0.249143` |
 | `0.006` | `0.123197` |
 
-For scale: the wall profile deviates from the frustrated alternating reference by
-at most `8.877e-3`, which is `1.28 r*`.  So the wall is not a perturbation of a
-pure phase and this tube does not reach it -- the two halves of the coercivity
-statement are computed, and they do not yet meet.  That factor of `1.28` is the
-honest size of the remaining gap on this side, and the drift bound above is the
-crude step: it is a Schur bound on a majorant, and a mean-value form that tracked
-the sign of the third derivative of the weight would be sharper.
+**What the radius does and does not connect to.**  It says: any perturbation of a
+pure phase with every gap within `0.0214` grows quadratically at a certified
+rate.  It says nothing about a wall, and the temptation to compare `r*` with the
+wall's `8.877e-3` profile deviation should be resisted — that deviation is
+measured against the *frustrated* alternating reference, which has a low-low
+adjacency at the seam and is not the crystal.  A wall is at sup distance
+`|H - L| = 0.938` from either pure phase on its far side, which is `44 r*`.  It
+is nowhere near the tube and cannot be brought into it by sharpening constants.
+
+So the two halves now stand as: coercivity in an explicit tube around each phase,
+and the certified tension of the wall that occurs.  What a Peierls bound needs
+and nothing here supplies is the middle — a lower bound on the excess for
+configurations that are within `r*` of no single phase.
 
 **A correction it produced, and this time enclosed rather than computed.**  The
 `(1.041680, 1.979467)` quoted throughout this directory is a six-decimal
