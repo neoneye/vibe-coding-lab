@@ -35,10 +35,22 @@ previously exist.
   `0.6730085279`, `99.1%` of the whole available gain, and Lean pins that
   constant two-sidedly, strictly above the published pin and strictly below the
   ceiling.
+- **Certified in Arb, on an arithmetic base that is not mine.**  The local
+  coercivity theorem — a unique two-periodic critical point, a Bloch gap of
+  `1.6612`, the minimising momentum in `q/pi in [0.925, 0.933]`, the chain
+  energy there, and a radius `r* = 0.02145` of certified quadratic growth around
+  each phase — and the two wall tensions, `tau_LL = 0.0010927864577` and
+  `tau_HH = 0.0001470854975`, each the tension of a wall proved unique and
+  strictly locally minimising on a 63-gap ring.  These were "numerical only" a
+  day ago; the Arb reimplementation is what moved them.  What is still *not*
+  certified about the walls is that they are the cheapest ones: the tensions are
+  unconditional upper bounds on the true wall tension and conditional lower
+  bounds.
 - **Numerical only.**  The certificate coefficients; every floor above the
-  swept ones; the two-phase kink energies and Bloch spectrum; and the entire
-  block-size scan, which says the projection peaks at `n = 8`, not the `n = 7`
-  the programme inherited.
+  swept ones; the pair-state candidates, including the pinned one whose floor is
+  the alternating energy itself — no interval has touched any of them; and the
+  entire block-size scan, which says the projection peaks at `n = 8`, not the
+  `n = 7` the programme inherited.
 - **Not checkable here at all.**  The external shifted-block assembly the
   projection encodes.  Everything downstream of it is conditional on it.
 
@@ -239,7 +251,10 @@ alternating-chain ceiling.
 
 Two consequences for the proof program.  Reaching the ceiling exactly is worth
 almost nothing over reaching `0.003951`, so an interval sweep should be run
-against a certificate with margin, not against the record.  And the earlier
+against a certificate with margin, not against the record.  That is a statement
+about the *projection* only: for a crystallization argument reaching the ceiling
+exactly is the entire content, since a block floor below `E_alt` cannot say the
+alternating chain is the minimiser.  See "Pricing the adjacency" below.  And the earlier
 verdict that a family "still falls short of `0.00395`" was measuring the wrong
 thing: the previous best was already buying 78% of the prize.
 
