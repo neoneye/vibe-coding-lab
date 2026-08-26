@@ -629,6 +629,14 @@ the `cot(1/sqrt2)/sqrt2` in it is exactly what evaluating the Euler-Lagrange
 equation at the origin produces.  The integer complement is machine-checked as
 `montgomery_taylor_complement`.
 
+One honest caveat, to forestall the obvious misreading.  The Euler-Lagrange
+equation fixes the *shape* at a given support; it says nothing about the support
+itself, and `R` decreases monotonically as the support widens
+(`2.166`, `1.514`, `1.327`, `1.223`, `1.146`, `1.112` at widths `0.5` through
+`2`).  The width is normalised to `1` by the application, not chosen by
+optimising `R`.  Nothing here says a wider window would do better in the place
+that matters.
+
 Checked: the residual — the spread of that expression over `s` — is exactly
 zero at `sqrt(2)` to 22 digits and settles at `R(psi) * int psi =
 1.219607282008414370146`, while for `cos(s)` and `cos(2s)` it spreads by
