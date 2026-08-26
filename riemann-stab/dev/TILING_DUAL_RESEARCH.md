@@ -522,23 +522,30 @@ The old program's steps are done: the certificate exists, the cube is finite
 and explicit, the sweep is exhaustive, and it now runs on proved enclosures.
 What is left, in order of how much it buys per unit of work:
 
-1. **Compute.**  The rigorous sweep is at `0.00392` and the double-precision
-   one at `0.003955`.  `0.003949` took 42.5 million rigorous boxes and 49
-   minutes on the `compact` certificate, whose own floor is `0.003950948` — so
-   that certificate is now the binding constraint, not the sweep.  `sharp`
-   removes it: same cube, floor `0.003956981`.  The next command is
+1. **Compute.**  The rigorous sweep is at `0.003952` on `sharp` and the
+   double-precision one at `0.003955`.  The remaining targets are
 
    ```
-   node dev/sweep.js rigorous sharp 0.003952 0.003954 0.003956
+   node dev/sweep.js rigorous sharp 0.003954 0.003956
    ```
 
    which should land the rigorous floor within a part in `10^6` of the ceiling.
+   Beyond that the certificate binds again: `sharp` stops at `0.003956981` and
+   `record` at `0.003957227`, against a ceiling of `0.003957393`.  Squeezing
+   the last `4e-7` means more cut-generation rounds, not more sweeping.
 2. **An independent implementation.**  Everything above trusts that this code
    has no bugs.  The cross-checks are real — 60-digit mpmath for the
    trigonometry, the exact-range table for every box analysis, the degenerate
    box reproducing `additiveReducedCost` bit for bit — but they are checks by
-   the same author.  Reimplementing the four range primitives in Arb or MPFI
-   and rerunning would be worth more than any further tightening here.
+   the same author.  Reimplementing in Arb or MPFI and rerunning would be worth
+   more than any further tightening here, and the surface is small: the whole
+   rigorous stack is `sinPoint`/`cosPoint` (Cody-Waite plus Taylor, the only
+   place a hand-written error bound is asserted), `sinRange`/`cosRange` (exact
+   ranges, extremum included whenever it cannot be excluded), `sincRange`,
+   `sincDerivRange`, `sincSecondRange`, and `weightPairCentered`, which fuses
+   the value and derivative enclosures.  Everything else — the subdivision, the
+   monotonicity reduction, the piecewise-linear potential — is exact rational
+   bookkeeping that needs no enclosure at all.
 3. **A checker with no optimizer in its trusted base.**  The certificate's
    knots and coefficients should be rationalised, and the checker should read
    them as data.  The finite-chain boundary term is already explicit: it is
