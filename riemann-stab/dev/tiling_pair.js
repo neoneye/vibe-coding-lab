@@ -313,31 +313,68 @@ function cellCornerRange(cert, k, i, j, aLo, aHi, bLo, bHi) {
 // Taking the min and max over the two edges instead, as the multi-cell path
 // must, leaves an O(1) overestimate that does not shrink as the box shrinks --
 // fatal for anything needing a tight gradient at a point, where the true value
-// is a cancellation of terms a thousand times larger.  Every step below is
-// outward-rounded: the fractions round, the corner differences round, and the
-// division rounds.
+// is a cancellation of terms a thousand times larger.
+//
+// Bounded the same way as the corner values, and for the same reason: an
+// interval-arithmetic version of this was correct but allocated about fifty
+// small arrays per box, which on 7.5e7 boxes is the difference between a
+// two-hour sweep and an eight-hour one.  Each slope is a convex combination of
+// the two edge slopes e0 = (c10-c00)/hx and e1 = (c11-c01)/hx, so every
+// intermediate is bounded by S = max(|e0|, |e1|).  The evaluation is one
+// subtraction and one division for v (relative error at most 2 * 2^-53, entering
+// multiplied by |e1 - e0| <= 2S), then four multiply-adds bounded by S.  That
+// totals below 12 * S * 2^-53; the constant used is 32.
+const SLOPE_OPS = 32;
+
 function singleCellSlopes(cert, k, i, j, aLo, aHi, bLo, bHi) {
   const t = cert.knots, J = cert.J, grid = cert.mats[k];
-  const hx = t[i + 1] - t[i], hy = t[j + 1] - t[j];
+  const t0 = t[i], s0 = t[j];
+  const hx = t[i + 1] - t0, hy = t[j + 1] - s0;
   const c00 = grid[i * J + j], c01 = grid[i * J + j + 1];
   const c10 = grid[(i + 1) * J + j], c11 = grid[(i + 1) * J + j + 1];
   const clampX = aLo <= t[0] || aHi >= t[t.length - 1];
   const clampY = bLo <= t[0] || bHi >= t[t.length - 1];
-  const uLo = Math.max(0, Math.min(1, R.rd(R.rd(aLo - t[i]) / hx)));
-  const uHi = Math.max(0, Math.min(1, R.ru(R.ru(aHi - t[i]) / hx)));
-  const vLo = Math.max(0, Math.min(1, R.rd(R.rd(bLo - t[j]) / hy)));
-  const vHi = Math.max(0, Math.min(1, R.ru(R.ru(bHi - t[j]) / hy)));
-  const dxAt = v => R.iDiv(R.iAdd(
-    R.iMul(R.iSub([1, 1], [v, v]), R.iSub([c10, c10], [c00, c00])),
-    R.iMul([v, v], R.iSub([c11, c11], [c01, c01]))), [hx, hx]);
-  const dyAt = u => R.iDiv(R.iAdd(
-    R.iMul(R.iSub([1, 1], [u, u]), R.iSub([c01, c01], [c00, c00])),
-    R.iMul([u, u], R.iSub([c11, c11], [c10, c10]))), [hy, hy]);
-  let dx = R.iHull(dxAt(vLo), dxAt(vHi));
-  let dy = R.iHull(dyAt(uLo), dyAt(uHi));
+  const clamp = z => z < 0 ? 0 : (z > 1 ? 1 : z);
+  const uA = clamp((aLo - t0) / hx), uB = clamp((aHi - t0) / hx);
+  const vA = clamp((bLo - s0) / hy), vB = clamp((bHi - s0) / hy);
+
+  const ex0 = (c10 - c00) / hx, ex1 = (c11 - c01) / hx;
+  const ey0 = (c01 - c00) / hy, ey1 = (c11 - c10) / hy;
+  const sx = SLOPE_OPS * Math.max(Math.abs(ex0), Math.abs(ex1))
+    * Number.EPSILON / 2 + BILINEAR_FLOOR;
+  const sy = SLOPE_OPS * Math.max(Math.abs(ey0), Math.abs(ey1))
+    * Number.EPSILON / 2 + BILINEAR_FLOOR;
+  const dxA = ex0 + vA * (ex1 - ex0), dxB = ex0 + vB * (ex1 - ex0);
+  const dyA = ey0 + uA * (ey1 - ey0), dyB = ey0 + uB * (ey1 - ey0);
+  let dx = [Math.min(dxA, dxB) - sx, Math.max(dxA, dxB) + sx];
+  let dy = [Math.min(dyA, dyB) - sy, Math.max(dyA, dyB) + sy];
   if (clampX) dx = [Math.min(dx[0], 0), Math.max(dx[1], 0)];
   if (clampY) dy = [Math.min(dy[0], 0), Math.max(dy[1], 0)];
   return {dx, dy};
+}
+
+// A sound centered form, for boxes that span more than one cell.
+//
+// Removing the unsound one entirely cost real pruning: on the full cube the
+// multi-cell boxes are where the sweep spends its time, and the grid range
+// alone is O(cell variation) loose there however small the box.  The mean value
+// bound is legitimate -- psi is continuous with slope ranges dx, dy valid over
+// the whole box, so for any point in it
+//
+//   psi(x,y) >= psi(cx,cy) - max|dx| |x - cx| - max|dy| |y - cy| ,
+//
+// and the only thing wrong with the version this replaces was that it computed
+// that in plain arithmetic and called the result a bound.  Here the centre value
+// carries the derived corner slack and every combination is rounded outward.
+function centeredLower(cert, k, aLo, aHi, bLo, bHi, dx, dy) {
+  const cx = (aLo + aHi) / 2, cy = (bLo + bHi) / 2;
+  const i = cellIndex(cert.knots, cx), j = cellIndex(cert.knots, cy);
+  const at = cellCornerRange(cert, k, i, j, cx, cx, cy, cy)[0];
+  const wx = R.ru(Math.max(aHi - cx, cx - aLo));
+  const wy = R.ru(Math.max(bHi - cy, cy - bLo));
+  const spread = R.ru(R.ru(Math.max(Math.abs(dx[0]), Math.abs(dx[1])) * wx)
+    + R.ru(Math.max(Math.abs(dy[0]), Math.abs(dy[1])) * wy));
+  return R.rd(at - spread);
 }
 
 function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
@@ -357,6 +394,8 @@ function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
   } else {
     dx = slopeRangeX(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
     dy = slopeRangeY(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
+    const centered = centeredLower(cert, k, aLo, aHi, bLo, bHi, dx, dy);
+    if (centered > value[0]) value[0] = centered;
   }
   // where the box reaches outside the knots the slope there is zero, so the
   // range has to include zero (the single-cell path already did this)
