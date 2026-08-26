@@ -9,6 +9,7 @@ const EXPECT = {
   chain_inequality:          ['propext', 'Quot.sound'],
   reversal_coboundary_symmetrization: ['propext', 'Quot.sound'],
   reversal_potential_antisymmetric:   ['propext', 'Quot.sound'],
+  binary_phase_defect_balance:        ['propext', 'Quot.sound'],
   headline_fraction_floor:   ['propext', 'Quot.sound'],
   headline_fraction_ceiling: ['propext', 'Quot.sound'],
   improvement_direction:     ['propext', 'Quot.sound'],

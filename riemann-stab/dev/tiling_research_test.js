@@ -46,7 +46,7 @@ for (const row of golden.periodic_candidates) {
 }
 
 for (const row of golden.long_period_stress) {
-  const motif = golden.periodic_candidates.find(x => x.period === row.observed_motif_period).gaps;
+  const motif = row.gaps || golden.periodic_candidates.find(x => x.period === row.observed_motif_period).gaps;
   const gaps = Array.from({length: row.period}, (_, i) => motif[i % motif.length]);
   check(`period-${row.period} stress motif pin`,
     close(T.periodicChainEnergy(gaps), row.value, 2e-9));
@@ -64,10 +64,32 @@ check('golden status says numerical only', /no certified global lower bound/.tes
 
 const phase = golden.two_phase_probe;
 const walls = T.runDomainWallStress({periods: [32, 48, 64], iterations: 3000});
-for (const observed of phase.wall_tension) {
-  const computed = walls.find(row => row.period === observed.period).wallTension;
-  check(`period-${observed.period} pinned wall tension`,
+for (const observed of phase.two_interface_excess) {
+  const computed = walls.find(row => row.period === observed.period).totalExcess;
+  check(`period-${observed.period} pinned two-interface excess`,
     close(computed, observed.value, 3e-15), `${computed}`);
+}
+const kinkRow = T.runOddKinkStress({periods: [63], iterations: 3000})[0];
+const lowKink = kinkRow.orientations.find(row => row.kind === 'low-low');
+const highKink = kinkRow.orientations.find(row => row.kind === 'high-high');
+check('low-low kink has one charged defect',
+  lowKink.counts.lowLow === 1 && lowKink.counts.highHigh === 0);
+check('high-high kink has opposite charged defect',
+  highKink.counts.lowLow === 0 && highKink.counts.highHigh === 1);
+check('low-low kink excess pin',
+  close(lowKink.totalExcess, phase.period_63_kinks.low_low_excess, 2e-13));
+check('high-high kink excess pin',
+  close(highKink.totalExcess, phase.period_63_kinks.high_high_excess, 2e-13));
+const additivityError = Math.abs(
+  walls.find(row => row.period === 64).totalExcess
+    - lowKink.totalExcess - highKink.totalExcess
+);
+check('separated two-wall excess is asymptotically additive', additivityError < 1e-10,
+  `${additivityError}`);
+for (const kink of kinkRow.orientations) {
+  const c = kink.counts;
+  check(`${kink.kind} phase-defect balance`,
+    c.low - c.high === c.lowLow - c.highHigh && c.lowHigh === c.highLow);
 }
 const spectrum = T.periodTwoBlochSpectrum(phase.bloch_period, phase.bloch_epsilon);
 const softest = Math.min(...spectrum.map(row => row.lower));
@@ -75,6 +97,14 @@ const largest = Math.max(...spectrum.map(row => row.upper));
 check('period-two Bloch spectrum is strictly positive', softest > 1.66, `${softest}`);
 check('softest Bloch eigenvalue pin', close(softest, phase.softest_eigenvalue, 2e-10));
 check('largest Bloch eigenvalue pin', close(largest, phase.largest_eigenvalue, 2e-10));
+const coercivity = T.runNonlinearCoercivityProbe();
+for (const observed of phase.finite_amplitude_bloch_coercivity) {
+  const computed = coercivity.find(row => row.radius === observed.radius);
+  check(`radius-${observed.radius} finite-amplitude coercivity pin`,
+    close(computed.ratio, observed.ratio, 8e-10), `${computed.ratio}`);
+}
+check('scanned finite-amplitude modes remain coercive through radius 0.15',
+  coercivity.every(row => row.ratio > 0.77));
 check('two-phase scope remains numerical', /not a global lower bound/.test(phase.status));
 
 if (failed) {

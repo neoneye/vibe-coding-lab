@@ -23,6 +23,7 @@ cat >> "$AXFILE" <<'LEANEOF'
 #print axioms chain_inequality
 #print axioms reversal_coboundary_symmetrization
 #print axioms reversal_potential_antisymmetric
+#print axioms binary_phase_defect_balance
 #print axioms headline_fraction_floor
 #print axioms headline_fraction_ceiling
 #print axioms improvement_direction

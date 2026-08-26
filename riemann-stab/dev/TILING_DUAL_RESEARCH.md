@@ -10,10 +10,10 @@ still required before the improved simple-zero projection can be used.
 ## What is new in this experiment
 
 - Analytic gradients and multi-start searches now stress periods 9 through 64,
-  including long waves, quasiperiodic starts, and random two-band starts.  Every
-  tested even period returned the alternating two-cycle; period 9 returned the
-  repeated three-cycle.  These are numerical upper bounds on minima, never
-  lower-bound certificates.
+  including long waves, quasiperiodic starts, random two-band starts, and both
+  alternating orientations.  Every tested even period returned the alternating
+  two-cycle; odd periods carry a localized kink.  These are numerical upper
+  bounds on minima, never lower-bound certificates.
 - A five-gap Bellman graph makes the proposed telescoping proof architecture
   explicit.  On the two-symbol alphabet `{1.041680, 1.979467}`, its lower and
   upper residuals meet at `0.003957393309...`, on the alternating cycle.
@@ -78,19 +78,36 @@ The alternating chain has two translates.  Rings forced to contain both phases
 were relaxed while short arcs inside each phase were pinned.  The excess energy
 localized at the two interfaces:
 
-| period | excess per wall |
+| period | total two-interface excess |
 |---:|---:|
-| 32 | 0.000620034007 |
-| 48 | 0.000619935991 |
-| 64 | 0.000619935975 |
+| 32 | 0.001240068014 |
+| 48 | 0.001239871982 |
+| 64 | 0.001239871950 |
+
+The two interfaces are not energetically equivalent.  Odd rings isolate their
+two orientations.  At period 63 the low-low kink costs `0.001092786451`, while
+the high-high kink costs only `0.000147085491`.  Their sum differs from the
+period-64 two-interface excess by about `7.0e-12`.  An earlier odd-period stress
+missed the cheap kink because it seeded only one alternating phase; both phases
+are now mandatory starts and the old period-9 pin has been replaced.
+
+For any cyclic binary phase word, directed-edge counting gives the exact charge
+identity `#low - #high = #LL - #HH`, since `#LH = #HL`.  Its integer skeleton is
+machine-checked as `binary_phase_defect_balance`.  The numerical kink costs are
+not part of that theorem.
 
 A two-site Bloch analysis of the numerical Hessian found every mode positive;
 the softest extensive eigenvalue was about `1.66129029`, stable across periods
 32--96 and finite-difference scales `10^-4` through `5*10^-6`.
+Scanning finite-amplitude Bloch deformations kept the energy-to-square-distance
+ratio positive: about `0.83048` at radius `0.01` and `0.77675` at radius `0.15`.
+The soft nonlinear direction is a staggered deformation concentrated on the
+high-gap sublattice.  This scan covers structured phonon directions, not every
+point in the corresponding neighborhood.
 
 This suggests a proof route unlike a pointwise block certificate: establish
 two locally coercive alternating phases, classify all low-energy blocks into
-their neighborhoods, and charge phase changes by a certified interface cost.
+their neighborhoods, and charge LL and HH defects by separate certified costs.
 The present wall tension and spectral gap are numerical evidence only.  A proof
 would need interval Hessian bounds inside the phase neighborhoods and a finite
 transition certificate outside them.

@@ -206,9 +206,63 @@ function runDomainWallStress(options = {}) {
       period,
       value: relaxed.value,
       totalExcess,
-      wallTension: totalExcess / 2,
+      averageInterfaceExcess: totalExcess / 2,
       gaps: relaxed.x
     };
+  });
+}
+
+function phaseDefectCounts(gaps, low = 1.041680, high = 1.979467) {
+  const midpoint = (low + high) / 2;
+  const symbols = gaps.map(gap => gap <= midpoint ? 0 : 1);
+  let lowLow = 0;
+  let highHigh = 0;
+  let lowHigh = 0;
+  let highLow = 0;
+  for (let i = 0; i < symbols.length; i++) {
+    const a = symbols[i];
+    const b = symbols[(i + 1) % symbols.length];
+    if (a === 0 && b === 0) lowLow++;
+    else if (a === 1 && b === 1) highHigh++;
+    else if (a === 0) lowHigh++;
+    else highLow++;
+  }
+  return {
+    symbols,
+    low: symbols.filter(x => x === 0).length,
+    high: symbols.filter(x => x === 1).length,
+    lowLow,
+    highHigh,
+    lowHigh,
+    highLow
+  };
+}
+
+function runOddKinkStress(options = {}) {
+  const periods = options.periods || [15, 23, 31, 47, 63, 95];
+  const low = 1.041680;
+  const high = 1.979467;
+  const ground = periodicChainEnergy([low, high]);
+  return periods.map(period => {
+    if (period % 2 !== 1) throw new Error('kink stress requires odd periods');
+    const orientations = [];
+    for (const phase of [0, 1]) {
+      const start = Array.from({length: period}, (_, i) =>
+        ((i + phase) % 2 === 0) ? low : high);
+      const relaxed = adamMinimizePeriodic(start, {
+        iterations: options.iterations || 10000,
+        learningRate: options.learningRate || 0.02
+      });
+      orientations.push({
+        phase,
+        kind: phase === 0 ? 'low-low' : 'high-high',
+        value: relaxed.value,
+        totalExcess: period * (relaxed.value - ground),
+        counts: phaseDefectCounts(relaxed.x),
+        gaps: relaxed.x
+      });
+    }
+    return {period, orientations};
   });
 }
 
@@ -258,6 +312,48 @@ function periodTwoBlochSpectrum(period = 64, epsilon = 2e-5) {
   return modes;
 }
 
+function runNonlinearCoercivityProbe(options = {}) {
+  const period = options.period || 64;
+  if (period % 2 !== 0) throw new Error('coercivity probe requires an even period');
+  const radii = options.radii || [0.01, 0.03, 0.08, 0.15];
+  const angleSteps = options.angleSteps || 20;
+  const phaseSteps = options.phaseSteps || 24;
+  const cells = period / 2;
+  const base = Array.from({length: period}, (_, i) => i % 2 ? 1.979467 : 1.041680);
+  const ground = periodicChainEnergy(base);
+  const rows = [];
+  for (const radius of radii) {
+    let best = null;
+    for (let mode = 0; mode < cells; mode++) {
+      const q = 2 * Math.PI * mode / cells;
+      for (let ai = 0; ai <= angleSteps; ai++) {
+        const angle = Math.PI * ai / (2 * angleSteps);
+        for (let pi = 0; pi < phaseSteps; pi++) {
+          const relativePhase = 2 * Math.PI * pi / phaseSteps;
+          const delta = new Array(period);
+          let maxAbsolute = 0;
+          for (let cell = 0; cell < cells; cell++) {
+            delta[2 * cell] = Math.cos(angle) * Math.cos(q * cell);
+            delta[2 * cell + 1] = Math.sin(angle) * Math.cos(q * cell + relativePhase);
+            maxAbsolute = Math.max(maxAbsolute,
+              Math.abs(delta[2 * cell]), Math.abs(delta[2 * cell + 1]));
+          }
+          if (maxAbsolute < 1e-12) continue;
+          for (let i = 0; i < period; i++) delta[i] *= radius / maxAbsolute;
+          const perturbed = base.map((gap, i) => gap + delta[i]);
+          const meanSquare = delta.reduce((sum, x) => sum + x * x, 0) / period;
+          const ratio = (periodicChainEnergy(perturbed) - ground) / meanSquare;
+          if (!best || ratio < best.ratio) {
+            best = {radius, ratio, mode, q, angle, relativePhase, meanSquare};
+          }
+        }
+      }
+    }
+    rows.push(best);
+  }
+  return rows;
+}
+
 function longPeriodStarts(period, seed) {
   const random = lcg(seed);
   const starts = [];
@@ -268,6 +364,10 @@ function longPeriodStarts(period, seed) {
   ];
   for (const motif of motifs) {
     starts.push(Array.from({length: period}, (_, i) => motif[i % motif.length]));
+    // Odd rings distinguish the two alternating phases: truncating LH versus
+    // HL produces different (LL versus HH) kink cores because of the pressure
+    // term.  Both orientations are mandatory search seeds.
+    starts.push(Array.from({length: period}, (_, i) => motif[(i + 1) % motif.length]));
   }
   // Phase-modulated and quasiperiodic starts probe domain walls and long waves.
   starts.push(Array.from({length: period}, (_, i) =>
@@ -548,9 +648,19 @@ if (require.main === module) {
   if (process.argv.includes('--walls')) {
     const rows = runDomainWallStress();
     for (const row of rows) {
-      console.log(`walls period ${String(row.period).padStart(2)}: mean=${row.value.toFixed(12)} total-excess=${row.totalExcess.toExponential(8)} tension=${row.wallTension.toExponential(8)}`);
+      console.log(`walls period ${String(row.period).padStart(2)}: mean=${row.value.toFixed(12)} total-excess=${row.totalExcess.toExponential(8)} average-interface=${row.averageInterfaceExcess.toExponential(8)}`);
     }
     console.log('PINNED DOMAIN-WALL SEARCH ONLY — not a global lower bound');
+    process.exit(0);
+  }
+  if (process.argv.includes('--kinks')) {
+    const rows = runOddKinkStress();
+    for (const row of rows) {
+      for (const kink of row.orientations) {
+        console.log(`kink period ${String(row.period).padStart(2)} ${kink.kind}: mean=${kink.value.toFixed(12)} total-excess=${kink.totalExcess.toExponential(10)} defects=${kink.counts.lowLow}/${kink.counts.highHigh}`);
+      }
+    }
+    console.log('ODD-KINK RELAXATION ONLY — not a certified defect bound');
     process.exit(0);
   }
   if (process.argv.includes('--bloch')) {
@@ -561,6 +671,14 @@ if (require.main === module) {
       console.log(`k=${String(mode.mode).padStart(2)} q=${mode.q.toFixed(7)} lambda-=${mode.lower.toExponential(8)} lambda+=${mode.upper.toExponential(8)}`);
     }
     console.log('FINITE-DIFFERENCE BLOCH HESSIAN — local numerical evidence only');
+    process.exit(0);
+  }
+  if (process.argv.includes('--coercivity')) {
+    const rows = runNonlinearCoercivityProbe();
+    for (const row of rows) {
+      console.log(`radius=${row.radius.toFixed(3)} ratio=${row.ratio.toFixed(9)} mode=${row.mode} q=${row.q.toFixed(7)} angle=${row.angle.toFixed(5)} phase=${row.relativePhase.toFixed(5)}`);
+    }
+    console.log('FINITE-AMPLITUDE PHONON SCAN — numerical directions only');
     process.exit(0);
   }
   const study = runStudy();
@@ -590,6 +708,9 @@ module.exports = {
   bandBasinSearch,
   runLongPeriodStress,
   runDomainWallStress,
+  phaseDefectCounts,
+  runOddKinkStress,
   periodTwoBlochSpectrum,
+  runNonlinearCoercivityProbe,
   runStudy
 };

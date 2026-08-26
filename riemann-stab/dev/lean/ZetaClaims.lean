@@ -65,6 +65,18 @@ theorem reversal_potential_antisymmetric {α : Type} (R : α → α)
   rw [hR s]
   omega
 
+/-- Directed-edge bookkeeping for a cyclic two-phase word.  If every low and
+    high site is counted by its outgoing edge, and cross-phase edges balance,
+    then the population imbalance equals the imbalance of the two defect
+    types.  This is the exact combinatorial charge behind the odd-ring kink
+    probe; it supplies no analytic lower bound for either defect energy. -/
+theorem binary_phase_defect_balance
+    (nLow nHigh nLL nHH nLH nHL : Int)
+    (hLow : nLow = nLL + nLH)
+    (hHigh : nHigh = nHH + nHL)
+    (hCross : nLH = nHL) :
+    nLow - nHigh = nLL - nHH := by omega
+
 /- WITHDRAWN THEOREM SKETCH — DO NOT REINSTATE WITHOUT READING
    dev/lean/rejected/README.md.
 
