@@ -1422,6 +1422,29 @@ with `k` — a resonance, and a good conjecture-generating signal, not a lock.
 The suite reproduces `k = 2` through `5`; the `k = 6, 7` rows are from a scan
 that is not gated.
 
+**Is it ever exact?**  "Near" is a function of the pressure, since the branch
+moves inside its own plateau, so the sharp question is whether the offset changes
+sign anywhere in it.  Sometimes:
+
+| `k` | period | offset across the plateau | exact at |
+| --- | --- | --- | --- |
+| 2 | 1 | `+6.2e-4` … `+1.4e-3` | never |
+| 3 | 2 | `+1.5e-4` … `+4.8e-4` | never |
+| 4 | 1 | `-1.7e-4` … `+1.3e-4` | **`p* = 7572.855986`** |
+| 5 | 2 | `+4.6e-5` … `+8.3e-5` | never |
+| 6 | 1 | `-1.9e-5` … `+1.3e-5` | **`p* = 80778.4126`** |
+
+At `k = 4` and `k = 6` the lag-two distance of the period-one branch passes
+*exactly* through a zero of `K` at one pressure inside the plateau — residual
+below `1e-18` in Arb, and the JavaScript relaxation finds the same `p*` to six
+digits.  At `k = 2, 3, 5` the offset keeps one sign the whole way across.  At
+`k = 8, 10` the offsets are about `1e-5`, which is the relaxation's own accuracy
+there, and nothing is claimed.
+
+Two crossings is not a pattern, and the plateau windows beyond `k = 7` are
+guesses.  What this does is replace "near" with something checkable: exact at two
+identified pressures, sign-definite at three others.
+
 Which of period one and period two wins tracks the **parity of `k`** — even `k`
 period one, odd `k` period two, with margins of `3e-2`, `5e-4`, `5e-2`, `3e-5` at
 `k = 2, 3, 4, 5`.  The gated test *determines* the period by relaxing both and

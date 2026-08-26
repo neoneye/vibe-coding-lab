@@ -191,6 +191,50 @@ function lowerCrossover(lo = 1300, hi = 1550, iterations = 60) {
   return (lo + hi) / 2;
 }
 
+// Does a branch's lag-two distance ever sit EXACTLY on a zero of K?
+//
+// The table above says "near", and near is a function of the pressure: the
+// branch moves inside its own plateau, so the offset from z_k/2 does too.  The
+// sharp question is whether the offset changes sign somewhere in the plateau,
+// i.e. whether there is a pressure at which the lag-two distance is exactly a
+// zero.  The answer separates the two families, which "near" did not:
+//
+//   even k, period one    -- yes.  2g = z_k exactly at one pressure inside the
+//                            plateau: p* = 7572.855986 at k = 4, and
+//                            p* = 80778.412591 at k = 6, residual below 1e-18.
+//   odd  k, period two    -- no.  L + H stays strictly ABOVE z_k across the
+//                            whole plateau, by 3.0e-4 to 9.7e-4 at k = 3,
+//                            shrinking with k.
+//
+// Which is what one would expect on counting: period one has one variable and
+// one condition, met at one pressure; period two has two variables and no reason
+// for their sum to pass through the zero at all.
+function branchMean(p, k, zeros) {
+  const half = (zeros || kernelZeros(Math.max(9, k + 2)))[k - 1] / 2;
+  if (k % 2 === 0) return relax([half], p, 60000).gaps[0];
+  const t = twoCycle(p, [half - 0.47, half + 0.47]);
+  return t.mean;
+}
+
+// The offset of the branch's lag-two distance from the zero, halved, as a
+// function of pressure.  Positive means the branch sits outside the zero.
+function resonanceOffset(p, k, zeros) {
+  const z = (zeros || kernelZeros(Math.max(9, k + 2)))[k - 1];
+  return branchMean(p, k, zeros) - z / 2;
+}
+
+function resonantPressure(k, lo, hi, iterations = 80) {
+  const zeros = kernelZeros(Math.max(9, k + 2));
+  const flo = resonanceOffset(lo, k, zeros);
+  if (flo * resonanceOffset(hi, k, zeros) > 0) return null;   // no crossing
+  for (let i = 0; i < iterations; i++) {
+    const m = (lo + hi) / 2;
+    if (resonanceOffset(m, k, zeros) * flo > 0) lo = m; else hi = m;
+    if (hi - lo < 1e-7) break;
+  }
+  return (lo + hi) / 2;
+}
+
 // The best pressure for the projection, which is not the one this directory
 // inherited.  The conditional projection has two competing p-dependences: the
 // span penalty (n-1)/p falls as p rises, and the ground-state energy falls too.
@@ -233,4 +277,5 @@ function periodCrossover(lo = 3360, hi = 3390, iterations = 50) {
 }
 
 module.exports = {kernel, kernelZeros, relax, twoCycle, wallTension, wallZero,
-  energyAndGradient, groundEnergy, projectionAt, periodCrossover, lowerCrossover};
+  energyAndGradient, groundEnergy, projectionAt, periodCrossover, lowerCrossover,
+  branchMean, resonanceOffset, resonantPressure};

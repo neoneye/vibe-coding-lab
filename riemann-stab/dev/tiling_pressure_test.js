@@ -107,6 +107,28 @@ for (const [p, beatable] of [[1400, true], [2000, false], [3600, true]]) {
     `difference ${(best - two).toExponential(3)}`);
 }
 
+// ---- is the resonance ever exact?
+// "near z_k/2" is a function of the pressure, since the branch moves inside its
+// own plateau.  The sharp question is whether the offset changes sign.
+const RES = [{k: 2, lo: 300, hi: 900, crosses: false},
+  {k: 3, lo: 1455, hi: 3370, crosses: false},
+  {k: 4, lo: 4000, hi: 25000, crosses: true},
+  {k: 5, lo: 26000, hi: 45000, crosses: false},
+  {k: 6, lo: 55000, hi: 120000, crosses: true}];
+const found = RES.map(r => ({...r, p: P.resonantPressure(r.k, r.lo, r.hi)}));
+check('the resonance is exact at two identified pressures and at no others '
+  + 'among these five', found.every(r => (r.p !== null) === r.crosses),
+  found.map(r => `k=${r.k}:${r.p === null ? 'none' : r.p.toFixed(3)}`).join(' '));
+check('and the two that cross are period-one branches',
+  found.filter(r => r.p !== null).every(r => r.k % 2 === 0));
+check('while the period-two branches keep their sign across the plateau',
+  found.filter(r => r.k % 2 === 1).every(r =>
+    P.resonanceOffset(r.lo, r.k) > 0 && P.resonanceOffset(r.hi, r.k) > 0),
+  'L + H stays strictly above z_k throughout');
+const k4 = found.find(r => r.k === 4).p;
+check('the k = 4 crossing agrees with the Arb computation of it',
+  Math.abs(k4 - 7572.855986) < 1e-4, `${k4.toFixed(6)} against 7572.855986`);
+
 // ---- the optimal pressure is the phase boundary
 const crossover = P.periodCrossover();
 check('the period-two state loses to period three at a definite pressure',
