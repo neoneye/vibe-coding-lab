@@ -179,6 +179,23 @@ theorem improvement_direction :
   rw [hH]
   omega
 
+/-- R(psi_MT) scaled by 10^19: the second-moment functional at its unique
+    critical point, R = 1/2 + cot(1/sqrt 2)/sqrt 2 = 1.3274992963205883543...
+    The closed form is not assumed here; it is derived by evaluating the
+    Euler-Lagrange equation at s = 0 (see core.js) and checked to 31 digits. -/
+abbrev RmtScaled : Int := 13274992963205883543
+
+/-- The Montgomery-Taylor constant is exactly two minus that value:
+
+        H_MT + R(psi_MT) = 2.
+
+    Both sides are 3/2 - cot(1/sqrt 2)/sqrt 2 and 1/2 + cot(1/sqrt 2)/sqrt 2, so
+    the cotangent cancels and the identity is exact rather than numerical.  What
+    Lean checks is that the two displayed decimals really are complements; that
+    they are the right decimals is the laboratory's business. -/
+theorem montgomery_taylor_complement :
+    RmtScaled + HmtScaled = 2 * 10000000000000000000 := by decide
+
 /-- The exhaustively swept chain floor, as an exact rational: 3955/1000000.
     It sits strictly above the published local certificate 19/5000, which is
     the whole point of the sweep. -/

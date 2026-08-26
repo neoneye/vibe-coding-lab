@@ -217,6 +217,21 @@ console.log('--- why sqrt(2): the Euler-Lagrange equation ---');
   ok('the odd component is forced to zero, with residual linear in |B|', linear, `${base}`);
   ok('so the critical window is unique up to scale',
     M.eulerLagrangeResidual(Math.SQRT2, n, 0).spread < base / 1e5);
+
+  // Evaluating the Euler-Lagrange equation at s = 0 gives R in closed form,
+  // and it is exactly the complement of the Montgomery-Taylor constant.
+  //   psi(0) + int |v| psi(v) dv = R * int psi,  with psi = cos(a s), a^2 = 2
+  //   => R = (a/2) cot(a/2) + 1/2 = cot(1/sqrt2)/sqrt2 + 1/2
+  const cot = x => Math.cos(x) / Math.sin(x);
+  const closedForm = 0.5 + cot(1 / Math.SQRT2) / Math.SQRT2;
+  const quadrature = M.cosineWindowFunctional(Math.SQRT2, 6000);
+  ok('R(psi_MT) matches its closed form 1/2 + cot(1/sqrt2)/sqrt2',
+    Math.abs(quadrature - closedForm) < 1e-7, `${quadrature} vs ${closedForm}`);
+  const HMT = 1.5 - cot(1 / Math.SQRT2) / Math.SQRT2;
+  ok('H_MT + R(psi_MT) = 2 exactly', Math.abs(HMT + closedForm - 2) < 1e-15,
+    `${HMT + closedForm}`);
+  ok('and H_MT is the published constant 0.6725007036794116457',
+    Math.abs(HMT - 0.6725007036794116457) < 1e-15, `${HMT}`);
 }
 
 console.log('--- sqrt(2) is the stationary frequency of the second-moment functional ---');

@@ -21,6 +21,7 @@ const EXPECT = {
   rigorous_projection_floor:          ['propext', 'Quot.sound'],
   rigorous_projection_ceiling:        ['propext', 'Quot.sound'],
   projection_ladder:                  ['propext', 'Quot.sound'],
+  montgomery_taylor_complement:       [],
   headline_fraction_floor:   ['propext', 'Quot.sound'],
   headline_fraction_ceiling: ['propext', 'Quot.sound'],
   improvement_direction:     ['propext', 'Quot.sound'],

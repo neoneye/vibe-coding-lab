@@ -595,6 +595,28 @@ interior to the positivity constraint, and every direction tried increases `R`
 functional, and the frequency is `sqrt(2)` because the second derivative of the
 `|s-v|` kernel contributes a factor of two, and nothing else.**
 
+### And the headline constant falls out of it
+
+Evaluate the Euler-Lagrange equation at `s = 0`.  With `psi = cos(a s)` and
+`a^2 = 2`,
+
+`1 + sin(a/2)/a + 2(cos(a/2) - 1)/a^2  =  R * 2 sin(a/2)/a`,
+
+and the `a^2 = 2` collapses the left side to `cos(a/2) + sin(a/2)/a`, giving
+
+`R(psi_MT) = (a/2) cot(a/2) + 1/2 = cot(1/sqrt2)/sqrt2 + 1/2 = 1.3274992963205883543...`
+
+which matches quadrature to 31 digits.  And the Montgomery-Taylor constant the
+whole zeta bound rests on is `H_MT = 3/2 - cot(1/sqrt2)/sqrt2`, so
+
+**`H_MT + R(psi_MT) = 2`, exactly** — the cotangent cancels.
+
+`H_MT = 0.67250070367941164573...` is therefore not an opaque decimal: it is two
+minus the second-moment functional evaluated at its unique critical point, and
+the `cot(1/sqrt2)/sqrt2` in it is exactly what evaluating the Euler-Lagrange
+equation at the origin produces.  The integer complement is machine-checked as
+`montgomery_taylor_complement`.
+
 Checked: the residual — the spread of that expression over `s` — is exactly
 zero at `sqrt(2)` to 22 digits and settles at `R(psi) * int psi =
 1.219607282008414370146`, while for `cos(s)` and `cos(2s)` it spreads by

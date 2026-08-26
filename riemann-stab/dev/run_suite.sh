@@ -39,6 +39,7 @@ cat >> "$AXFILE" <<'LEANEOF'
 #print axioms rigorous_projection_floor
 #print axioms rigorous_projection_ceiling
 #print axioms projection_ladder
+#print axioms montgomery_taylor_complement
 #print axioms headline_fraction_floor
 #print axioms headline_fraction_ceiling
 #print axioms improvement_direction
