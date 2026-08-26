@@ -89,6 +89,33 @@ const bare = I.verifyFloor(I.prepareCertificate(zero), 0.0035, {tables, budget: 
 check('sweep completes at 0.0035 on the bare block functional', bare.complete,
   `${bare.processed} boxes`);
 
+
+// ------------------------------------------------------- rigorous variant
+// The rigorous analysis must be weaker than the table version everywhere: its
+// value bound no higher, its gradient enclosure no narrower.  If it were ever
+// tighter, one of the two would be wrong.
+const scratchFast = I.newScratch();
+const scratchRigorous = I.newScratch();
+let orderFailures = 0;
+for (let trial = 0; trial < 4000; trial++) {
+  const lo = new Float64Array(6);
+  const hi = new Float64Array(6);
+  for (let k = 0; k < 6; k++) { lo[k] = random() * 4; hi[k] = lo[k] + random() * 0.4; }
+  I.analyzeBox(tables, prepared, lo, hi, scratchFast);
+  I.analyzeBoxRigorous(prepared, lo, hi, scratchRigorous);
+  if (scratchRigorous.bound > scratchFast.bound + 1e-12) orderFailures++;
+  for (let k = 0; k < 6; k++) {
+    if (scratchRigorous.grad[2 * k] > scratchFast.grad[2 * k] + 1e-10) orderFailures++;
+    if (scratchRigorous.grad[2 * k + 1] < scratchFast.grad[2 * k + 1] - 1e-10) orderFailures++;
+  }
+}
+check('rigorous box analysis is weaker than the table version everywhere',
+  orderFailures === 0, `${orderFailures}`);
+
+const rigorous = I.verifyFloorRigorous(prepared, 0.002, {budget: 2e6, box: compactEntry.searchBox});
+check('rigorous sweep completes at 0.002', rigorous.complete,
+  `${rigorous.processed} boxes, remaining ${rigorous.remaining}`);
+
 // --------------------------------------------------- recorded long sweeps
 const results = JSON.parse(
   fs.readFileSync(path.join(__dirname, 'tiling_interval.results.json'), 'utf8'));
@@ -110,6 +137,21 @@ const payoff = T.floorPayoff(best);
 check('best verified floor pin', Math.abs(best - results.bestVerifiedFloor) < 1e-15, `${best}`);
 check('projected constant pin',
   Math.abs(payoff.bound - results.bestVerifiedBound) < 5e-15, `${payoff.bound}`);
+
+
+if (results.rigorousRuns) {
+  for (const row of results.rigorousRuns) {
+    const entry = certificates.certificates.find(c => c.name === row.certificate);
+    check(`recorded rigorous completion at ${row.target} (${row.certificate})`,
+      row.complete && row.target < entry.floor, `${row.target}`);
+  }
+  const bestRigorous = results.rigorousRuns.filter(r => r.complete)
+    .reduce((a, r) => Math.max(a, r.target), 0);
+  check('best rigorously verified floor pin',
+    Math.abs(bestRigorous - results.bestRigorousFloor) < 1e-15, `${bestRigorous}`);
+  check('rigorous floor never exceeds the double-precision floor',
+    bestRigorous <= results.bestVerifiedFloor + 1e-15);
+}
 
 if (failed) {
   console.error(`${failed} interval-sweep checks failed`);

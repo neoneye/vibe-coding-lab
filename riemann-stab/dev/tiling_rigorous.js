@@ -277,3 +277,110 @@ module.exports.kernelDerivRange = kernelDerivRange;
 module.exports.weightRange = weightRange;
 module.exports.weightDerivRange = weightDerivRange;
 module.exports.K0 = K0;
+
+// --------------------------------------------------------- centered forms
+// The natural interval extension is first order: its slack grows like the
+// interval width even where the weight is flat, which makes it about thirty
+// times looser than the exact monotone-piece range the fast sweep uses.  The
+// centered (mean value) form is second order,
+//     f([a,b])  subset  f(m) + f'([a,b]) * [-rho, rho],
+// so its slack is the width times the *variation* of f', which does vanish
+// where f is flat.  The second derivative only enters that second-order term,
+// so a natural extension is accurate enough for it.
+//
+// sinc''(z) = -sin(z)/z - 2 cos(z)/z^2 + 2 sin(z)/z^3,
+// series -1/3 + z^2/10 - z^4/168 + ...
+const SINCDD_COEFF = [-1 / 3, 1 / 10, -1 / 168, 1 / 6480, -1 / 443520,
+  1 / 46702080, -1 / 6974263296, 1 / 1394852659200];
+
+function sincSecondRange(lo, hi) {
+  if (lo >= -SERIES_LIMIT && hi <= SERIES_LIMIT) {
+    const z2 = iSquare([lo, hi]);
+    let acc = [SINCDD_COEFF[SINCDD_COEFF.length - 1], SINCDD_COEFF[SINCDD_COEFF.length - 1]];
+    for (let i = SINCDD_COEFF.length - 2; i >= 0; i--) {
+      acc = iAdd(iMul(acc, z2), [SINCDD_COEFF[i], SINCDD_COEFF[i]]);
+    }
+    return iWiden(acc, SERIES_ERROR);
+  }
+  if (lo < -SERIES_LIMIT && hi > -SERIES_LIMIT) {
+    return iHull(sincSecondRange(lo, -SERIES_LIMIT), sincSecondRange(-SERIES_LIMIT, hi));
+  }
+  if (lo < SERIES_LIMIT && hi > SERIES_LIMIT) {
+    return iHull(sincSecondRange(lo, SERIES_LIMIT), sincSecondRange(SERIES_LIMIT, hi));
+  }
+  const z = [lo, hi];
+  const s = sinRange(lo, hi), c = cosRange(lo, hi);
+  const z2 = iSquare(z);
+  const z3 = iMul(z2, z);
+  return iAdd(iAdd(iNeg(iDiv(s, z)), iScale(iDiv(c, z2), -2)), iScale(iDiv(s, z3), 2));
+}
+
+function kernelSecondRange(a, b) {
+  const z = kernelArguments(a, b);
+  const piSquared = iMul(I_PI, I_PI);
+  return iScale(iMul(piSquared,
+    iAdd(sincSecondRange(z.left[0], z.left[1]), sincSecondRange(z.right[0], z.right[1]))), 0.5);
+}
+
+// w'' = 2 (K'^2 + K K'') / K0^2
+function weightSecondRange(a, b) {
+  const k = kernelRange(a, b);
+  const kp = kernelDerivRange(a, b);
+  const kpp = kernelSecondRange(a, b);
+  return iDiv(iScale(iAdd(iSquare(kp), iMul(k, kpp)), 2), K0_SQUARED);
+}
+
+const iIntersect = (x, y) => [Math.max(x[0], y[0]), Math.min(x[1], y[1])];
+
+function weightDerivRangeCentered(a, b) {
+  if (b <= a) return weightDerivRange(a, a);
+  const m = 0.5 * (a + b);
+  const rho = ru(Math.max(m - a, b - m));
+  const centre = weightDerivRange(m, m);
+  const spread = iMul(weightSecondRange(a, b), [-rho, rho]);
+  return iIntersect(iAdd(centre, spread), weightDerivRange(a, b));
+}
+
+function weightRangeCentered(a, b) {
+  if (b <= a) return weightRange(a, a);
+  const m = 0.5 * (a + b);
+  const rho = ru(Math.max(m - a, b - m));
+  const centre = weightRange(m, m);
+  const spread = iMul(weightDerivRangeCentered(a, b), [-rho, rho]);
+  const out = iIntersect(iAdd(centre, spread), weightRange(a, b));
+  return [Math.max(0, out[0]), out[1]];      // w is a square, so never negative
+}
+
+module.exports.sincSecondRange = sincSecondRange;
+module.exports.kernelSecondRange = kernelSecondRange;
+module.exports.weightSecondRange = weightSecondRange;
+module.exports.weightRangeCentered = weightRangeCentered;
+module.exports.weightDerivRangeCentered = weightDerivRangeCentered;
+
+// Both centered enclosures from one pass.  Computing them separately evaluates
+// the kernel family nine times per pair; this evaluates it five times, and the
+// sweep asks for both on every pair of every box.
+function weightPairCentered(a, b) {
+  const kab = kernelRange(a, b);
+  const kpab = kernelDerivRange(a, b);
+  const wNatural = iDiv(iSquare(kab), K0_SQUARED);
+  const dwNatural = iDiv(iScale(iMul(kab, kpab), 2), K0_SQUARED);
+  if (b <= a) return {w: [Math.max(0, wNatural[0]), wNatural[1]], dw: dwNatural};
+
+  const m = 0.5 * (a + b);
+  const rho = ru(Math.max(m - a, b - m));
+  const span = [-rho, rho];
+
+  const km = kernelRange(m, m);
+  const kpm = kernelDerivRange(m, m);
+  const wm = iDiv(iSquare(km), K0_SQUARED);
+  const dwm = iDiv(iScale(iMul(km, kpm), 2), K0_SQUARED);
+
+  const kppab = kernelSecondRange(a, b);
+  const ddw = iDiv(iScale(iAdd(iSquare(kpab), iMul(kab, kppab)), 2), K0_SQUARED);
+
+  const dw = iIntersect(iAdd(dwm, iMul(ddw, span)), dwNatural);
+  const w = iIntersect(iAdd(wm, iMul(dw, span)), wNatural);
+  return {w: [Math.max(0, w[0]), w[1]], dw};
+}
+module.exports.weightPairCentered = weightPairCentered;

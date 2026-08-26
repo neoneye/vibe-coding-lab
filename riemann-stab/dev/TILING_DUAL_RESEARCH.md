@@ -196,11 +196,11 @@ over any interval is a table lookup — the sweep finishes:
 | certificate | target | boxes | wall clock | outcome |
 |---|---:|---:|---:|---|
 | bare block `F6` | `0.0038` | 3 147 403 | 22 s | complete |
-| compact | `0.0038` | 3 582 525 | 25 s | complete |
-| compact | `0.0039` | 8 166 245 | 63 s | complete |
-| compact | `0.00392` | 10 506 937 | 84 s | complete |
-| compact | **`0.00394`** | 16 156 457 | 129 s | **complete** |
-| record | `0.0039` | 12 176 429 | 96 s | complete |
+| compact | `0.0039` | 8 166 263 | 64 s | complete |
+| compact | `0.00394` | 16 156 457 | 135 s | complete |
+| compact | `0.003949` | 32 617 969 | 277 s | complete |
+| record | `0.00395` | 32 931 519 | 283 s | complete |
+| record | **`0.003955`** | 54 730 585 | 476 s | **complete** |
 | compact | `0.00396` | 8 779 523 | — | refused, counterexample `0.00395999969` |
 | bare block `F6` | `0.0039` | 940 375 | — | refused, counterexample `0.003840817` |
 
@@ -212,22 +212,45 @@ It also refuses `0.0039`, correctly, with a counterexample below the known
 isolated-block minimum.  A verifier that never fails proves nothing; this one
 fails exactly where it should.
 
-**What this buys.**  `0.00394` telescopes to a chain floor for every gap
+**What this buys.**  `0.003955` telescopes to a chain floor for every gap
 sequence, periodic or not, and projects a simple-zero constant of
-`0.6730989992` against `0.6730085279` from the published local certificate —
-`88.9%` of the entire improvement the alternating-chain candidate could ever
-deliver.
+`0.6731086901` against `0.6730085279` from the published local certificate —
+`98.4%` of the entire improvement the alternating-chain candidate could ever
+deliver.  The sweep now sits within `2.3e-6` of the certificate's own audited
+floor, so the subdivision, not the certificate, is what is left on the table.
 
-**What is still missing.**  This is IEEE double precision with a `1e-10` safety
-margin per box, not directed-rounding interval arithmetic, and `Math.sin` is
-not correctly rounded.  So a completed sweep removes the *sampling* gap — the
-audited floors no longer rest on "no adversary found anything lower", because
-the entire cube was subdivided — but it does not remove the *floating-point*
-gap.  What changed is that the remaining work is now a reimplementation, not a
-research question: the proof structure is fixed, the cube is fixed, the
-subdivision is 16 million boxes and two minutes, and porting the four range
-primitives (`wRange`, `dwRange`, and the two piecewise-linear range queries) to
-Arb or MPFI is a bounded exercise.
+### Closing the floating-point gap
+
+The table above is IEEE double precision leaning on `Math.sin`, which is not
+correctly rounded and carries no proved error bound.  `tiling_rigorous.js`
+removes both leans: Cody-Waite reduction against a four-term split of `pi/2`,
+Taylor series to `r^19` and `r^18` whose truncation is below the first omitted
+term, and outward rounding by `2.3e-16` relative, sound because IEEE 754
+`+ - * /` are correctly rounded.  The resulting sine lands within `1.25e-16` of
+60-digit mpmath values, well inside its declared `2e-15` bound.
+
+Two things had to be got right for the sweep to survive the change.
+
+- *Natural extension is not enough.*  Enclosing the weight over an interval by
+  interval-evaluating its formula gives slack proportional to the interval
+  width even where the weight is flat — about thirty times looser than the
+  exact monotone-piece range.  That would demand boxes 700 times smaller, and
+  `1e17` of them.
+- *Centered forms are.*  `f([a,b]) subset f(m) + f'([a,b]) * [-rho, rho]` has
+  slack proportional to the width times the *variation* of `f'`, which does
+  vanish where `f` is flat.  Measured against the exact range: `1.35e-6` at
+  width `1e-3`, against `7.3e-4` for the natural extension — 540 times tighter,
+  and second order as advertised.  The second derivative only enters that
+  second-order term, so a natural extension suffices for it.
+
+The rigorous sweep then costs about `2.4x` the boxes and `7x` the wall clock of
+the table version, which is affordable.
+
+What the rigorous sweep still assumes: that the engine implements IEEE 754 for
+the four basic operations, and that this code has no bugs.  The second is what
+the cross-validation is for — against 60-digit mpmath for the trigonometry, and
+against the table version for every box analysis, where the rigorous bound must
+come out weaker or one of the two is wrong.
 
 ## Concrete next proof program
 

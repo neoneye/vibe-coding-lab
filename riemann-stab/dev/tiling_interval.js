@@ -423,7 +423,124 @@ function verifyFloor(cert, target, options = {}) {
 }
 
 module.exports = {
-  PAIRS, buildTables, attachTables, verifyFloor, analyzeBox, newScratch, prepareCertificate,
+  PAIRS, buildTables, attachTables, verifyFloor, verifyFloorRigorous, analyzeBoxRigorous, analyzeBox, newScratch, prepareCertificate,
   plRangeFast, slopeWithFlat, wRange, dwRange, plRange, plSlopeRange,
   boxLowerBound, gradientRange
 };
+
+// ------------------------------------------------------ rigorous variant
+// Same subdivision, but every kernel range comes from tiling_rigorous.js:
+// proved trigonometric error bounds, outward-rounded arithmetic, centered
+// forms.  Slower and slacker than the table version, and the only version
+// whose completion means anything beyond "double precision found nothing".
+const RIG = require('./tiling_rigorous');
+const PL_SLACK = 1e-15;      // rounding of the piecewise-linear interpolation
+
+function analyzeBoxRigorous(cert, lo, hi, out) {
+  const plo = out.plo, phi = out.phi;
+  plo[0] = 0; phi[0] = 0;
+  for (let k = 0; k < 6; k++) { plo[k + 1] = plo[k] + lo[k]; phi[k + 1] = phi[k] + hi[k]; }
+
+  // Accumulation slack.  The per-term enclosures are outward rounded, but the
+  // running sum below is not: about thirty-five additions and multiplications
+  // on a total of magnitude under fifty, each losing at most half an ulp, is
+  // under 2e-13.  Subtracting 1e-12 once covers it with room to spare, and is
+  // negligible against the 1e-6 margins that decide anything.
+  const ACCUMULATION_SLACK = 1e-12;
+  let bound = plo[6] / 3000;
+  const grad = out.grad;
+  for (let k = 0; k < 6; k++) { grad[2 * k] = 1 / 3000; grad[2 * k + 1] = 1 / 3000; }
+
+  for (let p = 0; p < PAIRS.length; p++) {
+    const {i, j, c} = PAIRS[p];
+    const a = plo[j] - plo[i];
+    const b = phi[j] - phi[i];
+    const pair = RIG.weightPairCentered(a, b);
+    bound += c * pair.w[0];
+    const dLow = c * pair.dw[0], dHigh = c * pair.dw[1];
+    for (let k = i; k < j; k++) { grad[2 * k] += dLow; grad[2 * k + 1] += dHigh; }
+  }
+
+  for (let k = 0; k < 6; k++) {
+    if (SIGN_A[k]) {
+      const r = plRangeFast(cert, cert.a, lo[k], hi[k]);
+      bound += (SIGN_A[k] > 0 ? r[0] : -r[1]) - PL_SLACK;
+      const sl = slopeWithFlat(cert, cert.a, lo[k], hi[k]);
+      grad[2 * k] += (SIGN_A[k] > 0 ? sl[0] : -sl[1]) - PL_SLACK;
+      grad[2 * k + 1] += (SIGN_A[k] > 0 ? sl[1] : -sl[0]) + PL_SLACK;
+    }
+    if (SIGN_B[k]) {
+      const r = plRangeFast(cert, cert.b, lo[k], hi[k]);
+      bound += (SIGN_B[k] > 0 ? r[0] : -r[1]) - PL_SLACK;
+      const sl = slopeWithFlat(cert, cert.b, lo[k], hi[k]);
+      grad[2 * k] += (SIGN_B[k] > 0 ? sl[0] : -sl[1]) - PL_SLACK;
+      grad[2 * k + 1] += (SIGN_B[k] > 0 ? sl[1] : -sl[0]) + PL_SLACK;
+    }
+  }
+  out.bound = bound - ACCUMULATION_SLACK;
+  for (let k = 0; k < 6; k++) {
+    grad[2 * k] -= ACCUMULATION_SLACK;
+    grad[2 * k + 1] += ACCUMULATION_SLACK;
+  }
+  return out;
+}
+
+function verifyFloorRigorous(cert, target, options = {}) {
+  const prepared = cert.knots instanceof Float64Array ? cert : prepareCertificate(cert);
+  const box = options.box || Math.ceil(A.tailThreshold(prepared.raw, target));
+  const minWidth = options.minWidth || 1e-7;
+  const budget = options.budget || 5e6;
+  const scratch = newScratch();
+
+  const stack = [{lo: new Float64Array(6).fill(0), hi: new Float64Array(6).fill(box)}];
+  let processed = 0, collapsed = 0, unresolved = 0;
+  let worstBound = Infinity;
+  let counterexample = null;
+
+  while (stack.length) {
+    if (processed >= budget) break;
+    const current = stack.pop();
+    processed++;
+    const lo = current.lo, hi = current.hi;
+
+    analyzeBoxRigorous(prepared, lo, hi, scratch);
+    if (scratch.bound >= target) continue;
+
+    for (let pass = 0; pass < 3; pass++) {
+      let changed = false;
+      for (let k = 0; k < 6; k++) {
+        if (hi[k] <= lo[k]) continue;
+        if (scratch.grad[2 * k] > 0) { hi[k] = lo[k]; changed = true; collapsed++; }
+        else if (scratch.grad[2 * k + 1] < 0) { lo[k] = hi[k]; changed = true; collapsed++; }
+      }
+      if (!changed) break;
+      analyzeBoxRigorous(prepared, lo, hi, scratch);
+      if (scratch.bound >= target) break;
+    }
+    if (scratch.bound >= target) continue;
+    if (scratch.bound < worstBound) worstBound = scratch.bound;
+
+    let widest = -1, width = 0;
+    for (let k = 0; k < 6; k++) {
+      const wk = hi[k] - lo[k];
+      if (wk > width) { width = wk; widest = k; }
+    }
+    if (widest < 0 || width <= minWidth) {
+      const centre = Array.from({length: 6}, (_, k) => (lo[k] + hi[k]) / 2);
+      const value = A.additiveReducedCost(centre, prepared.raw);
+      if (value < target) { counterexample = {gaps: centre, value}; break; }
+      unresolved++;
+      continue;
+    }
+    const mid = (lo[widest] + hi[widest]) / 2;
+    const leftHi = Float64Array.from(hi); leftHi[widest] = mid;
+    const rightLo = Float64Array.from(lo); rightLo[widest] = mid;
+    stack.push({lo: Float64Array.from(lo), hi: leftHi});
+    stack.push({lo: rightLo, hi: Float64Array.from(hi)});
+  }
+  return {
+    target, box, processed, collapsed, remaining: stack.length,
+    complete: stack.length === 0 && !counterexample && processed < budget && unresolved === 0,
+    worstBound, unresolved, counterexample
+  };
+}
