@@ -1289,6 +1289,59 @@ three adversaries were gradient descents that could have missed a hole: over
 the nine sources that determine it; `dev/check_pair_sweep.js` verifies those on
 every suite run and says, every time, that it did not redo the traversal.
 
+### And on the whole cube
+
+The same sweep, on the tail lemma's own cube rather than a truncation:
+
+| | |
+| --- | --- |
+| target | `E_alt = 0.003957393309109344` |
+| cube | `[0, 28]^6` — the full tail-lemma cube |
+| tube radius | `0.008` |
+| boxes | `50 203 847` |
+| collapses | `15 919 617` |
+| complete | **yes**, no counterexample, nothing unresolved |
+| checksum | `1d6592ed5e189361:50203847` |
+
+The cube is the right one, and it was checked rather than assumed: the tail
+lemma needs `3000 (E_alt + amplitude)`, the additive part contributes
+`27.46253654` and the five `psi` sup-norms another `0.48`, so `27.94` and the
+cube is `28`.
+
+Put together with the previous two sections:
+
+- **outside the tubes, inside the cube** — `R >= E_alt`, exhaustively, in double
+  precision, `50 203 847` boxes;
+- **on the tubes** — `R >= E_alt - 1.163e-11`, with proved enclosures;
+- **outside the cube** — the tail lemma, since every pair term of `F6` is
+  nonnegative and the coboundary is bounded by the amplitude.
+
+so `R(g) >= E_alt - 1.163e-11` for **every** six-gap block, and by the
+telescoping lemma every chain has per-gap energy at least that.  `E_alt` is the
+alternating chain's own energy, enclosed in Arb.  So this says the alternating
+chain is the minimiser, to within `1.2e-11`.
+
+**What it rests on, in order of how much it should worry you.**
+
+*The outside-the-tube half is double precision.*  The table kernel with a `1e-10`
+safety margin — the ladder rung this directory calls "exhaustively subdivided in
+double precision", not the one it calls "with proved enclosures".  The rigorous
+rerun is the same code with `--rigorous` and is running; until it finishes, the
+strongest honest phrasing of the headline is the double-precision one.
+
+*The tube half rests on `tiling_rigorous.js`*, which is mine.  The Arb
+reimplementation covers the chain coercivity theorem, not this.
+
+*The certificate came out of a floating-point LP* — and that, for once, does not
+matter.  Any `psi` whatever gives a valid telescoping certificate; the LP's
+quality affects only which floor comes out, and the floor is what the sweep
+measures rather than assumes.  There is no step here that trusts the search.
+
+*Everything downstream still depends on the external shifted-block assembly*,
+which nobody here can check.  A block floor of `E_alt` projects to `0.6731102697`
+by this directory's own table — the whole of the available improvement — and that
+projection is conditional exactly as every other number in this directory is.
+
 ### The tube, proved
 
 The half a branch-and-bound structurally cannot do is now done.
