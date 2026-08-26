@@ -23,11 +23,16 @@ previously exist.
   projection, two-sided-pinned at the assumed floor.  Sixteen Lean theorems,
   standard axioms only — the count the axiom audit prints, which is the only
   count that means anything.
-- **Exhaustively subdivided in double precision.**  The chain floor `0.003956`,
-  for every gap sequence, periodic or not — `99.1%` of the whole available
-  improvement.  Also, as a control, the published
-  Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
-  with the external Arb certificate.
+- **Exhaustively subdivided in double precision.**  With the additive record
+  certificate, the chain floor `0.003956`, for every gap sequence, periodic or
+  not — `99.1%` of the whole available improvement.  With the pair-state
+  certificate and the tube argument, `0.003957393309109344 - 1.163e-11` — the
+  alternating chain's own energy, so the alternating chain is the minimiser to
+  within `1.2e-11`, which is `100%` of the available improvement.  That last one
+  is three days newer than everything around it and its outside-the-tube half
+  has not been redone with proved enclosures; see "And on the whole cube".
+  Also, as a control, the published Proposition F6 (`F6 >= 19/5000`), reproduced
+  by machinery sharing no code with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  The chain floor
   `0.003956` — the same floor the double-precision sweep reaches, so these two
   rungs have merged.  67 608 431 boxes, proved trigonometric error bounds,
