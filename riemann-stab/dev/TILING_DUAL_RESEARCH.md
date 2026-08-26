@@ -19,10 +19,10 @@ Where things stand, most established first:
   Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
   with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  The chain floor
-  `0.0039`, strictly above the published local floor `19/5000`.  This is the
-  strongest rung the improvement itself has reached: 14 817 467 boxes, proved
+  `0.00392`, strictly above the published local floor `19/5000`.  This is the
+  strongest rung the improvement itself has reached: 18 260 117 boxes, proved
   trigonometric error bounds, outward-rounded arithmetic throughout.  It
-  projects to `0.6730732086` against `0.6730085279`, `63.6%` of the whole
+  projects to `0.6730862093` against `0.6730085279`, `76.3%` of the whole
   available gain.  Pushing it further is the live front.
 - **Numerical only.**  The certificate coefficients; every floor above the
   swept ones; the two-phase kink energies and Bloch spectrum; and the entire
@@ -293,12 +293,22 @@ the table version, which is affordable — and it finishes:
 | certificate | target | boxes | wall clock | outcome |
 |---|---:|---:|---:|---|
 | compact | `0.0038` | 7 200 335 | 491 s | complete, equals the published floor |
-| compact | **`0.0039`** | 14 817 467 | 1027 s | **complete, strictly above `19/5000`** |
+| compact | `0.0039` | 14 817 467 | 1027 s | complete, strictly above `19/5000` |
+| compact | **`0.00392`** | 18 260 117 | 1285 s | **complete** |
 
-`0.0039` projects to `0.6730732086` against the published `0.6730085279`.  That
-is `63.6%` of the whole available improvement, established with proved
-enclosures rather than with `Math.sin`.  The remaining `36%` is the double
-precision sweep's lead, and closing it is arithmetic, not research.
+`0.00392` projects to `0.6730862093` against the published `0.6730085279`.
+That is `76.3%` of the whole available improvement, established with proved
+enclosures rather than with `Math.sin`.  The remaining quarter is the
+double-precision sweep's lead, and closing it is arithmetic, not research.
+
+Two attempts to narrow the rigorous sweep's `~1.8x` box overhead are worth
+recording as failures.  A second-order Taylor form for the value bought `0.1%`
+where a sixth-power argument predicted a factor of eight; it is kept only
+because every quantity it needs is already computed.  The same treatment for
+the derivative, with a third-derivative remainder — implemented, validated
+against finite differences, measured — bought `0.4%` for `1.7x` the wall clock
+and was removed.  So the overhead is not a question of local expansion order,
+and raising the order further is the wrong place to look.
 
 What the rigorous sweep still assumes: that the engine implements IEEE 754 for
 the four basic operations, and that this code has no bugs.  The second is what

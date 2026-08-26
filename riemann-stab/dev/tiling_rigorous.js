@@ -379,6 +379,8 @@ function weightPairCentered(a, b) {
   const kppab = kernelSecondRange(a, b);
   const ddw = iDiv(iScale(iAdd(iSquare(kpab), iMul(kab, kppab)), 2), K0_SQUARED);
 
+  const halfSq = ru(0.5 * rho * rho);
+
   const dw = iIntersect(iAdd(dwm, iMul(ddw, span)), dwNatural);
 
   // Second-order Taylor with remainder beats the first-order centered form for
@@ -386,14 +388,21 @@ function weightPairCentered(a, b) {
   //     w([a,b]) subset w(m) + w'(m)*[-rho,rho] + w''([a,b])*[0, rho^2/2].
   // The centered form's second-order term is 2*rho^2*|w''|; this one is
   // rho^2*|w''|.  Measured effect on the sweep: 0.1% fewer boxes, not the
-  // factor of eight a sixth-power argument would predict -- so the binding
-  // slack is in the derivative enclosure that drives the monotonicity test,
-  // not in the value bound.  Kept because the intersection is never worse and
-  // because that measurement is the useful part: it says where to look next.
-  const halfSquare = ru(0.5 * rho * rho);
+  // factor of eight a sixth-power argument would predict.  Kept only because
+  // every quantity it needs is already computed, so it costs nothing.
+  //
+  // The obvious next step -- the same treatment for the derivative, with a
+  // third-derivative remainder -- was implemented, validated against finite
+  // differences, measured, and removed: 0.4% fewer boxes for 1.7x the wall
+  // clock, since it needs two more kernel evaluations per pair per box.  So
+  // the rigorous sweep's ~1.8x box overhead over the exact-range version is
+  // not a question of local expansion order, and raising the order further is
+  // the wrong place to look.
+  const halfSquare = halfSq;
   const taylor = iAdd(iAdd(wm, iMul(dwm, span)), iMul(ddw, [0, halfSquare]));
   const centered = iAdd(wm, iMul(dw, span));
   const w = iIntersect(iIntersect(taylor, centered), wNatural);
   return {w: [Math.max(0, w[0]), w[1]], dw};
 }
 module.exports.weightPairCentered = weightPairCentered;
+
