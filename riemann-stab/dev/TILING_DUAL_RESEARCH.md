@@ -831,16 +831,67 @@ sharing no code with it.
 Together: **the alternating two-cycle is a strict local minimum of the chain
 energy, with a certified spectral gap of `1.6`.**
 
-Two things this does *not* say, both of which an earlier draft of this section
-did.  The certification proves a lower bound; it does not isolate the minimising
-momentum.  A numerical scan puts the minimum near `q/pi = 0.929`, between the
-grid points the older routine sampled, but that location is measured, not
-certified, and nothing here depends on it.  And the enclosure is `3.0e-14` wide
-in `L` and `4.1e-14` in `H` — not "the last bit of a double", which was an
-artifact of a Krawczyk operator that collapsed the gradient enclosure to its
-midpoint and so reported an enclosure narrower than the gradient uncertainty
-that produced it.  That operator was unsound; it is repaired, and the width
-above is what a correct one gives.
+The enclosure above is `3.0e-14` wide in `L` and `4.1e-14` in `H` — not "the
+last bit of a double", which was an artifact of a Krawczyk operator that
+collapsed the gradient enclosure to its midpoint and so reported an enclosure
+narrower than the gradient uncertainty that produced it.  That operator was
+unsound; it is repaired, and the width above is what a correct one gives.
+
+### The same theorem again, in Arb
+
+Everything above rests on `tiling_rigorous.js`: hand-written sine and cosine
+with error constants I chose, first and second derivatives of the weight that I
+differentiated by hand and typed in, and a hand-written outward-rounding
+convention.  Each of those three has produced at least one unsoundness in this
+directory.  A theorem with a base that thin is not worth quoting however green
+the suite is, so `dev/coercivity_arb.py` proves it again with none of it:
+
+- arithmetic is **Arb** (`python-flint`), midpoint-radius balls with proved
+  enclosures, at 200 bits — not doubles with a hand-picked epsilon;
+- sine is Arb's, with Arb's bound — not a Cody-Waite reduction and a constant
+  called `TRIG_ERROR`;
+- `w'` and `w''` come from **Taylor-series arithmetic on the definition of `w`**
+  — nothing is differentiated by hand.
+
+Only the mathematics is shared: the definition of the weight, the chain energy,
+and the shape of the Krawczyk and Bloch arguments.  The two agree, so the local
+theorem does not depend on my arithmetic.  Arb also resolves the critical point
+about `10^45` times more finely than doubles allow:
+
+`L = 1.04168010344848698644197575211`   (radius `1.7e-59`),
+`H = 1.97946723140322440794242316550`   (radius `2.2e-59`),
+`E = 0.00395739330910934384458830825064` (radius `2.5e-60`).
+
+That is the strong direction of the check.  The true `L` sits `1.5e-14` into the
+`3.0e-14`-wide interval the JavaScript reports, and the true `H` `2.0e-14` into
+its `4.1e-14` — so the double-precision intervals are correct, and very nearly
+centred, rather than merely self-consistent.
+
+Two facts the Arb run adds outright:
+
+- **The gap is at least `1.6612`,** not merely `1.6`, in 3731 momentum
+  intervals.  Numerically the minimum is `1.66128101824`; bisection gets within
+  `1e-5` of it before the first-order slack in the interval evaluation starts
+  costing exponentially many subdivisions, which is the resolution limit rather
+  than a failure.
+- **The minimising momentum is certified,** by an argument the gap certificate
+  cannot make.  A lower-bound sweep says nothing about *where* the minimum sits,
+  which is why `q/pi = 0.929` was withdrawn as a certified claim.  But one point
+  evaluation bounds the minimum from *above* by `1.661281018241`, and the
+  eigenvalue is then certified to exceed that bound everywhere outside a window;
+  whatever is left inside the window must contain the minimiser.  In 16954
+  intervals this certifies
+
+  `q/pi in [0.925, 0.933]`,
+
+  with the numerical minimiser at `q/pi = 0.9290451141`.  So `0.929` is now a
+  certified two-decimal statement rather than a scan reading.  Nothing else here
+  depends on it.
+
+`dev/coercivity_arb.results.json` records the run, hashed to the source that
+produced it.  The suite reruns the whole certification when `python-flint` is
+importable and otherwise checks only that the transcript is not stale — and says
+which of the two it did, because a matching hash is not a rerun.
 
 **What this does not establish, and the gap is the whole problem.**  It is local.
 It says nothing about configurations far from the alternating state, nothing
@@ -860,12 +911,76 @@ enclosed*, is
 
 `E in [0.003957393309106188, 0.003957393309112507]`   (width `6.3e-15`),
 
-whereas the ceiling constant this directory quotes everywhere,
-`0.003957393309209766`, lies **outside** that interval — about `1.0e-13` too
-high, because it was evaluated at the rounding.  Immaterial to every projection
+and in Arb, `E = 0.00395739330910934384458830825064` to a radius of `2.5e-60`.
+The ceiling constant this directory quotes everywhere, `0.003957393309209766`,
+lies **outside** that interval — high by `1.004e-13`, which is exactly the cost
+of evaluating at the six-decimal rounding.  Immaterial to every projection
 here, and now a certified statement rather than a number read off the ordinary
 floating-point kernel, which carries no bound and should never have been called
 a true minimum.
+
+## The wall, certified
+
+Local coercivity supplies the `c dist^2` half of a crystallization argument.  The
+other half is the wall: a configuration that is not globally in one of the two
+alternating phases must contain an interface, and a Peierls bound needs each
+interface to cost a definite amount.  This directory has carried those numbers
+for a while — about `0.00109278645` for a low-low wall and `0.00014708549` for a
+high-high one — as the output of an Adam relaxation, which proves nothing.
+
+`dev/kink_arb.py` certifies them, on the same Arb base and by the same method
+that worked for the two-cycle.  An odd ring is frustrated: it cannot be
+alternating anywhere, so it carries exactly one wall, and the phase of the seed
+decides whether the core is a low-low or a high-high adjacency.
+
+**What is proved,** on a ring of 63 gaps:
+
+- *Existence and uniqueness.*  A Krawczyk test in **63 dimensions** on the full
+  gradient system proves a unique critical point in a box of halfwidth `1e-6`
+  about the relaxed profile.  Iterating tightens every gap to a radius near
+  `3e-89`.
+- *Strict local minimality.*  The interval Hessian over that box is positive
+  definite, by a **verified Cholesky in ball arithmetic** — written out rather
+  than delegated to `eig`, whose rigour contract would then have to be taken on
+  faith.  Every pivot is certifiably positive, and
+
+  `lambda_min >= 1.6613857650`  (low-low),
+  `lambda_min >= 1.2272529833`  (high-high).
+
+  Worth noticing: the low-low wall sits *above* the bulk Bloch gap `1.66128`,
+  and the high-high wall *below* it.  The high-high core carries a genuinely
+  softer mode; the low-low core does not soften the spectrum at all.
+- *The tensions, enclosed and positive.*
+
+  `tau_LL = 0.001092786457724342735  +/- 2.0e-25`,
+  `tau_HH = 0.000147085497481443264  +/- 1.1e-26`,
+
+  and their sum `0.001239871955205786000` reproduces the independently relaxed
+  two-interface ring excess.
+
+**And a clean structural fact the relaxation could not see.**  On an odd ring a
+wall interacts only with itself, around the ring.  That self-interaction dies
+extremely fast: the profile deviation from the crystal is `8.9e-3` at the core
+and `7e-30` eighty gaps away, a decay of about `e^-0.78` per gap, so the wall is
+localised within a couple of gaps.  The tension is correspondingly frozen —
+
+`tau_63 - tau_47 = 1.14e-19`,   `tau_95 - tau_63 < 1e-25`,
+
+with the second difference reading below `1e-28` at 400 bits.  So the ring value
+*is* the infinite-chain value to twenty-odd digits:
+
+`tau_LL^inf = 0.0010927864577243426...`,   `tau_HH^inf = 0.00014708549748144325...`
+
+**What this does not prove, and it is the same shape of gap as before.**  These
+are the tensions of *this* wall — the one the relaxation finds, now certified to
+be a genuine, unique, strict local minimum of the ring energy.  As an **upper**
+bound on the true wall tension that is unconditional.  As a **lower** bound it is
+conditional on the wall core being this one: certifying the infimum over all
+configurations of an odd ring is a global optimisation in 63 dimensions, and is
+not attempted here.  A Peierls bound needs exactly that lower bound.  So the
+missing constant of the crystallization program is now pinned to twenty digits
+and proved positive *for the wall that occurs*, which is strictly more than
+"numerical evidence", and strictly less than the theorem.
 
 ## Unusual stone: reversal cohomology
 
@@ -922,7 +1037,9 @@ point in the corresponding neighborhood.
 This suggests a proof route unlike a pointwise block certificate: establish
 two locally coercive alternating phases, classify all low-energy blocks into
 their neighborhoods, and charge LL and HH defects by separate certified costs.
-The wall tension is numerical evidence only.  The spectral gap is no longer:
+The wall tension is no longer numerical evidence only -- it is certified for the
+wall that occurs, and still uncertified as an infimum; see "The wall, certified".
+The spectral gap is not numerical either:
 it is certified at `1.6` over a box around the critical point, by the Bloch
 reduction in `tiling_coercivity.js` — see the local-theorem section above.  This
 paragraph predates that and said both were numerical.  A proof

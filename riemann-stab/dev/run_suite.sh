@@ -14,6 +14,7 @@ echo "== tiling Bellman/coboundary checks ==" && node tiling_bellman_test.js
 echo "== additive coboundary certificate checks ==" && node tiling_additive_test.js
 echo "== general block-size checks ==" && node tiling_blocks_test.js
 echo "== local coercivity checks ==" && node tiling_coercivity_test.js
+echo "== independent Arb certification (local coercivity) ==" && node check_arb.js
 echo "== rigorous arithmetic checks ==" && node tiling_rigorous_test.js
 echo "== interval sweep checks ==" && node tiling_interval_test.js
 
