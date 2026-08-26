@@ -297,3 +297,20 @@ function auditGeneral(certificate, m, options = {}) {
 }
 module.exports.reducedCostAndGradient = reducedCostAndGradient;
 module.exports.auditGeneral = auditGeneral;
+
+// Each free direction's sign row sums to zero, so adding a constant to any of
+// the functions leaves the reduced cost unchanged.  Centring them is therefore
+// free and shrinks the amplitude -- and with it the cube the tail lemma leaves
+// open -- by a large factor.  A search that only ever looked inside a small box
+// will otherwise emit a certificate that is worthless outside it.
+function gaugeNormalize(certificate) {
+  return {
+    knots: certificate.knots.slice(),
+    signs: certificate.signs,
+    functions: certificate.functions.map(values => {
+      const shift = (Math.max(...values) + Math.min(...values)) / 2;
+      return values.map(v => v - shift);
+    })
+  };
+}
+module.exports.gaugeNormalize = gaugeNormalize;

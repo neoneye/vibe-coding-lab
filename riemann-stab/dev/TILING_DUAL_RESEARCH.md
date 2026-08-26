@@ -432,6 +432,30 @@ already finer than a useful `n = 8` certificate would need, and it costs ten
 minutes.  The seven-dimensional sweep is not the obstacle; getting a good
 enough `m = 7` certificate is.
 
+### A first `m = 7` certificate, and the three ways it fails
+
+Ninety rounds of cut generation at `m = 7` produced a certificate that does not
+work.  The ways it fails are the useful part.
+
+- *Convergence is far slower.*  Ninety rounds reached `96.3%` of the chain
+  ceiling inside the box the search looked at.  At `m = 6`, twenty-six rounds
+  reached `99.98%`.
+- *It is worse than no certificate.*  Its small-box floor `0.004355584` is
+  below the trivial zero-certificate floor `0.004388737`, which is just the
+  isolated block minimum.  The search has not yet bought anything.
+- *It has no amplitude control.*  The `m = 6` pipeline has an
+  amplitude-minimising refine stage; that was never generalised.  So the
+  certificate's amplitude is `0.36`, its own tail lemma demands the cube
+  `[0, 1094]^7`, and an audit over that cube returns `-0.053`.  The certificate
+  is valid only on the box the search happened to look in, which is not a
+  certificate at all.
+
+Against a break-even of `0.004456540625`, this is not close.  The conclusion is
+specific and worth stating plainly: **the `n = 8` route needs more search, not
+more sweeping.**  The sweep side is solved — seven dimensions terminates at
+margins finer than needed.  What is missing is an amplitude-minimising refine
+stage generalised to `m` gaps, and substantially more cut generation.
+
 So the `n = 8` programme is reachable rather than merely describable.  What it
 needs is a certificate at `m = 7`, which is the same cut-generation loop with
 three free functions instead of two, and then the seven-dimensional sweep at a

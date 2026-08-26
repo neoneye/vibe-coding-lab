@@ -103,6 +103,34 @@ check(`seven-dimensional sweep completes at ${flat.target}`, sevenSweep.complete
 check('seven-dimensional sweep box-count pin',
   sevenSweep.processed === flat.boxes, `${sevenSweep.processed}`);
 
+
+// The first m = 7 certificate attempt, recorded because it fails informatively.
+const attempt = golden.block_seven.certificate_attempt;
+check('m=7 attempt is worse than the trivial zero certificate',
+  attempt.smallBoxFloor < attempt.zeroCertificateFloor,
+  `${attempt.smallBoxFloor} vs ${attempt.zeroCertificateFloor}`);
+check('m=7 attempt falls short of break-even by a wide margin',
+  attempt.breakEvenFloor - attempt.smallBoxFloor > 5e-5,
+  `${attempt.breakEvenFloor - attempt.smallBoxFloor}`);
+check('m=7 attempt has no amplitude control, so its required cube is absurd',
+  attempt.requiredBox > 1000 && attempt.auditOverRequiredBox < 0,
+  `box ${attempt.requiredBox}, audit ${attempt.auditOverRequiredBox}`);
+check('the record says what is missing', /refine stage/.test(attempt.whatIsMissing));
+
+// Gauge freedom is real at every block size: each sign row sums to zero.
+for (const m of [6, 7, 8]) {
+  const rows = B.signMatrix(m);
+  const knots = [0, 1, 2, 4, 8];
+  const cert = {knots, functions: rows.map((_, f) => knots.map((k, i) => 0.001 * (i + f)))};
+  const shifted = B.gaugeNormalize(cert);
+  let worstShift = 0;
+  for (let trial = 0; trial < 500; trial++) {
+    const g = Array.from({length: m}, () => random() * 6);
+    worstShift = Math.max(worstShift, Math.abs(B.reducedCost(g, cert) - B.reducedCost(g, shifted)));
+  }
+  check(`block ${m}: constants are a gauge freedom`, worstShift < 1e-15, `${worstShift}`);
+}
+
 if (failed) {
   console.error(`${failed} general-block checks failed`);
   process.exit(1);
