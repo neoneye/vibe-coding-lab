@@ -43,39 +43,54 @@ previously exist.
 
 ### Evidentiary status of the sweep numbers
 
-Three different things have been called "verified" in this file, and they are
-not the same.
+Three different things were being called "verified", and they are not the same.
 
-- **Transcripted and replayed by the suite.**  The row carries a traversal
-  checksum and input hashes, and `tiling_interval_test.js` re-runs it from
-  scratch on every suite run and compares.  Currently: `fast` up to `0.0025`
-  and `rigorous` up to `0.003`, plus the bare-block control rows — the rows
-  small enough to redo inside a test suite.
-- **Transcripted, too large for the suite to replay.**  The row carries the same
-  checksum and hashes, and its replay command, but redoing it costs minutes to
-  hours so the suite verifies its hashes only and reports that it did not
-  replay it.  Currently: `fast` up to `0.0039`.
-- **Previously reported, not currently transcripted.**  Everything above
-  `0.0039` fast and `0.003` rigorous, including the headline `0.003956` on both
-  rungs.  Those numbers were produced by a driver that emitted no checksum, and
-  every rigorous one is stale in any case because `TRIG_ERROR` moved from
-  `2e-15` to `8e-15` when an oracle showed the old bound had only a factor of
-  two of headroom.  They are being re-run; until a transcript lands they are
-  claims about what happened, not evidence of it.
+- **Replayed by the suite.**  The row carries a traversal checksum and input
+  hashes, and `tiling_interval_test.js` re-runs it from scratch on every suite
+  run and compares.  Currently: `fast` to `0.0025`, `rigorous` to `0.003`, plus
+  the bare-block controls.
+- **Transcripted, too large for a test suite to replay.**  Same checksum and
+  hashes, plus its replay command; the suite verifies the hashes and reports
+  that it did not redo the traversal.  Currently: `fast` to `0.003956`.
+- **Reported, with no transcript.**  Everything else, including every rigorous
+  row above `0.003` — the whole rigorous ladder from `0.0038` to `0.003956`.
+  Those came from a driver that emitted no checksum, and are stale regardless
+  because `TRIG_ERROR` moved from `2e-15` to `8e-15`.  They are being re-run in
+  the order that makes them useful: `0.0038` first, because that is the rung
+  that would recover the published local-certificate threshold, then `0.0039`,
+  and only afterwards the larger targets.
+
+**The honest ladder, today:**
+
+| | floor | conditional projection |
+|---|---:|---:|
+| replayed, rigorous | `0.003` | `0.6724883611` |
+| replayed, fast | `0.0025` | — |
+| transcripted, fast, unreplayed | `0.003956` | `0.6731093501` |
+| reported without transcript | `0.003956` rigorous | — |
+| **defensible unconditional record** | — | **`0.6725007037`** |
+
+Note what the first row means: the replayed rigorous floor `0.003` projects
+*below* the published constant.  A floor only improves on `19/5000` once it
+exceeds it, and no rigorous row currently does.  The improvement claimed in this
+directory is not, at this moment, backed by a reproducible artifact.  That is a
+statement about evidence, not about whether the sweeps happened — but the
+distinction is the entire point of the transcript mechanism, and it was
+introduced precisely because nothing was enforcing it.
 
 A stronger form was considered and rejected on cost: a persistent partition
 certificate, listing every disposed box for an independent checker to verify
-without re-running.  At 67 million boxes and twelve doubles each that is some
-six gigabytes for a single row, which is not something to commit.  The checksum
-is the weaker but affordable version — it makes a *replay* self-verifying, and
-an independent checker re-runs rather than reads.  The suite tests the detector
-as well as the rows: a tampered checksum, a forged certificate hash, and a
-traversal of a nearby target must all be caught.
+without re-running.  At 67 million boxes and twelve doubles each that is some six
+gigabytes for a single row.  The checksum is the weaker but affordable version —
+it makes a *replay* self-verifying, and an independent checker re-runs rather
+than reads.  The suite tests the detector as well as the rows: a tampered
+checksum, a forged certificate hash, and a traversal of a nearby target must all
+be caught.
 
-The reason for the distinction is a specific failure the transcript mechanism
-caught on its first outing: a `compact 0.00385` row recorded `5 164 379` boxes
-and replays to `5 164 383`, having silently predated the derivative sign test
-gaining its safety margin.  Nothing in the suite would ever have noticed.
+The failure that motivated all of this: a `compact 0.00385` row recorded
+`5 164 379` boxes and replays to `5 164 383`, having silently predated the
+derivative sign test gaining its safety margin.  Nothing in the suite would ever
+have noticed.
 
 What is still required before the improved simple-zero projection can be used:
 the assembly has to be checked by someone with the manuscript.  The rigorous
@@ -331,8 +346,12 @@ correctly rounded and carries no proved error bound.  `tiling_rigorous.js`
 removes both leans: Cody-Waite reduction against a four-term split of `pi/2`,
 Taylor series to `r^19` and `r^18` whose truncation is below the first omitted
 term, and outward rounding by `2.3e-16` relative, sound because IEEE 754
-`+ - * /` are correctly rounded.  The resulting sine lands within `1.25e-16` of
-60-digit mpmath values, well inside its declared `2e-15` bound.
+`+ - * /` are correctly rounded.  Against a 6174-row mpmath oracle at 60 digits,
+biased towards the cases where argument reduction is delicate, containment holds
+everywhere and the worst true error is `9.99e-16`.  The declared bound is
+`8e-15` — eight times that, and five times the term-by-term derivation beside
+the constant.  An earlier `2e-15` was carrying only twofold headroom, which a
+uniform random sample against the engine's own `Math.sin` had not revealed.
 
 Two things had to be got right for the sweep to survive the change.
 

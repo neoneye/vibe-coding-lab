@@ -230,21 +230,35 @@ for (const row of allRows) {
       row.target > reference - 1e-9, `${row.target} vs ${reference}`);
   }
 }
-const best = results.runs.filter(r => r.complete && r.certificate !== 'bare')
-  .reduce((a, r) => Math.max(a, r.target), 0);
-check('best verified floor beats the published 19/5000 certificate', best > 19 / 5000, `${best}`);
-check('best verified floor pin', Math.abs(best - results.bestVerifiedFloor) < 1e-15, `${best}`);
-check('projected constant pin',
-  Math.abs(T.floorPayoff(best).bound - results.bestVerifiedBound) < 5e-15);
-
-if (results.rigorousRuns && results.rigorousRuns.length) {
-  const bestRigorous = results.rigorousRuns.filter(r => r.complete)
-    .reduce((a, r) => Math.max(a, r.target), 0);
-  check('best rigorously verified floor pin',
-    Math.abs(bestRigorous - results.bestRigorousFloor) < 1e-15, `${bestRigorous}`);
-  check('rigorous floor never exceeds the double-precision floor',
-    bestRigorous <= results.bestVerifiedFloor + 1e-15);
-}
+// The distinction the field names now carry.  A floor is "replayed" only if the
+// suite redid its traversal here; "transcripted" means the row is authenticated
+// but too large to redo in a test.  Calling the second one verified is what let
+// a stale row stand, so the pins are separate and both are asserted.
+const REPLAYABLE = r => r.complete && r.certificate !== 'bare' && r.boxes <= REPLAY_BUDGET_BOXES;
+const TRANSCRIPTED = r => r.complete && r.certificate !== 'bare';
+const bestOf = (rows, pred) => {
+  const values = rows.filter(pred).map(r => r.target);
+  return values.length ? Math.max(...values) : null;
+};
+check('replayed fast floor pin',
+  bestOf(results.runs, REPLAYABLE) === results.bestReplayedFastFloor,
+  `${bestOf(results.runs, REPLAYABLE)}`);
+check('transcripted fast floor pin',
+  bestOf(results.runs, TRANSCRIPTED) === results.bestTranscriptedFastFloor,
+  `${bestOf(results.runs, TRANSCRIPTED)}`);
+check('replayed rigorous floor pin',
+  bestOf(results.rigorousRuns, REPLAYABLE) === results.bestReplayedRigorousFloor,
+  `${bestOf(results.rigorousRuns, REPLAYABLE)}`);
+check('transcripted rigorous floor pin',
+  bestOf(results.rigorousRuns, TRANSCRIPTED) === results.bestTranscriptedRigorousFloor,
+  `${bestOf(results.rigorousRuns, TRANSCRIPTED)}`);
+check('the file refuses to call anything simply "verified"',
+  /Nothing here is called "verified"/.test(results.naming));
+// The rigorous rung is the one that would carry a claim, so its status is
+// asserted explicitly rather than inferred from a maximum.
+check('no rigorous row yet reaches the published local floor',
+  results.bestTranscriptedRigorousFloor < 19 / 5000,
+  `${results.bestTranscriptedRigorousFloor} -- if this fires, the ladder moved and the docs need updating`);
 
 if (failed) {
   console.error(`${failed} interval-sweep checks failed`);

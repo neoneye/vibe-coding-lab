@@ -196,76 +196,59 @@ abbrev RmtScaled : Int := 13274992963205883543
 theorem montgomery_taylor_complement :
     RmtScaled + HmtScaled = 2 * 10000000000000000000 := by decide
 
-/-- The exhaustively swept chain floor, as an exact rational: 989/250000
-    = 0.003956.  It sits strictly above the published local certificate
-    19/5000, which is the whole point of the sweep. -/
-theorem swept_floor_beats_local_certificate :
+/-  ----------------------------------------------------------------------
+    WHAT THE NEXT FIVE THEOREMS DO AND DO NOT SAY.
+
+    They are arithmetic on an ASSUMED floor.  Lean has no access to the sweep
+    that would establish that floor, cannot see a box, and is not evidence that
+    any subdivision was ever run.  Each says only: IF a chain floor of
+    989/250000 is established elsewhere, THEN the shifted-block assembly
+    projects the constant pinned here.
+
+    Two further conditions, both currently unmet, sit between these theorems and
+    any statement about zeta zeros.  The floor 989/250000 is at present a
+    reported number with no transcript behind it -- see the evidentiary status
+    note in dev/TILING_DUAL_RESEARCH.md, which records what has actually been
+    replayed.  And the assembly itself comes from an external manuscript this
+    laboratory cannot check.
+
+    The names say `assumed` for that reason.  They previously said `swept` and
+    `rigorous`, which read as though Lean had validated a sweep.
+    ---------------------------------------------------------------------- -/
+
+/-- The assumed floor 989/250000 = 0.003956 exceeds the published local
+    certificate 19/5000.  Pure arithmetic on two rationals. -/
+theorem assumed_floor_exceeds_local_certificate :
     (989 : Int) * 5000 > 19 * 250000 := by omega
 
-/-- Projection of the swept floor.  With floor c = 989/250000 the shifted
-    block assembly uses 252 windows per block and blocks of 258 gaps, so
-
-        bound = (258*10^6 * H_MT - 514000) / 257003088,
-
-    the same algebra that turns the published floor 19/5000 into
-    (1345000 * H_MT - 2680)/1340003.  Two-sided pin at the printed digits:
-    the constant lies in [0.6731093501463616833, 0.6731093501463616834].
-    As with the headline pin, Lean is checking arithmetic on a decimal, not
-    the analytic derivation behind the assembly. -/
-theorem swept_projection_floor :
-    258000000 * HmtScaled - 514000 * 10000000000000000000
-      >= 6731093501463616833 * 257003088 := by
-  have hH : HmtScaled = 6725007036794116457 := rfl
-  rw [hH]
-  omega
-
-theorem swept_projection_ceiling :
-    258000000 * HmtScaled - 514000 * 10000000000000000000
-      <= 6731093501463616834 * 257003088 := by
-  have hH : HmtScaled = 6725007036794116457 := rfl
-  rw [hH]
-  omega
-
-/-- The swept projection strictly improves on the published one: the two-sided
-    pins do not overlap. -/
-theorem swept_projection_improves :
-    (6731093501463616833 : Int) > 6730085279277797613 := by omega
-
-/-- The floor established by the sweep that uses proved enclosures rather than
-    plain double precision: 989/250000 = 0.003956.  That is the same floor the
-    double-precision sweep reaches, so the arithmetic gap between the two rungs
-    has closed: everything the fast sweep can see, the rigorous one now sees. -/
-theorem rigorous_floor_beats_local_certificate :
-    (989 : Int) * 5000 > 19 * 250000 := by omega
-
-/-- Projection of the rigorous floor.  With c = 989/250000 the assembly uses
-    252 windows per block and blocks of 258 gaps, so
+/-- Projection of the assumed floor.  With c = 989/250000 the assembly uses 252
+    windows per block and blocks of 258 gaps, so
 
         bound = (258000000 * H_MT - 514000) / 257003088,
 
-    pinned two-sidedly at [0.6731093501463616833, 0.6731093501463616834] --
-    the same interval as swept_projection_floor/ceiling, which is the point. -/
-theorem rigorous_projection_floor :
+    which lies in [0.6731093501463616833, 0.6731093501463616834].  Arithmetic on
+    a decimal: that H_MT is the right decimal, and that the assembly is the
+    right assembly, are both outside what Lean checks here. -/
+theorem projection_at_assumed_floor_lower :
     258000000 * HmtScaled - 514000 * 10000000000000000000
       >= 6731093501463616833 * 257003088 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
 
-theorem rigorous_projection_ceiling :
+theorem projection_at_assumed_floor_upper :
     258000000 * HmtScaled - 514000 * 10000000000000000000
       <= 6731093501463616834 * 257003088 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
 
-/-- The projection pins.  The published local certificate sits strictly below
-    what the sweep gives, and the swept constant sits strictly below the ceiling
-    the alternating chain imposes (0.6731102697399269...).  The two sweep rungs,
-    double precision and proved enclosures, now land on the same floor, so there
-    is no longer a third rung between them.  No interval overlaps another, so
-    none of this depends on rounding. -/
-theorem projection_ladder :
+/-- The projection of the assumed floor exceeds the published pin, and stays
+    below the ceiling the alternating chain imposes.  The intervals do not
+    overlap, so the ordering does not depend on rounding -- but it is an
+    ordering of what WOULD follow from the assumed floor, not of anything
+    established. -/
+theorem projection_at_assumed_floor_ordering :
     (6730085279277797613 : Int) < 6731093501463616833
     ∧ (6731093501463616834 : Int) < 6731102697399269000 := by
   constructor <;> omega
