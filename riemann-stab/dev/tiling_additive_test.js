@@ -174,6 +174,37 @@ for (const entry of shipped.certificates) {
   }
 }
 
+
+// The tail lemma is the one part of the sweep that is not established by
+// subdivision, so it gets its own check: the declared amplitude really does
+// bound the total potential contribution, and past the threshold the reduced
+// cost really does clear the target.
+for (const entry of shipped.certificates) {
+  const cert = {knots: entry.knots, a: entry.a, b: entry.b};
+  const bound = A.certificateAmplitude(cert).bound;
+  let worstPotential = 0;
+  for (let trial = 0; trial < 40000; trial++) {
+    const gaps = Array.from({length: 6}, () => random() * 40);
+    const potential = A.additiveReducedCost(gaps, cert) - T.blockFunctional(gaps, 3000);
+    worstPotential = Math.max(worstPotential, Math.abs(potential));
+  }
+  check(`${entry.name}: amplitude really bounds the potential contribution`,
+    worstPotential <= bound, `${worstPotential} > ${bound}`);
+
+  const threshold = A.tailThreshold(cert, 0.0039);
+  let tailViolations = 0;
+  let tailMinimum = Infinity;
+  for (let trial = 0; trial < 40000; trial++) {
+    const gaps = Array.from({length: 6}, () => random() * 3);
+    gaps[Math.floor(random() * 6)] = threshold + random() * 200;
+    const value = A.additiveReducedCost(gaps, cert);
+    if (value < 0.0039) tailViolations++;
+    tailMinimum = Math.min(tailMinimum, value);
+  }
+  check(`${entry.name}: past the tail threshold the floor holds`,
+    tailViolations === 0, `${tailViolations}, min ${tailMinimum}`);
+}
+
 check('record certificate beats the previous best coboundary candidate',
   byName.record.floor > 0.003923427087, `${byName.record.floor}`);
 check('record certificate lands within 2e-7 of the ceiling',
