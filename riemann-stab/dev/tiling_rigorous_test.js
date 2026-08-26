@@ -33,17 +33,25 @@ check('trig enclosures stay narrow', widest < 5e-15, `${widest}`);
 // The enclosure must never be narrower than the true range.
 let rangeFailures = 0;
 for (let t = 0; t < 4000; t++) {
-  const a = (random() - 0.5) * 200;
+  // pair distances reach 6 * 16 = 96 gaps, so sinc arguments reach ~300;
+  // validate over the range actually used, not a tenth of it
+  const a = (random() - 0.5) * 800;
   const b = a + random() * 8;
   const r = R.sinRange(a, b);
-  let lo = Infinity, hi = -Infinity;
+  const rc = R.cosRange(a, b);
+  let lo = Infinity, hi = -Infinity, clo = Infinity, chi = -Infinity;
   for (let s = 0; s <= 2000; s++) {
-    const v = Math.sin(a + (b - a) * s / 2000);
+    const x = a + (b - a) * s / 2000;
+    const v = Math.sin(x);
     if (v < lo) lo = v; if (v > hi) hi = v;
+    const c = Math.cos(x);
+    if (c < clo) clo = c; if (c > chi) chi = c;
   }
   if (r[0] > lo + 1e-12 || r[1] < hi - 1e-12) rangeFailures++;
+  if (rc[0] > clo + 1e-12 || rc[1] < chi - 1e-12) rangeFailures++;
 }
-check('sine range encloses a dense sample', rangeFailures === 0, `${rangeFailures}`);
+check('sine and cosine ranges enclose a dense sample over the arguments actually used',
+  rangeFailures === 0, `${rangeFailures}`);
 
 // ------------------------------------------------------------------ kernel
 check('K(0) enclosure brackets the laboratory value',
