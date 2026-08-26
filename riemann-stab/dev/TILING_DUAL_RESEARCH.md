@@ -464,25 +464,38 @@ sits at `n = 8` and is shallow on both sides.
 
 ## Concrete next proof program
 
-Steps 1 through 3 of the old program are done — see the sweep section above.
-What is left is exactly the arithmetic:
+The old program's steps are done: the certificate exists, the cube is finite
+and explicit, the sweep is exhaustive, and it now runs on proved enclosures.
+What is left, in order of how much it buys per unit of work:
 
-1. Port the four range primitives to directed-rounding arithmetic: `wRange`,
-   `dwRange`, and the two piecewise-linear range queries.  Only the kernel
-   needs real enclosures; the potential part is piecewise linear with rational
-   knots and coefficients.
-2. Replace the breakpoint tables by *verified* enclosures of the zeros of `K`
-   and of `K'`.  The sweep needs those breakpoints to partition the line into
-   pieces on which `w` and `w'` are monotone; a missed piece silently narrows a
-   range, which is the one failure mode that would invalidate everything.
-3. Rerun the same 16 million boxes.  Nothing about the search changes.
-4. Emit a standalone checker with no optimizer in its trusted base.  The
-   finite-chain boundary term is already explicit: it is bounded by the
-   certificate amplitude, uniformly in the chain length.
+1. **Compute.**  The rigorous sweep is at `0.00392` and the double-precision
+   one at `0.003955`; that lead is mostly just hours.  `0.00394` and `0.003949`
+   should be roughly 25 and 60 million rigorous boxes.  Nothing about the
+   method changes — `node dev/sweep.js rigorous compact 0.00394` and wait.
+2. **An independent implementation.**  Everything above trusts that this code
+   has no bugs.  The cross-checks are real — 60-digit mpmath for the
+   trigonometry, the exact-range table for every box analysis, the degenerate
+   box reproducing `additiveReducedCost` bit for bit — but they are checks by
+   the same author.  Reimplementing the four range primitives in Arb or MPFI
+   and rerunning would be worth more than any further tightening here.
+3. **A checker with no optimizer in its trusted base.**  The certificate's
+   knots and coefficients should be rationalised, and the checker should read
+   them as data.  The finite-chain boundary term is already explicit: it is
+   bounded by the certificate amplitude, uniformly in the chain length.
+4. **The assembly.**  Everything downstream of `projectedSimpleZeroBound` is
+   conditional on a manuscript this directory cannot see.  That is the one
+   remaining gap nobody here can close.
 
-Point 2 is the one place where care is genuinely required, and it is worth
-stating why: every other approximation in the sweep makes bounds *wider*, which
-is safe, but a missing breakpoint makes a bound *narrower*, which is not.
+One design note worth keeping, because it inverts the old plan.  The old step 2
+was to build *verified* breakpoint tables — enclosures of the zeros of `K` and
+`K'` partitioning the line into monotone pieces — and it warned that a missed
+breakpoint silently narrows a range, the one failure mode that invalidates
+everything while every other approximation only widens.  The rigorous sweep
+avoids that hazard entirely by not using a breakpoint table: natural interval
+extension plus centered forms need no structural facts about where the kernel's
+zeros and extrema are.  The price is the `~1.8x` box overhead.  That is a good
+trade — the dangerous step was removed and paid for in compute — and it should
+not be undone in pursuit of speed.
 
 ## Unusual stone: reversal cohomology
 
