@@ -25,16 +25,16 @@ previously exist.
   count that means anything.
 - **Exhaustively subdivided in double precision.**  With the additive record
   certificate, the chain floor `0.003956`, for every gap sequence, periodic or
-  not — `99.1%` of the whole available improvement.  With the pair-state
-  certificate and the tube argument, `0.003957393309109344 - 1.163e-11` — the
-  alternating chain's own energy, so the alternating chain is the minimiser to
-  within `1.2e-11`, which is `100%` of the available improvement.  That last one
-  is three days newer than everything around it and its outside-the-tube half
-  has not been redone with proved enclosures; see "And on the whole cube".
-  Also, as a control, the published Proposition F6 (`F6 >= 19/5000`), reproduced
-  by machinery sharing no code with the external Arb certificate.
-- **Exhaustively subdivided with proved enclosures.**  The chain floor
-  `0.003956` — the same floor the double-precision sweep reaches, so these two
+  not — `99.1%` of the whole available improvement.  Also, as a control, the
+  published Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no
+  code with the external Arb certificate.
+- **Exhaustively subdivided with proved enclosures.**  With the pair-state
+  certificate and the tube argument, the chain floor
+  `0.003957393309109344 - 1.163e-11` — the alternating chain's own energy, so
+  the alternating chain is the minimiser to within `1.2e-11`.  That is `100%` of
+  the available improvement, and it is new; see "With proved enclosures".  With
+  the additive record certificate, the chain floor
+  `0.003956` — the same floor the double-precision sweep reaches, so those two
   rungs have merged.  67 608 431 boxes, proved trigonometric error bounds,
   outward-rounded arithmetic throughout.  It projects to `0.6731093501` against
   `0.6730085279`, `99.1%` of the whole available gain, and Lean pins that
@@ -1361,6 +1361,47 @@ measures rather than assumes.  There is no step here that trusts the search.
 which nobody here can check.  A block floor of `E_alt` projects to `0.6731102697`
 by this directory's own table — the whole of the available improvement — and that
 projection is conditional exactly as every other number in this directory is.
+
+### With proved enclosures
+
+The same sweep again, with `--rigorous`: every kernel range from
+`tiling_rigorous.js`, proved trigonometric error bounds, outward-rounded
+arithmetic throughout, no table and no `1e-10` safety margin.
+
+| | double precision | proved enclosures |
+| --- | --- | --- |
+| cube | `[0, 28]^6` | `[0, 28]^6` |
+| tube radius | `0.008` | `0.008` |
+| boxes | `50 203 847` | `75 037 955` |
+| collapses | `15 919 617` | `19 563 345` |
+| complete | yes | **yes** |
+| unresolved | `0` | `0` |
+| time | `463 s` | `5769 s` |
+| checksum | `1d6592ed5e189361` | `35aa6fea77ead5e1` |
+
+It cost `1.49x` the boxes and `12.5x` the time, and it closed.  So the doubt
+recorded in the previous section — that the rigorous evaluator's slack might
+exceed the margin outside the tube — was warranted and is now resolved the good
+way.
+
+**The statement, with the double-precision qualifier removed:**
+
+`R(g) >= E_alt - 1.163e-11`  for every six-gap block `g`,
+
+by proved enclosures outside the tubes, proved enclosures on the tubes, and the
+tail lemma outside the cube; hence by the telescoping lemma every chain has
+per-gap energy at least that.  `E_alt = 0.003957393309109344` is the alternating
+chain's own energy.  **The alternating chain is the minimiser to within
+`1.2e-11`.**
+
+That moves this directory's "exhaustively subdivided with proved enclosures"
+rung from `0.003956` to `0.003957393309109344 - 1.163e-11` — from `99.1%` of the
+available improvement to all of it.
+
+What it still rests on, unchanged: `tiling_rigorous.js` is mine, so this is
+certified modulo an arithmetic base whose Arb replacement covers only the chain
+coercivity theorem; and the projection to a simple-zero proportion still depends
+on the external shifted-block assembly nobody here can check.
 
 ### The tube, proved
 
