@@ -109,14 +109,34 @@ const I_PI_HALF = [nextDown(PI_LO / 2), nextUp(PI_HI / 2)];
 const I_SQRT2 = [1.4142135623730949, 1.4142135623730952];
 const TWO_OVER_PI = 0.6366197723675814;
 
-// Bound on the total error of sinPoint/cosPoint.  Contributions: the
-// Cody-Waite reduction (x - k*PIO2_1 is exact by Sterbenz, then three
-// correctly rounded subtractions of a value near 0.8, so under 2e-16, plus a
-// pi/2 truncation below 1e-31 scaled by |k| <= 2^12); the series truncation
-// (under 1e-21, see sinPoly); and the Horner evaluation, at most a few units
-// in the last place of a value bounded by one.  2e-15 is far above the sum and
-// is checked against 50-digit mpmath values in the test file.
-const TRIG_ERROR = 2e-15;
+// Bound on the total error of sinPoint/cosPoint.
+//
+// Derivation.  Argument reduction: x - k*PIO2_1 is exact by Sterbenz (PIO2_1
+// carries 33 significant bits and |k| <= 2^12, so the product is exact, and the
+// operands lie within a factor of two), followed by three correctly rounded
+// subtractions of small quantities from a value below pi/4, each losing at most
+// half an ulp of ~0.8, so under 2e-16; the four-term split represents pi/2 to
+// better than 1e-31, contributing under 1e-28 at |k| <= 2^12.  Series
+// truncation is below the first omitted term, under 1e-21 on |r| <= pi/4.  The
+// Horner evaluation runs ten steps on a running value bounded by one, so at
+// most ten half-ulps, under 1.2e-15.  Total under about 1.5e-15.
+//
+// Measurement.  Against 6174 high-precision oracle rows biased towards the
+// delicate cases -- multiples of pi/2 and tiny offsets from them, the pi/4
+// branch boundary, the composed kernel arguments, and magnitudes out to 400 --
+// the worst true error of the midpoint is 9.99e-16, consistent with the
+// derivation.  (For comparison the engine's own Math.sin reaches 1.11e-16 on
+// the same rows; this implementation is less accurate and is used anyway
+// because its error is bounded by an argument rather than by a vendor's
+// reputation.)
+//
+// The declared bound is 8e-15: eight times the worst observed and five times
+// the derived bound.  It is negligible downstream -- the accumulation slack
+// alone is 1e-12 and the sweep margins are ~1e-6 -- so there is no reason to
+// run it tight.  The test asserts both containment against the oracle and that
+// the observed worst stays under a quarter of this, so an accuracy regression
+// fails rather than silently eating the headroom.
+const TRIG_ERROR = 8e-15;
 const MAX_TRIG_ARGUMENT = 4096;
 
 function reduce(x) {
