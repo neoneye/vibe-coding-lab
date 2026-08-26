@@ -888,6 +888,22 @@ Two facts the Arb run adds outright:
   certified two-decimal statement rather than a scan reading.  Nothing else here
   depends on it.
 
+**Arb is not a free pass.**  Three defects turned up in the thin layer between
+Arb and the mathematics, and all three were mine.  `b ** 2` returns `nan` for a
+ball centred at zero and `b * b` returns something straddling zero — ball
+multiplication does not know its two factors are the same number — so the
+eigenvalue bound was feeding `nan` into a square root, where it read `False`
+against every comparison and sent the bisection down a branch that could not
+close.  Safe, in that nothing false could be certified, and useless.  Second, the
+radius of a ball crosses into Arb as a Python `float`, and `float()` rounds to
+*nearest*, which for a radius is inward half the time; every constructor now
+rounds its radius outward and inflates it far beyond any double rounding.  Third,
+outward rounding leaves a sum of squares reaching a hair below zero, which brings
+the `nan` back at the square root, so the clamp happens on the endpoints instead.
+The file now tests its own ball constructors on 891 cases before it proves
+anything, because the two layers that produced defects here were this one and the
+one it replaced.
+
 `dev/coercivity_arb.results.json` records the run, hashed to the source that
 produced it.  The suite reruns the whole certification when `python-flint` is
 importable and otherwise checks only that the transcript is not stale — and says

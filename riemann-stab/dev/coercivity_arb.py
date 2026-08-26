@@ -134,12 +134,51 @@ def jacobian(L, H):
 
 
 # ------------------------------------------------------------------ Krawczyk
+# python-flint takes a ball's radius as a Python float, so any constructor that
+# computes a radius in Arb and then hands it over crosses a rounding boundary --
+# and float() rounds to NEAREST, which for a radius is inward half the time.  The
+# amounts are around 1e-16 relative and would not move any number quoted here,
+# but "would not move it" is not the same as sound, and this directory has been
+# caught on exactly that distinction before.  So every constructor below rounds
+# its radius outward explicitly and inflates it by a factor far larger than any
+# double rounding can be.
+RADIUS_SLACK = 1 + 1e-10
+RADIUS_FLOOR = 1e-300
+
+
+def _outward(r):
+    return float(arb(r).upper()) * RADIUS_SLACK + RADIUS_FLOOR
+
+
 def span(lo, hi):
-    """The ball enclosing [lo, hi], with both endpoints given as balls."""
-    a, b = float(arb(lo).lower()), float(arb(hi).upper())
-    mid = (arb(a) + arb(b)) / 2
-    rad = (arb(b) - arb(a)) / 2
-    return arb(mid.mid(), float(rad.upper()))
+    """The smallest ball this constructor can build that encloses [lo, hi].
+
+    lo and hi may themselves be balls; their radii are absorbed.
+    """
+    a = arb(arb(lo).lower())
+    b = arb(arb(hi).upper())
+    m = (a + b) / 2
+    half = (b - a) / 2
+    return arb(m.mid(), _outward(abs(arb(half.upper())) + arb(m.rad())
+                                 + arb(half.rad())))
+
+
+def nonneg_sqrt(b):
+    """sqrt of a ball known to be nonnegative in exact arithmetic.
+
+    Outward rounding can leave such a ball reaching a hair below zero, and Arb
+    answers nan for the square root of anything that does.  A nan then reads
+    False against every comparison, so the caller subdivides down a branch that
+    can never close -- safe, in the sense that nothing false gets certified, and
+    useless.  Clamping the lower end to zero is exact and loses nothing, because
+    the true value was never negative.  There is no way to build a ball whose
+    lower end is exactly zero -- python-flint stores the radius as a mag, which
+    rounds up -- so the clamp happens here, on the endpoints, instead.
+    """
+    lo = arb(b.lower())
+    if lo < 0:
+        lo = arb(0)
+    return span(lo.sqrt(), arb(b.upper()).sqrt())
 
 
 def sqr(b):
@@ -161,9 +200,8 @@ def sqr(b):
 
 
 def ball(lo, hi):
-    mid = (arb(lo) + arb(hi)) / 2
-    rad = (arb(hi) - arb(lo)) / 2
-    return arb(mid, rad) if rad > 0 else mid
+    """Enclose [lo, hi] for lo, hi doubles.  Goes through span for the rounding."""
+    return span(arb(lo), arb(hi))
 
 
 def strictly_inside(k, x):
@@ -247,8 +285,7 @@ def smallest_eigenvalue_lower(qL, qH, L, H):
                 im[alpha][beta] -= e * theta.sin()
     a, d = re[0][0], re[1][1]
     off2 = sqr(re[0][1]) + sqr(im[0][1])
-    disc = (sqr((a - d) / 2) + off2).sqrt()
-    return (a + d) / 2 - disc
+    return (a + d) / 2 - nonneg_sqrt(sqr((a - d) / 2) + off2)
 
 
 def certify_gap(L, H, target, min_width=1e-9, budget=200000):
@@ -328,7 +365,7 @@ def hessian_entry_tube(a, b, L, H, r):
     for s in range(abs(a - b) + 1, LAGS + 1):
         for i in range(hi - s + 1, lo + 1):
             d = lag_distance(s, i % 2, L, H)
-            acc += weight_jet(arb(d.mid(), float(d.rad()) + s * r), 3)[2]
+            acc += weight_jet(arb(d.mid(), _outward(arb(d.rad()) + arb(s) * arb(r))), 3)[2]
     return acc * 2
 
 
@@ -393,7 +430,7 @@ def perturbed_symbol_lower(qLo, qHi, L, H, coef):
                 im[alpha][beta] -= entry * theta.sin()
     a, d = re[0][0], re[1][1]
     off2 = sqr(re[0][1]) + sqr(im[0][1])
-    return (a + d) / 2 - (sqr((a - d) / 2) + off2).sqrt()
+    return (a + d) / 2 - nonneg_sqrt(sqr((a - d) / 2) + off2)
 
 
 def lag_drift(L, H, s, r):
@@ -480,6 +517,29 @@ def main():
     JS_CEILING = 0.003957393309209766
 
     print("Arb, %d bits.  Independent of tiling_rigorous.js.\n" % ctx.prec)
+
+    # The ball constructors first.  Everything below is only as sound as these,
+    # and two of the three defects found in this file were in exactly this
+    # layer: a square that returned nan, and a radius rounded to nearest.
+    bad_ball = bad_sqr = nan_sqrt = 0
+    for i in range(-40, 41):
+        for j in range(1, 12):
+            a = i / 8.0
+            b = a + j / 997.0
+            x = ball(a, b)
+            if not (arb(a) in x and arb(b) in x):
+                bad_ball += 1
+            q = sqr(arb((a + b) / 2, (b - a) / 2))
+            for t in (arb(a), arb(b), arb((a + b) / 2)):
+                tt = t * t
+                if not (arb(tt.lower()) >= arb(q.lower())
+                        and arb(tt.upper()) <= arb(q.upper())):
+                    bad_sqr += 1
+            if str(nonneg_sqrt(q + sqr(arb(a)))) == "nan":
+                nan_sqrt += 1
+    check("ball encloses its endpoints", bad_ball == 0, "%d cases" % (81 * 11))
+    check("sqr encloses the squares of its endpoints and midpoint", bad_sqr == 0)
+    check("nonneg_sqrt never returns nan on a sum of squares", nan_sqrt == 0)
 
     L0 = ball(1.0416801034484717 - 1e-6, 1.0416801034484717 + 1e-6)
     H0 = ball(1.9794672314032040 - 1e-6, 1.9794672314032040 + 1e-6)
