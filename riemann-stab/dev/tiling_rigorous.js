@@ -380,7 +380,20 @@ function weightPairCentered(a, b) {
   const ddw = iDiv(iScale(iAdd(iSquare(kpab), iMul(kab, kppab)), 2), K0_SQUARED);
 
   const dw = iIntersect(iAdd(dwm, iMul(ddw, span)), dwNatural);
-  const w = iIntersect(iAdd(wm, iMul(dw, span)), wNatural);
+
+  // Second-order Taylor with remainder beats the first-order centered form for
+  // the value: w(x) = w(m) + w'(m)(x-m) + w''(xi)(x-m)^2/2, so
+  //     w([a,b]) subset w(m) + w'(m)*[-rho,rho] + w''([a,b])*[0, rho^2/2].
+  // The centered form's second-order term is 2*rho^2*|w''|; this one is
+  // rho^2*|w''|.  Measured effect on the sweep: 0.1% fewer boxes, not the
+  // factor of eight a sixth-power argument would predict -- so the binding
+  // slack is in the derivative enclosure that drives the monotonicity test,
+  // not in the value bound.  Kept because the intersection is never worse and
+  // because that measurement is the useful part: it says where to look next.
+  const halfSquare = ru(0.5 * rho * rho);
+  const taylor = iAdd(iAdd(wm, iMul(dwm, span)), iMul(ddw, [0, halfSquare]));
+  const centered = iAdd(wm, iMul(dw, span));
+  const w = iIntersect(iIntersect(taylor, centered), wNatural);
   return {w: [Math.max(0, w[0]), w[1]], dw};
 }
 module.exports.weightPairCentered = weightPairCentered;
