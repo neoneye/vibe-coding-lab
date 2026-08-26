@@ -194,6 +194,14 @@ node dev/sweep.js fast     bare    0.0038
 
 `bare` is the zero potential, for which the reduced cost is the isolated block
 functional; that run is the control reproducing the published Proposition F6.
+
+At other block sizes the search is `tiling_blocks_search.py`, which takes the
+number of gaps as its first argument; `m = 6` reproduces the mode above and is
+how to check it.
+
+```
+venv/bin/python tiling_blocks_search.py 7 0.10 90 block7
+```
 Every number in `tiling_interval.results.json` comes from one of these lines,
 and the suite checks the recorded outcomes stay consistent with the audited
 floors.
