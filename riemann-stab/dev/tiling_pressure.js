@@ -161,13 +161,32 @@ function wallTension(p, phase, period = 63) {
   return {tension: period * (relaxed.value - ground), L, H, gaps: relaxed.gaps};
 }
 
-function plateauEdge(phase, lo, hi, iterations = 50) {
+// Where an ISOLATED wall stops costing energy.  Not a phase boundary: the
+// period-three branch overtakes period two at 3370.45 while tau_HH stays
+// positive to 3521.82, so this zero sits outside the interval where period two
+// actually wins.  It is a metastability limit.
+function wallZero(phase, lo, hi, iterations = 50) {
   let flo = wallTension(lo, phase).tension;
   for (let i = 0; i < iterations; i++) {
     const mid = (lo + hi) / 2;
     const fm = wallTension(mid, phase).tension;
     if ((fm > 0) === (flo > 0)) { lo = mid; flo = fm; } else hi = mid;
     if (hi - lo < 1e-7) break;
+  }
+  return (lo + hi) / 2;
+}
+
+// Where the period-two branch is beaten by the period-three branch on the LOW
+// side.  Together with periodCrossover this brackets the interval in which the
+// period-two branch is the best of the branches tested.
+function lowerCrossover(lo = 1300, hi = 1550, iterations = 60) {
+  const two = p => { const t = twoCycle(p); return T.periodicChainEnergy([t.L, t.H], 7, p); };
+  const three = p => Math.min(relax([1.0323, 1.9712, 1.0323], p, 40000).value,
+    relax([1.0297, 1.0232, 1.9689], p, 40000).value);
+  for (let i = 0; i < iterations; i++) {
+    const m = (lo + hi) / 2;
+    if (three(m) < two(m)) lo = m; else hi = m;
+    if (hi - lo < 1e-8) break;
   }
   return (lo + hi) / 2;
 }
@@ -198,7 +217,10 @@ function projectionAt(p) {
     windowsPerBlock: r.windowsPerBlock};
 }
 
-// Where the period-two state loses to period three.
+// Where the period-two branch loses to the period-three branch.  This is a
+// crossing of two NUMERICALLY SELECTED branches, not a certified global
+// transition: nothing here minimises over all periodic sequences, let alone all
+// chains.
 function periodCrossover(lo = 3360, hi = 3390, iterations = 50) {
   const two = p => { const t = twoCycle(p); return T.periodicChainEnergy([t.L, t.H], 7, p); };
   const three = p => relax([1.0436, 1.9923, 1.9923], p, 40000).value;
@@ -210,5 +232,5 @@ function periodCrossover(lo = 3360, hi = 3390, iterations = 50) {
   return (lo + hi) / 2;
 }
 
-module.exports = {kernel, kernelZeros, relax, twoCycle, wallTension, plateauEdge,
-  energyAndGradient, groundEnergy, projectionAt, periodCrossover};
+module.exports = {kernel, kernelZeros, relax, twoCycle, wallTension, wallZero,
+  energyAndGradient, groundEnergy, projectionAt, periodCrossover, lowerCrossover};

@@ -1184,225 +1184,77 @@ global minimiser.  That is the crystallization statement this directory has been
 circling, and it would take the headline projection to `0.6731102697` — the whole
 of the available improvement rather than the `99.9%` the record certificate buys.
 
-**No such sweep exists.**  A rigorous sweep of a bilinear `psi` needs interval
-enclosures for bilinear interpolation over a box, and this directory has none.
-The mathematics of it is easy — a bilinear function on a rectangle is a convex
-combination of its four corner values, so its range over one knot cell is exactly
-the min and max of those corners, and its partial derivatives on a cell are
-convex combinations of the two edge slopes — so this is a known, finite amount of
-work rather than a research problem.  It is nevertheless *not done*, and an
-unswept certificate is worth nothing.  The three adversaries are gradient
-descents: they find holes they happen to land near.  The LP saturates its `2e-5`
-cap across 2304 coefficients, and a hole of depth `1e-4` is well within what such
-a correction could dig.  Until the sweep runs, this is a candidate that no
-adversary has broken, which is not the same as a floor, and this directory has
-been wrong before about exactly that distinction.
+**No such sweep existed when that was written.**  It does now; the position as it
+stands is the next section.  The paragraph that used to be here said the sweep
+was not built, which stopped being true several commits later, and the sections
+after it said so without this one being changed.
 
-### The sweep the candidate needs, and why it has not run
+### Where this stands, now
 
-A certificate nobody has swept is worth nothing, so: what would it take?
+The five sections that used to follow were written at five different moments and
+stated in the present tense things the later ones contradicted — one said no
+sweep existed while another, further down, reported it complete.  A reader could
+not tell what the current claim was.  They are collapsed here into one statement
+of the position.  The chronology is in the git log, where it belongs.
 
-**The enclosures exist now.**  `dev/tiling_pair.js` encloses a bilinear `psi`
-over a box.  On one knot cell the enclosure is *exact* — a bilinear function
-there is a convex combination of the four corner values, so its range is their
-min and max — and over several cells it is the min and max over the covering
-index rectangle.  The partial derivatives come out the same way: on a cell,
-`d/dx` is a convex combination of the two edge slopes.  A centered form is taken
-alongside and the better of the two used, which matters because the grid varies
-by up to `2e-5` across one cell while the margin the sweep has to work with is
-`1.5e-6`.  `dev/tiling_pair_interval_test.js` checks all of it against sampled
-values, and checks the single-cell case is exact rather than merely sound.
+**The certificate.**  A pair-state coboundary with the alternating block pinned as
+a critical point of `R` at value exactly `E_alt`.  `R` equals `E_alt` at both
+alternating phases to `2.2e-15`, its gradient there is `6.3e-17`, the smallest
+Hessian eigenvalue there is `0.245`, and no adversary has found anything below
+it.  It came out of a floating-point LP, and that does not matter for soundness:
+any `psi` whatever gives a valid telescoping certificate, so the search's quality
+affects only *which* floor comes out, and the floor is what the sweep measures
+rather than assumes.
 
-**The sweep exists too**, in `dev/tiling_pair_interval.js`, over the search cube
-minus the two alternating tubes, reusing the audited additive machinery for the
-`F6` part and adding the `psi` ranges term by term.
+**The three regions.**
 
-**The tube has to come out, and that is not a shortcut.**  The pinned candidate
-attains its floor exactly at the alternating block.  A branch-and-bound cannot
-certify a bound that is exactly attained — it would subdivide the basin forever,
-chasing a quadratic term down to a target it never clears.  So the tube is
-excluded and needs a local argument instead: `R = E_alt` at a critical point with
-a certified positive-definite Hessian gives `R >= E_alt` on a tube, and the
-alternating point sits strictly inside one knot cell in every coordinate, so `R`
-is smooth there even though a bilinear `psi` is only continuous across knot
-lines.  That argument is the same shape as the coercivity one already proved in
-Arb, and it is **not built**.
+- *On the two alternating tubes*, `|g_i - c_i| <= 0.008`: a Taylor argument from
+  the pinned point, with a covering-and-Cholesky bound on the Hessian, gives
+  `R >= E_alt - 1.163e-11`.  A branch-and-bound cannot do this region — it would
+  chase a bound that is exactly attained — and the argument is valid only because
+  the alternating gaps clear their nearest knot by `0.020533` in both grids,
+  which the code checks rather than assumes.
+- *Outside the tubes, inside the cube* `[0, 28]^6`: exhaustive subdivision,
+  complete, no counterexample, nothing unresolved.
+- *Outside the cube*: the tail lemma, which clears `E_alt` once `sum g` reaches
+  `27.942537`.  `27.94 < 28`, so the two meet with nothing between them.
 
-**Outside the tube the margin looks real but thin.**  The lowest thing the
-descents find outside the tube is a high-high defect block at `E_alt + 1.503e-6`,
-the same at tube radius `0.02`, `0.05` and `0.1` because it is a genuine defect
-far from the tube.  That is a *measurement*, and in the direction that flatters:
-a descent gives an upper bound on the margin, never a lower one, so the true
-margin is at most `1.5e-6` and could be less.  What it is good for is a
-feasibility estimate — `1.5e-6` is the same order as the margin the existing
-rigorous sweep already works with, so the target is not absurd.
+Together: `R(g) >= E_alt - 1.163e-11` for every six-gap block, hence by the
+telescoping lemma every chain has per-gap energy at least that.  `E_alt` is the
+alternating chain's own energy, so **the alternating chain is the minimiser to
+within `1.2e-11`**.
 
-**What actually blocks it is the cube.**  The pinned candidate is a correction to
-the `record` certificate, whose amplitude `5.2e-3` forces the cube `[0, 28]^6` —
-about twenty-nine times the volume of `sharp`'s.  That cost is not hypothetical:
-the *additive* record sweep alone, on a cube truncated all the way down to `4`,
-does not finish in `3e7` boxes.  So the pair certificate needs its own
-amplitude-minimising refine — the pair analogue of the stage that turned `record`
-into `sharp` — before starting a sweep is worth the electricity.  Pinning on the
-`sharp` base directly is harder than it sounds: its gradient at the alternating
-block is `4.1e-4` against `record`'s `2.4e-4`, so the correction has to be bigger,
-and at a cap large enough to be feasible the LP digs holes faster than the
-adversary finds them.
+**The arithmetic, after a review found holes in it.**  Three places in the
+enclosure path used ordinary rounded arithmetic where an enclosure was claimed.
+The Hessian cross terms were computed as plain doubles and inserted as
+*degenerate* intervals — a rounded number wearing an enclosure's clothes, and the
+most blatant of the three.  A centered form returned `at - spread` in plain
+arithmetic and that value was used as a lower bound.  And the accumulations in
+the box bound and the centre enclosure were plain additions covered only by a
+constant chosen by eye, which did not cover the gradient accumulations at all.
 
-So the state is: enclosures built and tested, sweep built and tested, one local
-argument missing, one refine stage missing, and a certificate that no adversary
-has broken and no interval has touched.
+All three are repaired: every step directed outward through
+`tiling_rigorous.js`; the centered form replaced by four outward-rounded corner
+evaluations, which is both sound and *tighter*, since a bilinear function on a
+sub-rectangle of a cell is a convex combination of its own four corners rather
+than the cell's; and the Cholesky pivot margin computed from the matrix in hand,
+`50 n u ||M||_inf`, instead of asserted as `1e-13`.  The tube result is unchanged
+by the repair — `lambda >= 0.0637` at radius `0.008`, shortfall still `1.163e-11`.
 
-### The sweep, run — on part of the space
+**The two sweeps are being redone on the repaired arithmetic.**  Until they land
+the transcript check reports the recorded rows as stale, which is what it is for.
+The pre-repair runs completed at `50 203 847` boxes in double precision and
+`75 037 955` with proved enclosures; the repair moves every quantity involved by
+about `1e-16` relative, so they are expected to close again.  Expected, not
+established, and this section will say which.
 
-The outside-the-tube half has now run, in double precision, on a truncated cube:
-
-| | |
-| --- | --- |
-| target | `E_alt = 0.003957393309109344` |
-| cube | `[0, 3]^6` |
-| tube radius | `0.008` |
-| boxes | `37 878 163` |
-| collapses | `15 244 320` |
-| complete | **yes**, no counterexample, nothing unresolved |
-| checksum | `03b032e373a9eb90:37878163` |
-
-So: every six-gap block with all gaps below `3`, outside the two alternating
-tubes of radius `0.008`, has reduced cost at least the alternating chain energy.
-Exhaustively — a subdivision that terminated, not a search that gave up.
-Together with the tube result that region is covered outright, at
-`E_alt - 1.2e-11`.
-
-**Three things this is not.**  It is *double precision*: the table kernel with a
-`1e-10` safety margin, the ladder rung this directory calls "exhaustively
-subdivided in double precision", not the one it calls "with proved enclosures".
-The rigorous version is the same code with `--rigorous` and has not been run.
-
-It is a *truncated* cube.  The tail lemma's cube for this certificate is `28`;
-blocks with a gap between `3` and `28` are not covered, so this is **not a block
-floor** and does not license any statement about chains.  What it is is an
-exhaustive check over the region containing every configuration anyone here has
-cared about — the alternating state at `1.04` and `1.98`, both defect
-orientations, and the long-gap block at `2.956`.  The full cube is running.
-
-And it is a check of *this candidate*, which came out of a floating-point LP and
-is not otherwise verified.  What the sweep removes is the objection that the
-three adversaries were gradient descents that could have missed a hole: over
-`[0, 3]^6` there is now no hole to miss.
-
-`dev/tiling_pair.sweep.json` records the row with its checksum and the hashes of
-the nine sources that determine it; `dev/check_pair_sweep.js` verifies those on
-every suite run and says, every time, that it did not redo the traversal.
-
-### And on the whole cube
-
-The same sweep, on the tail lemma's own cube rather than a truncation:
-
-| | |
-| --- | --- |
-| target | `E_alt = 0.003957393309109344` |
-| cube | `[0, 28]^6` — the full tail-lemma cube |
-| tube radius | `0.008` |
-| boxes | `50 203 847` |
-| collapses | `15 919 617` |
-| complete | **yes**, no counterexample, nothing unresolved |
-| checksum | `1d6592ed5e189361:50203847` |
-
-The cube is the right one, and it was checked rather than assumed: the tail
-lemma needs `3000 (E_alt + amplitude)`, the additive part contributes
-`27.46253654` and the five `psi` sup-norms another `0.48`, so `27.94` and the
-cube is `28`.
-
-Put together with the previous two sections:
-
-- **outside the tubes, inside the cube** — `R >= E_alt`, exhaustively, in double
-  precision, `50 203 847` boxes;
-- **on the tubes** — `R >= E_alt - 1.163e-11`, with proved enclosures;
-- **outside the cube** — the tail lemma, since every pair term of `F6` is
-  nonnegative and the coboundary is bounded by the amplitude.
-
-so `R(g) >= E_alt - 1.163e-11` for **every** six-gap block, and by the
-telescoping lemma every chain has per-gap energy at least that.
-
-The telescoping lemma applies unchanged, and it is worth saying why rather than
-waving at it.  It needs only that the coboundary is a difference of a *bounded*
-state potential: `Phi(s_{i+1}) - Phi(s_i)` sums to `Phi(end) - Phi(start)` over
-any finite chain, which is `O(1)` and vanishes in the density, and for a
-periodic chain it is exactly zero.  The pair potential
-`Phi(s) = sum_j phi_j(s_j, s_{j+1})` is bounded by the same sup-norms the
-amplitude already counts.  Nothing in the lemma cared that the additive
-potential was additive.  `E_alt` is the
-alternating chain's own energy, enclosed in Arb.  So this says the alternating
-chain is the minimiser, to within `1.2e-11`.
-
-**What it rests on, in order of how much it should worry you.**
-
-*The outside-the-tube half is double precision.*  The table kernel with a `1e-10`
-safety margin — the ladder rung this directory calls "exhaustively subdivided in
-double precision", not the one it calls "with proved enclosures".  The rigorous
-rerun is the same code with `--rigorous`; it has been started and has not
-returned.  Whether it *can* return is an open question rather than a formality:
-the rigorous evaluator is looser, the existing rigorous additive sweep works with
-about `1.2e-6` of margin, and the margin here outside the tube measures about
-`1.5e-6`.  That is the same order, which is neither a promise nor a reason to
-expect failure.  Until it finishes the honest phrasing of the headline is the
-double-precision one, and if it stalls that will be recorded here as plainly as
-this is.
-
-*The tube half rests on `tiling_rigorous.js`*, which is mine.  The Arb
-reimplementation covers the chain coercivity theorem, not this.
-
-*The certificate came out of a floating-point LP* — and that, for once, does not
-matter.  Any `psi` whatever gives a valid telescoping certificate; the LP's
-quality affects only which floor comes out, and the floor is what the sweep
-measures rather than assumes.  There is no step here that trusts the search.
-
-*Everything downstream still depends on the external shifted-block assembly*,
-which nobody here can check.  A block floor of `E_alt` projects to `0.6731102697`
-by this directory's own table — the whole of the available improvement — and that
-projection is conditional exactly as every other number in this directory is.
-
-### With proved enclosures
-
-The same sweep again, with `--rigorous`: every kernel range from
-`tiling_rigorous.js`, proved trigonometric error bounds, outward-rounded
-arithmetic throughout, no table and no `1e-10` safety margin.
-
-| | double precision | proved enclosures |
-| --- | --- | --- |
-| cube | `[0, 28]^6` | `[0, 28]^6` |
-| tube radius | `0.008` | `0.008` |
-| boxes | `50 203 847` | `75 037 955` |
-| collapses | `15 919 617` | `19 563 345` |
-| complete | yes | **yes** |
-| unresolved | `0` | `0` |
-| time | `463 s` | `5769 s` |
-| checksum | `1d6592ed5e189361` | `35aa6fea77ead5e1` |
-
-It cost `1.49x` the boxes and `12.5x` the time, and it closed.  So the doubt
-recorded in the previous section — that the rigorous evaluator's slack might
-exceed the margin outside the tube — was warranted and is now resolved the good
-way.
-
-**The statement, with the double-precision qualifier removed:**
-
-`R(g) >= E_alt - 1.163e-11`  for every six-gap block `g`,
-
-by proved enclosures outside the tubes, proved enclosures on the tubes, and the
-tail lemma outside the cube; hence by the telescoping lemma every chain has
-per-gap energy at least that.  `E_alt = 0.003957393309109344` is the alternating
-chain's own energy.  **The alternating chain is the minimiser to within
-`1.2e-11`.**
-
-That moves this directory's "exhaustively subdivided with proved enclosures"
-rung from `0.003956` to `0.003957393309109344 - 1.163e-11` — from `99.1%` of the
-available improvement to all of it.
-
-What it still rests on, unchanged: `tiling_rigorous.js` is mine, so this is
-certified modulo an arithmetic base whose Arb replacement covers only the chain
-coercivity theorem; and the projection to a simple-zero proportion still depends
-on the external shifted-block assembly nobody here can check.
-
+**What it rests on.**  `tiling_rigorous.js` is mine: hand-written transcendentals
+with error constants I chose.  The Arb reimplementation covers the chain
+coercivity theorem, not this, so a genuinely independent rebuild of the whole
+certificate — outside sweep and tube — in Arb is the outstanding item.  And
+everything downstream depends on the external shifted-block assembly nobody here
+can check.  Even repaired and rebuilt, this would be a theorem about the
+auxiliary chain: not about primes, and not about zeta zeros.
 ### The tube, proved
 
 The half a branch-and-bound structurally cannot do is now done.
@@ -1458,11 +1310,10 @@ reimplementation covers the *chain* coercivity theorem, not this one.  So this
 is certified modulo that base: the same footing every sweep in this directory
 stands on, and a weaker footing than `dev/coercivity_arb.py`.
 
-So the two halves of a crystallization proof for this candidate stand as: the
-tube is **proved**, at `E_alt - 1.2e-11`; everything outside it needs a sweep
-that has not run, for the reasons in the previous section.  And the candidate
-itself is still unverified outside the tube — the tube result says nothing about
-that.
+So the tube half stands at `E_alt - 1.2e-11`.  What covers everything outside it
+is the sweep, and where that stands is stated once, in "Where this stands, now"
+above — not here, because a second present-tense account of the same thing is how
+this document came to contradict itself in the first place.
 
 ## The wall, certified
 
@@ -1535,19 +1386,27 @@ one-dimensional particle system — a pressure term `(sum g)/p` plus a pair
 interaction `w` summed over lags `1..6` — and for a *convex* decaying
 interaction the ground state of such a system is equally spaced.  `w` is not
 convex: it is `(K/K0)^2`, which oscillates as it decays and vanishes at the zeros
-of `K`.  At `p = 3000` the ground state is period two.  Nobody had asked what it
-does as `p` moves, and the answer accounts for several numbers this directory
-has been carrying without an explanation.
+of `K`.  At `p = 3000` the lowest configuration anyone here has found is period two.
+Nobody had asked what happens as `p` moves.  What follows is exploratory
+numerics: relaxation from structured seeds, reporting the best branch found.  No
+global minimisation is performed anywhere in this section, and nothing in it is
+certified.
 
-### The ground state is mode-locked, and the lock is to a zero of the kernel
+### Zero-resonant branches
 
-The zeros of `K` are the *free* distances: `w` vanishes there, so a pair sitting
-on one costs nothing.  They sit at
+**What was done, precisely.**  For each pressure, configurations of period one to
+eight are relaxed by gradient descent from structured seeds — constant at each
+halved kernel zero, alternating about it, a few motifs, and some random starts —
+and the lowest result is reported.  That finds *branches*: selected local minima.
+It does **not** minimise globally over periodic sequences, let alone over all
+infinite chains.  Every statement below is a statement about those branches.  An
+earlier draft of this section called them the ground state and said the ground
+state is "mode-locked"; neither is established here.
 
-`z_1 = 1.057278`, `z_2 = 2.030068`, `z_3 = 3.020243`, `z_4 = 4.015236`, …
-
-approaching integer spacing from below.  As `p` rises the mean gap climbs in
-plateaus, and the plateau values are the **halved zeros**:
+The zeros of `K` are the free distances — `w` vanishes there, so a pair sitting
+on one costs nothing.  They sit at `z_1 = 1.057278`, `z_2 = 2.030068`,
+`z_3 = 3.020243`, `z_4 = 4.015236`, …, approaching integer spacing from below.
+The branch that wins at each pressure has mean gap near a **halved zero**:
 
 | `k` | period | mean gap | `z_k/2` | `mean - z_k/2` | `mean - k/2` |
 | --- | --- | --- | --- | --- | --- |
@@ -1558,56 +1417,69 @@ plateaus, and the plateau values are the **halved zeros**:
 | 6 | 1 | `3.005088255` | `3.005091395` | `-3.14e-6` | `5.09e-3` |
 | 7 | 2 | `3.504376231` | `3.504366406` | `9.83e-6` | `4.38e-3` |
 
-The lock is to `z_k/2` and not merely to the half-integer `k/2`: the last two
-columns differ by one to two orders of magnitude at every `k`, and the `z_k/2`
-error shrinks with `k` while the `k/2` error does not.  What is locked is the
-**lag-two** distance, `2 * mean`, onto a zero of `K`.
+`near`, not `at`: the offsets are real and only shrink with `k`.  What the table
+supports is that the branch tracks `z_k/2` one to two orders of magnitude more
+closely than it tracks the half-integer `k/2`, and that the agreement improves
+with `k` — a resonance, and a good conjecture-generating signal, not a lock.
+The suite reproduces `k = 2` through `5`; the `k = 6, 7` rows are from a scan
+that is not gated.
 
-**Which zero it is decides the period, and the rule is parity.**  Even `k` gives
-period one, every gap `z_k/2`.  Odd `k` gives period two — because a single gap
-of `z_k/2` would put the lag-*one* distance near a maximum of `w`, and splitting
-the sum into a short and a long gap keeps the lag-two distance on the zero while
-moving both lag-one distances towards the neighbouring zeros.  Checked for
-`k = 2` through `7`.  So the alternating state at `p = 3000` is the `k = 3`
-plateau, and it is period two for a reason: `3` is odd.
+Which of period one and period two wins tracks the **parity of `k`** — even `k`
+period one, odd `k` period two, with margins of `3e-2`, `5e-4`, `5e-2`, `3e-5` at
+`k = 2, 3, 4, 5`.  The gated test *determines* the period by relaxing both and
+comparing; an earlier version assigned it in a table and then checked it against
+the parity, which was the test reading back its own input.
 
-Between the locked plateaus sit others at periods three and four, with the
-short-to-long ratio running through small rationals — `3:1`, `2:1`, `1:1`, `1:2`
-— which is the shape of a devil's staircase.
+Between the winning branches sit others at periods three and four with
+short-to-long ratios running `3:1`, `2:1`, `1:1`, `1:2` — the shape of a devil's
+staircase, and no more than a shape at this stage.
 
-### The wall tensions are the order parameters of the plateau
+### Two different pressures, and only one of them is a boundary
 
-A low-low adjacency is a nucleus of the phase that wins below the plateau, and a
-high-high adjacency a nucleus of the one that wins above it.  So each tension
-should fall to zero at its own end of the plateau.  It does:
+An isolated wall on an odd ring stops costing energy at
 
-`tau_LL = 0` at `p = 1425.709927`,  `tau_HH = 0` at `p = 3521.815455`.
+`tau_LL = 0` at `p = 1425.709927`,  `tau_HH = 0` at `p = 3521.815455`,
 
-**`p = 3000` sits `75.1%` of the way across.**  That single fact accounts for
-things this directory had recorded without accounting for:
+and an earlier draft called these the edges of the period-two plateau.  **They
+are not.**  Comparing the periodic branches directly, the period-three branch
+overtakes period two at
 
-- why `tau_LL / tau_HH = 7.430` at `p = 3000` — the high-high end is much
-  nearer;
-- why the high-high defect is the near-free basin that blocks the certificate
-  program, while the low-low defect costs `2.4e-4` and never binds;
-- and therefore why the additive family stops `1.66e-7` short.  **The difficulty
-  of proving crystallization at `p = 3000` is a measure of how close `p = 3000`
-  is to a phase boundary.**
+`p = 1454.678546` (below) and `p = 3370.450721` (above),
 
-One thing the single-wall calculation cannot see: a periodic *array* of walls
-takes over earlier than a single wall stops costing.  The period-three state
-wins near `p = 3350` while `tau_HH` stays positive out to `3521.8`.  Walls
-attract.
+so both wall zeros lie strictly *outside* the interval where the period-two
+branch actually wins.  An isolated wall still costs energy at pressures where a
+periodic array of walls has already taken over.  The wall zeros are
+metastability limits; the branch crossings are the closest thing here to phase
+boundaries, and even they are crossings of two numerically selected branches, not
+certified global transitions.
+
+Consequences for what this section used to say, all withdrawn:
+
+- "`p = 3000` sits `75.1%` of the way across the plateau" was computed against
+  the wall zeros.  Against the branch crossings it is `80.7%`, and that figure is
+  branch-relative too.
+- "that single fact accounts for the additive family's `1.66e-7` shortfall" is
+  withdrawn outright.  No causal link was established, and the shortfall itself
+  turned out to be a property of the record certificate's knot grid rather than
+  of the family — see "Testing that prediction" below.
+
+What survives, and is worth keeping: `tau_LL` and `tau_HH` do change sign, in
+opposite directions, at pressures bracketing the interval where period two wins;
+the asymmetry `tau_LL / tau_HH = 7.43` at `p = 3000` does say the high-high side
+is the near one; and walls attract, which is why the array wins before the single
+wall stops costing.
 
 ### The pressure this directory inherited is not the best one
 
 The conditional projection has two competing dependences on `p`: the span
-penalty `(n-1)/p` falls as `p` rises, and the ground-state energy — the ceiling
+penalty `(n-1)/p` falls as `p` rises, and the lowest branch energy — the ceiling
 any block floor can reach — falls too.  Nobody had evaluated the trade-off,
 because nobody had `E_alt(p)`.
 
-Evaluating it, with the *true* ground state at each `p` rather than the
-period-two state:
+Evaluating it, using at each `p` the lowest of the branches found rather than the
+period-two one alone:
+
+(All floors below are the best branch found, not certified minima.)
 
 | `p` | period | floor | projection | against `p = 3000` |
 | --- | --- | --- | --- | --- |
@@ -1618,20 +1490,25 @@ period-two state:
 | `3500` | 3 | `0.003514893584` | `0.673109286998` | `-9.83e-7` |
 | `4000` | 3 | `0.003155733760` | `0.673089875145` | `-2.04e-5` |
 
-**The maximum is exactly the phase boundary.**  The projection climbs
-monotonically with `p` for as long as the ground state stays period two, and
-turns over the moment period three takes it — at
+**The maximum coincides with the branch crossing.**  The projection climbs
+monotonically with `p` for as long as the period-two branch stays the lowest one
+found, and turns over the moment the period-three branch takes it — at
 
 `p* = 3370.450721`,
 
-which is where `E_2(p) = E_3(p)`.  Not at `tau_HH = 0`, which is another
-`151` further on at `3521.815455`: at the crossover a single wall still costs
-`3.80e-5`, and it is a periodic *array* of walls that wins first.  Walls
-attract, and the optimum is set by the array, not the single wall.
+which is where `E_2(p) = E_3(p)` for these two branches.  Nothing within `200`
+either side beats it on a grid of `10`, which is what is checked; an earlier
+version compared two points `40` away, which cannot distinguish a maximum from a
+sawtooth peak in a quantity with integer steps in `windowsPerBlock`.  The
+crossing is not at `tau_HH = 0`, which is `151` further on at `3521.815455`: at
+the crossing a single wall still costs `3.80e-5`, and the periodic array wins
+first.  This is a crossing of two numerically selected branches, not a certified
+global transition, so `p*` is a candidate optimum and not a proven one.
 
 So the pressure the manuscript fixed is worth `4.75e-6` less on the projection
-than the best available choice, and the best available choice is a phase
-boundary of the chain energy.
+than the best choice these branches offer, and that choice sits at a branch
+crossing.  "Phase boundary" is what it would be if the branches were known to be
+the global minima; they are not.
 
 Three things this does not say.  The projection is conditional on the external
 shifted-block assembly, which nobody here can check, so this is a statement
@@ -1659,20 +1536,23 @@ row: the *LP bound gap* is how far the linear program's own optimum sits below
 the ceiling, which is a statement about the family, and the *search gap* is how
 far the adversary is below the LP bound, which is a statement about the search.
 
+("Position" is the fraction of the way across the interval between the two
+branch crossings, `1454.68` to `3370.45`.  It is a coordinate, not a claim.)
+
 | `p` | position | LP bound gap | shortfall | search gap |
 | --- | --- | --- | --- | --- |
-| `1500` | `3.5%` | **`+1.489e-6`** | `1.524e-6` | `3.4e-8` |
-| `1600` | `8.3%` | `0` | `2.26e-8` | `2.3e-8` |
-| `1800` | `17.9%` | `0` | `9.60e-9` | `9.6e-9` |
-| `2000` | `27.4%` | `0` | `2.12e-8` | `2.1e-8` |
-| `2200` | `36.9%` | `0` | `2.84e-8` | `2.8e-8` |
-| `2400` | `46.5%` | `0` | `2.80e-8` | `2.8e-8` |
-| `2600` | `56.0%` | `0` | `2.14e-8` | `2.1e-8` |
-| `2800` | `65.6%` | `0` | `4.15e-8` | `4.1e-8` |
-| `3000` | `75.1%` | `0` | `7.14e-8` | `7.1e-8` |
-| `3200` | `84.6%` | `0` | `2.97e-8` | `3.0e-8` |
-| `3350` | `91.8%` | *not converged* | `5.23e-6` | `3.3e-5` |
-| `3450` | `96.6%` | *not converged* | `1.29e-5` | `8.3e-5` |
+| `1500` | `2.4%` | **`+1.489e-6`** | `1.524e-6` | `3.4e-8` |
+| `1600` | `7.6%` | `0` | `2.26e-8` | `2.3e-8` |
+| `1800` | `18.0%` | `0` | `9.60e-9` | `9.6e-9` |
+| `2000` | `28.5%` | `0` | `2.12e-8` | `2.1e-8` |
+| `2200` | `38.9%` | `0` | `2.84e-8` | `2.8e-8` |
+| `2400` | `49.3%` | `0` | `2.80e-8` | `2.8e-8` |
+| `2600` | `59.8%` | `0` | `2.14e-8` | `2.1e-8` |
+| `2800` | `70.2%` | `0` | `4.15e-8` | `4.1e-8` |
+| `3000` | `80.7%` | `0` | `7.14e-8` | `7.1e-8` |
+| `3200` | `91.1%` | `0` | `2.97e-8` | `3.0e-8` |
+| `3350` | `98.9%` | *not converged* | `5.23e-6` | `3.3e-5` |
+| `3450` | `104.2%` | *not converged* | `1.29e-5` | `8.3e-5` |
 
 (`0` means below `1e-17`.  At `3350` and `3450` the LP bound is *above* the
 ceiling, which only means cut generation has not closed — the search gap there

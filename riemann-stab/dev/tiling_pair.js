@@ -39,6 +39,7 @@
 
 const T = require('./tiling_research');
 const A = require('./tiling_additive');
+const R = require('./tiling_rigorous');
 
 const SIGN_A = A.SIGN_A;
 const SIGN_B = A.SIGN_B;
@@ -255,26 +256,56 @@ function slopeRangeY(knots, grid, J, i0, i1, j0, j1) {
 function clampedBelow(knots, x) { return x <= knots[0]; }
 function clampedAbove(knots, x) { return x >= knots[knots.length - 1]; }
 
-// Centered (mean value) form: psi(x,y) is in psi(c) + [dx](x - cx) + [dy](y - cy)
-// over the box.  Second order in the box width where the natural range is first
-// order, which matters here because the psi grid varies by up to 2e-5 across one
-// knot cell while the margin the sweep is working with is 1.5e-6.  Taking the
-// better of the two costs one extra evaluation and is never worse.
-function psiCenteredLower(cert, k, aLo, aHi, bLo, bHi, dx, dy) {
-  const cx = (aLo + aHi) / 2, cy = (bLo + bHi) / 2;
-  const wx = (aHi - aLo) / 2, wy = (bHi - bLo) / 2;
-  const at = bilinear(cert.knots, cert.mats[k], cert.J, cx, cy).value;
-  const spread = Math.max(Math.abs(dx[0]), Math.abs(dx[1])) * wx
-    + Math.max(Math.abs(dy[0]), Math.abs(dy[1])) * wy;
-  return at - spread;
+// Outward-rounded evaluation of a bilinear psi at one point.
+//
+// This replaces a centered (mean value) form that was here before and was not
+// sound: it computed psi at the box centre, a spread from the slope ranges, and
+// returned `at - spread` -- every step in ordinary rounded arithmetic, the
+// result used as a LOWER BOUND.  A reviewer was right to call that "ordinary
+// rounded arithmetic used as an exact enclosure".
+//
+// The replacement is both sound and tighter.  A bilinear function restricted to
+// a sub-rectangle of one knot cell is still bilinear there, so its range over
+// that sub-rectangle is exactly the min and max of its values at the FOUR BOX
+// CORNERS -- not the cell corners, which is what the natural grid range uses and
+// which stays O(2e-5) loose however small the box gets.  Four outward-rounded
+// point evaluations replace one unsound estimate.
+function bilinearInterval(cert, k, x, y) {
+  const t = cert.knots, J = cert.J, grid = cert.mats[k];
+  const i = cellIndex(t, x), j = cellIndex(t, y);
+  const hx = t[i + 1] - t[i], hy = t[j + 1] - t[j];
+  const xc = Math.min(Math.max(x, t[0]), t[t.length - 1]);
+  const yc = Math.min(Math.max(y, t[0]), t[t.length - 1]);
+  // fractional positions, as intervals: the subtraction and the division each
+  // round, and both are widened outward
+  const fx = [R.rd(R.rd(xc - t[i]) / hx), R.ru(R.ru(xc - t[i]) / hx)];
+  const fy = [R.rd(R.rd(yc - t[j]) / hy), R.ru(R.ru(yc - t[j]) / hy)];
+  const gx = R.iSub([1, 1], fx), gy = R.iSub([1, 1], fy);
+  const c00 = grid[i * J + j], c01 = grid[i * J + j + 1];
+  const c10 = grid[(i + 1) * J + j], c11 = grid[(i + 1) * J + j + 1];
+  const left = R.iAdd(R.iScale(gy, c00), R.iScale(fy, c01));
+  const right = R.iAdd(R.iScale(gy, c10), R.iScale(fy, c11));
+  return R.iAdd(R.iMul(gx, left), R.iMul(fx, right));
+}
+
+// The exact range over a box that lies inside one cell: the hull of the four
+// corner enclosures.
+function cellCornerRange(cert, k, aLo, aHi, bLo, bHi) {
+  let out = bilinearInterval(cert, k, aLo, bLo);
+  for (const [x, y] of [[aLo, bHi], [aHi, bLo], [aHi, bHi]]) {
+    out = R.iHull(out, bilinearInterval(cert, k, x, y));
+  }
+  return out;
 }
 
 // Inside a single cell the slopes are EXACTLY linear in the other coordinate:
 // d/dx is ((1-v)(c10-c00) + v(c11-c01))/hx with v the fractional position in y.
 // Taking the min and max over the two edges instead, as the multi-cell path
 // must, leaves an O(1) overestimate that does not shrink as the box shrinks --
-// which is fatal for anything that needs a tight gradient at a point, because
-// the true gradient there is a cancellation of terms a thousand times larger.
+// fatal for anything needing a tight gradient at a point, where the true value
+// is a cancellation of terms a thousand times larger.  Every step below is
+// outward-rounded: the fractions round, the corner differences round, and the
+// division rounds.
 function singleCellSlopes(cert, k, i, j, aLo, aHi, bLo, bHi) {
   const t = cert.knots, J = cert.J, grid = cert.mats[k];
   const hx = t[i + 1] - t[i], hy = t[j + 1] - t[j];
@@ -282,16 +313,18 @@ function singleCellSlopes(cert, k, i, j, aLo, aHi, bLo, bHi) {
   const c10 = grid[(i + 1) * J + j], c11 = grid[(i + 1) * J + j + 1];
   const clampX = aLo <= t[0] || aHi >= t[t.length - 1];
   const clampY = bLo <= t[0] || bHi >= t[t.length - 1];
-  const uLo = Math.max(0, Math.min(1, (aLo - t[i]) / hx));
-  const uHi = Math.max(0, Math.min(1, (aHi - t[i]) / hx));
-  const vLo = Math.max(0, Math.min(1, (bLo - t[j]) / hy));
-  const vHi = Math.max(0, Math.min(1, (bHi - t[j]) / hy));
-  const dxAt = v => ((1 - v) * (c10 - c00) + v * (c11 - c01)) / hx;
-  const dyAt = u => ((1 - u) * (c01 - c00) + u * (c11 - c10)) / hy;
-  const dxA = dxAt(vLo), dxB = dxAt(vHi);
-  const dyA = dyAt(uLo), dyB = dyAt(uHi);
-  let dx = [Math.min(dxA, dxB), Math.max(dxA, dxB)];
-  let dy = [Math.min(dyA, dyB), Math.max(dyA, dyB)];
+  const uLo = Math.max(0, Math.min(1, R.rd(R.rd(aLo - t[i]) / hx)));
+  const uHi = Math.max(0, Math.min(1, R.ru(R.ru(aHi - t[i]) / hx)));
+  const vLo = Math.max(0, Math.min(1, R.rd(R.rd(bLo - t[j]) / hy)));
+  const vHi = Math.max(0, Math.min(1, R.ru(R.ru(bHi - t[j]) / hy)));
+  const dxAt = v => R.iDiv(R.iAdd(
+    R.iMul(R.iSub([1, 1], [v, v]), R.iSub([c10, c10], [c00, c00])),
+    R.iMul([v, v], R.iSub([c11, c11], [c01, c01]))), [hx, hx]);
+  const dyAt = u => R.iDiv(R.iAdd(
+    R.iMul(R.iSub([1, 1], [u, u]), R.iSub([c01, c01], [c00, c00])),
+    R.iMul([u, u], R.iSub([c11, c11], [c10, c10]))), [hy, hy]);
+  let dx = R.iHull(dxAt(vLo), dxAt(vHi));
+  let dy = R.iHull(dyAt(uLo), dyAt(uHi));
   if (clampX) dx = [Math.min(dx[0], 0), Math.max(dx[1], 0)];
   if (clampY) dy = [Math.min(dy[0], 0), Math.max(dy[1], 0)];
   return {dx, dy};
@@ -306,6 +339,10 @@ function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
     const exact = singleCellSlopes(cert, k, i0, j0, aLo, aHi, bLo, bHi);
     dx = exact.dx;
     dy = exact.dy;
+    // inside one cell the corner hull is the exact range and beats the grid one
+    const corners = cellCornerRange(cert, k, aLo, aHi, bLo, bHi);
+    if (corners[0] > value[0]) value[0] = corners[0];
+    if (corners[1] < value[1]) value[1] = corners[1];
   } else {
     dx = slopeRangeX(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
     dy = slopeRangeY(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
@@ -320,8 +357,6 @@ function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
       dy = [Math.min(dy[0], 0), Math.max(dy[1], 0)];
     }
   }
-  const centered = psiCenteredLower(cert, k, aLo, aHi, bLo, bHi, dx, dy);
-  if (centered > value[0]) value[0] = centered;
   // The grid values are stored doubles, so the natural value range is exact;
   // the slopes and the centered form are not -- they are divisions and
   // subtractions.  The rigorous path runs with a gradient margin of zero, where
@@ -339,4 +374,5 @@ function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
 }
 
 module.exports = {prepare, reducedCost, reducedCostAndGradient, multistart,
-  telescopingDefect, bilinear, psiBoxRange, cellIndex, cellIndexRight, cellSpan};
+  telescopingDefect, bilinear, psiBoxRange, cellIndex, cellIndexRight, cellSpan,
+  bilinearInterval, cellCornerRange};

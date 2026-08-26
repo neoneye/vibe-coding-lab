@@ -87,5 +87,37 @@ const coarse = L.certifyTube({cert, alt, radius: 0.008, ceiling: EALT,
 check('a single undivided box does not certify the wide tube, and says so',
   !coarse.holds, `lambda ${coarse.lambda.toFixed(4)} over one box`);
 
+// ---- the arithmetic itself, which is where the defects were
+// The cross terms used to come back as plain doubles and be inserted as
+// degenerate intervals.  A degenerate interval for a quantity that took three
+// roundings to compute is a rounded number wearing an enclosure's clothes.
+const cross = L.psiCrossTerms(cert, alt);
+check('the Hessian cross terms are intervals, not rounded points',
+  cross.every(c => Array.isArray(c) && c[1] > c[0]),
+  cross.map(c => (c[1] - c[0]).toExponential(1)).join(' '));
+let crossBad = 0;
+for (let k = 0; k < 5; k++) {
+  const h = 1e-6;
+  const at = (a, b) => {
+    const g = alt.slice();
+    g[k] += a * h;
+    g[k + 1] += b * h;
+    return P.bilinear(cert.knots, cert.mats[k], cert.J, g[k], g[k + 1]).value;
+  };
+  const fd = (at(1, 1) - at(1, -1) - at(-1, 1) + at(-1, -1)) / (4 * h * h);
+  if (fd < cross[k][0] - 1e-6 || fd > cross[k][1] + 1e-6) crossBad++;
+}
+check('and they enclose a finite difference of the bilinear patch',
+  crossBad === 0);
+
+// The Cholesky margin is computed from the matrix rather than asserted.
+const probe = [[4, 1, 0], [1, 4, 1], [0, 1, 4]];
+const margin = L.pivotMargin(probe, 3);
+check('the Cholesky pivot margin is derived from the matrix in hand',
+  margin > 0 && margin < 1e-12,
+  `${margin.toExponential(3)} for a 3x3 of row-norm 6`);
+check('and a matrix that is not positive definite is refused',
+  !L.choleskyPositive([[1, 2], [2, 1]], 2, L.pivotMargin([[1, 2], [2, 1]], 2)));
+
 console.log(failures ? `\n${failures} FAILED` : '\nTUBE CHECKS PASS');
 process.exit(failures ? 1 : 0);

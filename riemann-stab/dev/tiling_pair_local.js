@@ -40,10 +40,13 @@ function blockHessianRange(lo, hi) {
   const H = [];
   for (let a = 0; a < 6; a++) H.push(new Array(6).fill(0).map(() => [0, 0]));
   const plo = [0], phi = [0];
-  for (let k = 0; k < 6; k++) { plo.push(plo[k] + lo[k]); phi.push(phi[k] + hi[k]); }
+  for (let k = 0; k < 6; k++) {
+    plo.push(RIG.rd(plo[k] + lo[k]));
+    phi.push(RIG.ru(phi[k] + hi[k]));
+  }
   for (const {i, j, c} of PAIRS) {
-    const second = RIG.weightSecondRange(plo[j] - phi[i], phi[j] - plo[i]);
-    const term = [second[0] * c, second[1] * c];
+    const second = RIG.weightSecondRange(RIG.rd(plo[j] - phi[i]), RIG.ru(phi[j] - plo[i]));
+    const term = RIG.iScale(second, c);      // outward; c = 2/(N-s) is inexact
     for (let a = i; a < j; a++) {
       for (let b = i; b < j; b++) {
         H[a][b] = RIG.iAdd(H[a][b], term);
@@ -53,7 +56,13 @@ function blockHessianRange(lo, hi) {
   return H;
 }
 
-// psi_k contributes only d^2/dx dy, and on one cell that is constant.
+// psi_k contributes only d^2/dx dy, and on one cell that is constant -- but not
+// exactly representable.  This used to return the plain double
+// (c11 - c10 - c01 + c00) / (hx * hy), three roundings, and the caller inserted
+// it as the DEGENERATE interval [cross, cross].  A rounded number presented as
+// an exact enclosure is the one thing interval arithmetic exists to prevent, and
+// a reviewer named this as the most blatant instance in the file.  It returns
+// intervals now.
 function psiCrossTerms(cert, gaps) {
   const out = [];
   for (let k = 0; k < 5; k++) {
@@ -62,9 +71,13 @@ function psiCrossTerms(cert, gaps) {
     const J = cert.J;
     const c00 = cert.mats[k][i * J + j], c01 = cert.mats[k][i * J + j + 1];
     const c10 = cert.mats[k][(i + 1) * J + j], c11 = cert.mats[k][(i + 1) * J + j + 1];
-    const hx = cert.knots[i + 1] - cert.knots[i];
-    const hy = cert.knots[j + 1] - cert.knots[j];
-    out.push((c11 - c10 - c01 + c00) / (hx * hy));
+    const hx = RIG.iSub([cert.knots[i + 1], cert.knots[i + 1]],
+      [cert.knots[i], cert.knots[i]]);
+    const hy = RIG.iSub([cert.knots[j + 1], cert.knots[j + 1]],
+      [cert.knots[j], cert.knots[j]]);
+    const numerator = RIG.iAdd(RIG.iSub(RIG.iSub([c11, c11], [c10, c10]),
+      [c01, c01]), [c00, c00]);
+    out.push(RIG.iDiv(numerator, RIG.iMul(hx, hy)));
   }
   return out;
 }
@@ -87,15 +100,24 @@ function cellClearance(knots, x) {
 }
 
 // Cholesky as a positive-definiteness test, with a margin big enough to absorb
-// its own arithmetic.  A floating-point Cholesky of a symmetric M completes with
-// backward error at most about n * u * ||M||; here n = 6, u = 1.1e-16 and the
-// entries are of order 3, so 2e-15.  Requiring every pivot to exceed 1e-13 --
-// fifty times that -- makes completion a proof that M is positive definite,
-// rather than an impression that it probably is.  The constant is picked
-// against that estimate and not by taste.
-const PIVOT_MARGIN = 1e-13;
+// its own arithmetic.  A floating-point Cholesky of a symmetric M completes with backward error at
+// most about n * u * ||M||.  Rather than assert that a fixed margin covers it,
+// the margin is computed from the matrix in hand and the caller is told what it
+// was: PIVOT_FACTOR * n * u * ||M||_inf, with a factor of fifty.
+const UNIT_ROUNDOFF = 1.1102230246251565e-16;
+const PIVOT_FACTOR = 50;
 
-function choleskyPositive(M, n) {
+function pivotMargin(M, n) {
+  let norm = 0;
+  for (let i = 0; i < n; i++) {
+    let row = 0;
+    for (let j = 0; j < n; j++) row += Math.abs(M[i][j]);
+    if (row > norm) norm = row;
+  }
+  return PIVOT_FACTOR * n * UNIT_ROUNDOFF * norm;
+}
+
+function choleskyPositive(M, n, margin) {
   const L = [];
   for (let i = 0; i < n; i++) L.push(new Array(n).fill(0));
   for (let i = 0; i < n; i++) {
@@ -104,7 +126,7 @@ function choleskyPositive(M, n) {
       for (let k = 0; k < j; k++) acc -= L[i][k] * L[j][k];
       // one ulp-scale margin per accumulated term, taken against the pivot
       if (i === j) {
-        if (!(acc > PIVOT_MARGIN)) return false;
+        if (!(acc > margin)) return false;
         L[i][j] = Math.sqrt(acc);
       } else {
         L[i][j] = acc / L[j][j];
@@ -117,24 +139,30 @@ function choleskyPositive(M, n) {
 // lambda_min(H) >= s - ||radius||_F, with s the largest shift that still passes
 // a verified Cholesky on the midpoint.
 function smallestEigenvalueLower(H, n) {
+  // The midpoint may be any point; what matters is that the radius covers the
+  // distance from it to both ends, INCLUDING the rounding of the midpoint
+  // itself.  Computing rad as (hi - lo)/2 in plain doubles does not.
   const mid = [];
   let pert = 0;
   for (let a = 0; a < n; a++) {
     mid.push([]);
     for (let b = 0; b < n; b++) {
-      mid[a].push((H[a][b][0] + H[a][b][1]) / 2);
-      const r = (H[a][b][1] - H[a][b][0]) / 2;
-      pert += r * r;
+      const m = (H[a][b][0] + H[a][b][1]) / 2;
+      mid[a].push(m);
+      const r = Math.max(RIG.ru(H[a][b][1] - m), RIG.ru(m - H[a][b][0]), 0);
+      pert = RIG.ru(pert + RIG.ru(r * r));
     }
   }
-  pert = Math.sqrt(pert) * (1 + 4e-16);
+  pert = RIG.ru(Math.sqrt(pert));
   let lo = 0, hi = 10;
   for (let it = 0; it < 60; it++) {
     const s = (lo + hi) / 2;
     const shifted = mid.map((row, a) => row.map((v, b) => a === b ? v - s : v));
-    if (choleskyPositive(shifted, n)) lo = s; else hi = s;
+    if (choleskyPositive(shifted, n, pivotMargin(shifted, n))) lo = s; else hi = s;
   }
-  return lo - pert;
+  // the bisection's lo is a shift that PASSED, so lambda_min(mid) >= lo; the
+  // subtraction is rounded down
+  return RIG.rd(lo - pert);
 }
 
 // The tube certificate.  `evaluate` supplies R and its gradient at a point --
@@ -173,8 +201,8 @@ function certifyTube(options) {
     if (k === 6) {
       const H = blockHessianRange(lo, hi);
       for (let m = 0; m < 5; m++) {
-        H[m][m + 1] = RIG.iAdd(H[m][m + 1], [cross[m], cross[m]]);
-        H[m + 1][m] = RIG.iAdd(H[m + 1][m], [cross[m], cross[m]]);
+        H[m][m + 1] = RIG.iAdd(H[m][m + 1], cross[m]);
+        H[m + 1][m] = RIG.iAdd(H[m + 1][m], cross[m]);
       }
       const v = smallestEigenvalueLower(H, 6);
       if (v < lambda) lambda = v;
@@ -197,12 +225,12 @@ function certifyTube(options) {
   const centre = evaluate(alt);
   const value = centre.lower;
   const gradNorm = centre.gradNorm;
-  const deficit = ceiling - value;          // how far R(alt) sits below E_alt
+  const deficit = RIG.ru(ceiling - value);  // how far R(alt) sits below E_alt
 
   // R(alt+u) - E_alt >= -deficit - gradNorm * t + (lambda/2) t^2, t = ||u||_2.
   // The worst case over t >= 0 is at t = gradNorm / lambda.
   const worst = lambda > 0
-    ? -deficit - gradNorm * gradNorm / (2 * lambda)
+    ? RIG.rd(-deficit - RIG.ru(RIG.ru(gradNorm * gradNorm) / (2 * lambda)))
     : -Infinity;
   // The honest output is not a boolean against some threshold I picked: it is
   // the floor this argument certifies on the tube.  Whether that floor is good
@@ -222,6 +250,9 @@ function encloseCentre(cert, prepared, alt, delta) {
   const hi = Float64Array.from(alt.map(x => x + delta));
   const scratch = I.newScratch();
   I.analyzeBoxRigorous(prepared, lo, hi, scratch);
+  // Every accumulation directed outward.  A `- 1e-15` used to stand at the end
+  // in place of doing this; a constant subtracted at the end does not cover
+  // errors made along the way, and covered none of the gradient at all.
   let lower = scratch.bound;
   const gLo = new Float64Array(6), gHi = new Float64Array(6);
   for (let k = 0; k < 6; k++) {
@@ -230,19 +261,20 @@ function encloseCentre(cert, prepared, alt, delta) {
   }
   for (let k = 0; k < 5; k++) {
     const r = P.psiBoxRange(cert, k, lo[k], hi[k], lo[k + 1], hi[k + 1]);
-    lower += r.value[0];
-    gLo[k] += r.dx[0];
-    gHi[k] += r.dx[1];
-    gLo[k + 1] += r.dy[0];
-    gHi[k + 1] += r.dy[1];
+    lower = RIG.rd(lower + r.value[0]);
+    gLo[k] = RIG.rd(gLo[k] + r.dx[0]);
+    gHi[k] = RIG.ru(gHi[k] + r.dx[1]);
+    gLo[k + 1] = RIG.rd(gLo[k + 1] + r.dy[0]);
+    gHi[k + 1] = RIG.ru(gHi[k + 1] + r.dy[1]);
   }
   let sq = 0;
   for (let k = 0; k < 6; k++) {
     const m = Math.max(Math.abs(gLo[k]), Math.abs(gHi[k]));
-    sq += m * m;
+    sq = RIG.ru(sq + RIG.ru(m * m));
   }
-  return {lower: lower - 1e-15, gradNorm: Math.sqrt(sq) * (1 + 4e-16), delta};
+  return {lower, gradNorm: RIG.ru(Math.sqrt(sq)), delta};
 }
 
 module.exports = {blockHessianRange, psiCrossTerms, cellClearance,
-  choleskyPositive, smallestEigenvalueLower, certifyTube, encloseCentre};
+  choleskyPositive, pivotMargin, smallestEigenvalueLower, certifyTube,
+  encloseCentre};

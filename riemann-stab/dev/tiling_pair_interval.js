@@ -24,11 +24,15 @@ const I = require('./tiling_interval');
 const A = require('./tiling_additive');
 const P = require('./tiling_pair');
 const D = require('./tiling_defect');
+const R = require('./tiling_rigorous');
 
-// Slack for the double-precision path: the psi ranges are exact grid min/max,
-// so the only new error is the five additions, but the additive sweep's own
-// bound already carries 1e-10 and there is no reason to be tighter here.
-const PAIR_SLACK = 1e-12;
+// There is no slack constant here any more.  There used to be one, 1e-12,
+// justified in a comment by the claim that "the only new error is the five
+// additions" -- a hand-wave standing in for a proof, and it did not cover the
+// gradient accumulations at all.  Every accumulation below is instead performed
+// with the directed rounding from tiling_rigorous.js, so the bound and the two
+// derivative ranges are outward at every step and nothing is left to a constant
+// chosen by eye.
 
 function boxBound(cert, prepared, tables, rigorous, lo, hi, scratch) {
   if (rigorous) I.analyzeBoxRigorous(prepared, lo, hi, scratch);
@@ -42,13 +46,13 @@ function boxBound(cert, prepared, tables, rigorous, lo, hi, scratch) {
   }
   for (let k = 0; k < 5; k++) {
     const r = P.psiBoxRange(cert, k, lo[k], hi[k], lo[k + 1], hi[k + 1]);
-    bound += r.value[0];
-    gradLo[k] += r.dx[0];
-    gradHi[k] += r.dx[1];
-    gradLo[k + 1] += r.dy[0];
-    gradHi[k + 1] += r.dy[1];
+    bound = R.rd(bound + r.value[0]);
+    gradLo[k] = R.rd(gradLo[k] + r.dx[0]);
+    gradHi[k] = R.ru(gradHi[k] + r.dx[1]);
+    gradLo[k + 1] = R.rd(gradLo[k + 1] + r.dy[0]);
+    gradHi[k + 1] = R.ru(gradHi[k + 1] + r.dy[1]);
   }
-  return {bound: bound - PAIR_SLACK, gradLo, gradHi};
+  return {bound, gradLo, gradHi};
 }
 
 function verifyPairFloor(cert, prepared, target, options = {}) {
@@ -136,4 +140,4 @@ function verifyPairFloor(cert, prepared, target, options = {}) {
   };
 }
 
-module.exports = {verifyPairFloor, boxBound, PAIR_SLACK};
+module.exports = {verifyPairFloor, boxBound};
