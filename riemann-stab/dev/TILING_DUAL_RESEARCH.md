@@ -24,10 +24,10 @@ Where things stand, most established first:
   Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
   with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  The chain floor
-  `0.003952`, strictly above the published local floor `19/5000`.  This is the
-  strongest rung the improvement itself has reached: 40 938 447 boxes, proved
+  `0.003954`, strictly above the published local floor `19/5000`.  This is the
+  strongest rung the improvement itself has reached: 47 516 991 boxes, proved
   trigonometric error bounds, outward-rounded arithmetic throughout.  It
-  projects to `0.6731069199` against `0.6730085279`, `96.7%` of the whole
+  projects to `0.6731080301` against `0.6730085279`, `97.8%` of the whole
   available gain, and Lean pins that constant two-sidedly and strictly between
   the published pin and the double-precision one.
 - **Numerical only.**  The certificate coefficients; every floor above the
@@ -318,11 +318,13 @@ the table version, which is affordable — and it finishes:
 | compact | `0.00392` | 18 260 117 | 1285 s | complete |
 | compact | `0.00394` | 25 523 525 | 1792 s | complete |
 | compact | `0.003949` | 42 531 993 | 2924 s | complete |
-| sharp | **`0.003952`** | 40 938 447 | 2783 s | **complete** |
+| sharp | `0.003952` | 40 938 447 | 2783 s | complete |
+| sharp | **`0.003954`** | 47 516 991 | 3223 s | **complete** |
 
-`0.003952` projects to `0.6731069199` against the published `0.6730085279`.
-That is `96.7%` of the whole available improvement, established with proved
-enclosures rather than with `Math.sin`.
+`0.003954` projects to `0.6731080301` against the published `0.6730085279`.
+That is `97.8%` of the whole available improvement, established with proved
+enclosures rather than with `Math.sin`, against a ceiling of `0.6731102697`.
+The double-precision sweep is only `2e-6` of floor ahead of it now.
 
 The `0.003949` row is worth keeping for what it showed: it was within `1e-6` of
 the `compact` certificate's own floor, so the subdivision had caught up with the
@@ -524,11 +526,12 @@ The old program's steps are done: the certificate exists, the cube is finite
 and explicit, the sweep is exhaustive, and it now runs on proved enclosures.
 What is left, in order of how much it buys per unit of work:
 
-1. **Compute.**  The rigorous sweep is at `0.003952` on `sharp` and the
-   double-precision one at `0.003955`.  The remaining targets are
+1. **Compute.**  The rigorous sweep is at `0.003954` on `sharp` and the
+   double-precision one at `0.003956` — two parts in a million apart.  The last
+   target is running:
 
    ```
-   node dev/sweep.js rigorous sharp 0.003954 0.003956
+   node dev/sweep.js rigorous sharp 0.003956
    ```
 
    which should land the rigorous floor within a part in `10^6` of the ceiling.

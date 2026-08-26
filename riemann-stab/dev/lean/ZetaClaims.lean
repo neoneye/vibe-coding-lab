@@ -232,29 +232,29 @@ theorem swept_projection_improves :
     (6731093501463616833 : Int) > 6730085279277797613 := by omega
 
 /-- The floor established by the sweep that uses proved enclosures rather than
-    plain double precision: 494/125000 = 0.003952.  It is strictly above the
+    plain double precision: 1977/500000 = 0.003954.  It is strictly above the
     published local certificate 19/5000, so the improvement does not rest on
     floating point. -/
 theorem rigorous_floor_beats_local_certificate :
-    (494 : Int) * 5000 > 19 * 125000 := by omega
+    (1977 : Int) * 5000 > 19 * 500000 := by omega
 
-/-- Projection of the rigorous floor.  With c = 494/125000 the assembly uses
-    253 windows per block and blocks of 259 gaps, so
+/-- Projection of the rigorous floor.  With c = 1977/500000 the assembly uses
+    252 windows per block and blocks of 258 gaps, so
 
-        bound = (259000000 * H_MT - 516000) / 258000144,
+        bound = (258000000 * H_MT - 514000) / 257003592,
 
-    pinned two-sidedly at [0.6731069198665548660, 0.6731069198665548661].
+    pinned two-sidedly at [0.6731080301371359999, 0.6731080301371360000].
     Arithmetic on a decimal, as with the other projection pins. -/
 theorem rigorous_projection_floor :
-    259000000 * HmtScaled - 516000 * 10000000000000000000
-      >= 6731069198665548660 * 258000144 := by
+    258000000 * HmtScaled - 514000 * 10000000000000000000
+      >= 6731080301371359999 * 257003592 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
 
 theorem rigorous_projection_ceiling :
-    259000000 * HmtScaled - 516000 * 10000000000000000000
-      <= 6731069198665548661 * 258000144 := by
+    258000000 * HmtScaled - 514000 * 10000000000000000000
+      <= 6731080301371360000 * 257003592 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
@@ -264,8 +264,8 @@ theorem rigorous_projection_ceiling :
     double-precision sweep gives.  No two of the intervals overlap, so the
     ordering does not depend on rounding. -/
 theorem projection_ladder :
-    (6730085279277797613 : Int) < 6731069198665548660
-    ∧ (6731069198665548661 : Int) < 6731093501463616833 := by
+    (6730085279277797613 : Int) < 6731080301371359999
+    ∧ (6731080301371360000 : Int) < 6731093501463616833 := by
   constructor <;> omega
 
 /-- Lab cross-functional signal as exact decimals (reference-resolution
