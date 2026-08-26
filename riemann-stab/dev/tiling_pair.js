@@ -256,46 +256,56 @@ function slopeRangeY(knots, grid, J, i0, i1, j0, j1) {
 function clampedBelow(knots, x) { return x <= knots[0]; }
 function clampedAbove(knots, x) { return x >= knots[knots.length - 1]; }
 
-// Outward-rounded evaluation of a bilinear psi at one point.
+// The range of a bilinear psi over a box that lies inside one knot cell.
 //
 // This replaces a centered (mean value) form that was here before and was not
 // sound: it computed psi at the box centre, a spread from the slope ranges, and
-// returned `at - spread` -- every step in ordinary rounded arithmetic, the
-// result used as a LOWER BOUND.  A reviewer was right to call that "ordinary
-// rounded arithmetic used as an exact enclosure".
+// returned `at - spread`, every step in ordinary rounded arithmetic, the result
+// used as a LOWER BOUND.  A reviewer was right to call that "ordinary rounded
+// arithmetic used as an exact enclosure".
 //
-// The replacement is both sound and tighter.  A bilinear function restricted to
-// a sub-rectangle of one knot cell is still bilinear there, so its range over
-// that sub-rectangle is exactly the min and max of its values at the FOUR BOX
-// CORNERS -- not the cell corners, which is what the natural grid range uses and
-// which stays O(2e-5) loose however small the box gets.  Four outward-rounded
-// point evaluations replace one unsound estimate.
-function bilinearInterval(cert, k, x, y) {
+// The replacement is sound, tighter, and about as fast.  A bilinear function
+// restricted to a sub-rectangle of one cell is still bilinear there, so its
+// range is exactly the min and max of its values at the FOUR BOX CORNERS -- not
+// the cell corners, which is what the natural grid range uses and which stays
+// O(2e-5) loose however small the box gets.
+//
+// The four values are computed in plain doubles and the hull widened by a bound
+// that is derived rather than chosen.  Write M for the largest absolute corner
+// coefficient of the cell.  Each corner value is a convex combination of the
+// four coefficients, so every intermediate is bounded by M in absolute value.
+// The evaluation is: two subtractions and two divisions for u and v (each
+// carrying relative error at most 2 * 2^-53, and entering the result multiplied
+// by a coefficient difference of at most 2M), then ten multiply-adds whose
+// intermediates are bounded by M.  Charging 2^-53 per operation and 2M * 4 *
+// 2^-53 for the u and v errors gives a total below 24 * M * 2^-53; the constant
+// below is 32, a third again on top of that, plus an absolute floor that covers
+// the subnormal range where a relative bound vanishes.
+const BILINEAR_OPS = 32;
+const BILINEAR_FLOOR = 1e-300;
+
+function cellCornerRange(cert, k, i, j, aLo, aHi, bLo, bHi) {
   const t = cert.knots, J = cert.J, grid = cert.mats[k];
-  const i = cellIndex(t, x), j = cellIndex(t, y);
-  const hx = t[i + 1] - t[i], hy = t[j + 1] - t[j];
-  const xc = Math.min(Math.max(x, t[0]), t[t.length - 1]);
-  const yc = Math.min(Math.max(y, t[0]), t[t.length - 1]);
-  // fractional positions, as intervals: the subtraction and the division each
-  // round, and both are widened outward
-  const fx = [R.rd(R.rd(xc - t[i]) / hx), R.ru(R.ru(xc - t[i]) / hx)];
-  const fy = [R.rd(R.rd(yc - t[j]) / hy), R.ru(R.ru(yc - t[j]) / hy)];
-  const gx = R.iSub([1, 1], fx), gy = R.iSub([1, 1], fy);
+  const t0 = t[i], t1 = t[i + 1], s0 = t[j], s1 = t[j + 1];
+  const hx = t1 - t0, hy = s1 - s0;
   const c00 = grid[i * J + j], c01 = grid[i * J + j + 1];
   const c10 = grid[(i + 1) * J + j], c11 = grid[(i + 1) * J + j + 1];
-  const left = R.iAdd(R.iScale(gy, c00), R.iScale(fy, c01));
-  const right = R.iAdd(R.iScale(gy, c10), R.iScale(fy, c11));
-  return R.iAdd(R.iMul(gx, left), R.iMul(fx, right));
-}
-
-// The exact range over a box that lies inside one cell: the hull of the four
-// corner enclosures.
-function cellCornerRange(cert, k, aLo, aHi, bLo, bHi) {
-  let out = bilinearInterval(cert, k, aLo, bLo);
-  for (const [x, y] of [[aLo, bHi], [aHi, bLo], [aHi, bHi]]) {
-    out = R.iHull(out, bilinearInterval(cert, k, x, y));
+  const M = Math.max(Math.abs(c00), Math.abs(c01), Math.abs(c10), Math.abs(c11));
+  const clamp = z => z < 0 ? 0 : (z > 1 ? 1 : z);
+  const uA = clamp((aLo - t0) / hx), uB = clamp((aHi - t0) / hx);
+  const vA = clamp((bLo - s0) / hy), vB = clamp((bHi - s0) / hy);
+  let lo = Infinity, hi = -Infinity;
+  for (const u of [uA, uB]) {
+    const left = c00 + u * (c10 - c00);
+    const right = c01 + u * (c11 - c01);
+    for (const v of [vA, vB]) {
+      const value = left + v * (right - left);
+      if (value < lo) lo = value;
+      if (value > hi) hi = value;
+    }
   }
-  return out;
+  const slack = BILINEAR_OPS * M * Number.EPSILON / 2 + BILINEAR_FLOOR;
+  return [lo - slack, hi + slack];
 }
 
 // Inside a single cell the slopes are EXACTLY linear in the other coordinate:
@@ -339,10 +349,11 @@ function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
     const exact = singleCellSlopes(cert, k, i0, j0, aLo, aHi, bLo, bHi);
     dx = exact.dx;
     dy = exact.dy;
-    // inside one cell the corner hull is the exact range and beats the grid one
-    const corners = cellCornerRange(cert, k, aLo, aHi, bLo, bHi);
-    if (corners[0] > value[0]) value[0] = corners[0];
-    if (corners[1] < value[1]) value[1] = corners[1];
+    // inside one cell the corner hull IS the range, and beats the grid one by
+    // however much the cell varies; no need to compute both
+    const corners = cellCornerRange(cert, k, i0, j0, aLo, aHi, bLo, bHi);
+    value[0] = corners[0];
+    value[1] = corners[1];
   } else {
     dx = slopeRangeX(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
     dy = slopeRangeY(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
@@ -375,4 +386,4 @@ function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
 
 module.exports = {prepare, reducedCost, reducedCostAndGradient, multistart,
   telescopingDefect, bilinear, psiBoxRange, cellIndex, cellIndexRight, cellSpan,
-  bilinearInterval, cellCornerRange};
+  cellCornerRange};
