@@ -36,6 +36,14 @@ What is still required before the improved simple-zero projection can be used:
 the assembly has to be checked by someone with the manuscript.  The rigorous
 sweep cleared `19/5000` on its own.
 
+One result here is off the tiling line entirely and is a **correction**, not an
+advance: the cross-window "interior mixture optimum" does not exist for the
+honest second-moment functional.  `R` of the linear mixture is monotone with its
+minimum at the pure Montgomery-Taylor endpoint, because `sqrt(2)` is exactly the
+stationary frequency and a critical point admits no first-order improvement.
+The reported optimum is produced by substituting an inferred cross term for the
+bilinear one; nothing else changes.  Details below.
+
 ## What is new in this experiment
 
 - Analytic gradients and multi-start searches now stress periods 9 through 64,
