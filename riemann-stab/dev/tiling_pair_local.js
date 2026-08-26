@@ -86,8 +86,15 @@ function cellClearance(knots, x) {
   return Math.min(x - knots[i], knots[i + 1] - x);
 }
 
-// Verified Cholesky with outward rounding: succeeds only if every pivot is
-// certainly positive, which proves the matrix positive definite.
+// Cholesky as a positive-definiteness test, with a margin big enough to absorb
+// its own arithmetic.  A floating-point Cholesky of a symmetric M completes with
+// backward error at most about n * u * ||M||; here n = 6, u = 1.1e-16 and the
+// entries are of order 3, so 2e-15.  Requiring every pivot to exceed 1e-13 --
+// fifty times that -- makes completion a proof that M is positive definite,
+// rather than an impression that it probably is.  The constant is picked
+// against that estimate and not by taste.
+const PIVOT_MARGIN = 1e-13;
+
 function choleskyPositive(M, n) {
   const L = [];
   for (let i = 0; i < n; i++) L.push(new Array(n).fill(0));
@@ -97,7 +104,7 @@ function choleskyPositive(M, n) {
       for (let k = 0; k < j; k++) acc -= L[i][k] * L[j][k];
       // one ulp-scale margin per accumulated term, taken against the pivot
       if (i === j) {
-        if (!(acc > 1e-13)) return false;
+        if (!(acc > PIVOT_MARGIN)) return false;
         L[i][j] = Math.sqrt(acc);
       } else {
         L[i][j] = acc / L[j][j];
@@ -133,6 +140,12 @@ function smallestEigenvalueLower(H, n) {
 // The tube certificate.  `evaluate` supplies R and its gradient at a point --
 // passed in rather than imported so that this file works for an additive
 // certificate as well as a pair one.
+//
+// The arithmetic base here is tiling_rigorous.js, which is mine: hand-written
+// transcendentals with error constants I chose.  The Arb reimplementation
+// covers the CHAIN coercivity theorem, not this one.  Whatever this file
+// certifies is therefore certified modulo that base, the same footing every
+// sweep in this directory stands on and a weaker footing than dev/coercivity_arb.py.
 function certifyTube(options) {
   const {cert, alt, radius, evaluate, ceiling, additiveKnots} = options;
   // 1. the tube must stay inside one cell of both grids, in every coordinate

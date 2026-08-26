@@ -1297,9 +1297,17 @@ gradient encloses to `3.4e-10` and the shortfall drops to `1.163e-11`, which is
 now set by `analyzeBoxRigorous`'s own slack at a pinhole box and not by anything
 in this argument.
 
+**On what base.**  The arithmetic here is `tiling_rigorous.js` — mine, with
+hand-written transcendentals and error constants I chose.  The Arb
+reimplementation covers the *chain* coercivity theorem, not this one.  So this
+is certified modulo that base: the same footing every sweep in this directory
+stands on, and a weaker footing than `dev/coercivity_arb.py`.
+
 So the two halves of a crystallization proof for this candidate stand as: the
 tube is **proved**, at `E_alt - 1.2e-11`; everything outside it needs a sweep
-that has not run, for the reasons in the previous section.
+that has not run, for the reasons in the previous section.  And the candidate
+itself is still unverified outside the tube — the tube result says nothing about
+that.
 
 ## The wall, certified
 
