@@ -408,17 +408,19 @@ hard version has to be nearly as good as what already exists at `n = 7`.
 
 How expensive is the sweep at that margin?  Measured, with the zero potential:
 
-| margin below the block minimum | boxes |
-|---:|---:|
-| `3.887e-4` | 1 485 735 |
-| `1.887e-4` | 7 110 011 |
-| `8.874e-5` | 16 727 847 |
-| `3.874e-5` | 30 682 593 |
+| margin below the block minimum | boxes | wall clock |
+|---:|---:|---:|
+| `3.887e-4` | 1 485 735 | 14 s |
+| `1.887e-4` | 7 110 011 | 69 s |
+| `8.874e-5` | 16 727 847 | 167 s |
+| `3.874e-5` | 30 682 593 | 316 s |
+| `8.737e-6` | 56 271 749 | 611 s |
 
 so boxes grow like `margin^-1.3` in seven dimensions, against `margin^-0.5` in
-six.  Extrapolating to the `1e-5` margin a useful `n = 8` certificate would need
-gives on the order of `1e8` boxes — hours rather than minutes, but not out of
-reach.
+six — but the constant is small.  The tightest margin measured, `8.7e-6`, is
+already finer than a useful `n = 8` certificate would need, and it costs ten
+minutes.  The seven-dimensional sweep is not the obstacle; getting a good
+enough `m = 7` certificate is.
 
 So the `n = 8` programme is reachable rather than merely describable.  What it
 needs is a certificate at `m = 7`, which is the same cut-generation loop with

@@ -213,3 +213,87 @@ function verifyFloorGeneral(certificate, m, target, options = {}) {
   };
 }
 module.exports.verifyFloorGeneral = verifyFloorGeneral;
+
+// ------------------------------------------------------- general audit
+// Independent adversaries for a general-block certificate, mirroring
+// auditAdditiveCertificate: the deterministic three-basin word enumeration, a
+// differential-evolution run, and a gradient multistart.  A certificate is
+// only as good as its worst adversary.
+function slopeAt(knots, values, x) {
+  const last = knots.length - 1;
+  if (x <= knots[0] || x >= knots[last]) return 0;
+  let lo = 0, hi = last;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (knots[mid] <= x) lo = mid; else hi = mid; }
+  return (values[lo + 1] - values[lo]) / (knots[lo + 1] - knots[lo]);
+}
+
+function reducedCostAndGradient(gaps, certificate, p = 3000) {
+  const m = gaps.length;
+  const signs = certificate.signs || signMatrix(m);
+  const base = T.blockFunctionalAndGradient(gaps, p);
+  let value = base.value;
+  const gradient = base.gradient.slice();
+  for (let f = 0; f < signs.length; f++) {
+    for (let k = 0; k < m; k++) {
+      const weight = signs[f][k];
+      if (!weight) continue;
+      value += weight * interp(certificate.knots, certificate.functions[f], gaps[k]);
+      gradient[k] += weight * slopeAt(certificate.knots, certificate.functions[f], gaps[k]);
+    }
+  }
+  return {value, gradient};
+}
+
+function lcg(seed) {
+  let state = seed >>> 0;
+  return () => { state = (1664525 * state + 1013904223) >>> 0; return state / 0x100000000; };
+}
+
+function auditGeneral(certificate, m, options = {}) {
+  const p = options.p || 3000;
+  const maxGap = options.maxGap || Math.ceil(tailThreshold(certificate, m, options.floorGuess || 0.006, p));
+  const objective = gaps => reducedCost(gaps, certificate, p);
+  const results = {};
+  results.bands = T.bandBasinSearch(objective, m, {
+    periodic: false, reflectionSymmetry: true, maxGap,
+    bandSeeds: options.bandSeeds || [1.05, 2.05, 3.2],
+    coarseTolerance: 5e-4, tolerance: 5e-8
+  });
+  results.evolution = T.differentialEvolution(objective, m, {
+    seed: options.seed || 0xb10c8, generations: options.generations || 900,
+    populationSize: options.populationSize || 160, maxGap, tolerance: 5e-8
+  });
+  const random = lcg((options.seed || 0xb10c8) ^ 0x51de);
+  const bands = [1.0408, 1.9776, 1.044, 1.975, 3.02, 0.6, 2.5, 4.06, 2.95, 0.35];
+  let best = null;
+  for (let s = 0; s < (options.starts || 900); s++) {
+    const x = new Array(m);
+    for (let k = 0; k < m; k++) {
+      x[k] = (s % 2 === 0)
+        ? 0.1 + 4.3 * random()
+        : Math.max(0, bands[Math.floor(random() * bands.length)] + 0.12 * (random() - 0.5));
+    }
+    const first = new Array(m).fill(0), second = new Array(m).fill(0);
+    for (let t = 1; t <= (options.steps || 400); t++) {
+      const current = reducedCostAndGradient(x, certificate, p);
+      const rate = 0.06 * (0.1 + 0.9 * (1 - t / (options.steps || 400)));
+      for (let k = 0; k < m; k++) {
+        first[k] = 0.9 * first[k] + 0.1 * current.gradient[k];
+        second[k] = 0.999 * second[k] + 0.001 * current.gradient[k] * current.gradient[k];
+        const mHat = first[k] / (1 - Math.pow(0.9, t));
+        const vHat = second[k] / (1 - Math.pow(0.999, t));
+        x[k] = Math.max(0, Math.min(maxGap, x[k] - rate * mHat / (Math.sqrt(vHat) + 1e-12)));
+      }
+    }
+    const polished = T.patternMinimize(objective, x, {step: 0.02, tolerance: 5e-9, maxGap});
+    if (!best || polished.value < best.value) best = polished;
+  }
+  results.gradient = best;
+  let value = Infinity, gaps = null, source = null;
+  for (const key of Object.keys(results)) {
+    if (results[key].value < value) { value = results[key].value; gaps = results[key].x; source = key; }
+  }
+  return {value, gaps, source, maxGap, results};
+}
+module.exports.reducedCostAndGradient = reducedCostAndGradient;
+module.exports.auditGeneral = auditGeneral;

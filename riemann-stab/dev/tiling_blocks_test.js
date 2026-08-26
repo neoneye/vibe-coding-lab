@@ -47,6 +47,30 @@ check('general reduced cost agrees with the specialised one', worst < 1e-15, `${
 check('general amplitude agrees with the specialised one',
   Math.abs(B.amplitude(general, 6) - A.certificateAmplitude(compact).bound) < 1e-18);
 
+
+// The general gradient, checked away from the knots: the potential is
+// piecewise linear, so a central difference straddling a knot averages two
+// one-sided slopes and legitimately disagrees with either.
+let gradientError = 0;
+for (let trial = 0; trial < 2000; trial++) {
+  const g = Array.from({length: 6}, () => 0.013 + random() * 5);
+  const analytic = B.reducedCostAndGradient(g, general).gradient;
+  for (let k = 0; k < 6; k++) {
+    const left = g.slice(), right = g.slice();
+    left[k] -= 1e-7; right[k] += 1e-7;
+    const finite = (B.reducedCost(right, general) - B.reducedCost(left, general)) / 2e-7;
+    gradientError = Math.max(gradientError, Math.abs(finite - analytic[k]));
+  }
+}
+check('general gradient matches a finite difference off the knots',
+  gradientError < 1e-7, `${gradientError}`);
+
+// And the general audit must land on the shipped floor, through adversaries
+// that share no code with the specialised module.
+const generalAudit = B.auditGeneral(general, 6, {starts: 500, generations: 600, floorGuess: 0.00396});
+check('general audit reproduces the shipped compact floor',
+  Math.abs(generalAudit.value - compactEntry.floor) < 5e-9, `${generalAudit.value}`);
+
 // The general sweep must reproduce the specialised sweep box for box.
 const tables = I.attachTables(I.buildTables(400));
 const prepared = I.prepareCertificate(compact);
