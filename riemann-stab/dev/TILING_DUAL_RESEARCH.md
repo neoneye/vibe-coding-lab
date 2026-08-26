@@ -23,12 +23,14 @@ Where things stand, most established first:
   Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
   with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  The chain floor
-  `0.00394`, strictly above the published local floor `19/5000`.  This is the
-  strongest rung the improvement itself has reached: 25 523 525 boxes, proved
+  `0.003949`, strictly above the published local floor `19/5000`.  This is the
+  strongest rung the improvement itself has reached: 42 531 993 boxes, proved
   trigonometric error bounds, outward-rounded arithmetic throughout.  It
-  projects to `0.6730989992` against `0.6730085279`, `88.9%` of the whole
+  projects to `0.6731049397` against `0.6730085279`, `94.8%` of the whole
   available gain, and Lean pins that constant two-sidedly and strictly between
-  the published pin and the double-precision one.
+  the published pin and the double-precision one.  It is within `1e-6` of the
+  certificate's own audited floor, so the sweep is no longer the limit — the
+  certificate is.
 - **Numerical only.**  The certificate coefficients; every floor above the
   swept ones; the two-phase kink energies and Bloch spectrum; and the entire
   block-size scan, which says the projection peaks at `n = 8`, not the `n = 7`
@@ -316,12 +318,16 @@ the table version, which is affordable — and it finishes:
 | compact | `0.0038` | 7 200 335 | 491 s | complete, equals the published floor |
 | compact | `0.0039` | 14 817 467 | 1027 s | complete, strictly above `19/5000` |
 | compact | `0.00392` | 18 260 117 | 1285 s | complete |
-| compact | **`0.00394`** | 25 523 525 | 1792 s | **complete** |
+| compact | `0.00394` | 25 523 525 | 1792 s | complete |
+| compact | **`0.003949`** | 42 531 993 | 2924 s | **complete** |
 
-`0.00394` projects to `0.6730989992` against the published `0.6730085279`.
-That is `88.9%` of the whole available improvement, established with proved
-enclosures rather than with `Math.sin`.  The remaining tenth is the
-double-precision sweep's lead, and closing it is compute, not research.
+`0.003949` projects to `0.6731049397` against the published `0.6730085279`.
+That is `94.8%` of the whole available improvement, established with proved
+enclosures rather than with `Math.sin` — and it is within `1e-6` of the
+certificate's own audited floor `0.003950948242`, so the rigorous sweep has
+essentially caught up with the certificate.  What is left is not the sweep: it
+is that the certificate itself stops at `0.003950948`, and the ceiling is
+`0.003957393`.
 
 Two attempts to narrow the rigorous sweep's `~1.8x` box overhead are worth
 recording as failures.  A second-order Taylor form for the value bought `0.1%`
@@ -517,10 +523,11 @@ and explicit, the sweep is exhaustive, and it now runs on proved enclosures.
 What is left, in order of how much it buys per unit of work:
 
 1. **Compute.**  The rigorous sweep is at `0.00392` and the double-precision
-   one at `0.003955`; that lead is mostly just hours.  `0.00394` took 25.5
-   million rigorous boxes and half an hour; `0.003949` should be roughly 60
-   million.  Nothing about the method changes — `node dev/sweep.js rigorous
-   compact 0.003949` and wait.
+   one at `0.003955`, and the gap between them is now `6e-6`.  `0.003949`
+   took 42.5 million rigorous boxes and 49 minutes.  Going further means a
+   better certificate, not a longer sweep: the compact certificate's own floor
+   is `0.003950948`, and the record certificate's is `0.003957227`, so sweeping
+   the record one is the next move.
 2. **An independent implementation.**  Everything above trusts that this code
    has no bugs.  The cross-checks are real — 60-digit mpmath for the
    trigonometry, the exact-range table for every box analysis, the degenerate
