@@ -595,6 +595,18 @@ interior to the positivity constraint, and every direction tried increases `R`
 functional, and the frequency is `sqrt(2)` because the second derivative of the
 `|s-v|` kernel contributes a factor of two, and nothing else.**
 
+### The two halves of the laboratory are the same object
+
+Worth stating once, because it is easy to miss.  The tiling weight is
+`w = (K/K(0))^2`, and `K` is the cosine transform of `cos(sqrt(2) t)` on
+`[-1/2, 1/2]` — checked here to `9e-11`.  That is *exactly* the window the
+Euler-Lagrange equation selects.  So the seven-point kernel every certificate
+and every sweep in this directory is built on is the normalised power spectrum
+of the unique critical point of the second-moment functional, and the constant
+those certificates project against is two minus that functional's value there.
+The tiling line and the window line are not two experiments; they are the same
+`sqrt(2)` seen twice.
+
 ### And the headline constant falls out of it
 
 Evaluate the Euler-Lagrange equation at `s = 0`.  With `psi = cos(a s)` and

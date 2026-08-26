@@ -228,6 +228,28 @@ for (const key of ['breakEvenAgainstRigorousSeven', 'breakEvenAgainstSweptSeven'
     `${row.floor}`);
 }
 
+
+// The two halves of the laboratory are the same object.  The tiling weight is
+// w = (K/K(0))^2, and K is the cosine transform of cos(sqrt(2) t) on
+// [-1/2, 1/2] -- which is exactly the window the Euler-Lagrange equation of the
+// second-moment functional selects (see test.js).  So the seven-point kernel is
+// the normalised power spectrum of that unique critical window.
+function cosineTransform(x, n) {
+  const step = 1 / n;
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    const t = -0.5 + (i + 0.5) * step;
+    acc += Math.cos(Math.SQRT2 * t) * Math.cos(2 * Math.PI * x * t);
+  }
+  return acc * step;
+}
+let transformError = 0;
+for (const x of [0, 0.1, 0.5, 1, 2, 3.5, 7]) {
+  transformError = Math.max(transformError, Math.abs(T.mtKernel(x) - cosineTransform(x, 40000)));
+}
+check('the tiling kernel is the spectrum of the critical window',
+  transformError < 1e-8, `${transformError}`);
+
 if (failed) {
   console.error(`${failed} tiling-research checks failed`);
   process.exit(1);
