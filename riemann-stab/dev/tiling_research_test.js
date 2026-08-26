@@ -15,6 +15,18 @@ function close(a, b, tolerance) { return Math.abs(a - b) <= tolerance; }
 check('normalized kernel w(0)=1', close(T.overlapWeight(0), 1, 2e-15));
 check('kernel is even', close(T.overlapWeight(1.2345), T.overlapWeight(-1.2345), 2e-15));
 
+const gradientProbe = [0.91, 1.27, 2.03, 1.11, 2.41, 0.77, 1.62, 2.18, 1.34];
+const analytic = T.periodicChainEnergyAndGradient(gradientProbe).gradient;
+const epsilon = 1e-6;
+let gradientError = 0;
+for (let i = 0; i < gradientProbe.length; i++) {
+  const left = gradientProbe.slice(); left[i] -= epsilon;
+  const right = gradientProbe.slice(); right[i] += epsilon;
+  const finiteDifference = (T.periodicChainEnergy(right) - T.periodicChainEnergy(left)) / (2 * epsilon);
+  gradientError = Math.max(gradientError, Math.abs(finiteDifference - analytic[i]));
+}
+check('analytic periodic gradient', gradientError < 2e-10, `${gradientError}`);
+
 // This is the exact combinatorial reindexing on which the research direction rests.
 for (let period = 1; period <= 9; period++) {
   const gaps = Array.from({length: period}, (_, i) => 0.83 + ((17 * i + 3 * period) % 11) / 5);
@@ -31,6 +43,13 @@ for (const row of golden.periodic_candidates) {
   const reindexed = T.periodicChainEnergy(row.gaps, golden.n, golden.p);
   check(`period-${row.period} candidate identity`, close(direct, reindexed, 2e-13));
   check(`period-${row.period} candidate pin`, close(reindexed, row.value, 2e-9), `${reindexed}`);
+}
+
+for (const row of golden.long_period_stress) {
+  const motif = golden.periodic_candidates.find(x => x.period === row.observed_motif_period).gaps;
+  const gaps = Array.from({length: row.period}, (_, i) => motif[i % motif.length]);
+  check(`period-${row.period} stress motif pin`,
+    close(T.periodicChainEnergy(gaps), row.value, 2e-9));
 }
 
 const projection = T.projectedSimpleZeroBound(

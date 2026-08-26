@@ -16,6 +16,14 @@ function sinOverX(x) {
   return Math.sin(x) / x;
 }
 
+function sinOverXDerivative(x) {
+  if (Math.abs(x) < 1e-5) {
+    const x2 = x * x;
+    return -x / 3 + x * x2 / 30 - x * x2 * x2 / 840;
+  }
+  return (x * Math.cos(x) - Math.sin(x)) / (x * x);
+}
+
 // K(x) = integral_{-1/2}^{1/2} cos(sqrt(2)t) cos(2 pi x t) dt.
 function mtKernel(x) {
   const b = 2 * Math.PI * x;
@@ -28,6 +36,15 @@ const MT_KERNEL_ZERO = mtKernel(0);
 function overlapWeight(x) {
   const k = mtKernel(x) / MT_KERNEL_ZERO;
   return k * k;
+}
+
+function overlapWeightDerivative(x) {
+  const zLeft = (SQRT2 - 2 * Math.PI * x) / 2;
+  const zRight = (SQRT2 + 2 * Math.PI * x) / 2;
+  const kernel = 0.5 * (sinOverX(zLeft) + sinOverX(zRight));
+  const derivative = 0.5 * Math.PI
+    * (-sinOverXDerivative(zLeft) + sinOverXDerivative(zRight));
+  return 2 * kernel * derivative / (MT_KERNEL_ZERO * MT_KERNEL_ZERO);
 }
 
 function pointsFromGaps(gaps) {
@@ -82,6 +99,22 @@ function periodicChainEnergy(gaps, n = 7, p = 3000) {
   return out;
 }
 
+function periodicChainEnergyAndGradient(gaps, n = 7, p = 3000) {
+  const period = gaps.length;
+  const gradient = new Array(period).fill((n - 1) / (p * period));
+  let energy = ((n - 1) / p) * gaps.reduce((a, b) => a + b, 0) / period;
+  for (let s = 1; s < n; s++) {
+    for (let i = 0; i < period; i++) {
+      let distance = 0;
+      for (let j = 0; j < s; j++) distance += gaps[(i + j) % period];
+      energy += 2 * overlapWeight(distance) / period;
+      const derivative = 2 * overlapWeightDerivative(distance) / period;
+      for (let j = 0; j < s; j++) gradient[(i + j) % period] += derivative;
+    }
+  }
+  return {energy, gradient};
+}
+
 // Conditional projection through the published shifted-block assembly.
 // This is meaningful only if `floor` has first been proved as a uniform
 // long-chain lower bound with boundary error o(number of gaps).
@@ -106,6 +139,80 @@ function lcg(seed) {
     state = (1664525 * state + 1013904223) >>> 0;
     return state / 0x100000000;
   };
+}
+
+function adamMinimizePeriodic(start, options = {}) {
+  const n = options.n || 7;
+  const p = options.p || 3000;
+  const maxGap = options.maxGap || 11.4;
+  const iterations = options.iterations || 4500;
+  const learningRate = options.learningRate || 0.035;
+  const beta1 = 0.9;
+  const beta2 = 0.999;
+  const x = start.map(v => Math.max(0, Math.min(maxGap, v)));
+  const first = new Array(x.length).fill(0);
+  const second = new Array(x.length).fill(0);
+  let bestX = x.slice();
+  let bestValue = periodicChainEnergy(x, n, p);
+  for (let t = 1; t <= iterations; t++) {
+    const current = periodicChainEnergyAndGradient(x, n, p);
+    const rate = learningRate * (0.15 + 0.85 * (1 - t / iterations));
+    for (let i = 0; i < x.length; i++) {
+      first[i] = beta1 * first[i] + (1 - beta1) * current.gradient[i];
+      second[i] = beta2 * second[i] + (1 - beta2) * current.gradient[i] * current.gradient[i];
+      const mHat = first[i] / (1 - Math.pow(beta1, t));
+      const vHat = second[i] / (1 - Math.pow(beta2, t));
+      x[i] = Math.max(0, Math.min(maxGap, x[i] - rate * mHat / (Math.sqrt(vHat) + 1e-10)));
+    }
+    if (current.energy < bestValue) {
+      bestValue = current.energy;
+      bestX = x.slice();
+    }
+  }
+  const finalValue = periodicChainEnergy(bestX, n, p);
+  return {x: bestX, value: finalValue, evaluations: iterations};
+}
+
+function longPeriodStarts(period, seed) {
+  const random = lcg(seed);
+  const starts = [];
+  const motifs = [
+    [1.04168, 1.979467],
+    [1.043562, 1.992235, 1.992235],
+    [1.045002, 1.977024, 1.041603, 1.986415, 1.989132, 1.046080]
+  ];
+  for (const motif of motifs) {
+    starts.push(Array.from({length: period}, (_, i) => motif[i % motif.length]));
+  }
+  // Phase-modulated and quasiperiodic starts probe domain walls and long waves.
+  starts.push(Array.from({length: period}, (_, i) =>
+    1.52 + 0.48 * Math.cos(2 * Math.PI * i / period)));
+  starts.push(Array.from({length: period}, (_, i) =>
+    1.52 + 0.48 * Math.cos(2 * Math.PI * i * ((Math.sqrt(5) - 1) / 2))));
+  for (let k = 0; k < 7; k++) {
+    starts.push(Array.from({length: period}, () => {
+      const band = random() < 0.52 ? [0.95, 1.2] : [1.8, 2.35];
+      return band[0] + random() * (band[1] - band[0]);
+    }));
+  }
+  return starts;
+}
+
+function runLongPeriodStress(options = {}) {
+  const periods = options.periods || [9, 10, 12, 16, 24, 32, 48, 64];
+  const rows = [];
+  for (const period of periods) {
+    let best = null;
+    for (const start of longPeriodStarts(period, 0x64000000 + period)) {
+      const candidate = adamMinimizePeriodic(start, {
+        iterations: options.iterations || 4200,
+        learningRate: options.learningRate || 0.03
+      });
+      if (!best || candidate.value < best.value) best = candidate;
+    }
+    rows.push({period, ...best});
+  }
+  return rows;
 }
 
 // Deterministic coordinate/pair pattern search.  It is deliberately modest:
@@ -256,6 +363,7 @@ function canonicalCyclicWord(word) {
 function bandBasinSearch(fn, dimension, options = {}) {
   const values = options.bandSeeds || [1.05, 2.05, 3.2];
   const periodic = !!options.periodic;
+  const reflectionSymmetry = options.reflectionSymmetry !== false;
   const count = Math.pow(values.length, dimension);
   let best = null;
   let basins = 0;
@@ -272,7 +380,7 @@ function bandBasinSearch(fn, dimension, options = {}) {
     const word = digits.join('');
     if (periodic) {
       if (word !== canonicalCyclicWord(digits)) continue;
-    } else {
+    } else if (reflectionSymmetry) {
       const reverse = digits.slice().reverse().join('');
       if (word > reverse) continue;
     }
@@ -344,6 +452,14 @@ function runStudy(options = {}) {
 }
 
 if (require.main === module) {
+  if (process.argv.includes('--stress')) {
+    const rows = runLongPeriodStress();
+    for (const row of rows) {
+      console.log(`stress period ${String(row.period).padStart(2)}: ${row.value.toFixed(12)}  min=${Math.min(...row.x).toFixed(6)} max=${Math.max(...row.x).toFixed(6)}`);
+    }
+    console.log('STRESS SEARCH ONLY — values are upper bounds on periodic minima');
+    process.exit(0);
+  }
   const study = runStudy();
   console.log(`isolated F${study.n}: ${study.local.value.toFixed(12)}  gaps=${study.local.x.map(x => x.toFixed(6)).join(',')}`);
   for (const row of study.periods) {
@@ -357,13 +473,17 @@ if (require.main === module) {
 module.exports = {
   mtKernel,
   overlapWeight,
+  overlapWeightDerivative,
   blockFunctional,
   periodicBlockAverage,
   periodicChainEnergy,
+  periodicChainEnergyAndGradient,
   projectedSimpleZeroBound,
   patternMinimize,
+  adamMinimizePeriodic,
   multiStart,
   differentialEvolution,
   bandBasinSearch,
+  runLongPeriodStress,
   runStudy
 };
