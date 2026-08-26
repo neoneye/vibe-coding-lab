@@ -1340,8 +1340,14 @@ chain is the minimiser, to within `1.2e-11`.
 *The outside-the-tube half is double precision.*  The table kernel with a `1e-10`
 safety margin — the ladder rung this directory calls "exhaustively subdivided in
 double precision", not the one it calls "with proved enclosures".  The rigorous
-rerun is the same code with `--rigorous` and is running; until it finishes, the
-strongest honest phrasing of the headline is the double-precision one.
+rerun is the same code with `--rigorous`; it has been started and has not
+returned.  Whether it *can* return is an open question rather than a formality:
+the rigorous evaluator is looser, the existing rigorous additive sweep works with
+about `1.2e-6` of margin, and the margin here outside the tube measures about
+`1.5e-6`.  That is the same order, which is neither a promise nor a reason to
+expect failure.  Until it finishes the honest phrasing of the headline is the
+double-precision one, and if it stalls that will be recorded here as plainly as
+this is.
 
 *The tube half rests on `tiling_rigorous.js`*, which is mine.  The Arb
 reimplementation covers the chain coercivity theorem, not this.
