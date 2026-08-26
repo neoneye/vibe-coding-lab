@@ -30,8 +30,10 @@ previously exist.
   code with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  With the pair-state
   certificate and the tube argument, the chain floor
-  `0.003957393309109344 - 1.163e-11` — the alternating chain's own energy, so
-  the alternating chain is the minimiser to within `1.2e-11`.  That is `100%` of
+  `0.003957393309109344 - 2.186e-15` — the alternating chain's own energy, so
+  the alternating chain is the minimiser to within `2.2e-15`.  Its two halves
+  rest on different arithmetic and only one of them is independent of mine; see
+  "Where this stands, now".  That is `100%` of
   the available improvement, and it is new; see "With proved enclosures".  With
   the additive record certificate, the chain floor
   `0.003956` — the same floor the double-precision sweep reaches, so those two
@@ -1210,16 +1212,33 @@ rather than assumes.
 
 - *On the two alternating tubes*, `|g_i - c_i| <= 0.008`: a Taylor argument from
   the pinned point, with a covering-and-Cholesky bound on the Hessian, gives
-  `R >= E_alt - 1.163e-11`.  A branch-and-bound cannot do this region — it would
+  `R >= E_alt - 2.186e-15`.  A branch-and-bound cannot do this region — it would
   chase a bound that is exactly attained — and the argument is valid only because
   the alternating gaps clear their nearest knot by `0.020533` in both grids,
   which the code checks rather than assumes.
+
+  **This half is now in Arb**, in `dev/tube_arb.py`, with nothing from
+  `tiling_rigorous.js` anywhere in the file: Arb's own sine, the derivatives of
+  `w` by Taylor arithmetic on its definition, and the certificate coefficients
+  entering exactly as the doubles they are.  It is both independent and sharper —
+  `lambda >= 0.139341`, `0.114745`, `0.104984` at radii `0.003`, `0.005`,
+  `0.008` against the JavaScript's `0.1118`, `0.0774`, `0.0637`, and a shortfall
+  of `2.186e-15` against `1.163e-11`, five thousand times better because the
+  JavaScript figure was set by `analyzeBoxRigorous`'s slack at a pinhole box and
+  Arb encloses the point directly.  The two agree, and the sharper number is the
+  one to quote.
+
+  Its own first run was wrong, and the file says how: it used the chain's linear
+  term `(6/p) sum g` where the block functional wants `(1/p) sum g`, and `R` came
+  out `0.0151057` high — exactly `(L+H)/2 * 5/3000`.  The check that caught it was
+  the gradient one: at a pinned critical point the gradient must vanish, and it
+  did not.
 - *Outside the tubes, inside the cube* `[0, 28]^6`: exhaustive subdivision,
   complete, no counterexample, nothing unresolved.
 - *Outside the cube*: the tail lemma, which clears `E_alt` once `sum g` reaches
   `27.942537`.  `27.94 < 28`, so the two meet with nothing between them.
 
-Together: `R(g) >= E_alt - 1.163e-11` for every six-gap block, hence by the
+Together: `R(g) >= E_alt - 2.186e-15` for every six-gap block, hence by the
 telescoping lemma every chain has per-gap energy at least that.  `E_alt` is the
 alternating chain's own energy, so **the alternating chain is the minimiser to
 within `1.2e-11`**.
@@ -1239,7 +1258,9 @@ evaluations, which is both sound and *tighter*, since a bilinear function on a
 sub-rectangle of a cell is a convex combination of its own four corners rather
 than the cell's; and the Cholesky pivot margin computed from the matrix in hand,
 `50 n u ||M||_inf`, instead of asserted as `1e-13`.  The tube result is unchanged
-by the repair — `lambda >= 0.0637` at radius `0.008`, shortfall still `1.163e-11`.
+by the repair (`lambda >= 0.0637` at radius `0.008`), and has since been
+superseded by the Arb version, which is independent of that arithmetic and
+sharper.
 
 **The two sweeps are being redone on the repaired arithmetic.**  Until they land
 the transcript check reports the recorded rows as stale, which is what it is for.
@@ -1248,72 +1269,49 @@ The pre-repair runs completed at `50 203 847` boxes in double precision and
 about `1e-16` relative, so they are expected to close again.  Expected, not
 established, and this section will say which.
 
-**What it rests on.**  `tiling_rigorous.js` is mine: hand-written transcendentals
-with error constants I chose.  The Arb reimplementation covers the chain
-coercivity theorem, not this, so a genuinely independent rebuild of the whole
-certificate — outside sweep and tube — in Arb is the outstanding item.  And
+**What it rests on.**  The tube half no longer rests on `tiling_rigorous.js`;
+`dev/tube_arb.py` redoes it in Arb.  **The outside-the-tube sweep still does**,
+and that is now the whole of the outstanding item: seventy-five million boxes of
+`w` and `w''` enclosures from hand-written transcendentals with error constants
+I chose.  Rebuilding that in Arb is a much larger job than the tube was — the
+tube is a few thousand box evaluations, the sweep is `7.5e7` — and until it is
+done the global statement is certified modulo my arithmetic.  And
 everything downstream depends on the external shifted-block assembly nobody here
 can check.  Even repaired and rebuilt, this would be a theorem about the
 auxiliary chain: not about primes, and not about zeta zeros.
-### The tube, proved
+### The tube: how it was got right
 
-The half a branch-and-bound structurally cannot do is now done.
-`dev/tiling_pair_local.js` certifies, with interval arithmetic throughout,
-
-`R(g) >= E_alt - 1.163e-11`  for every block with `|g_i - c_i| <= 0.008`,
-
-`c` either alternating pattern, for the pinned candidate.  The argument is the
-one the exactness makes available rather than blocks:
-
-`R(alt + u) >= R(alt) - ||grad R(alt)|| ||u|| + (lambda/2) ||u||^2`,
-
-worst at `||u|| = ||grad|| / lambda`, so the floor on the tube is
-`R(alt) - ||grad||^2 / (2 lambda)`.
-
-Three things had to be got right, and each was wrong first.
+Kept for the three things that had to be got right, each of which was wrong
+first.  The *result* is in "Where this stands, now" above and is now the Arb one;
+this section is about the argument, not the number.
 
 **Smoothness is a precondition, not an assumption.**  A piecewise-linear
 additive potential and a bilinear `psi` are only *continuous* across their knot
-lines; their gradients jump there, and a Taylor argument across one is nonsense.
-The alternating gaps clear their nearest knots by `0.020533` in both grids, so
-the file computes that clearance and refuses any radius that exceeds it.  Inside
-one cell the additive part is linear — no second derivative at all — and `psi`
-is bilinear, contributing only its own constant cross term, so the Hessian is
-`F6`'s plus five constants.
+lines; their gradients jump, and a Taylor argument across one is nonsense.  The
+alternating gaps clear their nearest knots by `0.020533` in both grids, and both
+implementations compute that clearance and refuse any radius exceeding it.
 
-**One box is not a cover.**  The natural interval extension of `w''` over the
-whole tube goes negative by radius `0.005`: it reports `lambda = -0.885` on a
-radius-`0.008` tube taken in one piece.  The tube is covered by sub-boxes and
-`lambda` is the worst over the cover, which is a valid bound everywhere in the
-tube because the segment from the centre to any point of it stays inside.  At
-`3^6`, `4^6` and `6^6` boxes the radii `0.003`, `0.005` and `0.008` certify
-`lambda >= 0.1118`, `0.0774` and `0.0637`.  The test checks that the undivided
-version *fails*, so the covering is doing work rather than decorating.
+**One box is not a cover.**  The natural extension of `w''` over a radius-`0.008`
+tube taken whole reports `lambda = -0.885`.  The tube is covered by sub-boxes and
+`lambda` is the worst over the cover, valid everywhere in the tube because the
+segment from the centre stays inside.  The test checks that the undivided version
+*fails*, so the covering is doing work rather than decorating.
 
-**The centre has to be enclosed, not evaluated.**  Resting the conclusion on a
-floating-point `R(alt)` and `grad R(alt)` would put the whole thing back on an
-unbounded number, which is the mistake this directory keeps making.  Enclosing
-them naively is useless in a different way: the true gradient there is `6e-17`,
-a cancellation of terms a thousand times larger, and the first enclosure came
-back at `8.3e-4` — wide enough to swamp the quadratic term and make the tube
-certify nothing.  What fixed it: inside a single cell the bilinear slopes are
-*exactly linear* in the other coordinate, so their range is the two endpoint
-values rather than the min and max over the cell's edges.  That is an `O(1)`
-overestimate removed — one that does not shrink as the box shrinks.  With it the
-gradient encloses to `3.4e-10` and the shortfall drops to `1.163e-11`, which is
-now set by `analyzeBoxRigorous`'s own slack at a pinhole box and not by anything
-in this argument.
+**The centre has to be enclosed, not evaluated.**  The true gradient there is
+`6e-17`, a cancellation of terms a thousand times larger, and the first
+enclosure came back at `8.3e-4` — wide enough to certify nothing.  What fixed it
+in the JavaScript: inside a single cell the bilinear slopes are *exactly linear*
+in the other coordinate, so their range is the two endpoint values rather than
+the min and max over the cell's edges — an `O(1)` overestimate removed, one that
+does not shrink as the box shrinks.  Arb does not need the trick, which is part
+of why its shortfall is five thousand times smaller.
 
-**On what base.**  The arithmetic here is `tiling_rigorous.js` — mine, with
-hand-written transcendentals and error constants I chose.  The Arb
-reimplementation covers the *chain* coercivity theorem, not this one.  So this
-is certified modulo that base: the same footing every sweep in this directory
-stands on, and a weaker footing than `dev/coercivity_arb.py`.
+And a fourth, from the Arb rebuild: the block functional's linear term is
+`(1/p) sum g`, not the chain average's `(6/p) sum g`.  Using the wrong one put
+`R` `0.0151057` high — exactly `(L+H)/2 * 5/3000` — and the check that caught it
+was the gradient: at a pinned critical point the gradient must vanish, and it did
+not.
 
-So the tube half stands at `E_alt - 1.2e-11`.  What covers everything outside it
-is the sweep, and where that stands is stated once, in "Where this stands, now"
-above — not here, because a second present-tense account of the same thing is how
-this document came to contradict itself in the first place.
 
 ## The wall, certified
 
