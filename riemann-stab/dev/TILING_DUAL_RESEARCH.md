@@ -1248,6 +1248,47 @@ So the state is: enclosures built and tested, sweep built and tested, one local
 argument missing, one refine stage missing, and a certificate that no adversary
 has broken and no interval has touched.
 
+### The sweep, run — on part of the space
+
+The outside-the-tube half has now run, in double precision, on a truncated cube:
+
+| | |
+| --- | --- |
+| target | `E_alt = 0.003957393309109344` |
+| cube | `[0, 3]^6` |
+| tube radius | `0.008` |
+| boxes | `37 878 163` |
+| collapses | `15 244 320` |
+| complete | **yes**, no counterexample, nothing unresolved |
+| checksum | `03b032e373a9eb90:37878163` |
+
+So: every six-gap block with all gaps below `3`, outside the two alternating
+tubes of radius `0.008`, has reduced cost at least the alternating chain energy.
+Exhaustively — a subdivision that terminated, not a search that gave up.
+Together with the tube result that region is covered outright, at
+`E_alt - 1.2e-11`.
+
+**Three things this is not.**  It is *double precision*: the table kernel with a
+`1e-10` safety margin, the ladder rung this directory calls "exhaustively
+subdivided in double precision", not the one it calls "with proved enclosures".
+The rigorous version is the same code with `--rigorous` and has not been run.
+
+It is a *truncated* cube.  The tail lemma's cube for this certificate is `28`;
+blocks with a gap between `3` and `28` are not covered, so this is **not a block
+floor** and does not license any statement about chains.  What it is is an
+exhaustive check over the region containing every configuration anyone here has
+cared about — the alternating state at `1.04` and `1.98`, both defect
+orientations, and the long-gap block at `2.956`.  The full cube is running.
+
+And it is a check of *this candidate*, which came out of a floating-point LP and
+is not otherwise verified.  What the sweep removes is the objection that the
+three adversaries were gradient descents that could have missed a hole: over
+`[0, 3]^6` there is now no hole to miss.
+
+`dev/tiling_pair.sweep.json` records the row with its checksum and the hashes of
+the nine sources that determine it; `dev/check_pair_sweep.js` verifies those on
+every suite run and says, every time, that it did not redo the traversal.
+
 ### The tube, proved
 
 The half a branch-and-bound structurally cannot do is now done.

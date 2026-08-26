@@ -19,6 +19,7 @@ echo "== rigorous arithmetic checks ==" && node tiling_rigorous_test.js
 echo "== pair-state coboundary checks ==" && node tiling_pair_test.js
 echo "== bilinear enclosures and the pair sweep ==" && node tiling_pair_interval_test.js
 echo "== the tube a sweep cannot do ==" && node tiling_pair_local_test.js
+echo "== pair sweep transcript ==" && node check_pair_sweep.js
 echo "== tube-restricted block sweep checks ==" && node tiling_defect_test.js
 echo "== interval sweep checks ==" && node tiling_interval_test.js
 
