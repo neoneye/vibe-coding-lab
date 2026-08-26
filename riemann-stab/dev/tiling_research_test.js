@@ -182,6 +182,30 @@ check('block size eight beats the manuscript choice by about 1.9e-5',
   `${peak.bound - sevenRow.bound}`);
 check('block-size scan states its conditionality', /cannot check/.test(scan.note));
 
+
+// The compatibility gap -- chain minimum minus isolated-block minimum -- turns
+// out not to grow with the block size, which is what an end effect looks like.
+const gapData = golden.compatibility_gap;
+let smallestGap = Infinity, largestGap = -Infinity;
+for (const row of gapData.rows) {
+  const scanRow = golden.block_size_scan.rows.find(r => r.n === row.n);
+  const recomputed = T.periodicChainEnergy(scanRow.gaps, row.n, golden.p);
+  check(`compatibility gap ${row.n}: chain side matches the block-size scan`,
+    close(recomputed, row.chainCandidate, 5e-12), `${recomputed}`);
+  check(`compatibility gap ${row.n}: gap arithmetic`,
+    close(row.chainCandidate - row.blockMinimum, row.gap, 5e-13));
+  smallestGap = Math.min(smallestGap, row.gap);
+  largestGap = Math.max(largestGap, row.gap);
+}
+check('the compatibility gap never leaves a narrow band',
+  smallestGap > 1.1e-4 && largestGap < 1.6e-4, `${smallestGap} .. ${largestGap}`);
+const firstGap = gapData.rows[0].gap;
+const lastGap = gapData.rows[gapData.rows.length - 1].gap;
+check('the compatibility gap shows no growth with block size',
+  Math.abs(lastGap - firstGap) < 0.3e-4, `${firstGap} -> ${lastGap}`);
+check('compatibility-gap note states the direction of the bound',
+  /lower bound on the true one/.test(gapData.note));
+
 if (failed) {
   console.error(`${failed} tiling-research checks failed`);
   process.exit(1);

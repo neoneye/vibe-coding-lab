@@ -366,6 +366,41 @@ margin comparable to the one that already works at six.
 
 
 
+
+## Unusual stone: the compatibility gap is an end effect
+
+The number this whole directory is chasing is the compatibility gap — the chain
+minimum minus the isolated-block minimum, `1.31e-4` at `n = 7`.  Measuring it
+at every block size gives a surprise: it does not grow.
+
+| `n` | isolated block minimum | chain candidate | gap |
+|---:|---:|---:|---:|
+| 5 | `0.002627169469` | `0.002767634662` | `1.405e-4` |
+| 6 | `0.003238101026` | `0.003389815865` | `1.517e-4` |
+| 7 | `0.003826231211` | `0.003957393309` | `1.312e-4` |
+| 8 | `0.004388737387` | `0.004524418568` | `1.357e-4` |
+| 9 | `0.004935586734` | `0.005065102444` | `1.295e-4` |
+| 10 | `0.005454743634` | `0.005607259037` | `1.525e-4` |
+| 11 | `0.006015956917` | `0.006134360830` | `1.184e-4` |
+
+The block minima survived six independent differential-evolution runs at four
+times the usual budget without moving, so they are converged upper bounds,
+which makes each gap a *lower* bound on the true one.  Across `n = 5` to `11`
+the gap stays inside `[1.18, 1.53]e-4` and oscillates with the parity of the
+block instead of trending — odd gap counts sit high, even ones low.
+
+That is exactly what an end effect looks like.  A finite block is cheaper than
+the chain because it can relax its two free ends, and the saving from doing so
+does not care how long the block is.  The bulk of the block is already paying
+chain prices.
+
+It also says something about the block-size question above.  Since the
+chain-over-block improvement is worth the same `~1.3e-4` at every `n`, the
+choice of block size is not a question about how much compatibility costs — it
+is governed entirely by the projection's own trade-off between a floor that
+grows with `n` and a span term that grows with `n` too.  Which is why the peak
+sits at `n = 8` and is shallow on both sides.
+
 ## Concrete next proof program
 
 Steps 1 through 3 of the old program are done — see the sweep section above.
