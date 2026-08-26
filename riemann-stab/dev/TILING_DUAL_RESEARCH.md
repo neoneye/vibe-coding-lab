@@ -182,6 +182,22 @@ venv/bin/python tiling_additive_search.py refine record.json 0.003951 26 compact
 `tiling_additive.js` evaluates and audits; `tiling_additive_test.js` re-audits
 the shipped file from scratch on every suite run and fails if a floor moves.
 
+The sweeps whose numbers are quoted below take minutes to hours, so the suite
+runs only the cheap ones and the long runs go through `sweep.js`:
+
+```
+node dev/sweep.js fast     compact 0.0039 0.00394 0.003949
+node dev/sweep.js fast     record  0.00395 0.003955
+node dev/sweep.js rigorous compact 0.0038 0.0039
+node dev/sweep.js fast     bare    0.0038
+```
+
+`bare` is the zero potential, for which the reduced cost is the isolated block
+functional; that run is the control reproducing the published Proposition F6.
+Every number in `tiling_interval.results.json` comes from one of these lines,
+and the suite checks the recorded outcomes stay consistent with the audited
+floors.
+
 ### Status
 
 Still numerical.  The coefficients are floating-point LP output and the floors
