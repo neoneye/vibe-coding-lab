@@ -64,19 +64,23 @@ Three different things were being called "verified", and they are not the same.
 
 | | floor | conditional projection |
 |---|---:|---:|
-| replayed, rigorous | `0.003` | `0.6724883611` |
-| replayed, fast | `0.0025` | — |
+| replayed by the suite, rigorous | `0.003` | `0.6724883611` |
+| **transcripted, rigorous** | **`0.0038`** | **`0.6730085279`** |
 | transcripted, fast, unreplayed | `0.003956` | `0.6731093501` |
-| reported without transcript | `0.003956` rigorous | — |
+| reported without transcript | rigorous above `0.0038` | — |
 | **defensible unconditional record** | — | **`0.6725007037`** |
 
-Note what the first row means: the replayed rigorous floor `0.003` projects
-*below* the published constant.  A floor only improves on `19/5000` once it
-exceeds it, and no rigorous row currently does.  The improvement claimed in this
-directory is not, at this moment, backed by a reproducible artifact.  That is a
-statement about evidence, not about whether the sweeps happened — but the
-distinction is the entire point of the transcript mechanism, and it was
-introduced precisely because nothing was enforcing it.
+The rigorous rung now *reaches* the published local floor `19/5000` with a
+reproducible artifact — 7 048 899 boxes, checksum `791eadaf99dafbf6` — and does
+not exceed it.  Matching the published certificate is not improving on it: the
+projection of `0.0038` is exactly the published `0.6730085279`.  `0.0039` is
+running next, and that is the first target whose completion would constitute an
+improvement backed by evidence rather than by recollection.
+
+Note also that the earlier untranscripted `0.0038` run reported 7 200 335 boxes
+against the 7 048 899 measured now.  The difference is the second-order Taylor
+form for the value, added after that run and never re-measured against it.
+Neither number was wrong; nothing was tracking which code produced which.
 
 A stronger form was considered and rejected on cost: a persistent partition
 certificate, listing every disposed box for an independent checker to verify

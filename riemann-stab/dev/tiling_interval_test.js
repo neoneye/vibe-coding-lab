@@ -256,9 +256,16 @@ check('the file refuses to call anything simply "verified"',
   /Nothing here is called "verified"/.test(results.naming));
 // The rigorous rung is the one that would carry a claim, so its status is
 // asserted explicitly rather than inferred from a maximum.
-check('no rigorous row yet reaches the published local floor',
-  results.bestTranscriptedRigorousFloor < 19 / 5000,
-  `${results.bestTranscriptedRigorousFloor} -- if this fires, the ladder moved and the docs need updating`);
+// The rigorous rung is the one that would carry a claim, so where it stands
+// relative to the published local floor is asserted explicitly rather than left
+// to be inferred from a maximum.  It currently reaches 19/5000 and does not
+// exceed it: matching the published certificate, not improving on it.
+check('the rigorous ladder reaches the published local floor',
+  results.bestTranscriptedRigorousFloor >= 19 / 5000 - 1e-12,
+  `${results.bestTranscriptedRigorousFloor}`);
+check('and does not yet exceed it',
+  results.bestTranscriptedRigorousFloor <= 19 / 5000 + 1e-12,
+  `${results.bestTranscriptedRigorousFloor} -- if this fires the ladder moved and both surfaces need updating`);
 
 if (failed) {
   console.error(`${failed} interval-sweep checks failed`);
