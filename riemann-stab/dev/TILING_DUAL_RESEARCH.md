@@ -1486,6 +1486,87 @@ missing constant of the crystallization program is now pinned to twenty digits
 and proved positive *for the wall that occurs*, which is strictly more than
 "numerical evidence", and strictly less than the theorem.
 
+## Unusual stone: what happens when the pressure moves
+
+Everything else here studies the chain energy at one value of the pressure
+parameter, `p = 3000`, inherited from the manuscript.  The energy is a
+one-dimensional particle system — a pressure term `(sum g)/p` plus a pair
+interaction `w` summed over lags `1..6` — and for a *convex* decaying
+interaction the ground state of such a system is equally spaced.  `w` is not
+convex: it is `(K/K0)^2`, which oscillates as it decays and vanishes at the zeros
+of `K`.  At `p = 3000` the ground state is period two.  Nobody had asked what it
+does as `p` moves, and the answer accounts for several numbers this directory
+has been carrying without an explanation.
+
+### The ground state is mode-locked, and the lock is to a zero of the kernel
+
+The zeros of `K` are the *free* distances: `w` vanishes there, so a pair sitting
+on one costs nothing.  They sit at
+
+`z_1 = 1.057278`, `z_2 = 2.030068`, `z_3 = 3.020243`, `z_4 = 4.015236`, …
+
+approaching integer spacing from below.  As `p` rises the mean gap climbs in
+plateaus, and the plateau values are the **halved zeros**:
+
+| `k` | period | mean gap | `z_k/2` | `mean - z_k/2` | `mean - k/2` |
+| --- | --- | --- | --- | --- | --- |
+| 2 | 1 | `1.016274173` | `1.015033765` | `1.24e-3` | `1.63e-2` |
+| 3 | 2 | `1.510502760` | `1.510121496` | `3.81e-4` | `1.05e-2` |
+| 4 | 1 | `2.007689206` | `2.007617804` | `7.14e-5` | `7.69e-3` |
+| 5 | 2 | `2.506168559` | `2.506104224` | `6.43e-5` | `6.17e-3` |
+| 6 | 1 | `3.005088255` | `3.005091395` | `-3.14e-6` | `5.09e-3` |
+| 7 | 2 | `3.504376231` | `3.504366406` | `9.83e-6` | `4.38e-3` |
+
+The lock is to `z_k/2` and not merely to the half-integer `k/2`: the last two
+columns differ by one to two orders of magnitude at every `k`, and the `z_k/2`
+error shrinks with `k` while the `k/2` error does not.  What is locked is the
+**lag-two** distance, `2 * mean`, onto a zero of `K`.
+
+**Which zero it is decides the period, and the rule is parity.**  Even `k` gives
+period one, every gap `z_k/2`.  Odd `k` gives period two — because a single gap
+of `z_k/2` would put the lag-*one* distance near a maximum of `w`, and splitting
+the sum into a short and a long gap keeps the lag-two distance on the zero while
+moving both lag-one distances towards the neighbouring zeros.  Checked for
+`k = 2` through `7`.  So the alternating state at `p = 3000` is the `k = 3`
+plateau, and it is period two for a reason: `3` is odd.
+
+Between the locked plateaus sit others at periods three and four, with the
+short-to-long ratio running through small rationals — `3:1`, `2:1`, `1:1`, `1:2`
+— which is the shape of a devil's staircase.
+
+### The wall tensions are the order parameters of the plateau
+
+A low-low adjacency is a nucleus of the phase that wins below the plateau, and a
+high-high adjacency a nucleus of the one that wins above it.  So each tension
+should fall to zero at its own end of the plateau.  It does:
+
+`tau_LL = 0` at `p = 1425.709927`,  `tau_HH = 0` at `p = 3521.815455`.
+
+**`p = 3000` sits `75.1%` of the way across.**  That single fact accounts for
+things this directory had recorded without accounting for:
+
+- why `tau_LL / tau_HH = 7.430` at `p = 3000` — the high-high end is much
+  nearer;
+- why the high-high defect is the near-free basin that blocks the certificate
+  program, while the low-low defect costs `2.4e-4` and never binds;
+- and therefore why the additive family stops `1.66e-7` short.  **The difficulty
+  of proving crystallization at `p = 3000` is a measure of how close `p = 3000`
+  is to a phase boundary.**
+
+One thing the single-wall calculation cannot see: a periodic *array* of walls
+takes over earlier than a single wall stops costing.  The period-three state
+wins near `p = 3350` while `tau_HH` stays positive out to `3521.8`.  Walls
+attract.
+
+### What this predicts
+
+The degeneracy gap between the alternating state and its best periodic
+competitor is an inverted U across the plateau — `8.6e-5` at `p = 2000`,
+`2.1e-5` at `p = 3000`, `1.1e-5` at `p = 3200`, negative outside.  If the
+certificate program's difficulty really is plateau proximity, then the same
+program run at `p = 2000` should reach its ceiling far more easily than at
+`p = 3000`.  That is a falsifiable prediction and it has not been tested.
+
 ## Unusual stone: reversal cohomology
 
 The bare block energy is unchanged when a six-gap edge is reversed.  If `Phi`
