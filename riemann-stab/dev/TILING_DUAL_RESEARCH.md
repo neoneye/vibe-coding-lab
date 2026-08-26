@@ -20,8 +20,9 @@ previously exist.
   that turns a per-edge coboundary floor into a chain floor with an `O(1)`
   boundary term; the charge identity for two-phase words; the nonnegativity and
   compact support of the weight's Fourier transform; and the arithmetic of the
-  projection, two-sided-pinned at each swept floor.  Twenty Lean theorems,
-  standard axioms only.
+  projection, two-sided-pinned at the assumed floor.  Sixteen Lean theorems,
+  standard axioms only — the count the axiom audit prints, which is the only
+  count that means anything.
 - **Exhaustively subdivided in double precision.**  The chain floor `0.003956`,
   for every gap sequence, periodic or not — `99.1%` of the whole available
   improvement.  Also, as a control, the published
@@ -70,9 +71,12 @@ Three different things were being called "verified", and they are not the same.
 | reported without transcript | rigorous above `0.0038` | — |
 | **defensible unconditional record** | — | **`0.6725007037`** |
 
-The rigorous rung now *reaches* the published local floor `19/5000` with a
-reproducible artifact — 7 048 899 boxes, checksum `791eadaf99dafbf6` — and does
-not exceed it.  Matching the published certificate is not improving on it: the
+The rigorous rung now *reaches* the published local floor `19/5000`.  Precisely:
+that row is **transcripted, not replayed** — 7 048 899 boxes, checksum
+`791eadaf99dafbf6`, current input hashes, and a replay command — but the suite
+does not redo those seven million boxes, so it is a reproducible claim rather
+than an independently reproduced result.  It does not exceed the published
+floor either.  Matching the published certificate is not improving on it: the
 projection of `0.0038` is exactly the published `0.6730085279`.  `0.0039` is
 running next, and that is the first target whose completion would constitute an
 improvement backed by evidence rather than by recollection.
@@ -810,10 +814,13 @@ sharing no code with it.
 
 - *Existence and uniqueness.*  A Krawczyk test on `dE/dL = dE/dH = 0` proves a
   unique two-periodic critical point in a box of halfwidth `1e-6` about the
-  quoted values.  Iterating the test pins it to the last bit of a double:
+  quoted values.  Iterating the test tightens it to
 
-  `L in [1.041680103448486, 1.041680103448487]`,
-  `H in [1.979467231403224, 1.979467231403225]`.
+  `L in [1.0416801034484717, 1.0416801034485021]`  (width `3.0e-14`),
+  `H in [1.9794672314032040, 1.9794672314032447]`  (width `4.1e-14`).
+
+  The width floor is the gradient enclosure itself: `w'` is only known to a few
+  times `1e-14`, and no correct operator can beat that.
 
 - *A spectral gap.*  For every momentum `q in [0, pi]` and every two-periodic
   state in a box of halfwidth `1e-4` about that point, the smaller Bloch
@@ -822,10 +829,18 @@ sharing no code with it.
   not reach, so it is not vacuous.
 
 Together: **the alternating two-cycle is a strict local minimum of the chain
-energy, with a certified spectral gap.**  The previously reported softest mode
-`1.66129` was a numerical measurement at a discrete grid of momenta; the true
-minimum over `q` sits at `q/pi = 0.929`, between grid points, which the grid
-could not see.
+energy, with a certified spectral gap of `1.6`.**
+
+Two things this does *not* say, both of which an earlier draft of this section
+did.  The certification proves a lower bound; it does not isolate the minimising
+momentum.  A numerical scan puts the minimum near `q/pi = 0.929`, between the
+grid points the older routine sampled, but that location is measured, not
+certified, and nothing here depends on it.  And the enclosure is `3.0e-14` wide
+in `L` and `4.1e-14` in `H` — not "the last bit of a double", which was an
+artifact of a Krawczyk operator that collapsed the gradient enclosure to its
+midpoint and so reported an enclosure narrower than the gradient uncertainty
+that produced it.  That operator was unsound; it is repaired, and the width
+above is what a correct one gives.
 
 **What this does not establish, and the gap is the whole problem.**  It is local.
 It says nothing about configurations far from the alternating state, nothing
@@ -838,10 +853,19 @@ Converting even the local statement into a quadratic growth bound with a
 certified *radius* would need Hessian control off the two-periodic slice, which
 this file does not attempt.
 
-**A correction it produced.**  The `(1.041680, 1.979467)` quoted throughout this
-directory is a six-decimal rounding, and its chain energy `0.003957393309210` is
-`1.0e-13` *above* the true minimum `0.003957393309109`.  Immaterial to every
-projection here, but the ceiling constant was being quoted from the rounding.
+**A correction it produced, and this time enclosed rather than computed.**  The
+`(1.041680, 1.979467)` quoted throughout this directory is a six-decimal
+rounding.  The chain energy at the certified critical point, *rigorously
+enclosed*, is
+
+`E in [0.003957393309106188, 0.003957393309112507]`   (width `6.3e-15`),
+
+whereas the ceiling constant this directory quotes everywhere,
+`0.003957393309209766`, lies **outside** that interval — about `1.0e-13` too
+high, because it was evaluated at the rounding.  Immaterial to every projection
+here, and now a certified statement rather than a number read off the ordinary
+floating-point kernel, which carries no bound and should never have been called
+a true minimum.
 
 ## Unusual stone: reversal cohomology
 
@@ -898,6 +922,9 @@ point in the corresponding neighborhood.
 This suggests a proof route unlike a pointwise block certificate: establish
 two locally coercive alternating phases, classify all low-energy blocks into
 their neighborhoods, and charge LL and HH defects by separate certified costs.
-The present wall tension and spectral gap are numerical evidence only.  A proof
+The wall tension is numerical evidence only.  The spectral gap is no longer:
+it is certified at `1.6` over a box around the critical point, by the Bloch
+reduction in `tiling_coercivity.js` — see the local-theorem section above.  This
+paragraph predates that and said both were numerical.  A proof
 would need interval Hessian bounds inside the phase neighborhoods and a finite
 transition certificate outside them.

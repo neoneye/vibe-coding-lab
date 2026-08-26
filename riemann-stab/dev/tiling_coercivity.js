@@ -61,11 +61,13 @@ function blochSymbol(qLo, qHi, L, H) {
       for (let cell = -4; cell <= 4; cell++) {
         const entry = hessianEntry(alpha, 2 * cell + beta, L, H);
         if (entry[0] === 0 && entry[1] === 0) continue;
-        const cosine = cell === 0 ? [1, 1] : R.cosRange(qLo * cell, qHi * cell);
-        const sine = cell === 0 ? [0, 0] : R.sinRange(qLo * cell, qHi * cell);
-        // cos over [qLo*cell, qHi*cell] needs the endpoints ordered
-        const c = cell < 0 ? R.cosRange(qHi * cell, qLo * cell) : cosine;
-        const s = cell < 0 ? R.sinRange(qHi * cell, qLo * cell) : sine;
+        // q * cell is itself a rounded product, so the endpoints are widened
+        // before the trigonometric range is taken; otherwise the range could
+        // miss a sliver of the true one.
+        const p1 = R.rd(qLo * cell), p2 = R.ru(qHi * cell);
+        const aa = Math.min(R.rd(qHi * cell), p1), bb = Math.max(R.ru(qLo * cell), p2);
+        const c = cell === 0 ? [1, 1] : R.cosRange(aa, bb);
+        const s = cell === 0 ? [0, 0] : R.sinRange(aa, bb);
         M[alpha][beta].re = R.iAdd(M[alpha][beta].re, R.iMul(entry, c));
         M[alpha][beta].im = R.iSub(M[alpha][beta].im, R.iMul(entry, s));
       }
@@ -196,10 +198,19 @@ function krawczyk(L, H) {
     }
   }
   const rL = R.iSub(L, [mL, mL]), rH = R.iSub(H, [mH, mH]);
-  const CF = [C[0][0] * ((Fm[0][0] + Fm[0][1]) / 2) + C[0][1] * ((Fm[1][0] + Fm[1][1]) / 2),
-              C[1][0] * ((Fm[0][0] + Fm[0][1]) / 2) + C[1][1] * ((Fm[1][0] + Fm[1][1]) / 2)];
-  const KL = R.iAdd(R.iAdd([mL - CF[0], mL - CF[0]], R.iMul(E[0][0], rL)), R.iMul(E[0][1], rH));
-  const KH = R.iAdd(R.iAdd([mH - CF[1], mH - CF[1]], R.iMul(E[1][0], rL)), R.iMul(E[1][1], rH));
+  // C * F(m) must stay an INTERVAL.  F(m) is an enclosure even at a point --
+  // the weight derivative is only known to a few times 1e-14 -- so collapsing
+  // it to its midpoint here discards exactly the uncertainty the operator is
+  // supposed to propagate, and makes the inclusion test unsound.  An earlier
+  // version did that and reported an enclosure narrower than F(m) itself,
+  // which should have been the tell.
+  const CF = [
+    R.iAdd(R.iScale(Fm[0], C[0][0]), R.iScale(Fm[1], C[0][1])),
+    R.iAdd(R.iScale(Fm[0], C[1][0]), R.iScale(Fm[1], C[1][1]))
+  ];
+  const KL = R.iAdd(R.iAdd(R.iSub([mL, mL], CF[0]), R.iMul(E[0][0], rL)), R.iMul(E[0][1], rH));
+  const KH = R.iAdd(R.iAdd(R.iSub([mH, mH], CF[1]), R.iMul(E[1][0], rL)), R.iMul(E[1][1], rH));
+
   const inside = KL[0] > L[0] && KL[1] < L[1] && KH[0] > H[0] && KH[1] < H[1];
   return {proved: inside, K: [KL, KH], box: [L, H]};
 }
@@ -228,3 +239,25 @@ function refineCriticalPoint(L, H, iterations) {
   return best;
 }
 module.exports.refineCriticalPoint = refineCriticalPoint;
+
+// Rigorous enclosure of the chain energy at a two-periodic state.  Quoting a
+// value computed through the ordinary floating-point kernel and calling it the
+// true minimum was a category error: the ordinary kernel carries no bound.
+//   E = alpha (L+H)/2 + sum_{s<=6} [ w(D_s^0) + w(D_s^1) ]
+function chainEnergyInterval(L, H) {
+  const P = R.iAdd(L, H);
+  let total = R.iScale(P, ALPHA / 2);
+  for (let s = 1; s <= LAGS; s++) {
+    if (s % 2 === 0) {
+      const d = R.iScale(P, s / 2);
+      total = R.iAdd(total, R.iScale(R.weightRange(d[0], d[1]), 2));
+    } else {
+      const whole = R.iScale(P, (s - 1) / 2);
+      const withL = R.iAdd(whole, L), withH = R.iAdd(whole, H);
+      total = R.iAdd(total, R.iAdd(R.weightRange(withL[0], withL[1]),
+        R.weightRange(withH[0], withH[1])));
+    }
+  }
+  return R.iWiden(total, 1e-15);      // accumulation slack over ~20 operations
+}
+module.exports.chainEnergyInterval = chainEnergyInterval;

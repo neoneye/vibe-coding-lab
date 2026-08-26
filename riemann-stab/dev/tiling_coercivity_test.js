@@ -50,27 +50,38 @@ check('the Krawczyk image is strictly inside its box',
 const tooTight = C.krawczyk([L0 - 1e-9, L0 + 1e-9], [H0 - 1e-9, H0 + 1e-9]);
 check('and fails on a box too small to contain the zero', !tooTight.proved);
 
-// Iterating Krawczyk pins the critical point to the last bit of a double.
+// Iterating Krawczyk tightens the enclosure.  The floor on how tight is the
+// gradient enclosure itself -- w' is known to a few times 1e-14 -- so an
+// operator reporting anything much narrower is collapsing an interval
+// somewhere.  An earlier one did, by taking the midpoint of F(m).
 const refined = C.refineCriticalPoint([L0 - 1e-6, L0 + 1e-6], [H0 - 1e-6, H0 + 1e-6]);
 check('the critical point refines to a certified enclosure', refined.proved);
-check('and that enclosure is tight',
-  refined.L[1] - refined.L[0] < 1e-14 && refined.H[1] - refined.H[0] < 1e-14,
-  `${refined.L[1] - refined.L[0]}, ${refined.H[1] - refined.H[0]}`);
+const widthL = refined.L[1] - refined.L[0], widthH = refined.H[1] - refined.H[0];
+check('the enclosure is tight but not tighter than the gradient allows',
+  widthL > 1e-15 && widthL < 1e-12 && widthH > 1e-15 && widthH < 1e-12,
+  `${widthL}, ${widthH}`);
 const gradient = C.gradientInterval(refined.L, refined.H);
 check('the gradient enclosure over it contains zero',
   gradient[0][0] <= 0 && gradient[0][1] >= 0 && gradient[1][0] <= 0 && gradient[1][1] >= 0,
   `${JSON.stringify(gradient)}`);
 
-// And a finding worth pinning: the (L, H) quoted throughout the laboratory to
-// six decimals is a rounding, and its energy sits ABOVE the true minimum.
-check('the six-decimal values are a rounding of the certified point',
-  Math.abs(refined.L[0] - L0) > 1e-8 && Math.abs(refined.H[0] - H0) > 1e-8,
-  `${refined.L[0]} vs ${L0}`);
-const atRounded = T.periodicChainEnergy([L0, H0]);
-const atRefined = T.periodicChainEnergy([(refined.L[0] + refined.L[1]) / 2,
-  (refined.H[0] + refined.H[1]) / 2]);
-check('and the certified point has the lower energy of the two',
-  atRefined < atRounded, `${atRefined} vs ${atRounded}`);
+// The energy at that point, enclosed rather than computed.  Quoting a value out
+// of the ordinary kernel and calling it the true minimum was a category error:
+// that kernel carries no error bound at all.
+const energy = C.chainEnergyInterval(refined.L, refined.H);
+check('the chain energy at the critical point is rigorously enclosed',
+  energy[1] - energy[0] < 1e-13, `${energy[1] - energy[0]}`);
+const quotedCeiling = 0.003957393309209766;
+check('and the ceiling constant quoted elsewhere lies OUTSIDE that enclosure',
+  quotedCeiling > energy[1], `${quotedCeiling} vs ${energy[1]}`);
+check('by about 1e-13, consistent with a six-decimal rounding of (L, H)',
+  quotedCeiling - energy[1] > 5e-14 && quotedCeiling - energy[1] < 5e-13,
+  `${quotedCeiling - energy[1]}`);
+
+// The gap is certified at the enclosure itself, not merely at a nearby point.
+const atPoint = C.certifyGap(refined.L, refined.H, {target: 1.6});
+check('spectral gap at least 1.6 at the certified critical point', atPoint.complete,
+  `worst ${atPoint.worst}`);
 
 if (failed) {
   console.error(`${failed} coercivity checks failed`);
