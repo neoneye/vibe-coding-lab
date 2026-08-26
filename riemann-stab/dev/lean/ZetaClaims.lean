@@ -214,6 +214,40 @@ theorem swept_projection_ceiling :
 theorem swept_projection_improves :
     (6731086901411016860 : Int) > 6730085279277797613 := by omega
 
+/-- The floor established by the sweep that uses proved enclosures rather than
+    plain double precision: 39/10000.  It is strictly above the published local
+    certificate 19/5000, so the improvement does not rest on floating point. -/
+theorem rigorous_floor_beats_local_certificate :
+    (39 : Int) * 5000 > 19 * 10000 := by omega
+
+/-- Projection of the rigorous floor.  With c = 39/10000 the assembly uses 256
+    windows per block and blocks of 262 gaps, so
+
+        bound = (2620000 * H_MT - 5220) / 2610016,
+
+    pinned two-sidedly at [0.6730732086087052768, 0.6730732086087052769].
+    Arithmetic on a decimal, as with the other projection pins. -/
+theorem rigorous_projection_floor :
+    2620000 * HmtScaled - 5220 * 10000000000000000000
+      >= 6730732086087052768 * 2610016 := by
+  have hH : HmtScaled = 6725007036794116457 := rfl
+  rw [hH]
+  omega
+
+theorem rigorous_projection_ceiling :
+    2620000 * HmtScaled - 5220 * 10000000000000000000
+      <= 6730732086087052769 * 2610016 := by
+  have hH : HmtScaled = 6725007036794116457 := rfl
+  rw [hH]
+  omega
+
+/-- The rigorously swept projection is strictly above the published pin, and
+    strictly below the double-precision swept pin: the three sit in order. -/
+theorem projection_ladder :
+    (6730085279277797613 : Int) < 6730732086087052768
+    ∧ (6730732086087052769 : Int) < 6731086901411016860 := by
+  constructor <;> omega
+
 /-- Lab cross-functional signal as exact decimals (reference-resolution
     outputs of winCrossFunctional/mixtureStats):
     X = 1.3495972361 (smoothed-indicator parent)

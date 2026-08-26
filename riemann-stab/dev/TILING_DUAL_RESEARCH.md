@@ -19,8 +19,11 @@ Where things stand, most established first:
   Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
   with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  The chain floor
-  `0.0038`, which equals the published local floor rather than beating it.
-  Pushing the rigorous sweep past `19/5000` is the live front.
+  `0.0039`, strictly above the published local floor `19/5000`.  This is the
+  strongest rung the improvement itself has reached: 14 817 467 boxes, proved
+  trigonometric error bounds, outward-rounded arithmetic throughout.  It
+  projects to `0.6730732086` against `0.6730085279`, `63.6%` of the whole
+  available gain.  Pushing it further is the live front.
 - **Numerical only.**  The certificate coefficients; every floor above the
   swept ones; the two-phase kink energies and Bloch spectrum; and the entire
   block-size scan, which says the projection peaks at `n = 8`, not the `n = 7`
@@ -29,8 +32,8 @@ Where things stand, most established first:
   projection encodes.  Everything downstream of it is conditional on it.
 
 What is still required before the improved simple-zero projection can be used:
-the rigorous sweep has to clear `19/5000`, and the assembly has to be checked
-by someone with the manuscript.
+the assembly has to be checked by someone with the manuscript.  The rigorous
+sweep cleared `19/5000` on its own.
 
 ## What is new in this experiment
 
@@ -268,8 +271,18 @@ Two things had to be got right for the sweep to survive the change.
   and second order as advertised.  The second derivative only enters that
   second-order term, so a natural extension suffices for it.
 
-The rigorous sweep then costs about `2.4x` the boxes and `7x` the wall clock of
-the table version, which is affordable.
+The rigorous sweep then costs about `1.9x` the boxes and `9x` the wall clock of
+the table version, which is affordable — and it finishes:
+
+| certificate | target | boxes | wall clock | outcome |
+|---|---:|---:|---:|---|
+| compact | `0.0038` | 7 200 335 | 491 s | complete, equals the published floor |
+| compact | **`0.0039`** | 14 817 467 | 1027 s | **complete, strictly above `19/5000`** |
+
+`0.0039` projects to `0.6730732086` against the published `0.6730085279`.  That
+is `63.6%` of the whole available improvement, established with proved
+enclosures rather than with `Math.sin`.  The remaining `36%` is the double
+precision sweep's lead, and closing it is arithmetic, not research.
 
 What the rigorous sweep still assumes: that the engine implements IEEE 754 for
 the four basic operations, and that this code has no bugs.  The second is what
