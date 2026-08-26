@@ -79,6 +79,21 @@ it clears the programme's stated `0.00395` with margin, its cube is smaller by
 a factor of `28^6/16^6 ≈ 29`, and its amplitude — which also bounds the
 finite-chain boundary term — is five times smaller.
 
+### The certificate closes the aperiodic gap, which the period sweep never did
+
+A per-edge floor telescopes over *any* gap sequence.  For a window of `m` gaps,
+`sum_i R(window_i) = sum_i F6(window_i) + Phi(end) - Phi(start)`, so the block
+average is at least `kappa*(m-5)/m - 2*amplitude/m` for every configuration,
+periodic or not, and the liminf is at least `kappa`.  Together with the
+alternating cycle as an upper bound this pins the chain infimum inside
+
+`[0.003957227285, 0.003957393309]`,   width `1.66e-7`,
+
+over all configurations.  The period-9-through-64 sweep could always have
+missed a continuous or aperiodic minimizer; the certificate cannot.  That
+caveat, carried on the page since the probe started, is now retired — at
+floating-point confidence, like everything else here.
+
 The record floor is `1.66e-7` below the structural ceiling.  Both were audited
 in JavaScript by three adversaries that share no code with the Python search
 that produced them: the deterministic 729-word three-basin enumeration, a
