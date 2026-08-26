@@ -274,11 +274,74 @@ def certify_minimiser_window(L, H, w_lo, w_hi, upper, min_width=1e-11,
     return {"complete": True, "processed": processed}
 
 
+# ------------------------------------------------- a radius for the theorem
+# A spectral gap AT the alternating state says the energy is convex there and
+# nothing about how far that persists.  "Strict local minimum" with no radius is
+# a statement no global argument can use.  The radius is a finite computation.
+#
+# For g in the ell-infinity tube of radius r about the alternating state, every
+# distance D_{i,s} lies within s*r of its crystal value, so the interval Hessian
+# over the tube is a finite object.  Write H(g) = M + Delta with M the crystal
+# Hessian.  Delta is symmetric and banded with range five, so
+#
+#   ||Delta||_2 <= ||Delta||_inf = max_a sum_b |Delta_ab|,
+#
+# and the bound is attained by the majorant (all entries positive, symbol
+# maximal at q = 0), so nothing is lost by using it.  Hence
+#
+#   lambda_min(H(g)) >= lambda - drift(r)   for every g in the tube,
+#
+# and by Taylor with integral remainder along the segment -- which stays in the
+# tube, the tube being convex --
+#
+#   E(g_alt + u) - E_alt >= (lambda - drift(r))/2 * ||u||_2^2   for ||u||_inf <= r.
+def hessian_entry_tube(a, b, L, H, r):
+    """H_ab over the ell-infinity tube of radius r, off the two-periodic slice."""
+    acc = arb(0)
+    lo, hi = min(a, b), max(a, b)
+    for s in range(abs(a - b) + 1, LAGS + 1):
+        for i in range(hi - s + 1, lo + 1):
+            d = lag_distance(s, i % 2, L, H)
+            acc += weight_jet(arb(d.mid(), float(d.rad()) + s * r), 3)[2]
+    return acc * 2
+
+
+def hessian_drift(L, H, r):
+    """max_a sum_b |H_ab(g) - H_ab(g_alt)| over the tube.  Two parities suffice."""
+    worst = arb(0)
+    for a in (0, 1):
+        total = arb(0)
+        for b in range(a - 5, a + 6):
+            wide = hessian_entry_tube(a, b, L, H, r)
+            point = hessian_entry_tube(a, b, L, H, 0.0)
+            total += (arb(wide.rad()) + arb(point.rad())
+                      + abs(arb(wide.mid()) - arb(point.mid())))
+        if total > worst:
+            worst = total
+    return worst
+
+
+def growth_constant(L, H, r, gap=None):
+    """Certified c with E(g_alt+u) - E_alt >= (c/2) ||u||_2^2 for ||u||_inf <= r."""
+    return arb(SHARP_TARGET if gap is None else gap) - hessian_drift(L, H, r)
+
+
+def certified_radius(L, H, lo=0.0, hi=0.05, steps=40):
+    for _ in range(steps):
+        m = (lo + hi) / 2
+        if growth_constant(L, H, m) > 0:
+            lo = m
+        else:
+            hi = m
+    return lo
+
+
 # ---------------------------------------------------------------- the checks
 SHARP_TARGET = 1.6612
 NUMERICAL_MIN = 1.66128101824067719861
 NUMERICAL_ARGMIN = 0.929045114103617
 WINDOW = (0.925, 0.933)
+RADII = (0.001, 0.003, 0.005, 0.006)
 
 CHECKS = []
 
@@ -387,15 +450,31 @@ def main():
           "minimiser is at q/pi = %.12f" % (window["processed"], upper,
                                             NUMERICAL_ARGMIN))
 
+    # The radius.  Until now this file said "strict local minimum" and admitted
+    # in the same breath that it had no radius, which is a statement no global
+    # argument can use.
+    radius = certified_radius(L, H)
+    check("the local theorem has a certified radius", radius > 0.006,
+          "r* = %.8f in the sup norm" % radius)
+    quoted = []
+    for r in RADII:
+        c = growth_constant(L, H, r)
+        quoted.append((r, float(c.lower())))
+        check("quadratic growth at radius %g" % r, c > 0,
+              "E(g_alt+u) - E_alt >= %.6f ||u||_2^2 for ||u||_inf <= %g"
+              % (float(c.lower()) / 2, r))
+    check("the drift bound degrades monotonically, so r* is where it says",
+          all(quoted[i][1] > quoted[i + 1][1] for i in range(len(quoted) - 1)))
+
     bad = [c for c in CHECKS if not c[1]]
     print("\n%d checks, %d failed" % (len(CHECKS), len(bad)))
 
     if not bad:
-        write_transcript(L, H, E, g, gb, sharp, window, upper)
+        write_transcript(L, H, E, g, gb, sharp, window, upper, radius, quoted)
     return 1 if bad else 0
 
 
-def write_transcript(L, H, E, g, gb, sharp, window, upper):
+def write_transcript(L, H, E, g, gb, sharp, window, upper, radius, quoted):
     """Record what ran, hashed to this source.
 
     Nothing in this directory should quote a computed number that cannot be
@@ -425,6 +504,9 @@ def write_transcript(L, H, E, g, gb, sharp, window, upper):
                       "intervals": window["processed"],
                       "point_upper_bound": upper,
                       "numerical_argmin_over_pi": NUMERICAL_ARGMIN},
+        "quadratic_growth": {"certified_radius_sup_norm": radius,
+                             "constant_at_radius":
+                                 {str(r): c for r, c in quoted}},
         "checks": [{"name": n, "ok": ok} for n, ok, _ in CHECKS],
     }
     out = os.path.join(here, "coercivity_arb.results.json")

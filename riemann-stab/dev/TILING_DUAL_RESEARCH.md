@@ -899,10 +899,45 @@ about the energy of a wall between the two alternating phases, and nothing about
 the global floor -- which is what the sweeps are for and what an eventual
 crystallization argument would have to supply.  A coercivity statement of the
 form `E(g) - E(g_alt) >= c dist(g, A)^2 + tau (walls)` needs this constant *and*
-a wall tension *and* control of everything in between; only the first is here.
-Converting even the local statement into a quadratic growth bound with a
-certified *radius* would need Hessian control off the two-periodic slice, which
-this file does not attempt.
+a wall tension *and* control of everything in between.
+
+### A radius for it
+
+"Strict local minimum" with no radius is a statement no global argument can use,
+and until now this section said exactly that and admitted it in the same breath.
+The radius is a finite computation, and it is off the two-periodic slice.
+
+For `g` in the sup-norm tube of radius `r` about the alternating state, every
+distance `D_{i,s}` lies within `s r` of its crystal value, so the interval
+Hessian over the tube is a finite object -- two parities, eleven band entries
+each.  Write `H(g) = M + Delta` with `M` the crystal Hessian.  `Delta` is
+symmetric and banded with range five, so `||Delta||_2 <= max_a sum_b |Delta_ab|`,
+and that bound is *attained* by the majorant -- all entries positive, symbol
+maximal at `q = 0` -- so nothing is given away by using it.  Hence
+`lambda_min(H(g)) >= 1.6612 - drift(r)` throughout the tube, and Taylor with
+integral remainder along the segment, which stays in the tube because the tube is
+convex, gives
+
+`E(g_alt + u) - E_alt >= (c/2) ||u||_2^2`  whenever  `||u||_inf <= r`,
+
+with `c = 1.6612 - drift(r)` certified positive out to
+
+**`r* = 0.00695574`.**
+
+| `r` | growth constant `c/2` |
+| --- | --- |
+| `0.001` | `0.721009` |
+| `0.003` | `0.491623` |
+| `0.005` | `0.249143` |
+| `0.006` | `0.123197` |
+
+For scale: the wall profile deviates from the frustrated alternating reference by
+at most `8.877e-3`, which is `1.28 r*`.  So the wall is not a perturbation of a
+pure phase and this tube does not reach it -- the two halves of the coercivity
+statement are computed, and they do not yet meet.  That factor of `1.28` is the
+honest size of the remaining gap on this side, and the drift bound above is the
+crude step: it is a Schur bound on a majorant, and a mean-value form that tracked
+the sign of the third derivative of the weight would be sharper.
 
 **A correction it produced, and this time enclosed rather than computed.**  The
 `(1.041680, 1.979467)` quoted throughout this directory is a six-decimal
