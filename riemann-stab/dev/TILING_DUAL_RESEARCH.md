@@ -1322,7 +1322,16 @@ Put together with the previous two sections:
   nonnegative and the coboundary is bounded by the amplitude.
 
 so `R(g) >= E_alt - 1.163e-11` for **every** six-gap block, and by the
-telescoping lemma every chain has per-gap energy at least that.  `E_alt` is the
+telescoping lemma every chain has per-gap energy at least that.
+
+The telescoping lemma applies unchanged, and it is worth saying why rather than
+waving at it.  It needs only that the coboundary is a difference of a *bounded*
+state potential: `Phi(s_{i+1}) - Phi(s_i)` sums to `Phi(end) - Phi(start)` over
+any finite chain, which is `O(1)` and vanishes in the density, and for a
+periodic chain it is exactly zero.  The pair potential
+`Phi(s) = sum_j phi_j(s_j, s_{j+1})` is bounded by the same sup-norms the
+amplitude already counts.  Nothing in the lemma cared that the additive
+potential was additive.  `E_alt` is the
 alternating chain's own energy, enclosed in Arb.  So this says the alternating
 chain is the minimiser, to within `1.2e-11`.
 
