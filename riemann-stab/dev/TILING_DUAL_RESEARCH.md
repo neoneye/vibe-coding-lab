@@ -163,29 +163,93 @@ well-posed finite computation — an interval sweep of one explicit piecewise
 linear inequality over one explicit finite cube — rather than a search for a
 family that might work at all.
 
+
+## The sweep runs: exhaustive subdivision reaches 0.00394
+
+The "next proof obligation" written earlier in this file — interval-sweep one
+explicit inequality over one explicit cube — turned out to be reachable, but
+not by the route that section proposed, and it needed one idea that section
+did not mention.
+
+**What does not work.**  Two things were tried and failed, and both are worth
+recording so they are not tried again.
+
+- *Naive subdivision.*  The measured enclosure slack of the box bound is first
+  order, about `0.045 * diameter`.  Certifying a floor `5e-5` under the true
+  minimum therefore needs boxes of diameter `1e-3`, and the cube holds about
+  `1e20` of those.  Hopeless, and no amount of hardware fixes it.
+- *A fully separable certificate.*  Replacing the six-dimensional inequality by
+  one-dimensional sup-convolution constraints is very appealing — verification
+  collapses to 21 one-dimensional inequalities — but the relaxation is far too
+  lossy.  Cut generation drove it below `0.0031`, under the published
+  `19/5000`, and it was still descending.  Separability throws away the
+  correlation the whole compatibility effect lives in.
+
+**What works: the monotonicity reduction.**  If the enclosure of `dR/dg_k` over
+a box misses zero, the minimum over that box lies on one face, so the box
+collapses to a face and loses a dimension.  Applied repeatedly this is the
+difference between `1e20` boxes and `1e7`.  With exact one-dimensional ranges
+for `w` and `w'` — `w` is nonnegative with zeros exactly at the zeros of `K`,
+and rises to a single interior maximum between consecutive zeros, so its range
+over any interval is a table lookup — the sweep finishes:
+
+| certificate | target | boxes | wall clock | outcome |
+|---|---:|---:|---:|---|
+| bare block `F6` | `0.0038` | 3 147 403 | 22 s | complete |
+| compact | `0.0038` | 3 582 525 | 25 s | complete |
+| compact | `0.0039` | 8 166 245 | 63 s | complete |
+| compact | `0.00392` | 10 506 937 | 84 s | complete |
+| compact | **`0.00394`** | 16 156 457 | 129 s | **complete** |
+| record | `0.0039` | 12 176 429 | 96 s | complete |
+| compact | `0.00396` | 8 779 523 | — | refused, counterexample `0.00395999969` |
+| bare block `F6` | `0.0039` | 940 375 | — | refused, counterexample `0.003840817` |
+
+The bare-block row is the control: with the zero potential the reduced cost is
+the isolated block functional, so that sweep is an independent exhaustive
+reproduction of the published Proposition F6 (`F6 >= 19/5000` for all
+nonnegative gaps), by machinery that shares no code with the Arb certificate.
+It also refuses `0.0039`, correctly, with a counterexample below the known
+isolated-block minimum.  A verifier that never fails proves nothing; this one
+fails exactly where it should.
+
+**What this buys.**  `0.00394` telescopes to a chain floor for every gap
+sequence, periodic or not, and projects a simple-zero constant of
+`0.6730989992` against `0.6730085279` from the published local certificate —
+`88.9%` of the entire improvement the alternating-chain candidate could ever
+deliver.
+
+**What is still missing.**  This is IEEE double precision with a `1e-10` safety
+margin per box, not directed-rounding interval arithmetic, and `Math.sin` is
+not correctly rounded.  So a completed sweep removes the *sampling* gap — the
+audited floors no longer rest on "no adversary found anything lower", because
+the entire cube was subdivided — but it does not remove the *floating-point*
+gap.  What changed is that the remaining work is now a reimplementation, not a
+research question: the proof structure is fixed, the cube is fixed, the
+subdivision is 16 million boxes and two minutes, and porting the four range
+primitives (`wRange`, `dwRange`, and the two piecewise-linear range queries) to
+Arb or MPFI is a bounded exercise.
+
 ## Concrete next proof program
 
-The five-dimensional cell-partition Bellman program below is no longer the
-cheapest route.  The additive normal form replaces a potential on five-gap
-cells by two functions of one variable, so the obligation collapses to:
+Steps 1 through 3 of the old program are done — see the sweep section above.
+What is left is exactly the arithmetic:
 
-1. Fix a shipped certificate with margin — the compact one, not the record —
-   and rationalize its knots and coefficients.
-2. Interval-sweep `R(g) >= floor` over the single cube its own tail lemma
-   leaves open.  Branch on the six gaps; `R` is piecewise linear in the
-   potential part, so only the kernel needs interval enclosures.
-3. Discard sub-boxes by the tail bound `R >= (sum g)/3000 - amplitude` before
-   evaluating the kernel at all; that is what keeps the cube finite in
-   practice as well as in principle.
-4. Emit a standalone checker: rational knots, rational coefficients, interval
-   kernel bounds, no optimizer in the trusted base.
-5. Accept the projected zeta improvement only after the checker closes.  The
+1. Port the four range primitives to directed-rounding arithmetic: `wRange`,
+   `dwRange`, and the two piecewise-linear range queries.  Only the kernel
+   needs real enclosures; the potential part is piecewise linear with rational
+   knots and coefficients.
+2. Replace the breakpoint tables by *verified* enclosures of the zeros of `K`
+   and of `K'`.  The sweep needs those breakpoints to partition the line into
+   pieces on which `w` and `w'` are monotone; a missed piece silently narrows a
+   range, which is the one failure mode that would invalidate everything.
+3. Rerun the same 16 million boxes.  Nothing about the search changes.
+4. Emit a standalone checker with no optimizer in its trusted base.  The
    finite-chain boundary term is already explicit: it is bounded by the
    certificate amplitude, uniformly in the chain length.
 
-Either the sweep closes, or one of its sub-boxes supplies an explicit
-counterexample and the audited floor above is wrong.  Both outcomes are
-informative, and both are reachable with one finite computation.
+Point 2 is the one place where care is genuinely required, and it is worth
+stating why: every other approximation in the sweep makes bounds *wider*, which
+is safe, but a missing breakpoint makes a bound *narrower*, which is not.
 
 ## Unusual stone: reversal cohomology
 
