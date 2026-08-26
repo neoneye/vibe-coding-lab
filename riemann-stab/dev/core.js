@@ -579,6 +579,31 @@ function mixtureWindowFunctional(shapeA,shapeB,w,n){
   }
   return winFunctionalOfSamples(v,h).R;
 }
+// Where the reported interior optimum actually comes from.  Expanding R at a
+// mixture needs a cross term; substituting the inferred R12 for the bilinear
+// one is the whole difference.  With R12 the expansion has an interior minimum
+// below both parents; with the bilinear term the minimum is the pure endpoint.
+function mixtureExpansion(shapeA,shapeB,crossValue,n){
+  n=n||1200;
+  const h=1.0/n;
+  const a=new Float64Array(n),b=new Float64Array(n);
+  for(let i=0;i<n;i++){
+    const s=-0.5+(i+0.5)*h;
+    a[i]=psiWin(shapeA,s); b[i]=psiWin(shapeB,s);
+  }
+  const A=winFunctionalOfSamples(a,h), B=winFunctionalOfSamples(b,h);
+  const PA=A.integral, PB=B.integral;
+  const NAA=A.R*PA*PA, NBB=B.R*PB*PB;
+  const value=w=>{
+    const N=(1-w)*(1-w)*NAA + 2*w*(1-w)*crossValue*PA*PB + w*w*NBB;
+    const D=Math.pow((1-w)*PA + w*PB, 2);
+    return N/D;
+  };
+  let best={w:0,value:Infinity};
+  for(let k=0;k<=2000;k++){const w=k/2000, v=value(w); if(v<best.value) best={w,value:v};}
+  return {value,argmin:best.w,minimum:best.value,parentA:A.R,parentB:B.R,
+          interior:best.w>1e-3&&best.w<1-1e-3};
+}
 function mixtureStationarity(shapeA,shapeB,n){
   n=n||1200;
   const h=1.0/n;
@@ -605,6 +630,6 @@ const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,
-  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,crossFunctionalParts,winFunctionalOfSamples,cosineWindowFunctional,mixtureWindowFunctional,mixtureStationarity,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
+  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,crossFunctionalParts,winFunctionalOfSamples,cosineWindowFunctional,mixtureWindowFunctional,mixtureExpansion,mixtureStationarity,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
 if(typeof module!=='undefined'&&module.exports) module.exports=RH;
 if(typeof window!=='undefined') window.RH=RH;

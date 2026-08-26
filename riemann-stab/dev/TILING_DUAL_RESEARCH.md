@@ -572,8 +572,15 @@ lower the second moment.
 
 Note the two cross formulas differ in the double integral as well as the
 denominator: the inferred one puts the geometric mean at both arguments, the
-expansion of `R` gives the bilinear product.  The inferred dip differs from the
-honest object twice over.
+expansion of `R` gives the bilinear product.
+
+**The reported optimum is exactly that substitution.**  Expanding `R` at a
+mixture needs a cross term.  Feed it the inferred `R12` and the expansion has an
+interior minimum at `w ~ 0.09` (weight on the indicator) with value
+`1.327436`, below both parents — which is the claim on display.  Feed it the
+bilinear cross term instead and the minimum moves to the endpoint, at
+`R(psi_MT)` to `1e-9`.  Nothing else changes.  The interior optimum is not a
+property of the windows; it is the difference between the two cross terms.
 
 ## Unusual stone: reversal cohomology
 

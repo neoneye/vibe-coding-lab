@@ -223,6 +223,21 @@ console.log('--- the honest mixture functional has no interior optimum ---');
   ok('the inferred cross formula dips where the honest one does not',
     parts.cross < st.parentB - 1e-6 && st.bilinear > st.parentB - 1e-6,
     `inferred ${parts.cross}, honest ${st.bilinear}, parent ${st.parentB}`);
+
+  // And the whole reported interior optimum is that substitution.  Expanding R
+  // at a mixture needs a cross term: with the inferred R12 the expansion has an
+  // interior minimum below both parents; with the bilinear term it does not.
+  const withInferred = M.mixtureExpansion('ind', 'mt', parts.cross, n);
+  const withBilinear = M.mixtureExpansion('ind', 'mt', st.bilinear, n);
+  ok('with the inferred cross term the expansion has an interior optimum',
+    withInferred.interior && withInferred.minimum < Math.min(withInferred.parentA, withInferred.parentB),
+    `w*=${withInferred.argmin}, value ${withInferred.minimum}`);
+  ok('with the bilinear cross term it does not',
+    !withBilinear.interior && withBilinear.argmin === 1,
+    `w*=${withBilinear.argmin}`);
+  ok('and the bilinear expansion bottoms out exactly at the parent',
+    Math.abs(withBilinear.minimum - withBilinear.parentB) < 1e-9,
+    `${withBilinear.minimum} vs ${withBilinear.parentB}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
