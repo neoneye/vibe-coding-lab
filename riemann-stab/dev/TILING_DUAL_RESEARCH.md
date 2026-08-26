@@ -23,14 +23,12 @@ Where things stand, most established first:
   Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
   with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  The chain floor
-  `0.003949`, strictly above the published local floor `19/5000`.  This is the
-  strongest rung the improvement itself has reached: 42 531 993 boxes, proved
+  `0.003952`, strictly above the published local floor `19/5000`.  This is the
+  strongest rung the improvement itself has reached: 40 938 447 boxes, proved
   trigonometric error bounds, outward-rounded arithmetic throughout.  It
-  projects to `0.6731049397` against `0.6730085279`, `94.8%` of the whole
+  projects to `0.6731069199` against `0.6730085279`, `96.7%` of the whole
   available gain, and Lean pins that constant two-sidedly and strictly between
-  the published pin and the double-precision one.  It is within `1e-6` of the
-  certificate's own audited floor, so the sweep is no longer the limit — the
-  certificate is.
+  the published pin and the double-precision one.
 - **Numerical only.**  The certificate coefficients; every floor above the
   swept ones; the two-phase kink energies and Bloch spectrum; and the entire
   block-size scan, which says the projection peaks at `n = 8`, not the `n = 7`
@@ -317,15 +315,19 @@ the table version, which is affordable — and it finishes:
 | compact | `0.0039` | 14 817 467 | 1027 s | complete, strictly above `19/5000` |
 | compact | `0.00392` | 18 260 117 | 1285 s | complete |
 | compact | `0.00394` | 25 523 525 | 1792 s | complete |
-| compact | **`0.003949`** | 42 531 993 | 2924 s | **complete** |
+| compact | `0.003949` | 42 531 993 | 2924 s | complete |
+| sharp | **`0.003952`** | 40 938 447 | 2783 s | **complete** |
 
-`0.003949` projects to `0.6731049397` against the published `0.6730085279`.
-That is `94.8%` of the whole available improvement, established with proved
-enclosures rather than with `Math.sin` — and it is within `1e-6` of the
-certificate's own audited floor `0.003950948242`, so the rigorous sweep has
-essentially caught up with the certificate.  What is left is not the sweep: it
-is that the certificate itself stops at `0.003950948`, and the ceiling is
-`0.003957393`.
+`0.003952` projects to `0.6731069199` against the published `0.6730085279`.
+That is `96.7%` of the whole available improvement, established with proved
+enclosures rather than with `Math.sin`.
+
+The `0.003949` row is worth keeping for what it showed: it was within `1e-6` of
+the `compact` certificate's own floor, so the subdivision had caught up with the
+certificate and the certificate had become the binding constraint.  `sharp`
+removed that constraint in the same cube, and the very next rigorous run cleared
+`0.003952` in slightly *fewer* boxes than `0.003949` had needed on `compact` —
+the margin it has to resolve is larger.
 
 Two attempts to narrow the rigorous sweep's `~1.8x` box overhead are worth
 recording as failures.  A second-order Taylor form for the value bought `0.1%`

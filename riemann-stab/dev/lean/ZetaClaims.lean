@@ -232,29 +232,29 @@ theorem swept_projection_improves :
     (6731086901411016860 : Int) > 6730085279277797613 := by omega
 
 /-- The floor established by the sweep that uses proved enclosures rather than
-    plain double precision: 3949/1000000.  It is strictly above the published
-    local certificate 19/5000, so the improvement does not rest on floating
-    point. -/
+    plain double precision: 494/125000 = 0.003952.  It is strictly above the
+    published local certificate 19/5000, so the improvement does not rest on
+    floating point. -/
 theorem rigorous_floor_beats_local_certificate :
-    (3949 : Int) * 5000 > 19 * 1000000 := by omega
+    (494 : Int) * 5000 > 19 * 125000 := by omega
 
-/-- Projection of the rigorous floor.  With c = 3949/1000000 the assembly uses
+/-- Projection of the rigorous floor.  With c = 494/125000 the assembly uses
     253 windows per block and blocks of 259 gaps, so
 
-        bound = (259000000 * H_MT - 516000) / 258000903,
+        bound = (259000000 * H_MT - 516000) / 258000144,
 
-    pinned two-sidedly at [0.6731049396868491434, 0.6731049396868491435].
+    pinned two-sidedly at [0.6731069198665548660, 0.6731069198665548661].
     Arithmetic on a decimal, as with the other projection pins. -/
 theorem rigorous_projection_floor :
     259000000 * HmtScaled - 516000 * 10000000000000000000
-      >= 6731049396868491434 * 258000903 := by
+      >= 6731069198665548660 * 258000144 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
 
 theorem rigorous_projection_ceiling :
     259000000 * HmtScaled - 516000 * 10000000000000000000
-      <= 6731049396868491435 * 258000903 := by
+      <= 6731069198665548661 * 258000144 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
@@ -264,8 +264,8 @@ theorem rigorous_projection_ceiling :
     double-precision sweep gives.  No two of the intervals overlap, so the
     ordering does not depend on rounding. -/
 theorem projection_ladder :
-    (6730085279277797613 : Int) < 6731049396868491434
-    ∧ (6731049396868491435 : Int) < 6731086901411016860 := by
+    (6730085279277797613 : Int) < 6731069198665548660
+    ∧ (6731069198665548661 : Int) < 6731086901411016860 := by
   constructor <;> omega
 
 /-- Lab cross-functional signal as exact decimals (reference-resolution
