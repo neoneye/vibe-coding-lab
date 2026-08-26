@@ -1267,12 +1267,22 @@ by the repair (`lambda >= 0.0637` at radius `0.008`), and has since been
 superseded by the Arb version, which is independent of that arithmetic and
 sharper.
 
-**The two sweeps are being redone on the repaired arithmetic.**  Until they land
-the transcript check reports the recorded rows as stale, which is what it is for.
-The pre-repair runs completed at `50 203 847` boxes in double precision and
-`75 037 955` with proved enclosures; the repair moves every quantity involved by
-about `1e-16` relative, so they are expected to close again.  Expected, not
-established, and this section will say which.
+**Both sweeps have reclosed on the repaired arithmetic.**
+
+| | double precision | proved enclosures |
+| --- | --- | --- |
+| boxes, before the repair | `50 203 847` | `75 037 955` |
+| boxes, after | `50 184 539` | `75 004 893` |
+| collapses | `15 911 588` | `19 550 798` |
+| complete | yes | **yes** |
+| unresolved | `0` | `0` |
+| time | `479 s` | `5963 s` |
+| checksum | `a8bea1b0b603c5eb` | `e6bbfa8b87622e6e` |
+
+Both use *fewer* boxes than before the repair — 19 308 and 33 062 fewer — because
+the corner enclosure that replaced the unsound centered form is tighter than what
+it replaced as well as sound.  So the repair cost nothing and the statement did
+not move.
 
 **How big the remaining rebuild actually is.**  `dev/sweep_sample.js` records the
 boxes where the sweep's bound came closest to the target — the only ones where an
