@@ -19,11 +19,12 @@ Where things stand, most established first:
   Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
   with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  The chain floor
-  `0.00392`, strictly above the published local floor `19/5000`.  This is the
-  strongest rung the improvement itself has reached: 18 260 117 boxes, proved
+  `0.00394`, strictly above the published local floor `19/5000`.  This is the
+  strongest rung the improvement itself has reached: 25 523 525 boxes, proved
   trigonometric error bounds, outward-rounded arithmetic throughout.  It
-  projects to `0.6730862093` against `0.6730085279`, `76.3%` of the whole
-  available gain.  Pushing it further is the live front.
+  projects to `0.6730989992` against `0.6730085279`, `88.9%` of the whole
+  available gain, and Lean pins that constant two-sidedly and strictly between
+  the published pin and the double-precision one.
 - **Numerical only.**  The certificate coefficients; every floor above the
   swept ones; the two-phase kink energies and Bloch spectrum; and the entire
   block-size scan, which says the projection peaks at `n = 8`, not the `n = 7`
@@ -302,12 +303,13 @@ the table version, which is affordable — and it finishes:
 |---|---:|---:|---:|---|
 | compact | `0.0038` | 7 200 335 | 491 s | complete, equals the published floor |
 | compact | `0.0039` | 14 817 467 | 1027 s | complete, strictly above `19/5000` |
-| compact | **`0.00392`** | 18 260 117 | 1285 s | **complete** |
+| compact | `0.00392` | 18 260 117 | 1285 s | complete |
+| compact | **`0.00394`** | 25 523 525 | 1792 s | **complete** |
 
-`0.00392` projects to `0.6730862093` against the published `0.6730085279`.
-That is `76.3%` of the whole available improvement, established with proved
-enclosures rather than with `Math.sin`.  The remaining quarter is the
-double-precision sweep's lead, and closing it is arithmetic, not research.
+`0.00394` projects to `0.6730989992` against the published `0.6730085279`.
+That is `88.9%` of the whole available improvement, established with proved
+enclosures rather than with `Math.sin`.  The remaining tenth is the
+double-precision sweep's lead, and closing it is compute, not research.
 
 Two attempts to narrow the rigorous sweep's `~1.8x` box overhead are worth
 recording as failures.  A second-order Taylor form for the value bought `0.1%`
@@ -479,9 +481,10 @@ and explicit, the sweep is exhaustive, and it now runs on proved enclosures.
 What is left, in order of how much it buys per unit of work:
 
 1. **Compute.**  The rigorous sweep is at `0.00392` and the double-precision
-   one at `0.003955`; that lead is mostly just hours.  `0.00394` and `0.003949`
-   should be roughly 25 and 60 million rigorous boxes.  Nothing about the
-   method changes — `node dev/sweep.js rigorous compact 0.00394` and wait.
+   one at `0.003955`; that lead is mostly just hours.  `0.00394` took 25.5
+   million rigorous boxes and half an hour; `0.003949` should be roughly 60
+   million.  Nothing about the method changes — `node dev/sweep.js rigorous
+   compact 0.003949` and wait.
 2. **An independent implementation.**  Everything above trusts that this code
    has no bugs.  The cross-checks are real — 60-digit mpmath for the
    trigonometry, the exact-range table for every box analysis, the degenerate

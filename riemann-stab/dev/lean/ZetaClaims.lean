@@ -215,37 +215,40 @@ theorem swept_projection_improves :
     (6731086901411016860 : Int) > 6730085279277797613 := by omega
 
 /-- The floor established by the sweep that uses proved enclosures rather than
-    plain double precision: 39/10000.  It is strictly above the published local
-    certificate 19/5000, so the improvement does not rest on floating point. -/
+    plain double precision: 197/50000 = 0.00394.  It is strictly above the
+    published local certificate 19/5000, so the improvement does not rest on
+    floating point. -/
 theorem rigorous_floor_beats_local_certificate :
-    (39 : Int) * 5000 > 19 * 10000 := by omega
+    (197 : Int) * 5000 > 19 * 50000 := by omega
 
-/-- Projection of the rigorous floor.  With c = 39/10000 the assembly uses 256
-    windows per block and blocks of 262 gaps, so
+/-- Projection of the rigorous floor.  With c = 197/50000 the assembly uses 253
+    windows per block and blocks of 259 gaps, so
 
-        bound = (2620000 * H_MT - 5220) / 2610016,
+        bound = (25900000 * H_MT - 51600) / 25800318,
 
-    pinned two-sidedly at [0.6730732086087052768, 0.6730732086087052769].
+    pinned two-sidedly at [0.6730989992176360626, 0.6730989992176360627].
     Arithmetic on a decimal, as with the other projection pins. -/
 theorem rigorous_projection_floor :
-    2620000 * HmtScaled - 5220 * 10000000000000000000
-      >= 6730732086087052768 * 2610016 := by
+    25900000 * HmtScaled - 51600 * 10000000000000000000
+      >= 6730989992176360626 * 25800318 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
 
 theorem rigorous_projection_ceiling :
-    2620000 * HmtScaled - 5220 * 10000000000000000000
-      <= 6730732086087052769 * 2610016 := by
+    25900000 * HmtScaled - 51600 * 10000000000000000000
+      <= 6730989992176360627 * 25800318 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
 
-/-- The rigorously swept projection is strictly above the published pin, and
-    strictly below the double-precision swept pin: the three sit in order. -/
+/-- The three projection pins sit in strict order: what the published local
+    certificate gives, what the sweep with proved enclosures gives, and what the
+    double-precision sweep gives.  No two of the intervals overlap, so the
+    ordering does not depend on rounding. -/
 theorem projection_ladder :
-    (6730085279277797613 : Int) < 6730732086087052768
-    ∧ (6730732086087052769 : Int) < 6731086901411016860 := by
+    (6730085279277797613 : Int) < 6730989992176360626
+    ∧ (6730989992176360627 : Int) < 6731086901411016860 := by
   constructor <;> omega
 
 /-- Lab cross-functional signal as exact decimals (reference-resolution
