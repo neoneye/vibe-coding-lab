@@ -96,9 +96,14 @@ that row is **transcripted, not replayed** — 7 048 899 boxes, checksum
 does not redo those seven million boxes, so it is a reproducible claim rather
 than an independently reproduced result.  It does not exceed the published
 floor either.  Matching the published certificate is not improving on it: the
-projection of `0.0038` is exactly the published `0.6730085279`.  `0.0039` is
-running next, and that is the first target whose completion would constitute an
-improvement backed by evidence rather than by recollection.
+projection of `0.0038` is exactly the published `0.6730085279`.
+
+**This ladder is the additive certificate's, and only that.**  The pair
+certificate reaches much further and its status is stated separately in "Where
+this stands, now"; the two are not rungs of the same ladder and reading them as
+one is a mistake this document has invited before.  An earlier version of this
+paragraph ended "`0.0039` is running next", which stopped being true some
+sessions ago and stayed here.  Nothing is running it.
 
 Note also that the earlier untranscripted `0.0038` run reported 7 200 335 boxes
 against the 7 048 899 measured now.  The difference is the second-order Taylor
