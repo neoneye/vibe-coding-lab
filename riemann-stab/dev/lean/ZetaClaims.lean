@@ -196,32 +196,32 @@ abbrev RmtScaled : Int := 13274992963205883543
 theorem montgomery_taylor_complement :
     RmtScaled + HmtScaled = 2 * 10000000000000000000 := by decide
 
-/-- The exhaustively swept chain floor, as an exact rational: 3955/1000000.
-    It sits strictly above the published local certificate 19/5000, which is
-    the whole point of the sweep. -/
+/-- The exhaustively swept chain floor, as an exact rational: 989/250000
+    = 0.003956.  It sits strictly above the published local certificate
+    19/5000, which is the whole point of the sweep. -/
 theorem swept_floor_beats_local_certificate :
-    (3955 : Int) * 5000 > 19 * 1000000 := by omega
+    (989 : Int) * 5000 > 19 * 250000 := by omega
 
-/-- Projection of the swept floor.  With floor c = 3955/1000000 the shifted
+/-- Projection of the swept floor.  With floor c = 989/250000 the shifted
     block assembly uses 252 windows per block and blocks of 258 gaps, so
 
-        bound = (258*10^6 * H_MT - 514000) / 257003340,
+        bound = (258*10^6 * H_MT - 514000) / 257003088,
 
     the same algebra that turns the published floor 19/5000 into
     (1345000 * H_MT - 2680)/1340003.  Two-sided pin at the printed digits:
-    the constant lies in [0.6731086901411016860, 0.6731086901411016861].
+    the constant lies in [0.6731093501463616833, 0.6731093501463616834].
     As with the headline pin, Lean is checking arithmetic on a decimal, not
     the analytic derivation behind the assembly. -/
 theorem swept_projection_floor :
     258000000 * HmtScaled - 514000 * 10000000000000000000
-      >= 6731086901411016860 * 257003340 := by
+      >= 6731093501463616833 * 257003088 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
 
 theorem swept_projection_ceiling :
     258000000 * HmtScaled - 514000 * 10000000000000000000
-      <= 6731086901411016861 * 257003340 := by
+      <= 6731093501463616834 * 257003088 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
@@ -229,7 +229,7 @@ theorem swept_projection_ceiling :
 /-- The swept projection strictly improves on the published one: the two-sided
     pins do not overlap. -/
 theorem swept_projection_improves :
-    (6731086901411016860 : Int) > 6730085279277797613 := by omega
+    (6731093501463616833 : Int) > 6730085279277797613 := by omega
 
 /-- The floor established by the sweep that uses proved enclosures rather than
     plain double precision: 494/125000 = 0.003952.  It is strictly above the
@@ -265,7 +265,7 @@ theorem rigorous_projection_ceiling :
     ordering does not depend on rounding. -/
 theorem projection_ladder :
     (6730085279277797613 : Int) < 6731069198665548660
-    ∧ (6731069198665548661 : Int) < 6731086901411016860 := by
+    ∧ (6731069198665548661 : Int) < 6731093501463616833 := by
   constructor <;> omega
 
 /-- Lab cross-functional signal as exact decimals (reference-resolution

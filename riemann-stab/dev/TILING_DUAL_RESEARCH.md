@@ -18,8 +18,9 @@ Where things stand, most established first:
   compact support of the weight's Fourier transform; and the arithmetic of the
   projection, two-sided-pinned at each swept floor.  Twenty Lean theorems,
   standard axioms only.
-- **Exhaustively subdivided in double precision.**  The chain floor `0.003955`,
-  for every gap sequence, periodic or not.  Also, as a control, the published
+- **Exhaustively subdivided in double precision.**  The chain floor `0.003956`,
+  for every gap sequence, periodic or not — `99.1%` of the whole available
+  improvement.  Also, as a control, the published
   Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
   with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  The chain floor
@@ -263,7 +264,8 @@ over any interval is a table lookup — the sweep finishes:
 | compact | `0.00394` | 16 156 457 | 135 s | complete |
 | compact | `0.003949` | 32 617 969 | 277 s | complete |
 | record | `0.00395` | 32 931 519 | 283 s | complete |
-| record | **`0.003955`** | 54 730 585 | 476 s | **complete** |
+| record | `0.003955` | 54 730 585 | 476 s | complete |
+| sharp | **`0.003956`** | 54 518 075 | 458 s | **complete** |
 | compact | `0.00396` | 8 779 523 | — | refused, counterexample `0.00395999969` |
 | bare block `F6` | `0.0039` | 940 375 | — | refused, counterexample `0.003840817` |
 
@@ -275,12 +277,12 @@ It also refuses `0.0039`, correctly, with a counterexample below the known
 isolated-block minimum.  A verifier that never fails proves nothing; this one
 fails exactly where it should.
 
-**What this buys.**  `0.003955` telescopes to a chain floor for every gap
+**What this buys.**  `0.003956` telescopes to a chain floor for every gap
 sequence, periodic or not, and projects a simple-zero constant of
-`0.6731086901` against `0.6730085279` from the published local certificate —
-`98.4%` of the entire improvement the alternating-chain candidate could ever
-deliver.  The sweep now sits within `2.3e-6` of the certificate's own audited
-floor, so the subdivision, not the certificate, is what is left on the table.
+`0.6731093501` against `0.6730085279` from the published local certificate —
+`99.1%` of the entire improvement the alternating-chain candidate could ever
+deliver, against a ceiling of `0.6731102697`.  It sits `9.8e-7` below `sharp`'s
+own audited floor, so the certificate is again the binding constraint.
 
 ### Closing the floating-point gap
 
