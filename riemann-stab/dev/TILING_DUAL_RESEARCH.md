@@ -1474,6 +1474,25 @@ metastability limits; the branch crossings are the closest thing here to phase
 boundaries, and even they are crossings of two numerically selected branches, not
 certified global transitions.
 
+**The branches themselves are now certified, over pressure intervals.**
+`dev/branch_arb.py` does in Arb what the relaxation could not: for a whole
+*interval* of pressures at once, a Krawczyk test on the stationarity system
+proves a branch exists and is unique in an explicit box, and a verified Cholesky
+on the interval Hessian proves it is a strict local minimum there.
+
+- a unique period-two branch, strictly locally minimising, for every
+  `p in [2900, 3100]`, every `p in [3300, 3450]`, and every `p in [1400, 1600]`;
+- a unique period-three branch, likewise, for every `p in [3300, 3450]`;
+- and `E_2 - E_3` certainly negative at `p = 3360` (`-9.1605518e-7`) and
+  certainly positive at `p = 3380` (`+8.3208743e-7`), so **the two certified
+  branches cross between them**.
+
+That is a rigorous statement where "the branches cross at `3370.45`" was a
+numerical one.  It is **not** the statement that the ground state changes period
+there: nothing in it excludes configurations off these two branches, and doing
+that needs a transfer-operator or coboundary bound that is not built.  The
+crossing pressure itself, `3370.450721`, is still the relaxation's number.
+
 Consequences for what this section used to say, all withdrawn:
 
 - "`p = 3000` sits `75.1%` of the way across the plateau" was computed against
