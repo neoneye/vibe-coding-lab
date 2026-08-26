@@ -683,9 +683,15 @@ into a nonnegative Fourier sum; an index-truncated sum is not a two-body
 spatial energy, so the argument has nothing to act on.  Two attempts:
 
 - Bounding the full-lag energy below by `rho * what(0) - 1` and subtracting a
-  tail is hopeless: at the alternating cycle the full pair sum is about `0.0171`
-  while the quantity to be resolved is `1e-4`, so the tail must be known to
-  `0.5%` — far tighter than a linear-programming bound gives.
+  tail founders on the size of the tail.  Measured at the alternating cycle: the
+  pair part truncated at lag six is `9.3625e-4`, out to lag 400 it is
+  `3.5802e-3`, so the tail beyond lag six is at least `2.6439e-3` — twenty times
+  the `1.3116e-4` compatibility gap the whole exercise is trying to resolve.
+  A bound on it would have to be accurate to about `5%` relative, which a
+  linear-programming bound on a slowly converging `1/s^2` tail does not give.
+  (An earlier estimate here said the full pair sum was `0.0171` and the tail had
+  to be known to `0.5%`; both were wrong, from a `0.12/x^2` envelope that badly
+  overestimates. The numbers above are measured.)
 - Restricting the auxiliary function to `[-r, r]` so index truncation and
   distance truncation coincide needs every seven consecutive gaps to span more
   than `r`, which no configuration guarantees; tiny gaps break it, and the
