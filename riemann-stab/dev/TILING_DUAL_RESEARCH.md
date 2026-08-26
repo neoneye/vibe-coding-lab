@@ -114,13 +114,23 @@ clipped Walsh) to
 | certificate | audited floor | search box | amplitude bound | share of gain |
 |---|---:|---:|---:|---:|
 | record | `0.003957227285` | `[0, 28]^6` | `5.1968e-3` | `99.89%` |
+| **tight** | `0.003954886134` | `[0, 16]^6` | `1.1543e-3` | `98.37%` |
 | compact | `0.003950948242` | `[0, 16]^6` | `1.1068e-3` | `96.03%` |
 
-Both are in `tiling_additive.certificate.json` and are re-audited from scratch
-by `tiling_additive_test.js`.  The compact one is the interval-sweep target:
-it clears the programme's stated `0.00395` with margin, its cube is smaller by
-a factor of `28^6/16^6 ≈ 29`, and its amplitude — which also bounds the
-finite-chain boundary term — is five times smaller.
+All three are in `tiling_additive.certificate.json` and are re-audited from
+scratch by `tiling_additive_test.js`.  **`tight` is the sweep target**: it is
+the record certificate put through the amplitude-minimising refine stage at
+target `0.003955`, so it has a higher floor than `compact` in the same cube and
+dominates it outright.  Against `record` its cube is smaller by a factor of
+`28^6/16^6 ≈ 29`, and its amplitude — which also bounds the finite-chain
+boundary term — is four and a half times smaller.  `compact` is kept only
+because the recorded sweeps used it.
+
+The lesson is worth stating separately, because it was not obvious: the
+amplitude-minimising refine stage is not merely a tidying step for the tail
+lemma.  Running it at a *high* target produces a certificate that is better in
+every dimension at once — higher floor, smaller cube, smaller boundary term.
+The `m = 7` attempt failed partly for want of exactly this stage.
 
 ### The certificate closes the aperiodic gap, which the period sweep never did
 

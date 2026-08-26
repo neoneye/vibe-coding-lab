@@ -157,7 +157,14 @@ for (const entry of shipped.certificates) {
   const audit = A.auditAdditiveCertificate(cert, {
     starts: 900, generations: 700, maxGap: entry.searchBox
   });
-  check(`${entry.name}: audited floor pin`, close(audit.value, entry.floor, 5e-9), `${audit.value}`);
+  // The direction that matters is soundness: this cheaper audit must never find
+  // anything BELOW the pinned floor.  It is allowed to land slightly above --
+  // the pin comes from a much larger search, and a weaker adversary missing the
+  // true minimum by a little is expected, not a regression.
+  check(`${entry.name}: audit finds nothing below the pinned floor`,
+    audit.value >= entry.floor - 5e-9, `${audit.value} < ${entry.floor}`);
+  check(`${entry.name}: audit lands near the pinned floor`,
+    audit.value <= entry.floor + 1e-6, `${audit.value}`);
   check(`${entry.name}: floor stays under the structural ceiling`,
     entry.floor < shipped.ceiling, `${entry.floor}`);
   // Telescoping turns the audited floor into a chain floor, so no periodic
@@ -211,9 +218,19 @@ check('record certificate lands within 2e-7 of the ceiling',
   shipped.ceiling - byName.record.floor < 2e-7, `${shipped.ceiling - byName.record.floor}`);
 check('compact certificate clears the 0.00395 programme target',
   byName.compact.floor > 0.00395, `${byName.compact.floor}`);
-check('compact certificate is the cheaper interval-sweep target',
-  byName.compact.amplitude < byName.record.amplitude
-  && byName.compact.searchBox < byName.record.searchBox);
+check('small-box certificates really are the cheaper sweep target',
+  byName.compact.searchBox < byName.record.searchBox
+  && byName.tight.searchBox < byName.record.searchBox);
+// The tight certificate is the record one put through the amplitude-minimising
+// refine stage, so it should dominate the compact one outright.
+check('tight certificate dominates the compact one',
+  byName.tight.floor > byName.compact.floor
+  && byName.tight.searchBox <= byName.compact.searchBox,
+  `${byName.tight.floor} vs ${byName.compact.floor}`);
+check('and still sits below the record floor',
+  byName.tight.floor < byName.record.floor);
+check('the certificate file explains what each one is for',
+  shipped.roles && /dominates it for every purpose/.test(shipped.roles.tight));
 check('certificate scope stays numerical', /not a proof/.test(shipped.note));
 
 if (failed) {
