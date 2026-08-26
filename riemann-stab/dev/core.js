@@ -491,10 +491,57 @@ function winCrossFunctional(shapeA,shapeB,n){
   return (fg+dbl)/(pa*pb);
 }
 
+// Exact factorisation of the cross-window functional.
+//
+// Write G = sqrt(psiA * psiB) for the pointwise geometric mean.  The numerator
+// of winCrossFunctional is  int psiA psiB + int int |u-v| G(u) G(v), and
+// int psiA psiB is exactly int G^2, so that numerator is R(G) * (int G)^2 and
+//
+//     R12  =  R(G) * kappa,      kappa = (int G)^2 / (int psiA int psiB) <= 1
+//
+// with kappa <= 1 by Cauchy-Schwarz, equality only when psiA and psiB are
+// proportional.  This matters for reading the observed inequality
+// R12 < min(R(psiA), R(psiB)): it separates how much of the dip is the shape of
+// the mixed window from how much is the normalisation.  For the indicator and
+// Montgomery-Taylor pair the answer is that R(G) is ABOVE min(R_A, R_B), so the
+// whole dip comes from kappa < 1 -- from the denominator being
+// int psiA int psiB rather than (int G)^2.  The cross formula is an inference
+// from two lemmas, not a derived theorem, so which denominator is right is
+// exactly the risk the numerical support rests on.
+function winFunctionalOfSamples(values,h){
+  const n=values.length;
+  let p1=0,p2=0;
+  for(let i=0;i<n;i++){p1+=values[i];p2+=values[i]*values[i];}
+  p1*=h;p2*=h;
+  let dbl=0;
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++) dbl+=Math.abs((i-j)*h)*values[i]*values[j];
+  dbl*=h*h;
+  return {R:(p2+dbl)/(p1*p1),integral:p1};
+}
+function crossFunctionalParts(shapeA,shapeB,n){
+  n=n||1200;
+  const h=1.0/n;
+  const a=new Float64Array(n),b=new Float64Array(n),g=new Float64Array(n);
+  for(let i=0;i<n;i++){
+    const s=-0.5+(i+0.5)*h;
+    a[i]=psiWin(shapeA,s); b[i]=psiWin(shapeB,s);
+    g[i]=Math.sqrt(Math.max(0,a[i]*b[i]));
+  }
+  const A=winFunctionalOfSamples(a,h),B=winFunctionalOfSamples(b,h),G=winFunctionalOfSamples(g,h);
+  const kappa=(G.integral*G.integral)/(A.integral*B.integral);
+  return {
+    cross:winCrossFunctional(shapeA,shapeB,n),
+    geometricR:G.R,kappa,product:G.R*kappa,
+    parentA:A.R,parentB:B.R,
+    dipFromShape:Math.min(A.R,B.R)-G.R,
+    dipFromNormalisation:G.R*(1-kappa)
+  };
+}
+
 const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,
-  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,winCrossFunctional,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
+  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,crossFunctionalParts,winFunctionalOfSamples,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
 if(typeof module!=='undefined'&&module.exports) module.exports=RH;
 if(typeof window!=='undefined') window.RH=RH;

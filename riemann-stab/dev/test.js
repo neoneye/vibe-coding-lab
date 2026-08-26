@@ -152,5 +152,30 @@ console.log('--- polesCenter vs direct complex evaluation ---');
   ok('pole term exercised at small tau0',Math.abs(M.polesCenter(3,3))>1);
 }
 
+console.log('--- cross-window functional factorisation ---');
+{
+  // R12 = R(G) * kappa exactly, with G the pointwise geometric mean of the two
+  // windows and kappa = (int G)^2 / (int A int B) <= 1 by Cauchy-Schwarz.  The
+  // point of the split is attribution: it says how much of the observed dip
+  // R12 < min(R_A, R_B) is the mixed window's shape and how much is the
+  // normalisation the cross formula was inferred with.
+  const parts = M.crossFunctionalParts('ind', 'mt', 900);
+  ok('R12 factors as R(G) * kappa',
+    Math.abs(parts.cross - parts.product) < 1e-15,
+    `${parts.cross} vs ${parts.product}`);
+  ok('kappa obeys Cauchy-Schwarz', parts.kappa <= 1 && parts.kappa > 0.99, `${parts.kappa}`);
+  ok('the mixed window is proportional to neither parent', parts.kappa < 1, `${parts.kappa}`);
+  // The finding worth pinning: the geometric-mean window is WORSE than the
+  // better parent, so the whole reported dip comes from the normalisation.
+  ok('geometric-mean window sits above the better parent',
+    parts.geometricR > Math.min(parts.parentA, parts.parentB),
+    `${parts.geometricR} vs ${Math.min(parts.parentA, parts.parentB)}`);
+  ok('dip is attributable to normalisation, not shape',
+    parts.dipFromShape < 0 && parts.dipFromNormalisation > -parts.dipFromShape,
+    `shape ${parts.dipFromShape}, normalisation ${parts.dipFromNormalisation}`);
+  ok('R12 still lands below both parents',
+    parts.cross < Math.min(parts.parentA, parts.parentB), `${parts.cross}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
