@@ -132,6 +132,18 @@ lemma.  Running it at a *high* target produces a certificate that is better in
 every dimension at once — higher floor, smaller cube, smaller boundary term.
 The `m = 7` attempt failed partly for want of exactly this stage.
 
+How far it can be pushed is untested.  The refine converges smoothly when the
+target sits comfortably below the input certificate's own floor — `0.00395`,
+`0.003951` and `0.003955` all worked, with `2e-6` or more of headroom.  At
+`0.003957`, which is only `2.3e-7` below the record floor, it oscillates much
+harder: `0.0039530`, `0.0039211`, `0.0038736`, then back to `0.0039546` and
+`0.0039552` by round eight, at amplitude `1.9e-4`.  It was stopped there to free
+processor time for the sweep, *not* because it had failed — the run was
+recovering, and an earlier note in this file claiming it diverged was wrong and
+has been corrected.  Whether it converges at a near-ceiling target is an open
+and cheap question: twenty-four rounds of
+`tiling_additive_search.py refine cert.json 0.003957 24 out.json`.
+
 ### The certificate closes the aperiodic gap, which the period sweep never did
 
 A per-edge floor telescopes over *any* gap sequence.  For a window of `m` gaps,
