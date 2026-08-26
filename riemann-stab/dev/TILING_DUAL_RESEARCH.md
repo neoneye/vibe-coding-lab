@@ -1208,11 +1208,14 @@ is smooth there even though a bilinear `psi` is only continuous across knot
 lines.  That argument is the same shape as the coercivity one already proved in
 Arb, and it is **not built**.
 
-**Outside the tube the margin is real but thin.**  The second-lowest basin of
-the pinned candidate is a high-high defect block, at `E_alt + 1.503e-6` —
-independent of the tube radius, because it is a genuine defect far from the tube.
-`1.5e-6` is the same order as the margin the existing rigorous sweep already
-works with, so the target is not absurd.
+**Outside the tube the margin looks real but thin.**  The lowest thing the
+descents find outside the tube is a high-high defect block at `E_alt + 1.503e-6`,
+the same at tube radius `0.02`, `0.05` and `0.1` because it is a genuine defect
+far from the tube.  That is a *measurement*, and in the direction that flatters:
+a descent gives an upper bound on the margin, never a lower one, so the true
+margin is at most `1.5e-6` and could be less.  What it is good for is a
+feasibility estimate — `1.5e-6` is the same order as the margin the existing
+rigorous sweep already works with, so the target is not absurd.
 
 **What actually blocks it is the cube.**  The pinned candidate is a correction to
 the `record` certificate, whose amplitude `5.2e-3` forces the cube `[0, 28]^6` —
