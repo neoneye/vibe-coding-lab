@@ -1700,6 +1700,45 @@ Nothing about the pair-state results changes: the pinned certificate reaches the
 ceiling, and it is the one the rigorous sweep closed on.  What changes is the
 account of why it was needed.
 
+### What the pair widening was actually for
+
+Separating the two things the pinned certificate did at once — bivariate `psi`,
+and equality constraints making the alternating block a critical point of `R` at
+value exactly `E_alt` — settles the account.  All at `p = 3000`:
+
+| family | pinned | shortfall from `E_alt` |
+| --- | --- | --- |
+| additive, `record`'s 51-knot grid (this directory's number) | no | `1.660e-7` |
+| additive, knots twice as fine, 300 rounds | no | `3.21e-8`, still falling |
+| additive, knots four times as fine, 250 rounds | no | `5.69e-8`, still falling |
+| additive, twice as fine | **yes** | `1.68e-3` — collapses |
+| pair, 22 knots | **yes** | `2.19e-15` |
+
+**So the widening was not needed to approach the ceiling.**  A finer additive
+grid gets an order of magnitude closer than the record certificate and shows no
+sign of stopping.  What it was needed for is to reach the ceiling *exactly and
+stationarily*.
+
+Pinning is fourteen linear equalities — two values and twelve derivatives.  A
+search over the additive family under those constraints collapses to `1.68e-3`:
+`2J` parameters cannot satisfy fourteen equalities and still keep a floor, and
+the certificate it produces is full of holes.  The pair family satisfies them and
+lands at `E_alt - 2.19e-15`.
+
+And exactness is not a nicety here.  The tube half of the proof is a Taylor
+argument from the alternating block: it needs `R(alt) = E_alt` and
+`grad R(alt) = 0`, because what it bounds is
+`R(alt) - ||grad R(alt)|| ||u|| + (lambda/2)||u||^2`.  A certificate that gets to
+within `3e-8` of the ceiling but is not stationary there cannot be completed by a
+tube, and a branch-and-bound cannot finish the job either, because near a
+non-stationary near-minimum the bound it needs is still exactly attained
+somewhere it cannot see.  **The pair family's role is to make the certificate
+exact at the point the tube argument starts from.**
+
+That the pinned additive search collapses is a search result at 200 rounds, not a
+proof of impossibility.  What is not in doubt is the direction: pinning costs the
+additive family five orders of magnitude and costs the pair family nothing.
+
 ## Unusual stone: reversal cohomology
 
 The bare block energy is unchanged when a six-gap edge is reversed.  If `Phi`
