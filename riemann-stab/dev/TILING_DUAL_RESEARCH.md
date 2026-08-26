@@ -252,6 +252,49 @@ the cross-validation is for — against 60-digit mpmath for the trigonometry, an
 against the table version for every box analysis, where the rigorous bound must
 come out weaker or one of the two is wrong.
 
+
+## Unusual stone: seven is not the best block size
+
+The whole programme inherits `n = 7` from the manuscript, and nobody varied it.
+`projectedSimpleZeroBound` already takes `n` as a parameter, so the question
+costs nothing to ask.
+
+For each `n` the chain minimiser is again the alternating two-cycle — the pair
+drifts slowly, `(1.979467, 1.041680)` at `n = 7` and `(1.040769, 1.977587)` at
+`n = 8` — and pushing each chain minimum through the same projection gives:
+
+| `n` | chain candidate | windows/block | projected constant | gain over the published headline |
+|---:|---:|---:|---:|---:|
+| 6 | `0.003389815865` | 295 | `0.673083193522` | `0.75e-4` |
+| 7 | `0.003957393309` | 252 | `0.673110269740` | `1.02e-4` |
+| **8** | `0.004524418568` | 221 | **`0.673129621611`** | **`1.21e-4`** |
+| 9 | `0.005065102444` | 197 | `0.673123433005` | `1.15e-4` |
+| 10 | `0.005607259037` | 178 | `0.673109394454` | `1.01e-4` |
+| 11 | `0.006134360830` | 163 | `0.673076870025` | `0.68e-4` |
+
+The trade-off is visible: a larger block raises the floor, which raises the
+defect coefficient, but it also lengthens the span term that gets subtracted.
+The peak is at `n = 8`, and `n = 7` sits on the rising side of it.  Moving one
+step along costs nothing and adds `1.9e-5` — about a fifth again of the entire
+chain-versus-block improvement this directory has been chasing.
+
+Three caveats, all real.
+
+- This is conditional on the published shifted-block assembly being valid for
+  general `n`.  The code parameterises it; this laboratory cannot check the
+  manuscript.  If the assembly is `n = 7` only, the row is meaningless.
+- The `n = 8` floor is a numerical candidate with no certificate behind it.
+  Everything this directory built — the additive normal form, the linear
+  programme, the sweep — would have to be redone one dimension higher.
+- The normal form itself does generalise cleanly.  For a block of `m` gaps the
+  antisymmetric additive coboundaries are `u_i = u_{m-1-i}` with `sum u_i = 0`;
+  at `m = 7` that reads
+
+  `R = F7 + a(g0)+a(g6) + b(g1)+b(g5) + c(g2)+c(g4) - 2(a+b+c)(g3)`,
+
+  three free functions instead of two.  The sweep is the hard part: seven gaps
+  instead of six.
+
 ## Concrete next proof program
 
 Steps 1 through 3 of the old program are done — see the sweep section above.

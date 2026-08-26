@@ -157,6 +157,31 @@ check('swept projection sits inside the Lean two-sided pin',
   sweptProjection.bound >= 0.6731086901411016 && sweptProjection.bound <= 0.6731086901411018,
   `${sweptProjection.bound}`);
 
+
+// ------------------------------------------------------------- block size
+// The block size is a free parameter of the assembly that nobody varied.  The
+// search that produced these two-cycles is offline; what runs here is the
+// cheap part: recompute the chain energy at the pinned gaps and push it back
+// through the projection.
+const scan = golden.block_size_scan;
+let peak = null;
+for (const row of scan.rows) {
+  const energy = T.periodicChainEnergy(row.gaps, row.n, golden.p);
+  check(`block size ${row.n}: chain candidate pin`, close(energy, row.value, 5e-12), `${energy}`);
+  const projected = T.projectedSimpleZeroBound(energy, row.n, golden.p);
+  check(`block size ${row.n}: projection pin`, close(projected.bound, row.bound, 5e-12),
+    `${projected.bound}`);
+  check(`block size ${row.n}: window arithmetic pin`,
+    projected.windowsPerBlock === row.windowsPerBlock && projected.blockSize === row.blockSize);
+  if (!peak || projected.bound > peak.bound) peak = {n: row.n, bound: projected.bound};
+}
+check('the projection peaks at block size eight, not seven', peak.n === 8, `${peak.n}`);
+const sevenRow = scan.rows.find(r => r.n === 7);
+check('block size eight beats the manuscript choice by about 1.9e-5',
+  peak.bound - sevenRow.bound > 1.9e-5 && peak.bound - sevenRow.bound < 2.0e-5,
+  `${peak.bound - sevenRow.bound}`);
+check('block-size scan states its conditionality', /cannot check/.test(scan.note));
+
 if (failed) {
   console.error(`${failed} tiling-research checks failed`);
   process.exit(1);
