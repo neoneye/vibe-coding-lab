@@ -4,8 +4,33 @@
 
 This directory contains a numerical discovery program, not a new theorem about
 zeta zeros.  The exact mathematical ingredient is the cyclic reindexing of the
-shifted seven-point functional.  A uniform continuous coboundary inequality is
-still required before the improved simple-zero projection can be used.
+shifted seven-point functional.
+
+Where things stand, most established first:
+
+- **Exact and machine-checked.**  The cyclic block identity; the reversal
+  cohomology lemma; the telescoping lemma that turns a per-edge coboundary
+  floor into a chain floor with an `O(1)` boundary term; the charge identity
+  for two-phase words; and the arithmetic of the projection, including a
+  two-sided pin of the constant the swept floor projects to.  Fifteen Lean
+  theorems, standard axioms only.
+- **Exhaustively subdivided in double precision.**  The chain floor `0.003955`,
+  for every gap sequence, periodic or not.  Also, as a control, the published
+  Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
+  with the external Arb certificate.
+- **Exhaustively subdivided with proved enclosures.**  The chain floor
+  `0.0038`, which equals the published local floor rather than beating it.
+  Pushing the rigorous sweep past `19/5000` is the live front.
+- **Numerical only.**  The certificate coefficients; every floor above the
+  swept ones; the two-phase kink energies and Bloch spectrum; and the entire
+  block-size scan, which says the projection peaks at `n = 8`, not the `n = 7`
+  the programme inherited.
+- **Not checkable here at all.**  The external shifted-block assembly the
+  projection encodes.  Everything downstream of it is conditional on it.
+
+What is still required before the improved simple-zero projection can be used:
+the rigorous sweep has to clear `19/5000`, and the assembly has to be checked
+by someone with the manuscript.
 
 ## What is new in this experiment
 
@@ -164,7 +189,7 @@ linear inequality over one explicit finite cube — rather than a search for a
 family that might work at all.
 
 
-## The sweep runs: exhaustive subdivision reaches 0.00394
+## The sweep runs: exhaustive subdivision reaches 0.003955
 
 The "next proof obligation" written earlier in this file — interval-sweep one
 explicit inequality over one explicit cube — turned out to be reachable, but
