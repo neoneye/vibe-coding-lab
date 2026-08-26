@@ -691,15 +691,63 @@ if (require.main === module) {
   console.log('NUMERICAL UPPER BOUNDS ONLY — no global-optimality or zeta theorem claim');
 }
 
+// Analytic gradient of the isolated block functional.  Used by the additive
+// coboundary audit, where a strong adversary matters more than speed.
+function blockFunctionalAndGradient(gaps, p = 3000) {
+  const n = gaps.length + 1;
+  const pts = pointsFromGaps(gaps);
+  const gradient = new Array(gaps.length).fill(1 / p);
+  let value = gaps.reduce((a, b) => a + b, 0) / p;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const distance = pts[j] - pts[i];
+      const coefficient = 2 / (n - (j - i));
+      value += coefficient * overlapWeight(distance);
+      const derivative = coefficient * overlapWeightDerivative(distance);
+      for (let k = i; k < j; k++) gradient[k] += derivative;
+    }
+  }
+  return {value, gradient};
+}
+
+// Payoff curve of the conditional projection.  `floor` is whatever continuous
+// chain floor one manages to certify; `reference` is the floor already
+// certified by the published isolated-block proposition (19/5000), and `cap`
+// is the numerical chain candidate, i.e. the best floor any correct
+// certificate could ever reach.  The `capturedFraction` column is the point:
+// the projection is strongly concave in the floor, so most of the available
+// improvement is bought well before the round number 0.00395.
+function floorPayoff(floor, options = {}) {
+  const reference = options.reference || 19 / 5000;
+  const cap = options.cap || 0.003957393309209766;
+  const n = options.n || 7;
+  const p = options.p || 3000;
+  const at = value => projectedSimpleZeroBound(value, n, p).bound;
+  const here = at(floor);
+  const low = at(reference);
+  const high = at(cap);
+  return {
+    floor,
+    bound: here,
+    referenceBound: low,
+    capBound: high,
+    gainOverReference: here - low,
+    availableGain: high - low,
+    capturedFraction: high > low ? (here - low) / (high - low) : 0
+  };
+}
+
 module.exports = {
   mtKernel,
   overlapWeight,
   overlapWeightDerivative,
   blockFunctional,
+  blockFunctionalAndGradient,
   periodicBlockAverage,
   periodicChainEnergy,
   periodicChainEnergyAndGradient,
   projectedSimpleZeroBound,
+  floorPayoff,
   patternMinimize,
   adamMinimizePeriodic,
   domainWallStart,

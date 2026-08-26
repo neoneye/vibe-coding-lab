@@ -33,27 +33,144 @@ The compatibility signal survives long-period stress, but a globally clipped
 polynomial state potential does not currently expose enough of it.  The active
 local minimizers occupy several sharply separated gap basins, while polynomial
 interpolation blends those basins and creates cheap oriented transitions.
+The next section removes exactly that obstruction: the potential does not have
+to be smooth, and once each gap coordinate carries a free piecewise-linear
+function the same additive ansatz reaches the ceiling.
+
+
+## The move that closed the numerical gap: an additive normal form
+
+Every previous coboundary search parameterized `Phi` through a single clipped
+ramp per gap coordinate.  That was the binding constraint, not the geometry.
+
+Take any *additive* state potential `Phi(s) = sum_k psi_k(s_k)`.  The reversal
+lemma says one may antisymmetrize without losing floor, and antisymmetrizing
+preserves additivity.  Writing out the telescoping edge difference for such a
+potential gives an exact normal form with only two free functions:
+
+`R(g) = F6(g) + a(g0) + a(g5) + b(g1) + b(g4) - (a+b)(g2) - (a+b)(g3).`
+
+Every antisymmetric additive potential produces such a pair `(a, b)` and every
+pair arises from one, so searching `(a, b)` searches the whole family.  Both
+directions are checked in `tiling_additive_test.js`.  Two structural facts fall
+out immediately:
+
+- `R` is reversal invariant *by construction*.  The reflection quotient in the
+  adversarial search, which was illegal for the oriented Walsh family and
+  produced the pinned autopsy, is legal here.
+- On both alternating blocks every feature cancels, so `R = F6 = 0.003957393309`
+  there for any `(a, b)`.  The alternating chain energy is a hard ceiling on
+  what this family can certify — and it is exactly the conjectured chain
+  minimum.
+
+With `a` and `b` free piecewise-linear functions on a 51-knot grid and the
+max-min solved by linear-programming cut generation instead of a subgradient
+loop, the audited floor moves from `0.003923427087` (previous best, degree-five
+clipped Walsh) to
+
+| certificate | audited floor | search box | amplitude bound | share of gain |
+|---|---:|---:|---:|---:|
+| record | `0.003957227285` | `[0, 28]^6` | `5.1968e-3` | `99.89%` |
+| compact | `0.003950948242` | `[0, 16]^6` | `1.1068e-3` | `96.03%` |
+
+Both are in `tiling_additive.certificate.json` and are re-audited from scratch
+by `tiling_additive_test.js`.  The compact one is the interval-sweep target:
+it clears the programme's stated `0.00395` with margin, its cube is smaller by
+a factor of `28^6/16^6 ≈ 29`, and its amplitude — which also bounds the
+finite-chain boundary term — is five times smaller.
+
+The record floor is `1.66e-7` below the structural ceiling.  Both were audited
+in JavaScript by three adversaries that share no code with the Python search
+that produced them: the deterministic 729-word three-basin enumeration, a
+differential-evolution run, and a gradient multistart.  Python and JavaScript
+agree to about `4e-18`.
+
+### Amplitude, the tail, and why the search box is finite
+
+`F6(g) >= (sum g)/3000` with every pair term nonnegative, so
+
+`R(g) >= (sum g)/3000 - amplitude`, &nbsp; `amplitude = 2(|a|_inf + |b|_inf + |a+b|_inf)`.
+
+Any gap reaching `3000*(floor + amplitude)` therefore satisfies the inequality
+outright, and the certificate only has to be checked on that cube.  Adding a
+constant to `a` or to `b` leaves `R` unchanged — each enters with signs
+`(+,+,-,-)` — so gauge-centering both functions is free and shrinks the cube by
+a factor of about fifty.  The audits above search the entire cube each
+certificate's own tail lemma leaves open, not a convenient part of it.
+
+The same amplitude bounds the finite-chain boundary term: a length-`m` chain
+loses at most `2*max|Phi| = O(1)`, independent of `m`.  That is the `o(m)`
+requirement of step 5 below, made explicit.
+
+### What a floor is worth: the payoff curve
+
+The conditional projection is strongly concave in the certified floor, so the
+round number `0.00395` was never the real target.  `floorPayoff` in
+`tiling_research.js` reports the fraction of the available improvement a floor
+buys, between the published isolated-block certificate `19/5000` and the
+alternating-chain ceiling.
+
+| floor | source | projected constant | share of available gain |
+|---:|---|---:|---:|
+| `0.003800000000` | published `F6 >= 19/5000` | `0.6730085279` | `0%` |
+| `0.003826231219` | true isolated-block minimum | `0.6730254768` | `16.7%` |
+| `0.003923427087` | previous best coboundary | `0.6730882669` | `78.4%` |
+| `0.003950948242` | additive compact certificate | `0.6731062256` | `96.0%` |
+| `0.003957227285` | additive record certificate | `0.6731101602` | `99.9%` |
+| `0.003957393309` | alternating chain candidate | `0.6731102697` | `100%` |
+
+Two consequences for the proof program.  Reaching the ceiling exactly is worth
+almost nothing over reaching `0.003951`, so an interval sweep should be run
+against a certificate with margin, not against the record.  And the earlier
+verdict that a family "still falls short of `0.00395`" was measuring the wrong
+thing: the previous best was already buying 78% of the prize.
+
+### Reproducing it
+
+`tiling_additive_search.py` is the discovery tool and is deliberately outside
+the trusted base: it needs numpy and scipy, and it emits candidates only.
+
+```
+python3 -m venv venv && venv/bin/pip install numpy scipy
+venv/bin/python tiling_additive_search.py maxmin 0.10 26 1e-4 record.json
+venv/bin/python tiling_additive_search.py refine record.json 0.003951 26 compact.json
+```
+
+`tiling_additive.js` evaluates and audits; `tiling_additive_test.js` re-audits
+the shipped file from scratch on every suite run and fails if a floor moves.
+
+### Status
+
+Still numerical.  The coefficients are floating-point LP output and the floors
+are floating-point global searches; a missed minimum inside the cube would
+invalidate them.  What changed is that the remaining obligation is now a single
+well-posed finite computation — an interval sweep of one explicit piecewise
+linear inequality over one explicit finite cube — rather than a search for a
+family that might work at all.
 
 ## Concrete next proof program
 
-1. Partition each gap coordinate at the certified one-variable basin and
-   kernel-critical-point boundaries, preserving orientation.
-2. Put an independent potential variable on each five-cell state.  Solve the
-   finite Bellman linear program using rigorous lower bounds for every
-   six-cell transition, not point samples.
-3. Refine only transitions whose reduced-cost interval intersects `0.00395`.
-   Never quotient by reversal unless the potential constraints explicitly
-   enforce reversal symmetry.
-4. Emit a standalone certificate: rational cell boundaries, rational potential
-   enclosures, and interval kernel bounds.  The checker must enumerate every
-   oriented transition and must not invoke the optimizer.
-5. Accept the projected zeta improvement only after the checker proves a
-   continuous floor at least `0.00395` and the finite-chain boundary term is
-   bounded by `O(1)`.
+The five-dimensional cell-partition Bellman program below is no longer the
+cheapest route.  The additive normal form replaces a potential on five-gap
+cells by two functions of one variable, so the obligation collapses to:
 
-This is a smaller and more falsifiable target than another unconstrained
-window search: either the adaptive interval Bellman certificate closes, or its
-lowest transition supplies a new explicit counterexample.
+1. Fix a shipped certificate with margin — the compact one, not the record —
+   and rationalize its knots and coefficients.
+2. Interval-sweep `R(g) >= floor` over the single cube its own tail lemma
+   leaves open.  Branch on the six gaps; `R` is piecewise linear in the
+   potential part, so only the kernel needs interval enclosures.
+3. Discard sub-boxes by the tail bound `R >= (sum g)/3000 - amplitude` before
+   evaluating the kernel at all; that is what keeps the cube finite in
+   practice as well as in principle.
+4. Emit a standalone checker: rational knots, rational coefficients, interval
+   kernel bounds, no optimizer in the trusted base.
+5. Accept the projected zeta improvement only after the checker closes.  The
+   finite-chain boundary term is already explicit: it is bounded by the
+   certificate amplitude, uniformly in the chain length.
+
+Either the sweep closes, or one of its sub-boxes supplies an explicit
+counterexample and the audited floor above is wrong.  Both outcomes are
+informative, and both are reachable with one finite computation.
 
 ## Unusual stone: reversal cohomology
 
@@ -70,7 +187,9 @@ reflection quotienting is legal.  The doubled integral statement is checked in
 
 The full clipped-Walsh state space has 12 antisymmetric mask pairs.  The best
 fixed candidate found by the corrected numerical oracle had adversarial value
-about `0.003923427087`, still short of `0.00395`.
+about `0.003923427087`.  That is 78% of the available improvement, not the
+failure the earlier round number suggested; and replacing the clipped ramp by
+free piecewise-linear functions raises it to `0.003957227285` (above).
 
 ## Unusual stone: two phases and domain walls
 

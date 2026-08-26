@@ -11,8 +11,10 @@
 
   Scope (honest):
     [arith] theorems below are pure integer bookkeeping, fully checked.
-    [abstract] reversal-coboundary symmetrization is checked independently
-    of any analytic claim about the zeta kernel.
+    [abstract] reversal-coboundary symmetrization and the telescoping
+    coboundary-floor lemmas are checked independently of any analytic claim
+    about the zeta kernel: they say a per-edge floor becomes a chain floor,
+    not that any particular edge inequality holds.
     NOT formalized here (see bottom comment): the connected proportion
     theorem, the stability-enhanced rank-trace lemma, the F6 interval
     certificate, and the cross-window functional conjecture. A first
@@ -76,6 +78,60 @@ theorem binary_phase_defect_balance
     (hHigh : nHigh = nHH + nHL)
     (hCross : nLH = nHL) :
     nLow - nHigh = nLL - nHH := by omega
+
+/-- Telescoping sum over an initial segment. -/
+def sumRange (f : Nat → Int) : Nat → Int
+  | 0 => 0
+  | n + 1 => sumRange f n + f n
+
+/-- The mechanism a coboundary certificate runs on: the potential differences
+    along a path collapse to the two endpoints. -/
+theorem potential_telescopes (Phi : Nat → Int) :
+    ∀ n : Nat, sumRange (fun i => Phi (i + 1) - Phi i) n = Phi n - Phi 0 := by
+  intro n
+  induction n with
+  | zero => show (0 : Int) = Phi 0 - Phi 0; omega
+  | succ k ih =>
+      show sumRange (fun i => Phi (i + 1) - Phi i) k + (Phi (k + 1) - Phi k)
+        = Phi (k + 1) - Phi 0
+      rw [ih]
+      omega
+
+/-- A per-edge floor becomes a chain floor up to one boundary term.  If every
+    edge of a path satisfies `c ≤ F i + Phi (i+1) - Phi i`, then the path cost
+    is at least `n * c` minus the endpoint difference.  This is the statement
+    the additive certificates in `dev/tiling_additive.js` are built to feed,
+    and the boundary term there is bounded by the certificate amplitude,
+    uniformly in `n`.  The analytic hypothesis — that the six-gap inequality
+    holds for every nonnegative gap vector — is NOT proved here; only the
+    bookkeeping is. -/
+theorem coboundary_floor_telescopes (F Phi : Nat → Int) (c : Int)
+    (hedge : ∀ i, c ≤ F i + Phi (i + 1) - Phi i) :
+    ∀ n : Nat, (n : Int) * c ≤ sumRange F n + (Phi n - Phi 0) := by
+  intro n
+  induction n with
+  | zero =>
+      show ((0 : Nat) : Int) * c ≤ (0 : Int) + (Phi 0 - Phi 0)
+      omega
+  | succ k ih =>
+      have hk := hedge k
+      have hcast : ((k + 1 : Nat) : Int) = (k : Int) + 1 := by omega
+      show ((k + 1 : Nat) : Int) * c ≤ sumRange F k + F k + (Phi (k + 1) - Phi 0)
+      rw [hcast]
+      have hexpand : ((k : Int) + 1) * c = (k : Int) * c + c := by
+        rw [Int.add_mul, Int.one_mul]
+      rw [hexpand]
+      omega
+
+/-- Cyclic corollary: on a closed chain the boundary term vanishes outright,
+    so a per-edge floor is exactly a mean-cost floor for the cycle. -/
+theorem cyclic_coboundary_floor (F Phi : Nat → Int) (c : Int) (n : Nat)
+    (hedge : ∀ i, c ≤ F i + Phi (i + 1) - Phi i)
+    (hclosed : Phi n = Phi 0) :
+    (n : Int) * c ≤ sumRange F n := by
+  have h := coboundary_floor_telescopes F Phi c hedge n
+  rw [hclosed] at h
+  omega
 
 /- WITHDRAWN THEOREM SKETCH — DO NOT REINSTATE WITHOUT READING
    dev/lean/rejected/README.md.

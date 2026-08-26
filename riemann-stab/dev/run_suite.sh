@@ -11,6 +11,7 @@ echo "== chain checks =="          && node labE_chain_test.js
 echo "== mixture/golden checks ==" && node mix_convergence_test.js
 echo "== overlapping-block research checks ==" && node tiling_research_test.js
 echo "== tiling Bellman/coboundary checks ==" && node tiling_bellman_test.js
+echo "== additive coboundary certificate checks ==" && node tiling_additive_test.js
 
 echo "== lean formalization =="
 if lean "$PWD/lean/ZetaClaims.lean"; then echo "lean OK"; else echo "LEAN FAILED"; exit 1; fi
@@ -24,6 +25,9 @@ cat >> "$AXFILE" <<'LEANEOF'
 #print axioms reversal_coboundary_symmetrization
 #print axioms reversal_potential_antisymmetric
 #print axioms binary_phase_defect_balance
+#print axioms potential_telescopes
+#print axioms coboundary_floor_telescopes
+#print axioms cyclic_coboundary_floor
 #print axioms headline_fraction_floor
 #print axioms headline_fraction_ceiling
 #print axioms improvement_direction

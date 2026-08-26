@@ -107,6 +107,33 @@ check('scanned finite-amplitude modes remain coercive through radius 0.15',
   coercivity.every(row => row.ratio > 0.77));
 check('two-phase scope remains numerical', /not a global lower bound/.test(phase.status));
 
+
+// The payoff curve is the decision-relevant object: it converts whatever floor
+// a certificate actually reaches into the projected simple-zero constant, and
+// says what share of the available improvement that buys.  The projection is
+// strongly concave in the floor, which is why the round number 0.00395 was
+// never the right scoreboard.
+const payoff = golden.floor_payoff_curve;
+let previousBound = -Infinity;
+for (const row of payoff.rows) {
+  const computed = T.floorPayoff(row.floor);
+  check(`payoff pin ${row.name}`, close(computed.bound, row.bound, 5e-15), `${computed.bound}`);
+  check(`captured-fraction pin ${row.name}`,
+    close(computed.capturedFraction, row.capturedFraction, 5e-12), `${computed.capturedFraction}`);
+  check(`payoff is monotone at ${row.name}`, computed.bound >= previousBound,
+    `${computed.bound} < ${previousBound}`);
+  previousBound = computed.bound;
+}
+// Monotonicity has to survive the integer windows-per-block jump, so sweep it.
+let monotoneFailures = 0;
+let sweepPrevious = -Infinity;
+for (let floor = 0.0037; floor <= 0.00397; floor += 1e-6) {
+  const bound = T.floorPayoff(floor).bound;
+  if (bound < sweepPrevious - 1e-15) monotoneFailures++;
+  sweepPrevious = bound;
+}
+check('projection is monotone in the certified floor', monotoneFailures === 0, `${monotoneFailures}`);
+
 if (failed) {
   console.error(`${failed} tiling-research checks failed`);
   process.exit(1);
