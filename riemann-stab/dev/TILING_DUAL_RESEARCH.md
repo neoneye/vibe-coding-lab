@@ -1269,6 +1269,25 @@ The pre-repair runs completed at `50 203 847` boxes in double precision and
 about `1e-16` relative, so they are expected to close again.  Expected, not
 established, and this section will say which.
 
+**How big the remaining rebuild actually is.**  `dev/sweep_sample.js` records the
+boxes where the sweep's bound came closest to the target — the only ones where an
+unsound bound could have changed the outcome.  On the double-precision full-cube
+run the tightest discharged margins run from `1.001e-10` to `8.259e-10`: the
+sweep leans on its `1e-10` safety threshold in thousands of boxes.
+
+An Arb audit of exactly those boxes was written and thrown away.  A
+straightforward Arb enclosure of `R` over them — natural extension, or a
+mean-value form — is never narrower than about `4e-5`, a hundred thousand times
+wider than the margin it would have to check.  It cannot bind, and shipping it
+would have been a check that could only ever pass.
+
+The reason is that the sweep is *tighter* than an obvious reimplementation: it
+uses exact monotone-piece ranges for the kernel, built from precomputed
+breakpoints, where the obvious Arb version uses interval extensions.  So auditing
+the sweep against an independent base is not "do it in Arb" — it is reproducing
+that machinery in Arb.  That is the real size of the outstanding item, and it is
+larger than it looks.
+
 **What it rests on.**  The tube half no longer rests on `tiling_rigorous.js`;
 `dev/tube_arb.py` redoes it in Arb.  **The outside-the-tube sweep still does**,
 and that is now the whole of the outstanding item: seventy-five million boxes of
