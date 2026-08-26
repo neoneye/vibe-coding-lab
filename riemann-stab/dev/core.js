@@ -557,6 +557,18 @@ function crossFunctionalParts(shapeA,shapeB,n){
 // second moment; numerically R(w) is monotone decreasing on [0,1] with its
 // minimum at the pure endpoint.  Whatever the inferred cross formula's dip is,
 // it is not an interior optimum of this functional.
+// R for a cosine window cos(c s) on [-1/2, 1/2], as a function of c.  The
+// Montgomery-Taylor frequency sqrt(2) is exactly the stationary point of this:
+// dR/dc vanishes there to 26 digits by mpmath quadrature, and a root-find on
+// dR/dc returns sqrt(2) to the same accuracy.  That is the reason psi_MT
+// resists mixing -- a critical point admits no first-order improvement.
+function cosineWindowFunctional(c,n){
+  n=n||1200;
+  const h=1.0/n;
+  const v=new Float64Array(n);
+  for(let i=0;i<n;i++) v[i]=Math.cos(c*(-0.5+(i+0.5)*h));
+  return winFunctionalOfSamples(v,h).R;
+}
 function mixtureWindowFunctional(shapeA,shapeB,w,n){
   n=n||1200;
   const h=1.0/n;
@@ -593,6 +605,6 @@ const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,
-  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,crossFunctionalParts,winFunctionalOfSamples,mixtureWindowFunctional,mixtureStationarity,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
+  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,crossFunctionalParts,winFunctionalOfSamples,cosineWindowFunctional,mixtureWindowFunctional,mixtureStationarity,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
 if(typeof module!=='undefined'&&module.exports) module.exports=RH;
 if(typeof window!=='undefined') window.RH=RH;

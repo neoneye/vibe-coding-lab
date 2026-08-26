@@ -534,6 +534,47 @@ zeros and extrema are.  The price is the `~1.8x` box overhead.  That is a good
 trade — the dangerous step was removed and paid for in compute — and it should
 not be undone in pursuit of speed.
 
+## Unusual stone: the cross-window dip is a normalisation effect
+
+This one is off the tiling line entirely — it is about the other conjecture the
+laboratory displays, that a mixed window lowers the second moment below both
+parents.  The cross-window functional factors exactly.  With `G = sqrt(A B)`
+the pointwise geometric mean, its numerator is `int A B + int int |u-v| G G`,
+and `int A B` is exactly `int G^2`, so
+
+`R12 = R(G) * kappa`,  `kappa = (int G)^2 / (int A int B) <= 1`
+
+by Cauchy-Schwarz, equality only for proportional windows.  Numerically
+`R(G) = 1.328915660253` and `kappa = 0.998425519145`, and the product matches
+the directly quadratured `R12` to the last bit.
+
+The attribution is the point.  `R(G)` sits *above* `min(R_A, R_B)`: the mixed
+window's shape is worse than the better parent by `1.42e-3`, and the entire
+reported dip — plus `2.09e-3` more — comes from `kappa < 1`, that is, from the
+denominator being `int A int B` rather than `(int G)^2`.
+
+**And the honest functional has no interior optimum at all.**  `R` of the linear
+mixture is directly computable with no inferred formula, and it is monotone
+decreasing on `[0, 1]` at every resolution tested, minimum at the pure
+Montgomery-Taylor endpoint.  Expanding `R` at a mixture, the quotient rule at
+`w = 1` collapses to
+
+`R'(1) = 2 ( N_BB P_A - N_AB P_B ) / P_B^3`,
+
+so `R'(1) = 0` exactly when the *bilinear* cross term `N_AB/(P_A P_B)` equals
+`R(psi_MT)`.  It does, to thirty digits — and it fails for `cos(cs)` with
+`c != sqrt(2)`.  The reason is that `sqrt(2)` is exactly the stationary
+frequency: `dR/dc` vanishes at `c = sqrt(2)` to 26 digits, a root-find on
+`dR/dc` returns `sqrt(2)`, and `psi_MT` is stationary in every direction tried
+(indicator, `cos s`, `cos 2s`, `s^2`, a Gaussian: `dR/dt = 0` to `1e-32`).  A
+critical point admits no first-order improvement, so no mixture with it can
+lower the second moment.
+
+Note the two cross formulas differ in the double integral as well as the
+denominator: the inferred one puts the geometric mean at both arguments, the
+expansion of `R` gives the bilinear product.  The inferred dip differs from the
+honest object twice over.
+
 ## Unusual stone: reversal cohomology
 
 The bare block energy is unchanged when a six-gap edge is reversed.  If `Phi`

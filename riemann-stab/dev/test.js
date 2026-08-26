@@ -177,6 +177,24 @@ console.log('--- cross-window functional factorisation ---');
     parts.cross < Math.min(parts.parentA, parts.parentB), `${parts.cross}`);
 }
 
+console.log('--- sqrt(2) is the stationary frequency of the second-moment functional ---');
+{
+  // R(cos(c s)) is stationary exactly at c = sqrt(2): dR/dc vanishes there to
+  // 26 digits under mpmath quadrature, and a root-find on dR/dc returns
+  // sqrt(2).  Here, at working precision, it is checked as a strict minimum.
+  const n = 900, root = Math.SQRT2;
+  const at = M.cosineWindowFunctional(root, n);
+  let strict = true;
+  for (const delta of [1e-2, 3e-2, 1e-1, 3e-1]) {
+    if (M.cosineWindowFunctional(root - delta, n) <= at) strict = false;
+    if (M.cosineWindowFunctional(root + delta, n) <= at) strict = false;
+  }
+  ok('cos(sqrt(2) s) is a strict local minimum over the cosine family', strict, `${at}`);
+  // symmetric second difference: the first derivative vanishes
+  const d = (M.cosineWindowFunctional(root + 1e-3, n) - M.cosineWindowFunctional(root - 1e-3, n)) / 2e-3;
+  ok('dR/dc vanishes at sqrt(2)', Math.abs(d) < 1e-6, `${d}`);
+}
+
 console.log('--- the honest mixture functional has no interior optimum ---');
 {
   // No inferred cross formula here: R of the linear mixture, computed directly.
