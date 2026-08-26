@@ -145,6 +145,19 @@ class Hat:
         W[rows, idx + 1] += frac
         return W
 
+    def dweights(self, g):
+        """Derivative of the hat weights; zero where the argument is clamped."""
+        gg = np.asarray(g, dtype=float)
+        idx = np.clip(np.searchsorted(self.t, np.clip(gg, self.t[0], self.t[-1]),
+                                      side='right') - 1, 0, self.J - 2)
+        h = self.t[idx + 1] - self.t[idx]
+        D = np.zeros((gg.shape[0], self.J))
+        rows = np.arange(gg.shape[0])
+        live = ~self.clamped(gg)
+        D[rows[live], idx[live]] -= 1.0 / h[live]
+        D[rows[live], idx[live] + 1] += 1.0 / h[live]
+        return D
+
     def index_frac(self, g):
         g = np.clip(np.asarray(g, dtype=float), self.t[0], self.t[-1])
         idx = np.clip(np.searchsorted(self.t, g, side='right') - 1, 0, self.J - 2)
@@ -339,6 +352,32 @@ def climb(knot_count, rounds, out_path, start_target=0.0039, cap=0.5):
     print("wrote " + out_path)
 
 
+def gradient_features(hat, G):
+    """d/dg_i of the psi part, as a linear functional of the free coefficients.
+
+    Rows: one per (block, i).  Used to pin the gradient of R to zero at the
+    alternating blocks -- the constraint that turns "the floor is nearly E_alt"
+    into "the alternating block is a critical point of R", which is what a
+    certificate attaining the ceiling has to be.
+    """
+    m = G.shape[0]
+    J = hat.J
+    out = np.zeros((m, 6, FREE * J * J))
+    W = [hat.weights(G[:, i]) for i in range(6)]
+    D = [hat.dweights(G[:, i]) for i in range(6)]
+
+    def outer(a, b):
+        return (a[:, :, None] * b[:, None, :]).reshape(m, -1)
+
+    for k in range(FREE):
+        sl = slice(k * J * J, (k + 1) * J * J)
+        out[:, k, sl] += outer(D[k], W[k + 1])
+        out[:, k + 1, sl] += outer(W[k], D[k + 1])
+        out[:, 4, sl] -= outer(D[4], W[5])
+        out[:, 5, sl] -= outer(W[4], D[5])
+    return out
+
+
 # --------------------------------------------- pair correction to a base
 SIGN_A = np.array([1.0, 0.0, -1.0, -1.0, 0.0, 1.0])
 SIGN_B = np.array([0.0, 1.0, -1.0, -1.0, 1.0, 0.0])
@@ -375,7 +414,8 @@ class AdditiveBase:
         return val, gr
 
 
-def improve(base_name, knot_count, rounds, cap, out_path, stages=1):
+def improve(base_name, knot_count, rounds, cap, out_path, stages=1,
+            stationary=False):
     """Add a pair-state correction to an additive certificate and push the floor.
 
     Searching the whole pair family from scratch does not converge: 4 J^2
@@ -436,6 +476,38 @@ def improve(base_name, knot_count, rounds, cap, out_path, stages=1):
         return total(X, zero)
 
     base_val = accum_val(G)
+
+    # Stationarity at the alternating blocks.  Without it the LP can only push
+    # the floor up to where R dips just OFF the alternating point, which is the
+    # entire residue the knot ladder was chipping at.
+    alt = np.array([np.tile([LOW, HIGH], 3), np.tile([HIGH, LOW], 3)])
+
+    def equalities(with_kappa=True):
+        """R = E_alt at both alternating blocks, and its gradient zero there.
+
+        The value rows are not optional.  Pinning only the gradient makes the
+        alternating block a critical point of the WRONG value: the coboundary is
+        free to shift R(alt, phase 0) down and R(alt, phase 1) up by the same
+        amount -- their sum is fixed, each is not -- and the first attempt did
+        exactly that, dropping phase 0 by 1e-5 and the floor with it.
+        """
+        gf = gradient_features(hat, alt).reshape(-1, FREE * J * J)
+        vf = features(hat, alt)
+        vbase, gbase = total(alt, zero, grad=True)
+        Ae = np.vstack([vf, gf])
+        be = np.concatenate([E_ALT - vbase, -gbase.reshape(-1)])
+        if with_kappa:
+            Ae = np.concatenate([Ae, np.zeros((Ae.shape[0], 1))], axis=1)
+        return Ae, be
+
+    # The equalities go straight into the floor-maximising LP rather than being
+    # solved first.  Solving them first picks the SMALLEST correction that pins
+    # the alternating block, which is a spiky one: it satisfied stationarity to
+    # 7e-16 and dug a 2.8e-5 hole elsewhere, which no later round under the
+    # improvement cap could climb out of.  Inside the LP the same equalities are
+    # satisfied by whichever correction is best for the floor.
+    A_eq, b_eq = equalities() if stationary else (None, None)
+
     best = (reached, np.zeros(FREE * J * J))
     for r in range(rounds * stages):
         if r and r % rounds == 0:
@@ -447,13 +519,15 @@ def improve(base_name, knot_count, rounds, cap, out_path, stages=1):
                 accum[k] = accum[k] + best[1][k * J * J:(k + 1) * J * J].reshape(J, J)
             best = (best[0], np.zeros(FREE * J * J))
             base_val = accum_val(G)
+            if stationary:
+                A_eq, b_eq = equalities()
             print("  -- absorbed; base now %.12f" % best[0], flush=True)
         t0 = time.time()
         m, n = A.shape
         A_ub = np.concatenate([-A, np.ones((m, 1))], axis=1)
         obj = np.zeros(n + 1)
         obj[-1] = -1.0
-        res = linprog(obj, A_ub=A_ub, b_ub=base_val,
+        res = linprog(obj, A_ub=A_ub, b_ub=base_val, A_eq=A_eq, b_eq=b_eq,
                       bounds=[(-cap, cap)] * n + [(None, None)], method='highs')
         if not res.success:
             print("  round %2d  LP failed: %s" % (r, res.message), flush=True)
@@ -590,7 +664,8 @@ if __name__ == "__main__":
         cap = float(sys.argv[5]) if len(sys.argv) > 5 else 2e-4
         out = sys.argv[6] if len(sys.argv) > 6 else "pair_correction.json"
         stages = int(sys.argv[7]) if len(sys.argv) > 7 else 1
-        improve(base_name, knot_count, rounds, cap, out, stages)
+        stationary = len(sys.argv) > 8 and sys.argv[8] == "stationary"
+        improve(base_name, knot_count, rounds, cap, out, stages, stationary)
     elif cmd in ("climb", "maxmin"):
         knot_count = int(sys.argv[2]) if len(sys.argv) > 2 else 14
         rounds = int(sys.argv[3]) if len(sys.argv) > 3 else 24

@@ -1123,6 +1123,61 @@ bilinear `psi` needs enclosures for bilinear interpolation over a box, which do
 not exist in this directory.  Until that is built and run, this is evidence that
 the pair family is rich enough, not a floor.
 
+### Pinning the alternating block, and what falls out
+
+The knot ladder above was chipping at a residue with the wrong tool.  A
+certificate that attains the ceiling must have the alternating block as a
+critical point of `R` at value exactly `E_alt` — otherwise `R` dips just off it,
+and that dip *was* the entire residue.  Those are linear conditions on `psi`:
+two values and twelve derivatives.  Put them into the LP as equalities.
+
+Two false starts, both instructive.  Solving the equalities *first*, for the
+smallest correction that satisfies them, picks a spiky one: it pinned the
+gradient to `7e-16` and dug a `2.8e-5` hole elsewhere that no later round could
+climb out of.  And pinning only the gradient pins a critical point of the wrong
+*value* — the coboundary is free to shift `R(alt, phase 0)` down and
+`R(alt, phase 1)` up by the same amount, since their sum is fixed and each is
+not, and it promptly did, dropping phase 0 by `1e-5`.  Both rows are needed, and
+they belong inside the floor-maximising LP rather than before it.
+
+With both, at 22 knots and a correction capped at `2e-5`:
+
+| | |
+| --- | --- |
+| `R` at the alternating block, both phases | `E_alt` to `2.2e-15` |
+| gradient there | `6.3e-17` |
+| smallest Hessian eigenvalue there | `0.245` |
+| adversary floor | `0.003957393309107` |
+| `E_alt` minus that | **`2.19e-15`** |
+| `sup |psi|` | `2e-5` |
+
+`2.19e-15` on a quantity of size `4e-3` is a few hundred ulps: double-precision
+zero.  Three adversaries that share no code agree — the Python search's Adam
+multistart, a JavaScript gradient multistart, and a structured pass over all 64
+two-symbol patterns and 1536 long-gap variants — and all of them descend *to the
+alternating block*.  Nothing dips below it.
+
+**What that would mean, and the word is would.**  If an interval sweep confirms
+`R(g) >= E_alt` for every six-gap block, then averaging over the shifted blocks
+of any chain gives per-gap energy `>= E_alt`, so the alternating chain is the
+global minimiser.  That is the crystallization statement this directory has been
+circling, and it would take the headline projection to `0.6731102697` — the whole
+of the available improvement rather than the `99.9%` the record certificate buys.
+
+**No such sweep exists.**  A rigorous sweep of a bilinear `psi` needs interval
+enclosures for bilinear interpolation over a box, and this directory has none.
+The mathematics of it is easy — a bilinear function on a rectangle is a convex
+combination of its four corner values, so its range over one knot cell is exactly
+the min and max of those corners, and its partial derivatives on a cell are
+convex combinations of the two edge slopes — so this is a known, finite amount of
+work rather than a research problem.  It is nevertheless *not done*, and an
+unswept certificate is worth nothing.  The three adversaries are gradient
+descents: they find holes they happen to land near.  The LP saturates its `2e-5`
+cap across 2304 coefficients, and a hole of depth `1e-4` is well within what such
+a correction could dig.  Until the sweep runs, this is a candidate that no
+adversary has broken, which is not the same as a floor, and this directory has
+been wrong before about exactly that distinction.
+
 ## The wall, certified
 
 Local coercivity supplies the `c dist^2` half of a crystallization argument.  The
