@@ -1060,6 +1060,69 @@ sweep.  The first version of this file tried to test containment box by box
 instead, disabled the reduction on almost everything as a result, and burned
 `4e7` boxes without reaching the tube at all.
 
+## Pricing the adjacency: pair-state coboundaries
+
+The diagnosis above says the additive family is stuck because a potential that
+sees only individual gaps cannot price an *adjacency* — it has to lift the
+high-high defect without noticing that it is one.  So widen the family.
+
+For any state potential `Phi` on five consecutive gaps,
+`R(g) = F6(g) + Phi(g_2..g_6) - Phi(g_1..g_5)` telescopes.  Taking
+`Phi(s) = sum_{j=1..4} phi_j(s_j, s_{j+1})` gives the normal form
+
+`R(g) = F6(g) + sum_{k=1..5} psi_k(g_k, g_{k+1})`,  `sum_k psi_k = 0`,
+
+five bivariate functions summing to zero.  Setting `psi_k(x,y) = u_k(x) + v_k(y)`
+recovers the additive family exactly — `dev/tiling_pair_test.js` checks that
+embedding to `1e-16` on 300 random blocks — so this is a strict widening, and
+what it adds is exactly the ability to charge `(low, low)` differently from
+`(high, high)`.
+
+**The ceiling does not move, and it is structural.**  `F6` is reversal-invariant
+and the two alternating blocks are reverses of each other, so the coboundary
+cancels between them:
+
+`min_g R(g) <= [R(alt, phase 0) + R(alt, phase 1)] / 2 = F6(alt) = E_alt`
+
+for *every* telescoping certificate, additive or not.  Reaching `E_alt` is the
+whole game — a certificate attaining it would say the alternating chain is the
+minimiser, which is the crystallization statement.  Exceeding it is impossible,
+and any tool reporting a floor above it is reporting a bug.
+
+**What the search finds.**  `dev/tiling_pair_search.py` cannot search the family
+from scratch: `4 J^2` parameters against a cut set that can never cover six
+dimensions, so the LP fills the unsampled directions with holes faster than the
+adversary finds them — the first attempt reported an LP bound of exactly `E_alt`
+while its own adversary stood at `-0.15`.  What works is a bounded *correction*
+to a certificate that already reaches `0.003957227285`, absorbed and repeated:
+
+| family | floor | short of `E_alt` | of the additive gap |
+| --- | --- | --- | --- |
+| additive `record` | `0.003957227285` | `1.660e-7` | — |
+| pair, 14 knots | `0.003957387719` | `5.59e-9` | `96.6%` closed |
+| pair, 18 knots | `0.003957389338` | `3.97e-9` | `97.6%` closed |
+| **pair, 22 knots** | **`0.003957391049`** | **`2.26e-9`** | **`98.6%` closed** |
+
+The residue shrinks with knot count, which is what one expects if the family's
+supremum is the ceiling itself rather than something below it.
+
+Two things about that number are worth more than its size.  The binding block
+has moved: the additive record binds at a block with a `2.956` gap, and the pair
+candidate binds at `(1.04165, 1.97947, 1.04163, 1.97949, 1.04173, 1.97943)` —
+the alternating block, to `5e-3`.  A certificate whose minimum has arrived at the
+configuration it is trying to certify is behaving the way a tight one should.
+And the correction is tiny, `sup |psi| = 1.2e-5`, so it costs the tail lemma's
+search cube nothing.
+
+**What this is not.**  It is a floating-point candidate.  Its floor has been
+checked by adversaries — the Python search's own Adam multistart, and a
+JavaScript gradient multistart in `dev/tiling_pair.js` that shares no code with
+it and reproduces `0.003957391049344` to the last digit — and by nothing else.
+No interval sweep has touched it, and none can yet: a rigorous sweep of a
+bilinear `psi` needs enclosures for bilinear interpolation over a box, which do
+not exist in this directory.  Until that is built and run, this is evidence that
+the pair family is rich enough, not a floor.
+
 ## The wall, certified
 
 Local coercivity supplies the `c dist^2` half of a crystallization argument.  The
