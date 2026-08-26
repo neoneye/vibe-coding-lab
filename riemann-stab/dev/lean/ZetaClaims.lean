@@ -15,6 +15,8 @@
     coboundary-floor lemmas are checked independently of any analytic claim
     about the zeta kernel: they say a per-edge floor becomes a chain floor,
     not that any particular edge inequality holds.
+    [pin] the swept-floor projection theorems pin a decimal, not a proof of
+    the assembly they come from.
     NOT formalized here (see bottom comment): the connected proportion
     theorem, the stability-enhanced rank-trace lemma, the F6 interval
     certificate, and the cross-window functional conjecture. A first
@@ -176,6 +178,41 @@ theorem improvement_direction :
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
+
+/-- The exhaustively swept chain floor, as an exact rational: 3955/1000000.
+    It sits strictly above the published local certificate 19/5000, which is
+    the whole point of the sweep. -/
+theorem swept_floor_beats_local_certificate :
+    (3955 : Int) * 5000 > 19 * 1000000 := by omega
+
+/-- Projection of the swept floor.  With floor c = 3955/1000000 the shifted
+    block assembly uses 252 windows per block and blocks of 258 gaps, so
+
+        bound = (258*10^6 * H_MT - 514000) / 257003340,
+
+    the same algebra that turns the published floor 19/5000 into
+    (1345000 * H_MT - 2680)/1340003.  Two-sided pin at the printed digits:
+    the constant lies in [0.6731086901411016860, 0.6731086901411016861].
+    As with the headline pin, Lean is checking arithmetic on a decimal, not
+    the analytic derivation behind the assembly. -/
+theorem swept_projection_floor :
+    258000000 * HmtScaled - 514000 * 10000000000000000000
+      >= 6731086901411016860 * 257003340 := by
+  have hH : HmtScaled = 6725007036794116457 := rfl
+  rw [hH]
+  omega
+
+theorem swept_projection_ceiling :
+    258000000 * HmtScaled - 514000 * 10000000000000000000
+      <= 6731086901411016861 * 257003340 := by
+  have hH : HmtScaled = 6725007036794116457 := rfl
+  rw [hH]
+  omega
+
+/-- The swept projection strictly improves on the published one: the two-sided
+    pins do not overlap. -/
+theorem swept_projection_improves :
+    (6731086901411016860 : Int) > 6730085279277797613 := by omega
 
 /-- Lab cross-functional signal as exact decimals (reference-resolution
     outputs of winCrossFunctional/mixtureStats):

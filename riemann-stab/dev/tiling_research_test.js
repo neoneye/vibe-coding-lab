@@ -134,6 +134,29 @@ for (let floor = 0.0037; floor <= 0.00397; floor += 1e-6) {
 }
 check('projection is monotone in the certified floor', monotoneFailures === 0, `${monotoneFailures}`);
 
+
+// The projection code must reproduce the externally published headline exactly,
+// through completely different arithmetic: the code goes through
+// windowsPerBlock / blockSize / defectCoefficient, the published form is the
+// single fraction (1345000*H_MT - 2680)/1340003 that Lean pins two-sidedly.
+// Agreeing to the last bit is evidence the implementation is the same formula.
+const HMT = 0.6725007036794116457;
+const publishedHeadline = (1345000 * HMT - 2680) / 1340003;
+check('projection reproduces the published headline exactly',
+  T.projectedSimpleZeroBound(19 / 5000).bound === publishedHeadline,
+  `${T.projectedSimpleZeroBound(19 / 5000).bound} vs ${publishedHeadline}`);
+
+// Same algebra at the swept floor, where Lean pins the constant as well.
+const sweptProjection = T.projectedSimpleZeroBound(0.003955);
+check('swept floor uses 252 windows in blocks of 258',
+  sweptProjection.windowsPerBlock === 252 && sweptProjection.blockSize === 258);
+check('swept projection matches its closed form',
+  Math.abs(sweptProjection.bound - (258000000 * HMT - 514000) / 257003340) < 2e-16,
+  `${sweptProjection.bound}`);
+check('swept projection sits inside the Lean two-sided pin',
+  sweptProjection.bound >= 0.6731086901411016 && sweptProjection.bound <= 0.6731086901411018,
+  `${sweptProjection.bound}`);
+
 if (failed) {
   console.error(`${failed} tiling-research checks failed`);
   process.exit(1);
