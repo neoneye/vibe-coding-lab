@@ -571,12 +571,30 @@ Montgomery-Taylor endpoint.  Expanding `R` at a mixture, the quotient rule at
 
 so `R'(1) = 0` exactly when the *bilinear* cross term `N_AB/(P_A P_B)` equals
 `R(psi_MT)`.  It does, to thirty digits — and it fails for `cos(cs)` with
-`c != sqrt(2)`.  The reason is that `sqrt(2)` is exactly the stationary
-frequency: `dR/dc` vanishes at `c = sqrt(2)` to 26 digits, a root-find on
-`dR/dc` returns `sqrt(2)`, and `psi_MT` is stationary in every direction tried
-(indicator, `cos s`, `cos 2s`, `s^2`, a Gaussian: `dR/dt = 0` to `1e-32`).  A
-critical point admits no first-order improvement, so no mixture with it can
-lower the second moment.
+`c != sqrt(2)`.  ### Why sqrt(2), in two lines
+
+The reason is not numerical.  `R` is stationary when its first variation
+vanishes, and dividing that out gives the Euler-Lagrange equation
+
+`psi(s) + int |s-v| psi(v) dv  =  R(psi) * int psi`   (a constant, on the interior).
+
+Now `d^2/ds^2 int |s-v| f(v) dv = 2 f(s)`, so differentiating twice kills the
+constant and leaves
+
+`psi'' + 2 psi = 0`,
+
+whose even solution is `psi(s) = cos(sqrt(2) s)`.  **The Montgomery-Taylor
+frequency is `sqrt(2)` because the second derivative of the `|s-v|` kernel
+contributes a factor of two, and nothing else.**
+
+Checked: the residual — the spread of that expression over `s` — is exactly
+zero at `sqrt(2)` to 22 digits and settles at `R(psi) * int psi =
+1.219607282008414370146`, while for `cos(s)` and `cos(2s)` it spreads by
+`0.079` and `0.152`.  Correspondingly `dR/dc` vanishes at `c = sqrt(2)` to 26
+digits, a root-find on `dR/dc` returns `sqrt(2)`, and `psi_MT` is stationary in
+every direction tried (indicator, `cos s`, `cos 2s`, `s^2`, a Gaussian:
+`dR/dt = 0` to `1e-32`).  A critical point admits no first-order improvement,
+so no mixture with it can lower the second moment.
 
 Note the two cross formulas differ in the double integral as well as the
 denominator: the inferred one puts the geometric mean at both arguments, the

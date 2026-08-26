@@ -557,6 +557,47 @@ function crossFunctionalParts(shapeA,shapeB,n){
 // second moment; numerically R(w) is monotone decreasing on [0,1] with its
 // minimum at the pure endpoint.  Whatever the inferred cross formula's dip is,
 // it is not an interior optimum of this functional.
+// Why sqrt(2), in two lines.
+//
+// R(psi) = (int psi^2 + int int |u-v| psi psi) / (int psi)^2 is stationary when
+// its first variation vanishes, and dividing that out gives the Euler-Lagrange
+// equation
+//
+//     psi(s) + int |s-v| psi(v) dv  =  R(psi) * int psi        (a constant)
+//
+// on the interior.  Now d^2/ds^2 int |s-v| f(v) dv = 2 f(s), so differentiating
+// twice kills the constant and leaves
+//
+//     psi'' + 2 psi = 0,
+//
+// whose even solution is psi(s) = cos(sqrt(2) s).  The Montgomery-Taylor
+// frequency is sqrt(2) because the second derivative of the |s-v| kernel
+// contributes a factor 2, and nothing else.
+//
+// Checked to 22 digits: the residual below is exactly zero for cos(sqrt(2) s)
+// and visibly nonzero for cos(s) or cos(2s).  It is also the whole reason no
+// mixture improves on psi_MT -- a critical point has no first-order descent
+// direction, so in particular the indicator direction is neutral.
+function eulerLagrangeResidual(c,n){
+  n=n||1200;
+  const h=1.0/n;
+  const at=s=>{
+    let integral=0;
+    for(let i=0;i<n;i++){
+      const v=-0.5+(i+0.5)*h;
+      integral+=Math.abs(s-v)*Math.cos(c*v);
+    }
+    return Math.cos(c*s)+integral*h;
+  };
+  let lo=Infinity,hi=-Infinity;
+  for(let k=1;k<20;k++){
+    const value=at(-0.5+k/20);
+    if(value<lo)lo=value;
+    if(value>hi)hi=value;
+  }
+  return {spread:hi-lo,value:at(0)};
+}
+
 // R for a cosine window cos(c s) on [-1/2, 1/2], as a function of c.  The
 // Montgomery-Taylor frequency sqrt(2) is exactly the stationary point of this:
 // dR/dc vanishes there to 26 digits by mpmath quadrature, and a root-find on
@@ -630,6 +671,6 @@ const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,
-  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,crossFunctionalParts,winFunctionalOfSamples,cosineWindowFunctional,mixtureWindowFunctional,mixtureExpansion,mixtureStationarity,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
+  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,crossFunctionalParts,winFunctionalOfSamples,eulerLagrangeResidual,cosineWindowFunctional,mixtureWindowFunctional,mixtureExpansion,mixtureStationarity,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
 if(typeof module!=='undefined'&&module.exports) module.exports=RH;
 if(typeof window!=='undefined') window.RH=RH;

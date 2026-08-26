@@ -177,6 +177,35 @@ console.log('--- cross-window functional factorisation ---');
     parts.cross < Math.min(parts.parentA, parts.parentB), `${parts.cross}`);
 }
 
+console.log('--- why sqrt(2): the Euler-Lagrange equation ---');
+{
+  // Stationarity of R gives  psi(s) + int |s-v| psi(v) dv = const  on the
+  // interior.  Since d^2/ds^2 int |s-v| f = 2f, differentiating twice leaves
+  // psi'' + 2 psi = 0, whose even solution is cos(sqrt(2) s).  So the residual
+  // -- the spread of that expression over s -- vanishes exactly at sqrt(2).
+  const n = 4000;
+  const atRoot = M.eulerLagrangeResidual(Math.SQRT2, n);
+  // The floor is midpoint-quadrature error on the |s-v| kink, not the residual
+  // itself, so the meaningful test is the separation from any other frequency.
+  let nearest = Infinity;
+  for (const c of [0.5, 1, 2, 3]) {
+    const off = M.eulerLagrangeResidual(c, n);
+    ok(`Euler-Lagrange residual is nonzero at c=${c}`, off.spread > 1e-3, `${off.spread}`);
+    nearest = Math.min(nearest, off.spread);
+  }
+  ok('Euler-Lagrange residual vanishes at sqrt(2)', atRoot.spread < 1e-7, `${atRoot.spread}`);
+  ok('and is smaller there by five orders of magnitude than anywhere else',
+    nearest / atRoot.spread > 1e5, `${nearest / atRoot.spread}`);
+  // The constant it settles at is R(psi) * int psi, which is what the
+  // derivation says it must be.
+  const R = M.cosineWindowFunctional(Math.SQRT2, n);
+  let integral = 0;
+  for (let i = 0; i < n; i++) integral += Math.cos(Math.SQRT2 * (-0.5 + (i + 0.5) / n));
+  integral /= n;
+  ok('and it settles at R(psi) * int psi',
+    Math.abs(atRoot.value - R * integral) < 1e-6, `${atRoot.value} vs ${R * integral}`);
+}
+
 console.log('--- sqrt(2) is the stationary frequency of the second-moment functional ---');
 {
   // R(cos(c s)) is stationary exactly at c = sqrt(2): dR/dc vanishes there to
