@@ -63,6 +63,15 @@ not the same.
   two of headroom.  They are being re-run; until a transcript lands they are
   claims about what happened, not evidence of it.
 
+A stronger form was considered and rejected on cost: a persistent partition
+certificate, listing every disposed box for an independent checker to verify
+without re-running.  At 67 million boxes and twelve doubles each that is some
+six gigabytes for a single row, which is not something to commit.  The checksum
+is the weaker but affordable version — it makes a *replay* self-verifying, and
+an independent checker re-runs rather than reads.  The suite tests the detector
+as well as the rows: a tampered checksum, a forged certificate hash, and a
+traversal of a nearby target must all be caught.
+
 The reason for the distinction is a specific failure the transcript mechanism
 caught on its first outing: a `compact 0.00385` row recorded `5 164 379` boxes
 and replays to `5 164 383`, having silently predated the derivative sign test

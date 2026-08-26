@@ -184,6 +184,30 @@ for (const row of allRows) {
     unreplayed++;
   }
 }
+// A detector that never fires proves nothing, so the detector is tested: a row
+// with one digit of its checksum changed, and a row whose certificate hash is
+// wrong, must both be caught.
+{
+  const row = allRows.find(r => r.boxes <= REPLAY_BUDGET_BOXES);
+  const entry = sweep.certificateEntry(row.certificate);
+  const prepared = I.prepareCertificate({knots: entry.knots, a: entry.a, b: entry.b});
+  const rerun = row.mode === 'fast'
+    ? I.verifyFloor(prepared, row.target, {tables, budget: 6e8, box: entry.searchBox})
+    : I.verifyFloorRigorous(prepared, row.target, {budget: 6e8, box: entry.searchBox});
+  const tampered = row.checksum.replace(/^./, c => c === 'a' ? 'b' : 'a');
+  check('a tampered checksum is caught', rerun.checksum !== tampered, `${tampered}`);
+  const honest = sweep.inputHashes(entry, row.mode);
+  const forged = Object.assign({}, row.inputs, {certificate: '0'.repeat(16)});
+  check('a forged certificate hash is caught',
+    Object.keys(forged).some(k => honest[k] !== forged[k]));
+  // and the checksum must actually depend on the traversal, not just its length
+  const neighbour = row.mode === 'fast'
+    ? I.verifyFloor(prepared, row.target * 0.999, {tables, budget: 6e8, box: entry.searchBox})
+    : I.verifyFloorRigorous(prepared, row.target * 0.999, {budget: 6e8, box: entry.searchBox});
+  check('the checksum separates two nearby traversals',
+    neighbour.checksum !== rerun.checksum);
+}
+
 check('every recorded row carries a transcript', staleInputs === 0,
   `${staleInputs} rows with missing or stale input hashes`);
 check('every replayable row replays to the same checksum', checksumMismatches === 0,
