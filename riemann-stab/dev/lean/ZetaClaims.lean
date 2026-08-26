@@ -232,40 +232,42 @@ theorem swept_projection_improves :
     (6731093501463616833 : Int) > 6730085279277797613 := by omega
 
 /-- The floor established by the sweep that uses proved enclosures rather than
-    plain double precision: 1977/500000 = 0.003954.  It is strictly above the
-    published local certificate 19/5000, so the improvement does not rest on
-    floating point. -/
+    plain double precision: 989/250000 = 0.003956.  That is the same floor the
+    double-precision sweep reaches, so the arithmetic gap between the two rungs
+    has closed: everything the fast sweep can see, the rigorous one now sees. -/
 theorem rigorous_floor_beats_local_certificate :
-    (1977 : Int) * 5000 > 19 * 500000 := by omega
+    (989 : Int) * 5000 > 19 * 250000 := by omega
 
-/-- Projection of the rigorous floor.  With c = 1977/500000 the assembly uses
+/-- Projection of the rigorous floor.  With c = 989/250000 the assembly uses
     252 windows per block and blocks of 258 gaps, so
 
-        bound = (258000000 * H_MT - 514000) / 257003592,
+        bound = (258000000 * H_MT - 514000) / 257003088,
 
-    pinned two-sidedly at [0.6731080301371359999, 0.6731080301371360000].
-    Arithmetic on a decimal, as with the other projection pins. -/
+    pinned two-sidedly at [0.6731093501463616833, 0.6731093501463616834] --
+    the same interval as swept_projection_floor/ceiling, which is the point. -/
 theorem rigorous_projection_floor :
     258000000 * HmtScaled - 514000 * 10000000000000000000
-      >= 6731080301371359999 * 257003592 := by
+      >= 6731093501463616833 * 257003088 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
 
 theorem rigorous_projection_ceiling :
     258000000 * HmtScaled - 514000 * 10000000000000000000
-      <= 6731080301371360000 * 257003592 := by
+      <= 6731093501463616834 * 257003088 := by
   have hH : HmtScaled = 6725007036794116457 := rfl
   rw [hH]
   omega
 
-/-- The three projection pins sit in strict order: what the published local
-    certificate gives, what the sweep with proved enclosures gives, and what the
-    double-precision sweep gives.  No two of the intervals overlap, so the
-    ordering does not depend on rounding. -/
+/-- The projection pins.  The published local certificate sits strictly below
+    what the sweep gives, and the swept constant sits strictly below the ceiling
+    the alternating chain imposes (0.6731102697399269...).  The two sweep rungs,
+    double precision and proved enclosures, now land on the same floor, so there
+    is no longer a third rung between them.  No interval overlaps another, so
+    none of this depends on rounding. -/
 theorem projection_ladder :
-    (6730085279277797613 : Int) < 6731080301371359999
-    ∧ (6731080301371360000 : Int) < 6731093501463616833 := by
+    (6730085279277797613 : Int) < 6731093501463616833
+    ∧ (6731093501463616834 : Int) < 6731102697399269000 := by
   constructor <;> omega
 
 /-- Lab cross-functional signal as exact decimals (reference-resolution

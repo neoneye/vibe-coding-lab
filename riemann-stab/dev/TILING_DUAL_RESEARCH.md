@@ -24,12 +24,12 @@ Where things stand, most established first:
   Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
   with the external Arb certificate.
 - **Exhaustively subdivided with proved enclosures.**  The chain floor
-  `0.003954`, strictly above the published local floor `19/5000`.  This is the
-  strongest rung the improvement itself has reached: 47 516 991 boxes, proved
-  trigonometric error bounds, outward-rounded arithmetic throughout.  It
-  projects to `0.6731080301` against `0.6730085279`, `97.8%` of the whole
-  available gain, and Lean pins that constant two-sidedly and strictly between
-  the published pin and the double-precision one.
+  `0.003956` — the same floor the double-precision sweep reaches, so these two
+  rungs have merged.  67 608 431 boxes, proved trigonometric error bounds,
+  outward-rounded arithmetic throughout.  It projects to `0.6731093501` against
+  `0.6730085279`, `99.1%` of the whole available gain, and Lean pins that
+  constant two-sidedly, strictly above the published pin and strictly below the
+  ceiling.
 - **Numerical only.**  The certificate coefficients; every floor above the
   swept ones; the two-phase kink energies and Bloch spectrum; and the entire
   block-size scan, which says the projection peaks at `n = 8`, not the `n = 7`
@@ -319,12 +319,19 @@ the table version, which is affordable — and it finishes:
 | compact | `0.00394` | 25 523 525 | 1792 s | complete |
 | compact | `0.003949` | 42 531 993 | 2924 s | complete |
 | sharp | `0.003952` | 40 938 447 | 2783 s | complete |
-| sharp | **`0.003954`** | 47 516 991 | 3223 s | **complete** |
+| sharp | `0.003954` | 47 516 991 | 3223 s | complete |
+| sharp | **`0.003956`** | 67 608 431 | 4470 s | **complete — equals the double-precision floor** |
 
-`0.003954` projects to `0.6731080301` against the published `0.6730085279`.
-That is `97.8%` of the whole available improvement, established with proved
-enclosures rather than with `Math.sin`, against a ceiling of `0.6731102697`.
-The double-precision sweep is only `2e-6` of floor ahead of it now.
+`0.003956` projects to `0.6731093501` against the published `0.6730085279`.
+That is `99.1%` of the whole available improvement, against a ceiling of
+`0.6731102697` — **and it is exactly the floor the double-precision sweep
+reaches.**  The arithmetic gap that motivated `tiling_rigorous.js` has closed:
+everything the fast sweep can see, the sweep with proved enclosures now sees
+too, at about 1.24 times the boxes and 9.8 times the wall clock.
+
+What limits the answer now is neither the arithmetic nor the subdivision.  It is
+the certificate: `sharp` stops at `0.003956981` and `record` at `0.003957227`,
+against a ceiling of `0.003957393`.  The last `4e-7` is cut-generation rounds.
 
 The `0.003949` row is worth keeping for what it showed: it was within `1e-6` of
 the `compact` certificate's own floor, so the subdivision had caught up with the
@@ -526,18 +533,12 @@ The old program's steps are done: the certificate exists, the cube is finite
 and explicit, the sweep is exhaustive, and it now runs on proved enclosures.
 What is left, in order of how much it buys per unit of work:
 
-1. **Compute.**  The rigorous sweep is at `0.003954` on `sharp` and the
-   double-precision one at `0.003956` — two parts in a million apart.  The last
-   target is running:
-
-   ```
-   node dev/sweep.js rigorous sharp 0.003956
-   ```
-
-   which should land the rigorous floor within a part in `10^6` of the ceiling.
-   Beyond that the certificate binds again: `sharp` stops at `0.003956981` and
-   `record` at `0.003957227`, against a ceiling of `0.003957393`.  Squeezing
-   the last `4e-7` means more cut-generation rounds, not more sweeping.
+1. **A better certificate, not a longer sweep.**  Both rungs are at `0.003956`
+   and the certificate is what binds: `sharp` stops at `0.003956981`, `record`
+   at `0.003957227`, ceiling `0.003957393`.  The last `4e-7` is worth `0.9%` of
+   the gain and costs only cut-generation rounds —
+   `tiling_additive_search.py maxmin` for longer, then `refine` at a target just
+   under the new floor, which is the loop that produced `sharp`.
 2. **An independent implementation.**  Everything above trusts that this code
    has no bugs.  The cross-checks are real — 60-digit mpmath for the
    trigonometry, the exact-range table for every box analysis, the degenerate
