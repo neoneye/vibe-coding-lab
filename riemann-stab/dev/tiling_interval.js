@@ -340,6 +340,7 @@ function verifyFloor(cert, target, options = {}) {
   // itself only when there is a counterexample to find, not when the whole
   // subdivision has to be exhausted anyway.
   const dive = !!options.dive;
+  const gradientSafety = options.gradientSafety === undefined ? 1e-11 : options.gradientSafety;
 
   const stack = [{lo: new Float64Array(6).fill(0), hi: new Float64Array(6).fill(box)}];
   let processed = 0, collapsed = 0, deepest = 0, unresolved = 0, unresolvedVolume = 0;
@@ -363,8 +364,11 @@ function verifyFloor(cert, target, options = {}) {
       let changed = false;
       for (let k = 0; k < 6; k++) {
         if (hi[k] <= lo[k]) continue;
-        if (scratch.grad[2 * k] > 0) { hi[k] = lo[k]; changed = true; collapsed++; }
-        else if (scratch.grad[2 * k + 1] < 0) { lo[k] = hi[k]; changed = true; collapsed++; }
+        // The sign test needs its own margin: a derivative enclosure that
+        // straddles zero by less than the arithmetic's own error must not be
+        // allowed to collapse a box.
+        if (scratch.grad[2 * k] > gradientSafety) { hi[k] = lo[k]; changed = true; collapsed++; }
+        else if (scratch.grad[2 * k + 1] < -gradientSafety) { lo[k] = hi[k]; changed = true; collapsed++; }
       }
       if (!changed) break;
       analyzeBox(tables, prepared, lo, hi, scratch);

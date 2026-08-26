@@ -16,10 +16,17 @@ function sinOverX(x) {
   return Math.sin(x) / x;
 }
 
+// The closed form (x cos x - sin x)/x^2 cancels catastrophically for small x:
+// at x = 1e-2 the numerator is ~4e-7 formed from terms of size ~1e-2, losing
+// about eleven digits.  The old cutoff of 1e-5 left that whole region on the
+// cancelling branch; the series below is accurate to far past double precision
+// out to |x| = 0.05, where the closed form is already harmless.  Found by
+// cross-checking against the rigorous enclosures in tiling_rigorous.js.
 function sinOverXDerivative(x) {
-  if (Math.abs(x) < 1e-5) {
+  if (Math.abs(x) < 0.05) {
     const x2 = x * x;
-    return -x / 3 + x * x2 / 30 - x * x2 * x2 / 840;
+    return x * (-1 / 3 + x2 * (1 / 30 + x2 * (-1 / 840 + x2 * (1 / 45360
+      + x2 * (-1 / 3991680 + x2 / 518918400)))));
   }
   return (x * Math.cos(x) - Math.sin(x)) / (x * x);
 }
