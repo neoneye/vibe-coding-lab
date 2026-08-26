@@ -6,7 +6,11 @@ This directory contains a numerical discovery program, not a new theorem about
 zeta zeros.  The exact mathematical ingredient is the cyclic reindexing of the
 shifted seven-point functional.
 
-Where things stand, most established first:
+Where things stand, most established first.  **Read the evidentiary status
+note below the ladder before quoting any sweep number**: a review found that
+the suite had been accepting recorded sweep results without replaying them, and
+the numbers are being re-established under a transcript mechanism that did not
+previously exist.
 
 - **Exact.**  `H_MT = 2 - R(psi_MT)`, where `R` is the second-moment functional
   and `psi_MT = cos(sqrt(2) s)` is its unique critical point — derived, not
@@ -36,6 +40,33 @@ Where things stand, most established first:
   the programme inherited.
 - **Not checkable here at all.**  The external shifted-block assembly the
   projection encodes.  Everything downstream of it is conditional on it.
+
+### Evidentiary status of the sweep numbers
+
+Three different things have been called "verified" in this file, and they are
+not the same.
+
+- **Transcripted and replayed by the suite.**  The row carries a traversal
+  checksum and input hashes, and `tiling_interval_test.js` re-runs it from
+  scratch on every suite run and compares.  Currently: `fast` up to `0.0025`
+  and `rigorous` up to `0.003`, plus the bare-block control rows — the rows
+  small enough to redo inside a test suite.
+- **Transcripted, too large for the suite to replay.**  The row carries the same
+  checksum and hashes, and its replay command, but redoing it costs minutes to
+  hours so the suite verifies its hashes only and reports that it did not
+  replay it.  Currently: `fast` up to `0.0039`.
+- **Previously reported, not currently transcripted.**  Everything above
+  `0.0039` fast and `0.003` rigorous, including the headline `0.003956` on both
+  rungs.  Those numbers were produced by a driver that emitted no checksum, and
+  every rigorous one is stale in any case because `TRIG_ERROR` moved from
+  `2e-15` to `8e-15` when an oracle showed the old bound had only a factor of
+  two of headroom.  They are being re-run; until a transcript lands they are
+  claims about what happened, not evidence of it.
+
+The reason for the distinction is a specific failure the transcript mechanism
+caught on its first outing: a `compact 0.00385` row recorded `5 164 379` boxes
+and replays to `5 164 383`, having silently predated the derivative sign test
+gaining its safety margin.  Nothing in the suite would ever have noticed.
 
 What is still required before the improved simple-zero projection can be used:
 the assembly has to be checked by someone with the manuscript.  The rigorous
