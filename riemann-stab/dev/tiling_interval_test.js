@@ -90,6 +90,29 @@ check('sweep completes at 0.0035 on the bare block functional', bare.complete,
   `${bare.processed} boxes`);
 
 
+
+// On a degenerate box the analysis must reproduce the very function the
+// certificate was audited against.  If these ever disagreed, the sweep would be
+// bounding something else.
+const degenerateFast = I.newScratch();
+const degenerateRigorous = I.newScratch();
+let identityError = 0, rigorousAbove = 0, rigorousBelow = 0;
+for (let trial = 0; trial < 40000; trial++) {
+  const point = Array.from({length: 6}, () => random() * 5);
+  const lo = Float64Array.from(point), hi = Float64Array.from(point);
+  I.analyzeBox(tables, prepared, lo, hi, degenerateFast);
+  I.analyzeBoxRigorous(prepared, lo, hi, degenerateRigorous);
+  const truth = A.additiveReducedCost(point, compact);
+  identityError = Math.max(identityError, Math.abs(degenerateFast.bound - truth));
+  rigorousAbove = Math.max(rigorousAbove, degenerateRigorous.bound - truth);
+  rigorousBelow = Math.max(rigorousBelow, truth - degenerateRigorous.bound);
+}
+check('degenerate box reproduces the audited reduced cost exactly',
+  identityError === 0, `${identityError}`);
+check('rigorous bound never exceeds the true value', rigorousAbove <= 0, `${rigorousAbove}`);
+check('rigorous bound stays within its accumulation slack',
+  rigorousBelow < 5e-12, `${rigorousBelow}`);
+
 // ------------------------------------------------------- rigorous variant
 // The rigorous analysis must be weaker than the table version everywhere: its
 // value bound no higher, its gradient enclosure no narrower.  If it were ever
