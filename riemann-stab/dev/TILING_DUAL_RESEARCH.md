@@ -995,6 +995,71 @@ here, and now a certified statement rather than a number read off the ordinary
 floating-point kernel, which carries no bound and should never have been called
 a true minimum.
 
+## Where the certificate family's `1.66e-7` actually goes
+
+The best certificate here has LP floor `0.003957227285`, which is `1.66e-7` below
+the alternating chain energy.  Elsewhere this directory calls that shortfall
+economically irrelevant, and for the projection it is.  For a crystallization
+argument it is everything: a uniform block floor below `e_alt` cannot prove the
+alternating chain is the minimiser, and no amount of subdivision closes a gap the
+certificate does not have.  So it is worth knowing *where* the shortfall lives.
+
+Start from a structural identity.  The additive coboundary telescopes over the
+alternating chain, so the block reduced cost at an exactly alternating block *is*
+the chain energy:
+
+`R(L, H, L, H, L, H) = 0.003957393309109`  for every certificate here, to `1e-15`.
+
+`R` is not *minimised* there.  `dev/tiling_defect.js` runs the same subdivision
+over the search cube minus the two alternating tubes
+
+`T_p(rho) = { g : |g_i - c_i^p| <= rho }`,  `c^p` alternating with phase `p`,
+
+and what it turns up is that the shortfall is not one obstruction but three,
+within a factor of two of each other:
+
+| basin | `sharp` | `record` |
+| --- | --- | --- |
+| perturbed near-alternating | `-4.12e-7` | `-1.63e-7` |
+| **high-high defect** | `-4.01e-7` | `-8.09e-8` |
+| long gap (`2.956`) | — | `-1.66e-7`, the record's own argmin |
+| low-low defect | `+2.47e-4` | `+2.40e-4` |
+
+(signed against `e_alt`; the `sharp` certificate's global minimum is the first
+row, the `record` certificate's is the third.)
+
+**The high-high defect is the structurally interesting one.**  The chain charges
+that wall a tension of `1.47e-4`, certified in `dev/kink_arb.py`.  The block
+relaxation charges it essentially nothing — it comes out *below* the ground
+state, by about the same margin as the near-alternating basin.  The low-low
+wall, tension `1.09e-3`, does show up: the relaxation charges `2.4e-4` for it,
+roughly a fifth of the true cost.  So the relaxation sees a fifth of one wall
+and none of the other.
+
+That says something about where to go next.  Lifting the floor to `e_alt`
+requires lifting all three basins at once, and a certificate that depends only on
+a block's *gaps* has to lift the high-high defect without noticing it is a
+defect.  A coboundary that depends on the block's symbol pattern — a pair state,
+or any finite memory — could charge the two adjacencies differently, which a
+purely additive one cannot.  That is a concrete reason to want the generalised
+coboundary state, rather than a general preference for more parameters.
+
+**What the restricted sweep is worth, numerically: almost nothing.**  Excluding
+the tube raises the certifiable floor from `0.003956981` to about `0.00395699` —
+`1.1e-8` — because the high-high basin sits just above the near-alternating one.
+This file is a diagnostic instrument, not a new record, and is described as one.
+
+**One soundness point it does have to get right.**  The monotonicity reduction —
+collapse a box to a face when a derivative keeps its sign — is only valid when
+minimising over a *whole* box.  On a box straddling a tube boundary, the collapse
+can carry points into the tube, and the minimum over the complement is not the
+minimum over the face.  So the cube is first partitioned by cutting every
+coordinate at the tube faces, giving `15623` pieces each of which has interior
+disjoint from both tubes; on those the reduction runs exactly as in the uniform
+sweep.  The first version of this file tried to test containment box by box
+instead, disabled the reduction on almost everything as a result, and burned
+`4e7` boxes without reaching the tube at all.
+
 ## The wall, certified
 
 Local coercivity supplies the `c dist^2` half of a crystallization argument.  The
