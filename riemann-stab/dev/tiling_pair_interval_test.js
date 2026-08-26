@@ -64,8 +64,8 @@ for (let t = 0; t < 3000; t++) {
     cert.mats[k][(i + 1) * cert.J + j], cert.mats[k][(i + 1) * cert.J + j + 1]];
   if (Math.abs(R.value[1] - Math.max(...corners)) > 1e-15) cellBad++;
 }
-check('and on a single cell the upper end is exactly the largest corner',
-  cellBad === 0);
+check('and on a single cell the upper end is the largest corner, bar the '
+  + 'outward-rounding slack', cellBad === 0);
 
 // ---- the box bound for the whole reduced cost
 let boundBad = 0;

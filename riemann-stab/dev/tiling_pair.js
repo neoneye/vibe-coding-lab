@@ -120,7 +120,7 @@ function multistart(cert, options = {}) {
   const iterations = options.iterations || 900;
   let seed = options.seed || 0x5eed1234;
   const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-  const low = A.ALTERNATING_CEILING ? 1.0416801034484870 : 1.0416801034484870;
+  const low = 1.0416801034484870;
   const high = 1.9794672314032244;
   const fixed = [
     [low, high, low, high, low, high],
@@ -285,6 +285,19 @@ function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
   }
   const centered = psiCenteredLower(cert, k, aLo, aHi, bLo, bHi, dx, dy);
   if (centered > value[0]) value[0] = centered;
+  // The grid values are stored doubles, so the natural value range is exact;
+  // the slopes and the centered form are not -- they are divisions and
+  // subtractions.  The rigorous path runs with a gradient margin of zero, where
+  // a slope range straddling zero by less than its own rounding could collapse
+  // a box onto the wrong face.  Widen outward.  The amounts are around 1e-20
+  // against slopes of 1e-4, so this costs nothing and closes the hole.
+  const slack = 1e-15;
+  dx = [dx[0] - Math.abs(dx[0]) * slack - 1e-300,
+    dx[1] + Math.abs(dx[1]) * slack + 1e-300];
+  dy = [dy[0] - Math.abs(dy[0]) * slack - 1e-300,
+    dy[1] + Math.abs(dy[1]) * slack + 1e-300];
+  value[0] -= Math.abs(value[0]) * slack + 1e-300;
+  value[1] += Math.abs(value[1]) * slack + 1e-300;
   return {value, dx, dy};
 }
 
