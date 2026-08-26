@@ -220,17 +220,23 @@ check('compact certificate clears the 0.00395 programme target',
   byName.compact.floor > 0.00395, `${byName.compact.floor}`);
 check('small-box certificates really are the cheaper sweep target',
   byName.compact.searchBox < byName.record.searchBox
-  && byName.tight.searchBox < byName.record.searchBox);
+  && byName.sharp.searchBox < byName.record.searchBox);
 // The tight certificate is the record one put through the amplitude-minimising
 // refine stage, so it should dominate the compact one outright.
-check('tight certificate dominates the compact one',
-  byName.tight.floor > byName.compact.floor
-  && byName.tight.searchBox <= byName.compact.searchBox,
-  `${byName.tight.floor} vs ${byName.compact.floor}`);
-check('and still sits below the record floor',
-  byName.tight.floor < byName.record.floor);
+// `sharp` is the record certificate put through the amplitude-minimising refine
+// stage at a target within 2.3e-7 of its own floor.  It should keep almost all
+// of the record floor while living in the small cube.
+check('sharp certificate dominates the compact one',
+  byName.sharp.floor > byName.compact.floor
+  && byName.sharp.searchBox <= byName.compact.searchBox,
+  `${byName.sharp.floor} vs ${byName.compact.floor}`);
+check('sharp keeps almost all of the record floor',
+  byName.record.floor - byName.sharp.floor < 3e-7,
+  `${byName.record.floor - byName.sharp.floor}`);
+check('in a cube the record certificate cannot use',
+  byName.sharp.searchBox < byName.record.searchBox);
 check('the certificate file explains what each one is for',
-  shipped.roles && /dominates it for every purpose/.test(shipped.roles.tight));
+  shipped.roles && /Dominates every other certificate/.test(shipped.roles.sharp));
 check('certificate scope stays numerical', /not a proof/.test(shipped.note));
 
 if (failed) {

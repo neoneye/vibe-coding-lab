@@ -114,50 +114,26 @@ clipped Walsh) to
 | certificate | audited floor | search box | amplitude bound | share of gain |
 |---|---:|---:|---:|---:|
 | record | `0.003957227285` | `[0, 28]^6` | `5.1968e-3` | `99.89%` |
-| **tight** | `0.003954886134` | `[0, 16]^6` | `1.1543e-3` | `98.37%` |
+| **sharp** | `0.003956981146` | `[0, 16]^6` | `1.2818e-3` | `99.73%` |
 | compact | `0.003950948242` | `[0, 16]^6` | `1.1068e-3` | `96.03%` |
 
 All three are in `tiling_additive.certificate.json` and are re-audited from
-scratch by `tiling_additive_test.js`.  **`tight` is the sweep target**: it is
+scratch by `tiling_additive_test.js`.  **`sharp` is the sweep target.**  It is
 the record certificate put through the amplitude-minimising refine stage at
-target `0.003955`, so it has a higher floor than `compact` in the same cube and
-dominates it outright.  Against `record` its cube is smaller by a factor of
-`28^6/16^6 ≈ 29`, and its amplitude — which also bounds the finite-chain
-boundary term — is four and a half times smaller.  `compact` is kept only
-because the recorded sweeps used it.
+target `0.003957` — within `2.3e-7` of its own floor — and it keeps essentially
+all of that floor (`99.73%` of the available gain against the record's `99.89%`)
+while living in a cube smaller by `28^6/16^6 ≈ 29` in volume, with an amplitude
+— which also bounds the finite-chain boundary term — four times smaller.
+`compact` is kept only because the recorded sweeps used it.
 
-The lesson is worth stating separately, because it was not obvious: the
-amplitude-minimising refine stage is not merely a tidying step for the tail
-lemma.  Running it at a *high* target produces a certificate that is better in
-every dimension at once — higher floor, smaller cube, smaller boundary term.
-The `m = 7` attempt failed partly for want of exactly this stage.
-
-How far it can be pushed is untested.  The refine converges smoothly when the
-target sits comfortably below the input certificate's own floor — `0.00395`,
-`0.003951` and `0.003955` all worked, with `2e-6` or more of headroom.  At
-`0.003957`, which is only `2.3e-7` below the record floor, it oscillates much
-harder: `0.0039530`, `0.0039211`, `0.0038736`, then back to `0.0039546` and
-`0.0039552` by round eight, at amplitude `1.9e-4`.  It was stopped there to free
-processor time for the sweep, *not* because it had failed — the run was
-recovering, and an earlier note in this file claiming it diverged was wrong and
-has been corrected.  Whether it converges at a near-ceiling target is an open
-and cheap question: twenty-four rounds of
-`tiling_additive_search.py refine cert.json 0.003957 24 out.json`.
-
-### The certificate closes the aperiodic gap, which the period sweep never did
-
-A per-edge floor telescopes over *any* gap sequence.  For a window of `m` gaps,
-`sum_i R(window_i) = sum_i F6(window_i) + Phi(end) - Phi(start)`, so the block
-average is at least `kappa*(m-5)/m - 2*amplitude/m` for every configuration,
-periodic or not, and the liminf is at least `kappa`.  Together with the
-alternating cycle as an upper bound this pins the chain infimum inside
-
-`[0.003957227285, 0.003957393309]`,   width `1.66e-7`,
-
-over all configurations.  The period-9-through-64 sweep could always have
-missed a continuous or aperiodic minimizer; the certificate cannot.  That
-caveat, carried on the page since the probe started, is now retired — at
-floating-point confidence, like everything else here.
+Two lessons, neither obvious beforehand.  The amplitude-minimising refine stage
+is not a tidying step for the tail lemma: run at a *high* target it improves the
+floor, the cube and the boundary term at once.  And it can be driven almost to
+the ceiling — thirty rounds at target `0.003957` converge, after an alarming
+excursion down to `0.0038736` around round six.  An earlier note here called
+that excursion a divergence and was wrong twice: first in the claim, then in the
+correction that called the question open.  It is settled, and `sharp` is the
+answer.
 
 The record floor is `1.66e-7` below the structural ceiling.  Both were audited
 in JavaScript by three adversaries that share no code with the Python search
@@ -545,11 +521,16 @@ and explicit, the sweep is exhaustive, and it now runs on proved enclosures.
 What is left, in order of how much it buys per unit of work:
 
 1. **Compute.**  The rigorous sweep is at `0.00392` and the double-precision
-   one at `0.003955`, and the gap between them is now `6e-6`.  `0.003949`
-   took 42.5 million rigorous boxes and 49 minutes.  Going further means a
-   better certificate, not a longer sweep: the compact certificate's own floor
-   is `0.003950948`, and the record certificate's is `0.003957227`, so sweeping
-   the record one is the next move.
+   one at `0.003955`.  `0.003949` took 42.5 million rigorous boxes and 49
+   minutes on the `compact` certificate, whose own floor is `0.003950948` — so
+   that certificate is now the binding constraint, not the sweep.  `sharp`
+   removes it: same cube, floor `0.003956981`.  The next command is
+
+   ```
+   node dev/sweep.js rigorous sharp 0.003952 0.003954 0.003956
+   ```
+
+   which should land the rigorous floor within a part in `10^6` of the ceiling.
 2. **An independent implementation.**  Everything above trusts that this code
    has no bugs.  The cross-checks are real — 60-digit mpmath for the
    trigonometry, the exact-range table for every box analysis, the degenerate
