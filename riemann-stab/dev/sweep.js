@@ -24,7 +24,8 @@
 //     so a row goes stale visibly the moment any of them changes;
 //   * every parameter and every terminal field, so nothing that decided the
 //     outcome is left implicit;
-//   * the replay command, so checking a row is copy and paste.
+//   * the replay command and the git commit the run was made at, so checking a
+//     row is copy and paste and its provenance is not guesswork.
 //
 // The suite verifies the hashes on every row and replays the cheap rows in
 // full.  Expensive rows it cannot replay; it says so rather than implying
@@ -39,9 +40,9 @@ const I = require('./tiling_interval');
 // so a row goes stale when something relevant changes and not otherwise.  The
 // fast path never touches tiling_rigorous.js.
 const SOURCES = {
-  fast: ['tiling_interval.js', 'tiling_research.js', 'tiling_additive.js'],
-  rigorous: ['tiling_interval.js', 'tiling_rigorous.js', 'tiling_research.js',
-    'tiling_additive.js']
+  fast: ['sweep.js', 'tiling_interval.js', 'tiling_research.js', 'tiling_additive.js'],
+  rigorous: ['sweep.js', 'tiling_interval.js', 'tiling_rigorous.js',
+    'tiling_research.js', 'tiling_additive.js']
 };
 
 function sha256(text) {
@@ -65,6 +66,18 @@ function inputHashes(entry, mode) {
     hashes[file] = sha256(fs.readFileSync(path.join(__dirname, file), 'utf8'));
   }
   return hashes;
+}
+
+// Provenance only -- recorded, never compared, since a row stays valid across
+// commits that do not touch a hashed source.
+function headCommit() {
+  try {
+    return require('child_process')
+      .execSync('git rev-parse --short HEAD', {cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore']})
+      .toString().trim();
+  } catch (error) {
+    return 'unknown';
+  }
 }
 
 function certificateEntry(name) {
@@ -114,6 +127,7 @@ for (const target of targets) {
     seconds: +((Date.now() - started) / 1000).toFixed(1),
     inputs: hashes,
     replay: `node dev/sweep.js ${mode} ${name} ${target}`,
+    commit: headCommit(),
     engine: `${process.version} ${process.platform}-${process.arch}`
   }));
   if (!result.complete) break;
