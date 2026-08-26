@@ -177,5 +177,35 @@ console.log('--- cross-window functional factorisation ---');
     parts.cross < Math.min(parts.parentA, parts.parentB), `${parts.cross}`);
 }
 
+console.log('--- the honest mixture functional has no interior optimum ---');
+{
+  // No inferred cross formula here: R of the linear mixture, computed directly.
+  const n = 900;
+  let previous = Infinity, monotone = true, argmin = {w: 0, R: Infinity};
+  for (let k = 0; k <= 20; k++) {
+    const w = k / 20;
+    const R = M.mixtureWindowFunctional('ind', 'mt', w, n);
+    if (R > previous + 1e-12) monotone = false;
+    previous = R;
+    if (R < argmin.R) argmin = {w, R};
+  }
+  ok('mixture functional is monotone decreasing in w', monotone);
+  ok('its minimum is the pure Montgomery-Taylor endpoint, not an interior point',
+    argmin.w === 1, `argmin at w=${argmin.w}`);
+
+  // The algebraic equivalence: R'(1) = 2(N_BB P_A - N_AB P_B)/P_B^3 vanishes
+  // exactly when the bilinear cross term equals the parent.  It does, and that
+  // is why no mixture can improve on psi_MT to first order.
+  const st = M.mixtureStationarity('ind', 'mt', n);
+  ok('bilinear cross term equals R(psi_MT)', Math.abs(st.gap) < 1e-8, `${st.gap}`);
+  ok('so w=1 is a critical point of the mixture functional',
+    Math.abs(st.slopeAtB) < 1e-5, `${st.slopeAtB}`);
+  // And the geometric-mean cross formula does dip, which is the discrepancy.
+  const parts = M.crossFunctionalParts('ind', 'mt', n);
+  ok('the inferred cross formula dips where the honest one does not',
+    parts.cross < st.parentB - 1e-6 && st.bilinear > st.parentB - 1e-6,
+    `inferred ${parts.cross}, honest ${st.bilinear}, parent ${st.parentB}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

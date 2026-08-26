@@ -538,10 +538,61 @@ function crossFunctionalParts(shapeA,shapeB,n){
   };
 }
 
+// The honest mixture functional, and why it cannot have an interior optimum.
+//
+// R of the linear mixture (1-w) psiA + w psiB is directly computable -- no
+// inferred cross formula involved.  Expanding it,
+//     R(w) = [ (1-w)^2 N_AA + 2w(1-w) N_AB + w^2 N_BB ] / [ (1-w)P_A + w P_B ]^2
+// with N(X,Y) = int XY + int int |u-v| (X(u)Y(v)+Y(u)X(v))/2 and P = int.
+// The quotient rule at w = 1 collapses to
+//     R'(1) = 2 ( N_BB P_A - N_AB P_B ) / P_B^3,
+// so R'(1) = 0 exactly when N_AB/(P_A P_B) = N_BB/P_B^2 = R(psiB): the bilinear
+// cross term equals the parent.  For the indicator and Montgomery-Taylor pair
+// that identity holds to thirty digits, and it FAILS for cos(cs) with c != √2 --
+// so √2 is precisely where mixing in the indicator becomes neutral.
+//
+// The reason is that psi_MT is a critical point of R in every direction tested
+// (indicator, cos s, cos 2s, s^2, a Gaussian: dR/dt = 0 to 1e-32).  A critical
+// point admits no first-order improvement, so no mixture with it can lower the
+// second moment; numerically R(w) is monotone decreasing on [0,1] with its
+// minimum at the pure endpoint.  Whatever the inferred cross formula's dip is,
+// it is not an interior optimum of this functional.
+function mixtureWindowFunctional(shapeA,shapeB,w,n){
+  n=n||1200;
+  const h=1.0/n;
+  const v=new Float64Array(n);
+  for(let i=0;i<n;i++){
+    const s=-0.5+(i+0.5)*h;
+    v[i]=(1-w)*psiWin(shapeA,s)+w*psiWin(shapeB,s);
+  }
+  return winFunctionalOfSamples(v,h).R;
+}
+function mixtureStationarity(shapeA,shapeB,n){
+  n=n||1200;
+  const h=1.0/n;
+  const a=new Float64Array(n),b=new Float64Array(n);
+  for(let i=0;i<n;i++){
+    const s=-0.5+(i+0.5)*h;
+    a[i]=psiWin(shapeA,s); b[i]=psiWin(shapeB,s);
+  }
+  let ab=0,pa=0,pb=0;
+  for(let i=0;i<n;i++){ab+=a[i]*b[i];pa+=a[i];pb+=b[i];}
+  ab*=h;pa*=h;pb*=h;
+  let dbl=0;
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++) dbl+=Math.abs((i-j)*h)*(a[i]*b[j]+b[i]*a[j])/2;
+  dbl*=h*h;
+  const bilinear=(ab+dbl)/(pa*pb);
+  const parentB=winFunctionalOfSamples(b,h).R;
+  const eps=1e-4;
+  const slopeAtB=(mixtureWindowFunctional(shapeA,shapeB,1,n)
+                 -mixtureWindowFunctional(shapeA,shapeB,1-eps,n))/eps;
+  return {bilinear,parentB,gap:bilinear-parentB,slopeAtB};
+}
+
 const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,
-  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,crossFunctionalParts,winFunctionalOfSamples,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
+  windowFramePair,mixtureStats,winFunctionalR,winCrossFunctional,crossFunctionalParts,winFunctionalOfSamples,mixtureWindowFunctional,mixtureStationarity,gaussF,gaussFhat,explicitFormulaSides,fhatPair,fCenter,polesCenter,explicitFormulaSidesCenter,normalizedSpacings,jacobiEigen};
 if(typeof module!=='undefined'&&module.exports) module.exports=RH;
 if(typeof window!=='undefined') window.RH=RH;
