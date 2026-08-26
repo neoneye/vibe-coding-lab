@@ -385,6 +385,41 @@ energy, and the ceiling argument survives in the form that actually matters.
 The linear programme confirms it numerically: its cap at `m = 7` sits at exactly
 `0.004524418568`, the `n = 8` chain candidate.
 
+### But not by the easy route
+
+Before anyone certifies the seven-gap block minimum and calls it a day: that is
+not enough.  `0.004388737` at `n = 8` projects to `0.673042788`, a gain of only
+`0.34e-4` over the published headline — *below* the `0.78e-4` the `n = 7` chain
+certificate already delivers with proved enclosures, and well below the
+`1.00e-4` it delivers in double precision.  The block minimum is worth less at
+`n = 8` than the chain minimum is at `n = 7`.
+
+The break-even floors, solved from the projection:
+
+| to beat | `n = 8` floor required |
+|---|---:|
+| the `n = 7` rigorous sweep (`0.00392`) | `0.004456540625` |
+| the `n = 7` double-precision sweep (`0.003955`) | `0.004491924776` |
+
+against an `n = 8` chain ceiling of `0.004524418568`.  So the `n = 8` route pays
+only with a coboundary certificate capturing roughly half to three quarters of
+the compatibility gap — the easy version of the finding is worthless, and the
+hard version has to be nearly as good as what already exists at `n = 7`.
+
+How expensive is the sweep at that margin?  Measured, with the zero potential:
+
+| margin below the block minimum | boxes |
+|---:|---:|
+| `3.887e-4` | 1 485 735 |
+| `1.887e-4` | 7 110 011 |
+| `8.874e-5` | 16 727 847 |
+| `3.874e-5` | 30 682 593 |
+
+so boxes grow like `margin^-1.3` in seven dimensions, against `margin^-0.5` in
+six.  Extrapolating to the `1e-5` margin a useful `n = 8` certificate would need
+gives on the order of `1e8` boxes — hours rather than minutes, but not out of
+reach.
+
 So the `n = 8` programme is reachable rather than merely describable.  What it
 needs is a certificate at `m = 7`, which is the same cut-generation loop with
 three free functions instead of two, and then the seven-dimensional sweep at a

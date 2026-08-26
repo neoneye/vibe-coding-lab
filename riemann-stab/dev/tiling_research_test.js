@@ -206,6 +206,28 @@ check('the compatibility gap shows no growth with block size',
 check('compatibility-gap note states the direction of the bound',
   /lower bound on the true one/.test(gapData.note));
 
+
+// Before anyone chases the easy version of the block-size finding: certifying
+// only the n = 8 isolated block minimum projects BELOW what n = 7 already
+// delivers.  The n = 8 route pays only with a coboundary certificate that
+// captures most of the compatibility gap.
+const breakEven = golden.block_eight_break_even;
+const eightBlock = T.projectedSimpleZeroBound(breakEven.n8BlockMinimum.floor, 8, golden.p).bound;
+check('n=8 block-only projection pin', close(eightBlock, breakEven.n8BlockMinimum.bound, 5e-13),
+  `${eightBlock}`);
+check('n=8 block-only does NOT beat what n=7 already delivers',
+  eightBlock < T.projectedSimpleZeroBound(0.00392, 7, golden.p).bound,
+  `${eightBlock}`);
+for (const key of ['breakEvenAgainstRigorousSeven', 'breakEvenAgainstSweptSeven']) {
+  const row = breakEven[key];
+  const atFloor = T.projectedSimpleZeroBound(row.floor, 8, golden.p).bound - breakEven.publishedHeadline;
+  check(`${key}: break-even floor is where the gains cross`,
+    Math.abs(atFloor - row.targetGain) < 1e-9, `${atFloor} vs ${row.targetGain}`);
+  check(`${key}: break-even sits above the n=8 block minimum`,
+    row.floor > breakEven.n8BlockMinimum.floor && row.floor < breakEven.n8ChainCeiling.floor,
+    `${row.floor}`);
+}
+
 if (failed) {
   console.error(`${failed} tiling-research checks failed`);
   process.exit(1);
