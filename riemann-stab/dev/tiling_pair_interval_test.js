@@ -99,5 +99,29 @@ check('and refuses one above the certificate floor', !hard.complete,
   hard.counterexample
     ? `counterexample ${hard.counterexample.value.toFixed(15)}` : 'budget');
 
+// ---- the cube has to cover everything the tail lemma does not
+// Every pair term of F6 is nonnegative, so R(g) >= (sum g)/3000 - amplitude,
+// and a block clears E_alt outright once sum g reaches 3000 (E_alt + amplitude).
+// The amplitude is the additive one PLUS the five psi sup-norms, which the
+// additive tailThreshold knows nothing about -- getting that wrong would leave
+// a band of blocks covered by neither the sweep nor the lemma.
+let psiAmplitude = 0;
+for (const grid of cert.mats) {
+  let m = 0;
+  for (const v of grid) m = Math.max(m, Math.abs(v));
+  psiAmplitude += m;
+}
+const amplitude = base.amplitude + psiAmplitude;
+const threshold = 3000 * (EALT + amplitude);
+check('the tail lemma takes over below the cube the sweep covers',
+  threshold <= 28,
+  `clears at sum g = ${threshold.toFixed(6)}, cube 28`);
+check('and the psi sup-norms are counted in that amplitude',
+  psiAmplitude > 0 && Math.abs(3000 * psiAmplitude - 0.48) < 1e-9,
+  `5 sup-norms sum to ${psiAmplitude.toExponential(3)}, worth ${(3000 * psiAmplitude).toFixed(3)} of cube`);
+// a coordinate above the cube forces sum g above the threshold, so the two
+// really do meet with nothing in between
+check('a block outside the cube is always inside the lemma', 28 >= threshold);
+
 console.log(failures ? `\n${failures} FAILED` : '\nPAIR SWEEP CHECKS PASS');
 process.exit(failures ? 1 : 0);
