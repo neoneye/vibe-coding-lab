@@ -1248,6 +1248,59 @@ So the state is: enclosures built and tested, sweep built and tested, one local
 argument missing, one refine stage missing, and a certificate that no adversary
 has broken and no interval has touched.
 
+### The tube, proved
+
+The half a branch-and-bound structurally cannot do is now done.
+`dev/tiling_pair_local.js` certifies, with interval arithmetic throughout,
+
+`R(g) >= E_alt - 1.163e-11`  for every block with `|g_i - c_i| <= 0.008`,
+
+`c` either alternating pattern, for the pinned candidate.  The argument is the
+one the exactness makes available rather than blocks:
+
+`R(alt + u) >= R(alt) - ||grad R(alt)|| ||u|| + (lambda/2) ||u||^2`,
+
+worst at `||u|| = ||grad|| / lambda`, so the floor on the tube is
+`R(alt) - ||grad||^2 / (2 lambda)`.
+
+Three things had to be got right, and each was wrong first.
+
+**Smoothness is a precondition, not an assumption.**  A piecewise-linear
+additive potential and a bilinear `psi` are only *continuous* across their knot
+lines; their gradients jump there, and a Taylor argument across one is nonsense.
+The alternating gaps clear their nearest knots by `0.020533` in both grids, so
+the file computes that clearance and refuses any radius that exceeds it.  Inside
+one cell the additive part is linear — no second derivative at all — and `psi`
+is bilinear, contributing only its own constant cross term, so the Hessian is
+`F6`'s plus five constants.
+
+**One box is not a cover.**  The natural interval extension of `w''` over the
+whole tube goes negative by radius `0.005`: it reports `lambda = -0.885` on a
+radius-`0.008` tube taken in one piece.  The tube is covered by sub-boxes and
+`lambda` is the worst over the cover, which is a valid bound everywhere in the
+tube because the segment from the centre to any point of it stays inside.  At
+`3^6`, `4^6` and `6^6` boxes the radii `0.003`, `0.005` and `0.008` certify
+`lambda >= 0.1118`, `0.0774` and `0.0637`.  The test checks that the undivided
+version *fails*, so the covering is doing work rather than decorating.
+
+**The centre has to be enclosed, not evaluated.**  Resting the conclusion on a
+floating-point `R(alt)` and `grad R(alt)` would put the whole thing back on an
+unbounded number, which is the mistake this directory keeps making.  Enclosing
+them naively is useless in a different way: the true gradient there is `6e-17`,
+a cancellation of terms a thousand times larger, and the first enclosure came
+back at `8.3e-4` — wide enough to swamp the quadratic term and make the tube
+certify nothing.  What fixed it: inside a single cell the bilinear slopes are
+*exactly linear* in the other coordinate, so their range is the two endpoint
+values rather than the min and max over the cell's edges.  That is an `O(1)`
+overestimate removed — one that does not shrink as the box shrinks.  With it the
+gradient encloses to `3.4e-10` and the shortfall drops to `1.163e-11`, which is
+now set by `analyzeBoxRigorous`'s own slack at a pinhole box and not by anything
+in this argument.
+
+So the two halves of a crystallization proof for this candidate stand as: the
+tube is **proved**, at `E_alt - 1.2e-11`; everything outside it needs a sweep
+that has not run, for the reasons in the previous section.
+
 ## The wall, certified
 
 Local coercivity supplies the `c dist^2` half of a crystallization argument.  The

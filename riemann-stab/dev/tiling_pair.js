@@ -269,19 +269,56 @@ function psiCenteredLower(cert, k, aLo, aHi, bLo, bHi, dx, dy) {
   return at - spread;
 }
 
+// Inside a single cell the slopes are EXACTLY linear in the other coordinate:
+// d/dx is ((1-v)(c10-c00) + v(c11-c01))/hx with v the fractional position in y.
+// Taking the min and max over the two edges instead, as the multi-cell path
+// must, leaves an O(1) overestimate that does not shrink as the box shrinks --
+// which is fatal for anything that needs a tight gradient at a point, because
+// the true gradient there is a cancellation of terms a thousand times larger.
+function singleCellSlopes(cert, k, i, j, aLo, aHi, bLo, bHi) {
+  const t = cert.knots, J = cert.J, grid = cert.mats[k];
+  const hx = t[i + 1] - t[i], hy = t[j + 1] - t[j];
+  const c00 = grid[i * J + j], c01 = grid[i * J + j + 1];
+  const c10 = grid[(i + 1) * J + j], c11 = grid[(i + 1) * J + j + 1];
+  const clampX = aLo <= t[0] || aHi >= t[t.length - 1];
+  const clampY = bLo <= t[0] || bHi >= t[t.length - 1];
+  const uLo = Math.max(0, Math.min(1, (aLo - t[i]) / hx));
+  const uHi = Math.max(0, Math.min(1, (aHi - t[i]) / hx));
+  const vLo = Math.max(0, Math.min(1, (bLo - t[j]) / hy));
+  const vHi = Math.max(0, Math.min(1, (bHi - t[j]) / hy));
+  const dxAt = v => ((1 - v) * (c10 - c00) + v * (c11 - c01)) / hx;
+  const dyAt = u => ((1 - u) * (c01 - c00) + u * (c11 - c10)) / hy;
+  const dxA = dxAt(vLo), dxB = dxAt(vHi);
+  const dyA = dyAt(uLo), dyB = dyAt(uHi);
+  let dx = [Math.min(dxA, dxB), Math.max(dxA, dxB)];
+  let dy = [Math.min(dyA, dyB), Math.max(dyA, dyB)];
+  if (clampX) dx = [Math.min(dx[0], 0), Math.max(dx[1], 0)];
+  if (clampY) dy = [Math.min(dy[0], 0), Math.max(dy[1], 0)];
+  return {dx, dy};
+}
+
 function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
   const [i0, i1] = cellSpan(cert.knots, aLo, aHi);
   const [j0, j1] = cellSpan(cert.knots, bLo, bHi);
   const value = gridRange(cert.mats[k], cert.J, i0, i1, j0, j1);
-  let dx = slopeRangeX(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
-  let dy = slopeRangeY(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
-  // where the box reaches outside the knots the slope there is zero, so the
-  // range has to include zero
-  if (clampedBelow(cert.knots, aLo) || clampedAbove(cert.knots, aHi)) {
-    dx = [Math.min(dx[0], 0), Math.max(dx[1], 0)];
+  let dx, dy;
+  if (i0 === i1 && j0 === j1) {
+    const exact = singleCellSlopes(cert, k, i0, j0, aLo, aHi, bLo, bHi);
+    dx = exact.dx;
+    dy = exact.dy;
+  } else {
+    dx = slopeRangeX(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
+    dy = slopeRangeY(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
   }
-  if (clampedBelow(cert.knots, bLo) || clampedAbove(cert.knots, bHi)) {
-    dy = [Math.min(dy[0], 0), Math.max(dy[1], 0)];
+  // where the box reaches outside the knots the slope there is zero, so the
+  // range has to include zero (the single-cell path already did this)
+  if (!(i0 === i1 && j0 === j1)) {
+    if (clampedBelow(cert.knots, aLo) || clampedAbove(cert.knots, aHi)) {
+      dx = [Math.min(dx[0], 0), Math.max(dx[1], 0)];
+    }
+    if (clampedBelow(cert.knots, bLo) || clampedAbove(cert.knots, bHi)) {
+      dy = [Math.min(dy[0], 0), Math.max(dy[1], 0)];
+    }
   }
   const centered = psiCenteredLower(cert, k, aLo, aHi, bLo, bHi, dx, dy);
   if (centered > value[0]) value[0] = centered;
