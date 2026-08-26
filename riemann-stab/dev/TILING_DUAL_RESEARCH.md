@@ -784,6 +784,61 @@ spatial energy, so the argument has nothing to act on.  Two attempts:
 The compactly supported nonnegative transform is still the cleanest structural
 fact about this kernel, and `overlapWeightTransform` ships it in closed form.
 
+## A local theorem, proved rather than measured
+
+Everything else here bounds the energy by subdividing a six-dimensional cube.
+This is different and much cheaper, and it is the first statement in this
+directory that is established rather than observed.
+
+**The Hessian escapes the truncation.**  The lag-six truncation is by index, not
+distance, which is what defeats every Fourier argument for the energy itself.
+It does not defeat the *Hessian*: at a two-periodic state
+
+`Hhat_{ab} = 2 sum_{s=|a-b|+1}^{6} sum_{i=max(a,b)-s+1}^{min(a,b)} w''(D_{i,s})`
+
+is a finite sum that vanishes identically for `|a-b| >= 6`.  A two-site Bloch
+decomposition turns it into a `2x2` Hermitian symbol `M(q)`, so certifying
+positive definiteness is a **one-variable** interval problem.  The exact symbol
+agrees with the laboratory's existing finite-difference spectrum to `1e-7`,
+sharing no code with it.
+
+**What is certified.**  Two things, both cheap:
+
+- *Existence and uniqueness.*  A Krawczyk test on `dE/dL = dE/dH = 0` proves a
+  unique two-periodic critical point in a box of halfwidth `1e-6` about the
+  quoted values.  Iterating the test pins it to the last bit of a double:
+
+  `L in [1.041680103448486, 1.041680103448487]`,
+  `H in [1.979467231403224, 1.979467231403225]`.
+
+- *A spectral gap.*  For every momentum `q in [0, pi]` and every two-periodic
+  state in a box of halfwidth `1e-4` about that point, the smaller Bloch
+  eigenvalue is at least `1.6`.  About 1700 momentum intervals, well under a
+  second.  The certification is tested to fail at `1.7`, which the spectrum does
+  not reach, so it is not vacuous.
+
+Together: **the alternating two-cycle is a strict local minimum of the chain
+energy, with a certified spectral gap.**  The previously reported softest mode
+`1.66129` was a numerical measurement at a discrete grid of momenta; the true
+minimum over `q` sits at `q/pi = 0.929`, between grid points, which the grid
+could not see.
+
+**What this does not establish, and the gap is the whole problem.**  It is local.
+It says nothing about configurations far from the alternating state, nothing
+about the energy of a wall between the two alternating phases, and nothing about
+the global floor -- which is what the sweeps are for and what an eventual
+crystallization argument would have to supply.  A coercivity statement of the
+form `E(g) - E(g_alt) >= c dist(g, A)^2 + tau (walls)` needs this constant *and*
+a wall tension *and* control of everything in between; only the first is here.
+Converting even the local statement into a quadratic growth bound with a
+certified *radius* would need Hessian control off the two-periodic slice, which
+this file does not attempt.
+
+**A correction it produced.**  The `(1.041680, 1.979467)` quoted throughout this
+directory is a six-decimal rounding, and its chain energy `0.003957393309210` is
+`1.0e-13` *above* the true minimum `0.003957393309109`.  Immaterial to every
+projection here, but the ceiling constant was being quoted from the rounding.
+
 ## Unusual stone: reversal cohomology
 
 The bare block energy is unchanged when a six-gap edge is reversed.  If `Phi`
