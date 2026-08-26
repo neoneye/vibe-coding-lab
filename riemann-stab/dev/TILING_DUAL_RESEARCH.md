@@ -583,9 +583,17 @@ constant and leaves
 
 `psi'' + 2 psi = 0`,
 
-whose even solution is `psi(s) = cos(sqrt(2) s)`.  **The Montgomery-Taylor
-frequency is `sqrt(2)` because the second derivative of the `|s-v|` kernel
-contributes a factor of two, and nothing else.**
+whose general solution is `A cos(sqrt(2) s) + B sin(sqrt(2) s)`.  The
+*undifferentiated* equation then forces `B = 0` — the residual spread grows
+exactly linearly in `|B|`, `0.8960 |B|` — so the critical point is unique up to
+scale.  It is positive on its support (`cos(sqrt(2)/2) = 0.7602 > 0`), hence
+interior to the positivity constraint, and every direction tried increases `R`
+(indicator, `cos s`, `cos 3s`, `s^2`, `s^4`, a Gaussian, `cos 2 pi s`,
+`sin 2 pi s`): a strict local minimum.
+
+**The Montgomery-Taylor window is the unique critical point of the second-moment
+functional, and the frequency is `sqrt(2)` because the second derivative of the
+`|s-v|` kernel contributes a factor of two, and nothing else.**
 
 Checked: the residual — the spread of that expression over `s` — is exactly
 zero at `sqrt(2)` to 22 digits and settles at `R(psi) * int psi =

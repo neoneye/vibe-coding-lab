@@ -204,6 +204,19 @@ console.log('--- why sqrt(2): the Euler-Lagrange equation ---');
   integral /= n;
   ok('and it settles at R(psi) * int psi',
     Math.abs(atRoot.value - R * integral) < 1e-6, `${atRoot.value} vs ${R * integral}`);
+
+  // Uniqueness: the twice-differentiated equation admits A cos + B sin, but the
+  // undifferentiated one forces B = 0.  The residual spread is linear in |B|.
+  let linear = true;
+  const base = M.eulerLagrangeResidual(Math.SQRT2, n, 0.1).spread;
+  for (const b of [0.1, 0.3, 1]) {
+    const spread = M.eulerLagrangeResidual(Math.SQRT2, n, b).spread;
+    if (Math.abs(spread - base * (b / 0.1)) > 1e-6) linear = false;
+    if (spread < 1e-3) linear = false;
+  }
+  ok('the odd component is forced to zero, with residual linear in |B|', linear, `${base}`);
+  ok('so the critical window is unique up to scale',
+    M.eulerLagrangeResidual(Math.SQRT2, n, 0).spread < base / 1e5);
 }
 
 console.log('--- sqrt(2) is the stationary frequency of the second-moment functional ---');

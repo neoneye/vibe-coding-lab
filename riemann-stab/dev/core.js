@@ -570,24 +570,31 @@ function crossFunctionalParts(shapeA,shapeB,n){
 //
 //     psi'' + 2 psi = 0,
 //
-// whose even solution is psi(s) = cos(sqrt(2) s).  The Montgomery-Taylor
-// frequency is sqrt(2) because the second derivative of the |s-v| kernel
-// contributes a factor 2, and nothing else.
+// whose general solution is A cos(sqrt(2) s) + B sin(sqrt(2) s).  The
+// UNdifferentiated equation then forces B = 0 -- the residual spread grows
+// exactly linearly in |B| -- so the critical point is unique up to scale, and
+// it is the Montgomery-Taylor window.  The frequency is sqrt(2) because the
+// second derivative of the |s-v| kernel contributes a factor 2, and nothing
+// else.  It is positive on its support (cos(sqrt(2)/2) = 0.7602 > 0), so it
+// sits in the interior of the positivity constraint, and every direction tried
+// increases R -- a strict local minimum.
 //
 // Checked to 22 digits: the residual below is exactly zero for cos(sqrt(2) s)
 // and visibly nonzero for cos(s) or cos(2s).  It is also the whole reason no
 // mixture improves on psi_MT -- a critical point has no first-order descent
 // direction, so in particular the indicator direction is neutral.
-function eulerLagrangeResidual(c,n){
+function eulerLagrangeResidual(c,n,oddWeight){
   n=n||1200;
+  const b=oddWeight||0;
   const h=1.0/n;
+  const shape=x=>Math.cos(c*x)+b*Math.sin(c*x);
   const at=s=>{
     let integral=0;
     for(let i=0;i<n;i++){
       const v=-0.5+(i+0.5)*h;
-      integral+=Math.abs(s-v)*Math.cos(c*v);
+      integral+=Math.abs(s-v)*shape(v);
     }
-    return Math.cos(c*s)+integral*h;
+    return shape(s)+integral*h;
   };
   let lo=Infinity,hi=-Infinity;
   for(let k=1;k<20;k++){
