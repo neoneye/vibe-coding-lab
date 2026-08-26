@@ -332,31 +332,6 @@ function weightSecondRange(a, b) {
 
 const iIntersect = (x, y) => [Math.max(x[0], y[0]), Math.min(x[1], y[1])];
 
-function weightDerivRangeCentered(a, b) {
-  if (b <= a) return weightDerivRange(a, a);
-  const m = 0.5 * (a + b);
-  const rho = ru(Math.max(m - a, b - m));
-  const centre = weightDerivRange(m, m);
-  const spread = iMul(weightSecondRange(a, b), [-rho, rho]);
-  return iIntersect(iAdd(centre, spread), weightDerivRange(a, b));
-}
-
-function weightRangeCentered(a, b) {
-  if (b <= a) return weightRange(a, a);
-  const m = 0.5 * (a + b);
-  const rho = ru(Math.max(m - a, b - m));
-  const centre = weightRange(m, m);
-  const spread = iMul(weightDerivRangeCentered(a, b), [-rho, rho]);
-  const out = iIntersect(iAdd(centre, spread), weightRange(a, b));
-  return [Math.max(0, out[0]), out[1]];      // w is a square, so never negative
-}
-
-module.exports.sincSecondRange = sincSecondRange;
-module.exports.kernelSecondRange = kernelSecondRange;
-module.exports.weightSecondRange = weightSecondRange;
-module.exports.weightRangeCentered = weightRangeCentered;
-module.exports.weightDerivRangeCentered = weightDerivRangeCentered;
-
 // Both centered enclosures from one pass.  Computing them separately evaluates
 // the kernel family nine times per pair; this evaluates it five times, and the
 // sweep asks for both on every pair of every box.
@@ -404,5 +379,8 @@ function weightPairCentered(a, b) {
   const w = iIntersect(iIntersect(taylor, centered), wNatural);
   return {w: [Math.max(0, w[0]), w[1]], dw};
 }
+module.exports.sincSecondRange = sincSecondRange;
+module.exports.kernelSecondRange = kernelSecondRange;
+module.exports.weightSecondRange = weightSecondRange;
 module.exports.weightPairCentered = weightPairCentered;
 

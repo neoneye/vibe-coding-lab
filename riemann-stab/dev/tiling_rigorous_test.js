@@ -74,6 +74,38 @@ check('weight and derivative enclosures contain the laboratory values',
 check('pointwise weight enclosure is narrow', pointWidth < 1e-12, `${pointWidth}`);
 check('pointwise derivative enclosure is narrow', derivWidth < 1e-11, `${derivWidth}`);
 
+
+// The second derivative drives the centered forms' remainder term, so it gets
+// its own check against a finite difference of the first derivative.
+let secondFailures = 0, secondWidth = 0;
+for (let trial = 0; trial < 40000; trial++) {
+  const x = 0.05 + random() * 40;
+  const h = 1e-5;
+  const finite = (T.overlapWeightDerivative(x + h) - T.overlapWeightDerivative(x - h)) / (2 * h);
+  const enclosure = R.weightSecondRange(x, x);
+  if (finite < enclosure[0] - 1e-4 || finite > enclosure[1] + 1e-4) secondFailures++;
+  secondWidth = Math.max(secondWidth, enclosure[1] - enclosure[0]);
+}
+check('second-derivative enclosure agrees with a finite difference',
+  secondFailures === 0, `${secondFailures}`);
+check('second-derivative enclosure is narrow', secondWidth < 1e-10, `${secondWidth}`);
+
+// The fused pair form must match what the separate pieces would give, and must
+// contain the exact table ranges.
+let pairFailures = 0;
+for (let trial = 0; trial < 40000; trial++) {
+  const a = random() * 40;
+  const b = a + random() * 0.5;
+  const pair = R.weightPairCentered(a, b);
+  const wide = R.weightRange(a, b);
+  const wideD = R.weightDerivRange(a, b);
+  if (pair.w[0] < wide[0] - 1e-12 || pair.w[1] > wide[1] + 1e-12) pairFailures++;
+  if (pair.dw[0] < wideD[0] - 1e-10 || pair.dw[1] > wideD[1] + 1e-10) pairFailures++;
+  if (pair.w[0] < 0) pairFailures++;
+}
+check('fused centered pair form refines the natural extension without escaping it',
+  pairFailures === 0, `${pairFailures}`);
+
 // -------------------------------------------- containment of the fast table
 // The fast sweep uses exact monotone-piece ranges in double precision.  Those
 // must lie inside the rigorous enclosures; if they ever escaped, the fast
