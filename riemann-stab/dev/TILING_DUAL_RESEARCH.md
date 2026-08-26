@@ -1648,8 +1648,57 @@ The degeneracy gap between the alternating state and its best periodic
 competitor is an inverted U across the plateau — `8.6e-5` at `p = 2000`,
 `2.1e-5` at `p = 3000`, `1.1e-5` at `p = 3200`, negative outside.  If the
 certificate program's difficulty really is plateau proximity, then the same
-program run at `p = 2000` should reach its ceiling far more easily than at
-`p = 3000`.  That is a falsifiable prediction and it has not been tested.
+program run in the middle should reach its ceiling far more easily than near an
+edge.  That was a falsifiable prediction; the next section tests it.
+
+### Testing that prediction, and a correction it forced
+
+Same LP, same adversary, same knot grid, same effort — 110 cut-generation rounds
+— at twelve values of `p` across the plateau.  Only `p` moves.  Two numbers per
+row: the *LP bound gap* is how far the linear program's own optimum sits below
+the ceiling, which is a statement about the family, and the *search gap* is how
+far the adversary is below the LP bound, which is a statement about the search.
+
+| `p` | position | LP bound gap | shortfall | search gap |
+| --- | --- | --- | --- | --- |
+| `1500` | `3.5%` | **`+1.489e-6`** | `1.524e-6` | `3.4e-8` |
+| `1600` | `8.3%` | `0` | `2.26e-8` | `2.3e-8` |
+| `1800` | `17.9%` | `0` | `9.60e-9` | `9.6e-9` |
+| `2000` | `27.4%` | `0` | `2.12e-8` | `2.1e-8` |
+| `2200` | `36.9%` | `0` | `2.84e-8` | `2.8e-8` |
+| `2400` | `46.5%` | `0` | `2.80e-8` | `2.8e-8` |
+| `2600` | `56.0%` | `0` | `2.14e-8` | `2.1e-8` |
+| `2800` | `65.6%` | `0` | `4.15e-8` | `4.1e-8` |
+| `3000` | `75.1%` | `0` | `7.14e-8` | `7.1e-8` |
+| `3200` | `84.6%` | `0` | `2.97e-8` | `3.0e-8` |
+| `3350` | `91.8%` | *not converged* | `5.23e-6` | `3.3e-5` |
+| `3450` | `96.6%` | *not converged* | `1.29e-5` | `8.3e-5` |
+
+(`0` means below `1e-17`.  At `3350` and `3450` the LP bound is *above* the
+ceiling, which only means cut generation has not closed — the search gap there
+is three orders larger than anywhere in the interior.)
+
+**The prediction holds in the sense that matters operationally.**  At fixed
+effort the search lands within `1e-8` to `7e-8` of the ceiling everywhere from
+`8%` to `85%` across the plateau, and misses by `5e-6` to `1.3e-5` at the top
+end.  The two ends fail differently, which is worth knowing: at the bottom end
+the search *converges*, and converges to a **proven** family limit — the LP's own
+bound is `1.489e-6` below the ceiling, so at `p = 1500` the additive family
+genuinely cannot reach it.  At the top end the search simply does not converge.
+
+**And the correction.**  This directory records the additive family as stopping
+`1.66e-7` short at `p = 3000`, and the pair-state work was motivated by that.
+`1.66e-7` is the best certificate the directory *found*, on a 51-knot grid with
+spacing `0.1`.  The grid used here is twice as fine — a strictly richer family —
+and a modest search reaches `7.1e-8`, with the LP bound not forced below the
+ceiling anywhere in the interior.  So **"the additive family cannot reach the
+ceiling at `p = 3000`" is not established.**  What is established is that the
+record certificate's grid did not.  Whether the pair-state widening was
+*necessary* at `p = 3000`, as opposed to sufficient, is open.
+
+Nothing about the pair-state results changes: the pinned certificate reaches the
+ceiling, and it is the one the rigorous sweep closed on.  What changes is the
+account of why it was needed.
 
 ## Unusual stone: reversal cohomology
 
