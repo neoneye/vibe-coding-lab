@@ -147,6 +147,7 @@ function adamMinimizePeriodic(start, options = {}) {
   const maxGap = options.maxGap || 11.4;
   const iterations = options.iterations || 4500;
   const learningRate = options.learningRate || 0.035;
+  const frozen = options.frozen || new Array(start.length).fill(false);
   const beta1 = 0.9;
   const beta2 = 0.999;
   const x = start.map(v => Math.max(0, Math.min(maxGap, v)));
@@ -158,6 +159,7 @@ function adamMinimizePeriodic(start, options = {}) {
     const current = periodicChainEnergyAndGradient(x, n, p);
     const rate = learningRate * (0.15 + 0.85 * (1 - t / iterations));
     for (let i = 0; i < x.length; i++) {
+      if (frozen[i]) continue;
       first[i] = beta1 * first[i] + (1 - beta1) * current.gradient[i];
       second[i] = beta2 * second[i] + (1 - beta2) * current.gradient[i] * current.gradient[i];
       const mHat = first[i] / (1 - Math.pow(beta1, t));
@@ -171,6 +173,89 @@ function adamMinimizePeriodic(start, options = {}) {
   }
   const finalValue = periodicChainEnergy(bestX, n, p);
   return {x: bestX, value: finalValue, evaluations: iterations};
+}
+
+function domainWallStart(period, low = 1.041680, high = 1.979467) {
+  if (period % 4 !== 0) throw new Error('domain-wall period must be divisible by four');
+  return Array.from({length: period}, (_, i) => {
+    const phase = i < period / 2 ? 0 : 1;
+    return ((i + phase) % 2 === 0) ? low : high;
+  });
+}
+
+function runDomainWallStress(options = {}) {
+  const periods = options.periods || [16, 24, 32, 48, 64];
+  const ground = periodicChainEnergy([1.041680, 1.979467]);
+  return periods.map(period => {
+    const start = domainWallStart(period);
+    const frozen = new Array(period).fill(false);
+    // Pin short alternating arcs in the centers of both phases.  The remaining
+    // coordinates, including both interfaces, relax freely.
+    for (const center of [period / 4, 3 * period / 4]) {
+      for (let offset = -2; offset <= 2; offset++) {
+        frozen[(center + offset + period) % period] = true;
+      }
+    }
+    const relaxed = adamMinimizePeriodic(start, {
+      frozen,
+      iterations: options.iterations || 7000,
+      learningRate: options.learningRate || 0.025
+    });
+    const totalExcess = period * (relaxed.value - ground);
+    return {
+      period,
+      value: relaxed.value,
+      totalExcess,
+      wallTension: totalExcess / 2,
+      gaps: relaxed.x
+    };
+  });
+}
+
+function periodTwoBlochSpectrum(period = 64, epsilon = 2e-5) {
+  if (period % 2 !== 0 || period < 16) throw new Error('Bloch period must be even and at least 16');
+  const base = Array.from({length: period}, (_, i) => i % 2 ? 1.979467 : 1.041680);
+  const hessian = Array.from({length: period}, () => new Float64Array(period));
+  for (let column = 0; column < period; column++) {
+    const left = base.slice(); left[column] -= epsilon;
+    const right = base.slice(); right[column] += epsilon;
+    const leftGradient = periodicChainEnergyAndGradient(left).gradient;
+    const rightGradient = periodicChainEnergyAndGradient(right).gradient;
+    for (let row = 0; row < period; row++) {
+      hessian[row][column] = (rightGradient[row] - leftGradient[row]) / (2 * epsilon);
+    }
+  }
+  // The Hessian is normalized per gap.  Multiply by the period to obtain the
+  // extensive quadratic form before taking its two-site Bloch symbol.
+  const cells = period / 2;
+  const modes = [];
+  for (let mode = 0; mode < cells; mode++) {
+    const q = 2 * Math.PI * mode / cells;
+    const symbol = Array.from({length: 2}, () => Array.from({length: 2}, () => [0, 0]));
+    for (let a = 0; a < 2; a++) {
+      for (let b = 0; b < 2; b++) {
+        for (let cell = 0; cell < cells; cell++) {
+          const value = period * hessian[a][2 * cell + b];
+          symbol[a][b][0] += value * Math.cos(q * cell);
+          symbol[a][b][1] -= value * Math.sin(q * cell);
+        }
+      }
+    }
+    const diagonalA = symbol[0][0][0];
+    const diagonalD = symbol[1][1][0];
+    const offDiagonalNormSquared = symbol[0][1][0] * symbol[0][1][0]
+      + symbol[0][1][1] * symbol[0][1][1];
+    const discriminant = Math.sqrt(
+      (diagonalA - diagonalD) * (diagonalA - diagonalD) + 4 * offDiagonalNormSquared
+    );
+    modes.push({
+      mode,
+      q,
+      lower: (diagonalA + diagonalD - discriminant) / 2,
+      upper: (diagonalA + diagonalD + discriminant) / 2
+    });
+  }
+  return modes;
 }
 
 function longPeriodStarts(period, seed) {
@@ -460,6 +545,24 @@ if (require.main === module) {
     console.log('STRESS SEARCH ONLY — values are upper bounds on periodic minima');
     process.exit(0);
   }
+  if (process.argv.includes('--walls')) {
+    const rows = runDomainWallStress();
+    for (const row of rows) {
+      console.log(`walls period ${String(row.period).padStart(2)}: mean=${row.value.toFixed(12)} total-excess=${row.totalExcess.toExponential(8)} tension=${row.wallTension.toExponential(8)}`);
+    }
+    console.log('PINNED DOMAIN-WALL SEARCH ONLY — not a global lower bound');
+    process.exit(0);
+  }
+  if (process.argv.includes('--bloch')) {
+    const modes = periodTwoBlochSpectrum();
+    const softest = modes.reduce((a, b) => a.lower <= b.lower ? a : b);
+    console.log(`softest Bloch mode: k=${softest.mode} q=${softest.q.toFixed(9)} lower=${softest.lower.toExponential(10)} upper=${softest.upper.toExponential(10)}`);
+    for (const mode of modes) {
+      console.log(`k=${String(mode.mode).padStart(2)} q=${mode.q.toFixed(7)} lambda-=${mode.lower.toExponential(8)} lambda+=${mode.upper.toExponential(8)}`);
+    }
+    console.log('FINITE-DIFFERENCE BLOCH HESSIAN — local numerical evidence only');
+    process.exit(0);
+  }
   const study = runStudy();
   console.log(`isolated F${study.n}: ${study.local.value.toFixed(12)}  gaps=${study.local.x.map(x => x.toFixed(6)).join(',')}`);
   for (const row of study.periods) {
@@ -481,9 +584,12 @@ module.exports = {
   projectedSimpleZeroBound,
   patternMinimize,
   adamMinimizePeriodic,
+  domainWallStart,
   multiStart,
   differentialEvolution,
   bandBasinSearch,
   runLongPeriodStress,
+  runDomainWallStress,
+  periodTwoBlochSpectrum,
   runStudy
 };

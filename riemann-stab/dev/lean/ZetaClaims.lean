@@ -11,6 +11,8 @@
 
   Scope (honest):
     [arith] theorems below are pure integer bookkeeping, fully checked.
+    [abstract] reversal-coboundary symmetrization is checked independently
+    of any analytic claim about the zeta kernel.
     NOT formalized here (see bottom comment): the connected proportion
     theorem, the stability-enhanced rank-trace lemma, the F6 interval
     certificate, and the cross-window functional conjecture. A first
@@ -31,6 +33,37 @@ abbrev HmtScaled : Int := 6725007036794116457
 theorem chain_inequality (s1 s2 p N : Int)
     (h : s1 + 2 * s2 + 2 * p ≤ N) :
     3 * s1 + 4 * s2 + 4 * p ≤ s1 + 2 * N := by omega
+
+/-- Reversal-cohomology lemma for a finite-range chain.  If reversing an edge
+    swaps its endpoints without changing its cost, then any coboundary lower
+    bound can be averaged with its reversed copy.  The displayed potential is
+    doubled to keep the statement integral:
+
+      Ψ₂(s) = Φ(s) − Φ(R(s)).
+
+    Thus restricting a certificate search to reversal-antisymmetric potentials
+    loses no attainable floor.  This is abstract bookkeeping: applying it to
+    the seven-point kernel still requires a certified analytic edge bound. -/
+theorem reversal_coboundary_symmetrization {α : Type} (F : α → α → Int)
+    (R : α → α) (Phi : α → Int) (c : Int)
+    (hF : ∀ s t, F (R t) (R s) = F s t)
+    (hcert : ∀ s t, c ≤ F s t + Phi t - Phi s) :
+    ∀ s t, 2 * c ≤ 2 * F s t
+      + (Phi t - Phi (R t)) - (Phi s - Phi (R s)) := by
+  intro s t
+  have hforward := hcert s t
+  have hreverse := hcert (R t) (R s)
+  rw [hF s t] at hreverse
+  omega
+
+/-- The doubled averaged potential above is genuinely antisymmetric when R is
+    an involution. -/
+theorem reversal_potential_antisymmetric {α : Type} (R : α → α)
+    (Phi : α → Int) (hR : ∀ s, R (R s) = s) :
+    ∀ s, Phi (R s) - Phi (R (R s)) = -(Phi s - Phi (R s)) := by
+  intro s
+  rw [hR s]
+  omega
 
 /- WITHDRAWN THEOREM SKETCH — DO NOT REINSTATE WITHOUT READING
    dev/lean/rejected/README.md.

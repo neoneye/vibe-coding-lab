@@ -7,6 +7,8 @@ const fs = require('fs');
 const out = fs.readFileSync(process.argv[2], 'utf8');
 const EXPECT = {
   chain_inequality:          ['propext', 'Quot.sound'],
+  reversal_coboundary_symmetrization: ['propext', 'Quot.sound'],
+  reversal_potential_antisymmetric:   ['propext', 'Quot.sound'],
   headline_fraction_floor:   ['propext', 'Quot.sound'],
   headline_fraction_ceiling: ['propext', 'Quot.sound'],
   improvement_direction:     ['propext', 'Quot.sound'],

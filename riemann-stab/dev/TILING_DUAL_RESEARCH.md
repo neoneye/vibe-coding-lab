@@ -54,3 +54,43 @@ interpolation blends those basins and creates cheap oriented transitions.
 This is a smaller and more falsifiable target than another unconstrained
 window search: either the adaptive interval Bellman certificate closes, or its
 lowest transition supplies a new explicit counterexample.
+
+## Unusual stone: reversal cohomology
+
+The bare block energy is unchanged when a six-gap edge is reversed.  If `Phi`
+is any state potential proving a coboundary floor, apply its inequality to the
+reversed edge and average the two inequalities.  The new potential
+
+`Psi(s) = (Phi(s) - Phi(reverse(s))) / 2`
+
+is reversal-antisymmetric and proves the same floor.  Therefore restricting a
+search to antisymmetric potentials loses nothing.  It also states exactly when
+reflection quotienting is legal.  The doubled integral statement is checked in
+`lean/ZetaClaims.lean`; the continuous kernel inequality is not.
+
+The full clipped-Walsh state space has 12 antisymmetric mask pairs.  The best
+fixed candidate found by the corrected numerical oracle had adversarial value
+about `0.003923427087`, still short of `0.00395`.
+
+## Unusual stone: two phases and domain walls
+
+The alternating chain has two translates.  Rings forced to contain both phases
+were relaxed while short arcs inside each phase were pinned.  The excess energy
+localized at the two interfaces:
+
+| period | excess per wall |
+|---:|---:|
+| 32 | 0.000620034007 |
+| 48 | 0.000619935991 |
+| 64 | 0.000619935975 |
+
+A two-site Bloch analysis of the numerical Hessian found every mode positive;
+the softest extensive eigenvalue was about `1.66129029`, stable across periods
+32--96 and finite-difference scales `10^-4` through `5*10^-6`.
+
+This suggests a proof route unlike a pointwise block certificate: establish
+two locally coercive alternating phases, classify all low-energy blocks into
+their neighborhoods, and charge phase changes by a certified interface cost.
+The present wall tension and spectral gap are numerical evidence only.  A proof
+would need interval Hessian bounds inside the phase neighborhoods and a finite
+transition certificate outside them.

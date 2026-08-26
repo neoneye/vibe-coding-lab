@@ -36,6 +36,21 @@ for (let i = 0; i < chain.length; i++) {
 check('five-gap Walsh coboundary telescopes',
   Math.max(...Array.from(sums, Math.abs)) < 8e-15);
 
+const reversal = golden.reversal_cohomology;
+const pairs = B.reversibleWalshPairs(5);
+check('reversal-antisymmetric Walsh dimension pin',
+  pairs.length === reversal.antisymmetric_walsh_dimensions);
+check('mask reversal is an involution',
+  B.walshMasks(5).every(mask => B.reverseMask(B.reverseMask(mask)) === mask));
+const reversibleCoefficients = pairs.map((_, i) => (i - 5) * 1.7e-5);
+const orientedProbe = [0.73, 1.04, 1.98, 2.17, 0.91, 3.11];
+const forwardReduced = B.reversibleReducedCost(orientedProbe, reversibleCoefficients, pairs);
+const reverseReduced = B.reversibleReducedCost(
+  orientedProbe.slice().reverse(), reversibleCoefficients, pairs
+);
+check('antisymmetric potential restores edge reversal symmetry',
+  close(forwardReduced, reverseReduced, 3e-15));
+
 // Regression for the most important falsification in this study.  The
 // oriented potential destroys reversal symmetry, so quotienting by reversal
 // hid this counterexample to the initially promising >0.00395 candidate.
@@ -52,6 +67,8 @@ check('withdrawn candidate really misses 0.00395', value < 0.00395);
 check('linear coefficients lie in telescoping subspace',
   Math.abs(withdrawn.coefficients.reduce((a, b) => a + b, 0)) < 2e-19);
 check('dual-search scope remains numerical', /no family optimum/.test(golden.continuous_dual_search.status));
+check('reversal theorem scope distinguishes analytic floor',
+  /continuous kernel floor remains numerical/.test(reversal.status));
 
 if (failed) {
   console.error(`${failed} tiling-dual checks failed`);

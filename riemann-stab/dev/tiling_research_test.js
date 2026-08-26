@@ -62,6 +62,21 @@ check('conditional 0.00395 projection pin',
 
 check('golden status says numerical only', /no certified global lower bound/.test(golden.status));
 
+const phase = golden.two_phase_probe;
+const walls = T.runDomainWallStress({periods: [32, 48, 64], iterations: 3000});
+for (const observed of phase.wall_tension) {
+  const computed = walls.find(row => row.period === observed.period).wallTension;
+  check(`period-${observed.period} pinned wall tension`,
+    close(computed, observed.value, 3e-15), `${computed}`);
+}
+const spectrum = T.periodTwoBlochSpectrum(phase.bloch_period, phase.bloch_epsilon);
+const softest = Math.min(...spectrum.map(row => row.lower));
+const largest = Math.max(...spectrum.map(row => row.upper));
+check('period-two Bloch spectrum is strictly positive', softest > 1.66, `${softest}`);
+check('softest Bloch eigenvalue pin', close(softest, phase.softest_eigenvalue, 2e-10));
+check('largest Bloch eigenvalue pin', close(largest, phase.largest_eigenvalue, 2e-10));
+check('two-phase scope remains numerical', /not a global lower bound/.test(phase.status));
+
 if (failed) {
   console.error(`${failed} tiling-research checks failed`);
   process.exit(1);

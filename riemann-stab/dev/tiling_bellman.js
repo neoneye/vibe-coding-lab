@@ -255,6 +255,27 @@ function walshMasks(maxDegree) {
   return masks;
 }
 
+function reverseMask(mask) {
+  let reversed = 0;
+  for (let bit = 0; bit < 5; bit++) {
+    if ((mask >> bit) & 1) reversed |= 1 << (4 - bit);
+  }
+  return reversed;
+}
+
+// If F(g0,...,g5) is invariant under reversal, every coboundary certificate
+// Phi can be averaged with its reversed certificate.  The resulting potential
+// Psi(s) = (Phi(s) - Phi(reverse(s)))/2 is antisymmetric and loses no floor.
+// These mask pairs span that antisymmetric subspace in the clipped Walsh basis.
+function reversibleWalshPairs(maxDegree) {
+  const pairs = [];
+  for (const mask of walshMasks(maxDegree)) {
+    const reversed = reverseMask(mask);
+    if (mask < reversed) pairs.push([mask, reversed]);
+  }
+  return pairs;
+}
+
 function walshStateFeatures(stateGaps, masks) {
   const z = stateGaps.map(x => binaryCoordinate(x));
   return masks.map(mask => {
@@ -270,6 +291,80 @@ function walshEdgeFeatures(gaps, masks) {
   const before = walshStateFeatures(gaps.slice(0, 5), masks);
   const after = walshStateFeatures(gaps.slice(1), masks);
   return after.map((value, i) => value - before[i]);
+}
+
+function reversibleStateFeatures(stateGaps, pairs) {
+  const masks = pairs.flat();
+  const features = walshStateFeatures(stateGaps, masks);
+  const byMask = new Map(masks.map((mask, i) => [mask, features[i]]));
+  return pairs.map(([mask, reversed]) => byMask.get(mask) - byMask.get(reversed));
+}
+
+function reversibleEdgeFeatures(gaps, pairs) {
+  const before = reversibleStateFeatures(gaps.slice(0, 5), pairs);
+  const after = reversibleStateFeatures(gaps.slice(1), pairs);
+  return after.map((value, i) => value - before[i]);
+}
+
+function reversibleReducedCost(gaps, coefficients, pairs) {
+  const features = reversibleEdgeFeatures(gaps, pairs);
+  let value = T.blockFunctional(gaps, 3000);
+  for (let i = 0; i < pairs.length; i++) value += coefficients[i] * features[i];
+  return value;
+}
+
+function adversarialReversibleBlock(coefficients, pairs, options = {}) {
+  const objective = gaps => reversibleReducedCost(gaps, coefficients, pairs);
+  const bands = T.bandBasinSearch(objective, 6, {
+    periodic: false,
+    // Antisymmetry of the state potential restores reversal symmetry of the
+    // reduced edge cost; this quotient is therefore valid by construction.
+    reflectionSymmetry: true,
+    coarseTolerance: options.coarseTolerance || 5e-4,
+    tolerance: options.tolerance || 5e-7
+  });
+  if (options.skipDE) return bands;
+  const de = T.differentialEvolution(objective, 6, {
+    seed: options.seed || 0xa7100001,
+    generations: options.generations || 600,
+    populationSize: options.populationSize || 100,
+    tolerance: options.tolerance || 5e-7
+  });
+  return bands.value <= de.value ? bands : de;
+}
+
+function optimizeReversibleCoboundary(options = {}) {
+  const maxDegree = options.maxDegree || 5;
+  const pairs = reversibleWalshPairs(maxDegree);
+  let coefficients = new Array(pairs.length).fill(0);
+  let best = null;
+  const history = [];
+  const cycleUpperBound = 0.003957393309;
+  for (let iteration = 0; iteration < (options.iterations || 180); iteration++) {
+    const adversary = adversarialReversibleBlock(coefficients, pairs, {
+      seed: 0xa7100000 + iteration,
+      generations: options.generations || 550,
+      skipDE: iteration > 4
+    });
+    if (!best || adversary.value > best.value) {
+      best = {value: adversary.value, coefficients: coefficients.slice(), gaps: adversary.x.slice()};
+    }
+    history.push({iteration, value: adversary.value});
+    const features = reversibleEdgeFeatures(adversary.x, pairs);
+    const squaredNorm = features.reduce((sum, x) => sum + x * x, 0);
+    const rate = squaredNorm > 1e-16
+      ? (options.polyakFactor || 0.5) * Math.max(0, cycleUpperBound - adversary.value) / squaredNorm
+      : 0;
+    for (let i = 0; i < coefficients.length; i++) coefficients[i] += rate * features[i];
+  }
+  const audit = adversarialReversibleBlock(best.coefficients, pairs, {
+    seed: 0xa71fffff,
+    generations: 2600,
+    populationSize: 240,
+    tolerance: 2e-8,
+    coarseTolerance: 1e-4
+  });
+  return {pairs, best: {...best, auditValue: audit.value, auditGaps: audit.x}, history};
 }
 
 function walshReducedCost(gaps, coefficients, masks) {
@@ -440,6 +535,21 @@ function searchContinuousReducedCost(options = {}) {
 }
 
 if (require.main === module) {
+  if (process.argv.includes('--reversible-opt')) {
+    const degreeArg = process.argv.find(x => x.startsWith('--degree='));
+    const maxDegree = degreeArg ? Number(degreeArg.slice('--degree='.length)) : 5;
+    const result = optimizeReversibleCoboundary({maxDegree});
+    for (const row of result.history) {
+      console.log(`iter=${String(row.iteration).padStart(3)} adversary=${row.value.toFixed(12)}`);
+    }
+    console.log(`best training adversary: ${result.best.value.toFixed(12)}`);
+    console.log(`strong audit adversary: ${result.best.auditValue.toFixed(12)}`);
+    console.log(`audit gaps: ${result.best.auditGaps.map(x => x.toFixed(8)).join(',')}`);
+    console.log(`pairs: ${result.pairs.map(pair => pair.join(':')).join(',')}`);
+    console.log(`coefficients: ${result.best.coefficients.map(x => x.toExponential(17)).join(',')}`);
+    console.log('REVERSAL-ANTISYMMETRIC COBOUNDARY — numerical oracle only');
+    process.exit(0);
+  }
   if (process.argv.includes('--walsh-opt')) {
     const degreeArg = process.argv.find(x => x.startsWith('--degree='));
     const maxDegree = degreeArg ? Number(degreeArg.slice('--degree='.length)) : 2;
@@ -515,5 +625,8 @@ module.exports = {
   searchWalshFamily, binaryCoordinate, degreeOneEdgeCoefficients,
   linearReducedCost, adversarialLinearBlock, optimizeLinearCoboundary,
   walshMasks, walshStateFeatures, walshEdgeFeatures, walshReducedCost,
-  adversarialWalshBlock, optimizeWalshCoboundary
+  adversarialWalshBlock, optimizeWalshCoboundary, reverseMask,
+  reversibleWalshPairs, reversibleStateFeatures, reversibleEdgeFeatures,
+  reversibleReducedCost, adversarialReversibleBlock,
+  optimizeReversibleCoboundary
 };
