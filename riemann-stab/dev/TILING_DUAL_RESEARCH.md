@@ -650,6 +650,38 @@ bilinear cross term instead and the minimum moves to the endpoint, at
 `R(psi_MT)` to `1e-9`.  Nothing else changes.  The interior optimum is not a
 property of the windows; it is the difference between the two cross terms.
 
+## Unusual stone: the weight is positive definite, and why that does not help
+
+`w = (K/K(0))^2` and `K` is the cosine transform of `cos(sqrt(2) t)` on
+`[-1/2, 1/2]`, so the transform of `w` is the autoconvolution `(f*f)/K(0)^2`.
+It is supported on `[-1, 1]` and equals, for `0 <= t <= 1`,
+
+`( sin(sqrt2 (1-t))/sqrt2 + (1-t) cos(sqrt2 t) ) / (2 K(0)^2)`,
+
+which is **nonnegative**, with a two-line proof: `sqrt2 (1-t)` lies in
+`[0, sqrt2] subset [0, pi]` and `sqrt2 t` lies in `[0, sqrt2] subset [0, pi/2]`,
+so both terms are nonnegative.  `w` is therefore a positive definite function
+with compactly supported transform — exactly the Cohn-Elkies setting, and worth
+knowing is available.
+
+It does not close for the functional here, and the reason is worth recording so
+it is not attempted a third time.  The chain energy truncates at lag six **by
+index, not by distance**.  Poisson summation turns a two-body *spatial* energy
+into a nonnegative Fourier sum; an index-truncated sum is not a two-body
+spatial energy, so the argument has nothing to act on.  Two attempts:
+
+- Bounding the full-lag energy below by `rho * what(0) - 1` and subtracting a
+  tail is hopeless: at the alternating cycle the full pair sum is about `0.0171`
+  while the quantity to be resolved is `1e-4`, so the tail must be known to
+  `0.5%` — far tighter than a linear-programming bound gives.
+- Restricting the auxiliary function to `[-r, r]` so index truncation and
+  distance truncation coincide needs every seven consecutive gaps to span more
+  than `r`, which no configuration guarantees; tiny gaps break it, and the
+  case split that would handle them is the original problem again.
+
+The compactly supported nonnegative transform is still the cleanest structural
+fact about this kernel, and `overlapWeightTransform` ships it in closed form.
+
 ## Unusual stone: reversal cohomology
 
 The bare block energy is unchanged when a six-gap edge is reversed.  If `Phi`

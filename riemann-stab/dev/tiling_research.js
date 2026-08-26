@@ -54,6 +54,30 @@ function overlapWeightDerivative(x) {
   return 2 * kernel * derivative / (MT_KERNEL_ZERO * MT_KERNEL_ZERO);
 }
 
+// Fourier transform of the overlap weight, in closed form.
+//
+// w = (K/K(0))^2 and K is the cosine transform of f(t) = cos(sqrt(2) t) on
+// [-1/2, 1/2], so the transform of w is the autoconvolution (f*f)/K(0)^2, which
+// is supported on [-1, 1] and evaluates for 0 <= t <= 1 to
+//
+//     ( sin(sqrt2 (1-t))/sqrt2 + (1-t) cos(sqrt2 t) ) / (2 K(0)^2).
+//
+// Both terms are nonnegative there -- sqrt2 (1-t) lies in [0, sqrt2] subset
+// [0, pi] and sqrt2 t lies in [0, sqrt2] subset [0, pi/2] -- so w is a
+// POSITIVE DEFINITE function with compactly supported transform.  That is the
+// Cohn-Elkies setting, and it is worth knowing it is available.
+//
+// It does not, however, bound the functional this directory studies.  The chain
+// energy truncates at lag six by INDEX, not by distance, so it is not a
+// two-body energy in space and the Poisson-summation argument does not close.
+// Two attempts at using it are recorded in TILING_DUAL_RESEARCH.md.
+function overlapWeightTransform(t) {
+  const a = Math.abs(t);
+  if (a >= 1) return 0;
+  return (sinOverX(SQRT2 * (1 - a)) * (1 - a) + (1 - a) * Math.cos(SQRT2 * a))
+    / (2 * MT_KERNEL_ZERO * MT_KERNEL_ZERO);
+}
+
 function pointsFromGaps(gaps) {
   const pts = [0];
   for (const g of gaps) pts.push(pts[pts.length - 1] + g);
@@ -746,6 +770,7 @@ function floorPayoff(floor, options = {}) {
 
 module.exports = {
   mtKernel,
+  overlapWeightTransform,
   overlapWeight,
   overlapWeightDerivative,
   blockFunctional,

@@ -250,6 +250,35 @@ for (const x of [0, 0.1, 0.5, 1, 2, 3.5, 7]) {
 check('the tiling kernel is the spectrum of the critical window',
   transformError < 1e-8, `${transformError}`);
 
+
+// The overlap weight is positive definite with compactly supported transform:
+// the Cohn-Elkies setting.  Worth knowing it is available even though it does
+// not close for the index-truncated functional.
+let transformMin = Infinity, spectrumError = 0;
+for (let k = 0; k <= 4000; k++) {
+  const t = 1.3 * k / 4000;
+  const value = T.overlapWeightTransform(t);
+  transformMin = Math.min(transformMin, value);
+  // numerical cosine transform of w over a wide window, where it has converged
+  if (k % 800 === 0 && t > 0.05 && t < 0.95) {
+    const n = 400000, X = 400, h = X / n;
+    let acc = 0;
+    for (let i = 0; i < n; i++) {
+      const x = -X / 2 + (i + 0.5) * h;
+      acc += T.overlapWeight(x) * Math.cos(2 * Math.PI * t * x);
+    }
+    spectrumError = Math.max(spectrumError, Math.abs(acc * h - value));
+  }
+}
+check('overlap weight has a nonnegative Fourier transform', transformMin >= 0, `${transformMin}`);
+check('and it is supported on [-1, 1]',
+  T.overlapWeightTransform(1) === 0 && T.overlapWeightTransform(1.5) === 0);
+check('closed-form transform matches numerical quadrature',
+  spectrumError < 1e-5, `${spectrumError}`);
+check('transform at zero is the integral of the weight',
+  close(T.overlapWeightTransform(0), 1.006127190866, 1e-11),
+  `${T.overlapWeightTransform(0)}`);
+
 if (failed) {
   console.error(`${failed} tiling-research checks failed`);
   process.exit(1);
