@@ -140,34 +140,80 @@ check('rigorous sweep completes at 0.002', rigorous.complete,
   `${rigorous.processed} boxes, remaining ${rigorous.remaining}`);
 
 // --------------------------------------------------- recorded long sweeps
+// A recorded row is not evidence on its own.  Three things are checked.
+//
+//  1. The input hashes.  Every row records SHA-256 of the certificate entry and
+//     of each source file that determines its mode's result, so a row that
+//     predates a change to any of them is caught rather than silently believed.
+//     This is what exposed a `compact 0.00385` row left over from before the
+//     derivative sign test gained its safety margin.
+//  2. Replay, for every row cheap enough to redo here.  The traversal checksum
+//     is stirred once per box with that box's computed bound and shape, so
+//     matching it requires performing the traversal, not knowing the answer.
+//  3. For rows too expensive to replay in a test suite, the checks above and
+//     nothing more.  Those rows are listed as unreplayed, with their replay
+//     command, and the suite says so instead of implying they were verified.
 const results = JSON.parse(
   fs.readFileSync(path.join(__dirname, 'tiling_interval.results.json'), 'utf8'));
+const sweep = require('./sweep');
+
 check('recorded sweeps declare their arithmetic honestly', /double precision/.test(results.scope));
-for (const row of results.runs) {
-  const entry = certificates.certificates.find(c => c.name === row.certificate);
-  const reference = row.certificate === 'bare' ? 0.003826231218593872 : entry.floor;
+
+const REPLAY_BUDGET_BOXES = 3.5e5;    // keeps the suite near a minute
+let replayed = 0, unreplayed = 0, staleInputs = 0, checksumMismatches = 0;
+const allRows = [...results.runs, ...(results.rigorousRuns || [])];
+for (const row of allRows) {
+  if (!row.inputs || !row.checksum) {
+    staleInputs++;                    // pre-transcript row: no evidence at all
+    continue;
+  }
+  const entry = sweep.certificateEntry(row.certificate);
+  const current = sweep.inputHashes(entry, row.mode);
+  for (const key of Object.keys(row.inputs)) {
+    if (current[key] !== row.inputs[key]) staleInputs++;
+  }
+  if (row.boxes <= REPLAY_BUDGET_BOXES) {
+    const prepared = I.prepareCertificate({knots: entry.knots, a: entry.a, b: entry.b});
+    const rerun = row.mode === 'fast'
+      ? I.verifyFloor(prepared, row.target, {tables, budget: 6e8, box: entry.searchBox})
+      : I.verifyFloorRigorous(prepared, row.target, {budget: 6e8, box: entry.searchBox});
+    if (rerun.checksum !== row.checksum || rerun.processed !== row.boxes
+        || rerun.complete !== row.complete) checksumMismatches++;
+    replayed++;
+  } else {
+    unreplayed++;
+  }
+}
+check('every recorded row carries a transcript', staleInputs === 0,
+  `${staleInputs} rows with missing or stale input hashes`);
+check('every replayable row replays to the same checksum', checksumMismatches === 0,
+  `${checksumMismatches}`);
+const replayedModes = new Set(allRows.filter(r => r.boxes <= REPLAY_BUDGET_BOXES).map(r => r.mode));
+check('both modes have at least one row replayed in full',
+  replayedModes.has('fast') && replayedModes.has('rigorous'),
+  `replayed modes: ${[...replayedModes].join(', ') || 'none'}`);
+console.log(`         (${replayed} rows replayed in full, ${unreplayed} too large to replay here)`);
+
+for (const row of allRows) {
+  const reference = row.certificate === 'bare'
+    ? 0.003826231218593872
+    : certificates.certificates.find(c => c.name === row.certificate).floor;
   if (row.complete) {
-    check(`recorded completion at ${row.target} (${row.certificate}) is below the audited floor`,
+    check(`recorded completion at ${row.target} (${row.mode} ${row.certificate})`,
       row.target < reference, `${row.target} vs ${reference}`);
   } else {
-    check(`recorded refusal at ${row.target} (${row.certificate}) is above the audited floor`,
+    check(`recorded refusal at ${row.target} (${row.mode} ${row.certificate})`,
       row.target > reference - 1e-9, `${row.target} vs ${reference}`);
   }
 }
-const best = results.runs.filter(r => r.complete).reduce((a, r) => Math.max(a, r.target), 0);
+const best = results.runs.filter(r => r.complete && r.certificate !== 'bare')
+  .reduce((a, r) => Math.max(a, r.target), 0);
 check('best verified floor beats the published 19/5000 certificate', best > 19 / 5000, `${best}`);
-const payoff = T.floorPayoff(best);
 check('best verified floor pin', Math.abs(best - results.bestVerifiedFloor) < 1e-15, `${best}`);
 check('projected constant pin',
-  Math.abs(payoff.bound - results.bestVerifiedBound) < 5e-15, `${payoff.bound}`);
+  Math.abs(T.floorPayoff(best).bound - results.bestVerifiedBound) < 5e-15);
 
-
-if (results.rigorousRuns) {
-  for (const row of results.rigorousRuns) {
-    const entry = certificates.certificates.find(c => c.name === row.certificate);
-    check(`recorded rigorous completion at ${row.target} (${row.certificate})`,
-      row.complete && row.target < entry.floor, `${row.target}`);
-  }
+if (results.rigorousRuns && results.rigorousRuns.length) {
   const bestRigorous = results.rigorousRuns.filter(r => r.complete)
     .reduce((a, r) => Math.max(a, r.target), 0);
   check('best rigorously verified floor pin',

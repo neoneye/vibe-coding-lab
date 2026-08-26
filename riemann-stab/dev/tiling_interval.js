@@ -319,6 +319,39 @@ function gradientRange(tables, cert, lo, hi, k, scratch) {
   return [s.grad[2 * k], s.grad[2 * k + 1]];
 }
 
+// ------------------------------------------------------- traversal digest
+// A recorded "complete: true" is worth nothing on its own: an invented row
+// passes any test that only reads it back.  This digest is stirred once per box
+// with that box's computed bound and its coordinates, so reproducing the value
+// requires actually performing the traversal.  It is not a security primitive
+// -- it is a replay check, and cheap enough (a handful of integer ops against
+// the thousands of floating-point ops each box already costs) to leave on.
+const DIGEST_VIEW = new DataView(new ArrayBuffer(8));
+
+function newDigest() { return {a: 0x811c9dc5 | 0, b: 0x01000193 | 0, n: 0}; }
+
+function mixWord(digest, word) {
+  digest.a = Math.imul(digest.a ^ word, 0x01000193) | 0;
+  digest.b = (Math.imul(digest.b + word, 0x85ebca6b) ^ (digest.a >>> 13)) | 0;
+}
+
+function stir(digest, bound, lo, hi) {
+  digest.n++;
+  DIGEST_VIEW.setFloat64(0, bound);
+  mixWord(digest, DIGEST_VIEW.getInt32(0));
+  mixWord(digest, DIGEST_VIEW.getInt32(4));
+  for (let k = 0; k < 6; k++) {
+    DIGEST_VIEW.setFloat64(0, hi[k] - lo[k]);
+    mixWord(digest, DIGEST_VIEW.getInt32(0) ^ Math.imul(k + 1, 0x9e3779b9));
+  }
+}
+
+function seal(digest) {
+  const a = (digest.a >>> 0).toString(16).padStart(8, '0');
+  const b = (digest.b >>> 0).toString(16).padStart(8, '0');
+  return `${a}${b}:${digest.n}`;
+}
+
 // ------------------------------------------------------- branch and bound
 // Depth-first subdivision of the cube.  A box is disposed of when its lower
 // bound clears the target; otherwise the monotonicity reduction collapses
@@ -347,6 +380,7 @@ function verifyFloor(cert, target, options = {}) {
   let worstBound = Infinity;
   let counterexample = null;
   const sample = [];
+  const digest = newDigest();
 
   while (stack.length) {
     if (processed >= budget) break;
@@ -356,6 +390,7 @@ function verifyFloor(cert, target, options = {}) {
     const lo = current.lo, hi = current.hi;
 
     analyzeBox(tables, prepared, lo, hi, scratch);
+    stir(digest, scratch.bound, lo, hi);
     if (scratch.bound >= target + safety) continue;
 
     // Monotonicity reduction: a coordinate whose derivative keeps its sign
@@ -418,12 +453,13 @@ function verifyFloor(cert, target, options = {}) {
     // A box that hit the minimum width was never *proved*, only sampled, so it
     // blocks completeness exactly like a leftover stack entry does.
     complete: stack.length === 0 && !counterexample && processed < budget && unresolved === 0,
-    worstBound, unresolved, unresolvedVolume, counterexample, sample
+    worstBound, unresolved, unresolvedVolume, counterexample, sample,
+    checksum: seal(digest)
   };
 }
 
 module.exports = {
-  PAIRS, buildTables, attachTables, verifyFloor, verifyFloorRigorous, analyzeBoxRigorous, analyzeBox, newScratch, prepareCertificate,
+  PAIRS, buildTables, attachTables, verifyFloor, newDigest, stir, seal, verifyFloorRigorous, analyzeBoxRigorous, analyzeBox, newScratch, prepareCertificate,
   plRangeFast, slopeWithFlat, wRange, dwRange, plRange, plSlopeRange,
   boxLowerBound, gradientRange
 };
@@ -496,6 +532,7 @@ function verifyFloorRigorous(cert, target, options = {}) {
   let processed = 0, collapsed = 0, unresolved = 0;
   let worstBound = Infinity;
   let counterexample = null;
+  const digest = newDigest();
 
   while (stack.length) {
     if (processed >= budget) break;
@@ -504,6 +541,7 @@ function verifyFloorRigorous(cert, target, options = {}) {
     const lo = current.lo, hi = current.hi;
 
     analyzeBoxRigorous(prepared, lo, hi, scratch);
+    stir(digest, scratch.bound, lo, hi);
     if (scratch.bound >= target) continue;
 
     for (let pass = 0; pass < 3; pass++) {
@@ -541,6 +579,6 @@ function verifyFloorRigorous(cert, target, options = {}) {
   return {
     target, box, processed, collapsed, remaining: stack.length,
     complete: stack.length === 0 && !counterexample && processed < budget && unresolved === 0,
-    worstBound, unresolved, counterexample
+    worstBound, unresolved, counterexample, checksum: seal(digest)
   };
 }
