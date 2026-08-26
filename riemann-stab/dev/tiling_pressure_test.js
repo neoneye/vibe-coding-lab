@@ -111,5 +111,25 @@ for (const [p, beatable] of [[1400, true], [2000, false], [3600, true]]) {
     `difference ${(best - two).toExponential(3)}`);
 }
 
+// ---- the optimal pressure is the phase boundary
+const crossover = P.periodCrossover();
+check('the period-two state loses to period three at a definite pressure',
+  Math.abs(crossover - 3370.4507) < 0.01, `p = ${crossover.toFixed(6)}`);
+check('and that is well below where a single wall stops costing',
+  crossover < 3521.8 && P.wallTension(crossover, 1, 31).tension > 0,
+  `tau_HH there = ${P.wallTension(crossover, 1, 31).tension.toExponential(3)}, `
+  + 'so walls attract');
+
+const at3000 = P.projectionAt(3000).bound;
+const atStar = P.projectionAt(crossover).bound;
+check('the projection is larger at the crossover than at the inherited p = 3000',
+  atStar > at3000, `${atStar.toFixed(12)} against ${at3000.toFixed(12)}, `
+  + `+${(atStar - at3000).toExponential(3)}`);
+check('and it falls off on both sides, so the crossover is the maximum',
+  P.projectionAt(crossover - 40).bound < atStar
+  && P.projectionAt(crossover + 40).bound < atStar,
+  `${P.projectionAt(crossover - 40).bound.toFixed(12)} < ${atStar.toFixed(12)} > `
+  + `${P.projectionAt(crossover + 40).bound.toFixed(12)}`);
+
 console.log(failures ? `\n${failures} FAILED` : '\nPRESSURE CHECKS PASS');
 process.exit(failures ? 1 : 0);

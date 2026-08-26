@@ -172,5 +172,43 @@ function plateauEdge(phase, lo, hi, iterations = 50) {
   return (lo + hi) / 2;
 }
 
+// The best pressure for the projection, which is not the one this directory
+// inherited.  The conditional projection has two competing p-dependences: the
+// span penalty (n-1)/p falls as p rises, and the ground-state energy falls too.
+// Nobody had evaluated the trade-off, because nobody had E_alt(p).
+function groundEnergy(p) {
+  const two = twoCycle(p);
+  let best = T.periodicChainEnergy([two.L, two.H], 7, p);
+  let period = 2;
+  for (const seed of [[1.0436, 1.9923, 1.9923], [1.0323, 1.9712, 1.0323]]) {
+    const r = relax(seed, p, 20000);
+    if (r.value < best) { best = r.value; period = 3; }
+  }
+  for (const z of kernelZeros(8)) {
+    const r = relax([z / 2], p, 20000);
+    if (r.value < best) { best = r.value; period = 1; }
+  }
+  return {energy: best, period};
+}
+
+function projectionAt(p) {
+  const g = groundEnergy(p);
+  const r = T.projectedSimpleZeroBound(g.energy, 7, p);
+  return {bound: r.bound, floor: g.energy, period: g.period,
+    windowsPerBlock: r.windowsPerBlock};
+}
+
+// Where the period-two state loses to period three.
+function periodCrossover(lo = 3360, hi = 3390, iterations = 50) {
+  const two = p => { const t = twoCycle(p); return T.periodicChainEnergy([t.L, t.H], 7, p); };
+  const three = p => relax([1.0436, 1.9923, 1.9923], p, 40000).value;
+  for (let i = 0; i < iterations; i++) {
+    const m = (lo + hi) / 2;
+    if (two(m) < three(m)) lo = m; else hi = m;
+    if (hi - lo < 1e-8) break;
+  }
+  return (lo + hi) / 2;
+}
+
 module.exports = {kernel, kernelZeros, relax, twoCycle, wallTension, plateauEdge,
-  energyAndGradient};
+  energyAndGradient, groundEnergy, projectionAt, periodCrossover};

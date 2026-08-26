@@ -1599,6 +1599,49 @@ takes over earlier than a single wall stops costing.  The period-three state
 wins near `p = 3350` while `tau_HH` stays positive out to `3521.8`.  Walls
 attract.
 
+### The pressure this directory inherited is not the best one
+
+The conditional projection has two competing dependences on `p`: the span
+penalty `(n-1)/p` falls as `p` rises, and the ground-state energy — the ceiling
+any block floor can reach — falls too.  Nobody had evaluated the trade-off,
+because nobody had `E_alt(p)`.
+
+Evaluating it, with the *true* ground state at each `p` rather than the
+period-two state:
+
+| `p` | period | floor | projection | against `p = 3000` |
+| --- | --- | --- | --- | --- |
+| `3000` | 2 | `0.003957393309` | `0.673110269740` | — |
+| `3200` | 2 | `0.003768570492` | `0.673113134264` | `+2.87e-6` |
+| `3370.4507` | 2 | `0.003625331560` | **`0.673115021315`** | **`+4.75e-6`** |
+| `3380` | 3 | `0.003616902018` | `0.673114640522` | `+4.37e-6` |
+| `3500` | 3 | `0.003514893584` | `0.673109286998` | `-9.83e-7` |
+| `4000` | 3 | `0.003155733760` | `0.673089875145` | `-2.04e-5` |
+
+**The maximum is exactly the phase boundary.**  The projection climbs
+monotonically with `p` for as long as the ground state stays period two, and
+turns over the moment period three takes it — at
+
+`p* = 3370.450721`,
+
+which is where `E_2(p) = E_3(p)`.  Not at `tau_HH = 0`, which is another
+`151` further on at `3521.815455`: at the crossover a single wall still costs
+`3.80e-5`, and it is a periodic *array* of walls that wins first.  Walls
+attract, and the optimum is set by the array, not the single wall.
+
+So the pressure the manuscript fixed is worth `4.75e-6` less on the projection
+than the best available choice, and the best available choice is a phase
+boundary of the chain energy.
+
+Three things this does not say.  The projection is conditional on the external
+shifted-block assembly, which nobody here can check, so this is a statement
+about that formula and not about zeta zeros.  Whether `p` is free in the
+assembly at all is a question about the manuscript, not about anything here.
+And `0.003625331560` is a *ceiling* at `p*` — the alternating state's own
+energy — not a certified floor: a certificate and a sweep at `p*` would be a
+fresh piece of work, though the section below says it should be an easier one
+than at `p = 3000`.
+
 ### What this predicts
 
 The degeneracy gap between the alternating state and its best periodic
