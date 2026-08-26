@@ -1178,6 +1178,58 @@ a correction could dig.  Until the sweep runs, this is a candidate that no
 adversary has broken, which is not the same as a floor, and this directory has
 been wrong before about exactly that distinction.
 
+### The sweep the candidate needs, and why it has not run
+
+A certificate nobody has swept is worth nothing, so: what would it take?
+
+**The enclosures exist now.**  `dev/tiling_pair.js` encloses a bilinear `psi`
+over a box.  On one knot cell the enclosure is *exact* — a bilinear function
+there is a convex combination of the four corner values, so its range is their
+min and max — and over several cells it is the min and max over the covering
+index rectangle.  The partial derivatives come out the same way: on a cell,
+`d/dx` is a convex combination of the two edge slopes.  A centered form is taken
+alongside and the better of the two used, which matters because the grid varies
+by up to `2e-5` across one cell while the margin the sweep has to work with is
+`1.5e-6`.  `dev/tiling_pair_interval_test.js` checks all of it against sampled
+values, and checks the single-cell case is exact rather than merely sound.
+
+**The sweep exists too**, in `dev/tiling_pair_interval.js`, over the search cube
+minus the two alternating tubes, reusing the audited additive machinery for the
+`F6` part and adding the `psi` ranges term by term.
+
+**The tube has to come out, and that is not a shortcut.**  The pinned candidate
+attains its floor exactly at the alternating block.  A branch-and-bound cannot
+certify a bound that is exactly attained — it would subdivide the basin forever,
+chasing a quadratic term down to a target it never clears.  So the tube is
+excluded and needs a local argument instead: `R = E_alt` at a critical point with
+a certified positive-definite Hessian gives `R >= E_alt` on a tube, and the
+alternating point sits strictly inside one knot cell in every coordinate, so `R`
+is smooth there even though a bilinear `psi` is only continuous across knot
+lines.  That argument is the same shape as the coercivity one already proved in
+Arb, and it is **not built**.
+
+**Outside the tube the margin is real but thin.**  The second-lowest basin of
+the pinned candidate is a high-high defect block, at `E_alt + 1.503e-6` —
+independent of the tube radius, because it is a genuine defect far from the tube.
+`1.5e-6` is the same order as the margin the existing rigorous sweep already
+works with, so the target is not absurd.
+
+**What actually blocks it is the cube.**  The pinned candidate is a correction to
+the `record` certificate, whose amplitude `5.2e-3` forces the cube `[0, 28]^6` —
+about twenty-nine times the volume of `sharp`'s.  That cost is not hypothetical:
+the *additive* record sweep alone, on a cube truncated all the way down to `4`,
+does not finish in `3e7` boxes.  So the pair certificate needs its own
+amplitude-minimising refine — the pair analogue of the stage that turned `record`
+into `sharp` — before starting a sweep is worth the electricity.  Pinning on the
+`sharp` base directly is harder than it sounds: its gradient at the alternating
+block is `4.1e-4` against `record`'s `2.4e-4`, so the correction has to be bigger,
+and at a cap large enough to be feasible the LP digs holes faster than the
+adversary finds them.
+
+So the state is: enclosures built and tested, sweep built and tested, one local
+argument missing, one refine stage missing, and a certificate that no adversary
+has broken and no interval has touched.
+
 ## The wall, certified
 
 Local coercivity supplies the `c dist^2` half of a crystallization argument.  The

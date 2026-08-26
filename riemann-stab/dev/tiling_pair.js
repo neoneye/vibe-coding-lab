@@ -165,5 +165,128 @@ function telescopingDefect(cert, gaps) {
   return Math.abs(sumR / n - sumF / n);
 }
 
+// ----------------------------------------------------- interval enclosures
+// A bilinear function on one knot cell is a CONVEX COMBINATION of the four
+// corner values -- the weights (1-u)(1-v), (1-u)v, u(1-v), uv are nonnegative
+// and sum to one -- so its range over that cell is exactly the min and max of
+// those corners.  A box covering several cells is a union of cells, so the
+// range over it is enclosed by the min and max of the grid values over the
+// covering index rectangle.  Exact on a single cell, and a slight over-
+// enclosure only where a box ends part way through one.
+//
+// The same argument gives the derivatives.  On a cell, d/dx is
+// (1-v)(c10-c00)/h + v(c11-c01)/h: a convex combination of the two edge slopes,
+// so its range is the min and max of those two.  Across cells, take the extremes
+// over every covered cell.  A bilinear function is only continuous, not C1, so
+// these slopes jump at knot lines -- which is fine for a range but is why no
+// argument here may assume R is differentiable across one.
+// The right endpoint needs the right-closed convention.  With the left-closed
+// one, a box that is exactly one cell reports a span of two cells and drags in
+// the neighbouring corners -- sound, but it loses the one case where the
+// enclosure is exact, which is the case the subdivision spends its time in.
+function cellIndexRight(knots, x) {
+  const last = knots.length - 1;
+  if (x <= knots[0]) return 0;
+  if (x >= knots[last]) return last - 1;
+  const i = cellIndex(knots, x);
+  return (x === knots[i] && i > 0) ? i - 1 : i;
+}
+
+function cellSpan(knots, a, b) {
+  const last = knots.length - 1;
+  const lo = Math.max(0, Math.min(last - 1, cellIndex(knots, a)));
+  const hi = Math.max(0, Math.min(last - 1, cellIndexRight(knots, b)));
+  return [Math.min(lo, hi), Math.max(lo, hi)];
+}
+
+function cellIndex(knots, x) {
+  const last = knots.length - 1;
+  if (x <= knots[0]) return 0;
+  if (x >= knots[last]) return last - 1;
+  let lo = 0, hi = last;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (knots[mid] <= x) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+
+function gridRange(grid, J, i0, i1, j0, j1) {
+  let min = Infinity, max = -Infinity;
+  for (let i = i0; i <= i1 + 1; i++) {
+    const row = i * J;
+    for (let j = j0; j <= j1 + 1; j++) {
+      const v = grid[row + j];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  return [min, max];
+}
+
+function slopeRangeX(knots, grid, J, i0, i1, j0, j1) {
+  let min = Infinity, max = -Infinity;
+  for (let i = i0; i <= i1; i++) {
+    const h = knots[i + 1] - knots[i];
+    for (let j = j0; j <= j1 + 1; j++) {
+      const v = (grid[(i + 1) * J + j] - grid[i * J + j]) / h;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  return [min, max];
+}
+
+function slopeRangeY(knots, grid, J, i0, i1, j0, j1) {
+  let min = Infinity, max = -Infinity;
+  for (let j = j0; j <= j1; j++) {
+    const h = knots[j + 1] - knots[j];
+    for (let i = i0; i <= i1 + 1; i++) {
+      const v = (grid[i * J + j + 1] - grid[i * J + j]) / h;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  return [min, max];
+}
+
+// A clamped coordinate contributes no slope, and the value there is the edge
+// value, which the index clamp already delivers.
+function clampedBelow(knots, x) { return x <= knots[0]; }
+function clampedAbove(knots, x) { return x >= knots[knots.length - 1]; }
+
+// Centered (mean value) form: psi(x,y) is in psi(c) + [dx](x - cx) + [dy](y - cy)
+// over the box.  Second order in the box width where the natural range is first
+// order, which matters here because the psi grid varies by up to 2e-5 across one
+// knot cell while the margin the sweep is working with is 1.5e-6.  Taking the
+// better of the two costs one extra evaluation and is never worse.
+function psiCenteredLower(cert, k, aLo, aHi, bLo, bHi, dx, dy) {
+  const cx = (aLo + aHi) / 2, cy = (bLo + bHi) / 2;
+  const wx = (aHi - aLo) / 2, wy = (bHi - bLo) / 2;
+  const at = bilinear(cert.knots, cert.mats[k], cert.J, cx, cy).value;
+  const spread = Math.max(Math.abs(dx[0]), Math.abs(dx[1])) * wx
+    + Math.max(Math.abs(dy[0]), Math.abs(dy[1])) * wy;
+  return at - spread;
+}
+
+function psiBoxRange(cert, k, aLo, aHi, bLo, bHi) {
+  const [i0, i1] = cellSpan(cert.knots, aLo, aHi);
+  const [j0, j1] = cellSpan(cert.knots, bLo, bHi);
+  const value = gridRange(cert.mats[k], cert.J, i0, i1, j0, j1);
+  let dx = slopeRangeX(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
+  let dy = slopeRangeY(cert.knots, cert.mats[k], cert.J, i0, i1, j0, j1);
+  // where the box reaches outside the knots the slope there is zero, so the
+  // range has to include zero
+  if (clampedBelow(cert.knots, aLo) || clampedAbove(cert.knots, aHi)) {
+    dx = [Math.min(dx[0], 0), Math.max(dx[1], 0)];
+  }
+  if (clampedBelow(cert.knots, bLo) || clampedAbove(cert.knots, bHi)) {
+    dy = [Math.min(dy[0], 0), Math.max(dy[1], 0)];
+  }
+  const centered = psiCenteredLower(cert, k, aLo, aHi, bLo, bHi, dx, dy);
+  if (centered > value[0]) value[0] = centered;
+  return {value, dx, dy};
+}
+
 module.exports = {prepare, reducedCost, reducedCostAndGradient, multistart,
-  telescopingDefect, bilinear};
+  telescopingDefect, bilinear, psiBoxRange, cellIndex, cellIndexRight, cellSpan};
