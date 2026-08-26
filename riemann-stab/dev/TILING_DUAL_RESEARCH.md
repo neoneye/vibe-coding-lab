@@ -8,12 +8,16 @@ shifted seven-point functional.
 
 Where things stand, most established first:
 
-- **Exact and machine-checked.**  The cyclic block identity; the reversal
-  cohomology lemma; the telescoping lemma that turns a per-edge coboundary
-  floor into a chain floor with an `O(1)` boundary term; the charge identity
-  for two-phase words; and the arithmetic of the projection, including a
-  two-sided pin of the constant the swept floor projects to.  Fifteen Lean
-  theorems, standard axioms only.
+- **Exact.**  `H_MT = 2 - R(psi_MT)`, where `R` is the second-moment functional
+  and `psi_MT = cos(sqrt(2) s)` is its unique critical point — derived, not
+  observed, from the Euler-Lagrange equation, and the reason the `sqrt(2)` and
+  the `cot(1/sqrt2)` in the published constant are there at all.  Also: the
+  cyclic block identity; the reversal cohomology lemma; the telescoping lemma
+  that turns a per-edge coboundary floor into a chain floor with an `O(1)`
+  boundary term; the charge identity for two-phase words; the nonnegativity and
+  compact support of the weight's Fourier transform; and the arithmetic of the
+  projection, two-sided-pinned at each swept floor.  Twenty Lean theorems,
+  standard axioms only.
 - **Exhaustively subdivided in double precision.**  The chain floor `0.003955`,
   for every gap sequence, periodic or not.  Also, as a control, the published
   Proposition F6 (`F6 >= 19/5000`), reproduced by machinery sharing no code
