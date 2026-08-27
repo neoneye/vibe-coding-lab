@@ -201,6 +201,22 @@ DEFECTS = {
          1.0416816038, 1.9802324653, 1.0425356511, 1.9917921461, 1.9917921465],
 }
 
+# One more boundary, further down, and the mediant it would need.
+#
+# The right order parameter turns out not to be the period at all but the
+# H-DENSITY of the block word -- a rotation number.  Reading the phases that way:
+# LLLH is 1/4, LLH is 1/3, LLHLH is 2/5, LH is 1/2, LHH is 2/3, and they lock in
+# that order as the pressure rises.  2/5 is the Farey mediant of 1/3 and 1/2 and
+# it opens a window; so the same question can be put at the 1/4 | 1/3 boundary,
+# where the mediant is 2/7 = LLLHLLH.
+P_43 = "1068.324562"
+LOW = {
+    4: [1.0297054667, 1.0232610206, 1.0297054667, 1.9690075971],       # 1/4
+    3: [1.0322301722, 1.0322301722, 1.971085819],                      # 1/3
+    7: [1.0296683501, 1.0233513561, 1.0296683501, 1.9704580687,        # 2/7
+        1.0318705135, 1.0318705135, 1.9704580687],
+}
+
 CHECKS = []
 
 
@@ -285,6 +301,28 @@ def main():
     check("the period-two branch has collapsed to a uniform state there",
           abs(dn[2]["box"][0] - dn[2]["box"][1]) < arb(1e-12),
           "L - H = %s" % abs(dn[2]["box"][0] - dn[2]["box"][1]).str(4))
+
+    # ------------------------------------- the same question one boundary down
+    print("\nthe 1/4 | 1/3 boundary at p = %s, and its mediant 2/7" % P_43)
+    lw = {n: certify(P_43, LOW[n]) for n in sorted(LOW)}
+    for n in sorted(lw):
+        if not (lw[n]["proved"] and lw[n]["pd"]):
+            check("period %d certified at p = %s" % (n, P_43), False)
+    e4, e3l, e7 = lw[4]["energy"], lw[3]["energy"], lw[7]["energy"]
+    # P_43 is a numerically located root, quoted to six decimals, so the two
+    # energies meet only as closely as that placement allows -- 1.2e-13 here,
+    # against the 1.4e-15 at the upper crossing where the pressure is known to
+    # eighteen.  The threshold says what is actually being checked: that they are
+    # degenerate to the accuracy of the pressure, not that they are equal.
+    check("the 1/4 and 1/3 phases meet there, to the accuracy of the pressure",
+          abs(e4 - e3l) < arb(1e-12),
+          "|e(1/4) - e(1/3)| = %s at p quoted to 6 decimals"
+          % abs(e4 - e3l).str(4))
+    check("and the mediant 2/7 is strictly ABOVE both, so it does not lock",
+          strictly_below(e4, e7) and strictly_below(e3l, e7),
+          "e(2/7) - e(1/4) = %s" % (e7 - e4).str(6))
+    print("     five mediants have now been asked and one locked: 2/5 between")
+    print("     1/3 and 1/2.  2/7, 3/5, 3/8 and 3/7 all lose.")
 
     # ------------------------------------ each pure phase resists a lone defect
     print("\nisolated defects at p*")
@@ -382,6 +420,15 @@ def main():
             "mediants": ("checked at both edges: 8 = 3 + 5 and 7 = 5 + 2 are "
                          "strictly above the phases they would interpolate, so "
                          "no second-level window opens"),
+            "densities": ("the order parameter is the H-density of the block "
+                          "word: LLLH = 1/4, LLH = 1/3, LLHLH = 2/5, LH = 1/2, "
+                          "LHH = 2/3, locking in that order as p rises"),
+            "mediants_asked": {"2/7 at the 1/4|1/3 boundary": "loses",
+                               "2/5 between 1/3 and 1/2": "LOCKS",
+                               "3/5 between 1/2 and 2/3 at p*": "loses",
+                               "3/8 at the 1/3|2/5 edge": "loses",
+                               "3/7 at the 2/5|1/2 edge": "loses"},
+            "low_boundary": {str(n): lw[n]["energy"].str(20) for n in lw},
             "finding": ("period five is strictly below both branches at the "
                         "lower crossing and strictly above both at p*, so the "
                         "2|3 interface tension changes sign between them"),

@@ -275,9 +275,18 @@ check('and the lower crossing is recorded as not being a boundary either',
   check('the page quotes the window and says 5 = 3 + 2',
     page.includes('1452.44') && page.includes('1456.17')
     && /5 = 3 \+ 2/.test(page));
-  check('the page records that both mediants LOSE, so it is not a staircase',
-    page.includes('5.73192') && page.includes('6.72987')
-    && /is not a staircase/i.test(page));
+  // Five mediants have been asked and one locked, so the page has to record the
+  // count and the exception, not just the two second-level ones.
+  check('the page records all five mediants and which one locked',
+    ['9.89517', '5.73192', '6.72987', '1.69462'].every(x => page.includes(x))
+    && /one in five does/i.test(page));
+  check('and names the H-density as the order parameter',
+    /1\/4, 1\/3, 2\/5, 1\/2, 2\/3|1\/4<\/b>, <b>1\/3/.test(page)
+    || (page.includes('LLLH') && page.includes('LHLHH') && /rotation number/i.test(page)));
+  const lw = rec.low_boundary;
+  check('the transcript has the mediant 2/7 above both phases it interpolates',
+    mid(lw['7']) > mid(lw['4']) && mid(lw['7']) > mid(lw['3']),
+    `e(2/7) - e(1/4) = ${mid(lw['7']) - mid(lw['4'])}`);
 
   const d2 = mid(rec.p1000['2'].energy), d4 = mid(rec.p1000['4'].energy);
   check('the transcript has period four below the period-two branch at p = 1000',

@@ -1982,6 +1982,29 @@ in Arb, while *ground state* -- nothing of any other period being lower -- rests
 on the floating-point scan, which covers period <= 10 at these pressures and
 <= 16 at p\*.
 
+**The order parameter is not the period.**  Scanning further down settles what
+the phases are.  Below `1068.3` the winner is a period-four word `LLLH`, from
+there to the window it is `LLH`, the window is `LLHLH`, above it `LH`, and above
+p\* `LHH`.  As densities of H those are `1/4, 1/3, 2/5, 1/2, 2/3`, locking in
+that order as the pressure rises -- a rotation number, and the periods were a
+proxy for it.  That also disposes of an accidental collision: the period-five
+orbit that WINS at the lower crossing is `LLHLH`, density 2/5, and the one that
+LOSES at p\* is `LHLHH`, density 3/5.  Same period, different phases, each the
+Farey mediant of its own neighbours.
+
+**Five mediants asked, one locks.**  All five certified:
+
+| between | mediant | word | result |
+|---|---|---|---|
+| 1/4, 1/3 (p = 1068.324562) | 2/7 | LLLHLLH | loses by `9.89517e-6` |
+| 1/3, 1/2 | **2/5** | LLHLH | **locks**, on [1452.44, 1456.17] |
+| 1/2, 2/3 (p\*) | 3/5 | LHLHH | loses by `1.69462e-6` |
+| 1/3, 2/5 (window edge) | 3/8 | | loses by `5.73192e-7` |
+| 2/5, 1/2 (window edge) | 3/7 | | loses by `6.72987e-6` |
+
+A devil's staircase would have every mediant locking on some interval.  Here one
+in five does, and the one that does refuses to spawn the next level.
+
 **And it is not a staircase.**  If it were, `8 = 3 + 5` would open a window at the
 lower edge and `7 = 5 + 2` at the upper one.  Both were built and certified and
 both are strictly *above* the phases they would interpolate, by `5.73192e-7` and

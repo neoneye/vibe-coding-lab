@@ -45,6 +45,32 @@ function findInterpreter() {
 const exe = findInterpreter();
 let failed = false;
 
+// The line filter is load-bearing, so it is exercised rather than trusted: take
+// a transcript that HAS provenance lines, rewrite them to different values, and
+// require the digest not to move -- and require that removing a real line does
+// move it, so the filter cannot be silently matching nothing.
+{
+  const probe = path.join(here, 'sweep_proof.json');
+  const raw = fs.readFileSync(probe).toString('binary');
+  const strip = t => t.split('\n').filter(ln => !/^\s*"(commit|seconds)":/.test(ln)).join('\n');
+  const dig = t => crypto.createHash('sha256').update(Buffer.from(strip(t), 'binary')).digest('hex');
+  const bumped = raw
+    .replace(/^(\s*"commit":\s*)"[^"]*"/m, '$1"0000000000000000000000000000000000000000"')
+    .replace(/^(\s*"seconds":\s*)[-0-9.eE+]+/m, '$1999999');
+  if (bumped === raw) {
+    console.error('  FAIL provenance probe: sweep_proof.json has no commit/seconds line to filter');
+    failed = true;
+  } else if (dig(bumped) !== dig(raw)) {
+    console.error('  FAIL provenance filter: rewriting commit/seconds changed the digest');
+    failed = true;
+  } else if (dig(raw.replace(/^\s*"nodes":.*$/m, '')) === dig(raw)) {
+    console.error('  FAIL provenance filter: dropping a real line did NOT change the digest');
+    failed = true;
+  } else {
+    console.log('-- provenance filter: commit and seconds are excluded, everything else is not');
+  }
+}
+
 for (const unit of UNITS) {
   const src = path.join(here, unit.src);
   const results = path.join(here, unit.results);
@@ -85,7 +111,18 @@ for (const unit of UNITS) {
   for (const [dep, want] of Object.entries(recorded.inputs)) {
     const path_ = path.join(here, dep);
     if (!fs.existsSync(path_)) { console.log('   MISSING ' + dep); stale++; continue; }
-    const got = crypto.createHash('sha256').update(fs.readFileSync(path_)).digest('hex');
+    // Provenance lines are dropped from .json inputs before hashing, exactly as
+    // dev/arb_provenance.py does.  Without that, a transcript that lists another
+    // transcript as an input can never stay fresh: the replay regenerates it,
+    // the regeneration stamps the current commit, and the hash moves although
+    // nothing determining the result did.  A line filter rather than a JSON
+    // round trip, so the two languages cannot disagree about float formatting.
+    const raw = fs.readFileSync(path_);
+    const hashed = path_.endsWith('.json')
+      ? Buffer.from(raw.toString('binary').split('\n').filter(
+          ln => !/^\s*"(commit|seconds)":/.test(ln)).join('\n'), 'binary')
+      : raw;
+    const got = crypto.createHash('sha256').update(hashed).digest('hex');
     if (got !== want) {
       console.log('   STALE ' + dep + ': recorded ' + want.slice(0, 16)
         + ', on disk ' + got.slice(0, 16));
