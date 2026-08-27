@@ -2100,6 +2100,26 @@ is a search, so it can only ever fail to find one.  The calibration is not
 refuted by short orbits, and the evidence that was "leaning against" it is the
 LP's own behaviour and nothing else.
 
+**What this leaves open**, recorded so it is not rediscovered from scratch:
+
+* The period-five window's EDGES are located numerically, not certified.  What is
+  certified is the bracket -- four pairwise comparisons at 1452, 1453, 1455.5 and
+  1457.  Certifying an edge means certifying a root in `p`, which the interval
+  machinery here can do but nothing has been built for.
+* The winner-versus-pressure sweep used ten sample points.  Between `p = 1000`,
+  where period four wins, and `1452`, where period three does, there is room for
+  more windows and none has been looked for.  If the same mediant logic applies,
+  the candidates are explicit.
+* `tau_eff` approaches its isolated value non-monotonically in BOTH arguments:
+  `0.242, 0.196, 0.188, 0.188` along `a = 1`, and `1.104, 1.018, 1.020, 1.020` at
+  `a = 2`; down the `b = 1` column it reads `0.242, 1.104, 1.088, 1.084, 1.087`,
+  oscillating around one with a decaying amplitude.  That is the interface-
+  interaction decay and it is not fitted or explained here, only measured.
+* Nothing has been said about aperiodic configurations.  The orbit scan sees
+  periodic measures only; a shift-invariant measure that is not a limit of
+  periodic ones would be invisible to it, and that is exactly the gap a
+  transfer-operator bound would close.
+
 Replay:
 
 ```
