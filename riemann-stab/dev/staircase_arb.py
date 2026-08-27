@@ -11,7 +11,7 @@ turns up competitors, and every competitor that matters is certified here in
 Arb -- Krawczyk for existence and uniqueness, verified Cholesky for strict local
 minimality, and an enclosed per-gap energy to compare.
 
-Two things come out, and they point opposite ways.
+Three things come out, and the first two point opposite ways.
 
   * At the UPPER crossing p* = 3370.4507 the two branches really are the bottom.
     Period five sits 1.69e-6 above them and period seven 5.51e-6 above, so the
@@ -28,11 +28,16 @@ Two things come out, and they point opposite ways.
   * And at p = 1000, below both crossings, neither branch is even close: a
     genuinely period-four state is 1.27e-4 below the period-two branch.
 
-What replaces the lower crossing is a WINDOW.  Period five is the ground state on
-an interval of pressures, roughly [1452.44, 1456.17], and the old crossing sits
-inside it: below the window the period-three branch is lowest, above it the
+What replaces the lower crossing is a WINDOW.  Period five is the lowest of the
+three on an interval of pressures, and the old crossing sits inside it: below the window the period-three branch is lowest, above it the
 period-two branch is, and in between a phase of period 5 = 3 + 2 whose pattern is
-literally one three-block next to one two-block.  That is the Farey-mediant
+literally one three-block next to one two-block.  What is CERTIFIED about the
+window is the bracket -- four pairwise comparisons, at 1452, 1453, 1455.5 and
+1457, putting it inside (1452, 1457) and around [1453, 1455.5].  The edges
+themselves, 1452.4447 and 1456.1713, are located numerically.  And "lowest of the
+three" is a comparison among three periods; "ground state" is the stronger claim
+and it rests on the floating-point scan, which covers period <= 10 at these
+pressures and <= 16 at p*.  That is the Farey-mediant
 arrangement a devil's staircase is built from, so the obvious next question is
 whether the construction repeats -- whether 8 = 3 + 5 opens a window at the lower
 edge and 7 = 5 + 2 at the upper one.  It does NOT.  At both edges the mediant is
@@ -49,7 +54,25 @@ minimiser; the number now comes from a multi-start scan of period eight at that
 pressure.  The margin shrank by a factor of a hundred and the conclusion did not
 move, which is the only reason the conclusion was worth keeping.
 
-The last two are corrections to what this directory said.  The lower crossing
+Then WHY, which is the part that generalises.  Write a mixed configuration as a
+two-blocks beside b three-blocks and tabulate the tension over the COMPOSITION
+rather than the period.  At p* it is flat at 1.00 times the isolated tau_23 from
+a = 2 onward and converged in b by b = 2, with one exceptional cell: a lone
+two-block inside the period-three phase costs 0.188.  At the lower crossing that
+same cell is the only NEGATIVE one, -0.060, everything else positive.  So the
+failure of coexistence there is one defect and nothing longer, and the two
+immediate neighbours are certified here to cost.  The isolated version of that
+defect stops costing at p = 1456.865312 and again at 3333.294860 (converged in b
+by b = 8), so those, and not the wall zeros, are where the period-three phase
+gives up against a single two-block.  At p* both isolated defects cost -- 3.28e-6
+and 1.90e-5, certified in 20 and 15 dimensions -- so each phase is locally stable
+there and the transition has a metastability overlap rather than a spinodal.  The
+lower crossing has that overlap too and period five wins anyway, which is the
+sharp difference between the two crossings: there the defects ATTRACT at the
+shortest spacing, and the intermediate phase arrives by attraction rather than by
+single-defect softening.
+
+The last two of the three are corrections to what this directory said.  The lower crossing
 was already relabelled once, from "plateau edge" to "metastability limit", after
 a review pointed out it is not where the walls vanish; this says something
 stronger and simpler, which is that the ground state near it has a longer period
