@@ -1996,6 +1996,17 @@ that at either edge no period up to ten is below the two that meet, mediant or
 not.  A finite sequence of commensurate phases, checked
 at the one level where a staircase would have had to show itself.
 
+**A smaller thing that fell out: "the period-three branch" is two branches.**
+At p\* the three-block is `LHH`, at the lower crossing it is `LLH` -- different
+words, different densities, and at each pressure the other exists about `3.9e-4`
+higher.  They exchange which is lower at `p ~ 2033.43`, harmlessly: 2033 is well
+inside the stretch where the period-*two* phase is the ground state, so it is a
+level crossing between two excited states and not a transition.  `lowerCrossover`
+in `tiling_pressure.js` already relaxes from both seeds and takes the lower, so
+its crossing pressure is about the right orbit.  But the phrase covers two
+objects: `branch_arb.py` certifies LHH over `[3300, 3450]`, and the lower-crossing
+comparisons in `staircase_arb.py` are about LLH.
+
 **Why, exactly: it is a single two-block that goes cheap.**  Write a mixed
 configuration as `a` two-blocks beside `b` three-blocks -- period `n = 2a + 3b`,
 two interfaces -- and tabulate `tau_eff = n (mean - c) / 2` over the composition
