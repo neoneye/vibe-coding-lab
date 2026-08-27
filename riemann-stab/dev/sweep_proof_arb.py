@@ -28,7 +28,8 @@ at all -- it emits a different one with 53102447 nodes and a 51 MB file.  A repl
 command that does not replay is worse than none, because following it looks like
 verification.
 
-Run:  node dev/sweep_proof.js 1.6 0.008 && python3 dev/sweep_proof_arb.py
+Run:  python3 dev/sweep_proof_arb.py                 # check the committed tape
+      node dev/sweep_proof.js 1.6 0.008             # rebuild the tape itself
 """
 
 import hashlib
@@ -403,7 +404,14 @@ def main():
                     "subdivision proof",
             "engine": "python-flint / Arb, %d bits" % ctx.prec,
             "inputs": arb_provenance.hash_inputs(SOURCES),
-            "replay": "node dev/sweep_proof.js 1.6 0.008 && python3 dev/sweep_proof_arb.py",
+            # Two commands, and only the first is a replay of THIS transcript.
+            # dev/check_arb.js executes `replay`, so it must not write a repo
+            # file that is also a declared input -- regenerating sweep_proof.json
+            # restamps its commit and leaves the worktree dirty after every suite
+            # run.  Rebuilding the tape is a separate, rarer act, so it gets its
+            # own field: recorded for whoever wants it, never run by the checker.
+            "replay": "python3 dev/sweep_proof_arb.py",
+            "tape_replay": "node dev/sweep_proof.js 1.6 0.008",
             "tape_sha256": digest,
             "nodes": len(tape), "leaves": leaves, "splits": splits,
             "collapses": collapses,
