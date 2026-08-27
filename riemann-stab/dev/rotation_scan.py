@@ -224,3 +224,75 @@ def table(pressures, nmax=9, starts=200, seed=11):
                   (n, v, v - base, " ".join("%.4f" % t for t in x[:7])), flush=True)
         out[str(p)] = [{"n": n, "min": v, "gaps": x.tolist()} for n, v, x in row]
     return out
+
+
+# ------------------------------------------ what tau_eff actually depends on
+# The free scan at p* gives tau_eff(n)/tau_inf = 0.242, 1.104, 0.188, 1.020 at
+# n = 5, 7, 11, 13 -- the only periods below 17 that are not multiples of 2 or 3.
+# Read as block words those are (LH)(LHH), (LH)(LHH)(LH), (LHH)^3(LH) and
+# (LH)(LHH)^3(LH): one two-block for the first and third, two for the second and
+# fourth.  So the ratio does not track the period, or the interface separation as
+# such -- it tracks a, the number of consecutive TWO-blocks, and barely moves
+# with b.  That is testable, but not from a free scan: a = 3, b = 1 has period
+# nine, where the free minimum is the pure period-three phase, so the composition
+# has to be imposed.
+#
+# Relax from the word and check the word survives.  If it does, the stationary
+# point is the configuration that word names, and tau_eff = n (mean - c) / 2 is
+# its two-interface cost.
+def blocks_at(p):
+    """The two- and three-blocks at this pressure, as they actually come out.
+
+    They are NOT the same word at every pressure: at p* the three-block is
+    (L, H, H) and at the lower crossing it is (L, L, H).  Seeding the composition
+    table with the p* blocks at another pressure sends the relaxation somewhere
+    else entirely, which is how this was noticed.
+    """
+    S.P = float(p)
+    _, two = relax([L2, H2], 2)
+    # And there is more than one three-block.  Relaxing from the p* values keeps
+    # the (L, H, H) word; at the lower crossing the LOWER three-orbit is
+    # (L, L, H), a different word with a different density, and a seed that never
+    # leaves the first basin will not find it.  Try both and take the lower.
+    cands = []
+    for seed in ([A3[0], A3[1], A3[2]], [A3[0], A3[0], A3[1]]):
+        v, x = relax(seed, 3)
+        cands.append((v, list(x)))
+    cands.sort(key=lambda t: t[0])
+    return list(two), cands[0][1]
+
+
+def word_config(a, b, p=PSTAR, blocks=None):
+    """a two-blocks then b three-blocks, relaxed, with the word checked."""
+    S.P = float(p)
+    two, three = blocks if blocks else blocks_at(p)
+    n = 2 * a + 3 * b
+    seed = list(two) * a + list(three) * b
+    v, x = relax(seed, n)
+    word = "".join("L" if t < 1.5 else "H" for t in x)
+    want = ("".join("L" if t < 1.5 else "H" for t in two) * a
+            + "".join("L" if t < 1.5 else "H" for t in three) * b)
+    kept = any(word == want[k:] + want[:k] for k in range(n))
+    return v, x, word, kept
+
+
+def composition(amax=4, bmax=4, p=PSTAR, c=CVAL, tau=None):
+    tau = TAU_INF if tau is None else tau
+    two, three = blocks_at(p)
+    print("p = %.12f     tau_eff / %.6e, by composition" % (p, tau))
+    print("two-block %s, three-block %s\n"
+          % ("".join("L" if t < 1.5 else "H" for t in two),
+             "".join("L" if t < 1.5 else "H" for t in three)))
+    print("   a\\b " + "".join("%9d" % b for b in range(1, bmax + 1)))
+    out = []
+    for a in range(1, amax + 1):
+        cells = []
+        for b in range(1, bmax + 1):
+            v, x, word, kept = word_config(a, b, p, (two, three))
+            n = 2 * a + 3 * b
+            te = n * (v - c) / 2
+            out.append({"a": a, "b": b, "n": n, "mean": v, "tau_eff": te,
+                        "word": word, "word_kept": kept})
+            cells.append("%9.3f" % (te / tau) if kept else "    broke")
+        print("   %2d  " % a + "".join(cells), flush=True)
+    return out

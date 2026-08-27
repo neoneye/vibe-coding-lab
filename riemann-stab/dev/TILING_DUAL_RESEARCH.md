@@ -1996,6 +1996,47 @@ that at either edge no period up to ten is below the two that meet, mediant or
 not.  A finite sequence of commensurate phases, checked
 at the one level where a staircase would have had to show itself.
 
+**Why, exactly: it is a single two-block that goes cheap.**  Write a mixed
+configuration as `a` two-blocks beside `b` three-blocks -- period `n = 2a + 3b`,
+two interfaces -- and tabulate `tau_eff = n (mean - c) / 2` over the composition
+rather than over the period.  At p\*, in units of the isolated `tau_23`:
+
+```
+   a\b       1        2        3        4        5
+    1     0.242    0.196    0.188    0.188    0.188
+    2     1.104    1.018    1.020    1.020    1.020
+    3     1.088    1.001    1.002    1.002    1.002
+    4     1.084    0.997    0.998    0.998    0.998
+    5     1.087    0.999    1.000    1.000    1.000
+```
+
+The pair is decoupled from `a = 2` onward and converged in `b` by `b = 2`, and
+the one exceptional cell is a *lone* two-block inside the period-three phase,
+costing a fifth of two free interfaces.  That is the whole of the oscillation the
+periods showed: 5 and 11 are small because `a = 1`, 7 and 13 are near one because
+`a = 2`.  The period is a red herring; the composition is the variable.
+
+**And at the lower crossing that one cell goes negative.**  The same table at
+`p = 1454.6785` -- with the LOCAL blocks, because the three-block there is `LLH`
+and at p\* it is `LHH`, a different word with a different density, and seeding
+with the p\* blocks silently keeps the wrong basin:
+
+```
+   a\b       1        2        3        4
+    1    -0.060    0.071    0.057    0.058
+    2     1.288    1.355    1.350    1.351
+    3     1.188    1.253    1.247    1.247
+    4     1.178    1.244    1.238    1.239
+    5     1.187    1.253    1.247    1.248
+```
+
+So the failure of coexistence there is not a general instability: it is exactly
+one defect, one two-block beside one three-block, and nothing longer.  Both
+immediate neighbours are certified in Arb and both cost -- `tau_eff(7) = 2.25e-5`
+at `(2, 1)` and `tau_eff(8) = 1.25e-6` at `(1, 2)` -- against
+`tau_eff(5) = -1.05e-6` at `(1, 1)`.  Which is also why the ground state there is
+period five and not something longer: it is the only mixture that pays.
+
 **Below the crossings, longer still.**  At `p = 1000` the period-two branch has
 collapsed to a uniform state (`L - H` is zero to `1e-82`) and a certified
 genuinely period-four orbit is `1.2684e-4` below it, `3.15654e-5` below the

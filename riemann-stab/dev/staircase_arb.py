@@ -148,6 +148,20 @@ EDGES = {
             1.9790423937, 1.0409587646, 1.9754828032]},
 }
 
+# The neighbours of the winning composition at the lower crossing.  Writing a
+# mixed orbit as a two-blocks beside b three-blocks, tau_eff at the lower
+# crossing is negative for (a, b) = (1, 1) and positive everywhere else in the
+# scan -- so the period-five phase is not merely one competitor that happens to
+# win, it is the ONLY mixture that beats the pure phases there.  These two are
+# the immediate neighbours, (2, 1) and (1, 2), certified so the claim has more
+# than a floating-point table under it.
+NEIGHBOURS = {
+    7: [1.0409585277, 1.979041433, 1.0409585275, 1.9754818521,
+        1.0326265295, 1.0326265292, 1.9754818521],
+    8: [1.0409098385, 1.9752375507, 1.0325523776, 1.0323534291,
+        1.9714081867, 1.0323534288, 1.0325523779, 1.9752375505],
+}
+
 CHECKS = []
 
 
@@ -232,6 +246,18 @@ def main():
     check("the period-two branch has collapsed to a uniform state there",
           abs(dn[2]["box"][0] - dn[2]["box"][1]) < arb(1e-12),
           "L - H = %s" % abs(dn[2]["box"][0] - dn[2]["box"][1]).str(4))
+
+    # ----------------------------------- only the shortest mixture goes negative
+    print("\nthe neighbouring compositions at the lower crossing")
+    for n in sorted(NEIGHBOURS):
+        r = certify(P_LOW, NEIGHBOURS[n])
+        ok = r["proved"] and r["pd"]
+        tau = arb(n) * (r["energy"] - e2) / 2
+        check("period %d, the next composition along, is certified and costs" % n,
+              ok and arb(tau.lower()) > 0,
+              "tau_eff(%d) = %s" % (n, tau.str(8)))
+    print("     so (a, b) = (1, 1) is the only mixture below the pure phases:")
+    print("     one two-block beside one three-block, and nothing longer.")
 
     # ------------------------------------------------ the window that replaces it
     print("\nthe period-five window, bracketed")
