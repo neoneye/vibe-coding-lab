@@ -1926,6 +1926,76 @@ That the pinned additive search collapses is a search result at 200 rounds, not 
 proof of impossibility.  What is not in doubt is the direction: pinning costs the
 additive family five orders of magnitude and costs the pair family nothing.
 
+## Unusual stone: ask every period, not two branches
+
+The pressure section tracked two branches, period two and period three, and read
+their crossings as transitions.  `dev/branch_arb.py` certified the branches
+themselves and named the gap in one sentence: nothing had excluded configurations
+*off* them.  Closing that gap in general needs a transfer-operator bound.  Closing
+it *at a pressure* needs only a search that is period by period rather than
+branch by branch, and that is a search one can actually run.
+
+`dev/rotation_scan.py` minimises the mean of the block functional over cyclic
+configurations of each period n separately, from structured and random starts.
+`dev/staircase_arb.py` then certifies every competitor that matters -- Krawczyk
+for existence and uniqueness, verified Cholesky for strict local minimality,
+enclosed per-gap energy for the comparison.  Twenty checks, all in Arb.
+
+**At p\* the two branches survive their competitors.**  Period five is
+`+1.69462e-6` above the crossing energy `c` and period seven `+5.51479e-6`, both
+strictly, by non-overlapping enclosures.  Over every period up to nine, nothing
+falls below `c`: periods 4, 6, 8, 9 return `c` exactly because they are multiples
+of 2 or 3 and realise the same two measures, and every non-multiple is strictly
+above.  The coexistence `tau_23 = 1.74774e-5` is not an artefact of only two
+candidates having been asked.
+
+**At the lower crossing they do not.**  At `p = 1454.6785461214313` the branches
+meet -- certified, `|e2 - e3| = 1.4e-15` -- and a certified period-five orbit lies
+`4.18428e-7` *below both*.  Its pattern is one period-three block and one
+period-two block: a pair of 2|3 interfaces at the shortest separation there is.
+As a tension, `tau_eff(5) = -1.0460708e-6`, **negative** -- the same quantity that
+is positive at p\*, with the sign flipped.  So the lower crossing is not a phase
+boundary.  The branches exchange nothing there, because a mixture of them beats
+both.  It had already been relabelled once, from "plateau edge" to "metastability
+limit", after a review pointed out the walls do not vanish there.  This is the
+stronger statement: the ground state near it has a longer period than either
+branch being crossed.
+
+**Below the crossings, longer still.**  At `p = 1000` the period-two branch has
+collapsed to a uniform state (`L - H` is zero to `1e-82`) and a certified
+genuinely period-four orbit is `1.2684e-4` below it, `3.15654e-5` below the
+period-three branch.  Sweeping the winner across pressure gives period 1 at 500,
+4 at 1000, 5 at 1454.68, 2 from 2000 to p\*, 3 from p\* to 4500, 1 again by 6000.
+That is what a devil's staircase looks like from ten sample points, and it is
+**not** claimed to be one -- the certified content is the six comparisons at three
+pressures, nothing more.
+
+**The interface tension is not monotone in the separation.**  `tau_eff(n)`, the
+excess of a mixed period-n orbit written as two interfaces, is `+4.2365616e-6` at
+n = 5 and `+1.9301765e-5` at n = 7 against an isolated `1.74774e-5`.  It
+undershoots by a factor of four at the shortest separation and overshoots by ten
+per cent at the next, which is the behaviour an oscillatory pair kernel should
+produce and the reason a single isolated tension does not settle what short
+mixtures do.  At the lower crossing that oscillation carries `tau_eff(5)` past
+zero.
+
+**And what this says about the calibrated coboundary.**  A telescoping
+certificate with floor `c` exists only if `c` bounds the mean of `F_p` from below
+over every shift-invariant measure -- the coboundary averages to zero against any
+such measure.  Periodic orbits are shift-invariant measures, so one periodic
+configuration with mean below `c` refutes the calibration outright, and no LP
+tuning could have saved it.  Existence searches cannot be finished; falsification
+searches can.  Over every period up to nine at p\*, nothing gets below `c`.  The
+calibration is not refuted by short orbits, and the evidence that was "leaning
+against" it is the LP's own behaviour and nothing else.
+
+Replay:
+
+```
+python3 dev/rotation_scan.py 9 200      # floating point, finds the competitors
+python3 dev/staircase_arb.py            # Arb, certifies them
+```
+
 ## Unusual stone: reversal cohomology
 
 The bare block energy is unchanged when a six-gap edge is reversed.  If `Phi`

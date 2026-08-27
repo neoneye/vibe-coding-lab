@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const P = require('./tiling_pressure');
 const T = require('./tiling_research');
 
@@ -227,6 +229,48 @@ check('the two crossings bracket an interval, and the wall zeros lie OUTSIDE it'
   `branches cross at ${P.lowerCrossover().toFixed(3)} and ${crossover.toFixed(3)}; `
   + 'wall zeros at 1425.710 and 3521.815 sit outside both ends, so they are '
   + 'metastability limits and not phase boundaries');
+// The upper crossing IS a phase boundary -- dev/interface_arb.py gives it a
+// positive tension and dev/staircase_arb.py shows periods five and seven do not
+// undercut it.  The lower one is not: a certified period-five orbit lies below
+// both branches there.  Bracketing an interval is all this pair of numbers does.
+check('and the lower crossing is recorded as not being a boundary either',
+  /lower crossing is therefore not a phase boundary/i.test(
+    fs.readFileSync(path.join(__dirname, 'template.html'), 'utf8')),
+  'the page must say so, since a crossing that is not a transition reads as one');
+
+// ------------------------------- the page's staircase numbers, against Arb
+// The page now says the lower crossing is NOT a phase boundary and quotes
+// certified margins for it.  A number quoted on a page and a number in a
+// transcript drift apart silently; this is the only thing that stops that.
+{
+  const rec = JSON.parse(fs.readFileSync(
+    path.join(__dirname, 'staircase_arb.results.json'), 'utf8'));
+  const page = fs.readFileSync(path.join(__dirname, 'template.html'), 'utf8');
+  const mid = str => parseFloat(String(str).replace(/[[\]]/g, '').split('+/-')[0]);
+
+  const e2 = mid(rec.lower_crossing['2'].energy);
+  const e3 = mid(rec.lower_crossing['3'].energy);
+  const e5 = mid(rec.lower_crossing['5'].energy);
+  check('the transcript has period five below both branches at the lower crossing',
+    e5 < e2 && e5 < e3, `${e5} vs ${e2}, ${e3}`);
+  check('and the page quotes that margin',
+    page.includes('4.18428'), 'e5 - e2 = -4.18428e-7');
+  check('the page quotes the negative tension there',
+    page.includes('1.0460708'), 'tau_eff(5) = -1.0460708e-6');
+
+  const c = parseFloat(rec.c);
+  const u5 = mid(rec.upper_crossing['5'].energy);
+  const u7 = mid(rec.upper_crossing['7'].energy);
+  check('the transcript has period five and seven ABOVE c at p*',
+    u5 > c && u7 > c, `${u5 - c}, ${u7 - c}`);
+  check('and the page quotes both margins',
+    page.includes('1.69462') && page.includes('5.51479'));
+
+  const d2 = mid(rec.p1000['2'].energy), d4 = mid(rec.p1000['4'].energy);
+  check('the transcript has period four below the period-two branch at p = 1000',
+    d4 < d2, `${d4 - d2}`);
+  check('and the page quotes that margin', page.includes('1.2684'));
+}
 
 console.log(failures ? `\n${failures} FAILED` : '\nPRESSURE CHECKS PASS');
 process.exit(failures ? 1 : 0);
