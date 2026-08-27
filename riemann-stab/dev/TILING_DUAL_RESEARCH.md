@@ -1458,36 +1458,66 @@ that is not gated.
 
 **Is it ever exact?**  "Near" is a function of the pressure, since the branch
 moves inside its own plateau, so the sharp question is whether the offset changes
-sign anywhere in it.  Sometimes:
+sign anywhere in it.  That question is answered analytically in the next section,
+which also overturns two of the answers the scan gave.
 
-| `k` | period | offset across the plateau | exact at |
+### The zeros in closed form, and what that overturns
+
+The scan above found the kernel's zeros by looking for sign changes and its
+resonant pressures by bisecting a relaxation.  Neither is necessary.  Writing
+`a = 1/sqrt(2)` and `b = pi x`, the kernel collapses:
+
+`K(x) = [sinc(a - b) + sinc(a + b)] / 2 = ( a sin a cos b - b cos a sin b ) / ( a^2 - b^2 )`,
+
+so the zeros are exactly the roots of
+
+`b tan b = a tan a`,   `C := a tan a = 0.6042301210686357610`,
+
+one per period of `tan`.  Expanding `b = k pi + eps` gives
+
+`z_k = k + C/(k pi^2) - (C^2 + C^3/3)/(k^3 pi^4) + O(k^-5)`,
+
+and the residual times `k^5` sits between `6.47e-4` and `6.59e-4` over
+`k = 3..11`, so the exponent is right and the constant is about `6.5e-4`.
+**Those first two terms account for the whole of the `mean - k/2` column** the
+scan reported and could not explain: it is `C/(2 k pi^2)`, which is `1.53e-2` at
+`k = 2` against a measured `1.63e-2` and `4.37e-3` at `k = 7` against `4.38e-3`.
+
+And for a *period-one* chain the stationarity condition is a single equation,
+`6/p + 2 sum_{s<=6} s w'(s g) = 0`, so demanding exact resonance `g = z_k/2`
+fixes the pressure outright:
+
+**`p_k = -3 / sum_{s=1..6} s w'(s z_k / 2)`.**
+
+`dev/resonance_arb.py` certifies both — an interval Newton test proving a unique
+root of `b tan b = C` in an explicit bracket, then an interval evaluation of
+`p_k` on it — and `dev/tiling_pressure.js` carries the same formulas for the
+suite.
+
+| `k` | `z_k` | `p_k` | at `p_k` |
 | --- | --- | --- | --- |
-| 2 | 1 | `+6.2e-4` … `+1.4e-3` | never |
-| 3 | 2 | `+1.5e-4` … `+4.8e-4` | never |
-| 4 | 1 | `-1.7e-4` … `+1.3e-4` | **`p* = 7572.855986`** |
-| 5 | 2 | `+4.6e-5` … `+8.3e-5` | never |
-| 6 | 1 | `-1.9e-5` … `+1.3e-5` | **`p* = 80778.4126`** |
+| 2 | `2.030067530128` | `198.613218` | period one is the lower branch |
+| 3 | `3.020242992171` | `99.508625` | period two beats it by `7.26e-2` |
+| 4 | `4.015235607037` | `7572.855986` | period one is the lower branch |
+| 5 | `5.012208448499` | `491.981727` | period two beats it by `2.58e-2` |
+| 6 | `6.010182789398` | `80778.412591` | period one is the lower branch |
+| 7 | `7.008732812619` | `1375.104615` | period two beats it by `1.31e-2` |
+| 8 | `8.007643889171` | `776447.784137` | period one is the lower branch |
+| 9 | `9.006796202179` | `2944.969177` | period two beats it by `7.91e-3` |
+| 10 | `10.006117634756` | `-3679473.7` | none: the denominator has the wrong sign |
 
-At `k = 4` and `k = 6` the lag-two distance of the period-one branch passes
-*exactly* through a zero of `K` at one pressure inside the plateau — residual
-below `1e-18` in Arb, and the JavaScript relaxation finds the same `p*` to six
-digits.  At `k = 2, 3, 5` the offset keeps one sign the whole way across.  At
-`k = 8, 10` the offsets are about `1e-5`, which is the relaxation's own accuracy
-there, and nothing is claimed.
+**Two claims from the scan are overturned by this.**  The bisection reported "no
+crossing" at `k = 2` and "nothing claimed" at `k = 8`; both were guessed-window
+artifacts.  `p_2 = 198.613218` lies *below* the window I scanned, which started
+at `300`, and `p_8 = 776447.78` lies *above* the one that stopped at `520000`.
+Only `k = 10` is a genuine "none", and the closed form says why: the derivative
+sum changes sign there, so no positive pressure makes `z_10/2` stationary.
 
-Two crossings is not a pattern, and the plateau windows beyond `k = 7` are
-guesses.  What this does is replace "near" with something checkable: exact at two
-identified pressures, sign-definite at three others.
-
-Which of period one and period two wins tracks the **parity of `k`** — even `k`
-period one, odd `k` period two, with margins of `3e-2`, `5e-4`, `5e-2`, `3e-5` at
-`k = 2, 3, 4, 5`.  The gated test *determines* the period by relaxing both and
-comparing; an earlier version assigned it in a table and then checked it against
-the parity, which was the test reading back its own input.
-
-Between the winning branches sit others at periods three and four with
-short-to-long ratios running `3:1`, `2:1`, `1:1`, `1:2` — the shape of a devil's
-staircase, and no more than a shape at this stage.
+What survives, and is now analytic rather than measured: at even `k` the
+period-one branch is the lower of the two at its own resonance, and at odd `k` it
+is not — period two beats it, by margins running `7.3e-2`, `2.6e-2`, `1.3e-2`,
+`7.9e-3`.  That is the parity rule again, seen from the side where it can be
+computed instead of scanned.
 
 ### Two different pressures, and only one of them is a boundary
 

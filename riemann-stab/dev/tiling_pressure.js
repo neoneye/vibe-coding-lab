@@ -76,8 +76,67 @@ function kernel(x) {
   return 0.5 * sinc((SQRT2 - b) / 2) + 0.5 * sinc((SQRT2 + b) / 2);
 }
 
+// The zeros in closed form, which is how they should have been found in the
+// first place.  With a = 1/sqrt(2) and b = pi x the kernel collapses:
+//
+//   K(x) = [sinc(a - b) + sinc(a + b)] / 2
+//        = ( a sin a cos b - b cos a sin b ) / ( a^2 - b^2 ),
+//
+// so the zeros are exactly the roots of
+//
+//   b tan b = a tan a,     C := a tan a = 0.60423012106863576...,
+//
+// one per period of tan, and expanding b = k pi + eps gives
+//
+//   z_k = k + C/(k pi^2) - (C^2 + C^3/3)/(k^3 pi^4) + O(k^-5).
+//
+// Those first two terms account for the whole of the "mean - k/2" column the
+// scan below reported and could not explain: it is C/(2 k pi^2).
+const KERNEL_C = (1 / Math.SQRT2) * Math.tan(1 / Math.SQRT2);
+
+function kernelZeroClosed(k) {
+  // Newton on b tan b = C, started from the asymptotic value
+  let z = k + KERNEL_C / (k * Math.PI * Math.PI);
+  for (let i = 0; i < 60; i++) {
+    const b = Math.PI * z;
+    const t = Math.tan(b);
+    const f = b * t - KERNEL_C;
+    const d = Math.PI * t + Math.PI * Math.PI * z * (1 + t * t);
+    const nz = z - f / d;
+    if (Math.abs(nz - z) < 1e-16) { z = nz; break; }
+    z = nz;
+  }
+  return z;
+}
+
+function kernelZeroAsymptotic(k) {
+  const c = KERNEL_C;
+  return k + c / (k * Math.PI ** 2)
+    - (c * c + c ** 3 / 3) / (k ** 3 * Math.PI ** 4);
+}
+
+// For a PERIOD-ONE chain, stationarity is one equation --
+// 6/p + 2 sum_{s=1..6} s w'(s g) = 0 -- so demanding exact resonance g = z_k/2
+// fixes the pressure outright.  No relaxation, no bisection, no guessed window.
+//
+//   p_k = -3 / sum_{s=1..6} s w'(s z_k / 2)
+//
+// This replaces, and corrects, the bisection that used to stand here.  It agrees
+// with it exactly where that converged (k = 4 and k = 6), and it settles the
+// cases where the bisection reported "none": those were guessed-window
+// artifacts.  p_2 = 198.613218 lies BELOW the window that was scanned and
+// p_8 = 776447.784144 above it.  At k = 10 there is genuinely no positive
+// resonance pressure -- the denominator has the wrong sign.
+function resonancePressureClosed(k) {
+  const g = kernelZeroClosed(k) / 2;
+  let den = 0;
+  for (let s = 1; s <= 6; s++) den += s * T.overlapWeightDerivative(s * g);
+  return -3 / den;
+}
+
 // The zeros of K are the free distances: w = (K/K0)^2 vanishes there, so a pair
-// sitting on one costs nothing at all.
+// sitting on one costs nothing at all.  Kept because the sweep-style scan is a
+// useful cross-check on the closed form, and the test compares the two.
 function kernelZeros(limit, step = 1e-5) {
   const out = [];
   let prev = kernel(step);
@@ -276,6 +335,7 @@ function periodCrossover(lo = 3360, hi = 3390, iterations = 50) {
   return (lo + hi) / 2;
 }
 
-module.exports = {kernel, kernelZeros, relax, twoCycle, wallTension, wallZero,
+module.exports = {kernel, kernelZeros, kernelZeroClosed, kernelZeroAsymptotic,
+  resonancePressureClosed, KERNEL_C, relax, twoCycle, wallTension, wallZero,
   energyAndGradient, groundEnergy, projectionAt, periodCrossover, lowerCrossover,
   branchMean, resonanceOffset, resonantPressure};

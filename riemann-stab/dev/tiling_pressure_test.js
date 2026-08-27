@@ -11,6 +11,29 @@ function check(name, ok, detail) {
 
 console.log('=== pressure, mode locking, and the plateau edges ===');
 
+// ---- the closed form, which replaces the scan
+check('the kernel constant is a tan a with a = 1/sqrt(2)',
+  Math.abs(P.KERNEL_C - (1 / Math.SQRT2) * Math.tan(1 / Math.SQRT2)) < 1e-18,
+  P.KERNEL_C.toFixed(18));
+{
+  const scan = P.kernelZeros(11);
+  let worst = 0, worstAsym = [];
+  for (let k = 1; k <= scan.length; k++) {
+    worst = Math.max(worst, Math.abs(P.kernelZeroClosed(k) - scan[k - 1]));
+    if (k >= 3) {
+      worstAsym.push(Math.abs(P.kernelZeroAsymptotic(k) - P.kernelZeroClosed(k)) * k ** 5);
+    }
+  }
+  check('the closed-form zeros agree with the scan that found them', worst < 1e-9,
+    `worst disagreement ${worst.toExponential(2)} over ${scan.length} zeros`);
+  check('and b tan b = C really is the zero equation',
+    scan.every((z, i) => Math.abs(Math.PI * z * Math.tan(Math.PI * z) - P.KERNEL_C) < 1e-9));
+  check('the asymptotic z_k = k + C/(k pi^2) - (C^2 + C^3/3)/(k^3 pi^4) is O(k^-5)',
+    Math.max(...worstAsym) < 3 * Math.min(...worstAsym),
+    `k^5 times the error spans ${Math.min(...worstAsym).toExponential(3)} .. `
+    + `${Math.max(...worstAsym).toExponential(3)} over k = 3..11`);
+}
+
 // ---- the kernel's zeros are the free distances
 const zeros = P.kernelZeros(8);
 check('the kernel has zeros approaching integer spacing from below',
@@ -105,6 +128,46 @@ for (const [p, beatable] of [[1400, true], [2000, false], [3600, true]]) {
   check(`at p = ${p} a period-3 or -4 state ${beatable ? 'beats' : 'does not beat'}`
     + ' the alternating one', (best < two - 1e-12) === beatable,
     `difference ${(best - two).toExponential(3)}`);
+}
+
+// ---- the resonance pressure, in closed form
+// This replaces a bisection, agrees with it where that converged, and settles
+// the cases it reported as "none" -- those were guessed-window artifacts.
+check('the closed-form resonance pressure reproduces the bisected p_4 and p_6',
+  Math.abs(P.resonancePressureClosed(4) - 7572.855986) < 1e-5
+  && Math.abs(P.resonancePressureClosed(6) - 80778.412591) < 1e-4,
+  `${P.resonancePressureClosed(4).toFixed(6)} and `
+  + `${P.resonancePressureClosed(6).toFixed(6)}`);
+check('it gives a positive pressure at k = 2, which the scan called none '
+  + 'because its window started at 300',
+  P.resonancePressureClosed(2) > 0 && P.resonancePressureClosed(2) < 300,
+  `p_2 = ${P.resonancePressureClosed(2).toFixed(6)}`);
+check('and at k = 8, which the scan called none because its window stopped '
+  + 'at 520000', P.resonancePressureClosed(8) > 520000,
+  `p_8 = ${P.resonancePressureClosed(8).toFixed(3)}`);
+check('while k = 10 has no positive resonance pressure at all',
+  P.resonancePressureClosed(10) < 0,
+  `p_10 = ${P.resonancePressureClosed(10).toExponential(6)}, `
+  + 'the denominator has the wrong sign');
+// at an even-k resonance the period-one branch is the lower of the two; at an
+// odd-k one it is not, which is the parity rule seen from the analytic side
+for (const k of [2, 4, 6]) {
+  const p = P.resonancePressureClosed(k);
+  const g = P.kernelZeroClosed(k) / 2;
+  const one = T.periodicChainEnergy([g], 7, p);
+  const t = P.twoCycle(p, [g - 0.47, g + 0.47]);
+  const two = T.periodicChainEnergy([t.L, t.H], 7, p);
+  check(`at the k = ${k} resonance the period-one branch is the lower one`,
+    one < two, `${one.toExponential(6)} against ${two.toExponential(6)}`);
+}
+for (const k of [3, 5, 7]) {
+  const p = P.resonancePressureClosed(k);
+  const g = P.kernelZeroClosed(k) / 2;
+  const one = T.periodicChainEnergy([g], 7, p);
+  const t = P.twoCycle(p, [g - 0.47, g + 0.47]);
+  const two = T.periodicChainEnergy([t.L, t.H], 7, p);
+  check(`at the k = ${k} resonance period two beats period one`, two < one,
+    `by ${(one - two).toExponential(3)}`);
 }
 
 // ---- is the resonance ever exact?

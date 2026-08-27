@@ -21,7 +21,8 @@ const UNITS = [
   {src: 'coercivity_arb.py', results: 'coercivity_arb.results.json'},
   {src: 'kink_arb.py', results: 'kink_arb.results.json'},
   {src: 'tube_arb.py', results: 'tube_arb.results.json'},
-  {src: 'branch_arb.py', results: 'branch_arb.results.json'}
+  {src: 'branch_arb.py', results: 'branch_arb.results.json'},
+  {src: 'resonance_arb.py', results: 'resonance_arb.results.json'}
 ];
 
 function findInterpreter() {
