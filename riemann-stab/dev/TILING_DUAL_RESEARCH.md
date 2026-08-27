@@ -1519,6 +1519,73 @@ is not — period two beats it, by margins running `7.3e-2`, `2.6e-2`, `1.3e-2`,
 `7.9e-3`.  That is the parity rule again, seen from the side where it can be
 computed instead of scanned.
 
+### Coexistence at the crossing: what an interface costs
+
+The two branches having the same energy at `p*` says nothing on its own about
+whether they *coexist*.  If an interface between them cost negative energy, a
+mixed chain would beat both, neither pure phase would be the ground state, and
+"the branches cross" would not be a transition between them at all.
+
+The interface cost is a finite computation.  A ring that follows the period-two
+pattern on one arc and the period-three pattern on the other carries exactly two
+interfaces, and its excess over `N c` is their total.  In Arb, with the same
+Krawczyk-plus-Cholesky machinery the wall tensions use — a unique interface
+configuration proved to exist in a `1e-6` box in **84 dimensions**, refined to a
+gap radius of `3.8e-77`, and shown strictly locally minimising with
+`lambda_min >= 1.167`:
+
+**`tau_23 = 1.74773822872121908e-5`,  positive,**
+
+and saturated: identical from `N = 84` to `N = 156` to within `5.4e-20`, so it is
+the infinite-chain value and not a finite-ring artifact.
+
+**Positive means the phases coexist.**  Mixing them costs, so neither pure phase
+is beaten by a mixture, and `p*` is a genuine first-order transition rather than
+a pressure at which two curves happen to intersect.  It also removes the obvious
+way a coexistence certificate could have been impossible: a negative interface
+tension would have made one unobtainable outright.
+
+What this does *not* say: that the two phases are the global minima at `p*`.
+It says only that mixing them costs.
+
+### The calibrated coboundary: formulated, not settled
+
+The certificate that would establish coexistence *against every configuration*
+is a single potential with `F_p + Phi.sigma - Phi >= c` and equality on both
+cycles.  Where that stands:
+
+- **The crossing is pinned.**  `p* = 3370.450721224646523297`, period two at
+  `L = 1.0416923434460380797`, `H = 1.9795173654714754534`, period three at
+  `(1.0435744986456292657, 1.9922863695808364586, 1.9922863695808364586)`,
+  common energy `c = 0.00362533155996670429057064`.
+- **The calibration is three conditions, not five, and it is free of
+  obstruction.**  The telescoping identity already forces the blocks of each
+  cycle to average to `c` — `R(A) + R(B) = 2c` over the period-two cycle and
+  `R_1 + R_2 + R_3 = 3c` over the period-three one — so demanding equality
+  block by block adds one condition and two, not five.  And the gradients need
+  no constraint at all: if `min R = c` and `R = c` at a block, that block *is* a
+  minimum.  Pinning them as well over-determines the problem, and did: it made
+  the linear programme both slower and numerically fragile.
+- **The straight segments joining the five blocks do not obstruct.**  Cut the
+  segments densely and the calibrated LP bound is `0.003807958788`, above `c`,
+  and *identical* across families from 840 to 2128 coefficients — so that bound
+  is set by the cuts and not by how rich the family is.
+- **A calibrated certificate exists on any given cut set, and gets close.**  With
+  `sup |coefficient| = 1.6e-6` it clears `c` on 1950 cuts and its adversary floor
+  is `1.25e-4` below `c`; three rounds later, `5.5e-5` below.
+
+**And then it stops.**  As cuts accumulate the minimum-norm coefficient size
+grows without bound — `1.6e-6` at round 0, `7.5e-5` at round 3, `1.2e-3` at
+round 12, `2.5e-3` at round 15 — while the adversary floor gets *worse*, not
+better.  That is the signature of an infeasible system rather than a converging
+one.  It is not a proof: a proof would be the LP returning infeasible on a finite
+cut set, and it never did — the solver aborts at around six thousand cuts with
+eleven hundred coefficients before reaching that point.
+
+So: formulated correctly, the obvious obstruction ruled out, the evidence leaning
+against existence, and undecided.  Recorded that way rather than as either
+result.
+
 ### The odd-period resonance, decided
 
 For a *period-one* chain the resonance question is a formula.  For period two it

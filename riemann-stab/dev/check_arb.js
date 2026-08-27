@@ -22,7 +22,8 @@ const UNITS = [
   {src: 'kink_arb.py', results: 'kink_arb.results.json'},
   {src: 'tube_arb.py', results: 'tube_arb.results.json'},
   {src: 'branch_arb.py', results: 'branch_arb.results.json'},
-  {src: 'resonance_arb.py', results: 'resonance_arb.results.json'}
+  {src: 'resonance_arb.py', results: 'resonance_arb.results.json'},
+  {src: 'interface_arb.py', results: 'interface_arb.results.json'}
 ];
 
 function findInterpreter() {
