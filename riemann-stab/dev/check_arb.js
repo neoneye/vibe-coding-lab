@@ -44,20 +44,60 @@ for (const unit of UNITS) {
   const src = path.join(here, unit.src);
   const results = path.join(here, unit.results);
   const recorded = JSON.parse(fs.readFileSync(results, 'utf8'));
-  const actual = crypto.createHash('sha256').update(fs.readFileSync(src)).digest('hex');
   console.log('-- ' + unit.src + ': ' + recorded.what);
-  if (recorded.source_sha256 !== actual) {
-    console.log('   TRANSCRIPT STALE');
-    console.log('   recorded for source ' + recorded.source_sha256.slice(0, 16));
-    console.log('   current source is   ' + actual.slice(0, 16));
-    console.log('   rerun: ' + recorded.replay);
+  // The transcript must carry a hash for every file its result depends on --
+  // its own source, the modules it imports, and the certificate data it reads.
+  // It used to carry one hash, of its own source, so a change to
+  // coercivity_arb.py (imported by three of the four) left three transcripts
+  // reading as fresh.  A transcript with no such map is refused outright rather
+  // than checked leniently.
+  if (!recorded.inputs || typeof recorded.inputs !== 'object') {
+    console.log('   TRANSCRIPT HAS NO DEPENDENCY MAP; rerun: ' + recorded.replay);
+    failed = true;
+    continue;
+  }
+  // A declared dependency map is only as good as its declaration.  Read the
+  // script and check that every local module it imports and every data file it
+  // opens is actually in the map -- otherwise the next omission is silent in
+  // exactly the way the last one was.
+  const text = fs.readFileSync(src, 'utf8');
+  const needed = new Set([unit.src]);
+  for (const m of text.matchAll(/^import\s+([A-Za-z_][\w]*)/gm)) {
+    if (fs.existsSync(path.join(here, m[1] + '.py'))) needed.add(m[1] + '.py');
+  }
+  for (const m of text.matchAll(/"([\w.]+\.json)"/g)) {
+    if (fs.existsSync(path.join(here, m[1]))) needed.add(m[1]);
+  }
+  const missing = [...needed].filter(n => !(n in recorded.inputs)
+    && n !== unit.results.split('/').pop());
+  if (missing.length) {
+    console.log('   DEPENDENCY MAP INCOMPLETE, missing: ' + missing.join(', '));
+    failed = true;
+    continue;
+  }
+
+  let stale = 0;
+  for (const [dep, want] of Object.entries(recorded.inputs)) {
+    const path_ = path.join(here, dep);
+    if (!fs.existsSync(path_)) { console.log('   MISSING ' + dep); stale++; continue; }
+    const got = crypto.createHash('sha256').update(fs.readFileSync(path_)).digest('hex');
+    if (got !== want) {
+      console.log('   STALE ' + dep + ': recorded ' + want.slice(0, 16)
+        + ', on disk ' + got.slice(0, 16));
+      stale++;
+    }
+  }
+  if (stale) {
+    console.log('   TRANSCRIPT STALE (' + stale + ' of '
+      + Object.keys(recorded.inputs).length + ' inputs); rerun: ' + recorded.replay);
     failed = true;
     continue;
   }
   if (!exe) {
-    console.log('   Arb not available here; NOT rerun.  The transcript matches the');
-    console.log('   current source, which means it is not stale -- it does not mean');
-    console.log('   it was checked.  To check it: pip install python-flint, then');
+    console.log('   Arb not available here; NOT rerun.  All '
+      + Object.keys(recorded.inputs).length + ' declared inputs match, which means');
+    console.log('   the transcript is not stale -- it does not mean it was checked.');
+    console.log('   To check it: pip install python-flint, then');
     console.log('   ' + recorded.replay);
     const bad = recorded.checks.filter(c => !c.ok);
     if (bad.length) { console.log('   RECORDED RUN HAD FAILURES'); failed = true; continue; }

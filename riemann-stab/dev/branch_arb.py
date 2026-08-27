@@ -30,6 +30,15 @@ import sys
 
 from flint import arb, arb_mat, ctx
 
+import arb_provenance
+
+SOURCES = [
+    "arb_provenance.py",
+    "branch_arb.py",
+    "coercivity_arb.py",
+    "kink_arb.py",
+]
+
 import coercivity_arb as C
 import kink_arb as K
 
@@ -201,11 +210,11 @@ def main():
     print("\n%d checks, %d failed" % (len(CHECKS), len(bad)))
     if not bad:
         here = os.path.dirname(os.path.abspath(__file__))
-        src = open(os.path.abspath(__file__), "rb").read()
+
         json.dump({
             "what": "period-two and period-three branches certified over pressure intervals",
             "engine": "python-flint / Arb, %d bits" % ctx.prec,
-            "source_sha256": hashlib.sha256(src).hexdigest(),
+            "inputs": arb_provenance.hash_inputs(SOURCES),
             "replay": "python3 dev/branch_arb.py   (needs python-flint)",
             "crossing_bracket": [lo_p, hi_p],
             "E2_minus_E3": {str(lo_p): d_lo.str(12), str(hi_p): d_hi.str(12)},

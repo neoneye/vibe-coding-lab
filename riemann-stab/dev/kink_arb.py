@@ -41,6 +41,14 @@ import sys
 
 from flint import arb, arb_mat, ctx
 
+import arb_provenance
+
+SOURCES = [
+    "arb_provenance.py",
+    "kink_arb.py",
+    "coercivity_arb.py",
+]
+
 import coercivity_arb as C
 
 ctx.prec = 300
@@ -322,11 +330,11 @@ def main():
 
 def write_transcript(record, total, scaling):
     here = os.path.dirname(os.path.abspath(__file__))
-    src = open(os.path.abspath(__file__), "rb").read()
+
     payload = {
         "what": "certified wall tension of the alternating chain",
         "engine": "python-flint / Arb, %d bits" % ctx.prec,
-        "source_sha256": hashlib.sha256(src).hexdigest(),
+        "inputs": arb_provenance.hash_inputs(SOURCES),
         "replay": "python3 dev/kink_arb.py   (needs python-flint)",
         "ring": N_RING,
         "tension": {k: v.str(22) for k, v in record.items()},

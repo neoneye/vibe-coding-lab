@@ -27,6 +27,16 @@ import sys
 
 from flint import arb, ctx
 
+import arb_provenance
+
+SOURCES = [
+    "arb_provenance.py",
+    "tube_arb.py",
+    "coercivity_arb.py",
+    "tiling_pair.stationary.json",
+    "tiling_additive.certificate.json",
+]
+
 import coercivity_arb as C
 
 ctx.prec = 300
@@ -279,11 +289,11 @@ def main():
     print("\n%d checks, %d failed" % (len(CHECKS), len(failed)))
     if not failed:
         here = os.path.dirname(os.path.abspath(__file__))
-        src = open(os.path.abspath(__file__), "rb").read()
+
         payload = {
             "what": "the tube half of the crystallization argument, certified in Arb",
             "engine": "python-flint / Arb, %d bits" % ctx.prec,
-            "source_sha256": hashlib.sha256(src).hexdigest(),
+            "inputs": arb_provenance.hash_inputs(SOURCES),
             "replay": "python3 dev/tube_arb.py   (needs python-flint)",
             "clearance": clear,
             "tubes": [{"radius": radius, "cuts": r["cuts"],

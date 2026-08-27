@@ -37,6 +37,13 @@ import sys
 
 from flint import arb, arb_series, ctx
 
+import arb_provenance
+
+SOURCES = [
+    "arb_provenance.py",
+    "coercivity_arb.py",
+]
+
 ctx.prec = 200
 
 LAGS = 6
@@ -668,11 +675,11 @@ def write_transcript(L, H, E, g, gb, sharp, window, upper, radius, quoted,
     a matching hash is not a rerun, and the suite says so.
     """
     here = os.path.dirname(os.path.abspath(__file__))
-    src = open(os.path.abspath(__file__), "rb").read()
+
     payload = {
         "what": "independent Arb certification of the local coercivity theorem",
         "engine": "python-flint / Arb, %d bits" % ctx.prec,
-        "source_sha256": hashlib.sha256(src).hexdigest(),
+        "inputs": arb_provenance.hash_inputs(SOURCES),
         "replay": "python3 dev/coercivity_arb.py   (needs python-flint)",
         "critical_point": {
             "L": L.str(30, radius=False), "L_radius": "%.3g" % float(L.rad()),
