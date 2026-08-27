@@ -28,6 +28,20 @@ Two things come out, and they point opposite ways.
   * And at p = 1000, below both crossings, neither branch is even close: a
     genuinely period-four state is 1.27e-4 below the period-two branch.
 
+What replaces the lower crossing is a WINDOW.  Period five is the ground state on
+an interval of pressures, roughly [1452.44, 1456.17], and the old crossing sits
+inside it: below the window the period-three branch is lowest, above it the
+period-two branch is, and in between a phase of period 5 = 3 + 2 whose pattern is
+literally one three-block next to one two-block.  That is the Farey-mediant
+arrangement a devil's staircase is built from, so the obvious next question is
+whether the construction repeats -- whether 8 = 3 + 5 opens a window at the lower
+edge and 7 = 5 + 2 at the upper one.  It does NOT.  At both edges the mediant is
+strictly ABOVE the two phases it would interpolate, by 5.80e-5 and 6.73e-6, which
+is the same statement as the interface tension between those phases being
+positive.  So this is a finite sequence of commensurate phases with first-order
+transitions between them, and not a staircase -- checked at the one level where
+a staircase would have had to show itself.
+
 The last two are corrections to what this directory said.  The lower crossing
 was already relabelled once, from "plateau edge" to "metastability limit", after
 a review pointed out it is not where the walls vanish; this says something
@@ -85,6 +99,38 @@ SEEDS = {
         3: [1.032208078018, 1.032208078018, 1.971000092838],
         4: [1.023237851690, 1.029683085693, 1.968922623693, 1.029683085733],
     },
+}
+
+# The window around the old lower crossing.  Bracketing pressures on both sides
+# of each edge: the sign of the energy difference is proved at each, and that
+# brackets the edge without needing to certify a root in p.
+WINDOW = {
+    "1452.0": {2: [1.041561593, 1.978981545],
+               3: [1.032315719, 1.971417638, 1.032315719],
+               5: [1.0327883, 1.0327883, 1.975223135, 1.040530079, 1.975223135]},
+    "1453.0": {2: [1.041561751, 1.978982193],
+               3: [1.032315883, 1.971418274, 1.032315883],
+               5: [1.032788464, 1.032788464, 1.975223776, 1.04053024, 1.975223776]},
+    "1455.5": {2: [1.041562144, 1.978983806],
+               3: [1.032316292, 1.971419861, 1.032316292],
+               5: [1.032788872, 1.032788872, 1.975225373, 1.040530639, 1.975225373]},
+    "1457.0": {2: [1.04156238, 1.978984772],
+               3: [1.032316537, 1.971420811, 1.032316537],
+               5: [1.032789116, 1.032789116, 1.975226329, 1.040530878, 1.975226329]},
+}
+
+# The two edges, and at each the mediant that a staircase would require.
+EDGES = {
+    "1452.444719016": {
+        3: [1.032315792, 1.971417921, 1.032315792],
+        5: [1.032788373, 1.032788373, 1.97522342, 1.040530151, 1.97522342],
+        8: [1.041120895, 1.973906243, 1.030178278, 1.023599958, 1.030178278,
+            1.973906243, 1.041120895, 1.979127965]},
+    "1456.171287537": {
+        2: [1.04156225, 1.978984239],
+        5: [1.032788981, 1.032788981, 1.975225801, 1.040530746, 1.975225801],
+        7: [1.032626774, 1.032626774, 1.975482804, 1.040958765, 1.979042394,
+            1.040958765, 1.975482804]},
 }
 
 CHECKS = []
@@ -172,6 +218,49 @@ def main():
           abs(dn[2]["box"][0] - dn[2]["box"][1]) < arb(1e-12),
           "L - H = %s" % abs(dn[2]["box"][0] - dn[2]["box"][1]).str(4))
 
+    # ------------------------------------------------ the window that replaces it
+    print("\nthe period-five window, bracketed")
+    w = {}
+    for p in sorted(WINDOW, key=float):
+        w[p] = {n: certify(p, WINDOW[p][n]) for n in sorted(WINDOW[p])}
+        for n in sorted(w[p]):
+            if not (w[p][n]["proved"] and w[p][n]["pd"]):
+                check("period %d certified at p = %s" % (n, p), False)
+    def e(p, n):
+        return w[p][n]["energy"]
+    check("below the window, at p = 1452, period three is strictly under period five",
+          strictly_below(e("1452.0", 3), e("1452.0", 5)),
+          "e3 - e5 = %s" % (e("1452.0", 3) - e("1452.0", 5)).str(6))
+    check("just inside, at p = 1453, period five is strictly under period three",
+          strictly_below(e("1453.0", 5), e("1453.0", 3)),
+          "e5 - e3 = %s" % (e("1453.0", 5) - e("1453.0", 3)).str(6))
+    check("and still inside at p = 1455.5, strictly under period two",
+          strictly_below(e("1455.5", 5), e("1455.5", 2)),
+          "e5 - e2 = %s" % (e("1455.5", 5) - e("1455.5", 2)).str(6))
+    check("above the window, at p = 1457, period two is strictly under period five",
+          strictly_below(e("1457.0", 2), e("1457.0", 5)),
+          "e2 - e5 = %s" % (e("1457.0", 2) - e("1457.0", 5)).str(6))
+    check("so the period-five window contains the old lower crossing",
+          1453.0 < float(P_LOW) < 1455.5,
+          "1453 < %s < 1455.5" % P_LOW)
+
+    # ------------------------------------------------ and the mediants do not open
+    print("\nthe Farey mediant at each edge -- a staircase would need it to win")
+    for p in sorted(EDGES, key=float):
+        cert = {n: certify(p, EDGES[p][n]) for n in sorted(EDGES[p])}
+        ns = sorted(cert)
+        med = max(ns)
+        others = [n for n in ns if n != med]
+        em = cert[med]["energy"]
+        for n in others:
+            check("at p = %s the mediant %d = %d + %d is strictly ABOVE period %d"
+                  % (p, med, others[0], others[1], n),
+                  strictly_below(cert[n]["energy"], em),
+                  "e%d - e%d = %s" % (med, n, (em - cert[n]["energy"]).str(6)))
+        tau = arb(med) * (em - cert[others[0]]["energy"]) / 2
+        print("     tau_eff(%d) = %s, positive, so the edge is first order"
+              % (med, tau.str(8)))
+
     failed = [x for x in CHECKS if not x[1]]
     print("\n%d checks, %d failed" % (len(CHECKS), len(failed)))
     if not failed:
@@ -194,6 +283,11 @@ def main():
                 str(n): {"energy": dn[n]["energy"].str(20),
                          "gaps": [x.str(16) for x in dn[n]["box"]]}
                 for n in sorted(dn)},
+            "window": {p: {str(n): w[p][n]["energy"].str(20) for n in w[p]}
+                       for p in w},
+            "mediants": ("checked at both edges: 8 = 3 + 5 and 7 = 5 + 2 are "
+                         "strictly above the phases they would interpolate, so "
+                         "no second-level window opens"),
             "finding": ("period five is strictly below both branches at the "
                         "lower crossing and strictly above both at p*, so the "
                         "2|3 interface tension changes sign between them"),

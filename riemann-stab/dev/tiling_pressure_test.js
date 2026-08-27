@@ -266,6 +266,19 @@ check('and the lower crossing is recorded as not being a boundary either',
   check('and the page quotes both margins',
     page.includes('1.69462') && page.includes('5.51479'));
 
+  // The window, and the mediants that would have made it a staircase.
+  const wl = rec.window['1452.0'], wr = rec.window['1457.0'];
+  check('the transcript brackets the period-five window from below',
+    mid(wl['3']) < mid(wl['5']), `e3 - e5 = ${mid(wl['3']) - mid(wl['5'])}`);
+  check('and from above',
+    mid(wr['2']) < mid(wr['5']), `e2 - e5 = ${mid(wr['2']) - mid(wr['5'])}`);
+  check('the page quotes the window and says 5 = 3 + 2',
+    page.includes('1452.44') && page.includes('1456.17')
+    && /5 = 3 \+ 2/.test(page));
+  check('the page records that both mediants LOSE, so it is not a staircase',
+    page.includes('5.80138') && page.includes('6.72987')
+    && /is not a staircase/i.test(page));
+
   const d2 = mid(rec.p1000['2'].energy), d4 = mid(rec.p1000['4'].energy);
   check('the transcript has period four below the period-two branch at p = 1000',
     d4 < d2, `${d4 - d2}`);

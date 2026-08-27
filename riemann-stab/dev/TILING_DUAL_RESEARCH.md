@@ -1961,14 +1961,32 @@ limit", after a review pointed out the walls do not vanish there.  This is the
 stronger statement: the ground state near it has a longer period than either
 branch being crossed.
 
+**What replaces the lower crossing is a window, and the window is a Farey
+mediant.**  Period five is the ground state on an interval of pressures, and four
+certified comparisons bracket it: at `p = 1452` period three is `8.3e-8` below
+period five, at `1453` period five is `1.0e-7` below period three, at `1455.5` it
+is still `1.9e-7` below period two, and at `1457` period two is `2.3e-7` below it
+again.  The window is `[1452.44, 1456.17]` to the accuracy of that bracket, about
+four units of pressure wide, and the old crossing at `1454.6785` is *inside* it.
+Below it period three, above it period two, in between a phase of period
+`5 = 3 + 2` whose pattern is one three-block beside one two-block -- the
+Farey-mediant arrangement a devil's staircase is built from.
+
+**And it is not a staircase.**  If it were, `8 = 3 + 5` would open a window at the
+lower edge and `7 = 5 + 2` at the upper one.  Both were built and certified and
+both are strictly *above* the phases they would interpolate, by `5.80138e-5` and
+`6.72987e-6` -- equivalently `tau_eff(8) = 2.32e-4` and `tau_eff(7) = 2.36e-5`,
+both positive.  Both edges are ordinary first-order transitions and no
+second-level phase intervenes.  A finite sequence of commensurate phases, checked
+at the one level where a staircase would have had to show itself.
+
 **Below the crossings, longer still.**  At `p = 1000` the period-two branch has
 collapsed to a uniform state (`L - H` is zero to `1e-82`) and a certified
 genuinely period-four orbit is `1.2684e-4` below it, `3.15654e-5` below the
 period-three branch.  Sweeping the winner across pressure gives period 1 at 500,
 4 at 1000, 5 at 1454.68, 2 from 2000 to p\*, 3 from p\* to 4500, 1 again by 6000.
-That is what a devil's staircase looks like from ten sample points, and it is
-**not** claimed to be one -- the certified content is the six comparisons at three
-pressures, nothing more.
+That is what a devil's staircase looks like from ten sample points, and the
+paragraph above says why it is not one.
 
 **The interface tension is not monotone in the separation.**  `tau_eff(n)`, the
 excess of a mixed period-n orbit written as two interfaces, is `+4.2365616e-6` at
