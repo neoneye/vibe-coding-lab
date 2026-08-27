@@ -1337,13 +1337,27 @@ reporting "complete" having silently dropped part of its domain — and it is th
 reason the object is worth emitting.
 
 **Arithmetic is verified on a sample, and the checker says how far it got.**  Of
-220 sampled discharged leaves, Arb confirms 3 outright and finds 217 beyond its
-own resolution; of 220 sampled collapses, 35 outright and 185 beyond.  **Nothing
-is refuted.**  The disadvantage is the one measured above and cannot be argued
-away: the sweep uses exact monotone-piece ranges from precomputed breakpoints,
-and a straightforward Arb enclosure over the same box is much wider, so the
-checker can only confirm claims whose margin exceeds its own.  It reports the
-fraction it reached rather than implying it reached all of them.
+220 sampled discharged leaves Arb confirms **64** outright and finds 156 beyond
+its own resolution; of 220 sampled collapses, **59** and 161.  **Nothing is
+refuted.**
+
+Those numbers started at 3 and 35.  What moved them is closing part of the gap
+the previous section measured — the sweep's advantage was exact monotone-piece
+ranges built from precomputed breakpoints, so `dev/kernel_pieces_arb.py` builds
+the breakpoints in Arb.  They come straight out of the closed form: `w` vanishes
+at the roots of `b tan b = a tan a`, one per period of `tan`, and has exactly one
+maximum between consecutive roots, at a root of `K'`; between those it is
+monotone, so its range over any interval is the hull of the endpoint values and
+whatever breakpoints the interval contains — *exact*, not enclosing.  `w'` gets
+its own breakpoints, the roots of `w''`.  Thirty-one zeros, thirty maxima and
+fifty-nine `w'` breakpoints up to `x = 30`, each certified by an interval Newton
+test, built in `0.3 s`, and worth up to `118x` on the interval extension they
+replace.  A centred form for the whole bound does the rest.
+
+Neither closes the gap entirely, and the checker still reports the fraction it
+reached rather than implying it reached all of them: matching a `1e-10` margin
+means reproducing the sweep's whole enclosure strategy, which this is a step
+towards and not a substitute for.
 
 The suite carries a small configuration — cube `1.6`, `27 940` nodes, a `28 KB`
 tape — regenerated and compared byte for byte on every run, so a change in the

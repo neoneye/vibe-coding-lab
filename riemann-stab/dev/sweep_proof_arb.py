@@ -34,11 +34,13 @@ from flint import arb, ctx
 
 import arb_provenance
 import coercivity_arb as C
+import kernel_pieces_arb as KP
 
 SOURCES = [
     "arb_provenance.py",
     "sweep_proof_arb.py",
     "coercivity_arb.py",
+    "kernel_pieces_arb.py",
     "sweep_proof.json",
     "tiling_pair.stationary.json",
     "tiling_additive.certificate.json",
@@ -180,6 +182,19 @@ def grid_slopes(grid, J, knots, aLo, aHi, bLo, bHi):
 
 
 class Cert:
+    """Two enclosures of R over a box, and the better of them is used.
+
+    The natural extension is first order in the box width and cannot resolve the
+    margins the sweep works with.  Two things narrow it.  The kernel ranges come
+    from dev/kernel_pieces_arb.py, which uses the EXACT monotone-piece range --
+    the same idea the sweep uses, built here from certified breakpoints of w and
+    w' rather than from a precomputed table.  And the whole bound is also
+    computed in a centred form, R(centre) + grad(box) . (x - centre), which is
+    second order.  Neither closes the gap entirely: matching a 1e-10 margin means
+    reproducing the sweep's whole enclosure strategy, which is the rebuild this
+    checker is a step towards and not a substitute for.
+    """
+
     def __init__(self, here):
         cand = json.load(open(os.path.join(here, "tiling_pair.stationary.json")))
         bundle = json.load(open(os.path.join(here, "tiling_additive.certificate.json")))
@@ -192,6 +207,36 @@ class Cert:
              for k in range(cand["free"])]
         m.append([-sum(x[i] for x in m) for i in range(self.J * self.J)])
         self.mats = m
+        self.pieces = KP.Pieces(30.0)
+
+    def bound_and_grad_centered(self, lo, hi):
+        """R(centre) + grad(box) . (x - centre): second order in the width."""
+        c = [(arb(lo[k]) + arb(hi[k])) / 2 for k in range(6)]
+        rad = [span(lo[k], hi[k]) - c[k] for k in range(6)]
+        pc = [arb(0)]
+        for k in range(6):
+            pc.append(pc[k] + c[k])
+        val = sum(c, arb(0)) / 3000
+        for (i, j) in PAIRS:
+            val += KP.weight(pc[j] - pc[i]) * (arb(2) / (NPTS - (j - i)))
+        for i in range(6):
+            ci = float(c[i].mid())
+            if SIGN_A[i]:
+                val += SIGN_A[i] * pl_range(self.base["knots"], self.base["a"], ci, ci)
+            if SIGN_B[i]:
+                val += SIGN_B[i] * pl_range(self.base["knots"], self.base["b"], ci, ci)
+        for k in range(5):
+            ck, ck1 = float(c[k].mid()), float(c[k + 1].mid())
+            val += grid_range(self.mats[k], self.J, self.knots, ck, ck, ck1, ck1)
+        _, grad = self.bound_and_grad(lo, hi)
+        for k in range(6):
+            val += grad[k] * rad[k]
+        return val, grad
+
+    def best_bound(self, lo, hi):
+        nat, grad = self.bound_and_grad(lo, hi)
+        cen, _ = self.bound_and_grad_centered(lo, hi)
+        return nat.intersection(cen), grad
 
     def bound_and_grad(self, lo, hi):
         plo, phi = [arb(0)], [arb(0)]
@@ -206,8 +251,8 @@ class Cert:
         for (i, j) in PAIRS:
             d = span(float((plo[j] - phi[i]).lower()), float((phi[j] - plo[i]).upper()))
             c = arb(2) / (NPTS - (j - i))
-            val += weight_ball(d) * c
-            dw = weight_deriv_ball(d) * c
+            val += self.pieces.w_range(float(d.lower()), float(d.upper())) * c
+            dw = self.pieces.wd_range(float(d.lower()), float(d.upper())) * c
             for k in range(i, j):
                 grad[k] += dw
         for i in range(6):
@@ -315,7 +360,7 @@ def main():
     cert = Cert(here)
     confirmed = unresolved = refuted = 0
     for lo, hi in sample_leaf:
-        val, _ = cert.bound_and_grad(lo, hi)
+        val, _ = cert.best_bound(lo, hi)
         if float(val.lower()) >= target:
             confirmed += 1
         elif float(val.upper()) < target:
@@ -328,7 +373,7 @@ def main():
 
     gconf = gunres = gref = 0
     for lo, hi, k, side in sample_collapse:
-        _, grad = cert.bound_and_grad(lo, hi)
+        _, grad = cert.best_bound(lo, hi)
         g = grad[k]
         if side == 'hi' and float(g.lower()) > 0:
             gconf += 1
