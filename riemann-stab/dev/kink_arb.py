@@ -268,7 +268,10 @@ SATURATED = {"low-low": "0.0010927864577243426",
 def main():
     print("Arb, %d bits.  Wall tension of the alternating chain.\n" % ctx.prec)
     Ealt = alternating_energy()
-    check("the alternating energy comes from the certified two-cycle", True,
+    # Asserted against the value certified in dev/coercivity_arb.py, rather
+    # than passed a literal True and printed.
+    check("the alternating energy matches the one certified in coercivity_arb",
+          abs(float(Ealt.mid()) - 0.003957393309109344) < 1e-18,
           Ealt.str(25, radius=False))
 
     record = {}

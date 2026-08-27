@@ -589,7 +589,11 @@ def main():
           "radii %.3g and %.3g" % (float(L.rad()), float(H.rad())))
 
     E = energy(L, H)
-    check("the energy at the critical point is enclosed", True, fmt(E))
+    # This used to pass a literal True and print the enclosure -- a decoration,
+    # not a check.  What it should assert is that the enclosure is actually
+    # tight, which is the thing that could stop being so.
+    check("the energy at the critical point is enclosed, and tightly",
+          float(E.rad()) < 1e-40, fmt(E))
     check("Arb agrees with the JavaScript energy enclosure",
           float(E.lower()) <= JS_E[1] and float(E.upper()) >= JS_E[0],
           "js [%.17g, %.17g]" % JS_E)

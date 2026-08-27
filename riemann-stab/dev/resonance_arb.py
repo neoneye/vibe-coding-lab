@@ -213,8 +213,28 @@ def check(name, ok, detail=""):
 def main():
     print("Arb, %d bits.  The kernel's zeros in closed form.\n" % ctx.prec)
     c = constant()
-    check("the closed form agrees with the kernel it replaces", True,
-          "checked below on the zeros themselves")
+    def kernel_sinc(x):
+        r = arb(2).sqrt()
+        tp = 2 * arb.pi()
+        return (((r - tp * x) / 2).sinc() + ((r + tp * x) / 2).sinc()) / 2
+
+    def kernel_closed(x):
+        a = 1 / arb(2).sqrt()
+        b = arb.pi() * x
+        return (a * a.sin() * b.cos() - b * a.cos() * b.sin()) / (a * a - b * b)
+
+    worst_form = 0.0
+    for t in ("0.3", "1.0416801034484870", "1.9794672314032244", "3.02", "6.05",
+              "11.7", "19.3"):
+        d = kernel_sinc(arb(t)) - kernel_closed(arb(t))
+        worst_form = max(worst_form, abs(float(d.mid())) + float(d.rad()))
+    # 300 bits is about ninety decimal digits, so agreement to 1e-89 IS
+    # agreement; a tighter threshold would be testing the precision, not the
+    # identity.
+    check("the closed form agrees with the kernel it replaces",
+          worst_form < 1e-80,
+          "worst disagreement %.2e over seven points, at %d bits"
+          % (worst_form, ctx.prec))
     print("C = a tan a =", c.str(25, radius=False))
 
     def kernel_direct(x):
