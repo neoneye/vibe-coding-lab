@@ -1580,6 +1580,44 @@ is not — period two beats it, by margins running `7.3e-2`, `2.6e-2`, `1.3e-2`,
 `7.9e-3`.  That is the parity rule again, seen from the side where it can be
 computed instead of scanned.
 
+### Is `p` actually free? What can be determined here, and what cannot
+
+Optimising the pressure only becomes mathematics about zeros if `p` is a free
+parameter of the external assembly rather than a constant it fixes.  The
+manuscript is not here, so this cannot be settled — but the question can be made
+much sharper than "not checkable".
+
+**What the encoded projection does with `p`.**  In
+`projectedSimpleZeroBound(floor, n, p, base)` the pressure enters in exactly one
+place,
+
+`spanCoefficient = ((n-1)/p) * ((blockSize-1)/blockSize)`,
+
+and nowhere else: `windowsPerBlock` and `defectCoefficient` depend only on the
+floor, and the base constant `0.6725007036794116457` does not depend on `p` at
+all.  So *as encoded*, `p` is a free input and the optimisation is well posed.
+
+**What that does not settle.**  The `1/p` is the weight the local functional
+`F_n(g) = (sum g)/p + (pair terms)` gives to the total span, and the assembly
+charges the span at that rate.  Two possibilities, and they differ completely in
+what the optimisation means:
+
+- if the `1/p` is a *tunable* weight — a knob the assembly carries through — then
+  `p*` is a legitimate choice and `+4.75e-6` on the projection is real;
+- if the `1/p` is *derived* — fixed by a normalisation tied to the zero density,
+  or to the window the manuscript works in — then varying it changes the
+  functional without changing the assembly, and the optimisation is comparing
+  numbers that no longer describe the same object.
+
+Nothing in this directory distinguishes those.  **That is the question to put to
+whoever has the manuscript**, and it is a sharper one than "please audit the
+assembly": does the `1/3000` in `F_n` come from a choice or from a derivation?
+
+Until it is answered, the pressure results stand as mathematics about the
+auxiliary chain — where they are unconditional — and the projection numbers
+attached to them carry one more conditional layer than the rest of this
+directory's, which is already one layer more than nothing.
+
 ### Coexistence at the crossing: what an interface costs
 
 The two branches having the same energy at `p*` says nothing on its own about
