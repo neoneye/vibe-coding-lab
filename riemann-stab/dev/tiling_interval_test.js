@@ -5,6 +5,7 @@ const path = require('path');
 const T = require('./tiling_research');
 const A = require('./tiling_additive');
 const I = require('./tiling_interval');
+const JS = require('./js_provenance');
 
 let failed = 0;
 function check(name, condition, detail = '') {
@@ -206,6 +207,20 @@ for (const row of allRows) {
     : I.verifyFloorRigorous(prepared, row.target * 0.999, {budget: 6e8, box: entry.searchBox});
   check('the checksum separates two nearby traversals',
     neighbour.checksum !== rerun.checksum);
+}
+
+// The row manifests are walked from sweep.js the same way sweep.js builds them,
+// so an incomplete DECLARATION fails here and not only a changed declared file.
+// tiling_rigorous.js was the one that got away: required unconditionally by
+// tiling_interval.js, absent from every fast row's manifest.
+{
+  const rows = [...results.runs, ...results.rigorousRuns];
+  const short = rows.filter(r => JS.missing(r.inputs, ['sweep.js'], [], __dirname).length);
+  check('every recorded row declares everything sweep.js loads',
+    short.length === 0,
+    short.length
+      ? `${short.length} rows missing ${JS.missing(short[0].inputs, ['sweep.js'], [], __dirname).join(', ')}`
+      : '');
 }
 
 check('every recorded row carries a transcript', staleInputs === 0,

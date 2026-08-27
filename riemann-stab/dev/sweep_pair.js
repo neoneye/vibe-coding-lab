@@ -16,11 +16,17 @@ const {execSync} = require('child_process');
 const PI = require('./tiling_pair_interval');
 const P = require('./tiling_pair');
 const I = require('./tiling_interval');
+const JS = require('./js_provenance');
 
-const SOURCES = ['sweep_pair.js', 'tiling_pair.js', 'tiling_pair_interval.js',
-  'tiling_interval.js', 'tiling_research.js', 'tiling_additive.js',
-  'tiling_defect.js', 'tiling_pair.stationary.json',
-  'tiling_additive.certificate.json'];
+// Walked, not written by hand.  The hand-written list here omitted
+// tiling_rigorous.js -- the proved-enclosure arithmetic the rigorous path runs
+// on, required transitively through tiling_pair_interval.js and
+// tiling_interval.js -- so a change to it left a 96-minute transcript and an
+// 8-minute one both reading as fresh.  A review found that; a list nothing
+// forces to be right will not be.  Data files stay explicit, since a JSON path
+// is not a require and cannot be walked to.
+const DATA = ['tiling_pair.stationary.json', 'tiling_additive.certificate.json'];
+const SOURCES = JS.manifest(['sweep_pair.js'], DATA);
 
 const cube = parseFloat(process.argv[2] || '3');
 const rho = parseFloat(process.argv[3] || '0.008');

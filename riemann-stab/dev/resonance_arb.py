@@ -280,7 +280,19 @@ def main():
     odd_rows = []
     for k in (3, 5):
         Z = certified_zero(k)
-        z = arb(Z.mid())
+        # KEEP THE ENCLOSURE.  This read `z = arb(Z.mid())`, which throws away
+        # the interval Newton certificate and substitutes an exact rational that
+        # is NOT a zero of K.  Everything downstream then certified a root of the
+        # WRONG equation to a radius of 5e-90, and the claim "L + H = z_k
+        # exactly" was false -- L + H was the midpoint, not the zero.  A review
+        # caught it.
+        #
+        # Solving over the whole enclosure fixes it without a coupled 2-D
+        # Krawczyk: interval Newton on L with z ranging over Z proves that for
+        # every z in Z the root of G(., z) lies in X, and the true z_k is one of
+        # them.  It costs almost nothing in width because Z has radius ~3e-90
+        # while dG/dz is O(1).
+        z = Z
         found = odd_roots(z)
         nontrivial = [X for X in found
                       if abs(float((X - z / 2).mid())) > 1e-6]
@@ -297,7 +309,7 @@ def main():
         if k == 3:
             X = nontrivial[0]
             H = z - X
-            check("its L + H is z_3 exactly, by construction",
+            check("its L + H lies in the certified enclosure of z_3",
                   ((X + H) - z).contains(arb(0)),
                   "L = %s, H = %s" % (X.str(14, radius=False), H.str(14, radius=False)))
             p = pressure_from_stationarity(X, H)

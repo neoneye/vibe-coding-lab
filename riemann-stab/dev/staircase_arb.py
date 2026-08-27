@@ -264,7 +264,7 @@ def main():
     for n in (5, 7):
         e = up[n]["energy"]
         ok = strictly_below(c, e)
-        check("and period %d is strictly ABOVE it, so it does not compete" % n,
+        check("the period-%d configuration tried here is strictly ABOVE it" % n,
               ok, "e - c = %s" % (e - c).str(6))
     # The excess of a mixed orbit is two interfaces at spacing n/2.  Positive
     # excess is a positive tension at that spacing; dev/interface_arb.py gives
@@ -281,14 +281,14 @@ def main():
     check("the two branches meet there", abs(e2 - e3) < arb(1e-12),
           "|e2 - e3| = %s" % abs(e2 - e3).str(4))
     ok5 = strictly_below(e5, e2) and strictly_below(e5, e3)
-    check("but a certified period-FIVE orbit lies strictly below BOTH", ok5,
+    check("but a certified period-FIVE configuration lies strictly below BOTH", ok5,
           "e5 - e2 = %s,  e5 - e3 = %s" % ((e5 - e2).str(6), (e5 - e3).str(6)))
     tau_lo = arb(5) * (e5 - e2) / 2
-    check("so the 2|3 interface tension is NEGATIVE at the lower crossing",
+    check("so THIS mixture has negative excess -- the branches cannot exchange there",
           arb(tau_lo.upper()) < 0, "tau_eff(5) = %s" % tau_lo.str(8))
-    print("     the lower crossing is therefore NOT a phase boundary: the two")
-    print("     branches exchange nothing there, because a mixture of them is")
-    print("     below both.")
+    print("     the two branches therefore do NOT exchange minimality there --")
+    print("     a third configuration beats both.  What IS minimal at that")
+    print("     pressure is not settled here.")
 
     # ---------------------------------------------------------- further down
     print("\np = 1000, below both crossings")
@@ -318,11 +318,12 @@ def main():
           abs(e4 - e3l) < arb(1e-12),
           "|e(1/4) - e(1/3)| = %s at p quoted to 6 decimals"
           % abs(e4 - e3l).str(4))
-    check("and the mediant 2/7 is strictly ABOVE both, so it does not lock",
+    check("the 2/7 configuration tried here is strictly ABOVE both",
           strictly_below(e4, e7) and strictly_below(e3l, e7),
           "e(2/7) - e(1/4) = %s" % (e7 - e4).str(6))
-    print("     five mediants have now been asked and one locked: 2/5 between")
-    print("     1/3 and 1/2.  2/7, 3/5, 3/8 and 3/7 all lose.")
+    print("     five mediant CONFIGURATIONS have been built and certified; four")
+    print("     cost and one does not.  Whether a different configuration of the")
+    print("     same density would win is not something this file can answer.")
 
     # ------------------------------------ each pure phase resists a lone defect
     print("\nisolated defects at p*")
@@ -335,8 +336,8 @@ def main():
               r["proved"] and r["pd"] and arb(tau.lower()) > 0,
               "tau_eff = %s, %.3f of the isolated tau_23"
               % (tau.str(8), float(tau.mid()) / 1.74773822872121908e-5))
-    print("     so both phases are locally stable at p*, and the transition")
-    print("     there has a metastability overlap rather than a spinodal.")
+    print("     both phases resist THESE two defect configurations at p*.  A")
+    print("     metastability overlap would need every defect profile, not two.")
 
     # ----------------------------------- only the shortest mixture goes negative
     print("\nthe neighbouring compositions at the lower crossing")
@@ -347,11 +348,12 @@ def main():
         check("period %d, the next composition along, is certified and costs" % n,
               ok and arb(tau.lower()) > 0,
               "tau_eff(%d) = %s" % (n, tau.str(8)))
-    print("     so (a, b) = (1, 1) is the only mixture below the pure phases:")
-    print("     one two-block beside one three-block, and nothing longer.")
+    print("     (a, b) = (1, 1) is the only mixture SCANNED that goes below the")
+    print("     pure phases.  Nothing here searches the compositions it did not")
+    print("     try, so 'the only one' is dev/rotation_scan.py talking, not Arb.")
 
     # ------------------------------------------------ the window that replaces it
-    print("\nthe period-five window, bracketed")
+    print("\nwhere period five beats the other two, bracketed")
     w = {}
     for p in sorted(WINDOW, key=float):
         w[p] = {n: certify(p, WINDOW[p][n]) for n in sorted(WINDOW[p])}
@@ -372,12 +374,12 @@ def main():
     check("above the window, at p = 1457, period two is strictly under period five",
           strictly_below(e("1457.0", 2), e("1457.0", 5)),
           "e2 - e5 = %s" % (e("1457.0", 2) - e("1457.0", 5)).str(6))
-    check("so the period-five window contains the old lower crossing",
+    check("so the pressures where period five wins bracket the old crossing",
           1453.0 < float(P_LOW) < 1455.5,
-          "1453 < %s < 1455.5" % P_LOW)
+          "1453 < %s < 1455.5 -- among the three periods compared" % P_LOW)
 
     # ------------------------------------------------ and the mediants do not open
-    print("\nthe Farey mediant at each edge -- a staircase would need it to win")
+    print("\na Farey-mediant configuration at each edge")
     for p in sorted(EDGES, key=float):
         cert = {n: certify(p, EDGES[p][n]) for n in sorted(EDGES[p])}
         ns = sorted(cert)
@@ -385,13 +387,14 @@ def main():
         others = [n for n in ns if n != med]
         em = cert[med]["energy"]
         for n in others:
-            check("at p = %s the mediant %d = %d + %d is strictly ABOVE period %d"
+            check("at p = %s the %d = %d + %d configuration tried is ABOVE period %d"
                   % (p, med, others[0], others[1], n),
                   strictly_below(cert[n]["energy"], em),
                   "e%d - e%d = %s" % (med, n, (em - cert[n]["energy"]).str(6)))
         tau = arb(med) * (em - cert[others[0]]["energy"]) / 2
-        print("     tau_eff(%d) = %s, positive, so the edge is first order"
+        print("     tau_eff(%d) = %s for this configuration; an edge being"
               % (med, tau.str(8)))
+        print("     first order needs every profile, which is not done here.")
 
     failed = [x for x in CHECKS if not x[1]]
     print("\n%d checks, %d failed" % (len(CHECKS), len(failed)))
@@ -429,9 +432,35 @@ def main():
                                "3/8 at the 1/3|2/5 edge": "loses",
                                "3/7 at the 2/5|1/2 edge": "loses"},
             "low_boundary": {str(n): lw[n]["energy"].str(20) for n in lw},
-            "finding": ("period five is strictly below both branches at the "
-                        "lower crossing and strictly above both at p*, so the "
-                        "2|3 interface tension changes sign between them"),
+            "established": [
+                "at p_low a certified period-5 configuration lies strictly below "
+                "both certified branches, so those two branches do not exchange "
+                "minimality there",
+                "at p = 1000 a certified period-4 configuration lies strictly "
+                "below both certified branches",
+                "the specific period-5 and period-7 configurations tried at p* "
+                "lie strictly above the crossing energy",
+            ],
+            "not_established": [
+                "that any of these is the global minimum for its period, let "
+                "alone across periods: every seed comes from a floating-point "
+                "multi-start scan and Krawczyk certifies a LOCAL minimum",
+                "that period five is the ground state on any interval, or that "
+                "[1452.44, 1456.17] is a phase window",
+                "that the mediants 2/7, 3/5, 3/8, 3/7 lose -- only that the "
+                "particular configurations built here cost more",
+                "that either crossing is a first-order transition, or that the "
+                "density sequence is not a devil's staircase",
+            ],
+            "why_this_caveat": (
+                "an earlier version certified a period-8 configuration and "
+                "published its cost; a wider scan found a different period-8 "
+                "stationary point a hundred times lower.  Both are real strict "
+                "local minima.  Negative claims (X is below Y) survive that; "
+                "positive ones (nothing is below) do not."),
+            "finding": ("a certified period-five configuration is strictly "
+                        "below both branches at the lower crossing and strictly "
+                        "above both at p*"),
             "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in CHECKS],
         }
         json.dump(rec, open(os.path.join(here, "staircase_arb.results.json"), "w"),

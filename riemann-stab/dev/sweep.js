@@ -35,14 +35,20 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const I = require('./tiling_interval');
+const JS = require('./js_provenance');
 
 // Only the sources that actually determine a given mode's result are hashed,
 // so a row goes stale when something relevant changes and not otherwise.  The
 // fast path never touches tiling_rigorous.js.
+// Walked from the entry point rather than listed by hand.  The fast list used to
+// omit tiling_rigorous.js on the grounds that the fast path does not CALL it --
+// true, but tiling_interval.js requires it unconditionally, so every fast row
+// loaded it and none declared it.  The rule here is now "what is loaded", not
+// "what I believe matters": it is computable, and it errs the safe way.  A false
+// staleness costs a rerun; a false freshness costs the claim.
 const SOURCES = {
-  fast: ['sweep.js', 'tiling_interval.js', 'tiling_research.js', 'tiling_additive.js'],
-  rigorous: ['sweep.js', 'tiling_interval.js', 'tiling_rigorous.js',
-    'tiling_research.js', 'tiling_additive.js']
+  fast: JS.closure(['sweep.js']),
+  rigorous: JS.closure(['sweep.js'])
 };
 
 function sha256(text) {

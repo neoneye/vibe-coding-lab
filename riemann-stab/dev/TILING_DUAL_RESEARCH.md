@@ -1928,6 +1928,40 @@ additive family five orders of magnitude and costs the pair family nothing.
 
 ## Unusual stone: ask every period, not two branches
 
+**What the certification in this section does and does not give.**  Every
+certified statement here is a seeded Krawczyk test plus a verified Cholesky, so
+what it proves is: *this* configuration exists, it is a strict **local** minimum,
+and its energy lies in *this* enclosure.  Comparing two enclosures settles a
+question about those two configurations and nothing about the minimum over a
+period, because nothing here searches a period -- the seeds come from a
+floating-point multi-start scan.
+
+That is not a hypothetical failure.  An earlier version of `staircase_arb.py`
+certified a period-eight configuration and published its cost; a wider scan found
+a different period-eight stationary point a hundred times lower.  Both are real
+strict local minima.  The certificate was right and the claim built on it was
+wrong.  A review generalised it and the generalisation is correct:
+
+> A claim that something **is** below something else survives -- two disjoint
+> certified enclosures settle it.  A claim that **nothing** is below does not,
+> because it quantifies over a space that was never searched.
+
+So in what follows, "ground state", "phase window", "the mediant loses",
+"first-order transition" and "not a devil's staircase" are conjectures with
+certified evidence.  They were written here as results, and that was wrong.  What
+survives as proved:
+
+* at `p = 1454.6785` a certified period-five configuration is `4.18428e-7` below
+  both certified branches, so those two branches do not exchange minimality
+  there;
+* at `p = 1000` a certified period-four configuration is `1.2684e-4` below the
+  certified period-two branch;
+* the particular period-five and period-seven configurations tried at p\* lie
+  above the crossing energy.
+
+Everything else in this section is `rotation_scan.py`, which is floating point.
+
+
 The pressure section tracked two branches, period two and period three, and read
 their crossings as transitions.  `dev/branch_arb.py` certified the branches
 themselves and named the gap in one sentence: nothing had excluded configurations

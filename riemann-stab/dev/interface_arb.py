@@ -13,11 +13,24 @@ Krawczyk-plus-Cholesky machinery the wall tensions use:
 
     tau_23 = 1.74773822872e-5,  positive,
 
-and saturated -- identical from N = 84 to N = 156 to twelve digits, so it is the
-infinite-chain value and not a finite-ring artifact.  Positive means the two
-phases coexist at p*: mixing them costs, so neither pure phase is beaten by a
-mixture, and p* is a genuine first-order transition rather than a place where
-the branches merely happen to cross.
+and saturated -- identical from N = 84 to N = 156 to twelve digits, so it is not
+a finite-ring artifact.
+
+WHAT THAT IS AND IS NOT.  It is the excess of ONE interface configuration: the
+one Krawczyk certifies near the seed built from the two phases.  It is a strict
+local minimum of the ring energy and its excess is enclosed and positive.  It is
+NOT an infimum over interface profiles, because nothing here minimises over them
+-- so it does not exclude a different interface, or a longer mixed orbit, with
+negative excess.
+
+Earlier drafts of this file said "positive means the two phases coexist at p*"
+and "p* is a genuine first-order transition".  A review pointed out that those do
+not follow, and it was right: they quantify over every profile and this computes
+one.  The results file has always carried the line "not_established: that the two
+phases are the GLOBAL minima at p*", so the docstring was contradicting the
+transcript it writes.  Coexistence needs a lower bound over all interface
+profiles -- an infimum, proved -- or a calibrated subaction at p*, which would
+bound every invariant measure at once.  Neither is here.
 
 Run:  python3 dev/interface_arb.py
 """
@@ -110,12 +123,19 @@ def main():
     check("and it is a strict local minimum", lam > 0,
           "lambda_min >= %.9f" % float(lam.lower()))
     tau = (K.ring_energy_total(X) - N * c) / 2
-    check("so the interface tension is enclosed and positive", tau > 0,
+    check("this interface configuration has enclosed positive excess", tau > 0,
           "tau_23 = %s" % tau.str(18))
 
-    check("POSITIVE means the phases coexist at p*: a mixture costs, so neither "
-          "pure phase is beaten by one", tau > 0,
-          "which makes p* a first-order transition and not merely a crossing")
+    # There used to be a second check here reading "POSITIVE means the phases
+    # coexist at p*", asserting `tau > 0` again under a stronger name.  It could
+    # not fail independently of the line above, and the name claimed something
+    # the computation does not reach.  Deleted rather than reworded: a check that
+    # restates its neighbour is not evidence, and this directory has removed
+    # three others like it.
+    print("\n    What is open: tau_23 is the excess of ONE profile, the one")
+    print("    Krawczyk certifies near this seed.  An infimum over profiles")
+    print("    would be needed to call p* a first-order transition, and a")
+    print("    negative-excess profile elsewhere is not excluded here.")
 
     bad = [x for x in CHECKS if not x[1]]
     print("\n%d checks, %d failed" % (len(CHECKS), len(bad)))
@@ -130,8 +150,13 @@ def main():
             "p_star": PSTAR, "c": CVAL,
             "tau_23": tau.str(20),
             "finite_size": rows,
-            "not_established": "that the two phases are the GLOBAL minima at p*; "
-                               "this says only that mixing them costs",
+            "not_established": (
+                "that the two phases are the GLOBAL minima at p*; and that "
+                "tau_23 is an INFIMUM over interface profiles -- it is the "
+                "excess of the single profile certified here, so a different "
+                "interface, or a longer mixed orbit, with negative excess is "
+                "not excluded.  Coexistence and 'first-order transition' do not "
+                "follow from this number and are not claimed."),
             "checks": [{"name": n_, "ok": ok} for n_, ok in CHECKS],
         }, open(os.path.join(here, "interface_arb.results.json"), "w"),
             indent=2, sort_keys=True)

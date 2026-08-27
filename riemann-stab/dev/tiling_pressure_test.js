@@ -233,10 +233,10 @@ check('the two crossings bracket an interval, and the wall zeros lie OUTSIDE it'
 // positive tension and dev/staircase_arb.py shows periods five and seven do not
 // undercut it.  The lower one is not: a certified period-five orbit lies below
 // both branches there.  Bracketing an interval is all this pair of numbers does.
-check('and the lower crossing is recorded as not being a boundary either',
-  /lower crossing is therefore not a phase boundary/i.test(
+check('and the page says the two branches do not exchange minimality there',
+  /do not exchange minimality|not a transition between them/i.test(
     fs.readFileSync(path.join(__dirname, 'template.html'), 'utf8')),
-  'the page must say so, since a crossing that is not a transition reads as one');
+  'a crossing that is not a transition reads as one unless the page says so');
 
 // ------------------------------- the page's staircase numbers, against Arb
 // The page now says the lower crossing is NOT a phase boundary and quotes
@@ -277,9 +277,16 @@ check('and the lower crossing is recorded as not being a boundary either',
     && /5 = 3 \+ 2/.test(page));
   // Five mediants have been asked and one locked, so the page has to record the
   // count and the exception, not just the two second-level ones.
-  check('the page records all five mediants and which one locked',
+  check('the page records all five mediant configurations and their margins',
     ['9.89517', '5.73192', '6.72987', '1.69462'].every(x => page.includes(x))
-    && /one in five does/i.test(page));
+    && /one in five of the ones tried/i.test(page));
+  // The section must carry the caveat that gives those numbers their scope; the
+  // whole failure this guards against is the numbers surviving while the
+  // sentence that bounds them gets edited away.
+  check('and the page states that seed certification proves LOCAL minimality only',
+    /strict <b>local<\/b> minimum/i.test(page)
+    && /a claim that NOTHING is below does not/i.test(page.replace(/<[^>]+>/g, '')),
+    'the gating paragraph must survive edits to this section');
   check('and names the H-density as the order parameter',
     /1\/4, 1\/3, 2\/5, 1\/2, 2\/3|1\/4<\/b>, <b>1\/3/.test(page)
     || (page.includes('LLLH') && page.includes('LHLHH') && /rotation number/i.test(page)));

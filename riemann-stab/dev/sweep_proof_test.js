@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const {execSync} = require('child_process');
 
@@ -31,10 +32,17 @@ const recorded = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
 check('the committed record is the small machinery configuration',
   recorded.cube < 28, `cube ${recorded.cube}, ${recorded.nodes} nodes`);
 
-const before = fs.readFileSync(metaPath, 'utf8');
-execSync(`node ${path.join(here, 'sweep_proof.js')} ${recorded.cube} `
-  + `${recorded.tubeRadius}`, {stdio: 'ignore'});
-const regenerated = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+// Regenerate into a scratch directory, NOT over the committed object.  Running
+// sweep_proof.js in place restamps its commit, so the suite left the worktree
+// dirty on every run -- I claimed it did not, and a review showed me it did.
+// The committed artefact is the record; the test rebuilds it elsewhere and
+// checks the rebuild matches.
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-proof-'));
+const scratchBin = path.join(scratch, 'sweep_proof.bin');
+require('./sweep_proof').emit(recorded.cube, recorded.tubeRadius, false,
+  recorded.target, scratchBin);
+const regenerated = JSON.parse(
+  fs.readFileSync(scratchBin.replace(/\.bin$/, '.json'), 'utf8'));
 
 check('regenerating the proof reproduces the same tape, byte for byte',
   regenerated.tape_sha256 === recorded.tape_sha256,
