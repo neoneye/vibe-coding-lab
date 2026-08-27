@@ -22,7 +22,13 @@ What it can check, and what it cannot.
     and it reports the fraction it could reach rather than implying it reached
     all of them.
 
-Run:  node dev/sweep_proof.js 3 0.008 && python3 dev/sweep_proof_arb.py
+The 1.6 is the cube half-width the committed tape was emitted at, and it is not
+decoration: this line used to read 3, which does not reproduce the committed tape
+at all -- it emits a different one with 53102447 nodes and a 51 MB file.  A replay
+command that does not replay is worse than none, because following it looks like
+verification.
+
+Run:  node dev/sweep_proof.js 1.6 0.008 && python3 dev/sweep_proof_arb.py
 """
 
 import hashlib
@@ -397,7 +403,7 @@ def main():
                     "subdivision proof",
             "engine": "python-flint / Arb, %d bits" % ctx.prec,
             "inputs": arb_provenance.hash_inputs(SOURCES),
-            "replay": "node dev/sweep_proof.js 3 0.008 && python3 dev/sweep_proof_arb.py",
+            "replay": "node dev/sweep_proof.js 1.6 0.008 && python3 dev/sweep_proof_arb.py",
             "tape_sha256": digest,
             "nodes": len(tape), "leaves": leaves, "splits": splits,
             "collapses": collapses,
