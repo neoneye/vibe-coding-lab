@@ -2050,10 +2050,12 @@ period five and not something longer: it is the only mixture that pays.
 
 **Dilute defects, and two real metastability limits.**  The `a = 1` column at
 large `b` is the *isolated* defect: one two-block inside a long stretch of period
-three.  Its cost crosses zero at `p = 1456.8653` and again at `p = 3333.2947`,
+three.  Its cost crosses zero at `p = 1456.8653` and again at `p = 3333.2949`,
 negative in between and positive outside -- so those, not the wall zeros at
 1425.71 and 3521.82, are where the period-three phase stops resisting a single
-two-block.  The mirror defect, one three-block inside period two, costs
+two-block.  "Isolated" is a limit and it is taken: the zeros read
+`1456.867246 / 3333.279750` with five three-blocks between defects and settle at
+`1456.865312 / 3333.294860` from nine onward, unchanged at eleven and thirteen.  The mirror defect, one three-block inside period two, costs
 `+1.086 tau_23` at p\* and turns negative between p\* and 3800.  At p\* both are
 positive, certified at `3.28e-6` and `1.90e-5`, so each phase is locally stable
 and the transition has a metastability overlap -- an ordinary first-order point,
