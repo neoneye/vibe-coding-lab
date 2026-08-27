@@ -23,7 +23,8 @@ const UNITS = [
   {src: 'tube_arb.py', results: 'tube_arb.results.json'},
   {src: 'branch_arb.py', results: 'branch_arb.results.json'},
   {src: 'resonance_arb.py', results: 'resonance_arb.results.json'},
-  {src: 'interface_arb.py', results: 'interface_arb.results.json'}
+  {src: 'interface_arb.py', results: 'interface_arb.results.json'},
+  {src: 'sweep_proof_arb.py', results: 'sweep_proof_arb.results.json'}
 ];
 
 function findInterpreter() {

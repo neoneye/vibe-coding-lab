@@ -1303,6 +1303,53 @@ the sweep against an independent base is not "do it in Arb" — it is reproducin
 that machinery in Arb.  That is the real size of the outstanding item, and it is
 larger than it looks.
 
+### A proof-carrying sweep
+
+Rerunning the sweep in a different arithmetic is the obvious way to gain
+confidence in it, and the previous section measured why it is not affordable: an
+Arb box costs about half a millisecond, which is ten hours for seventy-five
+million of them.  A *proof object* is affordable, because it separates the search
+from the justification.  The search decided which boxes to look at and in what
+order; that is the expensive part and nobody needs to redo it.  What has to hold
+is local to each node:
+
+| node | claim | kind |
+| --- | --- | --- |
+| split `k` | the two children union to the parent | structural |
+| collapse `k` | the derivative keeps its sign across the box | arithmetic |
+| discharged | the bound clears the target | arithmetic |
+| tube | the box lies inside an excluded tube | structural |
+
+`dev/sweep_proof.js` emits the subdivision tree as **one byte per node** in
+preorder — `0x00+k` split, `0x08+k` and `0x10+k` collapse to a face, `0x20`
+discharged, `0x21` tube, `0x22` open — and `dev/sweep_proof_arb.py` replays it
+against an independently recomputed root partition.
+
+On the truncated cube, `53 102 447` nodes: `18 940 108` leaves, `18 924 485`
+splits, `15 237 854` collapses, **nothing unresolved**, tape `53 MB`, emitted in
+`344 s` and checked in `17 s`.
+
+**Structure is verified for every one of those nodes**, at no arithmetic cost:
+the tape is consumed exactly with nothing left over, the counts agree, every
+split has a midpoint inside its parent, every collapse lands on a face, and no
+leaf is left open.  That is the check that catches a *lost region* — a sweep
+reporting "complete" having silently dropped part of its domain — and it is the
+reason the object is worth emitting.
+
+**Arithmetic is verified on a sample, and the checker says how far it got.**  Of
+220 sampled discharged leaves, Arb confirms 3 outright and finds 217 beyond its
+own resolution; of 220 sampled collapses, 35 outright and 185 beyond.  **Nothing
+is refuted.**  The disadvantage is the one measured above and cannot be argued
+away: the sweep uses exact monotone-piece ranges from precomputed breakpoints,
+and a straightforward Arb enclosure over the same box is much wider, so the
+checker can only confirm claims whose margin exceeds its own.  It reports the
+fraction it reached rather than implying it reached all of them.
+
+The suite carries a small configuration — cube `1.6`, `27 940` nodes, a `28 KB`
+tape — regenerated and compared byte for byte on every run, so a change in the
+sweep's behaviour shows up as a changed tape.  The full-cube object is
+regenerated on demand rather than committed.
+
 **What it rests on.**  The tube half no longer rests on `tiling_rigorous.js`;
 `dev/tube_arb.py` redoes it in Arb.  **The outside-the-tube sweep still does**,
 and that is now the whole of the outstanding item: seventy-five million boxes of

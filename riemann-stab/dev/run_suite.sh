@@ -16,6 +16,7 @@ echo "== general block-size checks ==" && node tiling_blocks_test.js
 echo "== local coercivity checks ==" && node tiling_coercivity_test.js
 echo "== independent Arb certification (local coercivity) ==" && node check_arb.js
 echo "== rigorous arithmetic checks ==" && node tiling_rigorous_test.js
+echo "== the sweep proof object ==" && node sweep_proof_test.js
 echo "== pressure, mode locking, plateau edges ==" && node tiling_pressure_test.js
 echo "== pair-state coboundary checks ==" && node tiling_pair_test.js
 echo "== bilinear enclosures and the pair sweep ==" && node tiling_pair_interval_test.js
