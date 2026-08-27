@@ -2048,6 +2048,28 @@ at `(2, 1)` and `tau_eff(8) = 1.25e-6` at `(1, 2)` -- against
 `tau_eff(5) = -1.05e-6` at `(1, 1)`.  Which is also why the ground state there is
 period five and not something longer: it is the only mixture that pays.
 
+**Dilute defects, and two real metastability limits.**  The `a = 1` column at
+large `b` is the *isolated* defect: one two-block inside a long stretch of period
+three.  Its cost crosses zero at `p = 1456.8653` and again at `p = 3333.2947`,
+negative in between and positive outside -- so those, not the wall zeros at
+1425.71 and 3521.82, are where the period-three phase stops resisting a single
+two-block.  The mirror defect, one three-block inside period two, costs
+`+1.086 tau_23` at p\* and turns negative between p\* and 3800.  At p\* both are
+positive, certified at `3.28e-6` and `1.90e-5`, so each phase is locally stable
+and the transition has a metastability overlap -- an ordinary first-order point,
+not a spinodal.
+
+**And that is what the lower crossing does not have.**  At 1454.68 the isolated
+defect still costs on both sides, `+0.057 tau` for a two-block in period three
+and `+1.10 tau` for a three-block in period two.  Both pure phases are locally
+stable, and period five beats them anyway.  So the two crossings fail
+differently: at p\* the mixture costs at every spacing and the phases coexist; at
+the lower crossing the isolated defect costs but a *dense* array does not,
+because the defect-defect interaction turns attractive at the shortest spacing.
+The intermediate phase arrives by defect attraction, not by single-defect
+softening, which is also why it arrives as a first-order jump to period five
+rather than a continuous unbinding.
+
 **Below the crossings, longer still.**  At `p = 1000` the period-two branch has
 collapsed to a uniform state (`L - H` is zero to `1e-82`) and a certified
 genuinely period-four orbit is `1.2684e-4` below it, `3.15654e-5` below the

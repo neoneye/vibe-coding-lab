@@ -162,6 +162,22 @@ NEIGHBOURS = {
         1.9714081867, 1.0323534288, 1.0325523779, 1.9752375505],
 }
 
+# The two ISOLATED defects at p*, dilute rather than dense: one two-block inside
+# a long stretch of the period-three phase (a = 1, b = 6) and one three-block
+# inside a long stretch of the period-two phase (a = 6, b = 1).  Both costing is
+# the statement that each pure phase is locally stable against inserting a single
+# block of the other, which is what makes p* look like an ordinary first-order
+# point with a metastability overlap rather than a spinodal.
+DEFECTS = {
+    20: [1.0426520077, 1.9804687091, 1.0426520076, 1.9918487841, 1.9920312209,
+         1.0435152868, 1.9926121098, 1.9922279384, 1.0435683013, 1.9922755131,
+         1.9922867318, 1.0435756375, 1.9922867318, 1.9922755132, 1.0435683015,
+         1.9922279385, 1.9926121097, 1.0435152867, 1.9920312208, 1.9918487841],
+    15: [1.0425356511, 1.9802324658, 1.0416816031, 1.9795179275, 1.0415649881,
+         1.9795399499, 1.0417019536, 1.9795399505, 1.0415649873, 1.9795179277,
+         1.0416816038, 1.9802324653, 1.0425356511, 1.9917921461, 1.9917921465],
+}
+
 CHECKS = []
 
 
@@ -246,6 +262,20 @@ def main():
     check("the period-two branch has collapsed to a uniform state there",
           abs(dn[2]["box"][0] - dn[2]["box"][1]) < arb(1e-12),
           "L - H = %s" % abs(dn[2]["box"][0] - dn[2]["box"][1]).str(4))
+
+    # ------------------------------------ each pure phase resists a lone defect
+    print("\nisolated defects at p*")
+    LABEL = {20: "one two-block inside the period-three phase",
+             15: "one three-block inside the period-two phase"}
+    for n in sorted(DEFECTS, reverse=True):
+        r = certify(P_STAR, DEFECTS[n], halfwidth=1e-8)
+        tau = arb(n) * (r["energy"] - c) / 2
+        check("%s costs" % LABEL[n],
+              r["proved"] and r["pd"] and arb(tau.lower()) > 0,
+              "tau_eff = %s, %.3f of the isolated tau_23"
+              % (tau.str(8), float(tau.mid()) / 1.74773822872121908e-5))
+    print("     so both phases are locally stable at p*, and the transition")
+    print("     there has a metastability overlap rather than a spinodal.")
 
     # ----------------------------------- only the shortest mixture goes negative
     print("\nthe neighbouring compositions at the lower crossing")
