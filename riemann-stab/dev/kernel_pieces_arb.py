@@ -379,6 +379,18 @@ def main():
             "zero_equation": "b tan b = a tan a, b = pi x, a = 1/sqrt(2)",
             "zeros": len(P.zs), "maxima": len(P.ms),
             "w_breakpoints": len(P.wbreaks), "wd_breakpoints": len(P.dbreaks),
+            # The certified positions themselves, so a consumer without Arb can
+            # check its own breakpoints against them.  Each w' breakpoint also
+            # carries a certified bound on |w'''| over a 1e-6 neighbourhood: at a
+            # stationary point w'' vanishes, so displacing the breakpoint by d
+            # costs at most w3/2 * d^2 of w' value, and that is the shortfall a
+            # tabulated derivative range has to be widened to cover.
+            "w_break_points": [{"mid": float(t.mid()), "rad": float(t.rad())}
+                               for t in P.zs + P.ms if float(t.mid()) <= P.limit],
+            "wd_break_points": [
+                {"mid": float(t.mid()), "rad": float(t.rad()),
+                 "w3": float(abs(weight_jet(arb(float(t.mid()), 1e-6), 4)[3]).upper())}
+                for t in P.dbreaks_arb],
             "limit": P.limit,
             "checks": [{"name": n, "ok": ok} for n, ok in CHECKS],
         }, open(os.path.join(here, "kernel_pieces_arb.results.json"), "w"),

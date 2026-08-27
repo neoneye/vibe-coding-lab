@@ -36,11 +36,18 @@ literally one three-block next to one two-block.  That is the Farey-mediant
 arrangement a devil's staircase is built from, so the obvious next question is
 whether the construction repeats -- whether 8 = 3 + 5 opens a window at the lower
 edge and 7 = 5 + 2 at the upper one.  It does NOT.  At both edges the mediant is
-strictly ABOVE the two phases it would interpolate, by 5.80e-5 and 6.73e-6, which
+strictly ABOVE the two phases it would interpolate, by 5.73e-7 and 6.73e-6, which
 is the same statement as the interface tension between those phases being
 positive.  So this is a finite sequence of commensurate phases with first-order
 transitions between them, and not a staircase -- checked at the one level where
 a staircase would have had to show itself.
+
+The 5.73e-7 was 5.80e-5 in the first version of this file, because the period-8
+seed there was the two certified blocks written end to end and that relaxes into
+the wrong stationary point.  Concatenation is a plausible seed and not a
+minimiser; the number now comes from a multi-start scan of period eight at that
+pressure.  The margin shrank by a factor of a hundred and the conclusion did not
+move, which is the only reason the conclusion was worth keeping.
 
 The last two are corrections to what this directory said.  The lower crossing
 was already relabelled once, from "plateau edge" to "metastability limit", after
@@ -124,13 +131,21 @@ EDGES = {
     "1452.444719016": {
         3: [1.032315792, 1.971417921, 1.032315792],
         5: [1.032788373, 1.032788373, 1.97522342, 1.040530151, 1.97522342],
-        8: [1.041120895, 1.973906243, 1.030178278, 1.023599958, 1.030178278,
-            1.973906243, 1.041120895, 1.979127965]},
+        # NOT the concatenation of the certified three- and five-blocks.  That
+        # seed relaxes to a stationary point 5.80e-5 above the phases, and an
+        # earlier version of this file certified it and published that number as
+        # the mediant's cost.  It is a genuine stationary point and the wrong
+        # one: a multi-start scan of period eight at this pressure finds an orbit
+        # a hundred times closer, 5.73e-7 above.  The conclusion survives -- the
+        # mediant still loses -- but the margin does not, and a certified number
+        # about the wrong orbit is worse than no number.
+        8: [1.0323530616, 1.9714067684, 1.0323530617, 1.0325520116,
+            1.9752361218, 1.0409094852, 1.9752361229, 1.0325520111]},
     "1456.171287537": {
         2: [1.04156225, 1.978984239],
         5: [1.032788981, 1.032788981, 1.975225801, 1.040530746, 1.975225801],
-        7: [1.032626774, 1.032626774, 1.975482804, 1.040958765, 1.979042394,
-            1.040958765, 1.975482804]},
+        7: [1.0326267741, 1.0326267744, 1.9754828039, 1.040958765,
+            1.9790423937, 1.0409587646, 1.9754828032]},
 }
 
 CHECKS = []

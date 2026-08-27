@@ -276,7 +276,7 @@ check('and the lower crossing is recorded as not being a boundary either',
     page.includes('1452.44') && page.includes('1456.17')
     && /5 = 3 \+ 2/.test(page));
   check('the page records that both mediants LOSE, so it is not a staircase',
-    page.includes('5.80138') && page.includes('6.72987')
+    page.includes('5.73192') && page.includes('6.72987')
     && /is not a staircase/i.test(page));
 
   const d2 = mid(rec.p1000['2'].energy), d4 = mid(rec.p1000['4'].energy);

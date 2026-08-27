@@ -1943,11 +1943,15 @@ enclosed per-gap energy for the comparison.  Twenty checks, all in Arb.
 
 **At p\* the two branches survive their competitors.**  Period five is
 `+1.69462e-6` above the crossing energy `c` and period seven `+5.51479e-6`, both
-strictly, by non-overlapping enclosures.  Over every period up to nine, nothing
-falls below `c`: periods 4, 6, 8, 9 return `c` exactly because they are multiples
-of 2 or 3 and realise the same two measures, and every non-multiple is strictly
-above.  The coexistence `tau_23 = 1.74774e-5` is not an artefact of only two
-candidates having been asked.
+strictly, by non-overlapping enclosures.  Over every period up to sixteen, nothing
+falls below `c`: every period that is a multiple of 2 or 3 returns `c` exactly,
+because such an orbit *is* one of the two phases, and every period that is not --
+5, 7, 11, 13 -- is strictly above, by `1.69e-6`, `5.51e-6`, `5.97e-7`, `2.74e-6`.
+As tensions those are 0.24, 1.10, 0.19 and 1.02 times the isolated `tau_23`, so
+the cost of a mixture is not two interfaces at a distance: it depends on how the
+blocks are arranged and it oscillates rather than settling.  The coexistence
+`tau_23 = 1.74774e-5` is not an artefact of only two candidates having been
+asked.
 
 **At the lower crossing they do not.**  At `p = 1454.6785461214313` the branches
 meet -- certified, `|e2 - e3| = 1.4e-15` -- and a certified period-five orbit lies
@@ -1966,17 +1970,22 @@ mediant.**  Period five is the ground state on an interval of pressures, and fou
 certified comparisons bracket it: at `p = 1452` period three is `8.3e-8` below
 period five, at `1453` period five is `1.0e-7` below period three, at `1455.5` it
 is still `1.9e-7` below period two, and at `1457` period two is `2.3e-7` below it
-again.  The window is `[1452.44, 1456.17]` to the accuracy of that bracket, about
-four units of pressure wide, and the old crossing at `1454.6785` is *inside* it.
+again.  What that proves is that the window contains `[1453, 1455.5]` and is
+contained in `(1452, 1457)`; the edges themselves, `1452.4447` and `1456.1713`,
+are located numerically and not certified.  Either way the old crossing at
+`1454.6785` is *inside* it, which is the point.
 Below it period three, above it period two, in between a phase of period
 `5 = 3 + 2` whose pattern is one three-block beside one two-block -- the
 Farey-mediant arrangement a devil's staircase is built from.
 
 **And it is not a staircase.**  If it were, `8 = 3 + 5` would open a window at the
 lower edge and `7 = 5 + 2` at the upper one.  Both were built and certified and
-both are strictly *above* the phases they would interpolate, by `5.80138e-5` and
-`6.72987e-6` -- equivalently `tau_eff(8) = 2.32e-4` and `tau_eff(7) = 2.36e-5`,
-both positive.  Both edges are ordinary first-order transitions and no
+both are strictly *above* the phases they would interpolate, by `5.73192e-7` and
+`6.72987e-6` -- equivalently `tau_eff(8) = 2.29e-6` and `tau_eff(7) = 2.36e-5`,
+both positive.  (The first figure read `5.80e-5` for one commit: the period-eight
+seed was the two certified blocks written end to end, which relaxes into a real
+but wrong stationary point a hundred times too high.  Concatenation is a
+plausible seed and not a minimiser.)  Both edges are ordinary first-order transitions and no
 second-level phase intervenes.  A finite sequence of commensurate phases, checked
 at the one level where a staircase would have had to show itself.
 
@@ -2003,9 +2012,10 @@ over every shift-invariant measure -- the coboundary averages to zero against an
 such measure.  Periodic orbits are shift-invariant measures, so one periodic
 configuration with mean below `c` refutes the calibration outright, and no LP
 tuning could have saved it.  Existence searches cannot be finished; falsification
-searches can.  Over every period up to nine at p\*, nothing gets below `c`.  The
-calibration is not refuted by short orbits, and the evidence that was "leaning
-against" it is the LP's own behaviour and nothing else.
+searches can.  Over every period up to sixteen at p\*, nothing gets below `c` -- and this
+is a search, so it can only ever fail to find one.  The calibration is not
+refuted by short orbits, and the evidence that was "leaning against" it is the
+LP's own behaviour and nothing else.
 
 Replay:
 

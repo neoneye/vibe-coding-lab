@@ -65,6 +65,40 @@ function derivative(f, h = 1e-5) {
   return x => (f(x + h) - f(x - h)) / (2 * h);
 }
 
+// How far the tabulated extremum of w' can fall short of the true one.
+//
+// The breakpoints of w' are found by scanning the sign changes of a FINITE
+// DIFFERENCE second derivative with h = 1e-4, so they land within about 7.7e-9
+// of the true stationary points -- measured against the interval-Newton
+// certified breakpoints in dev/kernel_pieces_arb.py, which agree in count (59
+// on [0, 30]) and differ by at most that.  A displacement delta at a stationary
+// point costs half w'(b) delta^2 in value, and the worst over those 59
+// breakpoints is 2.05e-16, at x = 1.227859.
+//
+// The outward rounding does not cover it: the widening there is |v| * 2.3e-16,
+// and |w'| at that breakpoint is 0.123, so the rounding supplies 2.8e-17 against
+// a 2.05e-16 shortfall.  The tabulated derivative range can therefore be too
+// NARROW by about 1.8e-16, which is what a monotonicity test must never be
+// given.
+//
+// WHAT THAT DOES AND DOES NOT AFFECT, because the first version of this comment
+// overstated it.  dwRange is used in exactly one place, analyzeBox, which is the
+// DOUBLE-PRECISION path; the rigorous analyzer goes through
+// RIG.weightPairCentered and never touches these tables.  And the
+// double-precision path runs the sign test with a gradient margin of 1e-11,
+// which covers a 1.8e-16 shortfall by five orders of magnitude.  So nothing was
+// unsound.  What was true is that the margin was doing work nobody had accounted
+// for, and an audit that could not see why 1e-11 was there would not have known
+// it was load-bearing.  The widening below makes the coverage explicit instead of
+// incidental.
+//
+// The w VALUE breakpoints do not have the problem at all -- they are roots of w'
+// itself, found from an exact w', and the worst value shortfall there is 4.2e-32.
+//
+// The constant is three times the measured worst case, and absolute rather than
+// relative, because the shortfall does not scale with the value.
+const DW_BREAK_SLACK = 6e-16;
+
 function buildTables(limit = 100) {
   const w = T.overlapWeight;
   const dw = T.overlapWeightDerivative;
@@ -127,7 +161,8 @@ function dwRange(tables, a, b) {
     const inner = rangeByBreaks(tables.dw, tables.dwBreaks, tables.dwTable, Math.min(a, tables.limit), tables.limit, tables.limit);
     return [Math.min(inner[0], -0.01), Math.max(inner[1], 0.01)];
   }
-  return rangeByBreaks(tables.dw, tables.dwBreaks, tables.dwTable, a, b, tables.limit);
+  const r = rangeByBreaks(tables.dw, tables.dwBreaks, tables.dwTable, a, b, tables.limit);
+  return [r[0] - DW_BREAK_SLACK, r[1] + DW_BREAK_SLACK];
 }
 
 // Piecewise-linear range queries.  The knot grid is fixed for a certificate,
@@ -459,7 +494,7 @@ function verifyFloor(cert, target, options = {}) {
 }
 
 module.exports = {
-  PAIRS, buildTables, attachTables, verifyFloor, newDigest, stir, seal, verifyFloorRigorous, analyzeBoxRigorous, analyzeBox, newScratch, prepareCertificate,
+  PAIRS, buildTables, attachTables, verifyFloor, DW_BREAK_SLACK, rangeByBreaks, newDigest, stir, seal, verifyFloorRigorous, analyzeBoxRigorous, analyzeBox, newScratch, prepareCertificate,
   plRangeFast, slopeWithFlat, wRange, dwRange, plRange, plSlopeRange,
   boxLowerBound, gradientRange
 };
