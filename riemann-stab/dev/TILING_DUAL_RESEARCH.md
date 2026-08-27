@@ -1976,7 +1976,11 @@ are located numerically and not certified.  Either way the old crossing at
 `1454.6785` is *inside* it, which is the point.
 Below it period three, above it period two, in between a phase of period
 `5 = 3 + 2` whose pattern is one three-block beside one two-block -- the
-Farey-mediant arrangement a devil's staircase is built from.
+Farey-mediant arrangement a devil's staircase is built from.  Two statements of
+unequal strength: the comparisons among periods two, three and five are certified
+in Arb, while *ground state* -- nothing of any other period being lower -- rests
+on the floating-point scan, which covers period <= 10 at these pressures and
+<= 16 at p\*.
 
 **And it is not a staircase.**  If it were, `8 = 3 + 5` would open a window at the
 lower edge and `7 = 5 + 2` at the upper one.  Both were built and certified and
@@ -1985,8 +1989,11 @@ both are strictly *above* the phases they would interpolate, by `5.73192e-7` and
 both positive.  (The first figure read `5.80e-5` for one commit: the period-eight
 seed was the two certified blocks written end to end, which relaxes into a real
 but wrong stationary point a hundred times too high.  Concatenation is a
-plausible seed and not a minimiser.)  Both edges are ordinary first-order transitions and no
-second-level phase intervenes.  A finite sequence of commensurate phases, checked
+plausible seed and not a minimiser.)  Both edges are ordinary first-order transitions.  That the mediant
+loses is the sharp form of the question -- a mediant window would have to contain
+the degeneracy point and be below both phases exactly there -- and the scan adds
+that at either edge no period up to ten is below the two that meet, mediant or
+not.  A finite sequence of commensurate phases, checked
 at the one level where a staircase would have had to show itself.
 
 **Below the crossings, longer still.**  At `p = 1000` the period-two branch has
