@@ -179,15 +179,21 @@ const RES = [{k: 2, lo: 300, hi: 900, crosses: false},
   {k: 5, lo: 26000, hi: 45000, crosses: false},
   {k: 6, lo: 55000, hi: 120000, crosses: true}];
 const found = RES.map(r => ({...r, p: P.resonantPressure(r.k, r.lo, r.hi)}));
-check('the resonance is exact at two identified pressures and at no others '
-  + 'among these five', found.every(r => (r.p !== null) === r.crosses),
+// NOTE: this test is about whether the WINNING branch's offset changes sign
+// inside the plateau window, which is a different and weaker question than
+// whether a resonant configuration exists.  dev/resonance_arb.py answers the
+// latter analytically and finds resonances at k = 2, 3, 5 and 8 that this scan
+// misses because they lie outside the windows below.
+check('inside these windows the offset changes sign only at k = 4 and k = 6',
+  found.every(r => (r.p !== null) === r.crosses),
   found.map(r => `k=${r.k}:${r.p === null ? 'none' : r.p.toFixed(3)}`).join(' '));
-check('and the two that cross are period-one branches',
+check('and the two that do are period-one branches',
   found.filter(r => r.p !== null).every(r => r.k % 2 === 0));
-check('while the period-two branches keep their sign across the plateau',
+check('inside these windows the period-two offsets keep one sign -- which is '
+  + 'a fact about the windows, not about resonance',
   found.filter(r => r.k % 2 === 1).every(r =>
     P.resonanceOffset(r.lo, r.k) > 0 && P.resonanceOffset(r.hi, r.k) > 0),
-  'L + H stays strictly above z_k throughout');
+  'the k = 3 resonance is real and sits at p = 1155.32, below this window');
 const k4 = found.find(r => r.k === 4).p;
 check('the k = 4 crossing agrees with the Arb computation of it',
   Math.abs(k4 - 7572.855986) < 1e-4, `${k4.toFixed(6)} against 7572.855986`);

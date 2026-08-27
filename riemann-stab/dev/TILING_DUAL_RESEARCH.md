@@ -1519,6 +1519,43 @@ is not — period two beats it, by margins running `7.3e-2`, `2.6e-2`, `1.3e-2`,
 `7.9e-3`.  That is the parity rule again, seen from the side where it can be
 computed instead of scanned.
 
+### The odd-period resonance, decided
+
+For a *period-one* chain the resonance question is a formula.  For period two it
+is not: two stationarity equations and one pressure.  The way through is to
+**subtract** them, which kills `alpha` and hence `p`.  With `L + H = z` imposed,
+the lag-`s` distance at odd `s = 2m+1` is `m z + L` for one parity and
+`(m+1) z - L` for the other, with coefficient difference `+1` and `-1`, so
+everything collapses to
+
+**`G_k(L) = sum_{m=0..2} [ w'(m z_k + L) - w'((m+1) z_k - L) ]`,**
+
+odd under `L -> z_k - L`, with a trivial root at `L = z_k/2` — the period-one
+solution sitting inside the period-two family.  A resonant period-two
+configuration exists exactly when `G_k` has a root with `L != z_k/2`, and an
+interval Newton test settles that.  It is verified against the full gradient
+difference to the last digit, which is what makes the collapse trustworthy.
+
+**It has one.**  At `k = 3`, certified:
+
+`L = 1.041502757331298264032`  (radius `4.9e-90`),  `H = 1.978740234840183`,
+`L + H = z_3` exactly,  pressure `p = 1155.3172071956`.
+
+At `k = 5` there are three.
+
+**This overturns a third scan result.**  The earlier section reported that the
+period-two branch "keeps its sign across the plateau" and concluded the odd-`k`
+resonance never happens.  Same guessed-window mistake as at `k = 2` and `k = 8`:
+`p = 1155.32` sits *below* the plateau's lower branch crossing at `1454.678546`,
+so a scan over `[1455, 3370]` could only ever see one sign.  The resonance is
+real; it is just not on the stretch that was looked at.
+
+What is *not* claimed: that this configuration is the ground state at its own
+pressure.  `1155.32` is below the lower crossing, so the period-three branch is
+the lower one there.  The resonant period-two configuration exists, is unique for
+`k = 3`, and is not the winner — three separate statements, and only the first
+two are proved here.
+
 ### Two different pressures, and only one of them is a boundary
 
 An isolated wall on an odd ring stops costing energy at

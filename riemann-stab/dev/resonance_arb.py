@@ -118,6 +118,90 @@ def asymptotic(k):
             - (c * c + c ** 3 / 3) / (kk ** 3 * arb.pi() ** 4))
 
 
+# ---------------------------------------------- the odd-period resonance
+# For a PERIOD-TWO chain there are two stationarity equations and one pressure,
+# so imposing L + H = z_k leaves a genuine question rather than a formula.  The
+# way through is to SUBTRACT the two equations, which kills alpha and hence p.
+# With L + H = z fixed, the lag-s distance at odd s = 2m+1 is m z + L for one
+# parity and (m+1) z - L for the other, and the coefficient difference is +1 and
+# -1, so everything collapses to
+#
+#     G_k(L) = sum_{m=0..2} [ w'(m z_k + L) - w'((m+1) z_k - L) ],
+#
+# odd under L -> z_k - L, with the trivial root L = z_k/2 (which is the
+# period-one solution sitting inside the period-two family).  A resonant
+# period-two configuration exists exactly when G_k has a root with L != z_k/2,
+# and interval Newton settles that -- where sampling the ends of a guessed
+# pressure window cannot.
+#
+# It does have one.  The earlier scan reported that the period-two branch "keeps
+# its sign across the plateau", and concluded the odd-k resonance never happens.
+# That was the same guessed-window mistake as at k = 2 and k = 8: the resonance
+# is real and sits BELOW the plateau.
+def odd_G(L, z):
+    t = arb(0)
+    for m in range(3):
+        t += C.weight_jet(m * z + L, 2)[1] - C.weight_jet((m + 1) * z - L, 2)[1]
+    return t
+
+
+def odd_Gprime(L, z):
+    t = arb(0)
+    for m in range(3):
+        t += C.weight_jet(m * z + L, 3)[2] + C.weight_jet((m + 1) * z - L, 3)[2]
+    return t
+
+
+def certify_odd_root(guess, z, radius=1e-4):
+    m = arb(guess)
+    X = arb(guess, radius)
+    proved = None
+    for _ in range(8):
+        d = odd_Gprime(X, z)
+        if arb(0) in d:
+            return None
+        N = m - odd_G(m, z) / d
+        if not (arb(N.lower()) > arb(X.lower()) and arb(N.upper()) < arb(X.upper())):
+            break
+        proved = X.intersection(N)
+        X = proved
+        m = arb(X.mid())
+    return proved
+
+
+def odd_roots(z, samples=400):
+    """Bracket every sign change of G on (0, z/2), then certify each."""
+    out = []
+    prev = None
+    prevL = None
+    for i in range(1, samples):
+        L = z * i / (2 * samples)
+        v = odd_G(L, z)
+        if prev is not None and float(prev.mid()) * float(v.mid()) < 0:
+            a, b = prevL, L
+            for _ in range(120):
+                mid = (a + b) / 2
+                if float(odd_G(a, z).mid()) * float(odd_G(mid, z).mid()) <= 0:
+                    b = mid
+                else:
+                    a = mid
+            X = certify_odd_root(float(((a + b) / 2).mid()), z)
+            if X is not None:
+                out.append(X)
+        prev, prevL = v, L
+    return out
+
+
+def pressure_from_stationarity(L, H):
+    """dE/dL = alpha/2 + (rest) = 0, so alpha = -2 (rest) and p = 6/alpha."""
+    saved = C.ALPHA
+    C.ALPHA = arb(0)
+    dL, _ = C.gradient(L, H)
+    C.ALPHA = saved
+    alpha = -2 * dL
+    return None if arb(0) in alpha else 6 / alpha
+
+
 CHECKS = []
 
 
@@ -172,6 +256,37 @@ def main():
         check("p_%d matches the bisection it replaces" % k,
               abs(got - want) < 1e-6, "%.9f against %.9f" % (got, want))
 
+    # ---- the odd-period resonance, decided rather than sampled
+    odd_rows = []
+    for k in (3, 5):
+        Z = certified_zero(k)
+        z = arb(Z.mid())
+        found = odd_roots(z)
+        nontrivial = [X for X in found
+                      if abs(float((X - z / 2).mid())) > 1e-6]
+        check("G_%d has a certified root off the symmetric point, so a "
+              "resonant period-two configuration EXISTS" % k, nontrivial,
+              "%d root(s) in (0, z/2)" % len(nontrivial))
+        for X in nontrivial:
+            H = z - X
+            p = pressure_from_stationarity(X, H)
+            odd_rows.append({"k": k, "L": X.str(22, radius=False),
+                             "H": H.str(22, radius=False),
+                             "L_radius": float(X.rad()),
+                             "pressure": None if p is None else p.str(16, radius=False)})
+        if k == 3:
+            X = nontrivial[0]
+            H = z - X
+            check("its L + H is z_3 exactly, by construction",
+                  ((X + H) - z).contains(arb(0)),
+                  "L = %s, H = %s" % (X.str(14, radius=False), H.str(14, radius=False)))
+            p = pressure_from_stationarity(X, H)
+            check("and its pressure is 1155.3172, BELOW the plateau's lower "
+                  "crossing at 1454.6785",
+                  p is not None and float(p.upper()) < 1454.678546,
+                  "p = %s -- which is why a scan over [1455, 3370] saw the "
+                  "offset keep one sign and concluded 'never'" % p.str(14, radius=False))
+
     pos = [r["k"] for r in rows if r["p_positive"]]
     check("a positive resonance pressure exists for k = 2..9 and not for k = 10",
           set(pos) == {1, 2, 3, 4, 5, 6, 7, 8, 9} or set(pos) == {2, 3, 4, 5, 6, 7, 8, 9},
@@ -190,6 +305,8 @@ def main():
             "zero_equation": "b tan b = a tan a, b = pi z, a = 1/sqrt(2)",
             "pressure_formula": "p_k = -3 / sum_{s=1..6} s w'(s z_k / 2)",
             "rows": rows,
+            "odd_period_equation": "G_k(L) = sum_{m=0..2}[w'(m z_k + L) - w'((m+1) z_k - L)]",
+            "odd_resonances": odd_rows,
             "checks": [{"name": n, "ok": ok} for n, ok in CHECKS],
         }, open(os.path.join(here, "resonance_arb.results.json"), "w"),
             indent=2, sort_keys=True)
