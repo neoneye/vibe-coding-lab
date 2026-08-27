@@ -26,7 +26,7 @@ authoritative source, `ipip.ori.org`.
 Facets in 1 and 2: Imagination, Artistic Interests, Emotionality, Adventurousness,
 Intellect, Liberalism.
 
-## Key decision: one pooled item set, three scoring keys
+## Key decision: three standalone tests
 
 The three instruments overlap heavily:
 
@@ -35,59 +35,54 @@ The three instruments overlap heavily:
   "Have excellent ideas", "Am quick to understand things", "Use difficult words",
   "Am full of ideas".
 
-Administering the three as separate surveys means 94 questions of which 30 are literal
-duplicates. Beyond the tedium, a respondent who answers "Have a vivid imagination"
-differently on its second and third appearance injects noise into precisely the
-comparison the three benchmarks exist to support.
+The first build exploited that: one pooled set of 64 items, scored three times. The owner
+rejected it. Three benchmarks means three tests — each its own published instrument, its
+own entry in the battery, its own anchor to send someone.
 
-So: **administer the union once — 64 items — and score it three times.** Same responses,
-three keys. This is how one would compare instruments on a single respondent.
+So each ships standalone and complete, with its own item ids, its own scoring, and its own
+results card. 94 items across the three, 30 of them repeated between tests. That
+repetition is the accepted cost of three separately administrable instruments; a
+respondent taking all three answers the shared items once per test.
 
-Trade-off accepted: a single nav entry and anchor (`#ipipo`) rather than three
-separately linkable surveys.
+A consequence worth having: each test now uses **its own source's wording**. The 300 key
+and Johnson's 120 key differ on one item — "no absolute right or wrong" vs "right and
+wrong" — and each test quotes the page it came from rather than being normalised to one.
 
-## Item pool
+## Item pools
 
-64 items, grouped in source by facet for auditability against `ipip.ori.org`:
+Items are grouped in source by facet for auditability against `ipip.ori.org`.
 
-- `oi1`–`oi10` Imagination (`oi7`–`oi10` reverse-keyed)
-- `oa1`–`oa10` Artistic Interests (`oa6`–`oa10` reverse)
-- `oe1`–`oe10` Emotionality (`oe6`–`oe10` reverse)
-- `ov1`–`ov10` Adventurousness (`ov5`–`ov10` reverse)
-- `ot1`–`ot10` Intellect (`ot6`–`ot10` reverse)
-- `ol1`–`ol10` Liberalism (`ol4`–`ol10` reverse)
-- `om1`–`om4` marker-only items (all positive, `scored:false`)
+**IPIP-NEO-300 Openness** (`ipip300`, 60 items, total 60–300):
+`oi1`–`oi10` Imagination, `oa1`–`oa10` Artistic Interests, `oe1`–`oe10` Emotionality,
+`ov1`–`ov10` Adventurousness, `ot1`–`ot10` Intellect, `ol1`–`ol10` Liberalism.
+32 reverse-keyed. Six facet subscales of 10 (range 10–50).
 
-32 of the 60 NEO-300 items are reverse-keyed. The `reverse` array on the survey is the
-single source of truth for keying; items do not repeat it.
+**IPIP-NEO-120 Openness** (`ipip120`, 24 items, total 24–120):
+`si`/`sa`/`se`/`sv`/`st`/`sl` 1–4 in the same facet order. 12 reverse-keyed.
+Six facet subscales of 4 (range 4–20).
 
-**Presentation order is interleaved, not grouped.** Source order is by facet so it can be
-checked against IPIP; a deterministic round-robin over the seven groups builds the
-administration order at load time, so ten consecutive imagination items never appear
-together. Deterministic, so item order is stable across sessions and answers stay bound
-to their items.
+**Intellect/Imagination marker** (`ipipmarker`, 10 items, total 10–50):
+`m1`–`m10` in published order, 3 reverse-keyed, no subscales — a single broad factor by
+design.
+
+The `reverse` array on each survey is the single source of truth for keying; items do not
+repeat it.
+
+**Presentation order is interleaved for the two NEO forms.** Source order is by facet so it
+can be checked against IPIP; a deterministic round-robin over the facet groups builds the
+administration order at load time, so ten (or four) consecutive imagination items never
+appear together. Deterministic, so item order is stable across sessions and answers stay
+bound to their items. The marker is a single scale and keeps its published order.
 
 **Response scale:** the standard IPIP 5-point accuracy anchors, *Very inaccurate* (1) to
-*Very accurate* (5), with the standard stem.
+*Very accurate* (5), with the standard stem, on all three.
 
 ## Scoring
 
-`scored:false` on the four marker-only items keeps them out of the survey total, so the
-generic likert path yields the NEO-300 score directly:
-
-- **Total** = IPIP-NEO-300 Openness, 60 items, range 60–300
-- **Subscales** = the six NEO-300 facets, 10 items each, range 10–50
-
-A custom block adds the other two keys and the comparison:
-
-- IPIP-NEO-120 Openness: 24-item subset, range 24–120; six facets of 4, range 4–20
-- Intellect/Imagination marker: 10 items, range 10–50
-- All three rescaled to a common 0–100 position-within-range metric, plus a facet-level
-  300-vs-120 comparison on that metric
-
-The existing `unscored` chip says "included to obscure scale purpose", which is true of
-Rotter's filler items but false here — the marker items are scored, just on a different
-key. The chip label and tooltip become per-survey so this one can read "marker only".
+Each test uses the app's existing generic likert path: total from all items, subscales
+where declared. No custom scoring code, no cross-test comparison block — comparing the
+three totals as a percentage of each scale's own range is left to the reader, and the
+About page says so.
 
 ## Caveats to state in the page, not smooth over
 
@@ -98,9 +93,8 @@ key. The chip label and tooltip become per-survey so this one can read "marker o
 - **This is not a DMIDI scale.** The About page describes the battery as measures of
   judgment and decision making; Openness is a personality domain, included for
   correlation against the decision scales. About copy updated to place it accordingly.
-- The two IPIP pages differ trivially on one item: "no absolute right or wrong" (300)
-  vs "right and wrong" (120). The 300 wording is used, since the 300 pool is what is
-  administered.
+- The two IPIP pages differ on one item: "no absolute right or wrong" (300) vs "right and
+  wrong" (120). Each test quotes its own source rather than being normalised to one.
 
 ## Out of scope
 
