@@ -185,6 +185,8 @@
             <input type="range" id="crestRange" min="2.5" max="6.5" step="0.1" value="5.0"></label>
           <label class="slider">Tube bore <b id="boreVal">8 mm</b>
             <input type="range" id="boreRange" min="4" max="12" step="1" value="8"></label>
+          <label class="slider">Intake holes (six around the base) <b id="holeVal">4 mm</b>
+            <input type="range" id="holeRange" min="2" max="8" step="0.5" value="4"></label>
           <div class="toggles">
             <span>Speed <span class="seg" id="speedSeg"><button data-s="0.25">&frac14;&times;</button><button data-s="1" class="on">1&times;</button><button data-s="3">3&times;</button></span></span>
             <label class="toggle"><input type="checkbox" id="pressureToggle"> Pressure view</label>
@@ -246,10 +248,10 @@ function makeGeometry(o = {}) {
   const g = Object.assign({
     bowlR: 4.0, rimZ: 8.0, wall: 0.35,
     colR: 1.1, colWall: 0.25, colTopZ: 6.4,
-    holeZ0: 0.0, holeZ1: 0.35,
+    holeZ0: 0.0, holeD: 0.4, nHoles: 6,      // round intake holes sitting on the floor
     tubeR: 0.4, tubeWall: 0.05, crestZ: 5.0,
     outletZ: -1.4, tableZ: -2.0,
-    Cd: 0.62, Cw: 0.4, pourRate: 45
+    Cd: 0.62, Ch: 0.62, Cw: 0.4, pourRate: 45
   }, o);
   deriveGeometry(g);
   return g;
@@ -257,14 +259,21 @@ function makeGeometry(o = {}) {
 function deriveGeometry(g) {
   g.colInnerR  = g.colR - g.colWall;
   g.tubeOuterR = g.tubeR + g.tubeWall;
+  g.holeZ1     = g.holeZ0 + g.holeD;        // air gets in once the surface drops below this
+  g.A_holes    = g.nHoles * Math.PI * (g.holeD / 2) ** 2;
   if (g.tubeOuterR >= g.colInnerR) throw new Error("tube does not fit inside the column");
-  if (g.crestZ >= g.colTopZ || g.crestZ <= g.holeZ1) throw new Error("crest out of range");
+  if (g.holeD <= 0 || g.crestZ >= g.colTopZ || g.crestZ <= g.holeZ1) throw new Error("crest or holes out of range");
   g.A_bowl = Math.PI * (g.bowlR ** 2 - g.colR ** 2);           // free surface of the drink
   g.A_ann  = Math.PI * (g.colInnerR ** 2 - g.tubeOuterR ** 2); // the ring around the tube
   g.A_tube = Math.PI * g.tubeR ** 2;                            // the bore
   g.A_conn = g.A_bowl + g.A_ann;            // bowl + rising channel act as one vessel
   g.V_tube = g.A_tube * (g.crestZ - g.outletZ);
   return g;
+}
+// Siphon discharge: q = siphonCoeff * sqrt(2 g H). The bore and the intake holes are two orifices in
+// series, so their head losses add: H = q^2/2g * [1/(Cd A_tube)^2 + 1/(Ch A_holes)^2]. Tiny holes throttle it.
+function siphonCoeff(g) {
+  return 1 / Math.sqrt(1 / (g.Cd * g.A_tube) ** 2 + 1 / (g.Ch * g.A_holes) ** 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +316,10 @@ class CupModel {
     const g = this.geo; g.tubeR = d / 2; deriveGeometry(g);
     if (this.phase !== "filling" && this.phase !== "empty") this.reset();
   }
+  setHoles(d) {
+    const g = this.geo; g.holeD = d; deriveGeometry(g);
+    if (this.phase !== "filling" && this.phase !== "empty") this.reset();
+  }
   // pour into a vessel of the given free-surface area; excess over the rim is spilled outside
   _pour(dt, pouring, area) {
     if (!pouring) return;
@@ -347,7 +360,7 @@ class CupModel {
     }
     else if (this.phase === "siphon") {
       const H = this.h - g.outletZ;
-      this.qOut = g.Cd * g.A_tube * Math.sqrt(2 * G * H);
+      this.qOut = siphonCoeff(g) * Math.sqrt(2 * G * H);
       this._pour(dt, pouring, g.A_bowl);
       const dv = Math.min(this.qOut * dt, this.h * g.A_bowl);
       this.h -= dv / g.A_bowl; this.drained += dv;
@@ -386,8 +399,9 @@ class CupModel {
   }
 
   // Gauge pressure (cm H2O) along the streamline surface -> holes -> ring -> crest -> tube -> outlet.
-  // Static below the crest: p = h - z. Flowing: Bernoulli with the total loss (1 - Cd^2)*H spread
-  // evenly along the flowing part of the path, so the outlet reads exactly atmospheric.
+  // Static below the crest: p = h - z. Flowing: Bernoulli with losses. The intake holes take their
+  // orifice loss as a step right at the holes; the bore's loss is spread evenly along the rest of the
+  // flowing path, so the outlet reads exactly atmospheric.
   pressureProfile(n = 48) {
     const g = this.geo, h = this.h, holeZ = (g.holeZ0 + g.holeZ1) / 2;
     const flowing = this.phase === "siphon";
@@ -399,9 +413,11 @@ class CupModel {
     const Lflow = Lann + Ltube;
     const H = h - g.outletZ;
     const lossTotal = flowing ? Math.max(0, H - vTube * vTube / (2 * G)) : 0;
+    const lossHoles = flowing ? Math.min(lossTotal, (q / (g.Ch * g.A_holes)) ** 2 / (2 * G)) : 0;
+    const lossPath = lossTotal - lossHoles;
     const pts = [];
     const push = (seg, s, z, v, sFlow) => {
-      const loss = Lflow > 0 ? lossTotal * (sFlow / Lflow) : 0;
+      const loss = seg === "bowl" ? 0 : lossHoles + (Lflow > 0 ? lossPath * (sFlow / Lflow) : 0);
       pts.push({ seg, s, z, p: (h - z) - v * v / (2 * G) - loss });
     };
     const total = Lbowl + Lflow + 1e-9;
@@ -511,9 +527,12 @@ CupTests.add("crossing the crest primes the siphon within 3 s", () => {
 CupTests.add("siphon: Torricelli with head surface-to-outlet", () => {
   const g = makeGeometry(), m = pourModelTo(new CupModel(g), 5.3);
   runModel(m, 3, true); runModel(m, 0.5);
-  const expect = g.Cd * g.A_tube * Math.sqrt(2 * G * (m.h + m.qOut * 0.01 / g.A_bowl - g.outletZ));
+  const expect = siphonCoeff(g) * Math.sqrt(2 * G * (m.h + m.qOut * 0.01 / g.A_bowl - g.outletZ));
   near(m.flowOut(), expect, 1e-9);
-  assert(m.flowOut() > 30 && m.flowOut() < 40, "q " + m.flowOut());
+  assert(m.flowOut() > 25 && m.flowOut() < 40, "q " + m.flowOut());
+  // with the holes wide open the series formula collapses to plain Torricelli through the bore
+  const open = makeGeometry({ holeD: 1.0, nHoles: 40 });
+  near(siphonCoeff(open), open.Cd * open.A_tube, 0.01 * open.Cd * open.A_tube);
 });
 CupTests.add("siphon keeps running well below the crest", () => {
   const m = pourModelTo(new CupModel(makeGeometry()), 5.3);
@@ -542,11 +561,11 @@ CupTests.add("air break: breaking -> empty, channel levels fall to the bowl", ()
   near(m.balance(), 0, 1e-6);
 });
 CupTests.add("a wider bore drains faster (~d^2)", () => {
-  // compare at equal head: q / sqrt(h - outlet) is the bore's discharge coefficient times area
-  const k = (d) => { const g = makeGeometry({ tubeR: d / 2 }), m = pourModelTo(new CupModel(g), 5.3);
+  // compare at equal head with wide-open holes: q / sqrt(h - outlet) is then Cd times the bore area
+  const k = (d) => { const g = makeGeometry({ tubeR: d / 2, holeD: 1.0, nHoles: 400 }), m = pourModelTo(new CupModel(g), 5.3);
     runModel(m, 3, true); m.step(0.01, false);
     return m.flowOut() / Math.sqrt(m.h + m.flowOut() * 0.01 / g.A_bowl - g.outletZ); };
-  near(k(1.0) / k(0.5), 4, 1e-9);
+  near(k(1.0) / k(0.5), 4, 1e-3);
 });
 CupTests.add("a hair over the line only dribbles, then settles", () => {
   const m = pourModelTo(new CupModel(makeGeometry()), 5.002);
@@ -571,8 +590,8 @@ CupTests.add("setters: crest and bore changes keep the model consistent", () => 
   near(m.geo.A_tube, Math.PI * 0.25, 1e-12);
 });
 CupTests.add("pressure: static column below the crest", () => {
-  const m = pourModelTo(new CupModel(makeGeometry()), 3.0);
-  near(m.pressureAt("holes"), m.h - 0.175, 1e-9);
+  const m = pourModelTo(new CupModel(makeGeometry()), 3.0), g = m.geo;
+  near(m.pressureAt("holes"), m.h - (g.holeZ0 + g.holeZ1) / 2, 1e-9);
   near(m.pressureAt("outlet"), 0, 1e-9, "dry outlet reads atmospheric");
   near(m.pressureAt("crest"), 0, 1e-9, "dry crest reads atmospheric");
   const prof = m.pressureProfile();
@@ -591,6 +610,29 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
   near(prof.pts[prof.pts.length - 1].p, 0, 1e-9, "outlet sample is atmospheric");
   near(prof.pts[0].p, 0, 1e-9, "surface sample is atmospheric");
 });
+CupTests.add("intake holes: small holes throttle the siphon and drop the pressure at the holes", () => {
+  const at = (holeD) => { const g = makeGeometry({ holeD }), m = pourModelTo(new CupModel(g), 5.3);
+    runModel(m, 3, true); while (m.h > 4.0) m.step(0.01, false); return m; };
+  const small = at(0.2), big = at(0.8);
+  assert(small.flowOut() < 0.8 * big.flowOut(), `small ${small.flowOut()} vs big ${big.flowOut()}`);
+  // pressure just inside the holes: static head minus the orifice loss
+  const inside = (m) => m.pressureProfile().pts.find(p => p.seg === "ann");
+  const lossSmall = (small.h - inside(small).z) - inside(small).p, lossBig = (big.h - inside(big).z) - inside(big).p;
+  assert(lossSmall > 3 * lossBig, `hole loss small ${lossSmall} big ${lossBig}`);
+  // the film left behind reaches the top of the hole
+  runModel(small, 40); runModel(big, 40);
+  assert(small.phase === "empty" && big.phase === "empty");
+  assert(big.h > small.h + 0.3, `residual big ${big.h} small ${small.h}`);
+  near(small.balance(), 0, 1e-6); near(big.balance(), 0, 1e-6);
+});
+CupTests.add("setHoles keeps the model consistent", () => {
+  const m = pourModelTo(new CupModel(makeGeometry()), 3.0);
+  m.setHoles(0.6);
+  near(m.geo.holeZ1, 0.6, 1e-12); near(m.geo.A_holes, 6 * Math.PI * 0.09, 1e-12);
+  assert(m.phase === "filling" && m.h > 2.9, "filling is undisturbed");
+  m.setCrest(2.5); m.step(0.01, false); m.setHoles(0.3);
+  assert(m.phase === "filling" && m.h === 0, "mid-spill change resets");
+});
 </script>
 
 <script>
@@ -607,7 +649,7 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
   const PARTS = [
     { name: "bowl",    title: "Bowl",                        text: "Holds the drink. Its free surface is what sets every pressure inside the cup." },
     { name: "column",  title: "Central column",              text: "A hollow shell, closed at the top. From the drinker's side it is just a little dome in the middle of the floor." },
-    { name: "holes",   title: "Intake holes",                text: "Openings at the base of the shell. Whatever is in the bowl can flow in here — and air can get in once the bowl is nearly dry." },
+    { name: "holes",   title: "Intake holes",                text: "Openings around the base of the shell (six in this cup; the section cuts through two). Whatever is in the bowl can flow in here — and air gets in once the surface drops to them. Tiny holes throttle the siphon." },
     { name: "annulus", title: "Rising channel (the ring)",   text: "The ring-shaped gap between the shell and the inner tube. Liquid climbs here, level with the bowl." },
     { name: "crest",   title: "Crest — the fair-share line", text: "The open top of the inner tube. Fill above this and the drink spills over the lip into the tube." },
     { name: "tube",    title: "Inner tube (falling channel)", text: "A narrow bore running from the crest straight down through the stem." },
@@ -777,6 +819,7 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
     for (const id of ["bowlL", "bowlR", "surfL", "surfR", "annL", "annR", "holeL", "holeR", "lipFilm", "slug", "streamOut", "spillL", "spillR",
                       "puddle", "streamJug", "streamJugHi", "ripples", "particles", "revealRect", "cutEdge", "cutLabelOut", "cutLabelIn",
                       "leaders", "annot", "insBowl", "insAnn", "insBore", "pBowl", "pAnn", "pTube"]) App.el[id] = $(id);
+    for (const c of dropPool) App.el.particles.appendChild(c);   // the pool survives rebuilds
     for (const h of stage.querySelectorAll(".hit")) {
       h.addEventListener("pointerenter", () => setHover(h.dataset.part));
       h.addEventListener("pointerleave", () => setHover(null));
@@ -862,7 +905,7 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
     revealRange.value = Math.round(App.reveal * 100);
     revealVal.textContent = Math.round(App.reveal * 100) + "%";
   }
-  revealRange.addEventListener("input", () => { App.revealTween = null; setReveal(revealRange.value / 100); });
+  revealRange.addEventListener("input", () => { App.revealTween = null; setReveal(revealRange.value / 100); saveSettings(); });
 
   // ---------------------------------------------------------------------------
   // Pressure colours (diverging: cool = below atmospheric, warm = above, neutral at 0)
@@ -1188,24 +1231,46 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
   pourBtn.addEventListener("keyup", () => setPouring(false));
   $("resetBtn").addEventListener("click", () => { App.model.reset(); App.drops.length = 0; App.prevSpilled = 0; App.lastEvent = ""; onEvents(); });
 
-  const crestRange = $("crestRange"), boreRange = $("boreRange");
-  crestRange.addEventListener("input", () => {
-    const z = parseFloat(crestRange.value);
-    App.model.setCrest(z); $("crestVal").textContent = z.toFixed(1) + " cm";
-    buildStage(); App.drops.length = 0;
-  });
-  boreRange.addEventListener("input", () => {
-    const d = parseInt(boreRange.value, 10);
-    App.model.setBore(d / 10); $("boreVal").textContent = d + " mm";
-    buildStage(); App.drops.length = 0;
-  });
+  const crestRange = $("crestRange"), boreRange = $("boreRange"), holeRange = $("holeRange");
+  function applyCrest(z) { App.model.setCrest(z); crestRange.value = z; $("crestVal").textContent = z.toFixed(1) + " cm"; }
+  function applyBore(mm) { App.model.setBore(mm / 10); boreRange.value = mm; $("boreVal").textContent = mm + " mm"; }
+  function applyHoles(mm) { App.model.setHoles(mm / 10); holeRange.value = mm; $("holeVal").textContent = mm + " mm"; }
+  crestRange.addEventListener("input", () => { applyCrest(parseFloat(crestRange.value)); buildStage(); App.drops.length = 0; saveSettings(); });
+  boreRange.addEventListener("input", () => { applyBore(parseInt(boreRange.value, 10)); buildStage(); App.drops.length = 0; saveSettings(); });
+  holeRange.addEventListener("input", () => { applyHoles(parseFloat(holeRange.value)); buildStage(); App.drops.length = 0; saveSettings(); });
   function setSpeed(x) {
     App.speed = x;
     for (const b of $("speedSeg").children) b.classList.toggle("on", parseFloat(b.dataset.s) === x);
   }
-  for (const b of $("speedSeg").children) b.addEventListener("click", () => setSpeed(parseFloat(b.dataset.s)));
-  $("pressureToggle").addEventListener("change", (e) => setPressureView(e.target.checked));
-  $("labelsToggle").addEventListener("change", (e) => { App.labels = e.target.checked; App.el.annot.style.visibility = App.labels ? "visible" : "hidden"; });
+  for (const b of $("speedSeg").children) b.addEventListener("click", () => { setSpeed(parseFloat(b.dataset.s)); saveSettings(); });
+  function setLabels(on) { App.labels = on; $("labelsToggle").checked = on; App.el.annot.style.visibility = on ? "visible" : "hidden"; }
+  $("pressureToggle").addEventListener("change", (e) => { setPressureView(e.target.checked); saveSettings(); });
+  $("labelsToggle").addEventListener("change", (e) => { setLabels(e.target.checked); saveSettings(); });
+
+  // ---------------------------------------------------------------------------
+  // Settings persistence (per browser, via localStorage; every access is guarded)
+  // ---------------------------------------------------------------------------
+  const LS_KEY = "pythagorean-cup-v2-settings";
+  function loadSettings() {
+    try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}") || {}; } catch (e) { return {}; }
+  }
+  function saveSettings() {
+    const g = geo();
+    const s = { crest: g.crestZ, bore: Math.round(g.tubeR * 20), holes: g.holeD * 10, speed: App.speed,
+                pressureView: App.pressureView, labels: App.labels, reveal: App.reveal, mode: App.mode, step: Tour.i };
+    try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch (e) { /* storage unavailable: settings just don't persist */ }
+  }
+  function restoreSettings(s) {
+    const num = (v, lo, hi) => (typeof v === "number" && isFinite(v) && v >= lo && v <= hi) ? v : null;
+    const crest = num(s.crest, 2.5, 6.5), bore = num(s.bore, 4, 12), holes = num(s.holes, 2, 8);
+    if (crest !== null) applyCrest(crest);
+    if (bore !== null) applyBore(Math.round(bore));
+    if (holes !== null) applyHoles(holes);
+    if ([0.25, 1, 3].includes(s.speed)) setSpeed(s.speed);
+    if (typeof s.labels === "boolean") setLabels(s.labels);
+    if (typeof s.pressureView === "boolean") setPressureView(s.pressureView);
+    if (num(s.reveal, 0, 1) !== null) App.reveal = s.reveal;
+  }
 
   // ---------------------------------------------------------------------------
   // Tabs
@@ -1223,8 +1288,8 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
       App.lastEvent = ""; onEvents();
     } else Tour.go(Tour.i);
   }
-  $("tabTour").addEventListener("click", () => setMode("tour"));
-  $("tabPlay").addEventListener("click", () => setMode("play"));
+  $("tabTour").addEventListener("click", () => { setMode("tour"); saveSettings(); });
+  $("tabPlay").addEventListener("click", () => { setMode("play"); saveSettings(); });
 
   // ---------------------------------------------------------------------------
   // Guided tour
@@ -1287,9 +1352,9 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
     prev() { this.go(this.i - 1); }
   };
   const dots = $("tourDots");
-  TOUR.forEach((_, k) => { const s = document.createElement("span"); s.addEventListener("click", () => Tour.go(k)); dots.appendChild(s); });
-  $("tourNext").addEventListener("click", () => Tour.next());
-  $("tourPrev").addEventListener("click", () => Tour.prev());
+  TOUR.forEach((_, k) => { const s = document.createElement("span"); s.addEventListener("click", () => { Tour.go(k); saveSettings(); }); dots.appendChild(s); });
+  $("tourNext").addEventListener("click", () => { Tour.next(); saveSettings(); });
+  $("tourPrev").addEventListener("click", () => { Tour.prev(); saveSettings(); });
 
   // ---------------------------------------------------------------------------
   // Main loop
@@ -1316,7 +1381,11 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
   // ---------------------------------------------------------------------------
   // Boot (+ hooks for headless screenshots: ?play=1, ?step=N, ?reveal=NN, ?shot=name)
   // ---------------------------------------------------------------------------
+  const saved = params.has("nosave") ? {} : loadSettings();
   buildStage(); ensurePool();
+  restoreSettings(saved);        // may change the geometry, so build the stage again with it
+  buildStage();
+  setReveal(App.reveal);
   window.__shot = function (name) {
     const idx = { outside: 0, cutaway: 1, filling: 2, line: 3, prime: 4, siphon: 5, empty: 6 }[name];
     if (idx === undefined) return;
@@ -1331,8 +1400,12 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
     render(); updateReadouts();
   };
   if (params.has("shot")) window.__shot(params.get("shot"));
-  else if (params.has("play")) { setMode("play"); if (params.has("reveal")) setReveal(parseInt(params.get("reveal"), 10) / 100); }
-  else { Tour.go(params.has("step") ? parseInt(params.get("step"), 10) - 1 : 0); if (params.has("reveal")) { App.revealTween = null; setReveal(parseInt(params.get("reveal"), 10) / 100); } }
+  else if (params.has("play") || (!params.has("step") && saved.mode === "play")) { setMode("play"); if (params.has("reveal")) setReveal(parseInt(params.get("reveal"), 10) / 100); }
+  else {
+    const step = params.has("step") ? parseInt(params.get("step"), 10) - 1 : (Number.isInteger(saved.step) ? saved.step : 0);
+    Tour.go(step);
+    if (params.has("reveal")) { App.revealTween = null; setReveal(parseInt(params.get("reveal"), 10) / 100); }
+  }
   updateReadouts();
   requestAnimationFrame(tick);
 })();
