@@ -121,7 +121,8 @@
   /* stage */
   #cutEdge { stroke: #5c2d14; stroke-width: 2; stroke-dasharray: 5 4; }
   .hit { fill: transparent; stroke: none; cursor: pointer; pointer-events: all; }
-  .hit.lit { fill: rgba(255,214,120,0.45); stroke: #b3541e; stroke-width: 1.5; }
+  .hit.lit { fill: rgba(255,214,120,0.32); stroke: #b3541e; stroke-width: 1.5; }
+  #annot text { paint-order: stroke; stroke: #f6ecd9; stroke-width: 3px; stroke-linejoin: round; }
   #leaders { font-size: 11px; font-style: italic; font-family: Georgia, serif; fill: #5a4632; }
   #leaders line { stroke: #5a4632; stroke-width: 1; }
   #leaders circle { fill: #5a4632; }
@@ -596,7 +597,720 @@ CupTests.add("pressure: suction at the crest while the siphon runs", () => {
 </script>
 
 <script>
-// DOM script: stage renderer, tour, free play. Added in the next tasks.
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const NS = "http://www.w3.org/2000/svg";
+  const PX = 34, X0 = 260, Y0 = 380;                 // 1 cm = 34 px; z = 0 (bowl floor) at y = 380
+  const sx = (cm) => X0 + cm * PX, sz = (cm) => Y0 - cm * PX;
+  const r1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const params = new URLSearchParams(location.search);
+
+  const PARTS = [
+    { name: "bowl",    title: "Bowl",                        text: "Holds the drink. Its free surface is what sets every pressure inside the cup." },
+    { name: "column",  title: "Central column",              text: "A hollow shell, closed at the top. From the drinker's side it is just a little dome in the middle of the floor." },
+    { name: "holes",   title: "Intake holes",                text: "Openings at the base of the shell. Whatever is in the bowl can flow in here — and air can get in once the bowl is nearly dry." },
+    { name: "annulus", title: "Rising channel (the ring)",   text: "The ring-shaped gap between the shell and the inner tube. Liquid climbs here, level with the bowl." },
+    { name: "crest",   title: "Crest — the fair-share line", text: "The open top of the inner tube. Fill above this and the drink spills over the lip into the tube." },
+    { name: "tube",    title: "Inner tube (falling channel)", text: "A narrow bore running from the crest straight down through the stem." },
+    { name: "stem",    title: "Stem passage",                text: "The bore continues through the solid stem. Nothing shows from outside." },
+    { name: "outlet",  title: "Outlet",                      text: "A hole in the recess under the foot. The siphon discharges here — onto the table, or your lap." }
+  ];
+
+  const App = {
+    model: new CupModel(makeGeometry()),
+    speed: 1, pouring: false, running: false, mode: "tour",
+    pressureView: false, labels: true, reveal: 1,
+    stopWhen: null, lastEvent: "reset", lit: [], hover: null,
+    prevSpilled: 0, spillT: 0, prevDrained: 0, drops: [], spawnAcc: 0, simT: 0,
+    revealTween: null
+  };
+  const geo = () => App.model.geo;
+
+  // ---------------------------------------------------------------------------
+  // Stage construction (rebuilt whenever the geometry changes)
+  // ---------------------------------------------------------------------------
+  const stage = $("stage");
+  const rect = (id, x1, x2, y1, y2, attrs = "") =>
+    `<rect id="${id}" x="${Math.min(x1, x2).toFixed(1)}" y="${Math.min(y1, y2).toFixed(1)}" width="${Math.abs(x2 - x1).toFixed(1)}" height="${Math.abs(y2 - y1).toFixed(1)}" ${attrs}/>`;
+  const hit = (name, x1, x2, y1, y2) =>
+    `<rect class="hit" data-part="${name}" x="${Math.min(x1, x2).toFixed(1)}" y="${Math.min(y1, y2).toFixed(1)}" width="${Math.abs(x2 - x1).toFixed(1)}" height="${Math.abs(y2 - y1).toFixed(1)}" rx="3"><title>${PARTS.find(p => p.name === name).title}</title></rect>`;
+
+  function buildStage() {
+    const g = geo();
+    const s = (side, r) => sx(side * r);
+    const CUT = 'fill="url(#cut)" stroke="#7e4423" stroke-width="1.2" stroke-linejoin="round"';
+    const ceramicBody = (side) =>
+      `M${s(side, g.bowlR + g.wall)},${sz(g.rimZ)} L${s(side, g.bowlR + g.wall)},${sz(-g.wall)} L${s(side, 1.3)},${sz(-g.wall)} ` +
+      `L${s(side, 2.6)},${sz(g.outletZ)} L${s(side, 2.6)},${sz(g.tableZ)} L${s(side, 2.3)},${sz(g.tableZ)} L${s(side, 2.3)},${sz(g.outletZ)} ` +
+      `L${s(side, g.tubeR)},${sz(g.outletZ)} L${s(side, g.tubeR)},${sz(0)} L${s(side, g.bowlR)},${sz(0)} L${s(side, g.bowlR)},${sz(g.rimZ)} Z`;
+    const dome =
+      `M${sx(-g.colR)},${sz(g.colTopZ)} Q${sx(0)},${sz(g.colTopZ + 1.0)} ${sx(g.colR)},${sz(g.colTopZ)} ` +
+      `L${sx(g.colInnerR)},${sz(g.colTopZ)} Q${sx(0)},${sz(g.colTopZ + 0.62)} ${sx(-g.colInnerR)},${sz(g.colTopZ)} Z`;
+    const exterior =
+      `M${sx(-(g.bowlR + g.wall))},${sz(g.rimZ)} L${sx(-(g.bowlR + g.wall))},${sz(-g.wall)} L${sx(-1.3)},${sz(-g.wall)} L${sx(-2.6)},${sz(g.outletZ)} ` +
+      `L${sx(-2.6)},${sz(g.tableZ)} L${sx(2.6)},${sz(g.tableZ)} L${sx(2.6)},${sz(g.outletZ)} L${sx(1.3)},${sz(-g.wall)} L${sx(g.bowlR + g.wall)},${sz(-g.wall)} L${sx(g.bowlR + g.wall)},${sz(g.rimZ)} Z`;
+    const yTop = sz(g.rimZ) - 8, yBot = sz(g.tableZ) + 6;
+    const cutX0 = sx(-(g.bowlR + g.wall)) - 4, cutX1 = sx(g.bowlR + g.wall) + 4;
+    App.cutRange = [cutX0, cutX1];
+
+    // plan-view inset (from above), 1 cm = 11 px
+    const IC = [452, 60], IS = 11;
+    const ring = (id, r, fill, extra = "") => `<circle id="${id}" cx="${IC[0]}" cy="${IC[1]}" r="${(r * IS).toFixed(1)}" fill="${fill}" ${extra}/>`;
+
+    stage.innerHTML = `
+      <defs>
+        <pattern id="cut" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="6" height="6" fill="#e9d7bb"/><line x1="0" y1="0" x2="0" y2="6" stroke="rgba(126,68,35,0.32)" stroke-width="1.3"/>
+        </pattern>
+        <linearGradient id="wineGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a63b60"/><stop offset="1" stop-color="#5c1029"/></linearGradient>
+        <linearGradient id="extGrad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#8a4a25"/><stop offset="0.35" stop-color="#b8703f"/><stop offset="0.7" stop-color="#d0895a"/><stop offset="1" stop-color="#7a3f1f"/>
+        </linearGradient>
+        <linearGradient id="pBowl" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a63b60"/><stop offset="1" stop-color="#5c1029"/></linearGradient>
+        <linearGradient id="pAnn"  gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a63b60"/><stop offset="1" stop-color="#5c1029"/></linearGradient>
+        <linearGradient id="pTube" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a63b60"/><stop offset="1" stop-color="#5c1029"/></linearGradient>
+        <clipPath id="revealClip"><rect id="revealRect" x="${cutX1}" y="0" width="200" height="500"/></clipPath>
+        <clipPath id="bowlClip"><rect x="${sx(-g.bowlR)}" y="${sz(g.rimZ)}" width="${2 * g.bowlR * PX}" height="${g.rimZ * PX}"/></clipPath>
+      </defs>
+      <rect x="0" y="0" width="520" height="500" fill="#f6ecd9"/>
+      <rect x="0" y="${sz(g.tableZ)}" width="520" height="${500 - sz(g.tableZ)}" fill="#a9743f"/>
+      <rect x="0" y="${sz(g.tableZ)}" width="520" height="4" fill="#8a5a2e"/>
+      <ellipse cx="${X0}" cy="${sz(g.tableZ) + 3}" rx="110" ry="8" fill="rgba(61,44,30,0.14)"/>
+      <ellipse id="puddle" cx="${X0}" cy="${sz(g.tableZ) + 3}" rx="0" ry="3" fill="rgba(124,29,62,0.45)"/>
+
+      <g id="liquid">
+        <g clip-path="url(#bowlClip)">
+          <path id="bowlL" d="" fill="url(#wineGrad)"/><path id="bowlR" d="" fill="url(#wineGrad)"/>
+        </g>
+        <path id="surfL" d="" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="2" stroke-linecap="round"/>
+        <path id="surfR" d="" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="2" stroke-linecap="round"/>
+        ${rect("annL", s(-1, g.tubeOuterR), s(-1, g.colInnerR), sz(0), sz(0), 'fill="url(#wineGrad)"')}
+        ${rect("annR", s(1, g.tubeOuterR), s(1, g.colInnerR), sz(0), sz(0), 'fill="url(#wineGrad)"')}
+        ${rect("lipFilm", sx(-g.colInnerR), sx(g.colInnerR), sz(g.crestZ), sz(g.crestZ), 'fill="url(#wineGrad)"')}
+        ${rect("slug", sx(-g.tubeR), sx(g.tubeR), sz(g.crestZ), sz(g.crestZ), 'fill="url(#wineGrad)"')}
+        ${rect("streamOut", sx(-g.tubeR), sx(g.tubeR), sz(g.outletZ), sz(g.tableZ), 'fill="#7c1d3e" visibility="hidden"')}
+        ${rect("spillL", sx(-(g.bowlR + g.wall)) - 4, sx(-(g.bowlR + g.wall)), sz(g.rimZ), sz(g.tableZ), 'fill="#7c1d3e" opacity="0.85" visibility="hidden"')}
+        ${rect("spillR", sx(g.bowlR + g.wall), sx(g.bowlR + g.wall) + 4, sz(g.rimZ), sz(g.tableZ), 'fill="#7c1d3e" opacity="0.85" visibility="hidden"')}
+      </g>
+      <path id="streamJug" d="" fill="none" stroke="#7c1d3e" stroke-width="6" stroke-linecap="round"/>
+      <g id="ripples" transform="translate(-500,-500)">
+        <ellipse class="rip" rx="22" ry="5" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="2"/>
+        <ellipse class="rip" rx="22" ry="5" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="2"/>
+        <ellipse class="rip" rx="22" ry="5" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="2"/>
+      </g>
+      <g id="particles"></g>
+
+      <g id="section">
+        <path d="${ceramicBody(-1)}" ${CUT}/><path d="${ceramicBody(1)}" ${CUT}/>
+        ${rect("shellL", s(-1, g.colInnerR), s(-1, g.colR), sz(g.colTopZ), sz(g.holeZ1), CUT)}
+        ${rect("shellR", s(1, g.colInnerR), s(1, g.colR), sz(g.colTopZ), sz(g.holeZ1), CUT)}
+        <path d="${dome}" ${CUT}/>
+        ${rect("tubeWallL", s(-1, g.tubeR), s(-1, g.tubeOuterR), sz(g.crestZ), sz(0), CUT)}
+        ${rect("tubeWallR", s(1, g.tubeR), s(1, g.tubeOuterR), sz(g.crestZ), sz(0), CUT)}
+        <line x1="${sx(-(g.bowlR + g.wall)) - 2}" y1="${sz(g.rimZ)}" x2="${sx(-g.bowlR) + 2}" y2="${sz(g.rimZ)}" stroke="#7e4423" stroke-width="3" stroke-linecap="round"/>
+        <line x1="${sx(g.bowlR) - 2}" y1="${sz(g.rimZ)}" x2="${sx(g.bowlR + g.wall) + 2}" y2="${sz(g.rimZ)}" stroke="#7e4423" stroke-width="3" stroke-linecap="round"/>
+      </g>
+
+      <g id="annot" font-family="Georgia, serif" font-style="italic" font-size="11" fill="#b3541e">
+        <line id="crestLine" x1="${sx(-g.bowlR)}" y1="${sz(g.crestZ)}" x2="${sx(g.bowlR)}" y2="${sz(g.crestZ)}" stroke="#b3541e" stroke-width="1.5" stroke-dasharray="6 5" opacity="0.9"/>
+        <text x="${sx(-(g.bowlR + g.wall)) - 7}" y="${sz(g.crestZ) + 4}" text-anchor="end">fair-share line</text>
+        <text x="${sx(g.bowlR + g.wall) + 7}" y="${sz(g.crestZ) + 4}">crest ${r1(g.crestZ)} cm</text>
+        <line x1="${sx(-g.bowlR)}" y1="${sz(2.5)}" x2="${sx(g.bowlR)}" y2="${sz(2.5)}" stroke="#5a4632" stroke-width="1" stroke-dasharray="2 4" opacity="0.7"/>
+        <text x="${sx(g.bowlR + g.wall) + 7}" y="${sz(2.5) + 4}" fill="#5a4632">A&ndash;A</text>
+        <text x="${sx(g.colR) + 6}" y="${sz(g.holeZ1) - 2}" font-size="10" fill="#5c2d14">intake holes</text>
+        <text x="${sx(2.6) + 8}" y="${sz(g.outletZ) + 13}" font-size="10" fill="#5c2d14">outlet</text>
+        <g id="leaders" style="visibility:hidden"></g>
+      </g>
+
+      <g id="parts">
+        ${hit("bowl", sx(-(g.bowlR + g.wall)) - 2, sx(-g.bowlR) + 2, sz(g.rimZ) - 2, sz(0))}
+        ${hit("bowl", sx(g.bowlR) - 2, sx(g.bowlR + g.wall) + 2, sz(g.rimZ) - 2, sz(0))}
+        <path class="hit" data-part="column" d="${dome}"><title>Central column</title></path>
+        ${hit("column", s(-1, g.colR) - 2, s(-1, g.colInnerR) + 1, sz(g.colTopZ), sz(g.holeZ1))}
+        ${hit("column", s(1, g.colInnerR) - 1, s(1, g.colR) + 2, sz(g.colTopZ), sz(g.holeZ1))}
+        ${hit("annulus", s(-1, g.colInnerR), s(-1, g.tubeOuterR), sz(g.crestZ - 0.4), sz(0))}
+        ${hit("annulus", s(1, g.tubeOuterR), s(1, g.colInnerR), sz(g.crestZ - 0.4), sz(0))}
+        ${hit("crest", s(-1, g.colInnerR), s(1, g.colInnerR), sz(g.crestZ + 0.45), sz(g.crestZ - 0.4))}
+        ${hit("tube", s(-1, g.tubeOuterR), s(1, g.tubeOuterR), sz(g.crestZ - 0.4), sz(0))}
+        ${hit("holes", s(-1, g.colR) - 6, s(-1, g.colInnerR) + 4, sz(g.holeZ1) - 4, sz(0) + 4)}
+        ${hit("holes", s(1, g.colInnerR) - 4, s(1, g.colR) + 6, sz(g.holeZ1) - 4, sz(0) + 4)}
+        ${hit("stem", sx(-1.0), sx(1.0), sz(0), sz(g.outletZ + 0.15))}
+        ${hit("outlet", sx(-2.2), sx(2.2), sz(g.outletZ + 0.15), sz(g.tableZ))}
+      </g>
+
+      <g id="exterior" clip-path="url(#revealClip)">
+        <path d="${exterior}" fill="url(#extGrad)" stroke="#6e381a" stroke-width="2" stroke-linejoin="round"/>
+        <rect x="${sx(-(g.bowlR + g.wall))}" y="${sz(g.rimZ) - 3}" width="${2 * (g.bowlR + g.wall) * PX}" height="6" rx="3" fill="#7e4423"/>
+        <ellipse cx="${sx(1.7)}" cy="${sz(4.8)}" rx="16" ry="70" fill="rgba(255,255,255,0.13)"/>
+      </g>
+      <line id="cutEdge" x1="${cutX1}" y1="${yTop}" x2="${cutX1}" y2="${yBot}" style="visibility:hidden"/>
+      <text id="cutLabelOut" x="0" y="${yTop - 4}" font-family="Georgia, serif" font-style="italic" font-size="11" fill="#5a4632" text-anchor="start" style="visibility:hidden">outside</text>
+      <text id="cutLabelIn" x="0" y="${yTop - 4}" font-family="Georgia, serif" font-style="italic" font-size="11" fill="#5a4632" text-anchor="end" style="visibility:hidden">inside</text>
+
+      <g transform="translate(96,58)">
+        <g id="jugGroup">
+          <circle cx="-36" cy="8" r="24" fill="url(#extGrad)" stroke="#7e4423" stroke-width="3.5"/>
+          <ellipse cx="-44" cy="0" rx="6" ry="10" fill="rgba(255,255,255,0.25)"/>
+          <circle cx="-42" cy="-18" r="5.5" fill="#7e4423"/>
+          <path d="M-54,-9 C-70,-16 -72,10 -56,15" fill="none" stroke="#7e4423" stroke-width="4.5" stroke-linecap="round"/>
+          <path d="M-14,-3 L1,0 L-7,10 Z" fill="#7e4423"/>
+        </g>
+      </g>
+
+      <g id="inset" font-family="Georgia, serif" font-style="italic" font-size="10" fill="#5a4632">
+        ${ring("insOuter", g.bowlR + g.wall, "url(#cut)", 'stroke="#7e4423" stroke-width="1"')}
+        ${ring("insBowl", g.bowlR, "#f6ecd9")}
+        ${ring("insShell", g.colR, "url(#cut)", 'stroke="#7e4423" stroke-width="0.8"')}
+        ${ring("insAnn", g.colInnerR, "#f6ecd9")}
+        ${ring("insTubeWall", g.tubeOuterR, "#c9a77a")}
+        ${ring("insBore", g.tubeR, "#f6ecd9")}
+        <text x="${IC[0]}" y="${IC[1] + (g.bowlR + g.wall) * IS + 13}" text-anchor="middle">from above at A&ndash;A</text>
+      </g>`;
+
+    // liquid element handles
+    App.el = {};
+    for (const id of ["bowlL", "bowlR", "surfL", "surfR", "annL", "annR", "lipFilm", "slug", "streamOut", "spillL", "spillR",
+                      "puddle", "streamJug", "ripples", "particles", "revealRect", "cutEdge", "cutLabelOut", "cutLabelIn",
+                      "leaders", "annot", "insBowl", "insAnn", "insBore", "pBowl", "pAnn", "pTube"]) App.el[id] = $(id);
+    for (const h of stage.querySelectorAll(".hit")) {
+      h.addEventListener("pointerenter", () => setHover(h.dataset.part));
+      h.addEventListener("pointerleave", () => setHover(null));
+      h.addEventListener("click", () => selectPart(h.dataset.part));
+    }
+    applyHighlight();
+    setReveal(App.reveal);
+    buildLeaders();
+    stage.classList.toggle("pouring", App.pouring);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Parts: hover / click / legend
+  // ---------------------------------------------------------------------------
+  const partList = $("partList"), partInfo = $("partInfo");
+  for (const p of PARTS) {
+    const d = document.createElement("div");
+    d.textContent = (PARTS.indexOf(p) + 1) + " · " + p.title; d.dataset.part = p.name;
+    d.addEventListener("pointerenter", () => setHover(p.name));
+    d.addEventListener("pointerleave", () => setHover(null));
+    d.addEventListener("click", () => selectPart(p.name));
+    partList.appendChild(d);
+  }
+  function selectPart(name) { App.lit = [name]; setHover(null); applyHighlight(); }
+  function setHover(name) { App.hover = name; applyHighlight(); }
+  function applyHighlight() {
+    const on = new Set(App.lit); if (App.hover) on.add(App.hover);
+    for (const h of stage.querySelectorAll(".hit")) h.classList.toggle("lit", on.has(h.dataset.part));
+    for (const d of partList.children) d.classList.toggle("lit", on.has(d.dataset.part));
+    const show = App.hover || App.lit[App.lit.length - 1];
+    const p = PARTS.find(x => x.name === show);
+    partInfo.innerHTML = p ? `<b>${p.title}.</b> ${p.text}` : "<b>Pick a part</b> to see what it does.";
+  }
+
+  function buildLeaders() {
+    const g = geo(), L = App.el.leaders;
+    // numbered pins; the numbers match the parts legend in the panel
+    const lx0 = sx(-(g.bowlR + g.wall)) - 34, lx1 = sx(g.bowlR + g.wall) + 34;
+    const spec = [
+      ["bowl",    sx(-g.bowlR - 0.15), sz(7.2),        lx0, sz(7.6)],
+      ["column",  sx(-g.colR + 0.02),  sz(6.0),        lx0, sz(6.0)],
+      ["holes",   sx(-g.colR) - 4,     sz(0.2),        lx0, sz(0.7)],
+      ["annulus", sx(-0.65),           sz(3.2),        lx0, sz(3.4)],
+      ["crest",   sx(0.5),             sz(g.crestZ),   lx1, sz(g.crestZ + 0.5)],
+      ["tube",    sx(0.2),             sz(2.2),        lx1, sz(2.2)],
+      ["stem",    sx(0.2),             sz(-0.9),       lx1, sz(-0.6)],
+      ["outlet",  sx(0.4),             sz(g.outletZ - 0.25), lx1, sz(g.outletZ - 0.45)]
+    ];
+    let html = "";
+    spec.forEach(([name, ax, ay, lx, ly]) => {
+      const n = PARTS.findIndex(x => x.name === name) + 1;
+      html += `<line x1="${ax}" y1="${ay}" x2="${lx}" y2="${ly}"/><circle cx="${ax}" cy="${ay}" r="2"/>` +
+              `<circle cx="${lx}" cy="${ly}" r="8" fill="#5a4632"/><text class="num" x="${lx}" y="${ly + 3.2}" text-anchor="middle">${n}</text>`;
+    });
+    L.innerHTML = html;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reveal (exterior -> section)
+  // ---------------------------------------------------------------------------
+  const revealRange = $("revealRange"), revealVal = $("revealVal");
+  function setReveal(frac, animate) {
+    if (animate && !reducedMotion) {
+      const from = App.reveal, t0 = performance.now(), dur = 900;
+      App.revealTween = (now) => {
+        const u = Math.min(1, (now - t0) / dur), e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+        setReveal(from + (frac - from) * e);
+        if (u >= 1) App.revealTween = null;
+      };
+      return;
+    }
+    App.reveal = Math.max(0, Math.min(1, frac));
+    const [x0, x1] = App.cutRange, cut = x0 + (x1 - x0) * App.reveal;   // section shows left of the cut
+    $("inset").style.opacity = (0.15 + 0.85 * App.reveal).toFixed(2);
+    App.el.revealRect.setAttribute("x", cut.toFixed(1));
+    App.el.revealRect.setAttribute("width", (x1 - cut + 80).toFixed(1));
+    App.el.cutEdge.setAttribute("x1", cut.toFixed(1)); App.el.cutEdge.setAttribute("x2", cut.toFixed(1));
+    const mid = App.reveal > 0.02 && App.reveal < 0.98;
+    App.el.cutEdge.style.visibility = mid ? "visible" : "hidden";
+    App.el.cutLabelOut.style.visibility = App.el.cutLabelIn.style.visibility = mid ? "visible" : "hidden";
+    App.el.cutLabelOut.setAttribute("x", (cut + 6).toFixed(1));
+    App.el.cutLabelIn.setAttribute("x", (cut - 6).toFixed(1));
+    revealRange.value = Math.round(App.reveal * 100);
+    revealVal.textContent = Math.round(App.reveal * 100) + "%";
+  }
+  revealRange.addEventListener("input", () => { App.revealTween = null; setReveal(revealRange.value / 100); });
+
+  // ---------------------------------------------------------------------------
+  // Pressure colours (diverging: cool = below atmospheric, warm = above, neutral at 0)
+  // ---------------------------------------------------------------------------
+  function mix(a, b, t) { return a.map((v, i) => Math.round(v + (b[i] - v) * t)); }
+  const C_NEG = [63, 111, 181], C_MID = [176, 164, 170], C_POS = [194, 59, 59];
+  function pressureColor(p) {
+    const t = Math.max(-1, Math.min(1, p / 8));
+    const c = t < 0 ? mix(C_MID, C_NEG, -t) : mix(C_MID, C_POS, t);
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+  function setGrad(el, y1, y2, p1, p2) {
+    el.setAttribute("y1", y1.toFixed(1)); el.setAttribute("y2", y2.toFixed(1));
+    el.children[0].setAttribute("stop-color", pressureColor(p1));
+    el.children[1].setAttribute("stop-color", pressureColor(p2));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Droplets riding the path: bowl -> hole -> up the ring -> over the lip -> down the bore -> out
+  // ---------------------------------------------------------------------------
+  const DROP_MAX = 70;
+  const dropPool = [];
+  function ensurePool() {
+    const P = App.el.particles;
+    while (dropPool.length < DROP_MAX) {
+      const c = document.createElementNS(NS, "circle");
+      c.setAttribute("r", "2.2"); c.setAttribute("fill", "#e9a3bd"); c.setAttribute("opacity", "0.9"); c.setAttribute("visibility", "hidden");
+      P.appendChild(c); dropPool.push(c);
+    }
+  }
+  function segEnds(d, i) {                       // in cm; returns [[x,z],[x,z]]
+    const g = geo(), s = d.side;
+    const hole = [s * (g.colR + 0.02), 0.18], annBot = [s * 0.65, 0.2], annTop = [s * 0.65, g.crestZ + 0.06];
+    const lip = [s * 0.16, g.crestZ + 0.1], out = [s * 0.16, g.outletZ], table = [s * 0.16, g.tableZ + 0.05];
+    switch (i) {
+      case 0: return [[d.x0, d.z0], hole];
+      case 1: return [hole, annBot];
+      case 2: return [annBot, annTop];
+      case 3: return [annTop, lip];
+      case 4: return [lip, out];
+      default: return [out, table];
+    }
+  }
+  function segSpeed(i) {
+    const m = App.model, g = geo();
+    const q = m.phase === "siphon" ? m.qOut : (m.phase === "spilling" ? Math.max(m.qWeir, 2) : 0);
+    if (i === 0) return 2.5 + q / 6;
+    if (i <= 2) return Math.max(5, q / g.A_ann);
+    if (i <= 4) return Math.max(8, q / g.A_tube);
+    return 90;
+  }
+  function spawnDrop() {
+    const m = App.model, g = geo(), side = Math.random() < 0.5 ? -1 : 1;
+    if (m.h < 0.6) return;
+    App.drops.push({ side, seg: 0, d: 0,
+      x0: side * (g.colR + 0.25 + Math.random() * (g.bowlR - g.colR - 0.5)),
+      z0: 0.15 + Math.random() * Math.min(m.h - 0.3, 2.2) });
+  }
+  function updateDrops(dt) {
+    const m = App.model;
+    if (reducedMotion) { App.drops.length = 0; return; }
+    const rate = m.phase === "siphon" ? m.qOut / 3 : (m.phase === "spilling" ? 2.5 : 0);
+    App.spawnAcc += rate * dt;
+    while (App.spawnAcc > 1 && App.drops.length < DROP_MAX) { App.spawnAcc -= 1; spawnDrop(); }
+    if (rate === 0) App.spawnAcc = 0;
+    const frontZ = geo().crestZ - m.tubeFill * (geo().crestZ - geo().outletZ);
+    for (let i = App.drops.length - 1; i >= 0; i--) {
+      const d = App.drops[i];
+      d.d += segSpeed(d.seg) * dt;
+      let [a, b] = segEnds(d, d.seg), len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      while (d.d >= len && d.seg < 5) { d.d -= len; d.seg++; [a, b] = segEnds(d, d.seg); len = Math.hypot(b[0] - a[0], b[1] - a[1]); }
+      const t = Math.min(1, d.d / len);
+      d.x = a[0] + (b[0] - a[0]) * t; d.z = a[1] + (b[1] - a[1]) * t;
+      const dead = (d.seg === 5 && t >= 1) ||
+                   (m.phase === "spilling" && d.seg === 4 && d.z < frontZ + 0.1) ||
+                   (m.phase !== "siphon" && m.phase !== "spilling" && d.seg < 5) ||
+                   (d.seg <= 2 && d.z > m.hAnn + 0.3 && d.seg !== 0) ||
+                   (d.seg === 0 && d.z > m.h);
+      if (dead) App.drops.splice(i, 1);
+    }
+  }
+  function drawDrops() {
+    for (let i = 0; i < dropPool.length; i++) {
+      const el = dropPool[i], d = App.drops[i];
+      if (d) { el.setAttribute("cx", sx(d.x).toFixed(1)); el.setAttribute("cy", sz(d.z).toFixed(1)); el.setAttribute("visibility", "visible"); }
+      else el.setAttribute("visibility", "hidden");
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------------
+  function wave(x0, x1, y, t, amp, n) {
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const x = x0 + (x1 - x0) * i / n, edge = Math.sin(i / n * Math.PI);
+      pts.push([x, y + Math.sin(t * 4 + x * 0.09) * amp * edge]);
+    }
+    return pts;
+  }
+  function render() {
+    const m = App.model, g = geo(), E = App.el;
+    const t = App.simT, amp = reducedMotion ? 0 : (App.pouring ? 2.4 : 0.9) + (m.phase === "siphon" ? 0.6 : 0);
+    const yS = sz(Math.min(m.h, g.rimZ));
+    const pv = App.pressureView;
+
+    // bowl liquid, left and right of the column
+    for (const [side, path, surf] of [[-1, E.bowlL, E.surfL], [1, E.bowlR, E.surfR]]) {
+      if (m.h <= 0.005) { path.setAttribute("d", ""); surf.setAttribute("d", ""); continue; }
+      const xa = sx(side * g.bowlR), xb = sx(side * g.colR);
+      let pts = wave(Math.min(xa, xb), Math.max(xa, xb), yS, t, amp, 12);
+      if (m.phase === "siphon" && !reducedMotion) {    // dimple above the intake side
+        const dip = Math.min(6, 2 + m.h * 0.6), cx = sx(side * (g.colR + 0.55));
+        pts = pts.map(([x, y]) => [x, y + dip * Math.exp(-((x - cx) ** 2) / 260)]);
+      }
+      let d = `M${xa},${sz(0)}`;
+      for (const [x, y] of (side < 0 ? pts : pts.slice().reverse())) d += ` L${x.toFixed(1)},${y.toFixed(1)}`;
+      d += ` L${xb},${sz(0)} Z`;
+      path.setAttribute("d", d);
+      surf.setAttribute("d", pts.map(([x, y], i) => (i ? "L" : "M") + x.toFixed(1) + "," + y.toFixed(1)).join(" "));
+      path.setAttribute("fill", pv ? "url(#pBowl)" : "url(#wineGrad)");
+    }
+    // ring
+    const annTop = Math.min(m.hAnn, g.colTopZ - 0.02);
+    for (const el of [E.annL, E.annR]) {
+      el.setAttribute("y", sz(annTop).toFixed(1)); el.setAttribute("height", Math.max(0, annTop * PX).toFixed(1));
+      el.setAttribute("fill", pv ? "url(#pAnn)" : "url(#wineGrad)");
+    }
+    // film over the lip: the heap while spilling, a thin skin while the siphon runs
+    let film = 0;
+    if (m.phase === "spilling") film = Math.max(0, m.hAnn - g.crestZ);
+    else if (m.phase === "siphon") film = 0.1;
+    E.lipFilm.setAttribute("y", sz(g.crestZ + film).toFixed(1)); E.lipFilm.setAttribute("height", (film * PX).toFixed(1));
+    E.lipFilm.setAttribute("fill", pv ? pressureColor(m.pressureAt("crest")) : "url(#wineGrad)");
+    // slug in the bore
+    const len = g.crestZ - g.outletZ;
+    let top = g.crestZ, bot = g.crestZ - m.tubeFill * len;
+    if (m.phase === "breaking") { top = g.crestZ - (1 - m.tubeFill) * len; bot = g.outletZ; }
+    E.slug.setAttribute("y", sz(top).toFixed(1)); E.slug.setAttribute("height", Math.max(0, (top - bot) * PX).toFixed(1));
+    E.slug.setAttribute("fill", pv ? "url(#pTube)" : "url(#wineGrad)");
+    // outlet stream and puddle
+    let jet = m.phase === "siphon" ? Math.sqrt(m.qOut / 36) : (m.phase === "breaking" ? m.tubeFill * 0.9 : 0);
+    if (m.phase === "spilling" && m.tubeFill > 0 && m.qWeir === 0) jet = 0.25;   // the dribble
+    if (jet > 0.02) {
+      const w = Math.max(2, 2 * g.tubeR * PX * Math.min(1, jet));
+      E.streamOut.setAttribute("x", (X0 - w / 2).toFixed(1)); E.streamOut.setAttribute("width", w.toFixed(1));
+      E.streamOut.setAttribute("visibility", "visible");
+    } else E.streamOut.setAttribute("visibility", "hidden");
+    const wet = m.drained + m.spilled;
+    E.puddle.setAttribute("rx", Math.min(150, wet > 0.5 ? 10 + wet * 0.5 : 0).toFixed(1));
+    // rim overflow
+    if (m.spilled > App.prevSpilled + 1e-9) App.spillT = 0.5;
+    App.prevSpilled = m.spilled;
+    const spilling = App.spillT > 0;
+    E.spillL.setAttribute("visibility", spilling ? "visible" : "hidden");
+    E.spillR.setAttribute("visibility", spilling ? "visible" : "hidden");
+    // jug stream + ripples follow the surface
+    if (App.pouring) {
+      const tx = sx(-2.5), ty = yS;
+      E.streamJug.setAttribute("d", `M98,61 C112,90 ${tx + 20},${ty - 60} ${tx},${ty}`);
+      E.ripples.setAttribute("transform", `translate(${tx},${ty})`);
+    }
+    // pressure gradients (userSpaceOnUse, vertical, two stops each; p is linear in z on every segment)
+    if (pv) {
+      const prof = m.pressureProfile(), ann = prof.pts.filter(p => p.seg === "ann"), tube = prof.pts.filter(p => p.seg === "tube");
+      setGrad(E.pBowl, yS, sz(0), 0, m.h);
+      if (ann.length) setGrad(E.pAnn, sz(ann[ann.length - 1].z), sz(ann[0].z), ann[ann.length - 1].p, ann[0].p);
+      else setGrad(E.pAnn, sz(annTop), sz(0), 0, annTop);
+      if (tube.length) setGrad(E.pTube, sz(tube[0].z), sz(tube[tube.length - 1].z), tube[0].p, tube[tube.length - 1].p);
+      else setGrad(E.pTube, sz(g.crestZ), sz(g.outletZ), 0, 0);
+    }
+    // plan-view inset: what is wet at z = 2.5
+    E.insBowl.setAttribute("fill", m.h >= 2.5 ? "#8e2145" : "#f6ecd9");
+    E.insAnn.setAttribute("fill", m.hAnn >= 2.5 ? "#8e2145" : "#f6ecd9");
+    E.insBore.setAttribute("fill", (m.phase === "siphon" || (m.tubeFill > 0 && g.crestZ - m.tubeFill * len <= 2.5)) ? "#8e2145" : "#f6ecd9");
+    drawDrops();
+    if (App.revealTween) App.revealTween(performance.now());
+  }
+
+  // ---------------------------------------------------------------------------
+  // Readouts + chart
+  // ---------------------------------------------------------------------------
+  const RO = [["level", "Level in bowl", "cm"], ["ring", "Ring level", "cm"], ["flow", "Flow in the tube", "mL/s"], ["pc", "Gauge at crest", "cm H₂O"],
+              ["poured", "Poured", "mL"], ["drained", "Drained", "mL"], ["kept", "Kept", "mL"], ["phase", "Phase", ""]];
+  const roEl = {};
+  for (const [k, label, unit] of RO) {
+    const d = document.createElement("div"); d.className = "ro";
+    d.innerHTML = `<small>${label}</small>` + (k === "phase" ? `<span class="badge" id="phaseBadge">filling</span>` : `<b><span id="ro_${k}">0</span> ${unit}</b>`);
+    $("readouts").appendChild(d);
+    roEl[k] = k === "phase" ? d.querySelector("#phaseBadge") : d.querySelector("#ro_" + k);
+  }
+  const PHASE_CLS = { filling: "", spilling: "warn", siphon: "danger", breaking: "danger", empty: "ok" };
+  const PHASE_LABEL = { filling: "filling", spilling: "spilling over", siphon: "siphon running", breaking: "air break", empty: "drained" };
+  function updateReadouts() {
+    const m = App.model, g = geo();
+    roEl.level.textContent = m.h.toFixed(2);
+    roEl.ring.textContent = m.hAnn.toFixed(2);
+    roEl.flow.textContent = (m.phase === "spilling" ? m.qWeir : m.qOut).toFixed(1);
+    const pc = m.pressureAt("crest");
+    roEl.pc.textContent = (pc > 0 ? "+" : "") + pc.toFixed(1);
+    roEl.pc.parentElement.title = (pc * CM_H2O_TO_KPA).toFixed(2) + " kPa gauge";
+    roEl.poured.textContent = Math.round(m.poured);
+    roEl.drained.textContent = Math.round(m.drained + m.spilled);
+    roEl.kept.textContent = Math.round(m.h * g.A_bowl + m.hAnn * g.A_ann);
+    roEl.phase.textContent = PHASE_LABEL[m.phase];
+    roEl.phase.className = "badge " + PHASE_CLS[m.phase];
+    if (App.pressureView) drawChart();
+  }
+
+  const chart = $("pChart"), chartWrap = $("chartWrap");
+  const CH = { l: 46, r: 14, t: 12, b: 30, w: 520, h: 150 };
+  function drawChart() {
+    const m = App.model, prof = m.pressureProfile(), pts = prof.pts;
+    if (!pts.length || prof.sTotal <= 0) { chart.innerHTML = ""; return; }
+    let pMin = -8, pMax = 8;
+    for (const p of pts) { pMin = Math.min(pMin, p.p - 1); pMax = Math.max(pMax, p.p + 1); }
+    const X = (s) => CH.l + (CH.w - CH.l - CH.r) * s / prof.sTotal;
+    const Y = (p) => CH.t + (CH.h - CH.t - CH.b) * (pMax - p) / (pMax - pMin);
+    const ink = "#3d2c1e", mute = "#9a8a76", grid = "rgba(126,68,35,0.18)";
+    let html = "";
+    for (const v of [-8, -4, 4, 8]) if (v > pMin && v < pMax)
+      html += `<line x1="${CH.l}" x2="${CH.w - CH.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="${grid}" stroke-width="1"/><text x="${CH.l - 6}" y="${Y(v) + 3.5}" text-anchor="end" font-size="10" fill="${mute}">${v > 0 ? "+" : ""}${v}</text>`;
+    html += `<line x1="${CH.l}" x2="${CH.w - CH.r}" y1="${Y(0)}" y2="${Y(0)}" stroke="${mute}" stroke-width="1"/>` +
+            `<text x="${CH.w - CH.r}" y="${Y(0) - 4}" text-anchor="end" font-size="10" fill="${mute}">atmospheric</text>` +
+            `<text x="${CH.l + 4}" y="${Y(0) + 12}" font-size="10" fill="${mute}" font-style="italic">suction below this line</text>` +
+            `<text x="${CH.l - 34}" y="${CH.t + 2}" font-size="10" fill="${mute}" transform="rotate(-90 ${CH.l - 34} ${CH.t + 2})" text-anchor="end">cm H₂O</text>`;
+    const st = prof.stations;
+    for (const [k, label] of [["surface", "surface"], ["holes", "holes"], ["crest", "crest"], ["outlet", "outlet"]]) {
+      if (k === "outlet" && m.phase !== "siphon") continue;
+      if (k === "crest" && st.crest === st.outlet && m.phase !== "siphon" && m.hAnn < geo().crestZ) continue;
+      const x = X(st[k]);
+      html += `<line x1="${x}" x2="${x}" y1="${CH.h - CH.b}" y2="${CH.h - CH.b + 5}" stroke="${mute}"/><text x="${x}" y="${CH.h - CH.b + 17}" text-anchor="middle" font-size="10.5" fill="${ink}">${label}</text>`;
+    }
+    html += `<text x="${(CH.l + CH.w - CH.r) / 2}" y="${CH.h - 2}" text-anchor="middle" font-size="10" fill="${mute}">distance along the path →</text>`;
+    const d = pts.map((p, i) => (i ? "L" : "M") + X(p.s).toFixed(1) + "," + Y(p.p).toFixed(1)).join(" ");
+    html += `<path d="${d}" fill="none" stroke="${ink}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const crestPt = pts.find(p => p.seg === "tube") || pts.find(p => p.seg === "ann" && Math.abs(p.s - st.crest) < 1e-6);
+    if (crestPt) html += `<circle cx="${X(crestPt.s)}" cy="${Y(crestPt.p)}" r="5" fill="${pressureColor(crestPt.p)}" stroke="#fffaf0" stroke-width="2"/>` +
+                         `<text x="${X(crestPt.s) + 8}" y="${Y(crestPt.p) + (crestPt.p < 0 ? 14 : -8)}" font-size="10.5" fill="${ink}">${crestPt.p > 0 ? "+" : ""}${crestPt.p.toFixed(1)} at the crest</text>`;
+    html += `<g id="chartHover" style="visibility:hidden"><line id="chX" y1="${CH.t}" y2="${CH.h - CH.b}" stroke="${mute}" stroke-dasharray="3 3"/><circle id="chDot" r="4" fill="#fffaf0" stroke="${ink}" stroke-width="2"/><rect id="chBox" rx="4" fill="#fffaf0" stroke="${grid}"/><text id="chTxt" font-size="10.5" fill="${ink}"></text></g>`;
+    chart.innerHTML = html;
+    chart._pts = pts; chart._X = X; chart._Y = Y;
+  }
+  chart.addEventListener("pointermove", (ev) => {
+    const pts = chart._pts; if (!pts) return;
+    const bb = chart.getBoundingClientRect(), mx = (ev.clientX - bb.left) * CH.w / bb.width;
+    let best = pts[0], bd = 1e9;
+    for (const p of pts) { const dx = Math.abs(chart._X(p.s) - mx); if (dx < bd) { bd = dx; best = p; } }
+    const H = $("chartHover"); if (!H) return;
+    const x = chart._X(best.s), y = chart._Y(best.p);
+    $("chX").setAttribute("x1", x); $("chX").setAttribute("x2", x);
+    $("chDot").setAttribute("cx", x); $("chDot").setAttribute("cy", y);
+    const txt = $("chTxt"), left = x > CH.w * 0.6;
+    txt.textContent = `${best.seg === "bowl" ? "bowl" : best.seg === "ann" ? "ring" : "tube"} · z ${best.z.toFixed(1)} cm · ${best.p > 0 ? "+" : ""}${best.p.toFixed(1)} cm H₂O`;
+    txt.setAttribute("x", left ? x - 8 : x + 8); txt.setAttribute("y", CH.t + 12); txt.setAttribute("text-anchor", left ? "end" : "start");
+    const w = txt.getComputedTextLength() + 10;
+    $("chBox").setAttribute("x", left ? x - 8 - w + 5 : x + 3); $("chBox").setAttribute("y", CH.t); $("chBox").setAttribute("width", w); $("chBox").setAttribute("height", 17);
+    H.style.visibility = "visible";
+  });
+  chart.addEventListener("pointerleave", () => { const H = $("chartHover"); if (H) H.style.visibility = "hidden"; });
+
+  function setPressureView(on) {
+    App.pressureView = on; $("pressureToggle").checked = on; chartWrap.hidden = !on;
+    if (on) drawChart();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Narration (free play)
+  // ---------------------------------------------------------------------------
+  const NARRATION = {
+    reset:    ["Hold the pour button to fill the cup.", ""],
+    filling:  ["Liquid enters the ring through the holes and rises level with the bowl.", ""],
+    crest:    ["Fair-share line moved. Stop below it and you keep everything.", ""],
+    spilling: ["Over the crest — it spills into the inner tube.", "warn"],
+    dribble:  ["Barely over the line: a dribble, and the film on the lip holds. Pour a little more.", "warn"],
+    siphon:   ["The bore is full. Siphon locked — the head is now the whole drop to the outlet, crest or no crest.", "danger"],
+    breaking: ["Air gets in at the holes. The siphon gulps and breaks.", "danger"],
+    empty:    ["Drained. Only the film below the holes is left.", "ok"]
+  };
+  const statusEl = $("status");
+  function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = "status " + (cls || ""); }
+  function onEvents() {
+    const ev = App.model.lastEvent;
+    if (ev === App.lastEvent) return;
+    App.lastEvent = ev;
+    const n = NARRATION[ev]; if (n) setStatus(n[0], n[1]);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Free-play controls
+  // ---------------------------------------------------------------------------
+  const pourBtn = $("pourBtn");
+  function setPouring(on) {
+    App.pouring = on;
+    pourBtn.classList.toggle("pressed", on);
+    stage.classList.toggle("pouring", on);
+    if (!on) App.el.streamJug.setAttribute("d", "");
+  }
+  pourBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); App.running = true; setPouring(true); });
+  window.addEventListener("pointerup", () => { if (App.mode === "play") setPouring(false); });
+  window.addEventListener("pointercancel", () => { if (App.mode === "play") setPouring(false); });
+  pourBtn.addEventListener("keydown", (e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); App.running = true; setPouring(true); } });
+  pourBtn.addEventListener("keyup", () => setPouring(false));
+  $("resetBtn").addEventListener("click", () => { App.model.reset(); App.drops.length = 0; App.prevSpilled = 0; App.lastEvent = ""; onEvents(); });
+
+  const crestRange = $("crestRange"), boreRange = $("boreRange");
+  crestRange.addEventListener("input", () => {
+    const z = parseFloat(crestRange.value);
+    App.model.setCrest(z); $("crestVal").textContent = z.toFixed(1) + " cm";
+    buildStage(); App.drops.length = 0;
+  });
+  boreRange.addEventListener("input", () => {
+    const d = parseInt(boreRange.value, 10);
+    App.model.setBore(d / 10); $("boreVal").textContent = d + " mm";
+    buildStage(); App.drops.length = 0;
+  });
+  function setSpeed(x) {
+    App.speed = x;
+    for (const b of $("speedSeg").children) b.classList.toggle("on", parseFloat(b.dataset.s) === x);
+  }
+  for (const b of $("speedSeg").children) b.addEventListener("click", () => setSpeed(parseFloat(b.dataset.s)));
+  $("pressureToggle").addEventListener("change", (e) => setPressureView(e.target.checked));
+  $("labelsToggle").addEventListener("change", (e) => { App.labels = e.target.checked; App.el.annot.style.visibility = App.labels ? "visible" : "hidden"; });
+
+  // ---------------------------------------------------------------------------
+  // Tabs
+  // ---------------------------------------------------------------------------
+  function setMode(mode) {
+    App.mode = mode; App.stopWhen = null;
+    $("tabTour").classList.toggle("active", mode === "tour");
+    $("tabPlay").classList.toggle("active", mode === "play");
+    $("bodyTour").hidden = mode !== "tour";
+    $("bodyPlay").hidden = mode !== "play";
+    if (mode === "play") {
+      setPouring(false); App.running = true; App.lit = []; applyHighlight();
+      App.el.leaders.style.visibility = "hidden";
+      setSpeed(App.speed);
+      App.lastEvent = ""; onEvents();
+    } else Tour.go(Tour.i);
+  }
+  $("tabTour").addEventListener("click", () => setMode("tour"));
+  $("tabPlay").addEventListener("click", () => setMode("play"));
+
+  // ---------------------------------------------------------------------------
+  // Guided tour
+  // ---------------------------------------------------------------------------
+  const ctx = {
+    get model() { return App.model; },
+    setReveal, setSpeed, setPouring, pressureView: setPressureView,
+    setRunning: (on) => { App.running = on; },
+    highlight: (names) => { App.lit = names.slice(); applyHighlight(); },
+    leaders: (on) => { App.el.leaders.style.visibility = on ? "visible" : "hidden"; },
+    stopWhen: (pred, then) => { App.stopWhen = { pred, then }; },
+    fresh: () => { App.model.reset(); App.drops.length = 0; App.prevSpilled = 0; }
+  };
+  const TOUR = [
+    { title: "1 · From the outside",
+      text: "A bowl on a stem, with a small dome rising from the middle of the floor. That dome is all a drinker ever sees. There is a hole under the foot, but who looks there? Slide the cutaway control yourself, or press Next.",
+      apply: (c) => { c.fresh(); c.setRunning(false); c.setPouring(false); c.pressureView(false); c.leaders(false); c.highlight([]); c.setReveal(0, true); } },
+    { title: "2 · Cut it open",
+      text: "The dome is a hollow shell. Inside it stands a narrow tube that runs straight down through the stem to the hole under the foot. The shell has openings at its base. The inset shows the same cup from above: the two gaps you see in the section are one ring around the tube. The numbers match the parts list below.",
+      apply: (c) => { c.fresh(); c.setRunning(false); c.setPouring(false); c.pressureView(false); c.setReveal(1, true); c.leaders(true); c.highlight(["column", "tube", "holes"]); } },
+    { title: "3 · Filling",
+      text: "Pour, and the drink slips through the openings and climbs the ring — always exactly level with the bowl, because both surfaces feel the same air pressure on top and the same liquid below. Nothing leaves the outlet: the tube is still dry. Watch the ring level track the bowl level in the readouts.",
+      apply: (c) => { c.fresh(); c.leaders(false); c.pressureView(false); c.setReveal(1, true); c.setSpeed(1); c.setPouring(true); c.setRunning(true); c.highlight(["annulus"]);
+                      c.stopWhen((m) => m.h >= 4.0, () => c.setPouring(false)); } },
+    { title: "4 · The fair-share line",
+      text: "The only height that matters now is the open top of the inner tube — the crest. Stop below it and this is an ordinary cup: you keep every drop, for as long as you like. Legend has it Pythagoras set this line as a fair share of wine.",
+      apply: (c) => { c.fresh(); c.leaders(false); c.pressureView(false); c.setReveal(1, true); c.setPouring(false); c.setRunning(false);
+                      pourModelTo(c.model, c.model.geo.crestZ - 0.1); c.highlight(["crest"]); } },
+    { title: "5 · Over the top",
+      text: "A little more, and the drink spills over the lip into the tube. In a bore this narrow the overflow does not free-fall: it seals the tube and pushes the air out ahead of it. The instant the bore is full from crest to outlet, the flow readout jumps from a trickle to the full siphon rate. (Slowed 4×.)",
+      apply: (c) => { c.fresh(); c.leaders(false); c.pressureView(false); c.setReveal(1, true); pourModelTo(c.model, c.model.geo.crestZ - 0.1);
+                      c.setSpeed(0.25); c.setPouring(true); c.setRunning(true); c.highlight(["tube"]);
+                      c.stopWhen((m) => m.phase === "siphon" && m.t > m.primeTime + 0.15, () => { c.setPouring(false); c.setRunning(false); }); } },
+    { title: "6 · Why it keeps going",
+      text: "Locked, the liquid in the tube is one continuous rope from the bowl’s surface down to the outlet, and what pulls is that whole drop — not the crest. Pressure at the crest falls below atmospheric (see the chart dip), so the air pressing on the drink pushes it up the ring to fill the gap. The level sinks far below the line and the siphon does not care.",
+      apply: (c) => { c.fresh(); c.leaders(false); c.setReveal(1, true); c.setSpeed(1); c.setPouring(false);
+                      pourModelTo(c.model, c.model.geo.crestZ + 0.3); primeModel(c.model); c.pressureView(true); c.setRunning(true); c.highlight(["crest", "outlet"]);
+                      c.stopWhen((m) => m.phase === "empty", () => {}); } },
+    { title: "7 · Nothing left",
+      text: "When the surface drops to the intake holes, air is sucked in, the rope snaps and the last of it gulps out. All that stays is the film below the holes. Fair share, or nothing. Now try it yourself: move the line, widen the bore, pour as fast as you like.",
+      apply: (c) => { c.leaders(false); c.setReveal(1, true); c.setSpeed(1); c.setPouring(false); c.pressureView(false);
+                      if (c.model.phase !== "empty") { c.fresh(); pourModelTo(c.model, c.model.geo.crestZ + 0.3); primeModel(c.model); while (c.model.phase !== "empty") c.model.step(0.01, false); }
+                      c.setRunning(false); c.highlight(["holes"]); } }
+  ];
+  const Tour = {
+    i: 0,
+    go(i) {
+      this.i = Math.max(0, Math.min(TOUR.length - 1, i));
+      App.stopWhen = null;
+      $("tourTitle").textContent = TOUR[this.i].title;
+      $("tourText").textContent = TOUR[this.i].text;
+      $("tourPrev").disabled = this.i === 0;
+      $("tourNext").innerHTML = this.i === TOUR.length - 1 ? "Try it yourself →" : "Next →";
+      for (let k = 0; k < dots.children.length; k++) dots.children[k].classList.toggle("on", k === this.i);
+      TOUR[this.i].apply(ctx);
+      App.lastEvent = App.model.lastEvent;
+      render(); updateReadouts();
+    },
+    next() { if (this.i === TOUR.length - 1) setMode("play"); else this.go(this.i + 1); },
+    prev() { this.go(this.i - 1); }
+  };
+  const dots = $("tourDots");
+  TOUR.forEach((_, k) => { const s = document.createElement("span"); s.addEventListener("click", () => Tour.go(k)); dots.appendChild(s); });
+  $("tourNext").addEventListener("click", () => Tour.next());
+  $("tourPrev").addEventListener("click", () => Tour.prev());
+
+  // ---------------------------------------------------------------------------
+  // Main loop
+  // ---------------------------------------------------------------------------
+  let last = performance.now(), roAcc = 0;
+  function tick(now) {
+    let dt = Math.min(0.05, (now - last) / 1000); last = now;
+    dt *= App.speed; App.simT += dt;
+    if (App.running && dt > 0) {
+      const m = App.model, n = 4;
+      for (let i = 0; i < n; i++) m.step(dt / n, App.pouring);
+      if (App.stopWhen && App.stopWhen.pred(m)) { const s = App.stopWhen; App.stopWhen = null; s.then(); }
+      updateDrops(dt);
+    }
+    if (App.spillT > 0) App.spillT -= dt;
+    if (App.mode === "play") onEvents();
+    render();
+    roAcc += dt / Math.max(App.speed, 1e-6);
+    if (roAcc > 0.1) { roAcc = 0; updateReadouts(); }
+    requestAnimationFrame(tick);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Boot (+ hooks for headless screenshots: ?play=1, ?step=N, ?reveal=NN, ?shot=name)
+  // ---------------------------------------------------------------------------
+  buildStage(); ensurePool();
+  window.__shot = function (name) {
+    const idx = { outside: 0, cutaway: 1, filling: 2, line: 3, prime: 4, siphon: 5, empty: 6 }[name];
+    if (idx === undefined) return;
+    Tour.go(idx); App.revealTween = null; setReveal(idx === 0 ? 0 : 1);
+    const m = App.model;
+    if (name === "filling") { pourModelTo(m, 4.0); App.pouring = true; stage.classList.add("pouring"); }
+    if (name === "prime") { while (m.tubeFill < 0.55) m.step(0.01, true); }
+    if (name === "siphon") { while (m.h > 3.6) m.step(0.01, false); }
+    if (name === "filling" || name === "prime" || name === "siphon") { for (let i = 0; i < 60; i++) updateDrops(1 / 60); }
+    App.running = false;
+    render(); updateReadouts();
+  };
+  if (params.has("shot")) window.__shot(params.get("shot"));
+  else if (params.has("play")) { setMode("play"); if (params.has("reveal")) setReveal(parseInt(params.get("reveal"), 10) / 100); }
+  else { Tour.go(params.has("step") ? parseInt(params.get("step"), 10) - 1 : 0); if (params.has("reveal")) { App.revealTween = null; setReveal(parseInt(params.get("reveal"), 10) / 100); } }
+  updateReadouts();
+  requestAnimationFrame(tick);
+})();
 </script>
 </body>
 </html>
