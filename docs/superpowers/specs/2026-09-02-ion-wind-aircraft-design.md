@@ -85,3 +85,16 @@ Owner asked what happens above 40 kV. Changes:
 - **Model:** `sparkV(d) = 1.2 kV/mm · d` (rough sparkover of a corona-stabilised gap in dry air) and `regime(V, d)` → `off` / `corona` / `arc`. `current` (and so thrust, power, wind) is zero outside the corona window. Six new tests (28 total).
 - **Sliders:** voltage 0–100 kV, gap 2–15 cm. Section 1 draws a flickering bolt and a red sparkover caption when arcing; sections 2–5 say the gap is arcing instead of "below onset".
 - **Section 6 "More than 40 kV?":** two small-multiple charts sharing the voltage axis, one series each (no dual axis): thrust per metre (rises ~V²) and thrust per watt (falls as 1/V), with the no-corona and arc regions shaded, an MIT 40 kV tick, a marker at the slider voltage, hover crosshair + tooltip, and a collapsible table at 10 kV steps. Text: what goes up, what goes down, the sparkover wall, the wider-gap way out (design by field, ≈ 0.8 kV/mm on the MIT plane), and why the ladder is not the limit but clearance, potting and stray corona are. Notes become section 7.
+
+## Addendum (same day): sweet-spot picker in section 1
+
+Owner asked for a picker of sweet spots and why they are sweet. In the model, current per metre `I' = C5·0.05²·E·(E − E_onset)` and thrust per watt `1/(μE)` depend only on the field `E = V/d`; thrust per metre is `I'·d/μ`, so it scales with the gap at a fixed field. The sweet spot is therefore a choice of field between onset (0.2 kV/mm) and sparkover (1.2 kV/mm), and then a scale. Four presets (buttons above the sliders, with a "why" paragraph and a field meter):
+
+| Preset | V, d | Field | Why |
+|---|---|---|---|
+| MIT flight point | 40 kV, 5 cm | 0.8 kV/mm | margin against arcing, converter mass; 160 mN/m, 6.25 N/kW |
+| Least wire | 40 kV, 3.7 cm | 1.08 kV/mm | 235 mN/m, 4.6 N/kW, 90 % of sparkover, no margin |
+| Least power | 40 kV, 10 cm | 0.4 kV/mm | 12.5 N/kW, 53 mN/m, 3× the wire |
+| Scaled up | 80 kV, 10 cm | 0.8 kV/mm | same efficiency and margin as MIT, 320 mN/m; the only way more voltage helps |
+
+Gap slider step is now 0.1 cm. Five new tests (33 total) pin the field-only property and the preset orderings.
