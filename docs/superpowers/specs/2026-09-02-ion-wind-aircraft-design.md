@@ -77,3 +77,11 @@ Owner asked how such voltages are produced and whether the battery or a solar pa
 - **Battery card:** slider for pack mass (default 0.27 kg), `batteryEnergyWh = mass · 130 Wh/kg`, endurance at full thrust for the plane and drone from the section-4 power numbers.
 - **Solar card:** sliders for panel area (default 2 m², the wing's upper surface) and sunlight (default 1000 W/m²), `solarPower = area · irradiance · 0.22`, shown as watts and as a percentage of what the plane and drone need, plus panel mass at 0.5 kg/m². Verdict on the card: plane marginal (noon, clear sky, panel weight, launch battery), drone no.
 - Five new tests cover the three functions and the MIT pack calibration.
+
+## Addendum (same day): section 6, more than 40 kV
+
+Owner asked what happens above 40 kV. Changes:
+
+- **Model:** `sparkV(d) = 1.2 kV/mm · d` (rough sparkover of a corona-stabilised gap in dry air) and `regime(V, d)` → `off` / `corona` / `arc`. `current` (and so thrust, power, wind) is zero outside the corona window. Six new tests (28 total).
+- **Sliders:** voltage 0–100 kV, gap 2–15 cm. Section 1 draws a flickering bolt and a red sparkover caption when arcing; sections 2–5 say the gap is arcing instead of "below onset".
+- **Section 6 "More than 40 kV?":** two small-multiple charts sharing the voltage axis, one series each (no dual axis): thrust per metre (rises ~V²) and thrust per watt (falls as 1/V), with the no-corona and arc regions shaded, an MIT 40 kV tick, a marker at the slider voltage, hover crosshair + tooltip, and a collapsible table at 10 kV steps. Text: what goes up, what goes down, the sparkover wall, the wider-gap way out (design by field, ≈ 0.8 kV/mm on the MIT plane), and why the ladder is not the limit but clearance, potting and stray corona are. Notes become section 7.
