@@ -4,6 +4,12 @@ A collection of browser-based experiments. Unfinished, undocumented, weird stuff
 
 ## Experiments
 
+### 3D Eiffel Tower Assembly
+
+Watch the Eiffel Tower rise from the foundation pits of January 1887 to the flag of March 1889. Timeline scrubber with dated milestones, timber falsework and creeper cranes at the build frontier, free orbit camera with presets, and sunny / rainy / windy weather. Three.js.
+
+![3d-eiffel-tower-assembly](3d-eiffel-tower-assembly/screenshot1.jpg)
+
 ### 3D Torus Shooter
 
 Shoot geometric shapes into a torus. Shapes can stick, bounce, or carve holes through it. Split-screen with an exterior view and a first-person interior view. Custom WebGL ray marching with CSG operations.

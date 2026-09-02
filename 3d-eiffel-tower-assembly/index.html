@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eiffel Tower Assembly</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0f14; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #e8e6e0; }
+  canvas { display: block; }
+  #panel { position: absolute; top: 12px; left: 12px; width: 300px; max-height: calc(100% - 24px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; z-index: 2; }
+  .card { background: rgba(14, 18, 24, 0.86); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px 12px; }
+  .card h2 { margin: 0 0 6px; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: #c9a86a; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; }
+  .card h2 .chev { font-size: 11px; color: #888; }
+  .card.collapsed .body { display: none; }
+  h1 { font-size: 17px; margin: 0 0 2px; font-weight: 600; }
+  .sub { font-size: 12px; color: #a9a49a; margin: 0; line-height: 1.35; }
+  label { display: flex; justify-content: space-between; font-size: 12px; color: #cfcac0; margin-top: 7px; }
+  label .val { color: #fff; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; margin: 3px 0 0; accent-color: #c9a86a; }
+  .row { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; align-items: center; }
+  button, select { background: #1e2530; color: #eee; border: 1px solid #3a4452; border-radius: 6px; padding: 5px 9px; font-size: 12px; cursor: pointer; }
+  button:hover { background: #2a3442; }
+  button.on { background: #6b5a30; border-color: #c9a86a; }
+  .preset { padding: 4px 7px; font-size: 11px; }
+  .readout { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; margin-top: 8px; }
+  .readout .k { color: #8f8a80; }
+  .readout .v { color: #fff; font-variant-numeric: tabular-nums; }
+  .date { font-size: 20px; font-weight: 600; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .label { font-size: 12px; color: #e3c98a; margin-top: 2px; min-height: 16px; }
+  .radio { display: flex; gap: 4px; margin-top: 4px; }
+  .radio button { flex: 1; }
+  .note { font-size: 11px; color: #8f8a80; margin-top: 6px; line-height: 1.35; }
+  #hint { position: absolute; right: 12px; bottom: 10px; font-size: 11px; color: rgba(255,255,255,0.55); z-index: 2; text-align: right; line-height: 1.4; }
+  #err { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); background: #3a1a1a; padding: 16px 20px; border-radius: 8px; display: none; max-width: 420px; z-index: 5; font-size: 13px; }
+  @media (max-width: 520px) { #panel { width: calc(100% - 24px); max-height: 55%; } }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="card">
+    <h1>Eiffel Tower Assembly</h1>
+    <p class="sub">Paris, 28 January 1887 &rarr; 31 March 1889. Scrub the timeline to watch 18 000 iron pieces climb 300 m. Drag to orbit, wheel to zoom.</p>
+  </div>
+
+  <div class="card" id="cardTime">
+    <h2>Timeline <span class="chev">&#9662;</span></h2>
+    <div class="body">
+      <input type="range" id="tl" min="0" max="1" step="0.0005" value="0.6" aria-label="Timeline">
+      <div class="row">
+        <button id="play">&#9654; Play</button>
+        <select id="speed" aria-label="Playback duration">
+          <option value="30">30 s</option>
+          <option value="60" selected>1 min</option>
+          <option value="180">3 min</option>
+        </select>
+        <button id="restart" title="Back to January 1887">&#8634;</button>
+      </div>
+      <div class="date" id="date">1887-01-28</div>
+      <div class="label" id="phase"></div>
+      <div class="readout">
+        <span class="k">Height</span><span class="v" id="rh">0 m</span>
+        <span class="k">Pieces in place</span><span class="v" id="rp">0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="cardCam">
+    <h2>Camera <span class="chev">&#9662;</span></h2>
+    <div class="body">
+      <div class="row" id="presets">
+        <button class="preset" data-p="champ">Champ de Mars</button>
+        <button class="preset" data-p="aerial">Aerial</button>
+        <button class="preset" data-p="floor1">First floor</button>
+        <button class="preset" data-p="arches">Under the arches</button>
+        <button class="preset" data-p="follow">Follow the top</button>
+      </div>
+      <label>Azimuth <span class="val" id="vaz">35&deg;</span></label>
+      <input type="range" id="az" min="-180" max="180" step="0.5" value="35">
+      <label>Elevation <span class="val" id="vel">18&deg;</span></label>
+      <input type="range" id="el" min="-5" max="85" step="0.5" value="18">
+      <label>Distance <span class="val" id="vdist">420 m</span></label>
+      <input type="range" id="dist" min="60" max="900" step="1" value="420">
+      <label>Look-at height <span class="val" id="vty">120 m</span></label>
+      <input type="range" id="ty" min="0" max="320" step="1" value="120">
+      <label>Field of view <span class="val" id="vfov">45&deg;</span></label>
+      <input type="range" id="fov" min="20" max="90" step="1" value="45">
+      <div class="row">
+        <button id="orbit">Auto-orbit</button>
+        <label style="flex:1; margin:0; align-items:center; gap:6px">speed <input type="range" id="orbitSpeed" min="1" max="30" step="1" value="8" style="width:90px; margin:0"></label>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="cardWx">
+    <h2>Weather <span class="chev">&#9662;</span></h2>
+    <div class="body">
+      <div class="radio" id="wx">
+        <button data-w="sunny" class="on">&#9728; Sunny</button>
+        <button data-w="rainy">&#9730; Rainy</button>
+        <button data-w="windy">&#8776; Windy</button>
+      </div>
+      <label>Intensity <span class="val" id="vint">0.6</span></label>
+      <input type="range" id="int" min="0" max="1" step="0.01" value="0.6">
+      <label>Wind direction <span class="val" id="vwd">240&deg;</span></label>
+      <input type="range" id="wd" min="0" max="360" step="1" value="240">
+      <label id="sunRow">Sun elevation <span class="val" id="vsun">40&deg;</span></label>
+      <input type="range" id="sun" min="5" max="85" step="1" value="40">
+      <div class="note" id="wxnote"></div>
+    </div>
+  </div>
+</div>
+<div id="hint">timber falsework under the legs until March 1888 &middot; four creeper cranes ride the rails<br>tower sway in wind is exaggerated on purpose</div>
+<div id="err"></div>
+<script id="shared-code">
+// ---------------------------------------------------------------------------
+// Eiffel: pure tower model (profile, pieces, schedule). No DOM, no Three.js.
+// ---------------------------------------------------------------------------
+var Eiffel = (function () {
+  // --- profile: distance from the axis to a leg centre, metres ---
+  var PROFILE_H = [0, 57, 115, 180, 276, 300];
+  var PROFILE_W = [50, 32, 17, 11, 6, 4];
+
+  // Fritsch-Carlson monotone cubic interpolation.
+  function makeMonotone(xs, ys) {
+    var n = xs.length, d = [], m = [];
+    for (var i = 0; i < n - 1; i++) d.push((ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]));
+    m.push(d[0]);
+    for (var j = 1; j < n - 1; j++) m.push(d[j - 1] * d[j] <= 0 ? 0 : (d[j - 1] + d[j]) / 2);
+    m.push(d[n - 2]);
+    for (var k = 0; k < n - 1; k++) {
+      if (d[k] === 0) { m[k] = 0; m[k + 1] = 0; continue; }
+      var a = m[k] / d[k], b = m[k + 1] / d[k], s = a * a + b * b;
+      if (s > 9) { var tau = 3 / Math.sqrt(s); m[k] = tau * a * d[k]; m[k + 1] = tau * b * d[k]; }
+    }
+    return function (x) {
+      if (x <= xs[0]) return ys[0];
+      if (x >= xs[n - 1]) return ys[n - 1];
+      var i = 0;
+      while (i < n - 2 && x > xs[i + 1]) i++;
+      var hh = xs[i + 1] - xs[i], t = (x - xs[i]) / hh, t2 = t * t, t3 = t2 * t;
+      return (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * hh * m[i] +
+             (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * hh * m[i + 1];
+    };
+  }
+  var halfWidth = makeMonotone(PROFILE_H, PROFILE_W);
+
+  // Side of one leg's square lattice cross-section.
+  var legSide = makeMonotone([0, 115, 276, 300], [15, 7, 2.6, 2.2]);
+
+  var FLOOR1 = 57, FLOOR2 = 115, FLOOR3 = 276, TOP = 300, FLAG = 312;
+
+  function piece(kind, a, b, r, h, ry) {
+    return { kind: kind, a: a, b: b, r: r, ry: ry == null ? r : ry, h: h };
+  }
+
+  // Corner c (0..3) of the leg whose centre is at (sx*w, sz*w).
+  function legCorner(sx, sz, c, h) {
+    var w = halfWidth(h), s = legSide(h) / 2;
+    var cx = sx * w, cz = sz * w;
+    var ox = (c === 0 || c === 3) ? -s : s;
+    var oz = (c === 0 || c === 1) ? -s : s;
+    return [cx + ox, h, cz + oz];
+  }
+
+  var LEGS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+
+  function railRadius(h) { return h < FLOOR1 ? 0.55 : h < FLOOR2 ? 0.42 : h < 200 ? 0.34 : 0.26; }
+
+  function legSegment(out, sx, sz, h0, h1) {
+    var mid = (h0 + h1) / 2, rr = railRadius(mid), rb = rr * 0.45, rg = rr * 0.6;
+    var c0 = [], c1 = [];
+    for (var c = 0; c < 4; c++) { c0.push(legCorner(sx, sz, c, h0)); c1.push(legCorner(sx, sz, c, h1)); }
+    for (var i = 0; i < 4; i++) out.push(piece("rail", c0[i], c1[i], rr, mid - 0.3 * (h1 - h0)));
+    for (var f = 0; f < 4; f++) {
+      var j = (f + 1) % 4;
+      out.push(piece("brace", c0[f], c1[j], rb, mid));
+      out.push(piece("brace", c0[j], c1[f], rb, mid));
+    }
+    for (var g = 0; g < 4; g++) out.push(piece("ring", c1[g], c1[(g + 1) % 4], rg, h1 - 0.02));
+  }
+
+  // Bracing between neighbouring legs (used above the second floor, where
+  // the four legs read as one tower).
+  function interLegSegment(out, h0, h1) {
+    var mid = (h0 + h1) / 2, rb = railRadius(mid) * 0.4;
+    for (var i = 0; i < 4; i++) {
+      var A = LEGS[i], B = LEGS[(i + 1) % 4];
+      // corner of leg A nearest leg B and vice versa
+      var ca0 = nearestCorner(A, B, h0), cb0 = nearestCorner(B, A, h0);
+      var ca1 = nearestCorner(A, B, h1), cb1 = nearestCorner(B, A, h1);
+      out.push(piece("brace", ca0, cb1, rb, mid + 0.01));
+      out.push(piece("brace", cb0, ca1, rb, mid + 0.01));
+      out.push(piece("ring", ca1, cb1, rb, h1 - 0.01));
+    }
+  }
+  function nearestCorner(A, B, h) {
+    var best = null, bd = Infinity, target = [B[0] * halfWidth(h), h, B[1] * halfWidth(h)];
+    for (var c = 0; c < 4; c++) {
+      var p = legCorner(A[0], A[1], c, h);
+      var d = (p[0] - target[0]) * (p[0] - target[0]) + (p[2] - target[2]) * (p[2] - target[2]);
+      if (d < bd) { bd = d; best = p; }
+    }
+    return best;
+  }
+
+  function deck(out, y, S, inner, hBuild) {
+    var step = 3, r = 1.55, ry = 0.3;
+    for (var z = -S; z <= S + 1e-6; z += step) {
+      if (Math.abs(z) < inner) {
+        out.push(piece("deck", [-S, y, z], [-inner, y, z], r, hBuild, ry));
+        out.push(piece("deck", [inner, y, z], [S, y, z], r, hBuild, ry));
+      } else {
+        out.push(piece("deck", [-S, y, z], [S, y, z], r, hBuild, ry));
+      }
+    }
+    // edge girders and railing
+    var corners = [[-S, -S], [S, -S], [S, S], [-S, S]];
+    for (var i = 0; i < 4; i++) {
+      var a = corners[i], b = corners[(i + 1) % 4];
+      out.push(piece("deck", [a[0], y + 0.5, a[1]], [b[0], y + 0.5, b[1]], 0.6, hBuild + 0.2, 0.9));
+      out.push(piece("ring", [a[0], y + 2.2, a[1]], [b[0], y + 2.2, b[1]], 0.08, hBuild + 0.3));
+      var n = Math.round(2 * S / 4);
+      for (var k = 0; k <= n; k++) {
+        var t = k / n, x = a[0] + (b[0] - a[0]) * t, z2 = a[1] + (b[1] - a[1]) * t;
+        out.push(piece("ring", [x, y + 0.8, z2], [x, y + 2.2, z2], 0.06, hBuild + 0.3));
+      }
+    }
+    if (inner > 0) {
+      var ic = [[-inner, -inner], [inner, -inner], [inner, inner], [-inner, inner]];
+      for (var j = 0; j < 4; j++) {
+        var p = ic[j], q = ic[(j + 1) % 4];
+        out.push(piece("ring", [p[0], y + 2.2, p[1]], [q[0], y + 2.2, q[1]], 0.08, hBuild + 0.3));
+      }
+    }
+  }
+
+  function arches(out) {
+    var R = 38, R2 = 35.5, yc = 18, N = 44, plane = 34, hBuild = FLOOR1 + 4;
+    for (var side = 0; side < 4; side++) {
+      var prevO = null, prevI = null;
+      for (var i = 0; i <= N; i++) {
+        var th = Math.PI * i / N;
+        var u = R * Math.cos(th), y = yc + R * Math.sin(th);
+        var u2 = R2 * Math.cos(th), y2 = yc + R2 * Math.sin(th);
+        var po = sideXZ(side, u, plane, y), pi = sideXZ(side, u2, plane, y2);
+        if (prevO) {
+          out.push(piece("arch", prevO, po, 0.45, hBuild + i * 0.01));
+          out.push(piece("arch", prevI, pi, 0.35, hBuild + i * 0.01));
+          if (i % 3 === 0) out.push(piece("arch", pi, po, 0.2, hBuild + i * 0.01));
+        }
+        prevO = po; prevI = pi;
+      }
+    }
+  }
+  // Map a point (u along the side, plane distance) to XZ for side s.
+  function sideXZ(s, u, plane, y) {
+    if (s === 0) return [u, y, -plane];
+    if (s === 1) return [plane, y, u];
+    if (s === 2) return [-u, y, plane];
+    return [-plane, y, -u];
+  }
+
+  function foundations(out) {
+    for (var i = 0; i < 4; i++) {
+      var L = LEGS[i], cx = L[0] * 50, cz = L[1] * 50, S = 14;
+      // excavation outline (kind pit), then the masonry pier
+      var c = [[cx - S, cz - S], [cx + S, cz - S], [cx + S, cz + S], [cx - S, cz + S]];
+      for (var k = 0; k < 4; k++) {
+        var a = c[k], b = c[(k + 1) % 4];
+        out.push(piece("pit", [a[0], 0.25, a[1]], [b[0], 0.25, b[1]], 0.6, -7.5, 0.25));
+      }
+      out.push(piece("pit", [cx - 12, -3, cz], [cx + 12, -3, cz], 12, -5.5, 3));
+      out.push(piece("pit", [cx - 9, 0.8, cz], [cx + 9, 0.8, cz], 9, -2.5, 0.8));
+    }
+  }
+
+  function mast(out) {
+    // lantern box 300..306, mast 306..312
+    var s = 2.2, y0 = TOP, y1 = TOP + 6;
+    var c0 = [[-s, -s], [s, -s], [s, s], [-s, s]];
+    for (var i = 0; i < 4; i++) {
+      var a = c0[i], b = c0[(i + 1) % 4];
+      out.push(piece("mast", [a[0], y0, a[1]], [a[0], y1, a[1]], 0.25, y0 + 2));
+      out.push(piece("mast", [a[0], y1, a[1]], [b[0], y1, b[1]], 0.2, y1 - 0.02));
+      out.push(piece("mast", [a[0], y0, a[1]], [b[0], y0, b[1]], 0.2, y0 + 0.5));
+    }
+    out.push(piece("mast", [0, y1, 0], [0, FLAG, 0], 0.18, FLAG - 2));
+  }
+
+  var KIND_ORDER = { pit: 0, rail: 1, brace: 2, ring: 3, deck: 4, arch: 5, mast: 6 };
+
+  function buildPieces() {
+    var out = [];
+    foundations(out);
+    // four separate legs from the ground to the top of the lattice
+    var h = 0;
+    while (h < FLOOR3) {
+      var dh = h < FLOOR1 ? 3.0 : h < FLOOR2 ? 3.5 : 4.2;
+      var h1 = Math.min(h + dh, FLOOR3);
+      if (FLOOR3 - h1 < 1.5) h1 = FLOOR3;
+      for (var i = 0; i < 4; i++) legSegment(out, LEGS[i][0], LEGS[i][1], h, h1);
+      if (h >= FLOOR2) interLegSegment(out, h, h1);
+      h = h1;
+    }
+    // top section 276..300: single lattice
+    while (h < TOP) {
+      var h2 = Math.min(h + 4, TOP);
+      if (TOP - h2 < 1.5) h2 = TOP;
+      for (var j = 0; j < 4; j++) legSegment(out, LEGS[j][0], LEGS[j][1], h, h2);
+      interLegSegment(out, h, h2);
+      h = h2;
+    }
+    deck(out, FLOOR1, halfWidth(FLOOR1) + legSide(FLOOR1) / 2 + 1.5, 20, FLOOR1 + 0.5);
+    deck(out, FLOOR2, halfWidth(FLOOR2) + legSide(FLOOR2) / 2 + 2, 8, FLOOR2 + 0.5);
+    deck(out, FLOOR3, halfWidth(FLOOR3) + legSide(FLOOR3) / 2 + 2.5, 0, FLOOR3 + 0.5);
+    deck(out, TOP, halfWidth(TOP) + legSide(TOP) / 2 + 1.2, 0, TOP + 0.3);
+    arches(out);
+    mast(out);
+    out.sort(function (p, q) { return (p.h - q.h) || (KIND_ORDER[p.kind] - KIND_ORDER[q.kind]); });
+    return out;
+  }
+
+  // --- construction schedule ---
+  var schedule = [
+    { t: 0.00, date: "1887-01-28", height: -6,  label: "Digging the foundations" },
+    { t: 0.18, date: "1887-06-30", height: 0,   label: "Masonry piers finished" },
+    { t: 0.20, date: "1887-07-01", height: 1,   label: "First iron goes up" },
+    { t: 0.42, date: "1887-12-07", height: 28,  label: "Legs lean outward on timber scaffolds" },
+    { t: 0.55, date: "1888-03-26", height: 58,  label: "Legs joined at the first floor" },
+    { t: 0.72, date: "1888-08-14", height: 116, label: "Second floor reached" },
+    { t: 0.88, date: "1888-12-26", height: 200, label: "Creeper cranes climb the single tower" },
+    { t: 0.97, date: "1889-03-15", height: 300, label: "Top reached" },
+    { t: 1.00, date: "1889-03-31", height: 320, label: "Flag raised - 2 years, 2 months, 5 days" }
+  ];
+  function dateMs(s) { var p = s.split("-"); return Date.UTC(+p[0], +p[1] - 1, +p[2]); }
+  function msDate(ms) {
+    var d = new Date(ms);
+    function two(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getUTCFullYear() + "-" + two(d.getUTCMonth() + 1) + "-" + two(d.getUTCDate());
+  }
+  function stateAt(t) {
+    if (!(t > 0)) t = 0;
+    if (t > 1) t = 1;
+    var i = 0;
+    while (i < schedule.length - 2 && t >= schedule[i + 1].t) i++;
+    var A = schedule[i], B = schedule[i + 1];
+    var u = (t - A.t) / (B.t - A.t);
+    if (u < 0) u = 0;
+    if (u > 1) u = 1;
+    var ms = dateMs(A.date) + (dateMs(B.date) - dateMs(A.date)) * u;
+    ms = Math.floor(ms / 86400000) * 86400000;
+    return {
+      t: t,
+      height: A.height + (B.height - A.height) * u,
+      date: msDate(ms),
+      label: (u >= 1 ? B : A).label,
+      phase: i
+    };
+  }
+
+  // 1 = complete, 0 = not started, in between = rising into place.
+  function pieceState(h, height, band) {
+    if (h >= height) return 0;
+    if (h < height - band) return 1;
+    return (height - h) / band;
+  }
+  // Number of leading pieces (sorted by h) with h < height.
+  function visibleCount(pieces, height) {
+    var lo = 0, hi = pieces.length;
+    while (lo < hi) {
+      var m = (lo + hi) >> 1;
+      if (pieces[m].h < height) lo = m + 1; else hi = m;
+    }
+    return lo;
+  }
+
+  return {
+    halfWidth: halfWidth, legSide: legSide, buildPieces: buildPieces,
+    schedule: schedule, stateAt: stateAt, pieceState: pieceState, visibleCount: visibleCount,
+    FLOOR1: FLOOR1, FLOOR2: FLOOR2, FLOOR3: FLOOR3, TOP: TOP, FLAG: FLAG
+  };
+})();
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+var EiffelTests = (function () {
+  var results = [];
+  function check(name, cond, detail) {
+    results.push({ name: name, ok: !!cond, detail: detail });
+  }
+  function near(a, b, eps) { return Math.abs(a - b) <= (eps == null ? 1e-6 : eps); }
+
+  function run() {
+    results = [];
+    try {
+      // --- profile ---
+      check("halfWidth hits ground anchor", near(Eiffel.halfWidth(0), 50, 1e-9));
+      check("halfWidth hits first floor anchor", near(Eiffel.halfWidth(57), 32, 1e-9));
+      check("halfWidth hits second floor anchor", near(Eiffel.halfWidth(115), 17, 1e-9));
+      check("halfWidth hits top anchor", near(Eiffel.halfWidth(300), 4, 1e-9));
+      var mono = true, prev = Infinity;
+      for (var h = 0; h <= 300; h += 0.5) {
+        var w = Eiffel.halfWidth(h);
+        if (!(w <= prev + 1e-9) || !isFinite(w)) { mono = false; break; }
+        prev = w;
+      }
+      check("halfWidth is monotone decreasing over 0..300", mono);
+      check("legSide at ground is 15", near(Eiffel.legSide(0), 15, 1e-9));
+      check("legSide at second floor is 7", near(Eiffel.legSide(115), 7, 1e-9));
+      check("legSide never exceeds halfWidth spacing", (function () {
+        for (var h = 0; h <= 115; h += 1) if (Eiffel.legSide(h) / 2 >= Eiffel.halfWidth(h)) return false;
+        return true;
+      })());
+
+      // --- pieces ---
+      var pieces = Eiffel.buildPieces();
+      check("piece count is plausible", pieces.length >= 2000 && pieces.length <= 20000, pieces.length);
+      var allOk = true, sorted = true, kinds = {};
+      var minH = Infinity, maxH = -Infinity;
+      for (var i = 0; i < pieces.length; i++) {
+        var p = pieces[i];
+        kinds[p.kind] = (kinds[p.kind] || 0) + 1;
+        for (var k = 0; k < 3; k++) {
+          if (!isFinite(p.a[k]) || !isFinite(p.b[k])) allOk = false;
+        }
+        if (!(p.r > 0) || !isFinite(p.h) || p.h < -8 || p.h > 315) allOk = false;
+        var dx = p.a[0] - p.b[0], dy = p.a[1] - p.b[1], dz = p.a[2] - p.b[2];
+        if (dx * dx + dy * dy + dz * dz < 1e-6) allOk = false;
+        if (i > 0 && p.h < pieces[i - 1].h) sorted = false;
+        if (p.h < minH) minH = p.h;
+        if (p.h > maxH) maxH = p.h;
+      }
+      check("every piece has finite endpoints, r>0, h in range, nonzero length", allOk);
+      check("pieces are sorted by build height", sorted);
+      check("foundations come first (negative h)", minH < 0, minH);
+      check("flag mast reaches above 300 m", maxH > 300, maxH);
+      var expectKinds = ["rail", "brace", "ring", "deck", "arch", "pit", "mast"];
+      check("all kinds present: " + expectKinds.join(","), expectKinds.every(function (k) { return kinds[k] > 0; }), JSON.stringify(kinds));
+      check("every rail stays within the profile", pieces.filter(function (p) { return p.kind === "rail"; }).every(function (p) {
+        var lim = Eiffel.halfWidth(Math.max(0, Math.min(300, p.h))) + Eiffel.legSide(Math.max(0, Math.min(115, p.h))) / 2 + 0.5;
+        return Math.abs(p.a[0]) <= lim && Math.abs(p.a[2]) <= lim && Math.abs(p.b[0]) <= lim && Math.abs(p.b[2]) <= lim;
+      }));
+
+      // --- schedule ---
+      var s0 = Eiffel.stateAt(0), s1 = Eiffel.stateAt(1);
+      check("stateAt(0) is the foundation pits", s0.height < 0 && s0.date === "1887-01-28", JSON.stringify(s0));
+      check("stateAt(1) is the flag", near(s1.height, 320, 1e-9) && s1.date === "1889-03-31", JSON.stringify(s1));
+      check("stateAt(1) completes every piece (band 6)", pieces.every(function (p) { return Eiffel.pieceState(p.h, s1.height, 6) === 1; }));
+      var monoS = true, ph = -Infinity;
+      for (var t = 0; t <= 1; t += 0.001) {
+        var st = Eiffel.stateAt(t);
+        if (st.height < ph - 1e-9 || typeof st.label !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(st.date)) { monoS = false; break; }
+        ph = st.height;
+      }
+      check("stateAt height is monotone with a date and label for every t", monoS);
+      check("stateAt(0.55) is the first-floor join", near(Eiffel.stateAt(0.55).height, 58, 1e-9) && /first floor/i.test(Eiffel.stateAt(0.55).label), JSON.stringify(Eiffel.stateAt(0.55)));
+      check("stateAt clamps outside 0..1", Eiffel.stateAt(-1).height === s0.height && Eiffel.stateAt(2).height === s1.height);
+      check("dateAt interpolates between milestones", Eiffel.stateAt(0.19).date > "1887-06-30" && Eiffel.stateAt(0.19).date < "1887-07-01" || Eiffel.stateAt(0.19).date === "1887-06-30", Eiffel.stateAt(0.19).date);
+      check("stateAt(0.5) date lies between the neighbours", Eiffel.stateAt(0.5).date > "1887-12-07" && Eiffel.stateAt(0.5).date < "1888-03-26", Eiffel.stateAt(0.5).date);
+
+      // --- visibility helper ---
+      check("pieceState: complete below frontier band", Eiffel.pieceState(10, 100, 6) === 1);
+      check("pieceState: absent above frontier", Eiffel.pieceState(120, 100, 6) === 0);
+      check("pieceState: partial inside band", (function () { var v = Eiffel.pieceState(97, 100, 6); return v > 0 && v < 1; })());
+      check("visibleCount counts pieces with h < height", (function () {
+        var n = Eiffel.visibleCount(pieces, 57);
+        return n > 0 && n < pieces.length && pieces[n - 1].h < 57 && pieces[n].h >= 57;
+      })());
+    } catch (e) {
+      check("no exception during tests", false, String(e && e.stack || e));
+    }
+    var fails = results.filter(function (r) { return !r.ok; });
+    results.forEach(function (r) {
+      var line = (r.ok ? "PASS " : "FAIL ") + r.name + (r.ok || r.detail == null ? "" : "  -- " + r.detail);
+      if (typeof console !== "undefined") console.log(line);
+    });
+    if (typeof console !== "undefined") console.log(fails.length ? fails.length + " failing" : "all " + results.length + " passed");
+    return fails.length === 0;
+  }
+  return { run: run };
+})();
+</script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const $ = (id) => document.getElementById(id);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const DEG = Math.PI / 180;
+
+// ------------------------------------------------------------------ renderer
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 12000);
+
+// ------------------------------------------------------------------ sky dome
+const skyUniforms = {
+  topColor: { value: new THREE.Color(0x2a6fd6) },
+  horizonColor: { value: new THREE.Color(0xbfd9f2) },
+  sunDir: { value: new THREE.Vector3(0, 1, 0) },
+  sunAmount: { value: 1.0 },
+};
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(9000, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: skyUniforms,
+    vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `
+      uniform vec3 topColor, horizonColor, sunDir; uniform float sunAmount; varying vec3 vDir;
+      void main(){
+        float h = clamp(vDir.y, 0.0, 1.0);
+        vec3 c = mix(horizonColor, topColor, pow(h, 1.4));
+        float s = max(dot(normalize(vDir), sunDir), 0.0);
+        c += sunAmount * (vec3(1.0, 0.95, 0.8) * pow(s, 512.0) * 3.0 + vec3(1.0, 0.9, 0.7) * pow(s, 8.0) * 0.25);
+        gl_FragColor = vec4(c, 1.0);
+      }`
+  })
+);
+scene.add(sky);
+
+// ------------------------------------------------------------------ lights
+const hemi = new THREE.HemisphereLight(0xbfd9f2, 0x3a5a2a, 0.6);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff2dc, 2.2);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 50;
+sun.shadow.camera.far = 1500;
+const SC = 260;
+sun.shadow.camera.left = -SC; sun.shadow.camera.right = SC;
+sun.shadow.camera.top = SC; sun.shadow.camera.bottom = -SC;
+sun.shadow.bias = -0.0008;
+sun.shadow.normalBias = 0.6;
+scene.add(sun, sun.target);
+
+// ------------------------------------------------------------------ ground
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x5e8f46, roughness: 1 });
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(20000, 20000), groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+// Champ de Mars lawn (paler) and gravel paths
+const lawn = new THREE.Mesh(new THREE.PlaneGeometry(190, 620), new THREE.MeshStandardMaterial({ color: 0x6f9a4a, roughness: 1 }));
+lawn.rotation.x = -Math.PI / 2; lawn.position.set(0, 0.05, -160); lawn.receiveShadow = true;
+scene.add(lawn);
+const pathMat = new THREE.MeshStandardMaterial({ color: 0xb9a985, roughness: 1 });
+for (const [w, d, x, z] of [[24, 900, 0, -100], [900, 24, 0, 0], [24, 900, 0, 100]]) {
+  const p = new THREE.Mesh(new THREE.PlaneGeometry(w, d), pathMat);
+  p.rotation.x = -Math.PI / 2; p.position.set(x, 0.08, z); p.receiveShadow = true;
+  if (w > d) { p.rotation.z = 0; }
+  scene.add(p);
+}
+// the Seine, north of the tower
+const river = new THREE.Mesh(new THREE.PlaneGeometry(3000, 140), new THREE.MeshStandardMaterial({ color: 0x3f6f8a, roughness: 0.35, metalness: 0.1 }));
+river.rotation.x = -Math.PI / 2; river.position.set(0, 0.1, 240);
+scene.add(river);
+const quay = new THREE.Mesh(new THREE.PlaneGeometry(3000, 20), pathMat);
+quay.rotation.x = -Math.PI / 2; quay.position.set(0, 0.09, 160); scene.add(quay);
+// Trocadero-ish hill across the river (a low box) for scale
+const hill = new THREE.Mesh(new THREE.BoxGeometry(900, 18, 220), new THREE.MeshStandardMaterial({ color: 0x5c7d45, roughness: 1 }));
+hill.position.set(0, 9, 430); hill.receiveShadow = true; hill.castShadow = true; scene.add(hill);
+
+// ------------------------------------------------------------------ tower pieces
+const pieces = Eiffel.buildPieces();
+const N = pieces.length;
+const KIND_COLOR = {
+  rail: new THREE.Color(0xb0533c), brace: new THREE.Color(0xa04a35), ring: new THREE.Color(0xbb5a42),
+  deck: new THREE.Color(0x7a4a36), arch: new THREE.Color(0xc46a4e), pit: new THREE.Color(0xb8b0a2), mast: new THREE.Color(0x9a4231)
+};
+const towerGroup = new THREE.Group();
+scene.add(towerGroup);
+const ironMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.15 });
+const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), ironMat, N);
+inst.castShadow = true; inst.receiveShadow = true;
+inst.frustumCulled = false;
+inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+for (let i = 0; i < N; i++) inst.setColorAt(i, KIND_COLOR[pieces[i].kind]);
+inst.instanceColor.needsUpdate = true;
+towerGroup.add(inst);
+
+// Precompute per-piece basis (side, up, dir, mid, len) once.
+const basis = new Float32Array(N * 12);
+{
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), dir = new THREE.Vector3(), up = new THREE.Vector3(), side = new THREE.Vector3();
+  for (let i = 0; i < N; i++) {
+    const p = pieces[i];
+    a.fromArray(p.a); b.fromArray(p.b);
+    dir.subVectors(b, a); const len = dir.length(); dir.divideScalar(len);
+    up.set(0, 1, 0); if (Math.abs(dir.y) > 0.98) up.set(1, 0, 0);
+    side.crossVectors(up, dir).normalize();
+    up.crossVectors(dir, side).normalize();
+    const o = i * 12;
+    basis[o] = side.x; basis[o + 1] = side.y; basis[o + 2] = side.z;
+    basis[o + 3] = up.x; basis[o + 4] = up.y; basis[o + 5] = up.z;
+    basis[o + 6] = dir.x; basis[o + 7] = dir.y; basis[o + 8] = dir.z;
+    basis[o + 9] = (a.x + b.x) / 2; basis[o + 10] = (a.y + b.y) / 2; basis[o + 11] = (a.z + b.z) / 2;
+    p.len = len;
+  }
+}
+const M = new THREE.Matrix4();
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+function writePiece(i, s) {
+  if (s <= 0) { inst.setMatrixAt(i, ZERO); return; }
+  const p = pieces[i], o = i * 12;
+  const w = 2 * p.r * s, hgt = 2 * p.ry * s, L = p.len * s;
+  const lift = (1 - s) * (p.kind === 'pit' ? 0 : 14);
+  M.set(
+    basis[o] * w, basis[o + 3] * hgt, basis[o + 6] * L, basis[o + 9],
+    basis[o + 1] * w, basis[o + 4] * hgt, basis[o + 7] * L, basis[o + 10] + lift,
+    basis[o + 2] * w, basis[o + 5] * hgt, basis[o + 8] * L, basis[o + 11],
+    0, 0, 0, 1);
+  inst.setMatrixAt(i, M);
+}
+for (let i = 0; i < N; i++) inst.setMatrixAt(i, ZERO);
+const BAND = 6;
+let prevLo = 0, prevHi = 0, curHeight = -Infinity, curVisible = 0;
+function applyHeight(height) {
+  const hi = Eiffel.visibleCount(pieces, height);
+  const lo = Eiffel.visibleCount(pieces, height - BAND);
+  const from = Math.min(prevLo, lo), to = Math.max(prevHi, hi);
+  for (let i = from; i < to; i++) writePiece(i, Eiffel.pieceState(pieces[i].h, height, BAND));
+  prevLo = lo; prevHi = hi; curHeight = height; curVisible = hi;
+  inst.instanceMatrix.needsUpdate = true;
+}
+
+// ------------------------------------------------------------------ excavation pits
+const pitGroup = new THREE.Group();
+scene.add(pitGroup);
+const pitMeshes = [];
+{
+  const earth = new THREE.MeshStandardMaterial({ color: 0x4a3626, roughness: 1 });
+  const mound = new THREE.MeshStandardMaterial({ color: 0x6b5238, roughness: 1 });
+  for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    const hole = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), earth);
+    hole.rotation.x = -Math.PI / 2; hole.position.set(sx * 50, 0.12, sz * 50);
+    const spoil = new THREE.Mesh(new THREE.ConeGeometry(11, 4, 12), mound);
+    spoil.position.set(sx * 50 + sx * 26, 0, sz * 50 + sz * 26); spoil.castShadow = true;
+    pitGroup.add(hole, spoil); pitMeshes.push({ hole, spoil });
+  }
+}
+
+// ------------------------------------------------------------------ timber falsework
+const woodMat = new THREE.MeshStandardMaterial({ color: 0xa8814c, roughness: 0.9 });
+const scaffold = new THREE.Group();
+towerGroup.add(scaffold);
+{
+  const struts = [];
+  const add = (a, b, r) => struts.push({ a, b, r });
+  for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    // tower under the inner corner of each leg, up to just under the first floor
+    const cx = sx * 27, cz = sz * 27, s = 4.5, top = 52;
+    const c = [[cx - s, cz - s], [cx + s, cz - s], [cx + s, cz + s], [cx - s, cz + s]];
+    for (let y = 0; y < top; y += 4) {
+      const y1 = Math.min(y + 4, top);
+      for (let k = 0; k < 4; k++) {
+        const p = c[k], q = c[(k + 1) % 4];
+        add([p[0], y, p[1]], [p[0], y1, p[1]], 0.22);
+        add([p[0], y1, p[1]], [q[0], y1, q[1]], 0.16);
+        add([p[0], y, p[1]], [q[0], y1, q[1]], 0.12);
+      }
+    }
+    // platform + raking props out to the leg's underside at ~25 m
+    const lx = sx * Eiffel.halfWidth(25), lz = sz * Eiffel.halfWidth(25);
+    add([cx, top, cz], [lx, 25, lz], 0.3);
+    add([cx + sx * s, 36, cz + sz * s], [lx, 25, lz], 0.22);
+    add([cx - sx * s, 44, cz - sz * s], [lx - sx * 3, 30, lz - sz * 3], 0.18);
+    for (let d = -8; d <= 8; d += 4) add([cx - 8, top + 0.3, cz + d], [cx + 8, top + 0.3, cz + d], 0.25);
+  }
+  const m = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), woodMat, struts.length);
+  m.castShadow = true; m.frustumCulled = false;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), dir = new THREE.Vector3(), up = new THREE.Vector3(), side = new THREE.Vector3();
+  struts.forEach((st, i) => {
+    a.fromArray(st.a); b.fromArray(st.b); dir.subVectors(b, a); const L = dir.length(); dir.divideScalar(L);
+    up.set(0, 1, 0); if (Math.abs(dir.y) > 0.98) up.set(1, 0, 0);
+    side.crossVectors(up, dir).normalize(); up.crossVectors(dir, side).normalize();
+    const w = 2 * st.r;
+    M.set(side.x * w, up.x * w, dir.x * L, (a.x + b.x) / 2, side.y * w, up.y * w, dir.y * L, (a.y + b.y) / 2, side.z * w, up.z * w, dir.z * L, (a.z + b.z) / 2, 0, 0, 0, 1);
+    m.setMatrixAt(i, M);
+  });
+  scaffold.add(m);
+}
+
+// ------------------------------------------------------------------ creeper cranes
+const craneMat = new THREE.MeshStandardMaterial({ color: 0x3b3f46, roughness: 0.6, metalness: 0.5 });
+const cranes = [];
+function makeCrane() {
+  const g = new THREE.Group();
+  const mast = new THREE.Mesh(new THREE.BoxGeometry(1.2, 14, 1.2), craneMat); mast.position.y = 7; mast.castShadow = true;
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2, 2.6), craneMat); cab.position.y = 13;
+  const jibPivot = new THREE.Group(); jibPivot.position.y = 14;
+  const jib = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 16), craneMat); jib.position.z = 6; jib.rotation.x = -0.35; jib.castShadow = true;
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 10, 4), craneMat); cable.position.set(0, -5, 13.5);
+  const hook = new THREE.Mesh(new THREE.BoxGeometry(3, 0.8, 0.8), new THREE.MeshStandardMaterial({ color: 0x8a3b2a })); hook.position.set(0, -10.3, 13.5);
+  jibPivot.add(jib, cable, hook);
+  const pennant = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2, 8, 1), new THREE.MeshBasicMaterial({ color: 0xd33a2c, side: THREE.DoubleSide }));
+  pennant.position.set(1.2, 15.5, 0);
+  g.add(mast, cab, jibPivot, pennant);
+  g.userData = { jibPivot, cable, hook, pennant, phase: Math.random() * 6.28 };
+  return g;
+}
+for (let i = 0; i < 4; i++) { const c = makeCrane(); cranes.push(c); towerGroup.add(c); }
+const LEG_SIGNS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+
+// ------------------------------------------------------------------ flag
+const flagGeo = new THREE.PlaneGeometry(9, 6, 24, 8);
+const flagBase = flagGeo.attributes.position.array.slice();
+const flag = new THREE.Mesh(flagGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide, roughness: 0.9, vertexColors: true }));
+{
+  // tricolore: blue / white / red across the width
+  const col = new Float32Array(flagGeo.attributes.position.count * 3);
+  const pos = flagGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const u = (pos.getX(i) + 4.5) / 9;
+    const c = u < 0.34 ? [0.0, 0.14, 0.55] : u < 0.67 ? [0.95, 0.95, 0.95] : [0.85, 0.1, 0.12];
+    col.set(c, i * 3);
+  }
+  flagGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+}
+flag.position.set(0, Eiffel.FLAG - 3, 0);
+flag.castShadow = true;
+towerGroup.add(flag);
+
+// ------------------------------------------------------------------ rain
+const RAIN_MAX = 7000;
+const rainGeo = new THREE.BufferGeometry();
+const rainPos = new Float32Array(RAIN_MAX * 6);
+const rainSeed = new Float32Array(RAIN_MAX * 3);
+for (let i = 0; i < RAIN_MAX; i++) { rainSeed[i * 3] = Math.random(); rainSeed[i * 3 + 1] = Math.random(); rainSeed[i * 3 + 2] = Math.random(); }
+rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3).setUsage(THREE.DynamicDrawUsage));
+const rain = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({ color: 0xcfd8e6, transparent: true, opacity: 0.45 }));
+rain.frustumCulled = false; rain.visible = false;
+scene.add(rain);
+
+// ------------------------------------------------------------------ wind particles (dust / leaves)
+const DUST_MAX = 3000;
+const dustGeo = new THREE.BufferGeometry();
+const dustPos = new Float32Array(DUST_MAX * 3);
+const dustSeed = new Float32Array(DUST_MAX * 4);
+for (let i = 0; i < DUST_MAX; i++) for (let k = 0; k < 4; k++) dustSeed[i * 4 + k] = Math.random();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3).setUsage(THREE.DynamicDrawUsage));
+const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: 0xd9c48c, size: 0.9, transparent: true, opacity: 0.55, sizeAttenuation: true }));
+dust.frustumCulled = false; dust.visible = false;
+scene.add(dust);
+
+// ------------------------------------------------------------------ clouds
+function cloudTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, 256, 256);
+  for (let i = 0; i < 26; i++) {
+    const x = 60 + Math.random() * 136, y = 90 + Math.random() * 76, r = 28 + Math.random() * 40;
+    const grad = g.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, 'rgba(255,255,255,0.55)'); grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad; g.beginPath(); g.arc(x, y, r, 0, 6.29); g.fill();
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const cloudGroup = new THREE.Group();
+scene.add(cloudGroup);
+const clouds = [];
+{
+  const tex = cloudTexture();
+  for (let i = 0; i < 22; i++) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.85, fog: false }));
+    const w = 300 + Math.random() * 500;
+    m.scale.set(w, w * 0.45, 1);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set((Math.random() - 0.5) * 2600, 380 + Math.random() * 240, (Math.random() - 0.5) * 2600);
+    m.userData.speed = 0.7 + Math.random() * 0.6;
+    clouds.push(m); cloudGroup.add(m);
+  }
+}
+
+// ------------------------------------------------------------------ state
+const state = {
+  t: 0.6, playing: false, duration: 60,
+  cam: { az: 35, el: 18, dist: 420, ty: 120, fov: 45, orbit: false, orbitSpeed: 8, follow: false },
+  weather: 'sunny', intensity: 0.6, windDir: 240, sunEl: 40,
+};
+
+const PRESETS = {
+  champ: { az: 20, el: 6, dist: 330, ty: 40, fov: 60, follow: false },
+  aerial: { az: -40, el: 55, dist: 700, ty: 100, fov: 45, follow: false },
+  floor1: { az: 70, el: 2, dist: 150, ty: 62, fov: 55, follow: false },
+  arches: { az: 12, el: 14, dist: 95, ty: 30, fov: 75, follow: false },
+  follow: { az: 35, el: 12, dist: 220, ty: 60, fov: 45, follow: true },
+};
+
+function windVec(strength) {
+  const a = state.windDir * DEG; // direction the wind blows *toward*, 0 = +z
+  return new THREE.Vector3(Math.sin(a) * strength, 0, Math.cos(a) * strength);
+}
+
+function applyWeather() {
+  const w = state.weather, k = state.intensity;
+  $('int').value = k; $('vint').textContent = k.toFixed(2);
+  $('sunRow').style.display = w === 'sunny' ? '' : 'none';
+  $('sun').style.display = w === 'sunny' ? '' : 'none';
+  document.querySelectorAll('#wx button').forEach(b => b.classList.toggle('on', b.dataset.w === w));
+  rain.visible = w === 'rainy';
+  dust.visible = w === 'windy';
+  if (w === 'sunny') {
+    skyUniforms.topColor.value.set(0x2a6fd6); skyUniforms.horizonColor.value.set(0xc4dcf2); skyUniforms.sunAmount.value = 1;
+    scene.fog = new THREE.FogExp2(0xc4dcf2, 0.00035);
+    sun.intensity = 2.4; sun.color.set(0xfff2dc); sun.castShadow = true; hemi.intensity = 0.55;
+    groundMat.color.set(0x5e8f46); lawn.material.color.set(0x7fae57);
+    cloudGroup.visible = true; clouds.forEach(c => c.material.opacity = 0.35);
+    $('wxnote').textContent = 'Shadows on. Move the sun to change the time of day.';
+  } else if (w === 'rainy') {
+    const g = 0.55 - 0.25 * k;
+    skyUniforms.topColor.value.setRGB(g * 0.9 + 0.08, g * 0.95 + 0.08, g + 0.09); skyUniforms.horizonColor.value.setRGB(g + 0.15, g + 0.16, g + 0.18); skyUniforms.sunAmount.value = 0;
+    scene.fog = new THREE.FogExp2(new THREE.Color().setRGB(g + 0.15, g + 0.16, g + 0.18), 0.0005 + 0.0012 * k);
+    sun.intensity = 0.7 - 0.3 * k; sun.color.set(0xcfd8e6); sun.castShadow = false; hemi.intensity = 0.45;
+    groundMat.color.set(0x35522a); lawn.material.color.set(0x4a6b34);
+    cloudGroup.visible = true; clouds.forEach(c => c.material.opacity = 0.9);
+    $('wxnote').textContent = 'Overcast, fog, ' + Math.round(1000 + 6000 * k) + ' rain streaks drifting with the wind.';
+  } else {
+    skyUniforms.topColor.value.set(0x3f7fc8); skyUniforms.horizonColor.value.set(0xd6dde6); skyUniforms.sunAmount.value = 0.6;
+    scene.fog = new THREE.FogExp2(0xd6dde6, 0.0005);
+    sun.intensity = 1.7; sun.color.set(0xfff7ea); sun.castShadow = true; hemi.intensity = 0.6;
+    groundMat.color.set(0x66944c); lawn.material.color.set(0x88b45e);
+    cloudGroup.visible = true; clouds.forEach(c => c.material.opacity = 0.75);
+    $('wxnote').textContent = 'Clouds race, dust streams past, the flag whips and the tower sways ' + (0.3 + 2.2 * k).toFixed(1) + ' m at the top (exaggerated).';
+  }
+  applySun();
+}
+function applySun() {
+  const el = state.weather === 'sunny' ? state.sunEl : 35;
+  const az = 320 * DEG;
+  const d = new THREE.Vector3(Math.sin(az) * Math.cos(el * DEG), Math.sin(el * DEG), Math.cos(az) * Math.cos(el * DEG));
+  sun.position.copy(d).multiplyScalar(700);
+  sun.position.y += 0; sun.target.position.set(0, 120, 0);
+  skyUniforms.sunDir.value.copy(d);
+  const warm = state.weather === 'sunny' ? clamp((el - 5) / 30, 0, 1) : 1;
+  sun.color.setRGB(1, 0.75 + 0.2 * warm, 0.55 + 0.35 * warm);
+  if (state.weather === 'rainy') sun.color.set(0xcfd8e6);
+  hemi.color.copy(skyUniforms.horizonColor.value);
+}
+
+function applyCamera() {
+  const c = state.cam;
+  camera.fov = c.fov; camera.updateProjectionMatrix();
+  const az = c.az * DEG, el = c.el * DEG;
+  const target = new THREE.Vector3(0, c.ty, 0);
+  camera.position.set(target.x + c.dist * Math.cos(el) * Math.sin(az), Math.max(1.6, target.y + c.dist * Math.sin(el)), target.z + c.dist * Math.cos(el) * Math.cos(az));
+  camera.lookAt(target);
+  $('vaz').innerHTML = Math.round(c.az) + '&deg;'; $('az').value = c.az;
+  $('vel').innerHTML = Math.round(c.el) + '&deg;'; $('el').value = c.el;
+  $('vdist').textContent = Math.round(c.dist) + ' m'; $('dist').value = c.dist;
+  $('vty').textContent = Math.round(c.ty) + ' m'; $('ty').value = c.ty;
+  $('vfov').innerHTML = Math.round(c.fov) + '&deg;'; $('fov').value = c.fov;
+  $('orbit').classList.toggle('on', c.orbit);
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('on', b.dataset.p === 'follow' && c.follow));
+}
+
+function applyTimeline() {
+  const st = Eiffel.stateAt(state.t);
+  applyHeight(st.height);
+  $('tl').value = state.t;
+  $('date').textContent = st.date;
+  $('phase').textContent = st.label;
+  $('rh').textContent = (st.height < 0 ? 'pits ' + (-st.height).toFixed(0) + ' m deep' : Math.round(Math.min(st.height, 312)) + ' m');
+  $('rp').textContent = curVisible.toLocaleString('en-US');
+  // scenery driven by height
+  const h = st.height;
+  const sc = h < 20 ? 0 : h < 28 ? (h - 20) / 8 : h < 60 ? 1 : h < 66 ? (66 - h) / 6 : 0;
+  scaffold.visible = sc > 0; scaffold.scale.set(1, Math.max(0.001, sc), 1);
+  const cranesOn = h > 2 && h < 303;
+  for (let i = 0; i < 4; i++) {
+    const c = cranes[i]; c.visible = cranesOn;
+    if (!cranesOn) continue;
+    const hh = clamp(h, 0, 300);
+    const w = Eiffel.halfWidth(hh), s = Eiffel.legSide(hh) / 2;
+    const [sx, sz] = LEG_SIGNS[i];
+    c.position.set(sx * (w + s + 0.8), hh, sz * (w + s + 0.8));
+  }
+  flag.visible = h >= 311;
+  // excavation: holes open as the pits deepen, spoil heaps grow, both gone once the piers are up
+  const dig = h < 0 ? clamp((h + 6) / 6, 0.05, 1) : clamp(1 - h / 12, 0, 1);
+  pitGroup.visible = dig > 0;
+  for (const { hole, spoil } of pitMeshes) { hole.scale.set(dig, dig, 1); spoil.scale.set(dig, Math.max(0.01, dig), dig); spoil.position.y = 2 * dig; }
+  if (state.cam.follow) state.cam.ty = clamp(Math.max(h, 0) + 5, 0, 320);
+  return st;
+}
+
+// ------------------------------------------------------------------ UI wiring
+const bind = (id, fn) => $(id).addEventListener('input', e => fn(parseFloat(e.target.value)));
+bind('tl', v => { state.t = v; applyTimeline(); });
+$('play').addEventListener('click', () => { state.playing = !state.playing; if (state.playing && state.t >= 1) state.t = 0; $('play').innerHTML = state.playing ? '&#10074;&#10074; Pause' : '&#9654; Play'; $('play').classList.toggle('on', state.playing); });
+$('speed').addEventListener('change', e => state.duration = parseFloat(e.target.value));
+$('restart').addEventListener('click', () => { state.t = 0; applyTimeline(); });
+bind('az', v => { state.cam.az = v; state.cam.orbit = false; applyCamera(); });
+bind('el', v => { state.cam.el = v; applyCamera(); });
+bind('dist', v => { state.cam.dist = v; applyCamera(); });
+bind('ty', v => { state.cam.ty = v; state.cam.follow = false; applyCamera(); });
+bind('fov', v => { state.cam.fov = v; applyCamera(); });
+bind('orbitSpeed', v => state.cam.orbitSpeed = v);
+$('orbit').addEventListener('click', () => { state.cam.orbit = !state.cam.orbit; applyCamera(); });
+document.querySelectorAll('#presets button').forEach(b => b.addEventListener('click', () => { Object.assign(state.cam, PRESETS[b.dataset.p]); applyTimeline(); applyCamera(); }));
+document.querySelectorAll('#wx button').forEach(b => b.addEventListener('click', () => { state.weather = b.dataset.w; applyWeather(); }));
+bind('int', v => { state.intensity = v; $('vint').textContent = v.toFixed(2); applyWeather(); });
+bind('wd', v => { state.windDir = v; $('vwd').innerHTML = Math.round(v) + '&deg;'; });
+bind('sun', v => { state.sunEl = v; $('vsun').innerHTML = Math.round(v) + '&deg;'; applySun(); });
+document.querySelectorAll('.card h2').forEach(h => h.addEventListener('click', () => h.parentElement.classList.toggle('collapsed')));
+
+// mouse / touch orbit on the canvas
+{
+  let drag = null;
+  const el = renderer.domElement;
+  el.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, az: state.cam.az, el: state.cam.el }; el.setPointerCapture(e.pointerId); });
+  el.addEventListener('pointermove', e => {
+    if (!drag) return;
+    state.cam.az = ((drag.az - (e.clientX - drag.x) * 0.3 + 540) % 360) - 180;
+    state.cam.el = clamp(drag.el + (e.clientY - drag.y) * 0.25, -5, 85);
+    state.cam.orbit = false; applyCamera();
+  });
+  el.addEventListener('pointerup', () => drag = null);
+  el.addEventListener('wheel', e => { e.preventDefault(); state.cam.dist = clamp(state.cam.dist * Math.exp(e.deltaY * 0.0012), 60, 900); applyCamera(); }, { passive: false });
+}
+window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+
+// ------------------------------------------------------------------ per-frame effects
+const tmpV = new THREE.Vector3();
+function updateEffects(dt, time) {
+  const k = state.intensity;
+  const wind = windVec(state.weather === 'windy' ? 8 + 40 * k : state.weather === 'rainy' ? 3 + 12 * k : 1.5);
+  const windMag = wind.length();
+  // clouds
+  for (const c of clouds) {
+    c.position.addScaledVector(wind, dt * c.userData.speed * 0.9);
+    if (c.position.x > 1400) c.position.x -= 2800; if (c.position.x < -1400) c.position.x += 2800;
+    if (c.position.z > 1400) c.position.z -= 2800; if (c.position.z < -1400) c.position.z += 2800;
+  }
+  // rain: streaks around the look-at point, falling, drifting with the wind
+  if (rain.visible) {
+    const n = Math.round(1000 + (RAIN_MAX - 1000) * k), fall = 70 + 40 * k, box = 360, ht = 340;
+    const cx = camera.position.x * 0.3, cz = camera.position.z * 0.3;
+    for (let i = 0; i < n; i++) {
+      const s = i * 3;
+      let y = ((rainSeed[s + 1] * ht - time * fall) % ht + ht) % ht;
+      const drift = (ht - y) / fall;
+      const x = cx + (rainSeed[s] - 0.5) * box + wind.x * drift, z = cz + (rainSeed[s + 2] - 0.5) * box + wind.z * drift;
+      const o = i * 6, L = 2.2 + 1.5 * k;
+      rainPos[o] = x; rainPos[o + 1] = y; rainPos[o + 2] = z;
+      rainPos[o + 3] = x - wind.x * L / fall; rainPos[o + 4] = y + L; rainPos[o + 5] = z - wind.z * L / fall;
+    }
+    rainGeo.setDrawRange(0, n * 2);
+    rainGeo.attributes.position.needsUpdate = true;
+  }
+  // dust streaming horizontally
+  if (dust.visible) {
+    const n = Math.round(400 + (DUST_MAX - 400) * k), box = 500;
+    for (let i = 0; i < n; i++) {
+      const s = i * 4, phase = (dustSeed[s] * box + time * windMag * (0.6 + dustSeed[s + 3])) % box;
+      const along = phase - box / 2, across = (dustSeed[s + 1] - 0.5) * box;
+      const dirx = wind.x / windMag, dirz = wind.z / windMag;
+      dustPos[i * 3] = along * dirx - across * dirz;
+      dustPos[i * 3 + 1] = 1 + dustSeed[s + 2] * dustSeed[s + 2] * (30 + 150 * k) + Math.sin(time * 2 + dustSeed[s] * 20) * 3;
+      dustPos[i * 3 + 2] = along * dirz + across * dirx;
+    }
+    dustGeo.setDrawRange(0, n);
+    dustGeo.attributes.position.needsUpdate = true;
+  }
+  // flag: hangs limp in calm, waves with the wind
+  {
+    const pos = flagGeo.attributes.position, amp = 0.15 + windMag * 0.03, freq = 2 + windMag * 0.15;
+    flag.rotation.y = Math.atan2(wind.x, wind.z) + Math.PI / 2;
+    for (let i = 0; i < pos.count; i++) {
+      const bx = flagBase[i * 3], by = flagBase[i * 3 + 1];
+      const u = (bx + 4.5) / 9;
+      pos.setX(i, bx + 4.5);
+      pos.setY(i, by - (1 - windMag / 50) * u * u * 2.5 + Math.sin(u * 6 - time * freq) * amp * u * 0.4);
+      pos.setZ(i, Math.sin(u * 7 - time * freq) * amp * u + Math.sin(u * 3 - time * freq * 0.6) * amp * 0.5 * u);
+    }
+    pos.needsUpdate = true; flagGeo.computeVertexNormals();
+    for (const c of cranes) {
+      if (!c.visible) continue;
+      const p = c.userData.pennant.geometry.attributes.position;
+      for (let i = 0; i < p.count; i++) { const u = (p.getX(i) + 1.2) / 2.4; p.setZ(i, Math.sin(u * 6 - time * freq + c.userData.phase) * amp * 0.3 * u); }
+      p.needsUpdate = true;
+      c.userData.pennant.rotation.y = flag.rotation.y;
+      c.userData.jibPivot.rotation.y = Math.sin(time * 0.25 + c.userData.phase) * 0.9;
+    }
+  }
+  // sway (exaggerated) about the base
+  const sway = state.weather === 'windy' ? (0.3 + 2.2 * k) / 300 : 0.0004;
+  const gust = Math.sin(time * 0.7) * 0.7 + Math.sin(time * 1.9) * 0.3;
+  const wx = wind.x / windMag, wz = wind.z / windMag;
+  towerGroup.rotation.x = wz * sway * (0.6 + 0.4 * gust);
+  towerGroup.rotation.z = -wx * sway * (0.6 + 0.4 * gust);
+}
+
+// ------------------------------------------------------------------ loop
+let last = performance.now(), simTime = 0;
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now; simTime += dt;
+  if (state.playing) {
+    state.t = Math.min(1, state.t + dt / state.duration);
+    if (state.t >= 1) { state.playing = false; $('play').innerHTML = '&#9654; Play'; $('play').classList.remove('on'); }
+    applyTimeline();
+  } else if (state.cam.follow) applyTimeline();
+  if (state.cam.orbit) { state.cam.az = ((state.cam.az + dt * state.cam.orbitSpeed + 540) % 360) - 180; }
+  if (state.cam.orbit || state.cam.follow) applyCamera();
+  updateEffects(dt, simTime);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+applyWeather();
+applyTimeline();
+applyCamera();
+requestAnimationFrame(frame);
+
+// debug / automation handle
+window.__eiffel = {
+  state, pieces, scene, sun, hemi, camera, renderer,
+  setT(t) { state.t = clamp(t, 0, 1); applyTimeline(); },
+  setWeather(w, k) { state.weather = w; if (k != null) state.intensity = k; applyWeather(); },
+  setCamera(c) { Object.assign(state.cam, c); applyCamera(); },
+  step(dt) { simTime += dt; updateEffects(dt, simTime); },
+  render() { applyTimeline(); applyCamera(); renderer.render(scene, camera); },
+  pieceCount: () => curVisible,
+};
+</script>
+<script>
+window.addEventListener('error', e => { const d = document.getElementById('err'); d.style.display = 'block'; d.textContent = 'Error: ' + e.message; });
+</script>
+</body>
+</html>

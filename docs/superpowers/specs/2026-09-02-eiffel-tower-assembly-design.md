@@ -33,7 +33,7 @@ Units are metres; the world origin is the tower axis at ground level, Y up.
   | 0.72 | 1888-08-14 | 116 | Second floor reached |
   | 0.88 | 1888-12-26 | 200 | Creeper cranes climb the single tower |
   | 0.97 | 1889-03-15 | 300 | Top reached |
-  | 1.00 | 1889-03-31 | 312 | Flag raised — 2 years, 2 months, 5 days |
+  | 1.00 | 1889-03-31 | 320 (past the flag, so the last pieces finish animating) | Flag raised — 2 years, 2 months, 5 days |
 
   A piece is complete when `h < height − band`, animating (scaled in and lowered from above) when within the `band` (6 m), otherwise absent. Foundation pits, timber scaffolds under the legs (visible for `28 ≤ height < 62`) and four creeper cranes riding at the current frontier are scenery driven by the same height.
 - **Tests.** `EiffelTests.run()` checks: `halfWidth` is monotone decreasing and hits the anchors; every piece has finite coordinates, `r > 0` and `h` inside `[−8, 315]`; piece heights are non-decreasing after sort; `stateAt(0)` and `stateAt(1)` match the schedule ends; `stateAt` is monotone in height; pieces count is between 2 000 and 20 000.
