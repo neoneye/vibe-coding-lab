@@ -12,7 +12,7 @@ A homage to Porrasturvat's Stair Dismount. A ragdoll stands on top of a straight
 
 ### 3D Wrecking Ball
 
-Swing a crane-hung wrecking ball into a stone castle, a Mesoamerican pyramid, a wooden Trojan horse or a red-brick apartment block, all generated block by block. A mortar-bond model cracks blocks loose under impact and drops whatever loses its footing. Grab the ball with the mouse, drive the crane with the keys. Three.js + Rapier.
+Swing a crane-hung wrecking ball into a stone castle, a Mesoamerican pyramid, a wooden Trojan horse or a red-brick apartment block, all generated block by block. A mortar-bond model cracks blocks loose under impact and drops whatever loses its footing. Grab the ball on its chain with the mouse, drive the crane with the keys, synthesised thuds, clatter and crane motor. Three.js + Rapier.
 
 ![3d-wrecking-ball](3d-wrecking-ball/screenshot1.jpg)
 

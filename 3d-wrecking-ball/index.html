@@ -81,6 +81,7 @@
       <label>Slow motion <span class="val" id="vSlow"></span></label><input type="range" id="sSlow" min="0.1" max="1" step="0.05" value="1">
       <div class="check"><input type="checkbox" id="cShadows" checked><span>Shadows</span></div>
       <div class="check"><input type="checkbox" id="cFollow"><span>Camera follows the ball</span></div>
+      <div class="check"><input type="checkbox" id="cSound" checked><span>Sound effects</span></div>
     </div>
   </div>
   <div class="card" id="cardStats">
@@ -789,7 +790,8 @@ let bodies = [], colliderToBlock = new Map();
 let loose = [];            // indices of released blocks with live bodies
 let boxMesh = null, cylMesh = null;
 let ballBody = null, ballCol = null, hookBody = null, rope = null;
-let ballMesh = null, cableLine = null, hookMesh = null;
+let ballMesh = null, chainMesh = null, hookMesh = null;
+const CHAIN_PITCH = 0.42, CHAIN_MAX = 64;
 let grabbed = false, grabPlaneY = 0;
 let hookPos = new THREE.Vector3();
 let centre = new THREE.Vector3(0, 6, 0);
@@ -849,9 +851,14 @@ const boomGroup = new THREE.Group();
   tipBox.position.z = L; boomGroup.add(tipBox);
   hookMesh = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 8), dark);
   scene.add(hookMesh);
-  cableLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: 0x111111 }));
-  cableLine.frustumCulled = false;
-  scene.add(cableLine);
+  // chain: oval torus links laid along the cable, alternating 90 degrees
+  const linkGeo = new THREE.TorusGeometry(0.15, 0.045, 8, 14);
+  linkGeo.scale(1.55, 1, 1);
+  chainMesh = new THREE.InstancedMesh(linkGeo, new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.45, metalness: 0.85 }), CHAIN_MAX);
+  chainMesh.castShadow = true;
+  chainMesh.frustumCulled = false;
+  chainMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(chainMesh);
   ballMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), new THREE.MeshStandardMaterial({ color: 0x1c1c1e, roughness: 0.35, metalness: 0.75 }));
   ballMesh.castShadow = true;
   scene.add(ballMesh);
@@ -1018,17 +1025,27 @@ function physicsStep() {
   // first, so a weak event cannot release a block (through spill) before the
   // big one that actually struck it is processed.
   const hits = [];
+  let groundThud = 0, clatterBest = 0, clatterIdx = -1;
   eventQueue.drainContactForceEvents(e => {
     impactsPerStep++;
     const f = e.totalForceMagnitude() / 1000;
     if (f > stats.maxForce) stats.maxForce = f;
-    const fromBall = e.collider1() === ballCol.handle || e.collider2() === ballCol.handle;
-    for (const h of [e.collider1(), e.collider2()]) {
-      const i = colliderToBlock.get(h);
-      if (i !== undefined) hits.push([f, i, fromBall]);
+    const c1 = e.collider1(), c2 = e.collider2();
+    const fromBall = c1 === ballCol.handle || c2 === ballCol.handle;
+    const i1 = colliderToBlock.get(c1), i2 = colliderToBlock.get(c2);
+    if (i1 === undefined && i2 === undefined && fromBall) groundThud = Math.max(groundThud, f); // ball on the ground
+    for (const i of [i1, i2]) {
+      if (i === undefined) continue;
+      hits.push([f, i, fromBall]);
+      if (!fromBall && structure.released[i] && f > clatterBest) { clatterBest = f; clatterIdx = i; }
     }
   });
   hits.sort((a, b) => b[0] - a[0]);
+  // strongest ball-on-block contact of the step drives the impact sound
+  const strongest = hits.find(h => h[2]);
+  if (strongest && strongest[0] > 60) playImpact(strongest[0], asset.blocks[strongest[1]].mat, bodies[strongest[1]] ? bodies[strongest[1]].translation() : bp);
+  else if (groundThud > 80) playImpact(groundThud * 0.5, 'stone', bp);
+  if (clatterIdx >= 0 && bodies[clatterIdx]) playClatter(clatterBest, asset.blocks[clatterIdx].mat, bodies[clatterIdx].translation());
   let ballBroke = false;
   for (const [f, i, fromBall] of hits) {
     if (structure.released[i]) continue;
@@ -1076,6 +1093,132 @@ function shove(strength = 1) {
   ballBody.applyImpulse({ x: d.x, y: 0, z: d.z }, true);
 }
 
+// ------------------------------------------------------------------ audio
+// Everything is synthesised with Web Audio: no sample files, one-file page.
+const audio = { ctx: null, master: null, noise: null, enabled: true, lastClatter: 0, motor: null, motorGain: null };
+function ensureAudio() {
+  if (!audio.enabled) return null;
+  if (!audio.ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { audio.enabled = false; return null; }
+    const ctx = new AC();
+    audio.ctx = ctx;
+    audio.master = ctx.createGain();
+    audio.master.gain.value = 0.7;
+    audio.master.connect(ctx.destination);
+    const len = ctx.sampleRate;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    audio.noise = buf;
+  }
+  if (audio.ctx.state === 'suspended') audio.ctx.resume();
+  return audio.ctx;
+}
+function panFor(pos) {
+  const p = tmpP.set(pos.x, pos.y, pos.z).project(camera);
+  return Number.isFinite(p.x) ? clamp(p.x * 0.7, -0.8, 0.8) : 0;
+}
+function voice(pan) {
+  const ctx = audio.ctx;
+  const g = ctx.createGain();
+  const pn = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  if (pn) { pn.pan.value = pan; g.connect(pn); pn.connect(audio.master); } else g.connect(audio.master);
+  return g;
+}
+function noiseBurst(gainNode, t0, dur, type, freq, q, peak) {
+  const ctx = audio.ctx;
+  const src = ctx.createBufferSource();
+  src.buffer = audio.noise;
+  src.playbackRate.value = 0.8 + Math.random() * 0.4;
+  const flt = ctx.createBiquadFilter();
+  flt.type = type; flt.frequency.value = freq; flt.Q.value = q;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(peak, t0);
+  env.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  src.connect(flt); flt.connect(env); env.connect(gainNode);
+  src.start(t0); src.stop(t0 + dur + 0.05);
+}
+function thud(gainNode, t0, f0, f1, dur, peak) {
+  const ctx = audio.ctx;
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(f0, t0);
+  osc.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(peak, t0);
+  env.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  osc.connect(env); env.connect(gainNode);
+  osc.start(t0); osc.stop(t0 + dur + 0.05);
+}
+// Ball hits a block: a thud sized by the force, coloured by the material.
+function playImpact(forceKN, mat, pos) {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  const k = clamp(forceKN / 900, 0.12, 1.0);
+  const g = voice(panFor(pos));
+  if (mat === 'wood') {
+    thud(g, t0, 260, 110, 0.18, 0.5 * k);
+    noiseBurst(g, t0, 0.16, 'bandpass', 700 + Math.random() * 300, 5, 0.8 * k);
+  } else if (mat === 'brick') {
+    thud(g, t0, 170, 60, 0.22, 0.6 * k);
+    noiseBurst(g, t0, 0.22, 'lowpass', 1800, 0.7, 0.7 * k);
+  } else {
+    thud(g, t0, 120, 42, 0.3, 0.8 * k);
+    noiseBurst(g, t0, 0.3, 'lowpass', 900, 0.7, 0.7 * k);
+  }
+  if (forceKN > 600) noiseBurst(g, t0, 1.1, 'lowpass', 140, 1.2, 0.5 * k); // rumble
+}
+// Loose debris landing: short clicks and clatter, rate-limited.
+function playClatter(forceKN, mat, pos) {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const now = performance.now();
+  if (now - audio.lastClatter < 28) return;
+  audio.lastClatter = now;
+  const t0 = ctx.currentTime;
+  const k = clamp(forceKN / 250, 0.04, 0.45);
+  const g = voice(panFor(pos));
+  const wood = mat === 'wood';
+  noiseBurst(g, t0, wood ? 0.09 : 0.06, 'bandpass', wood ? 900 + Math.random() * 500 : 1600 + Math.random() * 1400, wood ? 4 : 2.5, k);
+  if (!wood && forceKN > 120) thud(g, t0, 150, 70, 0.1, k * 0.6);
+}
+function playClink(pos, strength = 1) {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  const g = voice(panFor(pos));
+  for (const f of [2100, 3150, 4800]) {
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = f * (0.97 + Math.random() * 0.06);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.08 * strength, t0);
+    env.gain.exponentialRampToValueAtTime(0.001, t0 + 0.12);
+    osc.connect(env); env.connect(g);
+    osc.start(t0); osc.stop(t0 + 0.15);
+  }
+}
+// Crane motor: a low saw through a lowpass, faded in while a crane key is held.
+function setMotor(on) {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  if (!audio.motor) {
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth'; osc.frequency.value = 52;
+    const osc2 = ctx.createOscillator();
+    osc2.type = 'square'; osc2.frequency.value = 104.5;
+    const flt = ctx.createBiquadFilter();
+    flt.type = 'lowpass'; flt.frequency.value = 260;
+    const g = ctx.createGain(); g.gain.value = 0;
+    osc.connect(flt); osc2.connect(flt); flt.connect(g); g.connect(audio.master);
+    osc.start(); osc2.start();
+    audio.motor = osc; audio.motorGain = g;
+  }
+  audio.motorGain.gain.setTargetAtTime(on ? 0.05 : 0, ctx.currentTime, on ? 0.08 : 0.15);
+}
+
 // ------------------------------------------------------------------ input
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
@@ -1099,6 +1242,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
   raycaster.setFromCamera(ndc, camera);
   if (ballBody && raycaster.intersectObject(ballMesh).length) {
     grabbed = true;
+    playClink(ballBody.translation(), 1);
     grabPlaneY = ballBody.translation().y;
     grabTarget.copy(ballBody.translation());
     ballBody.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
@@ -1123,6 +1267,7 @@ renderer.domElement.addEventListener('pointermove', e => {
 });
 function endPointer() {
   if (grabbed && ballBody) {
+    playClink(ballBody.translation(), 0.6);
     ballBody.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
     ballBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
     ballBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
@@ -1144,6 +1289,7 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
 
+let motorOn = false;
 function driveCrane(dt) {
   const c = state.crane;
   const fwd = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
@@ -1157,6 +1303,8 @@ function driveCrane(dt) {
   if (luff) { c.luff = clamp(c.luff + luff * 0.35 * dt, 15 * DEG, 80 * DEG); $('sLuff').value = Math.round(c.luff / DEG); }
   if (hoist) { const L = clamp(state.cable + hoist * 2.5 * dt, 4, 20); if (L !== state.cable) { state.cable = L; $('sCable').value = L.toFixed(1); makeRope(); } }
   if (slew || luff || hoist) updateLabels();
+  const moving = !!(fwd || turn || slew || luff || hoist);
+  if (moving !== motorOn) { motorOn = moving; if (audio.ctx || moving) setMotor(moving); }
 }
 
 // --------------------------------------------------------------------- ui
@@ -1193,6 +1341,8 @@ $('sMortar').addEventListener('input', e => {
 $('sSlow').addEventListener('input', e => { state.slowmo = +e.target.value; world.timestep = DT * state.slowmo; updateLabels(); });
 $('cShadows').addEventListener('change', e => { renderer.shadowMap.enabled = e.target.checked; blockMat.needsUpdate = true; ground.material.needsUpdate = true; });
 $('cFollow').addEventListener('change', e => { state.follow = e.target.checked; });
+$('cSound').addEventListener('change', e => { audio.enabled = e.target.checked; if (!audio.enabled && audio.ctx) audio.ctx.suspend(); else if (audio.enabled) ensureAudio(); });
+for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, () => ensureAudio(), { passive: true });
 for (const card of document.querySelectorAll('.card h2')) {
   card.addEventListener('click', () => card.parentElement.classList.toggle('collapsed'));
 }
@@ -1211,13 +1361,39 @@ function syncVisuals() {
   ballMesh.position.set(bp.x, bp.y, bp.z);
   const br = ballBody.rotation();
   ballMesh.quaternion.set(br.x, br.y, br.z, br.w);
-  const pa = cableLine.geometry.attributes.position;
-  pa.setXYZ(0, hookPos.x, hookPos.y, hookPos.z);
-  pa.setXYZ(1, bp.x, bp.y, bp.z);
-  pa.needsUpdate = true;
+  layoutChain(hookPos, ballMesh.position);
   sun.target.position.copy(centre);
   sun.position.set(centre.x + 40, 70, centre.z + 30);
   updateCamera();
+}
+// Lay the chain links from the hook to the ball. Taut: a straight run. Slack:
+// a parabola whose sag makes its arc length match the cable, and the links
+// follow that curve.
+const chainA = new THREE.Vector3(), chainB = new THREE.Vector3(), chainD = new THREE.Vector3(), chainT = new THREE.Vector3(), chainN = new THREE.Vector3();
+const chainQ = new THREE.Quaternion(), chainQ2 = new THREE.Quaternion(), chainS = new THREE.Vector3(1, 1, 1), X_AXIS = new THREE.Vector3(1, 0, 0);
+function layoutChain(from, to) {
+  const c = chainD.subVectors(to, from).length();
+  const L = state.cable;
+  const sag = c < L - 0.05 ? Math.sqrt(Math.max(0, 3 * c * (L - c) / 8)) : 0;
+  // bow direction: gravity with the along-chord part removed; sideways when the chord is vertical
+  chainN.set(0, -1, 0);
+  if (c > 1e-3) { chainT.copy(chainD).divideScalar(c); chainN.addScaledVector(chainT, -chainN.dot(chainT)); }
+  if (chainN.lengthSq() < 0.04) chainN.set(1, 0, 0);
+  chainN.normalize();
+  const n = Math.min(CHAIN_MAX, Math.max(2, Math.round((sag > 0 ? L : c) / CHAIN_PITCH)));
+  for (let i = 0; i < n; i++) {
+    const t = (i + 0.5) / n, t2 = (i + 1.5) / n;
+    chainA.lerpVectors(from, to, t).addScaledVector(chainN, 4 * sag * t * (1 - t));
+    chainB.lerpVectors(from, to, t2).addScaledVector(chainN, 4 * sag * t2 * (1 - t2));
+    chainT.subVectors(chainB, chainA).normalize();
+    chainQ.setFromUnitVectors(X_AXIS, chainT);
+    chainQ2.setFromAxisAngle(chainT, (i % 2) * Math.PI / 2);
+    chainQ.premultiply(chainQ2);
+    tmpM.compose(chainA, chainQ, chainS);
+    chainMesh.setMatrixAt(i, tmpM);
+  }
+  chainMesh.count = n;
+  chainMesh.instanceMatrix.needsUpdate = true;
 }
 function updateStats() {
   $('vLoose').textContent = loose.length + ' / ' + structure.released.reduce((a, b) => a + b, 0);

@@ -90,8 +90,17 @@ Full-screen canvas with the dark collapsible card panel top-left, like the Eiffe
 
 - One `InstancedMesh` of a unit box for all boxes and one of a unit cylinder for wheels; per-instance colour = material colour × tint jitter × (1 − 0.5 · damage/hp). Matrices are copied from Rapier each frame only for released bodies (fixed blocks never move); intact blocks keep the matrices written at build time.
 - Ground plane receiving shadows, a directional sun with a shadow map covering the structure, hemisphere fill, fog to the horizon, gradient sky colour.
-- Crane: crawler tracks and cab as boxes, a lattice boom drawn with `LineSegments`, the cable as a line from hook to ball, the ball a dark sphere.
+- Crane: crawler tracks and cab as boxes, a lattice boom drawn with `LineSegments`, the ball a dark sphere. The cable is a chain of oval torus links (one `InstancedMesh`, 0.42 m pitch, alternate links turned 90°) laid along the hook-to-ball line; when the rope joint is slack the links follow a parabola bowed away from the chord (in the gravity direction, or sideways for a vertical chord) whose sag makes the arc length match the cable. The chain is visual only: a physical chain of light links under a multi-ton ball would fight the solver.
 - Renderer pixel ratio capped at 2 (HiDPI).
+
+## Sound
+
+All effects are synthesised with Web Audio at run time (no sample files), started on the first pointer or key gesture, with a *Sound effects* checkbox in the World card. Each sound is panned by the source's screen position.
+
+- **Impact** (strongest ball-on-block contact per step above 60 kN): a pitch-dropping sine thud plus a filtered noise burst, sized by the force; stone low and dull, brick brighter, wood a resonant bandpass knock; hits above 600 kN add a one-second low rumble. The ball landing on the ground plays a softer stone thud.
+- **Clatter** (strongest contact per step of a loose block with anything, rate-limited to one every 28 ms): a short bandpass click, wooden for wood.
+- **Clink** when the ball is grabbed and released: three detuned high triangle partials.
+- **Crane motor**: a sawtooth and square through a lowpass, faded in while any crane key is held.
 
 ## Testing and verification
 
