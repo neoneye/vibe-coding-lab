@@ -1095,7 +1095,7 @@ function shove(strength = 1) {
 
 // ------------------------------------------------------------------ audio
 // Everything is synthesised with Web Audio: no sample files, one-file page.
-const audio = { ctx: null, master: null, noise: null, enabled: true, lastClatter: 0, motor: null, motorGain: null };
+const audio = { ctx: null, master: null, noise: null, enabled: true, lastClatter: 0 };
 function ensureAudio() {
   if (!audio.enabled) return null;
   if (!audio.ctx) {
@@ -1200,23 +1200,83 @@ function playClink(pos, strength = 1) {
     osc.start(t0); osc.stop(t0 + 0.15);
   }
 }
-// Crane motor: a low saw through a lowpass, faded in while a crane key is held.
-function setMotor(on) {
-  const ctx = ensureAudio();
-  if (!ctx) return;
-  if (!audio.motor) {
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth'; osc.frequency.value = 52;
-    const osc2 = ctx.createOscillator();
-    osc2.type = 'square'; osc2.frequency.value = 104.5;
-    const flt = ctx.createBiquadFilter();
-    flt.type = 'lowpass'; flt.frequency.value = 260;
-    const g = ctx.createGain(); g.gain.value = 0;
-    osc.connect(flt); osc2.connect(flt); flt.connect(g); g.connect(audio.master);
-    osc.start(); osc2.start();
-    audio.motor = osc; audio.motorGain = g;
+// Crane: a diesel that idles all the time and revs under load, a hydraulic
+// whine while slewing / luffing / hoisting, track clatter and rumble while
+// rolling, and the backup alarm while reversing.
+const craneAudio = { built: false, trackPhase: 0, beepPhase: 0, side: 0 };
+function buildCraneAudio(ctx) {
+  const A = craneAudio;
+  const out = audio.master;
+  // engine: saw + sub square, chugging via a slow LFO on the gain, through a lowpass
+  A.engine = ctx.createOscillator(); A.engine.type = 'sawtooth'; A.engine.frequency.value = 31;
+  A.sub = ctx.createOscillator(); A.sub.type = 'square'; A.sub.frequency.value = 15.5;
+  A.engineFlt = ctx.createBiquadFilter(); A.engineFlt.type = 'lowpass'; A.engineFlt.frequency.value = 150; A.engineFlt.Q.value = 1.2;
+  A.engineGain = ctx.createGain(); A.engineGain.gain.value = 0;
+  A.lfo = ctx.createOscillator(); A.lfo.type = 'sine'; A.lfo.frequency.value = 7;
+  A.lfoGain = ctx.createGain(); A.lfoGain.gain.value = 0.012;
+  A.lfo.connect(A.lfoGain); A.lfoGain.connect(A.engineGain.gain);
+  A.engine.connect(A.engineFlt); A.sub.connect(A.engineFlt); A.engineFlt.connect(A.engineGain); A.engineGain.connect(out);
+  // hydraulic whine: sine with vibrato
+  A.whine = ctx.createOscillator(); A.whine.type = 'sine'; A.whine.frequency.value = 600;
+  A.vib = ctx.createOscillator(); A.vib.frequency.value = 5.5;
+  A.vibGain = ctx.createGain(); A.vibGain.gain.value = 9;
+  A.vib.connect(A.vibGain); A.vibGain.connect(A.whine.frequency);
+  A.whineGain = ctx.createGain(); A.whineGain.gain.value = 0;
+  A.whine.connect(A.whineGain); A.whineGain.connect(out);
+  // track rumble: looped noise through a low bandpass
+  A.rumble = ctx.createBufferSource(); A.rumble.buffer = audio.noise; A.rumble.loop = true; A.rumble.playbackRate.value = 0.5;
+  A.rumbleFlt = ctx.createBiquadFilter(); A.rumbleFlt.type = 'bandpass'; A.rumbleFlt.frequency.value = 110; A.rumbleFlt.Q.value = 0.8;
+  A.rumbleGain = ctx.createGain(); A.rumbleGain.gain.value = 0;
+  A.rumble.connect(A.rumbleFlt); A.rumbleFlt.connect(A.rumbleGain); A.rumbleGain.connect(out);
+  // backup alarm
+  A.beep = ctx.createOscillator(); A.beep.type = 'square'; A.beep.frequency.value = 1050;
+  A.beepFlt = ctx.createBiquadFilter(); A.beepFlt.type = 'lowpass'; A.beepFlt.frequency.value = 2600;
+  A.beepGain = ctx.createGain(); A.beepGain.gain.value = 0;
+  A.beep.connect(A.beepFlt); A.beepFlt.connect(A.beepGain); A.beepGain.connect(out);
+  for (const o of [A.engine, A.sub, A.lfo, A.whine, A.vib, A.rumble, A.beep]) o.start();
+  A.built = true;
+}
+function trackClick(ctx, heavy) {
+  const t0 = ctx.currentTime;
+  craneAudio.side = 1 - craneAudio.side;
+  const g = voice(craneAudio.side ? 0.25 : -0.25);
+  noiseBurst(g, t0, 0.05, 'bandpass', heavy ? 380 + Math.random() * 120 : 620 + Math.random() * 200, 3, heavy ? 0.16 : 0.1);
+}
+// ctl: { fwd, turn, slew, luff, hoist } as -1 / 0 / 1
+function updateCraneAudio(dt, ctl) {
+  const ctx = audio.ctx;
+  if (!ctx || !audio.enabled) return;
+  if (!craneAudio.built) buildCraneAudio(ctx);
+  const A = craneAudio, t = ctx.currentTime;
+  const busy = !!(ctl.slew || ctl.luff || ctl.hoist);
+  const rolling = !!(ctl.fwd || ctl.turn);
+  const load = busy || rolling;
+  // engine: idle 31 Hz, working 47 Hz, louder and more open under load
+  A.engine.frequency.setTargetAtTime(load ? 47 : 31, t, 0.3);
+  A.sub.frequency.setTargetAtTime(load ? 23.5 : 15.5, t, 0.3);
+  A.engineFlt.frequency.setTargetAtTime(load ? 280 : 150, t, 0.3);
+  A.engineGain.gain.setTargetAtTime(load ? 0.075 : 0.04, t, 0.25);
+  A.lfo.frequency.setTargetAtTime(load ? 11 : 7, t, 0.3);
+  // hydraulics: pitch by function, hoist highest
+  const wf = ctl.hoist ? 880 : ctl.luff ? 700 : 560;
+  A.whine.frequency.setTargetAtTime(wf, t, 0.15);
+  A.whineGain.gain.setTargetAtTime(busy ? 0.02 : 0, t, busy ? 0.12 : 0.2);
+  // tracks: rumble plus a click per track link, faster forwards than turning
+  A.rumbleGain.gain.setTargetAtTime(rolling ? 0.07 : 0, t, rolling ? 0.1 : 0.2);
+  const rate = (Math.abs(ctl.fwd) * 3.5 + Math.abs(ctl.turn) * 1.6) / 0.45; // links per second
+  if (rate > 0) {
+    A.trackPhase += rate * dt;
+    while (A.trackPhase >= 1) { A.trackPhase -= 1; trackClick(ctx, ctl.fwd !== 0); }
+  } else A.trackPhase = 0;
+  // backup alarm while reversing: 0.45 s on, 0.45 s off
+  if (ctl.fwd < 0) {
+    A.beepPhase += dt;
+    const on = (A.beepPhase % 0.9) < 0.45;
+    A.beepGain.gain.setTargetAtTime(on ? 0.045 : 0, t, 0.008);
+  } else {
+    A.beepPhase = 0;
+    A.beepGain.gain.setTargetAtTime(0, t, 0.02);
   }
-  audio.motorGain.gain.setTargetAtTime(on ? 0.05 : 0, ctx.currentTime, on ? 0.08 : 0.15);
 }
 
 // ------------------------------------------------------------------ input
@@ -1289,7 +1349,6 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
 
-let motorOn = false;
 function driveCrane(dt) {
   const c = state.crane;
   const fwd = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
@@ -1303,8 +1362,7 @@ function driveCrane(dt) {
   if (luff) { c.luff = clamp(c.luff + luff * 0.35 * dt, 15 * DEG, 80 * DEG); $('sLuff').value = Math.round(c.luff / DEG); }
   if (hoist) { const L = clamp(state.cable + hoist * 2.5 * dt, 4, 20); if (L !== state.cable) { state.cable = L; $('sCable').value = L.toFixed(1); makeRope(); } }
   if (slew || luff || hoist) updateLabels();
-  const moving = !!(fwd || turn || slew || luff || hoist);
-  if (moving !== motorOn) { motorOn = moving; if (audio.ctx || moving) setMotor(moving); }
+  updateCraneAudio(dt, { fwd, turn, slew, luff, hoist });
 }
 
 // --------------------------------------------------------------------- ui
@@ -1434,6 +1492,9 @@ window.__wreck = {
   cam,
   setCamera(az, el, dist) { cam.az = az; cam.el = el; cam.dist = dist; cam.target.copy(centre); updateCamera(); },
   render() { syncVisuals(); renderer.render(scene, camera); },
+  drive(dt) { driveCrane(dt); },
+  keys,
+  get craneAudio() { return craneAudio; },
   ballScreen() { const p = tmpP.copy(ballBody.translation()).project(camera); return { x: (p.x + 1) / 2 * window.innerWidth, y: (1 - p.y) / 2 * window.innerHeight, w: window.innerWidth, h: window.innerHeight }; },
   get grabbed() { return grabbed; },
 };

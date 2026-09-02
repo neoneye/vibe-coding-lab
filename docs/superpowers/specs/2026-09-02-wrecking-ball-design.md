@@ -100,7 +100,10 @@ All effects are synthesised with Web Audio at run time (no sample files), starte
 - **Impact** (strongest ball-on-block contact per step above 60 kN): a pitch-dropping sine thud plus a filtered noise burst, sized by the force; stone low and dull, brick brighter, wood a resonant bandpass knock; hits above 600 kN add a one-second low rumble. The ball landing on the ground plays a softer stone thud.
 - **Clatter** (strongest contact per step of a loose block with anything, rate-limited to one every 28 ms): a short bandpass click, wooden for wood.
 - **Clink** when the ball is grabbed and released: three detuned high triangle partials.
-- **Crane motor**: a sawtooth and square through a lowpass, faded in while any crane key is held.
+- **Crane engine**: a diesel (sawtooth plus sub-octave square through a lowpass, chugging via a slow gain LFO) that idles at 31 Hz whenever sound is on and revs to 47 Hz, louder and more open, while any crane key is held.
+- **Hydraulic whine** while slewing, luffing or hoisting: a vibrato sine at 560 / 700 / 880 Hz respectively.
+- **Tracks** while driving or turning: a looped low bandpass rumble plus one bandpass click per track link (0.45 m of travel, alternating left and right), heavier when driving than when turning.
+- **Backup alarm** while driving backwards: a 1 050 Hz square beep, 0.45 s on and 0.45 s off.
 
 ## Testing and verification
 
