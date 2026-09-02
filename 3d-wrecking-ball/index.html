@@ -788,10 +788,13 @@ const keys = new Set();
 let world = null, eventQueue = null, structure = null, asset = null;
 let bodies = [], colliderToBlock = new Map();
 let loose = [];            // indices of released blocks with live bodies
+let preSpeed2 = new Float32Array(0); // squared speed of each loose block before the step
+let clatterAt = new Float32Array(0);  // simulation time of each block's last clatter
 let boxMesh = null, cylMesh = null;
 let ballBody = null, ballCol = null, hookBody = null, rope = null;
 let ballMesh = null, chainMesh = null, hookMesh = null;
 const CHAIN_PITCH = 0.42, CHAIN_MAX = 64;
+const COLLIDER_GAP = 0.01; // half of the mortar joint left between block colliders
 let grabbed = false, grabPlaneY = 0;
 let hookPos = new THREE.Vector3();
 let centre = new THREE.Vector3(0, 6, 0);
@@ -925,6 +928,8 @@ function loadAsset(name) {
   asset = W.assets[name].build();
   structure = new W.Structure(asset.blocks, state.mortar);
   stats.maxForce = 0;
+  preSpeed2 = new Float32Array(asset.blocks.length);
+  clatterAt = new Float32Array(asset.blocks.length).fill(-10);
   const blocks = asset.blocks;
   centre.set(0, Math.max(4, asset.radius * 0.35), 0);
   cam.dist = asset.radius * 3.2;
@@ -948,7 +953,11 @@ function loadAsset(name) {
     const b = blocks[i];
     const m = W.MATERIALS[b.mat];
     const rb = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(b.p[0], b.p[1], b.p[2]).setRotation({ x: b.q[0], y: b.q[1], z: b.q[2], w: b.q[3] }));
-    const cd = b.shape === 'cyl' ? RAPIER.ColliderDesc.cylinder(b.s[1] / 2, b.s[0] / 2) : RAPIER.ColliderDesc.cuboid(b.s[0] / 2, b.s[1] / 2, b.s[2] / 2);
+    // colliders are a mortar joint smaller than the drawn block: blocks generated
+    // touching exactly would rub on four fixed faces once freed and lose their
+    // kick to friction within a few steps
+    const g = COLLIDER_GAP;
+    const cd = b.shape === 'cyl' ? RAPIER.ColliderDesc.cylinder(b.s[1] / 2 - g, b.s[0] / 2 - g) : RAPIER.ColliderDesc.cuboid(b.s[0] / 2 - g, b.s[1] / 2 - g, b.s[2] / 2 - g);
     cd.setDensity(m.density).setFriction(0.6).setRestitution(0.05).setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(3e4);
     const col = world.createCollider(cd, rb);
     bodies.push(rb);
@@ -988,6 +997,23 @@ function makeRope() {
 }
 
 // --------------------------------------------------------------- stepping
+// The ball's speed, aimed along the struck block's local axis that best faces
+// the ball: the wall normal for masonry, the radial for ring blocks and staves.
+// Pushing along the ball's own velocity instead drives the freed stones into
+// their fixed neighbours sideways, where they jam within a couple of steps.
+function punchVelocity(i, vel, at) {
+  const b = asset.blocks[i];
+  const d = [b.p[0] - at.x, b.p[1] - at.y, b.p[2] - at.z];
+  let best = null, bestDot = 0;
+  for (const ax of W.axes(b.q)) {
+    const dot = ax[0] * d[0] + ax[1] * d[1] + ax[2] * d[2];
+    if (Math.abs(dot) > Math.abs(bestDot)) { bestDot = dot; best = ax; }
+  }
+  const speed = Math.hypot(vel.x, vel.y, vel.z);
+  if (!best || speed < 1e-3) return vel;
+  const sgn = bestDot < 0 ? -1 : 1;
+  return { x: best[0] * sgn * speed, y: best[1] * sgn * speed, z: best[2] * sgn * speed };
+}
 // Switch blocks to dynamic. Blocks broken by the ball inherit its velocity,
 // fading with distance from the impact, so the crater bursts instead of the
 // freed stones just resting on the course below.
@@ -1000,13 +1026,15 @@ function releaseBlocks(idx, vel, at) {
       const b = asset.blocks[i];
       const d = Math.hypot(b.p[0] - at.x, b.p[1] - at.y, b.p[2] - at.z);
       const k = clamp(1.25 - d / 3.5, 0.1, 1) * 0.9;
-      rb.setLinvel({ x: vel.x * k, y: vel.y * k + 0.5, z: vel.z * k }, true);
+      rb.setLinvel({ x: vel.x * k, y: vel.y * k + 0.3, z: vel.z * k }, true);
       rb.setAngvel({ x: (Math.random() - 0.5) * 4, y: (Math.random() - 0.5) * 4, z: (Math.random() - 0.5) * 4 }, true);
     }
     loose.push(i);
   }
 }
+let simTime = 0;
 function physicsStep() {
+  simTime += DT;
   const c = state.crane;
   // hook follows the boom tip with a little lag
   boomTip(tmpP);
@@ -1016,6 +1044,14 @@ function physicsStep() {
   const bv = ballBody.linvel();
   const prevVel = { x: bv.x, y: bv.y, z: bv.z };
   const bp = ballBody.translation();
+  // speeds of the loose blocks before the step: after it, a block that has
+  // just landed is already stopped and would not count as moving
+  for (const i of loose) {
+    const b = bodies[i];
+    if (b.isSleeping()) { preSpeed2[i] = 0; continue; }
+    const v = b.linvel(), av = b.angvel();
+    preSpeed2[i] = v.x * v.x + v.y * v.y + v.z * v.z + 0.15 * (av.x * av.x + av.y * av.y + av.z * av.z);
+  }
 
   world.step(eventQueue);
 
@@ -1037,21 +1073,26 @@ function physicsStep() {
     for (const i of [i1, i2]) {
       if (i === undefined) continue;
       hits.push([f, i, fromBall]);
-      if (!fromBall && structure.released[i] && f > clatterBest) { clatterBest = f; clatterIdx = i; }
+      // clatter only from debris that is actually moving: a settled pile still
+      // presses on the ground above the event threshold while it jitters to sleep
+      if (!fromBall && structure.released[i] && f > clatterBest && bodies[i] && preSpeed2[i] > 1.0 && simTime - clatterAt[i] > 0.3) { clatterBest = f; clatterIdx = i; }
     }
   });
   hits.sort((a, b) => b[0] - a[0]);
   // strongest ball-on-block contact of the step drives the impact sound
   const strongest = hits.find(h => h[2]);
-  if (strongest && strongest[0] > 60) playImpact(strongest[0], asset.blocks[strongest[1]].mat, bodies[strongest[1]] ? bodies[strongest[1]].translation() : bp);
-  else if (groundThud > 80) playImpact(groundThud * 0.5, 'stone', bp);
-  if (clatterIdx >= 0 && bodies[clatterIdx]) playClatter(clatterBest, asset.blocks[clatterIdx].mat, bodies[clatterIdx].translation());
+  const ballSpeed = Math.hypot(prevVel.x, prevVel.y, prevVel.z);
+  if (ballSpeed > 0.8) {
+    if (strongest && strongest[0] > 60) playImpact(strongest[0], asset.blocks[strongest[1]].mat, bodies[strongest[1]] ? bodies[strongest[1]].translation() : bp);
+    else if (groundThud > 80) playImpact(groundThud * 0.5, 'stone', bp);
+  }
+  if (clatterIdx >= 0 && bodies[clatterIdx]) { clatterAt[clatterIdx] = simTime; playClatter(clatterBest, asset.blocks[clatterIdx].mat, bodies[clatterIdx].translation()); }
   let ballBroke = false;
   for (const [f, i, fromBall] of hits) {
     if (structure.released[i]) continue;
     const rel = structure.hit(i, f);
     if (rel.length) {
-      releaseBlocks(rel, fromBall ? prevVel : null, bp);
+      releaseBlocks(rel, fromBall ? punchVelocity(i, prevVel, bp) : null, bp);
       if (fromBall) ballBroke = true;
     } else damaged.push(i);
   }
@@ -1155,6 +1196,7 @@ function thud(gainNode, t0, f0, f1, dur, peak) {
 function playImpact(forceKN, mat, pos) {
   const ctx = ensureAudio();
   if (!ctx) return;
+  stats.impacts++;
   const t0 = ctx.currentTime;
   const k = clamp(forceKN / 900, 0.12, 1.0);
   const g = voice(panFor(pos));
@@ -1174,9 +1216,9 @@ function playImpact(forceKN, mat, pos) {
 function playClatter(forceKN, mat, pos) {
   const ctx = ensureAudio();
   if (!ctx) return;
-  const now = performance.now();
-  if (now - audio.lastClatter < 28) return;
-  audio.lastClatter = now;
+  if (simTime - audio.lastClatter < 0.028) return;
+  audio.lastClatter = simTime;
+  stats.clatters++;
   const t0 = ctx.currentTime;
   const k = clamp(forceKN / 250, 0.04, 0.45);
   const g = voice(panFor(pos));
@@ -1463,7 +1505,7 @@ window.addEventListener('resize', () => {
 });
 
 // ------------------------------------------------------------------- loop
-const stats = { asleep: 0, fps: 0, maxForce: 0 };
+const stats = { asleep: 0, fps: 0, maxForce: 0, clatters: 0, impacts: 0 };
 let acc = 0, last = performance.now(), fpsAcc = 0, fpsN = 0, statTimer = 0;
 function syncVisuals() {
   updateCraneVisual();
@@ -1537,7 +1579,7 @@ window.__wreck = {
   load: loadAsset,
   step(n = 1) { for (let i = 0; i < n; i++) physicsStep(); syncVisuals(); renderer.render(scene, camera); },
   shove,
-  stats() { return { blocks: asset.blocks.length, released: structure.released.reduce((a, b) => a + b, 0), loose: loose.length, asleep: stats.asleep, maxForceKN: stats.maxForce, hp0: structure.hp[0] }; },
+  stats() { return { blocks: asset.blocks.length, released: structure.released.reduce((a, b) => a + b, 0), loose: loose.length, asleep: stats.asleep, maxForceKN: stats.maxForce, hp0: structure.hp[0], clatters: stats.clatters, impacts: stats.impacts }; },
   get structure() { return structure; },
   get world() { return world; },
   get state() { return state; },
