@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stair Dismount</title>
+</head>
+<body>
+<script id="shared-code">
+// ---------------------------------------------------------------------------
+// Dismount: pure logic shared by the page and by test.mjs (Node).
+// Units: metres, kilograms, seconds. Y is up.
+// ---------------------------------------------------------------------------
+const Dismount = (() => {
+  const DEG = Math.PI / 180;
+
+  // --- geometry helpers ----------------------------------------------------
+  function box(p, s, kind, yaw = 0) { return { shape: 'box', p, s, yaw, kind }; }
+  function cyl(p, r, h, kind) { return { shape: 'cyl', p, r, h, kind }; }
+  // Wedge: annular sector between radii r0..r1, azimuth a0..a0+ang (radians,
+  // measured from +Z towards +X), top surface at y, thickness t.
+  function wedge(cx, cz, r0, r1, a0, ang, y, t, kind) {
+    const am = a0 + ang / 2, rm = (r0 + r1) / 2;
+    return { shape: 'wedge', p: [cx + rm * Math.sin(am), y - t / 2, cz + rm * Math.cos(am)], cx, cz, r0, r1, a0, ang, y, t, kind };
+  }
+  function wedgeVertices(w) {
+    const out = [];
+    for (const yy of [w.y - w.t, w.y]) {
+      for (const a of [w.a0, w.a0 + w.ang]) {
+        for (const r of [w.r0, w.r1]) out.push([w.cx + r * Math.sin(a), yy, w.cz + r * Math.cos(a)]);
+      }
+    }
+    return out;
+  }
+  // World AABB of any solid, as [min, max].
+  function aabb(o) {
+    if (o.shape === 'box') {
+      const c = Math.abs(Math.cos(o.yaw)), s = Math.abs(Math.sin(o.yaw));
+      const hx = (o.s[0] * c + o.s[2] * s) / 2, hz = (o.s[0] * s + o.s[2] * c) / 2, hy = o.s[1] / 2;
+      return [[o.p[0] - hx, o.p[1] - hy, o.p[2] - hz], [o.p[0] + hx, o.p[1] + hy, o.p[2] + hz]];
+    }
+    if (o.shape === 'cyl') return [[o.p[0] - o.r, o.p[1] - o.h / 2, o.p[2] - o.r], [o.p[0] + o.r, o.p[1] + o.h / 2, o.p[2] + o.r]];
+    const v = wedgeVertices(o);
+    const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+    for (const q of v) for (let i = 0; i < 3; i++) { mn[i] = Math.min(mn[i], q[i]); mx[i] = Math.max(mx[i], q[i]); }
+    return [mn, mx];
+  }
+  function aabbOverlap(a, b, eps = 1e-6) {
+    for (let i = 0; i < 3; i++) if (a[0][i] + eps >= b[1][i] || b[0][i] + eps >= a[1][i]) return false;
+    return true;
+  }
+  function topAt(o) { return o.shape === 'wedge' ? o.y : o.p[1] + (o.shape === 'cyl' ? o.h : o.s[1]) / 2; }
+  // Does the vertical line at (x,z) pass through the solid's footprint?
+  function covers(o, x, z) {
+    if (o.shape === 'box') {
+      const dx = x - o.p[0], dz = z - o.p[2], c = Math.cos(o.yaw), s = Math.sin(o.yaw);
+      const lx = c * dx - s * dz, lz = s * dx + c * dz;
+      return Math.abs(lx) <= o.s[0] / 2 && Math.abs(lz) <= o.s[2] / 2;
+    }
+    if (o.shape === 'cyl') return Math.hypot(x - o.p[0], z - o.p[2]) <= o.r;
+    const dx = x - o.cx, dz = z - o.cz, r = Math.hypot(dx, dz);
+    if (r < o.r0 || r > o.r1) return false;
+    let a = Math.atan2(dx, dz) - o.a0;
+    a = ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    return a <= o.ang;
+  }
+  // Height of the highest walkable surface (steps and landings) at (x,z).
+  function supportHeight(stairs, x, z) {
+    let h = stairs.floorY;
+    for (const o of stairs.solids) {
+      if (o.kind !== 'step' && o.kind !== 'landing') continue;
+      if (covers(o, x, z)) h = Math.max(h, topAt(o));
+    }
+    return h;
+  }
+  function footprintRadius(solids) {
+    let r = 0;
+    for (const o of solids) {
+      if (o.kind === 'floor') continue;
+      const [mn, mx] = aabb(o);
+      for (const x of [mn[0], mx[0]]) for (const z of [mn[2], mx[2]]) r = Math.max(r, Math.hypot(x, z));
+    }
+    return r;
+  }
+  function floorSlab(size) { return box([0, -0.1, 0], [size, 0.2, size], 'floor'); }
+
+  // --- staircases ----------------------------------------------------------
+  // Every staircase: landing surface point `landing.p`, `down` unit vector in
+  // the XZ plane, landing extents `w` (across) and `d` (along `down`).
+  const stairs = {};
+
+  stairs.straight = { name: 'Straight', build() {
+    const n = 14, w = 1.4, rise = 0.18, run = 0.28, d = 1.6;
+    const top = (n + 1) * rise;
+    const solids = [floorSlab(30), box([0, top / 2, 0], [w, top, d], 'landing')];
+    for (let i = 0; i < n; i++) {
+      const y = top - (i + 1) * rise, cz = -d / 2 - (i + 0.5) * run;
+      solids.push(box([0, y / 2, cz], [w, y, run], 'step'));
+    }
+    return finish('Straight', solids, { p: [0, top, 0], w, d }, [0, 0, -1]);
+  } };
+
+  stairs.dogleg = { name: 'Dogleg', build() {
+    const n = 8, w = 1.4, rise = 0.18, run = 0.28, d = 1.6, gap = 0.2;
+    const top = (2 * n + 2) * rise, half = top - (n + 1) * rise;
+    const xa = (w + gap) / 2, xb = -xa;
+    const solids = [floorSlab(30), box([xa, top / 2, 0], [w, top, d], 'landing')];
+    for (let i = 0; i < n; i++) {
+      const y = top - (i + 1) * rise, cz = -d / 2 - (i + 0.5) * run;
+      solids.push(box([xa, y / 2, cz], [w, y, run], 'step'));
+    }
+    const flightEnd = -d / 2 - n * run;           // z where flight 1 ends
+    const hd = 1.6, hz = flightEnd - hd / 2;       // half landing centre z
+    solids.push(box([0, half / 2, hz], [2 * w + gap, half, hd], 'landing'));
+    for (let j = 0; j < n; j++) {
+      const y = half - (j + 1) * rise, cz = flightEnd + (j + 0.5) * run;
+      solids.push(box([xb, y / 2, cz], [w, y, run], 'step'));
+    }
+    const wallH = top + 1.0, wallLen = d / 2 - flightEnd;
+    solids.push(box([0, wallH / 2, (d / 2 + flightEnd) / 2], [gap, wallH, wallLen], 'wall'));
+    solids.push(cyl([0, half + 0.5, flightEnd - 0.12], 0.06, 1.0, 'post'));
+    return finish('Dogleg', solids, { p: [xa, top, 0], w, d }, [0, 0, -1]);
+  } };
+
+  stairs.spiral = { name: 'Spiral', build() {
+    const n = 20, rise = 0.19, r0 = 0.3, r1 = 1.9, ang = 18 * DEG, t = 0.12, la = 40 * DEG;
+    const top = (n + 1) * rise, rm = (r0 + r1) / 2;
+    const solids = [floorSlab(30), cyl([0, (top + 1.2) / 2, 0], r0, top + 1.2, 'post')];
+    // The landing is a wider wedge just before azimuth 0; steps wind on from there.
+    solids.push(wedge(0, 0, r0, r1, -la, la, top, t, 'landing'));
+    for (let k = 0; k < n; k++) solids.push(wedge(0, 0, r0, r1, k * ang, ang, top - (k + 1) * rise, t, 'step'));
+    const am = -la / 2;
+    const landing = { p: [rm * Math.sin(am), top, rm * Math.cos(am)], w: r1 - r0, d: rm * la };
+    return finish('Spiral', solids, landing, [Math.cos(am), 0, -Math.sin(am)]);
+  } };
+
+  stairs.long = { name: 'Long', build() {
+    const n = 30, w = 1.2, rise = 0.2, run = 0.25, d = 1.6, wt = 0.2, wh = 0.9;
+    const top = (n + 1) * rise;
+    const solids = [floorSlab(40), box([0, top / 2, 0], [w, top, d], 'landing')];
+    for (const sx of [-1, 1]) solids.push(box([sx * (w + wt) / 2, (top + wh) / 2, 0], [wt, top + wh, d], 'wall'));
+    for (let i = 0; i < n; i++) {
+      const y = top - (i + 1) * rise, cz = -d / 2 - (i + 0.5) * run;
+      solids.push(box([0, y / 2, cz], [w, y, run], 'step'));
+      for (const sx of [-1, 1]) solids.push(box([sx * (w + wt) / 2, (y + wh) / 2, cz], [wt, y + wh, run], 'wall'));
+    }
+    return finish('Long', solids, { p: [0, top, 0], w, d }, [0, 0, -1]);
+  } };
+
+  function finish(name, solids, landing, down) {
+    return { name, solids, landing, down, floorY: 0, radius: footprintRadius(solids) };
+  }
+
+  // --- ragdoll -------------------------------------------------------------
+  // Standing pose in a local frame: origin between the feet on the ground,
+  // facing -Z. Capsule axis is local Y. Masses are segment fractions of a
+  // 75 kg body at 1.8 m, scaled by (height/1.8)^3.
+  const ragdoll = {};
+  ragdoll.build = function (height = 1.8) {
+    const k = height / 1.8, m = k * k * k;
+    const parts = [], joints = [];
+    const cap = (name, x, y, len, r, mass, weight) =>
+      parts.push({ name, shape: 'capsule', dims: [(len / 2 - r) * k, r * k], mass: mass * m, p: [x * k, y * k, 0], q: [0, 0, 0, 1], weight });
+    const bx = (name, p, s, mass, weight) =>
+      parts.push({ name, shape: 'box', dims: s.map(v => v * k), mass: mass * m, p: p.map(v => v * k), q: [0, 0, 0, 1], weight });
+    parts.push({ name: 'head', shape: 'ball', dims: [0.11 * k], mass: 5.2 * m, p: [0, 1.68 * k, 0], q: [0, 0, 0, 1], weight: 5 });
+    bx('chest', [0, 1.30, 0], [0.36, 0.42, 0.20], 24, 3);
+    bx('pelvis', [0, 0.98, 0], [0.30, 0.18, 0.18], 11, 2);
+    for (const [side, sx] of [['L', -1], ['R', 1]]) {
+      cap('upperArm' + side, sx * 0.24, 1.30, 0.32, 0.05, 2.1, 1);
+      cap('forearm' + side, sx * 0.24, 1.00, 0.28, 0.045, 1.2, 1);
+      bx('hand' + side, [sx * 0.24, 0.77, 0], [0.04, 0.16, 0.08], 0.5, 0.5);
+      cap('thigh' + side, sx * 0.11, 0.71, 0.42, 0.075, 7.5, 1.5);
+      cap('shin' + side, sx * 0.11, 0.29, 0.42, 0.06, 3.5, 1);
+      bx('foot' + side, [sx * 0.11, 0.04, -0.05], [0.10, 0.08, 0.26], 1.1, 0.5);
+    }
+    const byName = Object.fromEntries(parts.map(p => [p.name, p]));
+    const J = (a, b, wp, type, stiffness, extra = {}) => {
+      const A = byName[a], B = byName[b], w = wp.map(v => v * k);
+      joints.push(Object.assign({ a, b, type, stiffness,
+        anchorA: [w[0] - A.p[0], w[1] - A.p[1], w[2] - A.p[2]],
+        anchorB: [w[0] - B.p[0], w[1] - B.p[1], w[2] - B.p[2]] }, extra));
+    };
+    J('chest', 'head', [0, 1.54, 0], 'spherical', 1.5);
+    J('pelvis', 'chest', [0, 1.08, 0], 'spherical', 3);
+    for (const [side, sx] of [['L', -1], ['R', 1]]) {
+      J('chest', 'upperArm' + side, [sx * 0.24, 1.46, 0], 'spherical', 1);
+      J('upperArm' + side, 'forearm' + side, [sx * 0.24, 1.14, 0], 'revolute', 1, { axis: [1, 0, 0], limits: [0, 2.4] });
+      J('forearm' + side, 'hand' + side, [sx * 0.24, 0.86, 0], 'spherical', 1);
+      J('pelvis', 'thigh' + side, [sx * 0.11, 0.92, 0], 'spherical', 2);
+      J('thigh' + side, 'shin' + side, [sx * 0.11, 0.50, 0], 'revolute', 1, { axis: [1, 0, 0], limits: [-2.4, 0] });
+      J('shin' + side, 'foot' + side, [sx * 0.11, 0.08, 0], 'spherical', 2);
+    }
+    return { height, parts, joints, mass: parts.reduce((s, p) => s + p.mass, 0) };
+  };
+  // Local AABB half extents of a part.
+  ragdoll.halfExtents = function (part) {
+    if (part.shape === 'ball') return [part.dims[0], part.dims[0], part.dims[0]];
+    if (part.shape === 'capsule') return [part.dims[1], part.dims[0] + part.dims[1], part.dims[1]];
+    return [part.dims[0] / 2, part.dims[1] / 2, part.dims[2] / 2];
+  };
+  // World placement: feet centred on the landing, 0.25 m back from its down
+  // edge, facing `down`. Returns { yaw, q, transforms:[{p,q}] }.
+  ragdoll.place = function (rig, landing, down) {
+    const yaw = Math.atan2(-down[0], -down[2]);
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const q = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+    const back = landing.d / 2 - 0.25;
+    const o = [landing.p[0] + down[0] * back, landing.p[1], landing.p[2] + down[2] * back];
+    const transforms = rig.parts.map(pt => ({
+      p: [o[0] + c * pt.p[0] + s * pt.p[2], o[1] + pt.p[1], o[2] - s * pt.p[0] + c * pt.p[2]],
+      q,
+    }));
+    return { yaw, q, origin: o, transforms };
+  };
+
+  // --- scoring -------------------------------------------------------------
+  const score = {
+    threshold: 400,           // N of contact force before an impact counts
+    impactPoints(weight, force, dt) { return weight * Math.max(0, force - score.threshold) * dt / 40; },
+    pushImpulse(percent) { return 40 + 5.6 * Math.max(0, Math.min(100, percent)); },
+    restSpeed: 0.08, restTime: 1.5, maxTime: 25,
+    // Accumulator for "the dismount is over". state = { t, rest }.
+    dismountOver(state, maxSpeed, dt) {
+      state.t += dt;
+      state.rest = maxSpeed < score.restSpeed ? state.rest + dt : 0;
+      return state.rest >= score.restTime || state.t >= score.maxTime;
+    },
+    // Bruise colour for accumulated damage, as [r,g,b] in 0..1.
+    partColour(damage) {
+      const u = Math.min(1, damage / 500);
+      const skin = [0.93, 0.76, 0.62], red = [0.75, 0.15, 0.12], purple = [0.35, 0.1, 0.4];
+      const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+      return u < 0.5 ? mix(skin, red, u * 2) : mix(red, purple, (u - 0.5) * 2);
+    },
+  };
+
+  return { DEG, box, cyl, wedge, wedgeVertices, aabb, aabbOverlap, topAt, covers, supportHeight, stairs, ragdoll, score };
+})();
+
+// ---------------------------------------------------------------------------
+const DismountTests = (() => {
+  const results = [];
+  function check(name, cond, detail = '') { results.push({ name, ok: !!cond, detail }); }
+  const near = (a, b, eps) => Math.abs(a - b) <= eps;
+
+  function testStairs() {
+    for (const key of Object.keys(Dismount.stairs)) {
+      const st = Dismount.stairs[key].build();
+      const nm = 'stairs ' + key + ': ';
+      let finite = true, aboveFloor = true, positive = true;
+      for (const o of st.solids) {
+        const [mn, mx] = Dismount.aabb(o);
+        for (const v of [...mn, ...mx, ...o.p]) if (!Number.isFinite(v)) finite = false;
+        if (o.kind !== 'floor' && mn[1] < st.floorY - 1e-6) aboveFloor = false;
+        if (o.shape === 'box' && o.s.some(v => v <= 0)) positive = false;
+        if (o.shape === 'cyl' && (o.r <= 0 || o.h <= 0)) positive = false;
+        if (o.shape === 'wedge' && (o.t <= 0 || o.ang <= 0 || o.r1 <= o.r0)) positive = false;
+      }
+      check(nm + 'finite', finite);
+      check(nm + 'nothing below the floor', aboveFloor);
+      check(nm + 'positive sizes', positive);
+      const steps = st.solids.filter(o => o.kind === 'step');
+      const tops = steps.map(Dismount.topAt);
+      check(nm + 'has steps', steps.length >= 14, String(steps.length));
+      check(nm + 'steps descend monotonically', tops.every((t, i) => i === 0 || t < tops[i - 1] - 1e-6));
+      const landingY = st.landing.p[1];
+      check(nm + 'landing is the highest walkable surface', tops.every(t => t < landingY) &&
+        near(Dismount.supportHeight(st, st.landing.p[0], st.landing.p[2]), landingY, 1e-6));
+      check(nm + 'lowest step is one rise above the floor', tops[tops.length - 1] > st.floorY + 0.1 && tops[tops.length - 1] < st.floorY + 0.25);
+      // Just past the landing's down edge the surface is exactly one rise lower.
+      const rise = landingY - tops[0];
+      const ex = st.landing.p[0] + st.down[0] * (st.landing.d / 2 + 0.05), ez = st.landing.p[2] + st.down[2] * (st.landing.d / 2 + 0.05);
+      check(nm + 'first step meets the landing edge', near(Dismount.supportHeight(st, ex, ez), landingY - rise, 1e-6),
+        Dismount.supportHeight(st, ex, ez).toFixed(3) + ' vs ' + (landingY - rise).toFixed(3));
+      check(nm + 'down is a unit XZ vector', near(Math.hypot(st.down[0], st.down[2]), 1, 1e-9) && st.down[1] === 0);
+      // No two steps overlap.
+      let overlaps = 0;
+      for (let i = 0; i < steps.length; i++) for (let j = i + 1; j < steps.length; j++) {
+        const a = steps[i], b = steps[j];
+        if (a.shape === 'wedge' && b.shape === 'wedge') {
+          const sep = a.a0 + a.ang <= b.a0 + 1e-9 || b.a0 + b.ang <= a.a0 + 1e-9;
+          if (!sep) overlaps++;
+        } else if (Dismount.aabbOverlap(Dismount.aabb(a), Dismount.aabb(b))) overlaps++;
+      }
+      check(nm + 'no overlapping steps', overlaps === 0, String(overlaps));
+      let inside = true;
+      for (const o of st.solids) {
+        if (o.kind === 'floor') continue;
+        const [mn, mx] = Dismount.aabb(o);
+        for (const x of [mn[0], mx[0]]) for (const z of [mn[2], mx[2]]) if (Math.hypot(x, z) > st.radius + 1e-6) inside = false;
+      }
+      check(nm + 'radius covers the footprint', inside && st.radius > 1);
+    }
+    // Straight flight: sampled descent along the flight is monotone.
+    const st = Dismount.stairs.straight.build();
+    let prev = Infinity, mono = true;
+    for (let z = 0; z > -4.5; z -= 0.1) { const h = Dismount.supportHeight(st, 0, z); if (h > prev + 1e-9) mono = false; prev = h; }
+    check('stairs straight: sampled profile never rises', mono);
+    // Wedge coverage sanity.
+    const w = Dismount.wedge(0, 0, 0.3, 1.9, 0, 18 * Dismount.DEG, 1, 0.12, 'step');
+    check('wedge covers a point inside its sector', Dismount.covers(w, 1.0 * Math.sin(9 * Dismount.DEG), 1.0 * Math.cos(9 * Dismount.DEG)));
+    check('wedge excludes a point outside its sector', !Dismount.covers(w, 1.0 * Math.sin(30 * Dismount.DEG), 1.0 * Math.cos(30 * Dismount.DEG)));
+    check('wedge excludes the column', !Dismount.covers(w, 0, 0.1));
+    check('wedge has 8 vertices', Dismount.wedgeVertices(w).length === 8);
+  }
+
+  function testRagdoll() {
+    for (const h of [1.8, 1.5]) {
+      const rig = Dismount.ragdoll.build(h);
+      const nm = 'ragdoll ' + h + ' m: ';
+      check(nm + '15 parts', rig.parts.length === 15, String(rig.parts.length));
+      const s3 = Math.pow(h / 1.8, 3);
+      check(nm + 'mass 60..90 kg scaled', rig.mass > 60 * s3 && rig.mass < 90 * s3, rig.mass.toFixed(1));
+      check(nm + 'weights positive', rig.parts.every(p => p.weight > 0));
+      const byName = Object.fromEntries(rig.parts.map(p => [p.name, p]));
+      let coincide = true;
+      for (const j of rig.joints) {
+        const A = byName[j.a], B = byName[j.b];
+        const wa = j.anchorA.map((v, i) => v + A.p[i]), wb = j.anchorB.map((v, i) => v + B.p[i]);
+        if (Math.hypot(wa[0] - wb[0], wa[1] - wb[1], wa[2] - wb[2]) > 1e-3) coincide = false;
+      }
+      check(nm + 'joint anchors coincide', coincide);
+      check(nm + '14 joints', rig.joints.length === 14, String(rig.joints.length));
+      const feet = rig.parts.filter(p => p.name.startsWith('foot'));
+      check(nm + 'feet stand on the ground', feet.every(f => near(f.p[1] - f.dims[1] / 2, 0, 5e-3)));
+      const topY = p => p.p[1] + Dismount.ragdoll.halfExtents(p)[1];
+      const head = byName.head;
+      check(nm + 'head is the highest part', rig.parts.every(p => p === head || topY(p) < topY(head)));
+      check(nm + 'head top is about the height', near(topY(head), h, 0.03), topY(head).toFixed(3));
+      const jointed = new Set(rig.joints.map(j => j.a + '|' + j.b).concat(rig.joints.map(j => j.b + '|' + j.a)));
+      const boxOf = p => { const e = Dismount.ragdoll.halfExtents(p); return [p.p.map((v, i) => v - e[i]), p.p.map((v, i) => v + e[i])]; };
+      let bad = [];
+      for (let i = 0; i < rig.parts.length; i++) for (let j = i + 1; j < rig.parts.length; j++) {
+        const a = rig.parts[i], b = rig.parts[j];
+        if (jointed.has(a.name + '|' + b.name)) continue;
+        if (Dismount.aabbOverlap(boxOf(a), boxOf(b))) bad.push(a.name + '/' + b.name);
+      }
+      check(nm + 'no overlap between unjointed parts', bad.length === 0, bad.join(', '));
+      check(nm + 'knees and elbows are limited revolutes', rig.joints.filter(j => j.type === 'revolute').length === 4 &&
+        rig.joints.filter(j => j.type === 'revolute').every(j => j.limits && j.limits[0] < j.limits[1] && j.axis));
+    }
+    // Placement on each staircase.
+    const rig = Dismount.ragdoll.build();
+    for (const key of Object.keys(Dismount.stairs)) {
+      const st = Dismount.stairs[key].build();
+      const pl = Dismount.ragdoll.place(rig, st.landing, st.down);
+      const nm = 'place on ' + key + ': ';
+      let onLanding = true;
+      rig.parts.forEach((p, i) => {
+        if (!p.name.startsWith('foot')) return;
+        const t = pl.transforms[i];
+        const h = Dismount.supportHeight(st, t.p[0], t.p[2]);
+        if (!near(t.p[1] - p.dims[1] / 2, h, 5e-3) || !near(h, st.landing.p[1], 1e-6)) onLanding = false;
+      });
+      check(nm + 'feet stand on the landing', onLanding);
+      // The local -Z axis maps onto `down`.
+      const c = Math.cos(pl.yaw), s = Math.sin(pl.yaw);
+      const fwd = [-s, 0, -c];
+      check(nm + 'faces down the stairs', near(fwd[0], st.down[0], 1e-9) && near(fwd[2], st.down[2], 1e-9));
+      const headI = rig.parts.findIndex(p => p.name === 'head');
+      check(nm + 'head above landing', pl.transforms[headI].p[1] > st.landing.p[1] + 1.5);
+    }
+  }
+
+  function testScore() {
+    const S = Dismount.score;
+    check('score: nothing below threshold', S.impactPoints(5, 399, 1 / 120) === 0);
+    check('score: linear above threshold', near(S.impactPoints(1, 2400, 1), 50, 1e-9) && near(S.impactPoints(1, 4400, 1), 100, 1e-9));
+    check('score: head outscores foot', S.impactPoints(5, 3000, 0.01) > S.impactPoints(0.5, 3000, 0.01));
+    check('score: push impulse endpoints', S.pushImpulse(0) === 40 && S.pushImpulse(100) === 600 && S.pushImpulse(150) === 600);
+    let st = { t: 0, rest: 0 }, fired = -1;
+    for (let i = 0; i < 400; i++) { if (S.dismountOver(st, i < 100 ? 2 : 0.01, 0.01)) { fired = i; break; } }
+    check('score: over after 1.5 s of rest', fired >= 100 + 149 && fired <= 100 + 151, String(fired));
+    st = { t: 0, rest: 0 }; fired = -1;
+    for (let i = 0; i < 4000; i++) { if (S.dismountOver(st, 5, 0.01)) { fired = i; break; } }
+    check('score: over at the time cap', fired >= 2498 && fired <= 2500, String(fired));
+    st = { t: 0, rest: 0 };
+    let early = false;
+    for (let i = 0; i < 140; i++) if (S.dismountOver(st, i % 50 === 49 ? 1 : 0.01, 0.01)) early = true;
+    check('score: a twitch resets the rest timer', !early);
+    const c0 = S.partColour(0), c1 = S.partColour(250), c2 = S.partColour(5000);
+    check('score: bruise colour darkens', c0[0] > c1[0] && c1[0] > c2[0] && c2.every(v => v >= 0 && v <= 1));
+  }
+
+  function run() {
+    results.length = 0;
+    for (const t of [testStairs, testRagdoll, testScore]) {
+      try { t(); } catch (e) { results.push({ name: t.name + ' threw', ok: false, detail: String(e && e.stack || e) }); }
+    }
+    const failed = results.filter(r => !r.ok);
+    const log = typeof console !== 'undefined' ? console.log : () => {};
+    for (const r of results) if (!r.ok) log('FAIL ' + r.name + (r.detail ? ' — ' + r.detail : ''));
+    log(`DismountTests: ${results.length - failed.length}/${results.length} passed`);
+    return failed.length === 0;
+  }
+  return { run, results };
+})();
+</script>
+</body>
+</html>
