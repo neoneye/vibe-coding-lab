@@ -102,7 +102,8 @@ All effects are synthesised with Web Audio at run time (no sample files), starte
 - **Clink** when the ball is grabbed and released: three detuned high triangle partials.
 - **Crane engine**: a diesel (sawtooth plus sub-octave square through a lowpass, chugging via a slow gain LFO) that idles at 31 Hz whenever sound is on and revs to 47 Hz, louder and more open, while any crane key is held.
 - **Hydraulic whine** while slewing, luffing or hoisting: a vibrato sine at 560 / 700 / 880 Hz respectively.
-- **Tracks** while driving or turning: a looped low bandpass rumble plus one bandpass click per track link (0.45 m of travel, alternating left and right), heavier when driving than when turning.
+- **Tracks** while driving: the engine drops to 42 Hz but gets harder and louder, a deep rumble and a 38 Hz ground shake come in, a drivetrain growl (two beating sawtooths through a tanh shaper and a bandpass, amplitude-modulated at the track-link rate) and a thin gear whine at 1 450 Hz, plus one clank per track link (0.45 m of travel, alternating left and right): a ground thud, a dull body knock and a metallic ring.
+- **Turning** on the spot: the same drivetrain at lower pitch and gear whine at 1 050 Hz, clanks on the outer track only at a slower rate, and a track scrape (bandpass noise around 850 Hz) with a wavering metal squeal.
 - **Backup alarm** while driving backwards: a 1 050 Hz square beep, 0.45 s on and 0.45 s off.
 
 ## Testing and verification

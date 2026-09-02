@@ -1228,19 +1228,56 @@ function buildCraneAudio(ctx) {
   A.rumbleFlt = ctx.createBiquadFilter(); A.rumbleFlt.type = 'bandpass'; A.rumbleFlt.frequency.value = 110; A.rumbleFlt.Q.value = 0.8;
   A.rumbleGain = ctx.createGain(); A.rumbleGain.gain.value = 0;
   A.rumble.connect(A.rumbleFlt); A.rumbleFlt.connect(A.rumbleGain); A.rumbleGain.connect(out);
+  // drivetrain growl: two beating saws through a tanh shaper and a bandpass,
+  // amplitude-modulated at the track-link rate
+  A.drive1 = ctx.createOscillator(); A.drive1.type = 'sawtooth'; A.drive1.frequency.value = 55;
+  A.drive2 = ctx.createOscillator(); A.drive2.type = 'sawtooth'; A.drive2.frequency.value = 55.9;
+  A.shaper = ctx.createWaveShaper();
+  { const n = 512, curve = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; curve[i] = Math.tanh(3.5 * x); } A.shaper.curve = curve; }
+  A.driveFlt = ctx.createBiquadFilter(); A.driveFlt.type = 'bandpass'; A.driveFlt.frequency.value = 240; A.driveFlt.Q.value = 0.9;
+  A.driveGain = ctx.createGain(); A.driveGain.gain.value = 0;
+  A.driveLfo = ctx.createOscillator(); A.driveLfo.type = 'triangle'; A.driveLfo.frequency.value = 6;
+  A.driveLfoGain = ctx.createGain(); A.driveLfoGain.gain.value = 0;
+  A.driveLfo.connect(A.driveLfoGain); A.driveLfoGain.connect(A.driveGain.gain);
+  A.drive1.connect(A.shaper); A.drive2.connect(A.shaper); A.shaper.connect(A.driveFlt); A.driveFlt.connect(A.driveGain); A.driveGain.connect(out);
+  // gear whine: a thin high sine that climbs with travel
+  A.gear = ctx.createOscillator(); A.gear.type = 'sine'; A.gear.frequency.value = 1200;
+  A.gearGain = ctx.createGain(); A.gearGain.gain.value = 0;
+  A.gear.connect(A.gearGain); A.gearGain.connect(out);
+  // ground shake: sub sine while rolling
+  A.shake = ctx.createOscillator(); A.shake.type = 'sine'; A.shake.frequency.value = 38;
+  A.shakeGain = ctx.createGain(); A.shakeGain.gain.value = 0;
+  A.shake.connect(A.shakeGain); A.shakeGain.connect(out);
+  // turning: track scrape (noise bandpass) and a metal squeal (saw with vibrato)
+  A.scrape = ctx.createBufferSource(); A.scrape.buffer = audio.noise; A.scrape.loop = true; A.scrape.playbackRate.value = 0.9;
+  A.scrapeFlt = ctx.createBiquadFilter(); A.scrapeFlt.type = 'bandpass'; A.scrapeFlt.frequency.value = 850; A.scrapeFlt.Q.value = 1.3;
+  A.scrapeGain = ctx.createGain(); A.scrapeGain.gain.value = 0;
+  A.scrape.connect(A.scrapeFlt); A.scrapeFlt.connect(A.scrapeGain); A.scrapeGain.connect(out);
+  A.squeal = ctx.createOscillator(); A.squeal.type = 'sawtooth'; A.squeal.frequency.value = 1900;
+  A.squealVib = ctx.createOscillator(); A.squealVib.frequency.value = 3.2;
+  A.squealVibGain = ctx.createGain(); A.squealVibGain.gain.value = 60;
+  A.squealVib.connect(A.squealVibGain); A.squealVibGain.connect(A.squeal.frequency);
+  A.squealFlt = ctx.createBiquadFilter(); A.squealFlt.type = 'lowpass'; A.squealFlt.frequency.value = 2600;
+  A.squealGain = ctx.createGain(); A.squealGain.gain.value = 0;
+  A.squeal.connect(A.squealFlt); A.squealFlt.connect(A.squealGain); A.squealGain.connect(out);
   // backup alarm
   A.beep = ctx.createOscillator(); A.beep.type = 'square'; A.beep.frequency.value = 1050;
   A.beepFlt = ctx.createBiquadFilter(); A.beepFlt.type = 'lowpass'; A.beepFlt.frequency.value = 2600;
   A.beepGain = ctx.createGain(); A.beepGain.gain.value = 0;
   A.beep.connect(A.beepFlt); A.beepFlt.connect(A.beepGain); A.beepGain.connect(out);
-  for (const o of [A.engine, A.sub, A.lfo, A.whine, A.vib, A.rumble, A.beep]) o.start();
+  for (const o of [A.engine, A.sub, A.lfo, A.whine, A.vib, A.rumble, A.beep, A.drive1, A.drive2, A.driveLfo, A.gear, A.shake, A.scrape, A.squeal, A.squealVib]) o.start();
   A.built = true;
 }
-function trackClick(ctx, heavy) {
+// One track link slamming down: a ground thud, a dull body knock and a
+// metallic ring. side: -1 left, 1 right, 0 alternate.
+function trackClank(ctx, side, heavy) {
   const t0 = ctx.currentTime;
-  craneAudio.side = 1 - craneAudio.side;
-  const g = voice(craneAudio.side ? 0.25 : -0.25);
-  noiseBurst(g, t0, 0.05, 'bandpass', heavy ? 380 + Math.random() * 120 : 620 + Math.random() * 200, 3, heavy ? 0.16 : 0.1);
+  if (side === 0) { craneAudio.side = 1 - craneAudio.side; side = craneAudio.side ? 1 : -1; }
+  const g = voice(side * 0.3);
+  const k = heavy ? 1 : 0.7;
+  thud(g, t0, 95, 46, 0.13, 0.42 * k);
+  noiseBurst(g, t0, 0.09, 'lowpass', 420, 0.8, 0.35 * k);
+  noiseBurst(g, t0 + 0.005, 0.07, 'bandpass', 1300 + Math.random() * 500, 7, 0.22 * k);
 }
 // ctl: { fwd, turn, slew, luff, hoist } as -1 / 0 / 1
 function updateCraneAudio(dt, ctl) {
@@ -1251,22 +1288,37 @@ function updateCraneAudio(dt, ctl) {
   const busy = !!(ctl.slew || ctl.luff || ctl.hoist);
   const rolling = !!(ctl.fwd || ctl.turn);
   const load = busy || rolling;
-  // engine: idle 31 Hz, working 47 Hz, louder and more open under load
-  A.engine.frequency.setTargetAtTime(load ? 47 : 31, t, 0.3);
-  A.sub.frequency.setTargetAtTime(load ? 23.5 : 15.5, t, 0.3);
-  A.engineFlt.frequency.setTargetAtTime(load ? 280 : 150, t, 0.3);
-  A.engineGain.gain.setTargetAtTime(load ? 0.075 : 0.04, t, 0.25);
+  // engine: idle 31 Hz, boom work 47 Hz, hauling the tracks 42 Hz but harder and louder
+  const engHz = rolling ? 42 : load ? 47 : 31;
+  A.engine.frequency.setTargetAtTime(engHz, t, 0.3);
+  A.sub.frequency.setTargetAtTime(engHz / 2, t, 0.3);
+  A.engineFlt.frequency.setTargetAtTime(rolling ? 340 : load ? 280 : 150, t, 0.3);
+  A.engineGain.gain.setTargetAtTime(rolling ? 0.1 : load ? 0.075 : 0.04, t, 0.25);
   A.lfo.frequency.setTargetAtTime(load ? 11 : 7, t, 0.3);
   // hydraulics: pitch by function, hoist highest
   const wf = ctl.hoist ? 880 : ctl.luff ? 700 : 560;
   A.whine.frequency.setTargetAtTime(wf, t, 0.15);
   A.whineGain.gain.setTargetAtTime(busy ? 0.02 : 0, t, busy ? 0.12 : 0.2);
-  // tracks: rumble plus a click per track link, faster forwards than turning
-  A.rumbleGain.gain.setTargetAtTime(rolling ? 0.07 : 0, t, rolling ? 0.1 : 0.2);
+  // tracks: deep rumble and ground shake, drivetrain growl pulsing at link rate,
+  // gear whine, and a clank per track link (0.45 m); turning is slower, one-sided,
+  // and adds the scrape and squeal of a track slewing on the spot
+  const driving = ctl.fwd !== 0, turning = ctl.turn !== 0;
   const rate = (Math.abs(ctl.fwd) * 3.5 + Math.abs(ctl.turn) * 1.6) / 0.45; // links per second
+  A.rumbleFlt.frequency.setTargetAtTime(driving ? 70 : 95, t, 0.2);
+  A.rumbleGain.gain.setTargetAtTime(rolling ? 0.16 : 0, t, rolling ? 0.1 : 0.25);
+  A.shakeGain.gain.setTargetAtTime(driving ? 0.09 : turning ? 0.05 : 0, t, 0.15);
+  A.driveGain.gain.setTargetAtTime(rolling ? 0.11 : 0, t, rolling ? 0.12 : 0.25);
+  A.driveLfoGain.gain.setTargetAtTime(rolling ? 0.05 : 0, t, 0.12);
+  A.driveLfo.frequency.setTargetAtTime(Math.max(2, rate), t, 0.1);
+  A.drive1.frequency.setTargetAtTime(driving ? 62 : 48, t, 0.25);
+  A.drive2.frequency.setTargetAtTime(driving ? 63.1 : 48.7, t, 0.25);
+  A.gear.frequency.setTargetAtTime(driving ? 1450 : 1050, t, 0.3);
+  A.gearGain.gain.setTargetAtTime(rolling ? 0.014 : 0, t, rolling ? 0.3 : 0.15);
+  A.scrapeGain.gain.setTargetAtTime(turning ? 0.12 : 0, t, turning ? 0.15 : 0.2);
+  A.squealGain.gain.setTargetAtTime(turning ? 0.012 : 0, t, turning ? 0.3 : 0.15);
   if (rate > 0) {
     A.trackPhase += rate * dt;
-    while (A.trackPhase >= 1) { A.trackPhase -= 1; trackClick(ctx, ctl.fwd !== 0); }
+    while (A.trackPhase >= 1) { A.trackPhase -= 1; trackClank(ctx, driving ? 0 : -Math.sign(ctl.turn), driving); }
   } else A.trackPhase = 0;
   // backup alarm while reversing: 0.45 s on, 0.45 s off
   if (ctl.fwd < 0) {
