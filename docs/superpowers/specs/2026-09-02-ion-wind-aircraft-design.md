@@ -98,3 +98,9 @@ Owner asked for a picker of sweet spots and why they are sweet. In the model, cu
 | Scaled up | 80 kV, 10 cm | 0.8 kV/mm | same efficiency and margin as MIT, 320 mN/m; the only way more voltage helps |
 
 Gap slider step is now 0.1 cm. Five new tests (33 total) pin the field-only property and the preset orderings.
+
+## Addendum (same day): section 7, compress the air first?
+
+Owner asked whether compressing the intake air before the emitters helps. Answer on the page: no for a fanless aircraft. Model gains an optional relative-density argument `delta` on onset, sparkover, regime, current, thrust, power, thrust-per-power, ion and wind speed (onset and sparkover ∝ δ, mobility ∝ 1/δ), plus `densityAtAltitude` (ISA troposphere), `ramPressure`, `thrusterPressureRise` (thrust per metre ÷ gap, ≈ 3 Pa at the MIT point), `thrusterFlow` and `compressionPower` (flow × Δp). Nine new tests (42 total).
+
+Section 7 has three cards: ram pressure from an airspeed slider (14 Pa at 4.8 m/s, as a share of an atmosphere and the matching gain in sparkover and efficiency); the ideal power to raise the plane's own air stream by a chosen share of an atmosphere, compared with the plane's electrical power from section 4 (kilowatts vs hundreds of watts); and an altitude slider showing density, sparkover and thrust per watt for the section 1 gap (the 5 cm gap arcs at ≈ 20 kV at 10 km). Text: what denser air does, what it costs, the ducted multi-stage form that works, and that ion planes want dense low air. Notes become section 8.

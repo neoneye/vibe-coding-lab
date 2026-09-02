@@ -97,6 +97,8 @@
   .notes { font-size: 14px; color: #b5bec9; max-width: 860px; }
   .notes li { margin: 0 0 8px; }
   .notes a { color: #58a6ff; }
+  .calc.three { grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 960px) { .calc.three { grid-template-columns: 1fr; } }
   @media (max-width: 720px) { .calc { grid-template-columns: 1fr; } aside { max-width: none; } }
 </style>
 </head>
@@ -267,7 +269,51 @@
 </section>
 
 <section id="s7">
-  <h2><span class="num">7</span> Notes</h2>
+  <h2><span class="num">7</span> Compress the air first?</h2>
+  <div class="row">
+    <div class="stage">
+      <div class="calc three">
+        <div class="card">
+          <h3>Ram compression from speed</h3>
+          <div class="ctl">
+            <label>Airspeed <span id="asVal"></span></label>
+            <input type="range" id="asRange" min="0" max="150" step="0.1" value="4.8">
+          </div>
+          <div class="big" id="ramPa"><small>Pa of ram pressure</small></div>
+          <div class="sub" id="ramSub"></div>
+        </div>
+        <div class="card drone">
+          <h3>Compress it with a machine</h3>
+          <div class="ctl">
+            <label>Pressure rise <span id="dpVal"></span></label>
+            <input type="range" id="dpRange" min="0.1" max="10" step="0.1" value="1">
+          </div>
+          <div class="big" id="compW"><small>W to compress the stream</small></div>
+          <div class="sub" id="compSub"></div>
+        </div>
+        <div class="card solar">
+          <h3>Or fly where the air is dense</h3>
+          <div class="ctl">
+            <label>Altitude <span id="altVal"></span></label>
+            <input type="range" id="altRange" min="0" max="10000" step="100" value="0">
+          </div>
+          <div class="big" id="altSpark"><small>kV sparkover for this gap</small></div>
+          <div class="sub" id="altSub"></div>
+        </div>
+      </div>
+      <div class="caption" id="cap7"></div>
+    </div>
+    <aside>
+      <p><b>What denser air does at the electrodes.</b> Sparkover and corona onset both rise in proportion to density, so a denser gap takes more voltage before it arcs. Ion mobility falls in proportion, so at a fixed voltage the current drops, the thrust stays about the same, and thrust per watt improves by the same factor. Real gains, but modest: ten percent denser air is worth ten percent.</p>
+      <p><b>What it costs.</b> An ion thruster is a pressure-rise device of a few pascals over a large area: the MIT plane made about 3 Pa. Ram compression at 4.8 m/s is about 14 Pa, a hundredth of a percent of an atmosphere, and only reaches a few percent near 100 m/s, where a slow ionic wind is useless anyway. A mechanical compressor is a fan, the thing the aircraft exists to avoid, and raising a few cubic metres per second by even one percent of an atmosphere costs kilowatts, ten times the whole plane's power. A sealed pressurised chamber does not work either: the thruster must exhaust to the atmosphere, so you would have built an electrostatic jet, throwing a little air fast, the opposite of the wide slow flow that makes ionic wind efficient.</p>
+      <p><b>The form of the idea that works.</b> MIT's later thrusters put several emitter–collector stages in series inside a duct, each adding its few pascals to the same stream. That is the thruster raising its own pressure, not a stage ahead of it.</p>
+      <p><b>What the density argument really says</b> is that ion planes want dense air: sea level on a cold day. At 10 km the air is a third as dense, this page's default gap arcs at about 20 kV instead of 60, and the efficiency drops with it. An ion aircraft is a low-altitude machine.</p>
+    </aside>
+  </div>
+</section>
+
+<section id="s8">
+  <h2><span class="num">8</span> Notes</h2>
   <ul class="notes">
     <li><b>Solid-state propulsion</b> means the thruster has no moving parts, the same sense as a solid-state drive. Ion engines on spacecraft use the same idea with their own propellant; in the atmosphere the air itself is the propellant, which is why it works at all here and not in space.</li>
     <li><b>The model on this page</b> is a one-dimensional textbook approximation: corona onset grows with gap, current follows the Townsend relation I ∝ V(V − V₀), and thrust is I·d/μ with the ion mobility μ = 2×10⁻⁴ m²/(V·s). It is calibrated so 20 m of wire at 40 kV across 5 cm gives 3.2 N for 512 W, the MIT plane's published figures (6.25 N/kW).</li>
@@ -290,24 +336,32 @@ const IonModel = (() => {
 
   const SPARK_PER_M = 1.2e6; // rough sparkover of a corona-stabilised gap in dry air: 1.2 kV per mm
 
-  function onsetV(d) { return ONSET_PER_M * d; }
-  function sparkV(d) { return SPARK_PER_M * d; }
+  // delta = air density relative to sea level (1 at sea level). Onset and sparkover fields scale with
+  // density (Peek, Paschen); ion mobility scales with 1/density, so the Townsend constant does too.
+  function onsetV(d, delta = 1) { return ONSET_PER_M * d * delta; }
+  function sparkV(d, delta = 1) { return SPARK_PER_M * d * delta; }
   // "off" below corona onset, "corona" in the working window, "arc" once the gap sparks over
-  function regime(V, d) {
-    if (!(d > 0)) return "off";
-    if (V >= sparkV(d)) return "arc";
-    return V > onsetV(d) ? "corona" : "off";
+  function regime(V, d, delta = 1) {
+    if (!(d > 0) || !(delta > 0)) return "off";
+    if (V >= sparkV(d, delta)) return "arc";
+    return V > onsetV(d, delta) ? "corona" : "off";
   }
-  function current(V, d) {
-    const V0 = onsetV(d);
-    if (regime(V, d) !== "corona") return 0;
-    return C5 * (0.05 / d) * (0.05 / d) * V * (V - V0);
+  function current(V, d, delta = 1) {
+    const V0 = onsetV(d, delta);
+    if (regime(V, d, delta) !== "corona") return 0;
+    return (C5 / delta) * (0.05 / d) * (0.05 / d) * V * (V - V0);
   }
-  function thrust(V, d) { return current(V, d) * d / MU; }
-  function power(V, d) { return current(V, d) * V; }
-  function thrustPerPower(V, d) { return V > 0 ? d / (MU * V) : 0; }
-  function ionSpeed(V, d) { return d > 0 ? MU * V / d : 0; }
-  function windSpeed(V, d) { return d > 0 ? Math.sqrt(thrust(V, d) / (RHO * d)) : 0; }
+  function thrust(V, d, delta = 1) { return current(V, d, delta) * d * delta / MU; }
+  function power(V, d, delta = 1) { return current(V, d, delta) * V; }
+  function thrustPerPower(V, d, delta = 1) { return V > 0 ? d * delta / (MU * V) : 0; }
+  function ionSpeed(V, d, delta = 1) { return d > 0 ? MU * V / (d * delta) : 0; }
+  function windSpeed(V, d, delta = 1) { return d > 0 ? Math.sqrt(thrust(V, d, delta) / (RHO * delta * d)) : 0; }
+  // ISA troposphere density ratio for an altitude in metres (0.34 at 10 km)
+  function densityAtAltitude(h) { return Math.pow(Math.max(0, 1 - 2.2558e-5 * Math.min(h, 11000)), 4.2559); }
+  function ramPressure(v, delta = 1) { return 0.5 * RHO * delta * v * v; }         // Pa
+  function thrusterPressureRise(V, d, delta = 1) { return d > 0 ? thrust(V, d, delta) / d : 0; } // Pa: thrust per metre over gap x 1 m
+  function thrusterFlow(wireM, d, airspeed, V, delta = 1) { return wireM * d * (airspeed + windSpeed(V, d, delta)); } // m^3/s
+  function compressionPower(flowM3s, dpPa) { return flowM3s * dpPa; }             // W, small pressure rise
   function wireNeeded(massKg, mode, V, d) {
     const W = massKg * G;
     const need = mode === "drone" ? W : W / LD;
@@ -320,7 +374,7 @@ const IonModel = (() => {
   function batteryEnergyWh(massKg) { return massKg * WH_PER_KG; }
   function enduranceSeconds(wh, watts) { return watts > 0 ? wh * 3600 / watts : Infinity; }
   function solarPower(areaM2, irradiance) { return areaM2 * irradiance * SOLAR_EFF; }
-  return { MU, RHO, G, LD, WH_PER_KG, SOLAR_EFF, onsetV, sparkV, regime, current, thrust, power, thrustPerPower, ionSpeed, windSpeed, wireNeeded,
+  return { MU, RHO, G, LD, WH_PER_KG, SOLAR_EFF, onsetV, sparkV, regime, current, densityAtAltitude, ramPressure, thrusterPressureRise, thrusterFlow, compressionPower, thrust, power, thrustPerPower, ionSpeed, windSpeed, wireNeeded,
            batteryEnergyWh, enduranceSeconds, solarPower };
 })();
 
@@ -383,6 +437,17 @@ const IonTests = {
     check("at a fixed field, thrust per metre scales with the gap", near(M.thrust(80000, 0.10), 2 * M.thrust(40000, 0.05), 1e-9));
     check("least-wire preset: more thrust per metre, worse efficiency than MIT", M.thrust(40000, 0.037) > M.thrust(40000, 0.05) && M.thrustPerPower(40000, 0.037) < M.thrustPerPower(40000, 0.05));
     check("least-power preset: double the efficiency of MIT", near(M.thrustPerPower(40000, 0.10), 2 * M.thrustPerPower(40000, 0.05), 1e-9));
+    check("density 1 is the default everywhere", near(M.thrust(40000, 0.05, 1), M.thrust(40000, 0.05), 1e-12) && near(M.sparkV(0.05, 1), M.sparkV(0.05), 1e-12));
+    check("denser air: sparkover and onset rise in proportion", near(M.sparkV(0.05, 1.1), 66000, 1e-9) && near(M.onsetV(0.05, 1.1), 11000, 1e-9));
+    check("denser air: thrust per watt rises in proportion", near(M.thrustPerPower(40000, 0.05, 1.1), 1.1 * M.thrustPerPower(40000, 0.05), 1e-9));
+    check("denser air at fixed voltage: less current, about the same thrust, less power",
+      M.current(40000, 0.05, 1.1) < M.current(40000, 0.05) && near(M.thrust(40000, 0.05, 1.1), M.thrust(40000, 0.05), 0.05) && M.power(40000, 0.05, 1.1) < M.power(40000, 0.05));
+    check("ISA density: 1 at sea level, ~0.34 at 10 km", near(M.densityAtAltitude(0), 1, 1e-12) && near(M.densityAtAltitude(10000), 0.337, 0.01));
+    check("at 10 km the 5 cm gap arcs at ~20 kV", near(M.sparkV(0.05, M.densityAtAltitude(10000)), 20000, 0.02) && M.regime(40000, 0.05, M.densityAtAltitude(10000)) === "arc");
+    check("ram pressure at 4.8 m/s is ~14 Pa", near(M.ramPressure(4.8), 13.8, 0.02));
+    check("thruster pressure rise at the MIT point is ~3.2 Pa", near(M.thrusterPressureRise(40000, 0.05), 3.2, 1e-9));
+    const flow = M.thrusterFlow(20, 0.05, 4.8, 40000);
+    check("MIT stream is a few m3/s and 1 % compression costs kilowatts", flow > 5 && flow < 8 && M.compressionPower(flow, 1013) > 5000);
     console.log(`IonTests: ${pass} passed, ${fail} failed`);
     return fail === 0;
   }
@@ -433,7 +498,7 @@ const IonTests = {
   const fmt = (x, digits = 1) => Number.isFinite(x) ? x.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: digits }) : "—";
 
   // ---------- shared settings ----------
-  const S = { V: 40000, d: 0.05, mass: 2.5, batt: 0.27, area: 2, sun: 1000 };
+  const S = { V: 40000, d: 0.05, mass: 2.5, batt: 0.27, area: 2, sun: 1000, airspeed: 4.8, dpPct: 1, alt: 0 };
   const regime = () => M.regime(S.V, S.d);
   const offReason = () => regime() === "arc" ? "the gap in section 1 is arcing: the supply is shorted, no thrust" : "voltage below corona onset in section 1: no thrust";
 
@@ -1002,6 +1067,22 @@ const IonTests = {
       ? `At ${fmt(V / 1000)} kV across ${fmt(d * 100)} cm each metre of wire gives ${fmt(M.thrust(V, d) * 1000, 0)} mN for ${fmt(M.power(V, d))} W. The MIT plane carried about 20 m of wire; a 5 m wingspan with four rows is exactly that.`
       : arc ? `At ${fmt(V / 1000)} kV a ${fmt(d * 100)} cm gap arcs over (sparkover ≈ ${fmt(M.sparkV(d) / 1000, 0)} kV), so no length of wire will do. Lower the voltage or widen the gap.`
       : `Below the corona onset (${fmt(V0 / 1000, 0)} kV for a ${fmt(d * 100)} cm gap) no current flows, so no length of wire will do. Raise the voltage in section 1.`;
+    // section 7 cards
+    const ram = M.ramPressure(S.airspeed), deltaRam = 1 + ram / 101325;
+    $("asVal").textContent = `${fmt(S.airspeed)} m/s`;
+    $("ramPa").innerHTML = fmt(ram, ram < 100 ? 1 : 0) + ' <small>Pa of ram pressure</small>';
+    $("ramSub").textContent = `${fmt(100 * ram / 101325, 3)} % of an atmosphere. Denser by that much, the gap's sparkover and thrust per watt rise by ${fmt(100 * (deltaRam - 1), 3)} %. The thruster's own pressure rise is ${fmt(M.thrusterPressureRise(V, d), 1)} Pa.`;
+    const dp = S.dpPct / 100 * 101325, flow = on ? M.thrusterFlow(plane.metres, d, S.airspeed, V) : 0, compW = M.compressionPower(flow, dp);
+    $("dpVal").textContent = `${fmt(S.dpPct)} % of 1 atm`;
+    $("compW").innerHTML = (on ? fmt(compW, 0) : "—") + ' <small>W to compress the stream</small>';
+    $("compSub").textContent = on
+      ? `The ${fmt(plane.metres, 0)} m of wire the plane needs pass ${fmt(flow)} m³/s at ${fmt(S.airspeed)} m/s. Raising that by ${fmt(dp / 1000)} kPa costs ${fmt(compW / plane.power)}× the plane's whole ${fmt(plane.power, 0)} W, to gain ${fmt(S.dpPct)} % in sparkover and efficiency.`
+      : "Set section 1 into the corona regime to size the plane's air stream";
+    const delta = M.densityAtAltitude(S.alt), rAlt = M.regime(V, d, delta);
+    $("altVal").textContent = `${fmt(S.alt, 0)} m`;
+    $("altSpark").innerHTML = fmt(M.sparkV(d, delta) / 1000, 0) + ' <small>kV sparkover for this gap</small>';
+    $("altSub").textContent = `Air density ${fmt(100 * delta, 0)} % of sea level. At your ${fmt(V / 1000)} kV the ${fmt(d * 100)} cm gap is ${rAlt === "arc" ? "ARCING" : rAlt === "corona" ? `in corona at ${fmt(M.thrustPerPower(V, d, delta) * 1000, 2)} N/kW (sea level ${fmt(M.thrustPerPower(V, d) * 1000, 2)})` : "below onset"}.`;
+    $("cap7").textContent = "Ram pressure is ½·ρ·v². Compression power is volume flow × pressure rise, the ideal minimum. Density follows the standard atmosphere; a cold day at sea level is a few percent denser still.";
     // section 6 table
     const tr = ['<tr><th>kV</th><th>regime</th><th>mN per m</th><th>W per m</th><th>N/kW</th></tr>'];
     for (let kv = 10; kv <= 100; kv += 10) {
@@ -1047,6 +1128,9 @@ const IonTests = {
   $("bRange").addEventListener("input", e => { S.batt = Number(e.target.value); updateReadouts(); });
   $("aRange").addEventListener("input", e => { S.area = Number(e.target.value); updateReadouts(); });
   $("sunRange").addEventListener("input", e => { S.sun = Number(e.target.value); updateReadouts(); });
+  $("asRange").addEventListener("input", e => { S.airspeed = Number(e.target.value); updateReadouts(); });
+  $("dpRange").addEventListener("input", e => { S.dpPct = Number(e.target.value); updateReadouts(); });
+  $("altRange").addEventListener("input", e => { S.alt = Number(e.target.value); updateReadouts(); });
   $("cap5").textContent = "Battery cells at 130 Wh/kg, solar cells at 22 % efficiency. Both cards use the power the plane and drone need from section 4, so the sliders there change these numbers too.";
   updateReadouts();
 
