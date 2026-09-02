@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wrecking Ball</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0f14; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #e8e6e0; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script id="shared-code">
+// ============================================================================
+// Wreck — pure geometry + collapse model. No DOM, no imports; runs in Node.
+// Units: metres, Y up, ground at y = 0. A block:
+//   { p:[x,y,z], s:[sx,sy,sz], q:[x,y,z,w], mat, tint, shape?:'cyl' }
+// ============================================================================
+const Wreck = (() => {
+  const MATERIALS = {
+    stone: { density: 2400, strength: 160, color: [0.64, 0.60, 0.53] },
+    brick: { density: 1800, strength: 90,  color: [0.66, 0.27, 0.19] },
+    wood:  { density: 600,  strength: 45,  color: [0.62, 0.45, 0.26] },
+    slab:  { density: 2400, strength: 200, color: [0.70, 0.70, 0.68] },
+    roof:  { density: 2000, strength: 60,  color: [0.34, 0.39, 0.47] },
+  };
+  const Q_ID = [0, 0, 0, 1];
+
+  // ---------------------------------------------------------------- quaternions
+  function qAxis(ax, ay, az, a) {
+    const s = Math.sin(a / 2);
+    return [ax * s, ay * s, az * s, Math.cos(a / 2)];
+  }
+  const qYaw = (a) => qAxis(0, 1, 0, a);
+  const qRoll = (a) => qAxis(1, 0, 0, a);
+  const qPitch = (a) => qAxis(0, 0, 1, a);
+  function qMul(a, b) {
+    const [ax, ay, az, aw] = a, [bx, by, bz, bw] = b;
+    return [
+      aw * bx + ax * bw + ay * bz - az * by,
+      aw * by - ax * bz + ay * bw + az * bx,
+      aw * bz + ax * by - ay * bx + az * bw,
+      aw * bw - ax * bx - ay * by - az * bz,
+    ];
+  }
+  function rotate(q, v) {
+    const [x, y, z, w] = q;
+    const [vx, vy, vz] = v;
+    // t = 2 * cross(q.xyz, v); v' = v + w*t + cross(q.xyz, t)
+    const tx = 2 * (y * vz - z * vy), ty = 2 * (z * vx - x * vz), tz = 2 * (x * vy - y * vx);
+    return [
+      vx + w * tx + (y * tz - z * ty),
+      vy + w * ty + (z * tx - x * tz),
+      vz + w * tz + (x * ty - y * tx),
+    ];
+  }
+  // Rotation matrix columns = images of the local axes.
+  function axes(q) {
+    return [rotate(q, [1, 0, 0]), rotate(q, [0, 1, 0]), rotate(q, [0, 0, 1])];
+  }
+  function aabb(b) {
+    const q = b.q || Q_ID;
+    const [ex, ey, ez] = axes(q);
+    const h = [b.s[0] / 2, b.s[1] / 2, b.s[2] / 2];
+    const r = [0, 1, 2].map(i => Math.abs(ex[i]) * h[0] + Math.abs(ey[i]) * h[1] + Math.abs(ez[i]) * h[2]);
+    return { min: [b.p[0] - r[0], b.p[1] - r[1], b.p[2] - r[2]], max: [b.p[0] + r[0], b.p[1] + r[1], b.p[2] + r[2]] };
+  }
+
+  // Separating-axis test between two oriented boxes, each shrunk by `shrink` per side.
+  function obbOverlap(a, b, shrink = 0) {
+    const A = axes(a.q || Q_ID), B = axes(b.q || Q_ID);
+    const ha = a.s.map(v => Math.max(0, v / 2 - shrink)), hb = b.s.map(v => Math.max(0, v / 2 - shrink));
+    const d = [b.p[0] - a.p[0], b.p[1] - a.p[1], b.p[2] - a.p[2]];
+    const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    const cross = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const test = (L) => {
+      const len = Math.hypot(L[0], L[1], L[2]);
+      if (len < 1e-8) return false;
+      const n = [L[0] / len, L[1] / len, L[2] / len];
+      let ra = 0, rb = 0;
+      for (let i = 0; i < 3; i++) { ra += ha[i] * Math.abs(dot(A[i], n)); rb += hb[i] * Math.abs(dot(B[i], n)); }
+      return Math.abs(dot(d, n)) > ra + rb; // true = separated
+    };
+    for (let i = 0; i < 3; i++) { if (test(A[i]) || test(B[i])) return false; }
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { if (test(cross(A[i], B[j]))) return false; }
+    return true;
+  }
+
+  const volume = (b) => b.shape === 'cyl' ? Math.PI * (b.s[0] / 2) ** 2 * b.s[1] : b.s[0] * b.s[1] * b.s[2];
+
+  // ------------------------------------------------------------ generators
+  let seed = 1;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const block = (p, s, mat, q, extra) => Object.assign({ p, s, q: q || Q_ID, mat, tint: rnd() }, extra || {});
+
+  // Masonry wall along local +X from x = 0 to `length`, centred on z = 0.
+  // openings: [{x0,x1,y0,y1}] in local coordinates; a lintel spans each opening
+  // on the first course whose bottom is at or above y1.
+  function wallCourses(spec) {
+    const { length, thickness, courses, courseH, unit, mat } = spec;
+    const bond = spec.bond === undefined ? 0.5 : spec.bond;
+    const openings = spec.openings || [];
+    const y0 = spec.y0 || 0;
+    const minPiece = spec.minPiece || unit * 0.2;
+    const ext = spec.lintelExt === undefined ? unit * 0.5 : spec.lintelExt;
+    const out = [];
+    for (let c = 0; c < courses; c++) {
+      const yb = y0 + c * courseH, yc = yb + courseH / 2;
+      const blocked = [];   // [x0, x1]
+      const lintels = [];
+      for (const o of openings) {
+        if (yc > o.y0 && yc < o.y1) blocked.push([o.x0, o.x1]);
+        const lc = Math.ceil((o.y1 - y0) / courseH - 1e-6);
+        if (lc === c) {
+          const lx0 = Math.max(0, o.x0 - ext), lx1 = Math.min(length, o.x1 + ext);
+          lintels.push([lx0, lx1]);
+          blocked.push([lx0, lx1]);
+        }
+      }
+      for (const [lx0, lx1] of lintels) {
+        out.push(block([(lx0 + lx1) / 2, yc, 0], [lx1 - lx0, courseH, thickness], mat, null, { lintel: true }));
+      }
+      const off = (c % 2) ? unit * bond : 0;
+      // unit boundaries: off + k*unit, plus 0 and length
+      const bounds = [0];
+      for (let x = off; x < length - 1e-9; x += unit) if (x > 0) bounds.push(x);
+      bounds.push(length);
+      for (let k = 0; k + 1 < bounds.length; k++) {
+        let x0 = bounds[k], x1 = bounds[k + 1];
+        // clip against blocked intervals (they may split a unit)
+        let pieces = [[x0, x1]];
+        for (const [b0, b1] of blocked) {
+          const next = [];
+          for (const [p0, p1] of pieces) {
+            if (b1 <= p0 || b0 >= p1) { next.push([p0, p1]); continue; }
+            if (b0 > p0) next.push([p0, b0]);
+            if (b1 < p1) next.push([b1, p1]);
+          }
+          pieces = next;
+        }
+        for (const [p0, p1] of pieces) {
+          if (p1 - p0 < minPiece - 1e-9) continue;
+          out.push(block([(p0 + p1) / 2, yc, 0], [p1 - p0, courseH, thickness], mat));
+        }
+      }
+    }
+    return out;
+  }
+
+  // Transform blocks: rotate by yaw about the origin, then translate.
+  function place(blocks, origin, yaw, q) {
+    const rq = q || qYaw(yaw || 0);
+    return blocks.map(b => {
+      const p = rotate(rq, b.p);
+      return Object.assign({}, b, { p: [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]], q: qMul(rq, b.q || Q_ID) });
+    });
+  }
+
+  // Ring courses around the local Y axis (centre at origin), blocks tangential.
+  // len defaults to the inner chord so adjacent blocks touch at their inner corners.
+  function ring(spec) {
+    const { r, n, courses, courseH, thick, mat } = spec;
+    const y0 = spec.y0 || 0;
+    const gap = spec.gap === undefined ? 0.02 : spec.gap;
+    const len = spec.len || (2 * (r - thick / 2) * Math.sin(Math.PI / n) - gap);
+    const out = [];
+    for (let c = 0; c < courses; c++) {
+      const y = y0 + (c + 0.5) * courseH;
+      const off = (spec.offset || 0) + ((c + (spec.phase || 0)) % 2 ? Math.PI / n : 0);
+      for (let k = 0; k < n; k++) {
+        if (spec.skip && spec.skip(k, c)) continue;
+        const a = off + 2 * Math.PI * k / n;
+        out.push(block([r * Math.cos(a), y, r * Math.sin(a)], [len, courseH, thick], mat, qYaw(-(a + Math.PI / 2))));
+      }
+    }
+    return spec.q || spec.center ? place(out, spec.center || [0, 0, 0], 0, spec.q || Q_ID) : out;
+  }
+
+  // ------------------------------------------------------------- structure
+  const BOND_EPS = 0.06;
+  class Structure {
+    constructor(blocks, strengthScale = 1) {
+      this.blocks = blocks;
+      const n = blocks.length;
+      this.n = n;
+      this.aabbs = blocks.map(aabb);
+      this.released = new Uint8Array(n);
+      this.damage = new Float32Array(n);
+      this.hp = new Float32Array(n);
+      for (let i = 0; i < n; i++) this.hp[i] = MATERIALS[blocks[i].mat].strength * strengthScale * Math.cbrt(volume(blocks[i]));
+      this.bonds = this._buildBonds();
+    }
+    _buildBonds() {
+      const cell = 2.0, n = this.n, grid = new Map();
+      const key = (x, y, z) => x + ',' + y + ',' + z;
+      const bonds = Array.from({ length: n }, () => []);
+      const ex = this.aabbs.map(a => ({ min: a.min.map(v => v - BOND_EPS), max: a.max.map(v => v + BOND_EPS) }));
+      for (let i = 0; i < n; i++) {
+        const a = ex[i];
+        const lo = a.min.map(v => Math.floor(v / cell)), hi = a.max.map(v => Math.floor(v / cell));
+        const seen = new Set();
+        for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) {
+          const k = key(x, y, z);
+          let list = grid.get(k);
+          if (!list) { list = []; grid.set(k, list); }
+          for (const j of list) {
+            if (seen.has(j)) continue;
+            seen.add(j);
+            const b = ex[j];
+            if (a.min[0] <= b.max[0] && a.max[0] >= b.min[0] && a.min[1] <= b.max[1] && a.max[1] >= b.min[1] && a.min[2] <= b.max[2] && a.max[2] >= b.min[2]) {
+              bonds[i].push(j); bonds[j].push(i);
+            }
+          }
+          list.push(i);
+        }
+      }
+      return bonds;
+    }
+    isSupported(i) {
+      const a = this.aabbs[i];
+      if (a.min[1] <= BOND_EPS) return true;
+      const cy = this.blocks[i].p[1], h = a.max[1] - a.min[1];
+      for (const j of this.bonds[i]) {
+        if (!this.released[j] && this.blocks[j].p[1] <= cy - 0.1 * h) return true;
+      }
+      return false;
+    }
+    unsupported() {
+      const out = [];
+      for (let i = 0; i < this.n; i++) if (!this.released[i] && !this.isSupported(i)) out.push(i);
+      return out;
+    }
+    // Release block i and everything that loses support. Returns newly released indices.
+    release(i) {
+      if (this.released[i]) return [];
+      this.released[i] = 1;
+      const out = [i];
+      const queue = [i];
+      while (queue.length) {
+        const k = queue.shift();
+        for (const j of this.bonds[k]) {
+          if (!this.released[j] && !this.isSupported(j)) { this.released[j] = 1; out.push(j); queue.push(j); }
+        }
+      }
+      return out;
+    }
+    // Impact of forceKN on block i: release if it exceeds hp, spill half the
+    // excess to intact neighbours, then cascade support loss.
+    hit(i, forceKN) {
+      if (this.released[i]) return [];
+      const out = [];
+      const queue = [[i, forceKN]];
+      while (queue.length) {
+        const [k, f] = queue.shift();
+        if (this.released[k]) continue;
+        if (f < this.hp[k]) { this.damage[k] = Math.max(this.damage[k], f); continue; }
+        const excess = f - this.hp[k];
+        this.released[k] = 1;
+        out.push(k);
+        const nb = this.bonds[k].filter(j => !this.released[j]);
+        if (nb.length && excess > 0) {
+          const spill = excess * 0.5 / nb.length;
+          for (const j of nb) queue.push([j, spill]);
+        }
+      }
+      // cascade from everything released in this hit
+      const casc = [...out];
+      while (casc.length) {
+        const k = casc.shift();
+        for (const j of this.bonds[k]) {
+          if (!this.released[j] && !this.isSupported(j)) { this.released[j] = 1; out.push(j); casc.push(j); }
+        }
+      }
+      return out;
+    }
+  }
+
+  // ------------------------------------------------------------------ assets
+  function reseed(s) { seed = s; }
+
+  function merlons(length, thickness, y, unit, mat, h = 0.8) {
+    const out = [];
+    for (let x = unit * 0.5; x < length; x += unit * 2) {
+      const w = Math.min(unit * 0.5, length - x + unit * 0.25);
+      out.push(block([x, y + h / 2, 0], [w, h, thickness], mat));
+    }
+    return out;
+  }
+
+  function buildCastle() {
+    reseed(7);
+    const B = [];
+    const half = 12, tr = 2.5, tThick = 1.0, unit = 1.5, ch = 0.6, wt = 1.2;
+    const courses = 12, wallH = courses * ch;
+    const wallLen = 2 * (half - (tr + tThick / 2)); // ends where the tower blocks begin
+    const x0 = -wallLen / 2;
+    // four curtain walls: local +X runs along the wall, wall centre line on the square edge
+    const sides = [
+      { origin: [x0, 0, half], yaw: 0, gate: true },       // front (+z)
+      { origin: [-x0, 0, -half], yaw: Math.PI, gate: false }, // back
+      { origin: [half, 0, x0], yaw: -Math.PI / 2, gate: false }, // +x side (local X -> +z)
+      { origin: [-half, 0, -x0], yaw: Math.PI / 2, gate: false }, // -x side
+    ];
+    for (const s of sides) {
+      const openings = s.gate ? [{ x0: wallLen / 2 - 1.5, x1: wallLen / 2 + 1.5, y0: 0, y1: 7 * ch }] : [];
+      const w = wallCourses({ length: wallLen, thickness: wt, courses, courseH: ch, unit, mat: 'stone', openings });
+      B.push(...place(w.concat(merlons(wallLen, wt, wallH, unit, 'stone')), s.origin, s.yaw));
+    }
+    // corner towers with stepped roofs
+    const tCourses = 17, tH = tCourses * ch;
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      const c = [sx * half, 0, sz * half];
+      B.push(...ring({ r: tr, n: 12, courses: tCourses, courseH: ch, thick: tThick, mat: 'stone', center: c }));
+      let y = tH;
+      for (const rr of [2.5, 2.0, 1.5, 1.0]) {
+        B.push(...ring({ r: rr, n: 12, courses: 1, courseH: 0.5, thick: 1.0, mat: 'roof', center: [c[0], y, c[2]], phase: 1 }));
+        y += 0.5;
+      }
+      B.push(block([c[0], y + 0.4, c[2]], [1.2, 0.8, 1.2], 'roof'));
+    }
+    // keep
+    const kh = 4, kCourses = 20, keepH = kCourses * ch, kUnit = 1.5;
+    const kSides = [
+      { origin: [-kh, 0, kh], yaw: 0, len: 2 * kh, door: true },
+      { origin: [kh, 0, -kh], yaw: Math.PI, len: 2 * kh, door: false },
+      { origin: [kh, 0, kh - wt], yaw: Math.PI / 2, len: 2 * kh - 2 * wt, door: false },
+      { origin: [-kh, 0, -kh + wt], yaw: -Math.PI / 2, len: 2 * kh - 2 * wt, door: false },
+    ];
+    for (const s of kSides) {
+      const openings = s.door ? [{ x0: kh - 0.75, x1: kh + 0.75, y0: 0, y1: 5 * ch }] : [];
+      const origin = [s.origin[0], 0, s.origin[2]];
+      // shift the wall centre line inward by half thickness so walls sit inside the 8x8 square
+      const inward = rotate(qYaw(s.yaw), [0, 0, -wt / 2]);
+      origin[0] += inward[0]; origin[2] += inward[2];
+      const w = wallCourses({ length: s.len, thickness: wt, courses: kCourses, courseH: ch, unit: kUnit, mat: 'stone', openings });
+      B.push(...place(w.concat(merlons(s.len, wt, keepH, kUnit, 'stone')), origin, s.yaw));
+    }
+    return { name: 'castle', blocks: B, radius: 18, craneStart: { pos: [0, 0, 27], heading: Math.PI } };
+  }
+
+  function buildPyramid() {
+    reseed(11);
+    const B = [];
+    const tiers = 7, tierH = 2.4, ch = 0.8, face = 0.9, unit = 1.5, inset = 1.5;
+    for (let k = 0; k < tiers; k++) {
+      const w = 15 - inset * k, y0 = k * tierH;
+      const L = 2 * w, Ls = 2 * w - 2 * face;
+      const sides = [
+        { origin: [-w, y0, w - face / 2], yaw: 0, len: L },
+        { origin: [w, y0, -w + face / 2], yaw: Math.PI, len: L },
+        { origin: [w - face / 2, y0, w - face], yaw: Math.PI / 2, len: Ls },
+        { origin: [-w + face / 2, y0, -w + face], yaw: -Math.PI / 2, len: Ls },
+      ];
+      for (const s of sides) {
+        B.push(...place(wallCourses({ length: s.len, thickness: face, courses: 3, courseH: ch, unit, mat: 'stone' }), s.origin, s.yaw));
+      }
+      // solid core: m x m blocks exactly filling the interior
+      const W = 2 * (w - face), m = Math.ceil(W / 3), cs = W / m;
+      for (let i = 0; i < m; i++) for (let j = 0; j < m; j++) {
+        B.push(block([-W / 2 + (i + 0.5) * cs, y0 + tierH / 2, -W / 2 + (j + 0.5) * cs], [cs, tierH, cs], 'stone'));
+      }
+    }
+    // stairway on the front face (+z), matching the tier slope: 8 steps per tier
+    const rise = tierH / 8, tread = inset / 8;
+    for (let i = 0; i < tiers * 8; i++) {
+      const k = Math.floor(i / 8), wk = 15 - inset * k;
+      const zFront = 15 + inset - tread * i, zBack = wk;
+      B.push(block([0, (i + 0.5) * rise, (zFront + zBack) / 2], [4, rise, zFront - zBack], 'stone'));
+    }
+    // temple on the summit
+    const top = tiers * tierH, th = 3, tt = 0.6, tCourses = 5, tch = 0.6;
+    const tSides = [
+      { origin: [-th, top, th - tt / 2], yaw: 0, len: 2 * th, door: true },
+      { origin: [th, top, -th + tt / 2], yaw: Math.PI, len: 2 * th, door: false },
+      { origin: [th - tt / 2, top, th - tt], yaw: Math.PI / 2, len: 2 * th - 2 * tt, door: false },
+      { origin: [-th + tt / 2, top, -th + tt], yaw: -Math.PI / 2, len: 2 * th - 2 * tt, door: false },
+    ];
+    for (const s of tSides) {
+      const openings = s.door ? [{ x0: th - 0.75, x1: th + 0.75, y0: 0, y1: 4 * tch }] : [];
+      B.push(...place(wallCourses({ length: s.len, thickness: tt, courses: tCourses, courseH: tch, unit: 1.5, mat: 'stone', openings }), s.origin, s.yaw));
+    }
+    const roofY = top + tCourses * tch;
+    B.push(block([0, roofY + 0.15, -1.5], [2 * th, 0.3, th], 'slab'));
+    B.push(block([0, roofY + 0.15, 1.5], [2 * th, 0.3, th], 'slab'));
+    for (let i = 0; i < 4; i++) B.push(block([-2.25 + 1.5 * i, roofY + 0.3 + 0.4, 0], [1.0, 0.8, 0.6], 'stone'));
+    return { name: 'pyramid', blocks: B, radius: 17, craneStart: { pos: [0, 0, 28], heading: Math.PI } };
+  }
+
+  function buildHorse() {
+    reseed(5);
+    const B = [];
+    const wood = 'wood';
+    // wheels (cylinders, axis along z) and the two cross beams that ride on them
+    const wr = 0.6;
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      B.push(block([sx * 2.5, wr, sz * 2.2], [2 * wr, 0.4, 2 * wr], wood, qRoll(Math.PI / 2), { shape: 'cyl' }));
+    }
+    for (const sx of [-1, 1]) B.push(block([sx * 2.5, 2 * wr + 0.2, 0], [0.6, 0.4, 4.8], wood));
+    // deck planks along x
+    const deckY = 2 * wr + 0.4;
+    for (let i = 0; i < 8; i++) B.push(block([0, deckY + 0.1, -1.75 + 0.5 * i], [8, 0.2, 0.5], wood));
+    const deckTop = deckY + 0.2;
+    // legs: 2x2 timbers, 6 courses
+    const legCourses = 6, lh = 0.6;
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      for (let c = 0; c < legCourses; c++) for (const ox of [-0.4, 0.4]) for (const oz of [-0.4, 0.4]) {
+        B.push(block([sx * 2.2 + ox, deckTop + (c + 0.5) * lh, sz * 1.4 + oz], [0.8, lh, 0.8], wood));
+      }
+    }
+    const legTop = deckTop + legCourses * lh;
+    // cradle: one wide plank across the leg tops; the bottom stave rests on it
+    B.push(block([0, legTop + 0.2, 0], [6.4, 0.4, 3.4], wood));
+    const cradleTop = legTop + 0.4;
+    // barrel: 18 staves around the x axis, bottom stave flat on the cradle
+    const n = 18, r = 2.2, t = 0.2, staveLen = 6;
+    const w = 2 * (r - t / 2) * Math.sin(Math.PI / n) - 0.02;
+    const cy = cradleTop + r + t / 2 + 0.005;
+    for (let k = 0; k < n; k++) {
+      const th = 2 * Math.PI * k / n; // from the bottom
+      B.push(block([0, cy - r * Math.cos(th), r * Math.sin(th)], [staveLen, t, w], wood, qRoll(-th)));
+    }
+    // three ribs inside the barrel
+    const rr = r - t / 2 - 0.15, rw = 2 * (rr - 0.15) * Math.sin(Math.PI / n) - 0.02;
+    for (const x of [-2.6, 0, 2.6]) for (let k = 0; k < n; k++) {
+      const th = 2 * Math.PI * (k + 0.5) / n;
+      B.push(block([x, cy - rr * Math.cos(th), rr * Math.sin(th)], [0.3, 0.3, rw], wood, qRoll(-th)));
+    }
+    // end caps: vertical planks trimmed to the circle
+    for (const sx of [-1, 1]) for (let i = 0; i < 8; i++) {
+      const zc = -1.75 + 0.5 * i;
+      const h = Math.sqrt((r + t / 2) ** 2 - (Math.abs(zc) + 0.25) ** 2);
+      B.push(block([sx * (staveLen / 2 + 0.1), cy, zc], [0.2, 2 * h, 0.5], wood));
+    }
+    // neck: six leaning timbers rising forward from the barrel top
+    const topY = cy + r + t / 2 + 0.03;
+    for (let j = 0; j < 6; j++) B.push(block([2.0 + 0.6 * j, topY + (j + 0.5) * 0.8, 0], [1.2, 0.8, 1.2], wood));
+    // head + ears
+    const headY = topY + 6 * 0.8;
+    B.push(block([5.8, headY + 0.6, 0], [3.0, 1.2, 1.4], wood));
+    for (const sz of [-1, 1]) B.push(block([5.0, headY + 1.2 + 0.35, sz * 0.45], [0.5, 0.7, 0.4], wood));
+    // tail: three boards stepping up and back
+    for (let j = 0; j < 3; j++) B.push(block([-2.4 - 0.4 * j, topY + (j + 0.5) * 0.5, 0], [1.0, 0.5, 0.6], wood));
+    return { name: 'horse', blocks: B, radius: 8, craneStart: { pos: [0, 0, 20], heading: Math.PI } };
+  }
+
+  function buildApartment() {
+    reseed(3);
+    const B = [];
+    const hx = 8, hz = 5, wt = 0.3, ch = 0.375, perStorey = 8, storeys = 6, slabT = 0.25, unit = 1.0;
+    const storeyH = perStorey * ch + slabT;
+    const wallH = perStorey * ch;
+    // window openings per storey (local x along the wall)
+    const winY = () => ({ y0: 2 * ch, y1: 6 * ch });
+    const longLen = 2 * hx, shortLen = 2 * hz - 2 * wt;
+    for (let s = 0; s < storeys; s++) {
+      const base = s * storeyH;
+      const sides = [
+        { origin: [-hx, base, hz - wt / 2], yaw: 0, len: longLen, wins: 8, wx: 0.4, front: true },
+        { origin: [hx, base, -hz + wt / 2], yaw: Math.PI, len: longLen, wins: 8, wx: 0.4 },
+        { origin: [hx - wt / 2, base, hz - wt], yaw: Math.PI / 2, len: shortLen, wins: 4, wx: 0.9 },
+        { origin: [-hx + wt / 2, base, -hz + wt], yaw: -Math.PI / 2, len: shortLen, wins: 4, wx: 0.9 },
+      ];
+      for (const side of sides) {
+        const openings = [];
+        for (let k = 0; k < side.wins; k++) {
+          const x0 = side.wx + 2 * k, x1 = x0 + 1.2;
+          if (s === 0 && side.front && k === 3) openings.push({ x0, x1, y0: -1, y1: 6 * ch }); // door
+          else openings.push(Object.assign({ x0, x1 }, winY()));
+        }
+        B.push(...place(wallCourses({ length: side.len, thickness: wt, courses: perStorey, courseH: ch, unit, mat: 'brick', openings, lintelExt: 0.3 }), side.origin, side.yaw));
+      }
+      // interior brick columns at the slab seams
+      for (const x of [-4, 0, 4]) for (let c = 0; c < perStorey; c++) {
+        B.push(block([x, base + (c + 0.5) * ch, 0], [0.6, ch, 0.6], 'brick'));
+      }
+      // floor / roof slab: 4 x 2 plates
+      const sy = base + wallH + slabT / 2;
+      for (let i = 0; i < 4; i++) for (let j = 0; j < 2; j++) {
+        B.push(block([-hx + 2 + 4 * i, sy, -hz + 2.5 + 5 * j], [4, slabT, 5], 'slab'));
+      }
+    }
+    // parapet: two courses on the roof slab
+    const pb = storeys * storeyH;
+    const pSides = [
+      { origin: [-hx, pb, hz - wt / 2], yaw: 0, len: longLen },
+      { origin: [hx, pb, -hz + wt / 2], yaw: Math.PI, len: longLen },
+      { origin: [hx - wt / 2, pb, hz - wt], yaw: Math.PI / 2, len: shortLen },
+      { origin: [-hx + wt / 2, pb, -hz + wt], yaw: -Math.PI / 2, len: shortLen },
+    ];
+    for (const side of pSides) {
+      B.push(...place(wallCourses({ length: side.len, thickness: wt, courses: 2, courseH: ch, unit, mat: 'brick' }), side.origin, side.yaw));
+    }
+    return { name: 'apartment', blocks: B, radius: 11, craneStart: { pos: [0, 0, 22], heading: Math.PI } };
+  }
+
+  const assets = {
+    castle: { label: 'Stone castle', build: buildCastle },
+    pyramid: { label: 'Mesoamerican pyramid', build: buildPyramid },
+    horse: { label: 'Trojan horse', build: buildHorse },
+    apartment: { label: 'Brick apartment', build: buildApartment },
+  };
+
+  return { MATERIALS, Q_ID, qYaw, qRoll, qPitch, qMul, rotate, axes, aabb, obbOverlap, volume, wallCourses, place, ring, Structure, assets, BOND_EPS };
+})();
+
+// ============================================================================
+// Tests
+// ============================================================================
+const WreckTests = {
+  run() {
+    let pass = 0, fail = 0;
+    const T = {
+      ok(c, msg) { if (c) pass++; else { fail++; console.log('FAIL: ' + msg); } },
+      near(a, b, eps, msg) { T.ok(Math.abs(a - b) <= eps, msg + ' (' + a + ' vs ' + b + ')'); },
+    };
+    const W = Wreck;
+    const cube = (p, s = [1, 1, 1], q) => ({ p, s, q: q || W.Q_ID, mat: 'stone', tint: 0 });
+
+    // quaternions
+    let v = W.rotate(W.qYaw(Math.PI / 2), [1, 0, 0]);
+    T.near(v[0], 0, 1e-9, 'yaw x'); T.near(v[2], -1, 1e-9, 'yaw z');
+    v = W.rotate(W.qRoll(Math.PI / 2), [0, 1, 0]);
+    T.near(v[2], 1, 1e-9, 'roll maps y to z');
+    v = W.rotate(W.qPitch(Math.PI / 2), [1, 0, 0]);
+    T.near(v[1], 1, 1e-9, 'pitch maps x to y');
+    v = W.rotate(W.qMul(W.qYaw(0.3), W.qYaw(0.4)), [1, 0, 0]);
+    T.near(v[0], Math.cos(0.7), 1e-9, 'qMul composes yaws');
+
+    // aabb
+    let a = W.aabb(cube([0, 0, 0], [2, 1, 1], W.qYaw(Math.PI / 2)));
+    T.near(a.max[0] - a.min[0], 1, 1e-9, 'aabb rotated x extent');
+    T.near(a.max[2] - a.min[2], 2, 1e-9, 'aabb rotated z extent');
+
+    // obb overlap
+    T.ok(!W.obbOverlap(cube([0, 0, 0]), cube([1, 0, 0]), 0.02), 'touching cubes do not overlap after shrink');
+    T.ok(W.obbOverlap(cube([0, 0, 0]), cube([0.9, 0, 0]), 0.02), 'overlapping cubes overlap');
+    T.ok(!W.obbOverlap(cube([0, 0, 0]), cube([0, 0, 1.75], [1, 1, 1], W.qYaw(Math.PI / 4)), 0), 'rotated cube outside');
+    T.ok(W.obbOverlap(cube([0, 0, 0]), cube([0, 0, 1.1], [1, 1, 1], W.qYaw(Math.PI / 4)), 0), 'rotated cube corner inside');
+
+    // wall courses
+    let wall = W.wallCourses({ length: 6, thickness: 0.5, courses: 4, courseH: 0.6, unit: 1, mat: 'stone', openings: [{ x0: 2, x1: 4, y0: 0.6, y1: 1.8 }] });
+    for (let c = 0; c < 4; c++) {
+      const row = wall.filter(b => Math.abs(b.p[1] - (c + 0.5) * 0.6) < 1e-9);
+      const len = row.reduce((s, b) => s + b.s[0], 0);
+      if (c === 0 || c === 3) T.near(len, 6, 1e-9, 'course ' + c + ' fully covered');
+      else T.near(len, 4, 1e-9, 'course ' + c + ' minus opening');
+    }
+    T.ok(!wall.some(b => b.p[0] > 2 && b.p[0] < 4 && b.p[1] > 0.6 && b.p[1] < 1.8), 'no block inside opening');
+    const lint = wall.filter(b => b.lintel);
+    T.ok(lint.length === 1 && lint[0].s[0] >= 2.99 && Math.abs(lint[0].p[1] - 2.1) < 1e-9, 'one lintel on the course above');
+    const row1 = wall.filter(b => Math.abs(b.p[1] - 0.9) < 1e-9).sort((p, q) => p.p[0] - q.p[0]);
+    T.near(row1[0].s[0], 0.5, 1e-9, 'odd course starts with a half unit');
+    T.ok(W.wallCourses({ length: 6, thickness: 0.5, courses: 2, courseH: 0.6, unit: 1, mat: 'stone' }).every(b => !b.lintel), 'no lintel without openings');
+
+    // ring
+    const rg = W.ring({ r: 3, n: 12, courses: 2, courseH: 0.5, thick: 1, mat: 'stone' });
+    T.ok(rg.length === 24, 'ring block count');
+    T.ok(rg.every(b => Math.abs(Math.hypot(b.p[0], b.p[2]) - 3) < 1e-9), 'ring blocks on the radius');
+    T.ok(rg.every(b => b.s[0] < 2 * 2.5 * Math.sin(Math.PI / 12)), 'ring block length below the inner chord');
+
+    // structure: column of three
+    let S = new W.Structure([cube([0, 0.5, 0]), cube([0, 1.5, 0]), cube([0, 2.5, 0])]);
+    T.ok(S.bonds[0].includes(1) && S.bonds[1].includes(0) && S.bonds[1].includes(2) && !S.bonds[0].includes(2), 'column bonds');
+    T.ok(S.unsupported().length === 0, 'column supported');
+    T.ok(S.hit(0, S.hp[0] - 1).length === 0 && S.damage[0] > 0, 'weak hit only damages');
+    let rel = S.hit(0, S.hp[0] * 10);
+    T.ok(rel.length === 3, 'strong base hit releases the column (' + rel.length + ')');
+    // lintel on two pillars
+    const mk = () => new W.Structure([cube([0, 0.5, 0]), cube([3, 0.5, 0]), cube([1.5, 1.5, 0], [4, 1, 1])]);
+    S = mk();
+    T.ok(S.unsupported().length === 0, 'lintel supported');
+    T.ok(S.release(0).length === 1, 'one pillar gone keeps lintel');
+    T.ok(S.release(1).length === 2, 'second pillar drops lintel');
+    // spill to neighbours
+    S = new W.Structure([cube([0, 0.5, 0]), cube([1, 0.5, 0]), cube([2, 0.5, 0])]);
+    T.ok(S.hit(1, S.hp[1] * 5).length === 3, 'excess force reaches neighbours');
+    S = new W.Structure([cube([0, 0.5, 0]), cube([1, 0.5, 0]), cube([2, 0.5, 0])]);
+    T.ok(S.hit(1, S.hp[1] * 1.5).length === 1, 'small excess stays local');
+    S = new W.Structure([cube([0, 0.5, 0])], 2);
+    T.near(S.hp[0], W.MATERIALS.stone.strength * 2, 1e-6, 'strength scale');
+
+    // assets
+    for (const name of Object.keys(W.assets)) {
+      const asset = W.assets[name].build();
+      const blocks = asset.blocks;
+      const tag = name + ': ';
+      T.ok(blocks.length >= 100 && blocks.length <= 2500, tag + 'block count ' + blocks.length);
+      T.ok(blocks.every(b => b.p.every(Number.isFinite) && b.s.every(x => Number.isFinite(x) && x > 0) && b.q.every(Number.isFinite)), tag + 'finite');
+      T.ok(blocks.every(b => W.MATERIALS[b.mat]), tag + 'materials known');
+      const st = new W.Structure(blocks);
+      T.ok(st.aabbs.every(ab => ab.min[1] >= -0.01), tag + 'nothing below ground');
+      let lonely = 0, overlaps = 0, asym = 0;
+      for (let i = 0; i < blocks.length; i++) {
+        if (st.bonds[i].length === 0) lonely++;
+        for (const j of st.bonds[i]) {
+          if (!st.bonds[j].includes(i)) asym++;
+          if (j > i && W.obbOverlap(blocks[i], blocks[j], 0.02)) { overlaps++; if (overlaps <= 3) console.log(tag + 'overlap ' + i + ' ' + JSON.stringify(blocks[i].p) + ' / ' + j + ' ' + JSON.stringify(blocks[j].p)); }
+        }
+      }
+      T.ok(lonely === 0, tag + 'lonely blocks ' + lonely);
+      T.ok(asym === 0, tag + 'bond symmetry');
+      T.ok(overlaps === 0, tag + 'interpenetrations ' + overlaps);
+      const un = st.unsupported();
+      if (un.length) console.log(tag + 'unsupported e.g. ' + un.slice(0, 5).map(i => JSON.stringify(blocks[i].p)).join(' '));
+      T.ok(un.length === 0, tag + 'unsupported blocks ' + un.length);
+      T.ok(asset.radius > 0 && asset.craneStart.pos.length === 3, tag + 'meta');
+    }
+
+    console.log('WreckTests: ' + pass + ' passed, ' + fail + ' failed');
+    return fail === 0;
+  },
+};
+</script>
+<script type="module">
+// (page script, Task 5)
+</script>
+</body>
+</html>
