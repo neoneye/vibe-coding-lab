@@ -4,6 +4,12 @@ A collection of browser-based experiments. Unfinished, undocumented, weird stuff
 
 ## Experiments
 
+### 3D Stair Dismount
+
+A homage to Porrasturvat's Stair Dismount. A ragdoll stands on top of a straight flight, a dogleg, a spiral or a long walled staircase. Click a spot on the body, aim the arrow, choose the force and push; every impact on the way down scores, head hits most. Retry replays the exact push. Three.js + Rapier.
+
+![3d-stair-dismount](3d-stair-dismount/screenshot1.jpg)
+
 ### 3D Wrecking Ball
 
 Swing a crane-hung wrecking ball into a stone castle, a Mesoamerican pyramid, a wooden Trojan horse or a red-brick apartment block, all generated block by block. A mortar-bond model cracks blocks loose under impact and drops whatever loses its footing. Grab the ball with the mouse, drive the crane with the keys. Three.js + Rapier.

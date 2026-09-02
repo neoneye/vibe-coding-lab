@@ -24,11 +24,11 @@ Metres, Y up, kilograms. The top landing of every staircase is where the figure 
 
 ### Staircases (`Dismount.stairs.<name>.build()` → `{ name, boxes, landing, down, radius, floorY }`)
 
-A box is `{ p:[x,y,z], s:[sx,sy,sz], yaw, kind:'step'|'landing'|'floor'|'wall'|'post' }` with `p` the centre, `s` the full size, `yaw` a rotation about Y. `landing` is `{ p:[x,y,z], w, d }`: the standing point (centre of the top landing surface) and its width and depth. `down` is a unit vector in the XZ plane pointing from the landing down the first flight. `radius` is the footprint radius for camera placement. `floorY` is the ground level (0).
+Solids are boxes `{ shape:'box', p:[x,y,z], s:[sx,sy,sz], yaw, kind }`, cylinders `{ shape:'cyl', p, r, h, kind }` and wedges `{ shape:'wedge', cx, cz, r0, r1, a0, ang, y, t, kind }` (annular sector, azimuth from +Z towards +X, top surface at `y`), with `kind` one of `'step'|'landing'|'floor'|'wall'|'post'`. `Dismount.supportHeight(stairs, x, z)` returns the highest walkable surface under a point; the tests use it to prove the landing is the top and that the first step meets the landing edge. `landing` is `{ p:[x,y,z], w, d }`: the standing point (centre of the top landing surface) and its width and depth. `down` is a unit vector in the XZ plane pointing from the landing down the first flight. `radius` is the footprint radius for camera placement. `floorY` is the ground level (0).
 
 - **Straight.** Fourteen steps, 1.4 m wide, rise 0.18 m, tread 0.28 m, a 1.6 × 1.4 m landing on top, a floor slab. Solid stair: each step box runs from its tread down to the floor so there is no hollow underside.
 - **Dogleg.** Eight steps down to a 1.6 × 3.0 m half landing, a 180° turn, eight more steps back the other way. A 0.2 m thick wall separates the two flights, and a newel post stands at the turn.
-- **Spiral.** Twenty wedge steps around a 0.3 m column, outer radius 1.9 m, 18° per step, rise 0.19 m. Each wedge is approximated by a yawed box whose depth is the tread at mid-radius, overlapping its neighbours slightly; steps are 0.12 m thick plates on a hidden column so the spiral has open air below the treads.
+- **Spiral.** Twenty wedge steps around a 0.3 m column, outer radius 1.9 m, 18° per step, rise 0.19 m, one full turn. Wedges are true annular sectors (`shape:'wedge'`, eight vertices from `Dismount.wedgeVertices`) rendered as flat-shaded meshes and simulated as Rapier convex hulls. The landing is a wider 40° wedge just before the first step, so the figure stands on the same kind of plate; `down` is the tangent at the landing's midpoint. Steps are 0.12 m thick plates with open air below them.
 - **Long.** Thirty steps, 1.2 m wide, rise 0.2 m, tread 0.25 m, low 0.9 m side walls on both sides so the figure keeps bouncing between them.
 
 ### Ragdoll (`Dismount.ragdoll.build(height=1.8)` → `{ parts, joints, mass }`)
@@ -41,18 +41,22 @@ Fifteen `parts`, each `{ name, shape:'capsule'|'box'|'ball', dims, mass, p, q, w
 
 ### Scoring (`Dismount.score`)
 
-`impactPoints(weight, force, dt)` = `weight · max(0, force − 400) · dt / 40`. A 75 kg figure resting on the floor never exceeds the 400 N threshold on any single bone, so resting scores nothing; a head-first hit at 3 m/s on a step lasts a few steps at several kN and scores in the hundreds. `partColour(damage)` maps accumulated damage to a bruise tint (skin → red → purple) saturating at 500 points.
+`impactPoints(weight, force, dt)` = `weight · max(0, force − 400) · dt / 2`. A 75 kg figure resting on the floor never exceeds the 400 N threshold on any single bone, so resting scores nothing; a head-first dive down the straight flight scores about 1 000 to 2 000 points in total, the long flight around 2 500. `partColour(damage)` maps accumulated damage to a bruise tint (skin → red → purple) saturating at 500 points.
 
-`pushImpulse(percent)` = `40 + 5.6 · percent` N·s (percent 0 … 100), so full force moves a 75 kg body at about 8 m/s.
+`pushImpulse(percent)` = `15 + 3 · percent` N·s (percent 0 … 100), so full force moves a 75 kg body at about 4 m/s. Stronger pushes (the first draft used 600 N·s) launch the figure clean over the staircase, which is no fun.
 
 `dismountOver(speeds, dt)` accumulates rest time: returns true once every bone has moved slower than 0.08 m/s for 1.5 s, or after 25 s of simulation.
 
 ### Tests (`DismountTests.run()`, run by `test.mjs`)
 
-- Every staircase: all values finite and sizes positive, nothing below the floor, the landing is the highest surface, steps descend monotonically along the flight, the landing's down edge sits at the first step, footprint radius covers every box, and (except the spiral) no two step boxes overlap.
+- Every staircase: all values finite and sizes positive, nothing below the floor, the landing is the highest surface, steps descend monotonically along the flight, the landing's down edge sits at the first step (via `supportHeight`), footprint radius covers every solid, and no two steps overlap (AABB for boxes, disjoint azimuth ranges for wedges).
 - Ragdoll at 1.8 m and 1.5 m: fifteen parts, mass 60 … 90 kg scaled, every joint's anchors coincide within 1 mm in world space, feet bottoms at y = 0 within 5 mm, head is the highest part, no two non-jointed parts overlap (AABB test), weights present and positive.
 - `place` on each staircase puts the feet on the landing surface, facing `down`.
 - Scoring: zero below threshold, linear above, head outscores foot for the same force, `pushImpulse` endpoints, `dismountOver` fires after 1.5 s of rest and not before, and fires at the 25 s cap.
+
+## Implementation note
+
+The `rapier3d-compat` 0.20 bundle ships two copies of its joint class hierarchy; the one `createImpulseJoint` returns has an empty `SphericalImpulseJoint` wrapper without motor methods. Spherical motors are therefore configured through `joint.rawSet.jointConfigureMotorModel(handle, axis, model)` and `jointConfigureMotorPosition(handle, axis, target, stiffness, damping)`. Motors use the acceleration-based model, so one stiffness figure serves hands and thighs alike: stiffness `420·(1−limpness)²·rel`, damping `(2 + 28·(1−limpness))·√rel`.
 
 ## Page
 
@@ -60,7 +64,7 @@ Full-screen canvas, dark collapsible card panel top-left like the Wrecking Ball 
 
 **Stairs card.** Four buttons (Straight, Dogleg, Spiral, Long), Reset. Switching rebuilds the world and the figure.
 
-**Push card.** Readout of the selected part and push point. Sliders: direction (azimuth −180 … 180°, elevation −60 … 60°, both relative to the down-stairs direction), force 0 … 100 % (default 60), limpness 0 … 1 (default 0.35). Buttons: *Push* (space), *Retry* (R: reset and replay the last push), *Reset* (Esc). Default target is the chest, pushed straight down the stairs.
+**Push card.** Readout of the selected part and push point. Sliders: direction (azimuth −180 … 180°, elevation −60 … 60°, both relative to the down-stairs direction), force 0 … 100 % (default 50), limpness 0 … 1 (default 0.35). Buttons: *Push* (space), *Retry* (R: reset and replay the last push), *Reset* (Esc). Default target is the chest, pushed straight down the stairs.
 
 **Score card.** Total, per-part breakdown sorted by damage, best score for this staircase (kept in `localStorage`, wrapped in try/catch), state line: *Aim*, *Falling…*, *Dismount over*.
 
