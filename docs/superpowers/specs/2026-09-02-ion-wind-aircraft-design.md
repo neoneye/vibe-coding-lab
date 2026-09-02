@@ -67,3 +67,13 @@ Inputs: aircraft mass (0.5–5 kg, default 2.5), voltage and gap (shared with se
 ## Out of scope
 
 Real 2-D electrostatics, ozone chemistry, battery modelling, control surfaces, a 3-D view.
+
+## Addendum (same day): section 5, the high-voltage supply
+
+Owner asked how such voltages are produced and whether the battery or a solar panel can be on board. Added between the wire calculator and the notes (notes become section 6):
+
+- **Canvas:** the three-stage chain MIT flew: battery pack (54 cells, 200 V DC) → series–parallel resonant inverter (fast AC) → small step-up transformer (1 : 10, ±2 kV peak) → five-rung Cockcroft–Walton multiplier (+4 kV per rung → +20 kV) → emitter wires. Animated charge dots: DC flow, AC slosh, packets climbing the ladder one rung per half-cycle. Note that a mirrored ladder makes the −20 kV side.
+- **Text:** why not one big transformer (ratio and insulation weight), high frequency shrinks the transformer, the ladder is diodes and capacitors, ~13 mA total so wires are thin but insulation (≈3 kV/mm in air) drives the layout, converter ≈ 0.5 kg for 600 W.
+- **Battery card:** slider for pack mass (default 0.27 kg), `batteryEnergyWh = mass · 130 Wh/kg`, endurance at full thrust for the plane and drone from the section-4 power numbers.
+- **Solar card:** sliders for panel area (default 2 m², the wing's upper surface) and sunlight (default 1000 W/m²), `solarPower = area · irradiance · 0.22`, shown as watts and as a percentage of what the plane and drone need, plus panel mass at 0.5 kg/m². Verdict on the card: plane marginal (noon, clear sky, panel weight, launch battery), drone no.
+- Five new tests cover the three functions and the MIT pack calibration.
