@@ -24,7 +24,7 @@ Units are metres, Y up, ground plane at `y = 0`. A block is
 
 `p` centre, `s` full size, `q` unit quaternion (identity when omitted; helpers `Wreck.qYaw(a)`, `Wreck.qRoll(a)`, `Wreck.qPitch(a)`), `tint` a per-block colour jitter in 0..1.
 
-Materials (`Wreck.MATERIALS`): density in kg/m³, `strength` in kN for a 1 m³ block, and a base colour: stone 2 400 / 160 / warm grey; brick 1 800 / 90 / red; wood 600 / 45 / tan; slab (concrete floors) 2 400 / 200 / pale grey; roof (slate) 2 000 / 60 / blue-grey.
+Materials (`Wreck.MATERIALS`): density in kg/m³, `strength` in kN for a 1 m³ block, `reach` in metres (how far an impact force travels through the material before decaying by 1/e) and a base colour: stone 2 400 / 160 / 1.5 / warm grey; brick 1 800 / 90 / 1.3 / red; wood 600 / 100 / 0.6 / tan; slab (concrete floors) 2 400 / 200 / 0.6 / pale grey; roof (slate) 2 000 / 60 / 1.5 / blue-grey. A block may carry `tough`, a multiplier on its hit points for massive timbers (the horse's sled beams and cradle).
 
 ### Geometry helpers
 
@@ -38,8 +38,8 @@ Materials (`Wreck.MATERIALS`): density in kg/m³, `strength` in kN for a 1 m³ b
 Block budget ≤ 2 500 per asset. `radius` is the footprint radius used for camera and crane placement; `craneStart` is the crane base position and heading.
 
 - **Castle.** 24 × 24 m. Four curtain walls 7 m high of 1.5 × 0.6 × 1.2 m stone in running bond, ending where the towers begin, merlons (0.8 m) on top, a 3 m wide, 4 m high gate in the front wall with a lintel. Four round corner towers, radius 3 m, 10 m high, 12 blocks per ring, crenellated, capped by a stepped cone of shrinking `roof` rings. A central keep 8 × 8 × 12 m with a door and crenellations. About 2 300 blocks.
-- **Pyramid.** Seven stepped tiers on a 30 × 30 m base, each tier 2.4 m high and inset 1.5 m. Tier faces are three courses of 1.5 × 0.8 × 0.9 m stone; the interior is filled with 3 × 2.4 × 3 m core blocks so the pyramid is solid but cheap. A 4 m wide stairway of single-block steps (0.3 m rise, 0.4 m tread) climbs the front face between two balustrades. A 6 × 6 m temple with a door and a flat slab roof stands on the summit. About 1 700 blocks.
-- **Trojan horse.** All wood. A plank sled (8 × 4 m deck of eight planks on four cross-beams) on four cylinder wheels. Four legs, each a 2 × 2 column of 0.8 × 0.6 × 0.8 m timbers, 3.6 m tall. A barrel body 6 m long, radius 2.2 m: 18 longitudinal staves around three hoop rings (`ring` with a roll), closed by plank end caps trimmed to the circle. A neck of six leaning timbers rising forward from the front top, a plank head with ears and snout, and a few plank tail boards. About 350 blocks.
+- **Pyramid.** Seven stepped tiers on a 30 × 30 m base, each tier 2.4 m high and inset 1.5 m. Tier faces are three courses of 1.5 × 0.8 × 0.9 m stone; the interior is filled with 3 × 2.4 × 3 m core blocks so the pyramid is solid but cheap. A 4 m wide stairway of single-block steps (0.3 m rise, 0.19 m tread, matching the tier slope) climbs the front face; each step block runs back to the tier face behind it. A 6 × 6 m temple with a door and a flat slab roof stands on the summit. About 1 700 blocks.
+- **Trojan horse.** All wood. A plank sled (8 × 4 m deck of eight planks on two cross-beams) on four cylinder wheels. Four legs, each a 2 × 2 column of 0.8 × 0.6 × 0.8 m timbers, 3.6 m tall, carrying one wide cradle plank. A barrel body 6 m long, radius 2.2 m: 18 longitudinal staves resting on the cradle, three rib rings inside the barrel, closed by plank end caps trimmed to the circle. A neck of six leaning timbers rising forward from the barrel top, a plank head with ears, and three tail boards stepping up and back. About 210 blocks. The crane starts in front of a leg.
 - **Apartment.** 16 × 10 m footprint, six storeys of 3 m. Walls of 1.0 × 0.33 × 0.3 m brick units in running bond (`wallCourses`) with 1.2 × 1.5 m windows on a 2 m grid on every façade, lintels above, a ground-floor door, and a 0.6 m roof parapet. Each floor is a slab of eight 4 × 0.25 × 5 m concrete plates resting on the walls (interior columns of brick at the two slab seams so the plates are supported). About 2 100 blocks.
 
 Cylinders (`shape:'cyl'`, axis local Y, then rotated) exist only for the horse's wheels.
@@ -51,7 +51,7 @@ Cylinders (`shape:'cyl'`, axis local Y, then rotated) exist only for the horse's
 - **Bonds.** Two blocks are bonded when their AABBs, expanded by 6 cm, overlap. Built with a spatial hash; symmetric adjacency lists.
 - **Support.** A block is supported when its AABB bottom is within 6 cm of the ground, or when it is bonded to an intact block whose centre is at least a tenth of the upper block's height lower than its own centre. Lintels rest on their end blocks, barrel staves rest on the staves below them, an arch left by a hole in a wall keeps standing.
 - **Hit points.** `hp = strength(mat) · strengthScale · cbrt(volume)`.
-- **`hit(index, forceKN)`** on an intact block: if `force < hp`, the block keeps `damage += force` (visual only, darker tint) and returns `[]`. Otherwise the block is released, and half the excess `force − hp` is split equally among its intact bonded neighbours and applied recursively as further hits (a crater rather than a single pin-prick). Finally `cascade()` releases every intact block that is no longer supported, breadth-first from the released ones. Returns the list of newly released indices.
+- **`hit(index, forceKN)`** on an intact block: if `force < hp`, the block records `damage = max(damage, force)` (visual only, darker tint) and returns `[]`. Otherwise the block is released and the force travels on along its bonds, multiplied by `exp(−d / reach)` for the distance `d` to each neighbour, breaking every block it still exceeds (a crater whose size grows with the logarithm of the force, independent of block size). Finally the cascade releases every intact block that is no longer supported, breadth-first from the released ones. Returns the list of newly released indices.
 - **`unsupported()`** returns intact blocks that fail the support rule; every freshly built asset must return an empty list, which is the structural test that assets stand.
 
 ### Tests (`WreckTests.run()`, run by `test.mjs`)
@@ -68,7 +68,7 @@ Full-screen canvas with the dark collapsible card panel top-left, like the Eiffe
 
 **Target card.** Four asset buttons, block count, Reset. Switching assets rebuilds the physics world.
 
-**Ball card.** Sliders: mass (0.5..10 t), radius (0.5..1.5 m), cable length (4..20 m). Space bar or *Shove* button applies an impulse from the ball towards the structure centre.
+**Ball card.** Sliders: mass (0.5..10 t, default 3), radius (0.5..1.5 m), cable length (4..20 m, default 12). The boom starts at 40° so the ball hangs at wall height. Space bar or *Shove* button applies an impulse from the ball towards the structure centre.
 
 **Crane card.** Key hints: `←` `→` turn tracks, `↑` `↓` drive, `A` `D` slew, `W` `S` luff the boom, `Q` `E` hoist. Readout of boom angle and hook height. Sliders mirror slew and luff for mouse users.
 
@@ -81,9 +81,9 @@ Full-screen canvas with the dark collapsible card panel top-left, like the Eiffe
 ## Physics plan
 
 - Rapier world, gravity −9.81, timestep 1/60 scaled by the slow-motion factor, one step per rendered frame (cap two steps when the frame is late). Solver iterations 8.
-- Every block gets its own rigid body, created **fixed**, with a cuboid (or cylinder) collider: density from the material, friction 0.6, restitution 0.05, `CONTACT_FORCE_EVENTS` active with a threshold of 20 kN so resting contacts stay silent.
-- The ball is a dynamic ball collider whose density is set from the mass slider. The hook is a kinematic position-based body at the boom tip. A **rope joint** of the cable length connects hook and ball; changing the length recreates the joint. Linear damping 0.05 on the ball.
-- Per step: drain contact force events. For each event where either collider is an intact block, call `structure.hit(index, force / 1000)`; every returned index has its body switched to dynamic (`setBodyType(Dynamic, true)`). Released debris that falls below y = −10 is removed from the world and hidden.
+- Every block gets its own rigid body, created **fixed**, with a cuboid (or cylinder) collider: density from the material, friction 0.6, restitution 0.05, `CONTACT_FORCE_EVENTS` active with a threshold of 30 kN so resting contacts stay silent.
+- The ball is a dynamic ball collider with continuous collision detection, whose density is set from the mass slider. The hook is a kinematic position-based body at the boom tip. A **rope joint** of the cable length connects hook and ball; changing the length recreates the joint. Linear damping 0.05 on the ball.
+- Per step: record the ball's velocity, step, then drain contact force events into a list and apply them **strongest first** (otherwise a weak event can release a block through spill before the big event that actually struck it is seen). Each intact block hit gets `structure.hit(index, force / 1000)`; every returned index has its body switched to dynamic. Blocks freed by a ball contact inherit the ball's pre-impact velocity, fading with distance from the ball, and the ball keeps about half of that velocity, because the solver resolved the impact against fixed bodies and would otherwise leave the freed stones resting in place and the ball bouncing off. Released debris that falls below y = −10 is removed from the world and hidden.
 - Crane: base position and heading are integrated from the drive keys; slew, luff and hoist are angles and a length. The hook target is the boom tip, moved with `setNextKinematicTranslation` and smoothed so the ball is not yanked.
 
 ## Rendering plan
@@ -96,5 +96,5 @@ Full-screen canvas with the dark collapsible card panel top-left, like the Eiffe
 ## Testing and verification
 
 - `node test.mjs` runs `WreckTests`.
-- Headless Chrome (plain `--headless=new`, no swiftshader) loads the page through a local http server (Rapier's WASM is inlined so file:// also works, but http is the safe path), uses the `window.__wreck` debug handle to shove the ball and step the world synchronously, and checks the canvas is non-blank, some blocks were released and there are no console errors.
+- Headless Chrome (plain `--headless=new`, no swiftshader) loads a temporary copy of the page through a local http server with an appended module script that awaits `window.__wreckReady`, shoves the ball and steps the world synchronously through the `window.__wreck` handle, writes the released count into the document title (read back with `--dump-dom`) and is captured with `--screenshot`.
 - Screenshot for the gallery: the castle a second or two after the first impact.

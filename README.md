@@ -4,6 +4,12 @@ A collection of browser-based experiments. Unfinished, undocumented, weird stuff
 
 ## Experiments
 
+### 3D Wrecking Ball
+
+Swing a crane-hung wrecking ball into a stone castle, a Mesoamerican pyramid, a wooden Trojan horse or a red-brick apartment block, all generated block by block. A mortar-bond model cracks blocks loose under impact and drops whatever loses its footing. Grab the ball with the mouse, drive the crane with the keys. Three.js + Rapier.
+
+![3d-wrecking-ball](3d-wrecking-ball/screenshot1.jpg)
+
 ### 3D Eiffel Tower Assembly
 
 Watch the Eiffel Tower rise from the foundation pits of January 1887 to the flag of March 1889. Timeline scrubber with dated milestones, timber falsework and creeper cranes at the build frontier, free orbit camera with presets, and sunny / rainy / windy weather. Three.js.
