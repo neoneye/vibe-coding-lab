@@ -221,6 +221,9 @@ const Pulley = {
 
   // Damped pendulum about the hook tip, pushed by the wind. Semi-implicit
   // Euler in sub-steps. Sets `fallen` once the swing passes FALL_ANGLE.
+  // Angle convention matches the canvas (y down, positive = clockwise), so a
+  // positive theta swings the load to the LEFT; wind blows toward +x, hence
+  // the minus sign on its term. swingOffsetX() gives the rightward offset.
   swingStep(sw, dt, windMs, load) {
     if (sw.fallen) return sw;
     const Lp = Pulley.pendulumLength(load), m = load.kg;
@@ -228,7 +231,7 @@ const Pulley = {
     for (let k = 0; k < n; k++) {
       sw.t += h;
       const F = Pulley.windForce(windMs, load, sw.t);
-      const acc = -(Pulley.G / Lp) * Math.sin(sw.theta) + (F / (m * Lp)) * Math.cos(sw.theta) - Pulley.SWING_DAMPING * sw.omega;
+      const acc = -(Pulley.G / Lp) * Math.sin(sw.theta) - (F / (m * Lp)) * Math.cos(sw.theta) - Pulley.SWING_DAMPING * sw.omega;
       sw.omega += acc * h;
       sw.theta += sw.omega * h;
       if (Math.abs(sw.theta) > Pulley.FALL_ANGLE) { sw.fallen = true; break; }
@@ -236,13 +239,17 @@ const Pulley = {
     return sw;
   },
 
+  // horizontal offset of the load's bottom from the hook, positive = right
+  swingOffsetX(sw, load) { return -Pulley.pendulumLength(load) * Math.sin(sw.theta); },
+
   // Called once when the sling slips: the load's frame (origin at the sling
   // top, y down the load) leaves the pivot with the pendulum's tangential
-  // velocity and keeps spinning.
+  // velocity and keeps spinning. The bottom sits at Lp*(-sin t, cos t), so
+  // its velocity is Lp*omega*(-cos t, -sin t).
   detach(sw, pivotX, pivotY, load) {
     const Lp = Pulley.pendulumLength(load), vt = Lp * sw.omega;
     sw.fx = pivotX; sw.fy = pivotY;
-    sw.fvx = vt * Math.cos(sw.theta); sw.fvy = vt * Math.sin(sw.theta);
+    sw.fvx = -vt * Math.cos(sw.theta); sw.fvy = -vt * Math.sin(sw.theta);
     sw.fang = sw.theta; sw.fspin = sw.omega;
     sw.landed = false;
     return sw;
@@ -524,6 +531,11 @@ const PulleyTests = {
       }
       assert(a.fallen && fellAt < 15, "bucket falls in a storm, at " + fellAt);
       assert(!b.fallen && Math.abs(b.theta) < 0.2, "car barely moves in a storm");
+      assert(Pulley.swingOffsetX(b, car) > 0, "wind blows toward +x, so the load is pushed to the right");
+      const crate = Pulley.LOADS.find((l) => l.id === "crate"), d = Pulley.swingInit(0);
+      let mean = 0; // average over seconds 4-8 so a gust lull does not skew it
+      for (let i = 0; i < 60 * 8; i++) { Pulley.swingStep(d, 1 / 60, 15, crate); if (i >= 240) mean += Pulley.swingOffsetX(d, crate) / 240; }
+      assert(mean > 0.01 && !d.fallen, "crate leans downwind (right) on average: " + mean.toFixed(3));
       // a breeze does not knock the bucket off
       const c = Pulley.swingInit(1.2);
       for (let i = 0; i < 60 * 20; i++) Pulley.swingStep(c, 1 / 60, 6, bucket);
@@ -532,9 +544,10 @@ const PulleyTests = {
 
     test("fall: lands on the floor and settles", () => {
       const load = Pulley.LOADS.find((l) => l.id === "barrel");
-      const sw = Pulley.swingInit(0); sw.theta = 0.95; sw.omega = 2.0; sw.fallen = true;
+      // swung far to the right (negative theta) and still moving right: it flies off up and to the right
+      const sw = Pulley.swingInit(0); sw.theta = -0.95; sw.omega = -2.0; sw.fallen = true;
       Pulley.detach(sw, 2.0, 2.5, load);
-      assert(sw.fvx > 0 && sw.fvy > 0 && Math.abs(sw.fang - 0.95) < 1e-9, "leaves with tangential velocity");
+      assert(sw.fvx > 0 && sw.fvy < 0 && Math.abs(sw.fang + 0.95) < 1e-9, "leaves with tangential velocity, downwind");
       for (let i = 0; i < 60 * 4; i++) Pulley.fallStep(sw, 1 / 60, 0, load, 4.9);
       assert(sw.landed, "landed");
       assert(Math.abs(sw.fy + Pulley.dropExtent(load, sw.fang) - 4.9) < 1e-6, "rests on the floor");
