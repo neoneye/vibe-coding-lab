@@ -270,17 +270,34 @@ const Pulley = {
     return sw;
   },
 
-  // lowest point of the load's box below its frame origin, for a given tilt
-  dropExtent(load, ang) { return load.h * Math.abs(Math.cos(ang)) + (load.w / 2) * Math.abs(Math.sin(ang)); },
+  // Lowest point of the load's box below its frame origin (the sling apex at
+  // the top centre of the box) for a given tilt: the corners are (+-w/2, 0)
+  // and (+-w/2, h), so the drop is (w/2)|sin a| + max(0, h cos a).
+  dropExtent(load, ang) { return (load.w / 2) * Math.abs(Math.sin(ang)) + Math.max(0, load.h * Math.cos(ang)); },
+
+  // The orientation a load settles into on the floor, nearest to its current
+  // angle: upright or upside down for everything, on its side only for loads
+  // at least 0.7 as tall as they are wide (a flat pallet cannot balance on
+  // its edge).
+  FLOOR_FRICTION: 0.5,
+  restAngle(load, ang) {
+    const cands = [0, Math.PI, -Math.PI];
+    if (load.h >= 0.7 * load.w) cands.push(Math.PI / 2, -Math.PI / 2);
+    let best = 0, bestD = Infinity;
+    for (const c of cands) { const d = Math.atan2(Math.sin(ang - c), Math.cos(ang - c)); if (Math.abs(d) < bestD) { bestD = Math.abs(d); best = ang - d; } }
+    return best;
+  },
 
   fallStep(sw, dt, windMs, load, floorY) {
     sw.t += dt;
     if (sw.landed) {
-      // settle onto the floor: upright if it landed nearly upright, else on its side
-      const rest = Math.abs(sw.fang) < 0.6 ? 0 : Math.sign(sw.fang) * Math.PI / 2;
-      sw.fang += (rest - sw.fang) * Math.min(1, dt * 6);
-      sw.fy = floorY - Pulley.dropExtent(load, sw.fang);
+      // wind on the floor: it skids once the push beats friction, and tumbles while skidding fast
+      const push = Pulley.windForce(windMs, load, sw.t) - Pulley.FLOOR_FRICTION * load.kg * Pulley.G;
+      if (push > 0) sw.fvx += (push / load.kg) * dt;
       sw.fvx *= Math.max(0, 1 - dt * 4); sw.fx += sw.fvx * dt;
+      if (Math.abs(sw.fvx) > 0.8) sw.fang += (sw.fvx / Math.max(load.w, load.h)) * dt;
+      else sw.fang += (Pulley.restAngle(load, sw.fang) - sw.fang) * Math.min(1, dt * 6);
+      sw.fy = floorY - Pulley.dropExtent(load, sw.fang);
       return sw;
     }
     sw.fvy += Pulley.G * dt;
@@ -626,8 +643,30 @@ const PulleyTests = {
       for (let i = 0; i < 60 * 4; i++) Pulley.fallStep(sw, 1 / 60, 0, load, 4.9);
       assert(sw.landed, "landed");
       assert(Math.abs(sw.fy + Pulley.dropExtent(load, sw.fang) - 4.9) < 1e-6, "rests on the floor");
-      assert(Math.abs(Math.abs(sw.fang) - Math.PI / 2) < 0.05, "a barrel that came off sideways lies on its side");
+      assert(Math.abs(Math.sin(2 * sw.fang)) < 0.05, "a barrel comes to rest flat, on its side or upside down: " + sw.fang.toFixed(2));
+      const side = Pulley.swingInit(0); side.fallen = true; side.landed = true; side.fx = 2; side.fy = 4.9; side.fang = 1.3;
+      for (let i = 0; i < 60 * 2; i++) Pulley.fallStep(side, 1 / 60, 0, load, 4.9);
+      assert(Math.abs(side.fang - Math.PI / 2) < 0.02, "a tall barrel tipped past 45 degrees lies on its side");
       assert(Pulley.windName(0) === "calm" && Pulley.windName(30) === "storm", "wind names");
+      assert(Pulley.dropExtent(load, 0) === load.h && Math.abs(Pulley.dropExtent(load, Math.PI)) < 1e-9 && Math.abs(Pulley.dropExtent(load, Math.PI / 2) - load.w / 2) < 1e-9, "drop extent per orientation");
+    });
+
+    test("fall: a flat pallet lands flat, and a light one is carried by a storm", () => {
+      const gold = Pulley.LOADS.find((l) => l.id === "gold");
+      const flat = (ang) => { const a = Pulley.restAngle(gold, ang); return Math.abs(Math.sin(a)) < 1e-9; };
+      assert(flat(1.2) && flat(-1.4) && flat(2.0), "pallet never rests on its edge");
+      assert(Math.abs(Pulley.restAngle(gold, 0.3)) < 1e-9 && Math.abs(Math.abs(Pulley.restAngle(gold, 2.9)) - Math.PI) < 1e-9, "nearest of upright / upside down");
+      // empty pallet (4 kg) on the floor in a storm skids downwind; the car does not budge
+      const light = { kg: 4, w: gold.w, h: gold.h }, car = Pulley.LOADS.find((l) => l.id === "car");
+      const a = Pulley.swingInit(0); a.fallen = true; a.landed = true; a.fx = 2; a.fy = 4.9 - gold.h; a.fang = 0;
+      const b = Pulley.swingInit(0); b.fallen = true; b.landed = true; b.fx = 2; b.fy = 4.9 - car.h; b.fang = 0;
+      for (let i = 0; i < 60 * 3; i++) { Pulley.fallStep(a, 1 / 60, Pulley.WIND_MAX, light, 4.9); Pulley.fallStep(b, 1 / 60, Pulley.WIND_MAX, car, 4.9); }
+      assert(a.fx > 3 && Math.abs(a.fang) > 0.5, "empty pallet carried off and tumbling: x=" + a.fx.toFixed(1));
+      assert(Math.abs(b.fx - 2) < 1e-9, "car stays put");
+      // in calm air the same pallet just settles flat
+      const c = Pulley.swingInit(0); c.fallen = true; c.landed = true; c.fx = 2; c.fy = 4.9; c.fang = 2.8;
+      for (let i = 0; i < 60 * 2; i++) Pulley.fallStep(c, 1 / 60, 0, light, 4.9);
+      assert(Math.abs(Math.abs(c.fang) - Math.PI) < 0.02 && Math.abs(c.fy - 4.9) < 1e-6, "lands upside down, origin on the floor");
     });
 
     test("droplets ride the wind", () => {
