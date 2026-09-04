@@ -538,20 +538,20 @@ function drawBlocks(c) {
   g.xB.forEach((x, j) => drawSheave(x, g.yB, g.r, -angle, j < rt.usedBottom));
 }
 
-// The rope as a dense polyline from the anchor, through every sheave, to the
-// hand and on into the loose tail. Used for both the stroke and the texture.
+// The rope as dense polylines: `run` from the anchor, through every sheave,
+// to the hand; `tail` from the hand into the loose end. Used for both the
+// stroke and the texture.
 function ropeSamples(c) {
   const { path, g, s } = c;
-  const pts = [], step = 0.01;
-  const push = (x, y) => pts.push({ x, y });
+  const run = [], tail = [], step = 0.01;
   for (let i = 0; i < path.segs.length; i++) {
     const sg = path.segs[i];
     const len = Math.hypot(sg.x2 - sg.x1, sg.y2 - sg.y1), n = Math.max(1, Math.ceil(len / step));
-    for (let k = i === 0 ? 0 : 1; k <= n; k++) push(sg.x1 + (sg.x2 - sg.x1) * k / n, sg.y1 + (sg.y2 - sg.y1) * k / n);
+    for (let k = i === 0 ? 0 : 1; k <= n; k++) run.push({ x: sg.x1 + (sg.x2 - sg.x1) * k / n, y: sg.y1 + (sg.y2 - sg.y1) * k / n });
     const a = path.arcs[i];
     if (a) {
       const d = a.ccw ? -1 : 1, span = Math.abs(a.a1 - a.a0), n2 = Math.max(2, Math.ceil(a.r * span / step));
-      for (let k = 1; k <= n2; k++) { const t = a.a0 + d * span * k / n2; push(a.x + Math.cos(t) * a.r, a.y + Math.sin(t) * a.r); }
+      for (let k = 1; k <= n2; k++) { const t = a.a0 + d * span * k / n2; run.push({ x: a.x + Math.cos(t) * a.r, y: a.y + Math.sin(t) * a.r }); }
     }
   }
   // loose tail beyond the hands (a quadratic curve)
@@ -559,26 +559,32 @@ function ropeSamples(c) {
   const down = c.rt.pullDir === "down";
   const cx = down ? g.hand.x + 0.05 : g.hand.x + 0.3, cy = down ? g.hand.y + 0.35 + stretch : g.hand.y + 0.05;
   const ex = down ? g.hand.x + 0.25 : g.hand.x + 0.35, ey = down ? g.hand.y + 0.55 : g.hand.y + 0.45;
-  for (let k = 1; k <= 40; k++) {
+  for (let k = 0; k <= 40; k++) {
     const t = k / 40, u = 1 - t;
-    push(u * u * g.hand.x + 2 * u * t * cx + t * t * ex, u * u * g.hand.y + 2 * u * t * cy + t * t * ey);
+    tail.push({ x: u * u * g.hand.x + 2 * u * t * cx + t * t * ex, y: u * u * g.hand.y + 2 * u * t * cy + t * t * ey });
   }
-  return pts;
+  return { run, tail };
 }
 
-function drawRope(c) {
-  const pts = ropeSamples(c);
-  const W = 0.05; // rope thickness in metres
-  ctx.lineCap = "round"; ctx.lineJoin = "round";
+const ROPE_W = 0.05; // rope thickness in metres
+
+function strokePolyline(pts) {
   ctx.beginPath();
   ctx.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
   // dark edge under a lighter core gives the rope a round shaded look
-  ctx.strokeStyle = "#8f7748"; ctx.lineWidth = W + 0.02; ctx.stroke();
-  ctx.strokeStyle = "#dcc79c"; ctx.lineWidth = W; ctx.stroke();
-  // twisted strands: slanted ticks that travel with the rope as it is hauled
-  const spacing = 0.075, h = W * 0.55;
-  let phase = c.s.pulledM % spacing, acc = 0, nextS = phase;
+  ctx.strokeStyle = "#8f7748"; ctx.lineWidth = ROPE_W + 0.02; ctx.stroke();
+  ctx.strokeStyle = "#dcc79c"; ctx.lineWidth = ROPE_W; ctx.stroke();
+}
+
+// Twisted strands: slanted ticks at fixed distances along the rope, measured
+// from the polyline's first point. The rope is inextensible, so measuring
+// from the anchor keeps the texture still where the rope is tied off and
+// lets it flow around the sheaves as the blocks move; the tail is measured
+// from the hand so what the figure already holds stays put.
+function strokeStrands(pts) {
+  const spacing = 0.075, h = ROPE_W * 0.55;
+  let acc = 0, nextS = spacing / 2;
   ctx.strokeStyle = "rgba(96, 72, 34, 0.7)"; ctx.lineWidth = 0.018; ctx.lineCap = "butt";
   ctx.beginPath();
   for (let i = 1; i < pts.length; i++) {
@@ -596,6 +602,15 @@ function drawRope(c) {
     acc += len;
   }
   ctx.stroke();
+}
+
+function drawRope(c) {
+  const { run, tail } = ropeSamples(c);
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  strokePolyline(run);
+  strokePolyline(tail);
+  strokeStrands(run);
+  strokeStrands(tail);
   ctx.lineCap = "butt";
   // tension labels on supporting segments
   const each = fmtKg(c.load.kg / c.rt.ma) + " kg";
