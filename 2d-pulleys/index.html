@@ -20,6 +20,14 @@
 
 function fmtKg(x) { return String(Math.round(x * 10) / 10); }
 
+function fitCanvasMetrics(innerW, innerH, dpr, cw, ch) {
+  const s = Math.min(innerW / cw, innerH / ch);
+  const pxW = Math.max(1, Math.round(cw * s * dpr));
+  const pxH = Math.max(1, Math.round(ch * s * dpr));
+  // css size derived from the backing store so 1 backing px = 1 device px
+  return { pxW, pxH, cssW: pxW / dpr, cssH: pxH / dpr, sx: pxW / cw, sy: pxH / ch };
+}
+
 const Pulley = {
   STRENGTH_KG: 50,
   TRAVEL_M: 2.0,
@@ -38,6 +46,43 @@ const Pulley = {
     const ma = 2 * usedBottom + (anchor === "load" ? 1 : 0);
     const pullDir = usedTop >= usedBottom && usedTop > 0 ? "down" : "up";
     return { top, bottom, usedTop, usedBottom, anchor, ma, pullDir, idleTop: top - usedTop, idleBottom: bottom - usedBottom };
+  },
+
+  LOADS: [
+    { id: "bucket", name: "Bucket", kg: 10, w: 0.45, h: 0.45 },
+    { id: "crate", name: "Crate", kg: 40, w: 0.7, h: 0.7 },
+    { id: "anvil", name: "Anvil", kg: 100, w: 0.8, h: 0.5 },
+    { id: "barrel", name: "Barrel", kg: 150, w: 0.7, h: 0.9 },
+    { id: "piano", name: "Piano", kg: 300, w: 1.3, h: 1.0 },
+    { id: "cow", name: "Cow", kg: 400, w: 1.5, h: 1.0 },
+    { id: "car", name: "Car", kg: 1000, w: 2.2, h: 0.9 },
+  ],
+
+  lift(rt, loadKg, strengthKg, pulledM, travelM) {
+    const neededKg = loadKg / rt.ma;
+    const lifts = neededKg <= strengthKg + 1e-9;
+    if (!lifts) return { neededKg, lifts, heightM: 0, pulledM: 0, blocked: false };
+    const heightM = Math.min(Math.max(0, pulledM) / rt.ma, travelM);
+    return { neededKg, lifts, heightM, pulledM: heightM * rt.ma, blocked: heightM >= travelM - 1e-9 };
+  },
+
+  segmentsNeeded(loadKg, strengthKg) { return Math.max(1, Math.ceil(loadKg / strengthKg - 1e-9)); },
+
+  travelFor(rt) { return rt.usedTop === 0 && rt.usedBottom === 0 ? Pulley.HAND_TRAVEL_M : Pulley.TRAVEL_M; },
+
+  rigSentence(rt, loadKg) {
+    const n = rt.ma, each = fmtKg(loadKg / n);
+    if (rt.usedTop === 0 && rt.usedBottom === 0) return `No pulleys: you lift all ${loadKg} kg yourself, straight up.`;
+    if (rt.usedBottom === 0) return `A single fixed pulley only changes the direction of your pull. The load still hangs from one rope, so you still need the full ${loadKg} kg.`;
+    if (n === 2 && rt.usedTop === 0) return `A movable pulley: the load hangs from 2 ropes, each carrying ${each} kg. You pull half the weight, but 2 m of rope for every metre lifted.`;
+    return `The load hangs from ${n} ropes, so each carries ${each} kg. You pull with ${each} kg, but you must pull ${n} m of rope for every metre lifted.`;
+  },
+
+  idleHint(rt) {
+    const word = (k, one, many) => (k > 1 ? many : one);
+    if (rt.idleTop > 0) return `${rt.idleTop} grey ${word(rt.idleTop, "pulley", "pulleys")} on the beam ${word(rt.idleTop, "has", "have")} no rope. Add a pulley to the hook to use ${word(rt.idleTop, "it", "them")}.`;
+    if (rt.idleBottom > 0) return `${rt.idleBottom} grey ${word(rt.idleBottom, "pulley", "pulleys")} on the hook ${word(rt.idleBottom, "has", "have")} no rope. Add a pulley to the beam to use ${word(rt.idleBottom, "it", "them")}.`;
+    return "";
   },
 };
 
@@ -86,6 +131,61 @@ const PulleyTests = {
 
     test("fmtKg", () => {
       assert(fmtKg(50) === "50" && fmtKg(100 / 3) === "33.3" && fmtKg(12.5) === "12.5", "one decimal max");
+    });
+
+    test("lift: within strength", () => {
+      const rt = Pulley.route(1, 1); // 2x
+      const s = Pulley.lift(rt, 100, 50, 1.0, 2.0);
+      assert(s.lifts && near(s.neededKg, 50), "exactly at strength lifts");
+      assert(near(s.heightM, 0.5) && near(s.pulledM, 1.0) && !s.blocked, "1 m pulled lifts 0.5 m");
+    });
+
+    test("lift: two-blocked clamps rope", () => {
+      const rt = Pulley.route(2, 2); // 4x
+      const s = Pulley.lift(rt, 100, 50, 10, 2.0);
+      assert(near(s.heightM, 2.0) && near(s.pulledM, 8.0) && s.blocked, "clamped at travel");
+    });
+
+    test("lift: too heavy", () => {
+      const rt = Pulley.route(1, 0); // 1x
+      const s = Pulley.lift(rt, 100, 50, 3, 2.0);
+      assert(!s.lifts && s.heightM === 0 && s.pulledM === 0 && !s.blocked, "does not move");
+    });
+
+    test("segmentsNeeded", () => {
+      assert(Pulley.segmentsNeeded(300, 50) === 6, "piano needs 6");
+      assert(Pulley.segmentsNeeded(1000, 50) === 20, "car needs 20");
+      assert(Pulley.segmentsNeeded(10, 50) === 1, "bucket needs 1");
+      assert(Pulley.segmentsNeeded(100, 50) === 2, "anvil needs 2 exactly");
+    });
+
+    test("travelFor", () => {
+      assert(near(Pulley.travelFor(Pulley.route(0, 0)), 1.2), "hand lift travel");
+      assert(near(Pulley.travelFor(Pulley.route(1, 0)), 2.0), "rig travel");
+    });
+
+    test("loads ladder", () => {
+      const ids = Pulley.LOADS.map((l) => l.id).join(",");
+      assert(ids === "bucket,crate,anvil,barrel,piano,cow,car", "load order");
+      const kgs = Pulley.LOADS.map((l) => l.kg).join(",");
+      assert(kgs === "10,40,100,150,300,400,1000", "load weights");
+    });
+
+    test("rigSentence and idleHint", () => {
+      assert(/direction/.test(Pulley.rigSentence(Pulley.route(1, 0), 40)), "fixed pulley sentence");
+      assert(/4 ropes/.test(Pulley.rigSentence(Pulley.route(2, 2), 100)), "block and tackle sentence");
+      assert(/yourself/.test(Pulley.rigSentence(Pulley.route(0, 0), 40)), "hand lift sentence");
+      assert(Pulley.idleHint(Pulley.route(2, 2)) === "", "no idle hint");
+      assert(/hook/.test(Pulley.idleHint(Pulley.route(3, 1))), "idle top hint points at hook");
+      assert(/beam/.test(Pulley.idleHint(Pulley.route(0, 3))), "idle bottom hint points at beam");
+    });
+
+    test("canvas metrics: 2x display doubles backing store", () => {
+      const m = fitCanvasMetrics(800, 640, 2, 800, 640);
+      assert(m.pxW === 1600 && m.pxH === 1280 && m.cssW === 800 && m.sx === 2, "doubled");
+      const f = fitCanvasMetrics(1000, 700, 2, 800, 640);
+      const s = Math.min(1000 / 800, 700 / 640);
+      assert(Math.abs(f.cssW - 800 * s) < 1, "fits window");
     });
 
     console.log(`${pass} passed, ${fail} failed`);
