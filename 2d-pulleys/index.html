@@ -272,6 +272,13 @@ const Pulley = {
     return sw;
   },
 
+  // Safety-board wording: hours while under two days, whole days after that.
+  accidentSign(hours) {
+    return hours < 48
+      ? { label: "HOURS SINCE LAST ACCIDENT", value: Math.floor(Math.max(0, hours)) }
+      : { label: "DAYS SINCE LAST ACCIDENT", value: Math.floor(hours / 24) };
+  },
+
   windName(v) { return v === 0 ? "calm" : v < 4 ? "light air" : v < 8 ? "breeze" : v < 14 ? "strong breeze" : v < 21 ? "gale" : "storm"; },
 
   // How much rope runs over each sheave per metre the load rises: the k-th
@@ -524,6 +531,18 @@ const PulleyTests = {
       assert(Pulley.windName(0) === "calm" && Pulley.windName(30) === "storm", "wind names");
     });
 
+    test("accident sign: hours under 48, days after", () => {
+      let a = Pulley.accidentSign(120);
+      assert(a.label === "DAYS SINCE LAST ACCIDENT" && a.value === 5, "5 days at start");
+      a = Pulley.accidentSign(27.9);
+      assert(a.label === "HOURS SINCE LAST ACCIDENT" && a.value === 27, "27 hours");
+      a = Pulley.accidentSign(47.99);
+      assert(a.label.startsWith("HOURS") && a.value === 47, "just under two days stays in hours");
+      a = Pulley.accidentSign(48);
+      assert(a.label.startsWith("DAYS") && a.value === 2, "48 h is 2 days");
+      assert(Pulley.accidentSign(0).value === 0, "fresh accident");
+    });
+
     test("layout: hand and blocks", () => {
       const L = Pulley.L;
       let rt = Pulley.route(2, 2), g = Pulley.layout(rt, 0);
@@ -556,6 +575,8 @@ const $ = (id) => document.getElementById(id);
 
 const state = { top: 4, bottom: 4, loadId: "crate", pulledM: 0, strain: 0, drag: null, holdPull: false, lowering: false, time: 0, wind: 8, swing: Pulley.swingInit(1.2) };
 const HANG_KICK = 1.2; // rad/s nudge when a load is hung, so it visibly sways
+const SIGN_HOURS_PER_S = 1; // the safety board runs at one simulated hour per real second
+state.accidentAt = -120 / SIGN_HOURS_PER_S; // the board opens at 5 days
 const LOWER_M_PER_S = 0.8; // load descent speed while the Lower button is active
 let metrics = fitCanvasMetrics(CW, CH, 1, CW, CH);
 
@@ -855,6 +876,18 @@ function drawLoad(c) {
   }
 }
 
+function drawSign() {
+  const x = 5.35, y = 0.72, w = 1.22, h = 0.86;
+  const sign = Pulley.accidentSign((state.time - state.accidentAt) * SIGN_HOURS_PER_S);
+  const words = sign.label.split(" "); // "HOURS SINCE" / "LAST ACCIDENT"
+  ctx.fillStyle = "#3a3f47"; ctx.fillRect(x + w / 2 - 0.03, L.beamY, 0.06, y - L.beamY); // hanger
+  ctx.fillStyle = "#1f6a3a"; rrect(x, y, w, h, 0.04); ctx.fill();
+  ctx.strokeStyle = "#e9eef3"; ctx.lineWidth = 0.025; rrect(x + 0.04, y + 0.04, w - 0.08, h - 0.08, 0.03); ctx.stroke();
+  text(words.slice(0, 2).join(" "), x + w / 2, y + 0.16, 10.5, "#e9eef3", "center", "700");
+  text(words.slice(2).join(" "), x + w / 2, y + 0.3, 10.5, "#e9eef3", "center", "700");
+  text(String(sign.value), x + w / 2, y + 0.6, 28, "#ffe27a", "center", "800");
+}
+
 function drawWind() {
   const v = state.wind;
   if (v <= 0) return;
@@ -929,6 +962,7 @@ function draw() {
   ctx.clearRect(0, 0, L.sceneW, L.sceneH);
   drawBackground(c);
   drawWind();
+  drawSign();
   drawBlocks(c);
   drawRope(c);
   drawLoad(c);
@@ -1016,7 +1050,7 @@ function stepSwing(dt) {
   const c = current(), sw = state.swing;
   if (!sw.fallen) {
     Pulley.swingStep(sw, dt, state.wind, c.load);
-    if (sw.fallen) { const p = pivot(c.g); Pulley.detach(sw, p.x, p.y, c.load); }
+    if (sw.fallen) { const p = pivot(c.g); Pulley.detach(sw, p.x, p.y, c.load); state.accidentAt = state.time; }
   } else {
     Pulley.fallStep(sw, dt, state.wind, c.load, L.floorY);
   }
