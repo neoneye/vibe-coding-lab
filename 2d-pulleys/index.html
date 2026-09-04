@@ -129,12 +129,20 @@ const Pulley = {
     { id: "movable", name: "Movable pulley", top: 0, bottom: 1 },
   ],
 
+  // Where the load is for a given amount of rope, and whether the puller can
+  // hold it. A load that is too heavy is not zeroed here: it keeps its height
+  // and the rope slips through the hands at slipSpeed() until it is down.
   lift(rt, loadKg, strengthKg, pulledM, travelM) {
     const neededKg = loadKg / rt.ma;
     const lifts = neededKg <= strengthKg + 1e-9;
-    if (!lifts) return { neededKg, lifts, heightM: 0, pulledM: 0, blocked: false };
     const heightM = Math.min(Math.max(0, pulledM) / rt.ma, travelM);
-    return { neededKg, lifts, heightM, pulledM: heightM * rt.ma, blocked: heightM >= travelM - 1e-9 };
+    return { neededKg, lifts, heightM, pulledM: heightM * rt.ma, blocked: lifts && heightM >= travelM - 1e-9 };
+  },
+
+  // load descent speed (m/s) while the rope slips: faster the more overloaded
+  slipSpeed(neededKg, strengthKg) {
+    if (neededKg <= strengthKg) return 0;
+    return Math.min(3, 0.5 + 0.5 * (neededKg / strengthKg - 1));
   },
 
   segmentsNeeded(loadKg, strengthKg) { return Math.max(1, Math.ceil(loadKg / strengthKg - 1e-9)); },
@@ -486,10 +494,13 @@ const PulleyTests = {
       assert(near(s.heightM, 2.0) && near(s.pulledM, 8.0) && s.blocked, "clamped at travel");
     });
 
-    test("lift: too heavy", () => {
+    test("lift: too heavy keeps its height, the rope slips", () => {
       const rt = Pulley.route(1, 0); // 1x
-      const s = Pulley.lift(rt, 100, 50, 3, 2.0);
-      assert(!s.lifts && s.heightM === 0 && s.pulledM === 0 && !s.blocked, "does not move");
+      let s = Pulley.lift(rt, 100, 50, 3, 2.0);
+      assert(!s.lifts && near(s.heightM, 2.0) && near(s.pulledM, 2.0) && !s.blocked, "geometry is kept, no two-block warning");
+      s = Pulley.lift(rt, 100, 50, 0, 2.0);
+      assert(!s.lifts && s.heightM === 0, "on the floor it just cannot be raised");
+      assert(Pulley.slipSpeed(50, 50) === 0 && near(Pulley.slipSpeed(125, 50), 1.25) && near(Pulley.slipSpeed(1000, 50), 3), "slip speed grows with overload, capped");
     });
 
     test("segmentsNeeded", () => {
@@ -797,7 +808,8 @@ function knockOff() {
   state.accidentAt = state.time;
 }
 function setLoad(id) {
-  state.loadId = id; state.pulledM = 0; state.strain = 0; state.lowering = false; state.swing = Pulley.swingInit(HANG_KICK);
+  // the rig stays where it is: a heavier load may then slip down through the hands
+  state.loadId = id; state.strain = 0; state.lowering = false; state.swing = Pulley.swingInit(HANG_KICK);
   const load = Pulley.LOADS.find((l) => l.id === id);
   state.bars = load && load.id === "gold" ? Pulley.goldBars(load) : [];
   state.looseBars = [];
@@ -1383,6 +1395,9 @@ function updatePanel() {
     st.textContent = state.swing.knocked
       ? `You knocked the ${load.name.toLowerCase()} off the hook. Click a load to hang it again.`
       : `The ${load.name.toLowerCase()} swung too far and slipped off the hook. Click a load to hang it again.`;
+  } else if (!s.lifts && s.heightM > 0) {
+    st.className = "status bad";
+    st.textContent = `Too heavy to hold! The rope is slipping through his hands and the ${load.name.toLowerCase()} is coming down. Needs ${Pulley.segmentsNeeded(c.mass, Pulley.STRENGTH_KG)} rope segments, you have ${rt.ma}.`;
   } else if (!s.lifts) {
     const need = Pulley.segmentsNeeded(c.mass, Pulley.STRENGTH_KG);
     const max = 2 * Pulley.MAX_SHEAVES;
@@ -1496,6 +1511,14 @@ function frame(now) {
   state.strain = Math.max(0, state.strain - dt * 0.8);
   state.windDist += state.wind * Pulley.gust(state.time) * dt;
   if (state.cut) Pulley.cutFallStep(state.cut.fall, dt);
+  else {
+    // too heavy to hold: the rope runs back through the hands
+    const c0 = current();
+    if (!c0.s.lifts && c0.s.heightM > 0) {
+      state.pulledM = Math.max(0, c0.s.pulledM - Pulley.slipSpeed(c0.s.neededKg, Pulley.STRENGTH_KG) * c0.rt.ma * dt);
+      state.strain = 1; state.lowering = false;
+    }
+  }
   stepSwing(dt);
   stepBars(dt, current());
   stepDroplets(dt, current());
