@@ -84,6 +84,76 @@ const Pulley = {
     if (rt.idleBottom > 0) return `${rt.idleBottom} grey ${word(rt.idleBottom, "pulley", "pulleys")} on the hook ${word(rt.idleBottom, "has", "have")} no rope. Add a pulley to the beam to use ${word(rt.idleBottom, "it", "them")}.`;
     return "";
   },
+
+  // Scene constants in metres, y down. Canvas is 800x640 px at 120 px/m.
+  L: {
+    pxPerM: 120, sceneW: 800 / 120, sceneH: 640 / 120,
+    r: 0.14, pitch: 0.56, x0: 1.7,
+    beamY: 0.45, yT: 0.85, yB0: 3.4, floorY: 4.9,
+    handDownY: 3.75,
+    balconyX: 4.0, balconyW: 1.5, balconyY: 2.6, handUpX: 4.35, handUpY: 0.75,
+    trayY: 5.05,
+  },
+
+  // Top sheave i sits at x0 + i*pitch. Bottom sheaves are shifted by +-2r so
+  // that, with pitch = 4r, every segment between the blocks is vertical.
+  // Idle bottom sheaves go to the left of the working ones.
+  layout(rt, heightM) {
+    const L = Pulley.L, r = L.r, p = L.pitch;
+    const yB = L.yB0 - heightM;
+    const handLift = rt.usedTop === 0 && rt.usedBottom === 0;
+    const bOff = rt.anchor === "load" ? 2 * r : -2 * r;
+    let x0 = L.x0;
+    if (rt.pullDir === "up" && !handLift) x0 = L.handUpX - 0.5 - r - ((rt.usedBottom - 1) * p + bOff);
+    const xT = [], xB = [];
+    for (let i = 0; i < rt.top; i++) xT.push(x0 + i * p);
+    for (let j = 0; j < rt.bottom; j++) xB.push(j < rt.usedBottom ? x0 + j * p + bOff : x0 - (j - rt.usedBottom + 1) * p + bOff);
+    const minB = xB.length ? Math.min(...xB) : 0, maxB = xB.length ? Math.max(...xB) : 0;
+    let hookX;
+    if (rt.bottom > 0) hookX = (minB + maxB) / 2;
+    else hookX = rt.usedTop > 0 ? xT[0] - r : x0;
+    const hookY = yB + 0.35;
+    let anchor;
+    if (rt.anchor === "load") anchor = rt.usedBottom > 0 ? { x: xT[0] - r, y: yB - 0.22 } : { x: hookX, y: hookY - 0.08 };
+    else anchor = { x: xB[0] - r, y: L.beamY + 0.12 };
+    let hand, stand;
+    if (rt.pullDir === "down") { hand = { x: xT[rt.usedTop - 1] + r, y: L.handDownY }; stand = "floor"; }
+    else if (handLift) { hand = { x: hookX, y: hookY - 0.2 }; stand = "floor"; }
+    else { hand = { x: L.handUpX, y: L.handUpY }; stand = "balcony"; }
+    const bodyT = rt.top > 0 ? { x1: xT[0] - r - 0.08, x2: xT[xT.length - 1] + r + 0.08 } : null;
+    let bodyB = null;
+    if (rt.bottom > 0) {
+      const left = rt.anchor === "load" && rt.usedBottom > 0 ? Math.min(minB - r, anchor.x) : minB - r;
+      bodyB = { x1: left - 0.08, x2: maxB + r + 0.08 };
+    }
+    return { x0, xT, xB, yT: L.yT, yB, r, hookX, hookY, anchor, hand, stand, handLift, bodyT, bodyB };
+  },
+
+  // Rope as straight segments and sheave arcs, in order from the anchor to the
+  // puller's hand. A segment "supports" when it is attached to the moving
+  // block (directly or through one of its sheaves); counting them gives ma.
+  ropePath(rt, g) {
+    const r = g.r, segs = [], arcs = [];
+    const line = (x1, y1, x2, y2, support) => segs.push({ x1, y1, x2, y2, support });
+    const under = (x, y) => arcs.push({ x, y, r, a0: Math.PI, a1: 0, ccw: true });
+    const over = (x, y) => arcs.push({ x, y, r, a0: Math.PI, a1: 2 * Math.PI, ccw: false });
+    let i = 0, j = 0, cur = { x: g.anchor.x, y: g.anchor.y };
+    let next = rt.anchor === "load" ? "top" : "bottom";
+    for (;;) {
+      if (next === "top") {
+        if (i >= rt.usedTop) { line(cur.x, cur.y, g.hand.x, g.hand.y, true); break; }
+        const x = g.xT[i];
+        line(cur.x, cur.y, x - r, g.yT, true);
+        over(x, g.yT); cur = { x: x + r, y: g.yT }; i++; next = "bottom";
+      } else {
+        if (j >= rt.usedBottom) { line(cur.x, cur.y, g.hand.x, g.hand.y, false); break; }
+        const x = g.xB[j];
+        line(cur.x, cur.y, x - r, g.yB, true);
+        under(x, g.yB); cur = { x: x + r, y: g.yB }; j++; next = "top";
+      }
+    }
+    return { segs, arcs };
+  },
 };
 
 const PulleyTests = {
@@ -186,6 +256,60 @@ const PulleyTests = {
       const f = fitCanvasMetrics(1000, 700, 2, 800, 640);
       const s = Math.min(1000 / 800, 700 / 640);
       assert(Math.abs(f.cssW - 800 * s) < 1, "fits window");
+    });
+
+    test("ropePath: support segments equal the mechanical advantage", () => {
+      for (let t = 0; t <= 4; t++) for (let b = 0; b <= 4; b++) {
+        const rt = Pulley.route(t, b);
+        const g = Pulley.layout(rt, 0.7);
+        const p = Pulley.ropePath(rt, g);
+        const n = p.segs.filter((s) => s.support).length;
+        assert(n === rt.ma, `(${t},${b}) support ${n} != ma ${rt.ma}`);
+        assert(p.arcs.length === rt.usedTop + rt.usedBottom, `(${t},${b}) one arc per working sheave`);
+        const last = p.segs[p.segs.length - 1];
+        assert(near(last.x2, g.hand.x) && near(last.y2, g.hand.y), "path ends at the hand");
+        assert(near(p.segs[0].x1, g.anchor.x) && near(p.segs[0].y1, g.anchor.y), "path starts at the anchor");
+      }
+    });
+
+    test("ropePath: down-pull rigs are all vertical", () => {
+      for (const [t, b] of [[1, 0], [1, 1], [2, 1], [2, 2], [4, 3], [4, 4], [3, 0]]) {
+        const rt = Pulley.route(t, b);
+        const p = Pulley.ropePath(rt, Pulley.layout(rt, 0));
+        for (const s of p.segs) assert(near(s.x1, s.x2), `(${t},${b}) segment not vertical`);
+      }
+    });
+
+    test("ropePath: up-pull rigs are vertical except the free end", () => {
+      for (const [t, b] of [[0, 1], [1, 2], [3, 4], [0, 3]]) {
+        const rt = Pulley.route(t, b);
+        const g = Pulley.layout(rt, 0);
+        const p = Pulley.ropePath(rt, g);
+        p.segs.slice(0, -1).forEach((s) => assert(near(s.x1, s.x2), `(${t},${b}) inner segment not vertical`));
+        assert(g.stand === "balcony" && near(g.hand.x, Pulley.L.handUpX), "puller on the balcony");
+        const last = p.segs[p.segs.length - 1];
+        assert(near(last.x1, g.hand.x - 0.5), `(${t},${b}) free end leaves 0.5 m left of the hand`);
+        assert(g.x0 > 1.0, `(${t},${b}) rig stays on canvas`);
+        // idle bottom sheaves sit left of the working ones, clear of the balcony
+        for (let j = rt.usedBottom; j < rt.bottom; j++) assert(g.xB[j] < g.xB[0], `(${t},${b}) idle bottom sheave to the left`);
+      }
+    });
+
+    test("layout: hand and blocks", () => {
+      const L = Pulley.L;
+      let rt = Pulley.route(2, 2), g = Pulley.layout(rt, 0);
+      assert(near(g.hand.x, g.xT[1] + g.r) && near(g.hand.y, L.handDownY) && g.stand === "floor", "down hand under last top sheave");
+      assert(near(g.hookY, g.yB + 0.35), "hook hangs under the moving block");
+      const top = Pulley.layout(rt, Pulley.TRAVEL_M);
+      assert(top.yB - top.yT >= 0.5, "two-blocked rig keeps sheaves apart");
+      assert(g.bodyT.x1 < g.xT[0] - g.r && g.bodyT.x2 > g.xT[1] + g.r, "top body spans its sheaves");
+      assert(g.bodyB.x1 < g.xB[0] - g.r && g.bodyB.x2 > g.xB[1] + g.r, "bottom body spans its sheaves");
+      rt = Pulley.route(2, 1); g = Pulley.layout(rt, 0);
+      assert(g.bodyB.x1 < g.anchor.x, "load anchor sits on the moving block body");
+      rt = Pulley.route(0, 0); g = Pulley.layout(rt, 0.5);
+      assert(g.handLift && g.stand === "floor" && near(g.hand.y, g.hookY - 0.2) && g.bodyT === null && g.bodyB === null, "hand lift");
+      rt = Pulley.route(1, 0); g = Pulley.layout(rt, 0);
+      assert(near(g.hookX, g.xT[0] - g.r) && g.bodyB === null, "bare hook hangs under the sheave's left tangent");
     });
 
     console.log(`${pass} passed, ${fail} failed`);
