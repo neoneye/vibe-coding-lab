@@ -17,9 +17,9 @@ The rig is two numbers: `top` (sheaves in the fixed block hanging from the beam,
 `Pulley.route(top, bottom)` returns `{usedTop, usedBottom, anchor, ma, pullDir, idleTop, idleBottom}` under these rules:
 
 - `usedBottom = min(bottom, top + 1)`, `usedTop = min(top, bottom + 1)`.
-- `anchor = usedTop > usedBottom ? "load" : "ceiling"`. The rope's fixed end is tied to the moving block (or bare hook) when the top block has one more working sheave than the bottom; otherwise to the beam.
+- `anchor = (usedTop > usedBottom || usedBottom === 0) ? "load" : "ceiling"`. The rope's fixed end is tied to the moving block (or bare hook) when the top block has one more working sheave than the bottom, or when there are no working bottom sheaves at all; otherwise to the beam.
 - The rope alternates between the blocks from the anchor: from a ceiling anchor it goes down to bottom sheave 1, up over top sheave 1, down to bottom sheave 2, and so on; from a load anchor it goes up over top sheave 1 first.
-- `ma = 2 * usedBottom + (anchor === "load" ? 1 : 0)`. This is the number of rope segments attached to the moving block. With no pulleys at all `ma = 1` (the rope is tied to the hook).
+- `ma = 2 * usedBottom + (anchor === "load" ? 1 : 0)`. This is the number of rope segments attached to the moving block. With no pulleys at all the anchor is the hook and `ma = 1`.
 - `pullDir = usedTop >= usedBottom && usedTop > 0 ? "down" : "up"`. The free end leaves the last sheave used; leaving a top sheave means the person pulls downward, leaving a bottom sheave (or a bare hook) means they pull upward.
 - Idle sheaves (`idleTop = top − usedTop`, `idleBottom = bottom − usedBottom`) are drawn grey; a caption says which block needs another pulley for them to do anything.
 
@@ -34,7 +34,7 @@ Expected table (top, bottom → ma, pullDir): (0,0→1,up) (1,0→1,down) (0,1�
 - If not: `heightM = 0`, `pulledM = 0`.
 - `Pulley.segmentsNeeded(loadKg, strengthKg) = ceil(loadKg / strengthKg)` feeds the hint "you need N rope segments".
 
-Constants: strength 50 kgf, `travelM = 2.0`, g shown as 9.81 for the Newton readout.
+Constants: strength 50 kgf, `travelM = 2.0` (1.2 for the no-pulley hand lift, so the figure's reach stays plausible), g shown as 9.81 for the Newton readout.
 
 Loads (kg): bucket 10, crate 40, anvil 100, barrel 150, piano 300, cow 400, car 1000. With 50 kgf that ladder needs 1, 1, 2, 3, 6, 8 segments; the car needs 20 and is intentionally beyond the 8× maximum so the "add more" hint has a case that cannot be satisfied.
 
@@ -42,13 +42,13 @@ Loads (kg): bucket 10, crate 40, anvil 100, barrel 150, piano 300, cow 400, car 
 
 Single canvas, logical 1000 × 640 px at 120 px/m, HiDPI backing store via `fitCanvasMetrics` (same helper as boulder-dash), letterboxed to the window. Pointer events for mouse and touch.
 
-Layout, left to right: the rig (beam across the top, fixed block under it, moving block with hook and load below, floor at the bottom), the puller, the load shelf at the far right. A pulley tray sits along the bottom edge. The readout panel is HTML beside/below the canvas, not drawn on it.
+Layout, left to right: the rig (beam across the top, fixed block under it, moving block with hook and load below, floor at the bottom) and the puller. A pulley tray sits along the bottom edge of the canvas. The load shelf and the readouts live in an HTML panel beside the canvas (below it on narrow screens), not drawn on it. In down-pull rigs the figure stands directly under the rope's free end; in up-pull rigs the rig shifts so the last working bottom sheave sits just left of the balcony, keeping every rope segment close to vertical. With no pulleys the figure stands on the floor beside the hook and lifts it by hand.
 
 - **Pulley tray.** An endless supply of pulley icons. Pointer-down starts a drag with a ghost. Drop zones (the beam area and the moving-block area) highlight when hovered; a full block (4) shows "full" and refuses. Dropping anywhere else cancels.
 - **Installed pulleys.** Pointer-down on one lifts it out of its block; drop on the other block to move it, drop elsewhere to remove it. Removing while a load is raised lowers the load to the floor (state resets `pulledM = 0`).
 - **Rope drawing.** Anchor point, alternating vertical segments, arcs around sheaves, then the free end to the puller's hands. Supporting segments are numbered 1…N and labelled with their tension `W/N` kg. Sheaves rotate by the rope movement. Idle sheaves are grey with no rope.
-- **Puller.** A stick figure. For `pullDir = "down"` they stand on the floor to the right of the rig with the rope coming down from the last top sheave into their hands. For `pullDir = "up"` they stand on a balcony at the right edge near beam height, hands above their head, rope rising from the last bottom sheave (or the hook) to their hands. Dragging the hands along the pull direction increases `pulledM`; dragging the other way lowers. Arrow keys ↑/↓ also work. When the load is too heavy the figure leans and strains, the rope does not move, and the panel goes red. A "Lower" button resets `pulledM`.
-- **Load shelf.** Click or drag a load onto the hook to swap it; the current one is highlighted. Swapping lowers the load first.
+- **Puller.** A stick figure. For `pullDir = "down"` they stand on the floor to the right of the rig with the rope coming down from the last top sheave into their hands. For `pullDir = "up"` they stand on a balcony at the right edge near beam height, hands above their head, rope rising from the last bottom sheave (or the hook) to their hands. Dragging the hands along the pull direction increases `pulledM`; dragging the other way lowers. Arrow keys ↑/↓ and a hold-to-pull button also work. When the load is too heavy the figure leans and strains, the rope does not move, and the panel goes red. A "Lower" button resets `pulledM`.
+- **Load shelf.** Click a load in the panel to hang it; the current one is highlighted. Swapping lowers the load first.
 - **Panel readouts.** Mechanical advantage `N×`; load kg (and N); needed force kg vs strength 50 kg with a bar; state text: "Lifts!" / "Too heavy — needs N rope segments, add pulleys" / "Two-blocked: no more travel"; rope pulled m vs height gained m; and a rig sentence chosen from the route, e.g. "A single fixed pulley only changes the direction of your pull; the load still hangs from one rope." / "The load hangs from N ropes, so each carries W/N, so you pull with W/N, but you must pull N m of rope for every metre lifted."
 
 ## Testing
