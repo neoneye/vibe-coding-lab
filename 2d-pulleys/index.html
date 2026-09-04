@@ -65,7 +65,7 @@
     <div id="status" class="status">Lifts!</div>
     <div class="row"><span>Rope pulled</span><b id="pulled">0.0 m</b></div>
     <div class="row"><span>Height gained</span><b id="height">0.0 m</b></div>
-    <div class="btns"><button id="pull" class="primary">Hold to pull</button><button id="lower">Lower</button><button id="clear">Clear rig</button></div>
+    <div class="btns"><button id="pull" class="primary">Hold to pull</button><button id="lower">Lower</button><button id="clear">Clear rig</button><button id="rope" class="primary" hidden>New rope</button></div>
     <label class="slider"><span>Wind <b id="windVal">29 m/s · storm</b></span><input id="wind" type="range" min="0" max="30" step="1" value="29"></label>
     <h2>Ready-made rigs</h2>
     <div id="presets"></div>
@@ -73,7 +73,7 @@
     <div id="loads"></div>
     <p id="sentence" class="sentence"></p>
     <p id="hint" class="hint" hidden></p>
-    <p class="foot">Idealised: no friction, weightless rope and blocks, ropes treated as vertical. Real pulleys lose a few percent per sheave. The load swings on its sling; wind pushes on its face, and past about 50° it slips off the hook. Keys: ↑ pull, ↓ lower.</p>
+    <p class="foot">Idealised: no friction, weightless rope and blocks, ropes treated as vertical. Real pulleys lose a few percent per sheave. The load swings on its sling; wind pushes on its face, and past about 50° it slips off the hook. Click the rope to cut it, or click the load to knock it off. Keys: ↑ pull, ↓ lower.</p>
   </aside>
 </div>
 <script id="shared-code">
@@ -303,6 +303,35 @@ const Pulley = {
     d.vy = Math.min(Pulley.DROP_TERMINAL, d.vy + Pulley.G * dt);
     d.x += d.vx * dt; d.y += d.vy * dt; d.age += dt;
     return d;
+  },
+
+  // Split a polyline at a distance along it. Returns the two pieces (both
+  // include the cut point) and the point itself; the second piece is empty
+  // when the cut is past the end.
+  splitAtLength(pts, sCut) {
+    let acc = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i], len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (acc + len >= sCut) {
+        const t = len ? (sCut - acc) / len : 0, cut = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+        return { a: pts.slice(0, i).concat([cut]), b: [cut].concat(pts.slice(i)), cut };
+      }
+      acc += len;
+    }
+    return { a: pts.slice(), b: [], cut: pts[pts.length - 1] };
+  },
+
+  // Free fall of the moving block after a cut: height above its lowered
+  // position, with a small bounce on landing. Returns true once at rest.
+  cutFallStep(f, dt) {
+    if (f.rest) return true;
+    f.v += Pulley.G * dt; f.h -= f.v * dt;
+    if (f.h <= 0) {
+      f.h = 0;
+      if (f.v > 1.5 && f.bounces < 1) { f.v = -f.v * 0.25; f.bounces++; }
+      else { f.v = 0; f.rest = true; }
+    }
+    return f.rest;
   },
 
   // Safety-board wording: hours while under two days, whole days after that.
@@ -584,6 +613,17 @@ const PulleyTests = {
       assert(windy.vy <= Pulley.DROP_TERMINAL, "capped fall speed");
     });
 
+    test("cut rope: split and free fall", () => {
+      const pts = [{ x: 0, y: 0 }, { x: 0, y: 1 }, { x: 0, y: 3 }];
+      const sp = Pulley.splitAtLength(pts, 2.0);
+      assert(sp.cut.x === 0 && Math.abs(sp.cut.y - 2) < 1e-9, "cut point at 2 m");
+      assert(sp.a.length === 3 && sp.b.length === 2 && sp.a[2].y === sp.cut.y && sp.b[0].y === sp.cut.y, "both pieces end/start at the cut");
+      assert(Pulley.splitAtLength(pts, 99).b.length === 0, "cut past the end leaves nothing after");
+      const f = { h: 1.5, v: 0, bounces: 0, rest: false };
+      let t = 0; while (!Pulley.cutFallStep(f, 1 / 120) && t < 10) t += 1 / 120;
+      assert(f.rest && f.h === 0 && f.bounces === 1 && t > 0.5 && t < 2, "falls 1.5 m, bounces once, comes to rest in " + t.toFixed(2) + " s");
+    });
+
     test("accident sign: hours under 48, days after", () => {
       let a = Pulley.accidentSign(120);
       assert(a.label === "DAYS SINCE LAST ACCIDENT" && a.value === 5, "5 days at start");
@@ -635,6 +675,7 @@ state.drops = [];   // airborne sludge droplets {x,y,vx,vy,age}
 state.splats = [];  // sludge stuck to the figure, in the figure's frame {dx,dy,age}
 state.puddles = []; // sludge on the floor {x,age}
 state.hitTimer = 0; // seconds left of the figure's "eww" reaction
+state.cut = null;   // {s, fall:{h,v,bounces,rest}} once the rope has been cut
 let dripAcc = 0;
 const WIND_KEY = "pulleys.wind";
 const LOWER_M_PER_S = 0.8; // load descent speed while the Lower button is active
@@ -646,14 +687,28 @@ function current() {
   const travel = Pulley.travelFor(rt);
   const fallen = state.swing.fallen;
   const s = Pulley.lift(rt, fallen ? 0 : load.kg, Pulley.STRENGTH_KG, state.pulledM, travel);
+  if (state.cut) { s.heightM = state.cut.fall.h; s.pulledM = s.heightM * rt.ma; s.blocked = false; }
   const g = Pulley.layout(rt, s.heightM);
-  return { rt, load, travel, s, g, fallen, path: Pulley.ropePath(rt, g) };
+  return { rt, load, travel, s, g, fallen, cut: !!state.cut, path: Pulley.ropePath(rt, g) };
 }
 
 function setRig(top, bottom) {
   state.top = Math.max(0, Math.min(Pulley.MAX_SHEAVES, top));
   state.bottom = Math.max(0, Math.min(Pulley.MAX_SHEAVES, bottom));
-  state.pulledM = 0; state.strain = 0; state.lowering = false;
+  state.pulledM = 0; state.strain = 0; state.lowering = false; state.cut = null;
+}
+function cutRope(sM) {
+  const c = current();
+  state.cut = { s: sM, fall: { h: c.s.heightM, v: 0, bounces: 0, rest: c.s.heightM <= 0 } };
+  state.pulledM = 0; state.lowering = false; state.holdPull = false;
+  state.accidentAt = state.time;
+}
+function knockOff() {
+  const c = current(), sw = state.swing;
+  if (sw.fallen) return;
+  sw.fallen = true; sw.knocked = true; sw.omega += 1.5; // a shove
+  const p = pivot(c.g); Pulley.detach(sw, p.x, p.y, c.load);
+  state.accidentAt = state.time;
 }
 function setLoad(id) { state.loadId = id; state.pulledM = 0; state.strain = 0; state.lowering = false; state.swing = Pulley.swingInit(HANG_KICK); }
 // The hook is a J: shank down from the eye, then an arc of radius 0.09 centred
@@ -663,6 +718,7 @@ function pivot(g) { return { x: g.hookX - HOOK_R, y: g.hookY + 0.05 + HOOK_R }; 
 
 // deltaM > 0 hauls rope in (raises the load), < 0 pays it out.
 function applyPull(deltaM) {
+  if (state.cut) return; // nothing to pull against
   if (deltaM > 0) state.lowering = false;
   const c = current();
   if (!c.s.lifts) { if (deltaM > 0) state.strain = Math.min(1, state.strain + deltaM * 1.5); return; }
@@ -774,8 +830,9 @@ function drawBlocks(c) {
   // sheaves
   // each sheave turns by the rope that has run over it: k * height / r
   const turns = Pulley.sheaveTurns(rt);
-  g.xT.forEach((x, i) => drawSheave(x, g.yT, g.r, turns.top[i] * c.s.heightM / g.r, i < rt.usedTop));
-  g.xB.forEach((x, j) => drawSheave(x, g.yB, g.r, -turns.bottom[j] * c.s.heightM / g.r, j < rt.usedBottom));
+  const hM = state.cut ? state.cut.fall.h : c.s.heightM;
+  g.xT.forEach((x, i) => drawSheave(x, g.yT, g.r, turns.top[i] * hM / g.r, i < rt.usedTop));
+  g.xB.forEach((x, j) => drawSheave(x, g.yB, g.r, -turns.bottom[j] * hM / g.r, j < rt.usedBottom));
 }
 
 // The rope as dense polylines: `run` from the anchor, through every sheave,
@@ -844,9 +901,31 @@ function strokeStrands(pts) {
   ctx.stroke();
 }
 
+// a cut end droops and sways a little
+function danglingEnd(from, side) {
+  const sway = Math.sin(state.time * 2.1 + side) * 0.05;
+  const pts = [];
+  for (let k = 0; k <= 16; k++) {
+    const t = k / 16, u = 1 - t;
+    const cx = from.x + side * 0.08, cy = from.y + 0.15, ex = from.x + side * 0.06 + sway, ey = from.y + 0.32;
+    pts.push({ x: u * u * from.x + 2 * u * t * cx + t * t * ex, y: u * u * from.y + 2 * u * t * cy + t * t * ey });
+  }
+  return pts;
+}
+
 function drawRope(c) {
   const { run, tail } = ropeSamples(c);
   ctx.lineCap = "round"; ctx.lineJoin = "round";
+  if (state.cut) {
+    const sp = Pulley.splitAtLength(run, state.cut.s);
+    const a = sp.a.concat(danglingEnd(sp.cut, -1).slice(1));
+    const b = sp.b.length > 1 ? danglingEnd(sp.cut, 1).reverse().concat(sp.b.slice(1)) : [];
+    strokePolyline(a); strokeStrands(a);
+    if (b.length) { strokePolyline(b); strokeStrands(b); }
+    strokePolyline(tail); strokeStrands(tail);
+    ctx.lineCap = "butt";
+    return; // no tension, no badges
+  }
   strokePolyline(run);
   strokePolyline(tail);
   strokeStrands(run);
@@ -1162,9 +1241,15 @@ function updatePanel() {
   fill.style.width = Math.min(100, (s.neededKg / Pulley.STRENGTH_KG) * 50) + "%";
   fill.className = s.lifts ? "" : "bad";
   const st = $("status");
-  if (c.fallen) {
+  $("rope").hidden = !c.cut;
+  if (c.cut) {
     st.className = "status bad";
-    st.textContent = `The ${load.name.toLowerCase()} swung too far and slipped off the hook. Click a load to hang it again.`;
+    st.textContent = `Rope cut! With no rope there is no tension: the block${c.fallen ? "" : " and the " + load.name.toLowerCase()} crashed down. Fit a new rope.`;
+  } else if (c.fallen) {
+    st.className = "status bad";
+    st.textContent = state.swing.knocked
+      ? `You knocked the ${load.name.toLowerCase()} off the hook. Click a load to hang it again.`
+      : `The ${load.name.toLowerCase()} swung too far and slipped off the hook. Click a load to hang it again.`;
   } else if (!s.lifts) {
     const need = Pulley.segmentsNeeded(load.kg, Pulley.STRENGTH_KG);
     const max = 2 * Pulley.MAX_SHEAVES;
@@ -1252,6 +1337,7 @@ function frame(now) {
   }
   state.strain = Math.max(0, state.strain - dt * 0.8);
   state.windDist += state.wind * Pulley.gust(state.time) * dt;
+  if (state.cut) Pulley.cutFallStep(state.cut.fall, dt);
   stepSwing(dt);
   stepDroplets(dt, current());
   draw(); updatePanel();
@@ -1275,6 +1361,27 @@ function hitInstalledSheave(p, c) {
   return null;
 }
 
+// distance along the rope run of the nearest point to p, or null when not on the rope
+function hitRope(p, c) {
+  const run = ropeSamples(c).run;
+  let best = 0.08, acc = 0, at = null;
+  for (let i = 1; i < run.length; i++) {
+    const a = run[i - 1], b = run[i], len = Math.hypot(b.x - a.x, b.y - a.y);
+    const d = distToSeg(p.x, p.y, a.x, a.y, b.x, b.y);
+    if (d < best) { best = d; at = acc + len / 2; }
+    acc += len;
+  }
+  return at;
+}
+// is p on the hanging load's box (in its swung frame)?
+function hitLoad(p, c) {
+  const sw = state.swing;
+  if (sw.fallen) return false;
+  const pv = pivot(c.g), dx = p.x - pv.x, dy = p.y - pv.y, cs = Math.cos(-sw.theta), sn = Math.sin(-sw.theta);
+  const lx = dx * cs - dy * sn, ly = dx * sn + dy * cs;
+  return Math.abs(lx) <= c.load.w / 2 && ly >= 0 && ly <= c.load.h;
+}
+
 canvas.addEventListener("pointerdown", (ev) => {
   const p = canvasToScene(ev), c = current();
   canvas.setPointerCapture(ev.pointerId);
@@ -1285,13 +1392,17 @@ canvas.addEventListener("pointerdown", (ev) => {
     state.drag = { kind: "pulley", x: p.x, y: p.y };
     return;
   }
-  if (dist(p.x, p.y, c.g.hand.x, c.g.hand.y) < 0.4) { state.drag = { kind: "pull", lastY: p.y }; canvas.style.cursor = "grabbing"; }
+  if (dist(p.x, p.y, c.g.hand.x, c.g.hand.y) < 0.4) { state.drag = { kind: "pull", lastY: p.y }; canvas.style.cursor = "grabbing"; return; }
+  if (hitLoad(p, c)) { knockOff(); updatePanel(); return; }
+  if (!state.cut) { const at = hitRope(p, c); if (at !== null) { cutRope(at); updatePanel(); } }
 });
 canvas.addEventListener("pointermove", (ev) => {
   const p = canvasToScene(ev);
   if (!state.drag) {
     const c = current();
-    canvas.style.cursor = (hitTrayPulley(p) || hitInstalledSheave(p, c) || dist(p.x, p.y, c.g.hand.x, c.g.hand.y) < 0.4) ? "grab" : "default";
+    if (hitTrayPulley(p) || hitInstalledSheave(p, c) || dist(p.x, p.y, c.g.hand.x, c.g.hand.y) < 0.4) canvas.style.cursor = "grab";
+    else if (hitLoad(p, c) || (!state.cut && hitRope(p, c) !== null)) canvas.style.cursor = "crosshair";
+    else canvas.style.cursor = "default";
     return;
   }
   if (state.drag.kind === "pulley") { state.drag.x = p.x; state.drag.y = p.y; return; }
@@ -1333,12 +1444,13 @@ $("wind").addEventListener("input", (ev) => {
   try { localStorage.setItem(WIND_KEY, String(state.wind)); } catch (e) { /* storage unavailable */ }
 });
 $("clear").addEventListener("click", () => { setRig(0, 0); updatePanel(); });
+$("rope").addEventListener("click", () => { state.cut = null; state.pulledM = 0; updatePanel(); });
 window.addEventListener("keydown", (ev) => {
   if (ev.key === "ArrowUp") { applyPull(0.15); ev.preventDefault(); }
   else if (ev.key === "ArrowDown") { applyPull(-0.15); ev.preventDefault(); }
 });
 
-window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene, initFromQuery };
+window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene, initFromQuery, cutRope, knockOff, hitRope, hitLoad };
 
 buildPresetButtons();
 buildLoadButtons();
