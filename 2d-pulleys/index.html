@@ -196,6 +196,20 @@ const Pulley = {
     return { x0, xT, xB, yT: L.yT, yB, r, hookX, hookY, anchor, hand, stand, handLift, bodyT, bodyB };
   },
 
+  // How much rope runs over each sheave per metre the load rises: the k-th
+  // sheave along the rope from the anchor has k shortening segments upstream
+  // of it, so k metres of rope pass over it (the last one at the full pull
+  // rate, ma). Idle sheaves get 0. Arrays are indexed like layout().xT / xB.
+  sheaveTurns(rt) {
+    const top = new Array(rt.top).fill(0), bottom = new Array(rt.bottom).fill(0);
+    let k = 1, next = rt.anchor === "load" ? "top" : "bottom", i = 0, j = 0;
+    while ((next === "top" && i < rt.usedTop) || (next === "bottom" && j < rt.usedBottom)) {
+      if (next === "top") { top[i++] = k++; next = "bottom"; }
+      else { bottom[j++] = k++; next = "top"; }
+    }
+    return { top, bottom };
+  },
+
   // Rope as straight segments and sheave arcs, in order from the anchor to the
   // puller's hand. A segment "supports" when it is attached to the moving
   // block (directly or through one of its sheaves); counting them gives ma.
@@ -372,6 +386,28 @@ const PulleyTests = {
       }
     });
 
+    test("sheaveTurns: rope speed grows along the rope", () => {
+      const eq = (a, b) => a.join(",") === b.join(",");
+      let t = Pulley.sheaveTurns(Pulley.route(1, 1));
+      assert(eq(t.bottom, [1]) && eq(t.top, [2]), "gun tackle: bottom 1x, top 2x");
+      t = Pulley.sheaveTurns(Pulley.route(2, 1));
+      assert(eq(t.top, [1, 3]) && eq(t.bottom, [2]), "load anchor: top1 1x, bottom 2x, top2 3x");
+      t = Pulley.sheaveTurns(Pulley.route(4, 4));
+      assert(eq(t.bottom, [1, 3, 5, 7]) && eq(t.top, [2, 4, 6, 8]), "full rig ends at ma");
+      t = Pulley.sheaveTurns(Pulley.route(2, 0));
+      assert(eq(t.top, [1, 0]), "idle sheave does not turn");
+      t = Pulley.sheaveTurns(Pulley.route(0, 0));
+      assert(t.top.length === 0 && t.bottom.length === 0, "no sheaves");
+      for (let a = 0; a <= 4; a++) for (let b = 0; b <= 4; b++) {
+        const rt = Pulley.route(a, b), u = Pulley.sheaveTurns(rt);
+        const max = Math.max(0, ...u.top, ...u.bottom);
+        assert(max === rt.usedTop + rt.usedBottom, `(${a},${b}) last sheave index`);
+        // the last sheave passes rope at the pull rate: ma for downward pulls,
+        // one less for upward pulls (the free end is itself a supporting segment)
+        if (max > 0) assert(max === rt.ma - (rt.pullDir === "up" ? 1 : 0), `(${a},${b}) last sheave runs at pull rate`);
+      }
+    });
+
     test("layout: hand and blocks", () => {
       const L = Pulley.L;
       let rt = Pulley.route(2, 2), g = Pulley.layout(rt, 0);
@@ -533,9 +569,10 @@ function drawBlocks(c) {
   ctx.beginPath(); ctx.arc(g.hookX, g.hookY - 0.1, 0.06, 0, Math.PI * 2); ctx.stroke();
   ctx.lineCap = "butt";
   // sheaves
-  const angle = c.s.pulledM / g.r;
-  g.xT.forEach((x, i) => drawSheave(x, g.yT, g.r, angle, i < rt.usedTop));
-  g.xB.forEach((x, j) => drawSheave(x, g.yB, g.r, -angle, j < rt.usedBottom));
+  // each sheave turns by the rope that has run over it: k * height / r
+  const turns = Pulley.sheaveTurns(rt);
+  g.xT.forEach((x, i) => drawSheave(x, g.yT, g.r, turns.top[i] * c.s.heightM / g.r, i < rt.usedTop));
+  g.xB.forEach((x, j) => drawSheave(x, g.yB, g.r, -turns.bottom[j] * c.s.heightM / g.r, j < rt.usedBottom));
 }
 
 // The rope as dense polylines: `run` from the anchor, through every sheave,
