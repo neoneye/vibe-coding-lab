@@ -538,24 +538,69 @@ function drawBlocks(c) {
   g.xB.forEach((x, j) => drawSheave(x, g.yB, g.r, -angle, j < rt.usedBottom));
 }
 
-function drawRope(c) {
-  const { path, s, g } = c;
-  ctx.strokeStyle = "#dcc79c"; ctx.lineWidth = 0.045; ctx.lineCap = "round";
+// The rope as a dense polyline from the anchor, through every sheave, to the
+// hand and on into the loose tail. Used for both the stroke and the texture.
+function ropeSamples(c) {
+  const { path, g, s } = c;
+  const pts = [], step = 0.01;
+  const push = (x, y) => pts.push({ x, y });
+  for (let i = 0; i < path.segs.length; i++) {
+    const sg = path.segs[i];
+    const len = Math.hypot(sg.x2 - sg.x1, sg.y2 - sg.y1), n = Math.max(1, Math.ceil(len / step));
+    for (let k = i === 0 ? 0 : 1; k <= n; k++) push(sg.x1 + (sg.x2 - sg.x1) * k / n, sg.y1 + (sg.y2 - sg.y1) * k / n);
+    const a = path.arcs[i];
+    if (a) {
+      const d = a.ccw ? -1 : 1, span = Math.abs(a.a1 - a.a0), n2 = Math.max(2, Math.ceil(a.r * span / step));
+      for (let k = 1; k <= n2; k++) { const t = a.a0 + d * span * k / n2; push(a.x + Math.cos(t) * a.r, a.y + Math.sin(t) * a.r); }
+    }
+  }
+  // loose tail beyond the hands (a quadratic curve)
   const stretch = s.lifts ? 0 : state.strain * 0.05;
+  const down = c.rt.pullDir === "down";
+  const cx = down ? g.hand.x + 0.05 : g.hand.x + 0.3, cy = down ? g.hand.y + 0.35 + stretch : g.hand.y + 0.05;
+  const ex = down ? g.hand.x + 0.25 : g.hand.x + 0.35, ey = down ? g.hand.y + 0.55 : g.hand.y + 0.45;
+  for (let k = 1; k <= 40; k++) {
+    const t = k / 40, u = 1 - t;
+    push(u * u * g.hand.x + 2 * u * t * cx + t * t * ex, u * u * g.hand.y + 2 * u * t * cy + t * t * ey);
+  }
+  return pts;
+}
+
+function drawRope(c) {
+  const pts = ropeSamples(c);
+  const W = 0.05; // rope thickness in metres
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
   ctx.beginPath();
-  for (const seg of path.segs) { ctx.moveTo(seg.x1, seg.y1); ctx.lineTo(seg.x2, seg.y2); }
-  ctx.stroke();
-  for (const a of path.arcs) { ctx.beginPath(); ctx.arc(a.x, a.y, a.r, a.a0, a.a1, a.ccw); ctx.stroke(); }
-  // rope tail beyond the hands
-  ctx.beginPath(); ctx.moveTo(g.hand.x, g.hand.y);
-  if (c.rt.pullDir === "down") ctx.quadraticCurveTo(g.hand.x + 0.05, g.hand.y + 0.35 + stretch, g.hand.x + 0.25, g.hand.y + 0.55);
-  else ctx.quadraticCurveTo(g.hand.x + 0.3, g.hand.y + 0.05, g.hand.x + 0.35, g.hand.y + 0.45);
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  // dark edge under a lighter core gives the rope a round shaded look
+  ctx.strokeStyle = "#8f7748"; ctx.lineWidth = W + 0.02; ctx.stroke();
+  ctx.strokeStyle = "#dcc79c"; ctx.lineWidth = W; ctx.stroke();
+  // twisted strands: slanted ticks that travel with the rope as it is hauled
+  const spacing = 0.075, h = W * 0.55;
+  let phase = c.s.pulledM % spacing, acc = 0, nextS = phase;
+  ctx.strokeStyle = "rgba(96, 72, 34, 0.7)"; ctx.lineWidth = 0.018; ctx.lineCap = "butt";
+  ctx.beginPath();
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+    if (len === 0) continue;
+    while (nextS <= acc + len) {
+      const t = (nextS - acc) / len, x = a.x + dx * t, y = a.y + dy * t;
+      const tx = dx / len, ty = dy / len;
+      // direction halfway between the tangent and the normal = a 45 degree twist
+      const ux = (tx - ty) * Math.SQRT1_2, uy = (ty + tx) * Math.SQRT1_2;
+      ctx.moveTo(x - ux * h, y - uy * h); ctx.lineTo(x + ux * h, y + uy * h);
+      nextS += spacing;
+    }
+    acc += len;
+  }
   ctx.stroke();
   ctx.lineCap = "butt";
   // tension labels on supporting segments
   const each = fmtKg(c.load.kg / c.rt.ma) + " kg";
   let n = 0;
-  for (const seg of path.segs) {
+  for (const seg of c.path.segs) {
     if (!seg.support) continue;
     n++;
     // badges alternate above/below the midpoint so dense rigs stay readable
