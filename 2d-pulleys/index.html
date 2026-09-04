@@ -208,8 +208,23 @@ const Pulley = {
 
   swingInit(kick) { return { theta: 0, omega: kick || 0, t: 0, fallen: false, landed: false, fx: 0, fy: 0, fvx: 0, fvy: 0, fang: 0, fspin: 0 }; },
 
-  // deterministic gust factor in about [0.1, 1]
-  gust(t) { return 0.55 + 0.45 * (0.5 * Math.sin(1.1 * t) + 0.35 * Math.sin(2.9 * t + 1.3) + 0.15 * Math.sin(6.1 * t + 0.4)); },
+  // Deterministic wind factor: a wobbling lull (about 0.5-0.9 of the set
+  // speed) plus one gust per 7 s window, rising in 0.35 s to 1.25-1.65x,
+  // holding 0.6-2.2 s and dying away over 1.4 s. Timing varies by window.
+  GUST_WINDOW: 7,
+  gust(t) {
+    const W = Pulley.GUST_WINDOW, w = Math.floor(t / W), u = t - w * W;
+    const h = (n) => { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); };
+    const start = 0.4 + h(w) * 2.4, hold = 0.6 + h(w + 0.5) * 1.6, peak = 1.25 + h(w + 0.25) * 0.4;
+    const rise = 0.35, fall = 1.4, x = u - start;
+    let g = 0;
+    if (x > 0) {
+      if (x < rise) g = x / rise; else if (x < rise + hold) g = 1; else if (x < rise + hold + fall) g = 1 - (x - rise - hold) / fall;
+      g = g * g * (3 - 2 * g);
+    }
+    const lull = 0.72 + 0.12 * Math.sin(0.9 * t) + 0.08 * Math.sin(2.3 * t + 1.0);
+    return lull + (peak - lull) * g;
+  },
 
   // horizontal force (N) on a load's face, dynamic pressure times area
   windForce(windMs, load, t) {
@@ -517,7 +532,13 @@ const PulleyTests = {
       let peak = 0;
       for (let i = 0; i < 600; i++) { Pulley.swingStep(sw, 1 / 60, 0, load); peak = Math.max(peak, Math.abs(sw.theta)); }
       assert(!sw.fallen && peak < 0.45 && Math.abs(sw.theta) < 0.05, "settles under damping");
-      for (let t = 0; t < 20; t += 0.1) { const g = Pulley.gust(t); assert(g > 0 && g <= 1.05, "gust in range"); }
+      let lo = 9, hi = 0, gusts = 0, up = false;
+      for (let t = 0; t < 70; t += 1 / 60) {
+        const g = Pulley.gust(t); lo = Math.min(lo, g); hi = Math.max(hi, g);
+        if (g > 1.1 && !up) { gusts++; up = true; } else if (g < 1.0) up = false;
+      }
+      assert(lo > 0.45 && lo < 0.95 && hi > 1.2 && hi <= 1.66, `lull and gust range ${lo.toFixed(2)}..${hi.toFixed(2)}`);
+      assert(gusts >= 8 && gusts <= 11, "about one gust per window: " + gusts);
     });
 
     test("swing: a storm knocks the bucket off but not the car", () => {
@@ -609,6 +630,7 @@ const state = { top: 4, bottom: 4, loadId: "barrel", pulledM: 0, strain: 0, drag
 const HANG_KICK = 1.2; // rad/s nudge when a load is hung, so it visibly sways
 const SIGN_HOURS_PER_S = 1; // the safety board runs at one simulated hour per real second
 state.accidentAt = -120 / SIGN_HOURS_PER_S; // the board opens at 5 days
+state.windDist = 0; // metres of air gone past, drives the streaks
 state.drops = [];   // airborne sludge droplets {x,y,vx,vy,age}
 state.splats = [];  // sludge stuck to the figure, in the figure's frame {dx,dy,age}
 state.puddles = []; // sludge on the floor {x,age}
@@ -970,12 +992,13 @@ function drawSign() {
 function drawWind() {
   const v = state.wind;
   if (v <= 0) return;
-  const n = Math.round(v / 2) + 2;
-  ctx.strokeStyle = `rgba(200, 215, 230, ${0.12 + v / 100})`; ctx.lineWidth = 0.02; ctx.lineCap = "round";
+  const gf = Pulley.gust(state.time), now = v * gf;
+  const n = Math.round(now / 2) + 2;
+  ctx.strokeStyle = `rgba(200, 215, 230, ${0.12 + now / 100})`; ctx.lineWidth = 0.02; ctx.lineCap = "round";
   ctx.beginPath();
   for (let k = 0; k < n; k++) {
-    const len = 0.15 + v * 0.025;
-    const x = ((state.time * v * 0.35 + k * 1.37) % (L.sceneW + 1)) - 0.5;
+    const len = 0.12 + now * 0.028;
+    const x = ((state.windDist * 0.35 + k * 1.37) % (L.sceneW + 1)) - 0.5;
     const y = 0.7 + ((k * 0.61) % 3.8);
     ctx.moveTo(x, y); ctx.lineTo(x + len, y);
   }
@@ -1155,7 +1178,8 @@ function updatePanel() {
   $("pulled").textContent = s.pulledM.toFixed(1) + " m";
   $("height").textContent = s.heightM.toFixed(2) + " m";
   $("sentence").textContent = Pulley.rigSentence(rt, load.kg);
-  $("windVal").textContent = `${state.wind} m/s · ${Pulley.windName(state.wind)}`;
+  const now = Math.round(state.wind * Pulley.gust(state.time));
+  $("windVal").textContent = state.wind ? `${state.wind} m/s · ${Pulley.windName(state.wind)} · now ${now}` : "0 m/s · calm";
   const hint = Pulley.idleHint(rt);
   $("hint").hidden = !hint; $("hint").textContent = hint;
   for (const b of $("loads").children) b.classList.toggle("on", b.dataset.id === state.loadId);
@@ -1223,6 +1247,7 @@ function frame(now) {
     if (state.pulledM === 0) state.lowering = false;
   }
   state.strain = Math.max(0, state.strain - dt * 0.8);
+  state.windDist += state.wind * Pulley.gust(state.time) * dt;
   stepSwing(dt);
   stepDroplets(dt, current());
   draw(); updatePanel();
