@@ -42,8 +42,8 @@
   .foot { margin-top:16px; color:var(--muted); font-size:12.5px; }
   @media (max-width: 820px) {
     #app { flex-direction:column; }
-    #stage { flex:none; }
-    #panel { width:auto; border-left:0; border-top:1px solid #000; }
+    #stage { flex:none; height:min(80vw, 70vh); }
+    #panel { width:auto; flex:1; border-left:0; border-top:1px solid #000; }
   }
 </style>
 </head>
@@ -725,9 +725,83 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-//__INPUT__
+function canvasToScene(ev) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (ev.clientX - r.left) / r.width * L.sceneW, y: (ev.clientY - r.top) / r.height * L.sceneH };
+}
+const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
 
-window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone };
+function hitTrayPulley(p) {
+  for (let k = 0; k < 3; k++) if (dist(p.x, p.y, 0.45 + k * 0.42, L.trayY + 0.12) < 0.2) return true;
+  return false;
+}
+// returns "top"/"bottom" when a sheave in that block is under the pointer
+function hitInstalledSheave(p, c) {
+  for (const x of c.g.xT) if (dist(p.x, p.y, x, c.g.yT) < c.g.r + 0.06) return "top";
+  for (const x of c.g.xB) if (dist(p.x, p.y, x, c.g.yB) < c.g.r + 0.06) return "bottom";
+  return null;
+}
+
+canvas.addEventListener("pointerdown", (ev) => {
+  const p = canvasToScene(ev), c = current();
+  canvas.setPointerCapture(ev.pointerId);
+  if (hitTrayPulley(p)) { state.drag = { kind: "pulley", x: p.x, y: p.y }; return; }
+  const blk = hitInstalledSheave(p, c);
+  if (blk) {
+    setRig(state.top - (blk === "top" ? 1 : 0), state.bottom - (blk === "bottom" ? 1 : 0));
+    state.drag = { kind: "pulley", x: p.x, y: p.y };
+    return;
+  }
+  if (dist(p.x, p.y, c.g.hand.x, c.g.hand.y) < 0.4) { state.drag = { kind: "pull", lastY: p.y }; canvas.style.cursor = "grabbing"; }
+});
+canvas.addEventListener("pointermove", (ev) => {
+  const p = canvasToScene(ev);
+  if (!state.drag) {
+    const c = current();
+    canvas.style.cursor = (hitTrayPulley(p) || hitInstalledSheave(p, c) || dist(p.x, p.y, c.g.hand.x, c.g.hand.y) < 0.4) ? "grab" : "default";
+    return;
+  }
+  if (state.drag.kind === "pulley") { state.drag.x = p.x; state.drag.y = p.y; return; }
+  const c = current();
+  const dy = p.y - state.drag.lastY; state.drag.lastY = p.y;
+  // dragging along the pull direction hauls rope in
+  applyPull(c.rt.pullDir === "down" ? dy : -dy);
+});
+function endDrag() {
+  if (!state.drag) return;
+  if (state.drag.kind === "pulley") {
+    const c = current();
+    for (const z of dropZones(c)) {
+      if (pointInZone(state.drag.x, state.drag.y, z) && !z.full) {
+        if (z.id === "top") setRig(state.top + 1, state.bottom); else setRig(state.top, state.bottom + 1);
+      }
+    }
+  }
+  state.drag = null; canvas.style.cursor = "default";
+  draw(); updatePanel();
+}
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+
+const pullBtn = $("pull");
+const stopHold = () => { state.holdPull = false; };
+pullBtn.addEventListener("pointerdown", (ev) => {
+  ev.preventDefault();
+  applyPull(0.05); // a tap nudges the load; holding keeps hauling in frame()
+  state.holdPull = true;
+  try { pullBtn.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic pointer */ }
+});
+pullBtn.addEventListener("pointerup", stopHold);
+pullBtn.addEventListener("pointercancel", stopHold);
+pullBtn.addEventListener("lostpointercapture", stopHold);
+$("lower").addEventListener("click", () => { state.pulledM = 0; state.strain = 0; });
+$("clear").addEventListener("click", () => { setRig(0, 0); updatePanel(); });
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "ArrowUp") { applyPull(0.15); ev.preventDefault(); }
+  else if (ev.key === "ArrowDown") { applyPull(-0.15); ev.preventDefault(); }
+});
+
+window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene };
 
 buildLoadButtons();
 initFromQuery();
