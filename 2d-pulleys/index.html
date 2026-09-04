@@ -37,6 +37,9 @@
   #loads button, #presets button { display:flex; justify-content:space-between; gap:6px; padding:7px 9px; }
   #loads button.on, #presets button.on { outline:2px solid var(--accent); background:#3d3218; }
   #loads button small, #presets button small { color:var(--muted); white-space:nowrap; }
+  .slider { display:block; margin:12px 0 2px; font-size:13.5px; color:var(--muted); }
+  .slider b { color:var(--ink); float:right; font-weight:600; }
+  .slider input { display:block; width:100%; margin:6px 0 0; accent-color:var(--accent); }
   .sentence { margin:12px 0 0; padding:10px 12px; border-left:3px solid var(--accent); background:#1f252e; font-size:14px; }
   .hint { margin:8px 0 0; color:var(--accent); font-size:13.5px; }
   .foot { margin-top:16px; color:var(--muted); font-size:12.5px; }
@@ -63,13 +66,14 @@
     <div class="row"><span>Rope pulled</span><b id="pulled">0.0 m</b></div>
     <div class="row"><span>Height gained</span><b id="height">0.0 m</b></div>
     <div class="btns"><button id="pull" class="primary">Hold to pull</button><button id="lower">Lower</button><button id="clear">Clear rig</button></div>
+    <label class="slider"><span>Wind <b id="windVal">8 m/s · strong breeze</b></span><input id="wind" type="range" min="0" max="30" step="1" value="8"></label>
     <h2>Ready-made rigs</h2>
     <div id="presets"></div>
     <h2>Load on the hook</h2>
     <div id="loads"></div>
     <p id="sentence" class="sentence"></p>
     <p id="hint" class="hint" hidden></p>
-    <p class="foot">Idealised: no friction, weightless rope and blocks, ropes treated as vertical. Real pulleys lose a few percent per sheave. Keys: ↑ pull, ↓ lower.</p>
+    <p class="foot">Idealised: no friction, weightless rope and blocks, ropes treated as vertical. Real pulleys lose a few percent per sheave. The load swings on its sling; wind pushes on its face, and past about 50° it slips off the hook. Keys: ↑ pull, ↓ lower.</p>
   </aside>
 </div>
 <script id="shared-code">
@@ -195,6 +199,80 @@ const Pulley = {
     }
     return { x0, xT, xB, yT: L.yT, yB, r, hookX, hookY, anchor, hand, stand, handLift, bodyT, bodyB };
   },
+
+  // ----- swinging load and wind -----
+  WIND_MAX: 30,          // m/s at the top of the slider
+  FALL_ANGLE: 0.9,       // rad; past this the sling slips off the hook
+  SWING_DAMPING: 0.4,    // 1/s
+  AIR_DENSITY: 1.2,      // kg/m^3
+
+  swingInit(kick) { return { theta: 0, omega: kick || 0, t: 0, fallen: false, landed: false, fx: 0, fy: 0, fvx: 0, fvy: 0, fang: 0, fspin: 0 }; },
+
+  // deterministic gust factor in about [0.1, 1]
+  gust(t) { return 0.55 + 0.45 * (0.5 * Math.sin(1.1 * t) + 0.35 * Math.sin(2.9 * t + 1.3) + 0.15 * Math.sin(6.1 * t + 0.4)); },
+
+  // horizontal force (N) on a load's face, dynamic pressure times area
+  windForce(windMs, load, t) {
+    const v = windMs * Pulley.gust(t);
+    return 0.5 * Pulley.AIR_DENSITY * v * v * load.w * load.h;
+  },
+
+  pendulumLength(load) { return 0.2 + load.h / 2; },
+
+  // Damped pendulum about the hook tip, pushed by the wind. Semi-implicit
+  // Euler in sub-steps. Sets `fallen` once the swing passes FALL_ANGLE.
+  swingStep(sw, dt, windMs, load) {
+    if (sw.fallen) return sw;
+    const Lp = Pulley.pendulumLength(load), m = load.kg;
+    const n = Math.max(1, Math.ceil(dt / (1 / 120))), h = dt / n;
+    for (let k = 0; k < n; k++) {
+      sw.t += h;
+      const F = Pulley.windForce(windMs, load, sw.t);
+      const acc = -(Pulley.G / Lp) * Math.sin(sw.theta) + (F / (m * Lp)) * Math.cos(sw.theta) - Pulley.SWING_DAMPING * sw.omega;
+      sw.omega += acc * h;
+      sw.theta += sw.omega * h;
+      if (Math.abs(sw.theta) > Pulley.FALL_ANGLE) { sw.fallen = true; break; }
+    }
+    return sw;
+  },
+
+  // Called once when the sling slips: the load's frame (origin at the sling
+  // top, y down the load) leaves the pivot with the pendulum's tangential
+  // velocity and keeps spinning.
+  detach(sw, pivotX, pivotY, load) {
+    const Lp = Pulley.pendulumLength(load), vt = Lp * sw.omega;
+    sw.fx = pivotX; sw.fy = pivotY;
+    sw.fvx = vt * Math.cos(sw.theta); sw.fvy = vt * Math.sin(sw.theta);
+    sw.fang = sw.theta; sw.fspin = sw.omega;
+    sw.landed = false;
+    return sw;
+  },
+
+  // lowest point of the load's box below its frame origin, for a given tilt
+  dropExtent(load, ang) { return load.h * Math.abs(Math.cos(ang)) + (load.w / 2) * Math.abs(Math.sin(ang)); },
+
+  fallStep(sw, dt, windMs, load, floorY) {
+    sw.t += dt;
+    if (sw.landed) {
+      // settle onto the floor: upright if it landed nearly upright, else on its side
+      const rest = Math.abs(sw.fang) < 0.6 ? 0 : Math.sign(sw.fang) * Math.PI / 2;
+      sw.fang += (rest - sw.fang) * Math.min(1, dt * 6);
+      sw.fy = floorY - Pulley.dropExtent(load, sw.fang);
+      sw.fvx *= Math.max(0, 1 - dt * 4); sw.fx += sw.fvx * dt;
+      return sw;
+    }
+    sw.fvy += Pulley.G * dt;
+    sw.fvx += (Pulley.windForce(windMs, load, sw.t) / load.kg) * dt;
+    sw.fx += sw.fvx * dt; sw.fy += sw.fvy * dt;
+    sw.fang += sw.fspin * dt;
+    if (sw.fy + Pulley.dropExtent(load, sw.fang) >= floorY) {
+      sw.landed = true; sw.fvy = 0; sw.fvx *= 0.3; sw.fspin = 0;
+      sw.fy = floorY - Pulley.dropExtent(load, sw.fang);
+    }
+    return sw;
+  },
+
+  windName(v) { return v === 0 ? "calm" : v < 4 ? "light air" : v < 8 ? "breeze" : v < 14 ? "strong breeze" : v < 21 ? "gale" : "storm"; },
 
   // How much rope runs over each sheave per metre the load rises: the k-th
   // sheave along the rope from the anchor has k shortening segments upstream
@@ -408,6 +486,44 @@ const PulleyTests = {
       }
     });
 
+    test("swing: no wind damps out and never falls", () => {
+      const load = Pulley.LOADS.find((l) => l.id === "bucket");
+      const sw = Pulley.swingInit(0); sw.theta = 0.4;
+      let peak = 0;
+      for (let i = 0; i < 600; i++) { Pulley.swingStep(sw, 1 / 60, 0, load); peak = Math.max(peak, Math.abs(sw.theta)); }
+      assert(!sw.fallen && peak < 0.45 && Math.abs(sw.theta) < 0.05, "settles under damping");
+      for (let t = 0; t < 20; t += 0.1) { const g = Pulley.gust(t); assert(g > 0 && g <= 1.05, "gust in range"); }
+    });
+
+    test("swing: a storm knocks the bucket off but not the car", () => {
+      const bucket = Pulley.LOADS.find((l) => l.id === "bucket"), car = Pulley.LOADS.find((l) => l.id === "car");
+      const a = Pulley.swingInit(0), b = Pulley.swingInit(0);
+      let fellAt = -1;
+      for (let i = 0; i < 60 * 20; i++) {
+        Pulley.swingStep(a, 1 / 60, Pulley.WIND_MAX, bucket);
+        if (a.fallen && fellAt < 0) fellAt = i / 60;
+        Pulley.swingStep(b, 1 / 60, Pulley.WIND_MAX, car);
+      }
+      assert(a.fallen && fellAt < 15, "bucket falls in a storm, at " + fellAt);
+      assert(!b.fallen && Math.abs(b.theta) < 0.2, "car barely moves in a storm");
+      // a breeze does not knock the bucket off
+      const c = Pulley.swingInit(1.2);
+      for (let i = 0; i < 60 * 20; i++) Pulley.swingStep(c, 1 / 60, 6, bucket);
+      assert(!c.fallen, "bucket stays on in a 6 m/s breeze");
+    });
+
+    test("fall: lands on the floor and settles", () => {
+      const load = Pulley.LOADS.find((l) => l.id === "barrel");
+      const sw = Pulley.swingInit(0); sw.theta = 0.95; sw.omega = 2.0; sw.fallen = true;
+      Pulley.detach(sw, 2.0, 2.5, load);
+      assert(sw.fvx > 0 && sw.fvy > 0 && Math.abs(sw.fang - 0.95) < 1e-9, "leaves with tangential velocity");
+      for (let i = 0; i < 60 * 4; i++) Pulley.fallStep(sw, 1 / 60, 0, load, 4.9);
+      assert(sw.landed, "landed");
+      assert(Math.abs(sw.fy + Pulley.dropExtent(load, sw.fang) - 4.9) < 1e-6, "rests on the floor");
+      assert(Math.abs(Math.abs(sw.fang) - Math.PI / 2) < 0.05, "a barrel that came off sideways lies on its side");
+      assert(Pulley.windName(0) === "calm" && Pulley.windName(30) === "storm", "wind names");
+    });
+
     test("layout: hand and blocks", () => {
       const L = Pulley.L;
       let rt = Pulley.route(2, 2), g = Pulley.layout(rt, 0);
@@ -438,7 +554,8 @@ const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 const $ = (id) => document.getElementById(id);
 
-const state = { top: 4, bottom: 4, loadId: "crate", pulledM: 0, strain: 0, drag: null, holdPull: false, lowering: false, time: 0 };
+const state = { top: 4, bottom: 4, loadId: "crate", pulledM: 0, strain: 0, drag: null, holdPull: false, lowering: false, time: 0, wind: 8, swing: Pulley.swingInit(1.2) };
+const HANG_KICK = 1.2; // rad/s nudge when a load is hung, so it visibly sways
 const LOWER_M_PER_S = 0.8; // load descent speed while the Lower button is active
 let metrics = fitCanvasMetrics(CW, CH, 1, CW, CH);
 
@@ -446,9 +563,10 @@ function current() {
   const rt = Pulley.route(state.top, state.bottom);
   const load = Pulley.LOADS.find((l) => l.id === state.loadId) || Pulley.LOADS[1];
   const travel = Pulley.travelFor(rt);
-  const s = Pulley.lift(rt, load.kg, Pulley.STRENGTH_KG, state.pulledM, travel);
+  const fallen = state.swing.fallen;
+  const s = Pulley.lift(rt, fallen ? 0 : load.kg, Pulley.STRENGTH_KG, state.pulledM, travel);
   const g = Pulley.layout(rt, s.heightM);
-  return { rt, load, travel, s, g, path: Pulley.ropePath(rt, g) };
+  return { rt, load, travel, s, g, fallen, path: Pulley.ropePath(rt, g) };
 }
 
 function setRig(top, bottom) {
@@ -456,7 +574,8 @@ function setRig(top, bottom) {
   state.bottom = Math.max(0, Math.min(Pulley.MAX_SHEAVES, bottom));
   state.pulledM = 0; state.strain = 0; state.lowering = false;
 }
-function setLoad(id) { state.loadId = id; state.pulledM = 0; state.strain = 0; state.lowering = false; }
+function setLoad(id) { state.loadId = id; state.pulledM = 0; state.strain = 0; state.lowering = false; state.swing = Pulley.swingInit(HANG_KICK); }
+function pivot(g) { return { x: g.hookX, y: g.hookY + 0.15 }; } // hook tip, where the sling hangs
 
 // deltaM > 0 hauls rope in (raises the load), < 0 pays it out.
 function applyPull(deltaM) {
@@ -650,7 +769,7 @@ function drawRope(c) {
   strokeStrands(tail);
   ctx.lineCap = "butt";
   // tension labels on supporting segments
-  const each = fmtKg(c.load.kg / c.rt.ma) + " kg";
+  const each = fmtKg((c.fallen ? 0 : c.load.kg) / c.rt.ma) + " kg";
   let n = 0;
   for (const seg of c.path.segs) {
     if (!seg.support) continue;
@@ -720,14 +839,36 @@ const LOAD_DRAW = {
 };
 
 function drawLoad(c) {
-  const { g, load } = c;
-  const top = g.hookY + 0.15;
-  ctx.save(); ctx.translate(g.hookX, top);
-  ctx.strokeStyle = "#8d96a1"; ctx.lineWidth = 0.035;
-  ctx.beginPath(); ctx.moveTo(0, -0.1); ctx.lineTo(-load.w * 0.3, 0.12); ctx.moveTo(0, -0.1); ctx.lineTo(load.w * 0.3, 0.12); ctx.stroke();
-  LOAD_DRAW[load.id](load.w, load.h);
-  ctx.restore();
-  text(`${load.name} · ${load.kg} kg`, g.hookX - load.w / 2 - 0.12, top + load.h / 2, 13, "#e9eef3", "right", "600");
+  const { g, load } = c, sw = state.swing;
+  const drawSlingAndShape = () => {
+    ctx.strokeStyle = "#8d96a1"; ctx.lineWidth = 0.035;
+    ctx.beginPath(); ctx.moveTo(0, -0.1); ctx.lineTo(-load.w * 0.3, 0.12); ctx.moveTo(0, -0.1); ctx.lineTo(load.w * 0.3, 0.12); ctx.stroke();
+    LOAD_DRAW[load.id](load.w, load.h);
+  };
+  if (!sw.fallen) {
+    const p = pivot(g);
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(sw.theta); drawSlingAndShape(); ctx.restore();
+    text(`${load.name} · ${load.kg} kg`, p.x - load.w / 2 - 0.12, p.y + load.h / 2, 13, "#e9eef3", "right", "600");
+  } else {
+    ctx.save(); ctx.translate(sw.fx, sw.fy); ctx.rotate(sw.fang); drawSlingAndShape(); ctx.restore();
+    if (sw.landed) text(`${load.name} · ${load.kg} kg — fell off!`, sw.fx, L.floorY - Pulley.dropExtent(load, sw.fang) - 0.2, 13, "#e8625c", "center", "600", "rgba(27,32,39,.85)");
+  }
+}
+
+function drawWind() {
+  const v = state.wind;
+  if (v <= 0) return;
+  const n = Math.round(v / 2) + 2;
+  ctx.strokeStyle = `rgba(200, 215, 230, ${0.12 + v / 100})`; ctx.lineWidth = 0.02; ctx.lineCap = "round";
+  ctx.beginPath();
+  for (let k = 0; k < n; k++) {
+    const len = 0.15 + v * 0.025;
+    const x = ((state.time * v * 0.35 + k * 1.37) % (L.sceneW + 1)) - 0.5;
+    const y = 0.7 + ((k * 0.61) % 3.8);
+    ctx.moveTo(x, y); ctx.lineTo(x + len, y);
+  }
+  ctx.stroke();
+  ctx.lineCap = "butt";
 }
 
 function drawFigure(c) {
@@ -787,6 +928,7 @@ function draw() {
   ctx.setTransform(metrics.sx * PX, 0, 0, metrics.sy * PX, 0, 0);
   ctx.clearRect(0, 0, L.sceneW, L.sceneH);
   drawBackground(c);
+  drawWind();
   drawBlocks(c);
   drawRope(c);
   drawLoad(c);
@@ -799,14 +941,17 @@ function updatePanel() {
   const c = current();
   const { rt, load, s } = c;
   $("ma").textContent = rt.ma + "×";
-  $("loadKg").textContent = `${load.kg} kg  (${Math.round(load.kg * Pulley.G)} N)`;
+  $("loadKg").textContent = c.fallen ? "none — it fell off" : `${load.kg} kg  (${Math.round(load.kg * Pulley.G)} N)`;
   $("needKg").textContent = `${fmtKg(s.neededKg)} kg  (${Math.round(s.neededKg * Pulley.G)} N)`;
   $("strength").textContent = `${Pulley.STRENGTH_KG} kg`;
   const fill = $("barFill");
   fill.style.width = Math.min(100, (s.neededKg / Pulley.STRENGTH_KG) * 50) + "%";
   fill.className = s.lifts ? "" : "bad";
   const st = $("status");
-  if (!s.lifts) {
+  if (c.fallen) {
+    st.className = "status bad";
+    st.textContent = `The ${load.name.toLowerCase()} swung too far and slipped off the hook. Click a load to hang it again.`;
+  } else if (!s.lifts) {
     const need = Pulley.segmentsNeeded(load.kg, Pulley.STRENGTH_KG);
     const max = 2 * Pulley.MAX_SHEAVES;
     st.className = "status bad";
@@ -823,6 +968,7 @@ function updatePanel() {
   $("pulled").textContent = s.pulledM.toFixed(1) + " m";
   $("height").textContent = s.heightM.toFixed(2) + " m";
   $("sentence").textContent = Pulley.rigSentence(rt, load.kg);
+  $("windVal").textContent = `${state.wind} m/s · ${Pulley.windName(state.wind)}`;
   const hint = Pulley.idleHint(rt);
   $("hint").hidden = !hint; $("hint").textContent = hint;
   for (const b of $("loads").children) b.classList.toggle("on", b.dataset.id === state.loadId);
@@ -862,6 +1008,18 @@ function initFromQuery() {
   setRig(num("top", opt.top), num("bottom", opt.bottom));
   if (q.get("load") && Pulley.LOADS.some((l) => l.id === q.get("load"))) state.loadId = q.get("load");
   state.pulledM = Math.max(0, parseFloat(q.get("pulled") || "0") || 0);
+  if (q.has("wind")) { state.wind = Math.max(0, Math.min(Pulley.WIND_MAX, parseInt(q.get("wind"), 10) || 0)); $("wind").value = state.wind; }
+  if (q.has("swing")) state.swing.theta = parseFloat(q.get("swing")) || 0;
+}
+
+function stepSwing(dt) {
+  const c = current(), sw = state.swing;
+  if (!sw.fallen) {
+    Pulley.swingStep(sw, dt, state.wind, c.load);
+    if (sw.fallen) { const p = pivot(c.g); Pulley.detach(sw, p.x, p.y, c.load); }
+  } else {
+    Pulley.fallStep(sw, dt, state.wind, c.load, L.floorY);
+  }
 }
 
 let last = performance.now();
@@ -874,6 +1032,7 @@ function frame(now) {
     if (state.pulledM === 0) state.lowering = false;
   }
   state.strain = Math.max(0, state.strain - dt * 0.8);
+  stepSwing(dt);
   draw(); updatePanel();
   requestAnimationFrame(frame);
 }
@@ -948,6 +1107,7 @@ pullBtn.addEventListener("pointerup", stopHold);
 pullBtn.addEventListener("pointercancel", stopHold);
 pullBtn.addEventListener("lostpointercapture", stopHold);
 $("lower").addEventListener("click", () => { state.lowering = true; state.strain = 0; });
+$("wind").addEventListener("input", (ev) => { state.wind = parseInt(ev.target.value, 10) || 0; updatePanel(); });
 $("clear").addEventListener("click", () => { setRig(0, 0); updatePanel(); });
 window.addEventListener("keydown", (ev) => {
   if (ev.key === "ArrowUp") { applyPull(0.15); ev.preventDefault(); }
