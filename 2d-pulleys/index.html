@@ -272,6 +272,17 @@ const Pulley = {
     return sw;
   },
 
+  // Tiny sludge droplets: they fall (capped at a terminal speed, they are
+  // small) and the wind sweeps them sideways with a short relaxation time.
+  DROP_TERMINAL: 3.5,
+  dropletStep(d, dt, windMs, t) {
+    const wind = windMs * Pulley.gust(t);
+    d.vx += (wind - d.vx) * Math.min(1, 4 * dt);
+    d.vy = Math.min(Pulley.DROP_TERMINAL, d.vy + Pulley.G * dt);
+    d.x += d.vx * dt; d.y += d.vy * dt; d.age += dt;
+    return d;
+  },
+
   // Safety-board wording: hours while under two days, whole days after that.
   accidentSign(hours) {
     return hours < 48
@@ -531,6 +542,14 @@ const PulleyTests = {
       assert(Pulley.windName(0) === "calm" && Pulley.windName(30) === "storm", "wind names");
     });
 
+    test("droplets ride the wind", () => {
+      const still = { x: 0, y: 0, vx: 0, vy: 0, age: 0 }, windy = { x: 0, y: 0, vx: 0, vy: 0, age: 0 };
+      for (let i = 0; i < 36; i++) { Pulley.dropletStep(still, 1 / 60, 0, i / 60); Pulley.dropletStep(windy, 1 / 60, 8, i / 60); }
+      assert(Math.abs(still.x) < 1e-9 && still.y > 1.0 && still.y < 1.8, "no wind: falls straight, terminal-limited");
+      assert(windy.x > 1.2 && windy.y > 1.0, "8 m/s carries a drop over a metre in 0.6 s: " + windy.x.toFixed(2));
+      assert(windy.vy <= Pulley.DROP_TERMINAL, "capped fall speed");
+    });
+
     test("accident sign: hours under 48, days after", () => {
       let a = Pulley.accidentSign(120);
       assert(a.label === "DAYS SINCE LAST ACCIDENT" && a.value === 5, "5 days at start");
@@ -577,6 +596,12 @@ const state = { top: 4, bottom: 4, loadId: "crate", pulledM: 0, strain: 0, drag:
 const HANG_KICK = 1.2; // rad/s nudge when a load is hung, so it visibly sways
 const SIGN_HOURS_PER_S = 1; // the safety board runs at one simulated hour per real second
 state.accidentAt = -120 / SIGN_HOURS_PER_S; // the board opens at 5 days
+state.drops = [];   // airborne sludge droplets {x,y,vx,vy,age}
+state.splats = [];  // sludge stuck to the figure, in the figure's frame {dx,dy,age}
+state.puddles = []; // sludge on the floor {x,age}
+state.hitTimer = 0; // seconds left of the figure's "eww" reaction
+let dripAcc = 0;
+const WIND_KEY = "pulleys.wind";
 const LOWER_M_PER_S = 0.8; // load descent speed while the Lower button is active
 let metrics = fitCanvasMetrics(CW, CH, 1, CW, CH);
 
@@ -945,7 +970,7 @@ function drawWind() {
   ctx.lineCap = "butt";
 }
 
-function drawFigure(c) {
+function figureGeom(c) {
   const { g, rt, s } = c;
   const feetY = g.stand === "balcony" ? L.balconyY : L.floorY;
   const strain = s.lifts ? 0 : state.strain;
@@ -957,6 +982,16 @@ function drawFigure(c) {
   const lean = (rt.pullDir === "down" || g.handLift) ? -0.15 * strain : 0.1 * strain;
   const hipY = feetY - 0.85, shoulderY = feetY - 1.4, headY = feetY - 1.62;
   const hipX = bx + wobble, shX = bx + lean + wobble;
+  const segs = [ // limbs and torso as line segments, for droplet hits
+    [hipX, hipY, bx - 0.22, feetY], [hipX, hipY, bx + 0.22, feetY], [hipX, hipY, shX, shoulderY],
+    [shX, shoulderY, g.hand.x, g.hand.y],
+  ];
+  return { feetY, strain, wobble, bx, lean, hipY, shoulderY, headY, hipX, shX, headX: shX + lean * 0.5, segs };
+}
+
+function drawFigure(c) {
+  const { g } = c;
+  const { feetY, strain, bx, lean, hipY, shoulderY, headY, hipX, shX } = figureGeom(c);
   ctx.strokeStyle = "#e9eef3"; ctx.lineWidth = 0.06; ctx.lineCap = "round"; ctx.lineJoin = "round";
   ctx.beginPath();
   ctx.moveTo(hipX, hipY); ctx.lineTo(bx - 0.22, feetY); ctx.moveTo(hipX, hipY); ctx.lineTo(bx + 0.22, feetY);
@@ -967,8 +1002,71 @@ function drawFigure(c) {
   ctx.fillStyle = "#e9eef3"; ctx.beginPath(); ctx.arc(shX + lean * 0.5, headY, 0.16, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = "#f3b640"; ctx.beginPath(); ctx.arc(g.hand.x, g.hand.y, 0.07, 0, Math.PI * 2); ctx.fill();
   ctx.lineCap = "butt";
-  if (strain > 0.15) text("ngh!", shX + 0.35, headY - 0.1, 13, "#e8625c", "left", "700");
+  // sludge stuck to him
+  if (state.splats.length) {
+    ctx.save(); ctx.shadowColor = "rgba(120,255,80,.8)"; ctx.shadowBlur = 4; ctx.fillStyle = "#7ef04a";
+    for (const sp of state.splats) { ctx.globalAlpha = Math.max(0.15, 1 - sp.age / 40); ctx.beginPath(); ctx.arc(bx + sp.dx, feetY + sp.dy, sp.r, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+  }
+  if (state.hitTimer > 0) text("eww!", shX + 0.35, headY - 0.1, 13, "#7ef04a", "left", "700");
+  else if (strain > 0.15) text("ngh!", shX + 0.35, headY - 0.1, 13, "#e8625c", "left", "700");
   text("50 kg", bx + 0.2, hipY - 0.1, 11, "#98a3b0", "left", "500");
+}
+
+// where the drum's drips are, in world space, following the swing or the fall
+function loadFrame(c) {
+  const sw = state.swing;
+  if (!sw.fallen) { const p = pivot(c.g); return { x: p.x, y: p.y, ang: sw.theta }; }
+  return { x: sw.fx, y: sw.fy, ang: sw.fang };
+}
+const DRIP_POINTS = (load) => {
+  const y0 = 0.05, hh = load.h - y0, w = load.w;
+  return [[w * 0.4, y0 + hh * 0.77 + 0.16], [w * 0.28, y0 + hh * 0.97 + 0.11], [-w * 0.18, y0 + hh * 0.97 + 0.07], [w * 0.06, y0 + hh * 0.97 + 0.15]];
+};
+
+function distToSeg(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / l2)) : 0;
+  return Math.hypot(px - (x1 + dx * t), py - (y1 + dy * t));
+}
+
+function stepDroplets(dt, c) {
+  const fig = figureGeom(c);
+  if (c.load.id === "barrel") {
+    dripAcc += dt * 5; // drops per second across all leaks
+    const f = loadFrame(c), pts = DRIP_POINTS(c.load), cs = Math.cos(f.ang), sn = Math.sin(f.ang);
+    while (dripAcc >= 1) {
+      dripAcc -= 1;
+      const [lx, ly] = pts[Math.floor(Math.random() * pts.length)];
+      state.drops.push({ x: f.x + lx * cs - ly * sn, y: f.y + lx * sn + ly * cs, vx: 0, vy: 0.2, age: 0 });
+    }
+  }
+  const keep = [];
+  for (const d of state.drops) {
+    Pulley.dropletStep(d, dt, state.wind, state.time);
+    const onFigure = Math.hypot(d.x - fig.headX, d.y - fig.headY) < 0.19 || fig.segs.some(([x1, y1, x2, y2]) => distToSeg(d.x, d.y, x1, y1, x2, y2) < 0.08);
+    if (onFigure) {
+      state.splats.push({ dx: d.x - fig.bx, dy: d.y - fig.feetY, r: 0.025 + Math.random() * 0.02, age: 0 });
+      if (state.splats.length > 80) state.splats.shift();
+      state.hitTimer = 1.2;
+      continue;
+    }
+    if (d.y >= L.floorY) { state.puddles.push({ x: d.x, age: 0 }); if (state.puddles.length > 60) state.puddles.shift(); continue; }
+    if (d.x > L.sceneW + 0.5 || d.age > 6) continue;
+    keep.push(d);
+  }
+  state.drops = keep.slice(-300);
+  for (const sp of state.splats) sp.age += dt;
+  state.puddles = state.puddles.filter((pd) => (pd.age += dt) < 12);
+  state.hitTimer = Math.max(0, state.hitTimer - dt);
+}
+
+function drawDroplets() {
+  if (!state.drops.length && !state.puddles.length) return;
+  ctx.save(); ctx.shadowColor = "rgba(120,255,80,.9)"; ctx.shadowBlur = 5; ctx.fillStyle = "#7ef04a";
+  for (const d of state.drops) { ctx.beginPath(); ctx.arc(d.x, d.y, 0.018, 0, Math.PI * 2); ctx.fill(); }
+  for (const pd of state.puddles) { ctx.globalAlpha = Math.max(0, 1 - pd.age / 12) * 0.8; ctx.beginPath(); ctx.ellipse(pd.x, L.floorY - 0.008, 0.05, 0.014, 0, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
 }
 
 function dropZones(c) {
@@ -1008,6 +1106,7 @@ function draw() {
   drawRope(c);
   drawLoad(c);
   drawFigure(c);
+  drawDroplets();
   drawDropZones(c);
   drawGhost();
 }
@@ -1083,7 +1182,11 @@ function initFromQuery() {
   setRig(num("top", opt.top), num("bottom", opt.bottom));
   if (q.get("load") && Pulley.LOADS.some((l) => l.id === q.get("load"))) state.loadId = q.get("load");
   state.pulledM = Math.max(0, parseFloat(q.get("pulled") || "0") || 0);
-  if (q.has("wind")) { state.wind = Math.max(0, Math.min(Pulley.WIND_MAX, parseInt(q.get("wind"), 10) || 0)); $("wind").value = state.wind; }
+  // wind: last setting from storage, unless the URL says otherwise
+  let wind = null;
+  try { const v = localStorage.getItem(WIND_KEY); if (v !== null) wind = parseInt(v, 10); } catch (e) { /* storage unavailable */ }
+  if (q.has("wind")) wind = parseInt(q.get("wind"), 10);
+  if (wind !== null && !Number.isNaN(wind)) { state.wind = Math.max(0, Math.min(Pulley.WIND_MAX, wind)); $("wind").value = state.wind; }
   if (q.has("swing")) state.swing.theta = parseFloat(q.get("swing")) || 0;
 }
 
@@ -1108,6 +1211,7 @@ function frame(now) {
   }
   state.strain = Math.max(0, state.strain - dt * 0.8);
   stepSwing(dt);
+  stepDroplets(dt, current());
   draw(); updatePanel();
   requestAnimationFrame(frame);
 }
@@ -1182,14 +1286,17 @@ pullBtn.addEventListener("pointerup", stopHold);
 pullBtn.addEventListener("pointercancel", stopHold);
 pullBtn.addEventListener("lostpointercapture", stopHold);
 $("lower").addEventListener("click", () => { state.lowering = true; state.strain = 0; });
-$("wind").addEventListener("input", (ev) => { state.wind = parseInt(ev.target.value, 10) || 0; updatePanel(); });
+$("wind").addEventListener("input", (ev) => {
+  state.wind = parseInt(ev.target.value, 10) || 0; updatePanel();
+  try { localStorage.setItem(WIND_KEY, String(state.wind)); } catch (e) { /* storage unavailable */ }
+});
 $("clear").addEventListener("click", () => { setRig(0, 0); updatePanel(); });
 window.addEventListener("keydown", (ev) => {
   if (ev.key === "ArrowUp") { applyPull(0.15); ev.preventDefault(); }
   else if (ev.key === "ArrowDown") { applyPull(-0.15); ev.preventDefault(); }
 });
 
-window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene };
+window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene, initFromQuery };
 
 buildPresetButtons();
 buildLoadButtons();
