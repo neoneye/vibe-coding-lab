@@ -772,6 +772,11 @@ state.cut = null;   // {s, fall:{h,v,bounces,rest}} once the rope has been cut
 state.bars = [];    // gold bars still on the pallet (load-frame positions)
 state.looseBars = []; // bars that slid off {x,y,vx,vy,ang,spin,landed}
 let slideAcc = 0;
+state.boom = null;     // {x, y, age} while an explosion plays
+state.debris = [];     // splinters, sparks and smoke {x,y,vx,vy,ang,spin,age,life,kind,r}
+state.scorch = null;   // {x} burn mark on the floor
+state.shake = 0;       // screen shake energy
+state.sootTimer = 0;   // seconds the figure stays blackened
 let dripAcc = 0;
 const WIND_KEY = "pulleys.wind";
 const LOWER_M_PER_S = 0.8; // load descent speed while the Lower button is active
@@ -812,7 +817,7 @@ function setLoad(id) {
   state.loadId = id; state.strain = 0; state.lowering = false; state.swing = Pulley.swingInit(HANG_KICK);
   const load = Pulley.LOADS.find((l) => l.id === id);
   state.bars = load && load.id === "gold" ? Pulley.goldBars(load) : [];
-  state.looseBars = [];
+  state.looseBars = []; state.scorch = null;
 }
 // The hook is a J: shank down from the eye, then an arc of radius 0.09 centred
 // 0.09 left of the shank. The sling hangs from the bottom of that U.
@@ -1056,7 +1061,19 @@ const LOAD_DRAW = {
   crate(w, h) {
     ctx.fillStyle = "#b98a4d"; ctx.fillRect(-w / 2, 0.05, w, h - 0.05);
     ctx.strokeStyle = "#7d5a2f"; ctx.lineWidth = 0.03; ctx.strokeRect(-w / 2, 0.05, w, h - 0.05);
-    ctx.beginPath(); ctx.moveTo(-w / 2, 0.05); ctx.lineTo(w / 2, h); ctx.moveTo(w / 2, 0.05); ctx.lineTo(-w / 2, h); ctx.stroke();
+    // planks
+    ctx.lineWidth = 0.015; ctx.beginPath();
+    for (const f of [0.3, 0.55, 0.8]) { ctx.moveTo(-w / 2, 0.05 + (h - 0.05) * f); ctx.lineTo(w / 2, 0.05 + (h - 0.05) * f); }
+    ctx.stroke();
+    // stencil
+    ctx.fillStyle = "#f2e4c8"; ctx.fillRect(-w * 0.34, 0.05 + (h - 0.05) * 0.33, w * 0.68, (h - 0.05) * 0.34);
+    ctx.font = `900 ${(h * 0.3).toFixed(3)}px Impact, "Arial Black", system-ui, sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "#b8281e"; ctx.fillText("TNT", 0, 0.05 + (h - 0.05) * 0.5 + h * 0.01);
+    // fuse
+    ctx.strokeStyle = "#3a2a1a"; ctx.lineWidth = 0.018; ctx.beginPath(); ctx.moveTo(w * 0.3, 0.05); ctx.quadraticCurveTo(w * 0.36, -0.06, w * 0.44, -0.02); ctx.stroke();
+    const f = 0.5 + 0.5 * Math.sin(state.time * 18);
+    ctx.fillStyle = `rgba(255,${150 + 80 * f},40,${0.6 + 0.4 * f})`; ctx.beginPath(); ctx.arc(w * 0.44, -0.02, 0.02 + 0.01 * f, 0, Math.PI * 2); ctx.fill();
   },
   gold(w, h) {
     // wooden pallet with the remaining bars stacked on it (bars come from state)
@@ -1197,9 +1214,11 @@ function drawLoad(c) {
     const p = pivot(g);
     ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(sw.theta); drawSlingAndShape(); ctx.restore();
     text(`${load.name} · ${c.mass} kg`, p.x - load.w / 2 - 0.12, p.y + load.h / 2, 13, "#e9eef3", "right", "600");
+  } else if (sw.exploded) {
+    return; // nothing left but the scorch mark
   } else {
     ctx.save(); ctx.translate(sw.fx, sw.fy); ctx.rotate(sw.fang); drawSlingAndShape(); ctx.restore();
-    if (sw.landed) text(`${load.name} · ${c.mass} kg — fell off!`, sw.fx, L.floorY - Pulley.dropExtent(load, sw.fang) - 0.2, 13, "#e8625c", "center", "600", "rgba(27,32,39,.85)");
+    if (sw.landed && !sw.exploded) text(`${load.name} · ${c.mass} kg — fell off!`, sw.fx, L.floorY - Pulley.dropExtent(load, sw.fang) - 0.2, 13, "#e8625c", "center", "600", "rgba(27,32,39,.85)");
   }
 }
 
@@ -1254,14 +1273,21 @@ function figureGeom(c) {
 function drawFigure(c) {
   const { g } = c;
   const { feetY, strain, bx, lean, hipY, shoulderY, headY, hipX, shX } = figureGeom(c);
-  ctx.strokeStyle = "#e9eef3"; ctx.lineWidth = 0.06; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  const sooty = state.sootTimer > 0, skin = sooty ? "#3a3a3a" : "#e9eef3";
+  ctx.strokeStyle = skin; ctx.lineWidth = 0.06; ctx.lineCap = "round"; ctx.lineJoin = "round";
   ctx.beginPath();
   ctx.moveTo(hipX, hipY); ctx.lineTo(bx - 0.22, feetY); ctx.moveTo(hipX, hipY); ctx.lineTo(bx + 0.22, feetY);
   ctx.moveTo(hipX, hipY); ctx.lineTo(shX, shoulderY);
   ctx.moveTo(shX, shoulderY); ctx.lineTo(g.hand.x + 0.02, g.hand.y + 0.03);
   ctx.moveTo(shX, shoulderY); ctx.lineTo(g.hand.x - 0.02, g.hand.y - 0.03);
   ctx.stroke();
-  ctx.fillStyle = "#e9eef3"; ctx.beginPath(); ctx.arc(shX + lean * 0.5, headY, 0.16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(shX + lean * 0.5, headY, 0.16, 0, Math.PI * 2); ctx.fill();
+  if (sooty) { // frazzled hair and wide eyes
+    ctx.strokeStyle = "#3a3a3a"; ctx.lineWidth = 0.03; ctx.beginPath();
+    for (let k = -3; k <= 3; k++) { const a = -Math.PI / 2 + k * 0.28; ctx.moveTo(shX + lean * 0.5 + Math.cos(a) * 0.16, headY + Math.sin(a) * 0.16); ctx.lineTo(shX + lean * 0.5 + Math.cos(a) * 0.3, headY + Math.sin(a) * 0.3); }
+    ctx.stroke();
+    ctx.fillStyle = "#fff"; for (const ex of [-0.05, 0.05]) { ctx.beginPath(); ctx.arc(shX + lean * 0.5 + ex, headY - 0.02, 0.035, 0, Math.PI * 2); ctx.fill(); }
+  }
   ctx.fillStyle = "#f3b640"; ctx.beginPath(); ctx.arc(g.hand.x, g.hand.y, 0.07, 0, Math.PI * 2); ctx.fill();
   ctx.lineCap = "butt";
   // sludge stuck to him
@@ -1270,7 +1296,8 @@ function drawFigure(c) {
     for (const sp of state.splats) { ctx.globalAlpha = Math.max(0.15, 1 - sp.age / 40); ctx.beginPath(); ctx.arc(bx + sp.dx, feetY + sp.dy, sp.r, 0, Math.PI * 2); ctx.fill(); }
     ctx.restore();
   }
-  if (state.hitTimer > 0) text("eww!", shX + 0.35, headY - 0.1, 13, "#7ef04a", "left", "700");
+  if (sooty) text("ouch!", shX + 0.35, headY - 0.1, 13, "#ffb347", "left", "700");
+  else if (state.hitTimer > 0) text("eww!", shX + 0.35, headY - 0.1, 13, "#7ef04a", "left", "700");
   else if (strain > 0.15) text("ngh!", shX + 0.35, headY - 0.1, 13, "#e8625c", "left", "700");
   text("50 kg", bx + 0.2, hipY - 0.1, 11, "#98a3b0", "left", "500");
 }
@@ -1361,6 +1388,7 @@ function draw() {
   const c = current();
   ctx.setTransform(metrics.sx * PX, 0, 0, metrics.sy * PX, 0, 0);
   ctx.clearRect(0, 0, L.sceneW, L.sceneH);
+  if (state.shake > 0) { const k = state.shake * state.shake * 0.08; ctx.translate(Math.sin(state.time * 90) * k, Math.cos(state.time * 71) * k); }
   drawBackground(c);
   drawWind();
   drawSign();
@@ -1370,6 +1398,7 @@ function draw() {
   state.looseBars.forEach((b, i) => drawBar(b.x, b.y, b.ang, 20 + i));
   drawFigure(c);
   drawDroplets();
+  drawExplosion();
   drawDropZones(c);
   drawGhost();
 }
@@ -1379,7 +1408,7 @@ function updatePanel() {
   const { rt, load, s } = c;
   $("ma").textContent = rt.ma + "×";
   const barsNote = load.id === "gold" && state.bars.length < Pulley.GOLD.count ? ` · ${state.bars.length} of ${Pulley.GOLD.count} bars left` : "";
-  $("loadKg").textContent = c.fallen ? "none — it fell off" : `${c.mass} kg  (${Math.round(c.mass * Pulley.G)} N)${barsNote}`;
+  $("loadKg").textContent = state.swing.exploded ? "none — it exploded" : c.fallen ? "none — it fell off" : `${c.mass} kg  (${Math.round(c.mass * Pulley.G)} N)${barsNote}`;
   $("needKg").textContent = `${fmtKg(s.neededKg)} kg  (${Math.round(s.neededKg * Pulley.G)} N)`;
   $("strength").textContent = `${Pulley.STRENGTH_KG} kg`;
   const fill = $("barFill");
@@ -1390,6 +1419,9 @@ function updatePanel() {
   if (c.cut) {
     st.className = "status bad";
     st.textContent = `Rope cut! With no rope there is no tension: the block${c.fallen ? "" : " and the " + load.name.toLowerCase()} crashed down. Fit a new rope.`;
+  } else if (state.swing.exploded) {
+    st.className = "status bad";
+    st.textContent = "BOOM! The TNT crate went off when it hit the floor. Click a load to hang another one.";
   } else if (c.fallen) {
     st.className = "status bad";
     st.textContent = state.swing.knocked
@@ -1471,12 +1503,67 @@ function stepSwing(dt) {
     Pulley.swingStep(sw, dt, state.wind, body);
     if (sw.fallen) { const p = pivot(c.g); Pulley.detach(sw, p.x, p.y, c.load); state.accidentAt = state.time; }
   } else {
+    const wasLanded = sw.landed;
     Pulley.fallStep(sw, dt, state.wind, body, L.floorY);
+    if (c.load.id === "crate" && sw.landed && !wasLanded && !sw.exploded) explode(sw.fx, sw.fy + c.load.h / 2, c);
+    if (sw.exploded) return;
     // a light load can be blown a long way; keep it on stage
     const lim = L.sceneW - c.load.w / 2 - 0.1;
     if (sw.fx > lim) { sw.fx = lim; sw.fvx = 0; }
     if (sw.fx < c.load.w / 2 + 0.1) { sw.fx = c.load.w / 2 + 0.1; sw.fvx = 0; }
   }
+}
+
+function explode(x, y, c) {
+  state.boom = { x, y, age: 0 };
+  state.scorch = { x };
+  state.shake = 1;
+  state.swing.exploded = true; state.swing.fallen = true; state.swing.landed = true;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  for (let i = 0; i < 26; i++) state.debris.push({ x, y, vx: rnd(-5, 5), vy: rnd(-8, -1), ang: rnd(0, 6.3), spin: rnd(-12, 12), age: 0, life: rnd(1.2, 2.2), kind: "splinter", r: rnd(0.05, 0.13) });
+  for (let i = 0; i < 30; i++) state.debris.push({ x, y, vx: rnd(-6, 6), vy: rnd(-7, 0), ang: 0, spin: 0, age: 0, life: rnd(0.3, 0.7), kind: "spark", r: rnd(0.02, 0.04) });
+  for (let i = 0; i < 18; i++) state.debris.push({ x: x + rnd(-0.4, 0.4), y: y + rnd(-0.3, 0.1), vx: rnd(-0.8, 0.8), vy: rnd(-1.4, -0.4), ang: 0, spin: 0, age: 0, life: rnd(1.5, 2.8), kind: "smoke", r: rnd(0.15, 0.35) });
+  const fig = figureGeom(c);
+  if (Math.abs(fig.bx - x) < 2.6) { state.sootTimer = 4; state.hitTimer = 0; }
+  state.accidentAt = state.time;
+}
+
+function stepExplosion(dt) {
+  if (state.boom) { state.boom.age += dt; if (state.boom.age > 1.2) state.boom = null; }
+  state.shake = Math.max(0, state.shake - dt * 1.6);
+  state.sootTimer = Math.max(0, state.sootTimer - dt);
+  const keep = [];
+  for (const d of state.debris) {
+    d.age += dt; if (d.age > d.life) continue;
+    if (d.kind === "smoke") { d.x += (d.vx + state.wind * Pulley.gust(state.time) * 0.15) * dt; d.y += d.vy * dt; d.r += dt * 0.25; }
+    else {
+      d.vy += Pulley.G * dt; d.x += d.vx * dt; d.y += d.vy * dt; d.ang += d.spin * dt;
+      if (d.y > L.floorY) { d.y = L.floorY; d.vy = -d.vy * 0.3; d.vx *= 0.6; d.spin *= 0.5; }
+    }
+    keep.push(d);
+  }
+  state.debris = keep;
+}
+
+function drawExplosion() {
+  for (const d of state.debris) {
+    const k = 1 - d.age / d.life;
+    if (d.kind === "smoke") { ctx.fillStyle = `rgba(70,70,75,${0.45 * k})`; ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2); ctx.fill(); }
+    else if (d.kind === "spark") { ctx.fillStyle = `rgba(255,${120 + 120 * k},40,${k})`; ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2); ctx.fill(); }
+    else { ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.ang); ctx.fillStyle = "#8a6238"; ctx.fillRect(-d.r, -0.012, d.r * 2, 0.024); ctx.restore(); }
+  }
+  if (state.scorch) { ctx.fillStyle = "rgba(20,18,16,.75)"; ctx.beginPath(); ctx.ellipse(state.scorch.x, L.floorY - 0.005, 0.9, 0.05, 0, 0, Math.PI * 2); ctx.fill(); }
+  const b = state.boom;
+  if (!b) return;
+  const a = b.age;
+  if (a < 0.6) { // fireball
+    const r = 0.3 + a * 2.6, k = 1 - a / 0.6;
+    const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, r);
+    g.addColorStop(0, `rgba(255,255,220,${k})`); g.addColorStop(0.35, `rgba(255,170,40,${0.9 * k})`); g.addColorStop(0.7, `rgba(220,60,20,${0.6 * k})`); g.addColorStop(1, "rgba(80,20,10,0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  if (a < 0.12) { ctx.fillStyle = `rgba(255,255,255,${0.8 * (1 - a / 0.12)})`; ctx.fillRect(0, 0, L.sceneW, L.sceneH); }
+  if (a > 0.05 && a < 0.9) text("BOOM!", b.x, b.y - 1.2 - a * 0.6, 34 + a * 10, `rgba(255,220,80,${1 - a / 0.9})`, "center", "900");
 }
 
 // gold bars slide off a tilted pallet, one every quarter second while it stays tilted
@@ -1510,8 +1597,12 @@ function frame(now) {
   }
   state.strain = Math.max(0, state.strain - dt * 0.8);
   state.windDist += state.wind * Pulley.gust(state.time) * dt;
-  if (state.cut) Pulley.cutFallStep(state.cut.fall, dt);
-  else {
+  if (state.cut) {
+    const wasRest = state.cut.fall.rest, hadHeight = state.cut.fall.h > 0.05;
+    Pulley.cutFallStep(state.cut.fall, dt);
+    const cc = current();
+    if (cc.load.id === "crate" && state.cut.fall.rest && !wasRest && hadHeight && !state.swing.fallen) { const p = pivot(cc.g); explode(p.x, p.y + cc.load.h / 2, cc); }
+  } else {
     // too heavy to hold: the rope runs back through the hands
     const c0 = current();
     if (!c0.s.lifts && c0.s.heightM > 0) {
@@ -1520,6 +1611,7 @@ function frame(now) {
     }
   }
   stepSwing(dt);
+  stepExplosion(dt);
   stepBars(dt, current());
   stepDroplets(dt, current());
   draw(); updatePanel();
@@ -1632,7 +1724,7 @@ window.addEventListener("keydown", (ev) => {
   else if (ev.key === "ArrowDown") { applyPull(-0.15); ev.preventDefault(); }
 });
 
-window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene, initFromQuery, cutRope, knockOff, hitRope, hitLoad, stepBars };
+window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene, initFromQuery, cutRope, knockOff, hitRope, hitLoad, stepBars, explode };
 
 buildPresetButtons();
 buildLoadButtons();
