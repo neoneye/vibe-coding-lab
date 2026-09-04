@@ -262,6 +262,21 @@ const Pulley = {
     return sw;
   },
 
+  // A sudden change dv (m/s, up positive) in the hoist speed jolts the load:
+  // the pivot's acceleration adds to gravity for an instant, which amplifies
+  // an existing swing (omega -= dv/Lp * sin theta), and the jerk itself sets
+  // the load swinging along the direction it is already moving.
+  JERK_KICK: 0.8,
+  jerk(sw, dv, load) {
+    if (sw.fallen) return sw;
+    const Lp = Pulley.pendulumLength(load);
+    sw.omega -= (dv / Lp) * Math.sin(sw.theta);
+    let dir = Math.sign(sw.omega);
+    if (Math.abs(sw.omega) < 0.05) dir = sw.theta !== 0 ? -Math.sign(sw.theta) : 1;
+    sw.omega += Pulley.JERK_KICK * Math.abs(dv) / Math.max(Math.abs(dv), 0.15) * dir;
+    return sw;
+  },
+
   // horizontal offset of the load's bottom from the hook, positive = right
   swingOffsetX(sw, load) { return -Pulley.pendulumLength(load) * Math.sin(sw.theta); },
 
@@ -645,6 +660,22 @@ const PulleyTests = {
       assert(!c.fallen, "bucket stays on in a 6 m/s breeze");
     });
 
+    test("jerk: hoist starts and stops amplify the swing", () => {
+      const crate = Pulley.LOADS.find((l) => l.id === "crate");
+      const still = Pulley.swingInit(0);
+      Pulley.jerk(still, 0.3, crate);
+      assert(Math.abs(still.omega) >= Pulley.JERK_KICK - 1e-9, "a still load is set swinging");
+      const swinging = Pulley.swingInit(0); swinging.theta = 0.2; swinging.omega = 1.0;
+      const before = swinging.omega;
+      Pulley.jerk(swinging, 0.3, crate);
+      assert(swinging.omega > before, "kick goes with the motion: " + swinging.omega.toFixed(2));
+      const back = Pulley.swingInit(0); back.theta = 0.3; back.omega = -0.9;
+      Pulley.jerk(back, -0.3, crate);
+      assert(back.omega < -0.9, "and with the motion when swinging the other way");
+      const fallen = Pulley.swingInit(0); fallen.fallen = true; Pulley.jerk(fallen, 1, crate);
+      assert(fallen.omega === 0, "no jolt for a load that is off the hook");
+    });
+
     test("fall: lands on the floor and settles", () => {
       const load = Pulley.LOADS.find((l) => l.id === "barrel");
       // swung far to the right (negative theta) and still moving right: it flies off up and to the right
@@ -801,6 +832,15 @@ function setRig(top, bottom) {
   state.bottom = Math.max(0, Math.min(Pulley.MAX_SHEAVES, bottom));
   state.pulledM = 0; state.strain = 0; state.lowering = false; state.cut = null;
 }
+// jolt the hanging load when the hoist speed jumps by dv (m/s, up positive)
+function jolt(dv) {
+  const c = current();
+  if (state.cut || state.swing.fallen || !c.s.lifts) return;
+  Pulley.jerk(state.swing, dv, c.load);
+}
+const HOLD_ROPE_SPEED = 1.2; // m/s of rope hauled while the button is held
+function hoistSpeedForHold() { return HOLD_ROPE_SPEED / current().rt.ma; }
+
 function cutRope(sM) {
   const c = current();
   state.cut = { s: sM, fall: { h: c.s.heightM, v: 0, bounces: 0, rest: c.s.heightM <= 0 } };
@@ -1615,11 +1655,11 @@ function stepBars(dt, c) {
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now; state.time += dt;
-  if (state.holdPull) applyPull(dt * 1.2);
+  if (state.holdPull) applyPull(dt * HOLD_ROPE_SPEED);
   if (state.lowering) {
     const c = current();
     state.pulledM = Math.max(0, c.s.pulledM - dt * LOWER_M_PER_S * c.rt.ma);
-    if (state.pulledM === 0) state.lowering = false;
+    if (state.pulledM === 0) { state.lowering = false; jolt(LOWER_M_PER_S); } // hits the bottom
   }
   state.strain = Math.max(0, state.strain - dt * 0.8);
   state.windDist += state.wind * Pulley.gust(state.time) * dt;
@@ -1728,17 +1768,18 @@ canvas.addEventListener("pointerup", endDrag);
 canvas.addEventListener("pointercancel", endDrag);
 
 const pullBtn = $("pull");
-const stopHold = () => { state.holdPull = false; };
+const stopHold = () => { if (state.holdPull) { state.holdPull = false; jolt(-hoistSpeedForHold()); } };
 pullBtn.addEventListener("pointerdown", (ev) => {
   ev.preventDefault();
   applyPull(0.05); // a tap nudges the load; holding keeps hauling in frame()
+  if (!state.holdPull) jolt(hoistSpeedForHold());
   state.holdPull = true;
   try { pullBtn.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic pointer */ }
 });
 pullBtn.addEventListener("pointerup", stopHold);
 pullBtn.addEventListener("pointercancel", stopHold);
 pullBtn.addEventListener("lostpointercapture", stopHold);
-$("lower").addEventListener("click", () => { state.lowering = true; state.strain = 0; });
+$("lower").addEventListener("click", () => { if (!state.lowering && state.pulledM > 0) jolt(-LOWER_M_PER_S); state.lowering = true; state.strain = 0; });
 $("wind").addEventListener("input", (ev) => {
   state.wind = parseInt(ev.target.value, 10) || 0; updatePanel();
   store(WIND_KEY, state.wind);
@@ -1750,7 +1791,7 @@ window.addEventListener("keydown", (ev) => {
   else if (ev.key === "ArrowDown") { applyPull(-0.15); ev.preventDefault(); }
 });
 
-window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene, initFromQuery, cutRope, knockOff, hitRope, hitLoad, stepBars, explode };
+window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene, initFromQuery, cutRope, knockOff, hitRope, hitLoad, stepBars, explode, jolt };
 
 buildPresetButtons();
 buildLoadButtons();
