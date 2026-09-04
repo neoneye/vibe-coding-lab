@@ -5,13 +5,70 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>2D Pulleys</title>
 <style>
-  /* filled in Task 4 */
+  :root { --bg:#1b2027; --panel:#242a33; --ink:#e9eef3; --muted:#98a3b0; --accent:#f3b640; --ok:#5fc57f; --bad:#e8625c; --line:#3a424d; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  #app { display:flex; height:100%; }
+  #stage { flex:1; min-width:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; user-select:none; -webkit-user-select:none; }
+  #panel { width:330px; flex:none; padding:16px 20px 20px; background:var(--panel); border-left:1px solid #000; overflow:auto; }
+  h1 { margin:0 0 2px; font-size:24px; letter-spacing:.02em; }
+  h2 { margin:18px 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  .sub { margin:0 0 14px; color:var(--muted); font-size:13.5px; }
+  .ma { display:flex; align-items:baseline; gap:10px; margin:6px 0 10px; }
+  .ma b { font-size:44px; line-height:1; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .ma small { color:var(--muted); line-height:1.25; }
+  .row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  .row span { color:var(--muted); }
+  .bar { position:relative; height:12px; margin:10px 0 4px; background:#151a20; border-radius:6px; overflow:hidden; }
+  .bar i { position:absolute; left:0; top:0; bottom:0; width:0; background:var(--ok); border-radius:6px; transition:width .12s; }
+  .bar i.bad { background:var(--bad); }
+  .bar em { position:absolute; left:50%; top:-2px; bottom:-2px; width:2px; background:var(--ink); }
+  .barcap { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); }
+  .status { margin:10px 0; padding:8px 10px; border-radius:6px; background:#1a3a27; color:var(--ok); font-weight:600; }
+  .status.bad { background:#40201f; color:var(--bad); }
+  .status.warn { background:#3d3218; color:var(--accent); }
+  .btns { display:flex; gap:8px; margin:10px 0 4px; }
+  button { flex:1; padding:9px 6px; border:1px solid var(--line); border-radius:6px; background:#2f3742; color:var(--ink); font:inherit; cursor:pointer; touch-action:none; user-select:none; -webkit-user-select:none; }
+  button:hover { background:#3a4350; }
+  button.primary { background:var(--accent); color:#1b2027; border-color:transparent; font-weight:700; }
+  button.primary:hover { background:#ffc659; }
+  #loads { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  #loads button { display:flex; justify-content:space-between; padding:7px 9px; }
+  #loads button.on { outline:2px solid var(--accent); background:#3d3218; }
+  #loads button small { color:var(--muted); }
+  .sentence { margin:12px 0 0; padding:10px 12px; border-left:3px solid var(--accent); background:#1f252e; font-size:14px; }
+  .hint { margin:8px 0 0; color:var(--accent); font-size:13.5px; }
+  .foot { margin-top:16px; color:var(--muted); font-size:12.5px; }
+  @media (max-width: 820px) {
+    #app { flex-direction:column; }
+    #stage { flex:none; }
+    #panel { width:auto; border-left:0; border-top:1px solid #000; }
+  }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="stage"><canvas id="c" width="800" height="640"></canvas></div>
-  <aside id="panel"><!-- filled in Task 4 --></aside>
+  <aside id="panel">
+    <h1>Pulleys</h1>
+    <p class="sub">Drag pulleys from the tray onto the <b>beam</b> or the <b>hook</b>. Then drag the rope end (or hold Pull) to lift.</p>
+    <div class="ma"><b id="ma">1×</b><small>mechanical advantage<br>rope segments holding the load</small></div>
+    <div class="row"><span>Load</span><b id="loadKg">40 kg</b></div>
+    <div class="row"><span>Force you must pull with</span><b id="needKg">40 kg</b></div>
+    <div class="row"><span>Your strength</span><b id="strength">50 kg</b></div>
+    <div class="bar"><i id="barFill"></i><em title="your strength"></em></div>
+    <div class="barcap"><span>0</span><span>strength</span><span>2× strength</span></div>
+    <div id="status" class="status">Lifts!</div>
+    <div class="row"><span>Rope pulled</span><b id="pulled">0.0 m</b></div>
+    <div class="row"><span>Height gained</span><b id="height">0.0 m</b></div>
+    <div class="btns"><button id="pull" class="primary">Hold to pull</button><button id="lower">Lower</button><button id="clear">Clear rig</button></div>
+    <h2>Load on the hook</h2>
+    <div id="loads"></div>
+    <p id="sentence" class="sentence"></p>
+    <p id="hint" class="hint" hidden></p>
+    <p class="foot">Idealised: no friction, weightless rope and blocks, ropes treated as vertical. Real pulleys lose a few percent per sheave. Keys: ↑ pull, ↓ lower.</p>
+  </aside>
 </div>
 <script id="shared-code">
 "use strict";
@@ -318,7 +375,367 @@ const PulleyTests = {
 };
 </script>
 <script>
-// renderer and input: Tasks 4 and 5
+"use strict";
+(() => {
+const L = Pulley.L, PX = L.pxPerM, CW = 800, CH = 640;
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const $ = (id) => document.getElementById(id);
+
+const state = { top: 0, bottom: 0, loadId: "crate", pulledM: 0, strain: 0, drag: null, holdPull: false, time: 0 };
+let metrics = fitCanvasMetrics(CW, CH, 1, CW, CH);
+
+function current() {
+  const rt = Pulley.route(state.top, state.bottom);
+  const load = Pulley.LOADS.find((l) => l.id === state.loadId) || Pulley.LOADS[1];
+  const travel = Pulley.travelFor(rt);
+  const s = Pulley.lift(rt, load.kg, Pulley.STRENGTH_KG, state.pulledM, travel);
+  const g = Pulley.layout(rt, s.heightM);
+  return { rt, load, travel, s, g, path: Pulley.ropePath(rt, g) };
+}
+
+function setRig(top, bottom) {
+  state.top = Math.max(0, Math.min(Pulley.MAX_SHEAVES, top));
+  state.bottom = Math.max(0, Math.min(Pulley.MAX_SHEAVES, bottom));
+  state.pulledM = 0; state.strain = 0;
+}
+function setLoad(id) { state.loadId = id; state.pulledM = 0; state.strain = 0; }
+
+// deltaM > 0 hauls rope in (raises the load), < 0 pays it out.
+function applyPull(deltaM) {
+  const c = current();
+  if (!c.s.lifts) { if (deltaM > 0) state.strain = Math.min(1, state.strain + deltaM * 1.5); return; }
+  state.pulledM = Math.max(0, Math.min(c.travel * c.rt.ma, c.s.pulledM + deltaM));
+}
+
+function resize() {
+  const stage = $("stage");
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  metrics = fitCanvasMetrics(Math.max(1, stage.clientWidth), Math.max(1, stage.clientHeight), dpr, CW, CH);
+  canvas.width = metrics.pxW; canvas.height = metrics.pxH;
+  canvas.style.width = metrics.cssW + "px"; canvas.style.height = metrics.cssH + "px";
+}
+
+// Text is drawn in screen pixels (tiny metre-sized fonts render badly under a transform).
+function text(str, xm, ym, size, color, align = "center", weight = "600", bg = null) {
+  ctx.save();
+  ctx.setTransform(metrics.sx, 0, 0, metrics.sy, 0, 0);
+  ctx.font = `${weight} ${size}px system-ui, -apple-system, Helvetica, Arial, sans-serif`;
+  ctx.textAlign = align; ctx.textBaseline = "middle";
+  const x = xm * PX, y = ym * PX;
+  if (bg) {
+    const w = ctx.measureText(str).width + 8, h = size + 4;
+    const x0 = align === "left" ? x - 4 : align === "right" ? x - w + 4 : x - w / 2;
+    ctx.fillStyle = bg; ctx.fillRect(x0, y - h / 2, w, h);
+  }
+  ctx.fillStyle = color;
+  ctx.fillText(str, x, y);
+  ctx.restore();
+}
+function rrect(x, y, w, h, rad) {
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y); ctx.arcTo(x + w, y, x + w, y + h, rad); ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad); ctx.arcTo(x, y, x + w, y, rad); ctx.closePath();
+}
+
+function drawBackground(c) {
+  const grad = ctx.createLinearGradient(0, 0, 0, L.floorY);
+  grad.addColorStop(0, "#2b323c"); grad.addColorStop(1, "#1f252d");
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, L.sceneW, L.floorY);
+  // beam
+  ctx.fillStyle = "#6b4a2e"; ctx.fillRect(0, L.beamY - 0.18, L.sceneW, 0.18);
+  ctx.fillStyle = "#8a6440"; ctx.fillRect(0, L.beamY - 0.18, L.sceneW, 0.05);
+  // floor
+  ctx.fillStyle = "#3a3f47"; ctx.fillRect(0, L.floorY, L.sceneW, L.sceneH - L.floorY);
+  ctx.fillStyle = "#4a515b"; ctx.fillRect(0, L.floorY, L.sceneW, 0.05);
+  // balcony for upward pulls
+  if (c.g.stand === "balcony") {
+    ctx.fillStyle = "#5b4a3a";
+    ctx.fillRect(L.balconyX, L.balconyY, L.balconyW, 0.12);
+    ctx.fillRect(L.balconyX + 0.1, L.balconyY, 0.08, L.floorY - L.balconyY);
+    ctx.fillRect(L.balconyX + L.balconyW - 0.18, L.balconyY, 0.08, L.floorY - L.balconyY);
+    ctx.strokeStyle = "#7a664f"; ctx.lineWidth = 0.04;
+    ctx.beginPath();
+    ctx.moveTo(L.balconyX + L.balconyW, L.balconyY); ctx.lineTo(L.balconyX + L.balconyW, L.balconyY - 0.9);
+    ctx.moveTo(L.balconyX + L.balconyW - 0.6, L.balconyY - 0.9); ctx.lineTo(L.balconyX + L.balconyW + 0.02, L.balconyY - 0.9);
+    ctx.stroke();
+  }
+  // tray
+  ctx.fillStyle = "#14181d"; ctx.fillRect(0, L.floorY + 0.05, L.sceneW, L.sceneH);
+  for (let k = 0; k < 3; k++) drawSheave(0.45 + k * 0.42, L.trayY + 0.12, 0.12, 0, true, "#d6dde4");
+  text("pulleys — drag one onto the beam or the hook", 1.55, L.trayY + 0.12, 13, "#98a3b0", "left", "500");
+}
+
+function drawSheave(x, y, r, angle, used, faceColor) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = used ? (faceColor || "#cfd6dd") : "#565d67";
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = used ? "#6a727c" : "#454b54"; ctx.lineWidth = 0.02; ctx.stroke();
+  ctx.rotate(angle);
+  ctx.strokeStyle = used ? "#7c858f" : "#3f454d"; ctx.lineWidth = 0.025;
+  ctx.beginPath();
+  for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2; ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * r * 0.8, Math.sin(a) * r * 0.8); }
+  ctx.stroke();
+  ctx.fillStyle = "#3a4048"; ctx.beginPath(); ctx.arc(0, 0, r * 0.22, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  if (!used) {
+    ctx.save(); ctx.setLineDash([0.05, 0.04]); ctx.strokeStyle = "#8d96a1"; ctx.lineWidth = 0.02;
+    ctx.beginPath(); ctx.arc(x, y, r + 0.05, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+  }
+}
+
+function drawBlocks(c) {
+  const { g, rt } = c;
+  const bodyH = 0.44;
+  if (g.bodyT) {
+    ctx.fillStyle = "#4d5866";
+    ctx.fillRect((g.bodyT.x1 + g.bodyT.x2) / 2 - 0.06, L.beamY, 0.12, g.yT - bodyH / 2 - L.beamY + 0.02);
+    ctx.fillStyle = "#5c6775"; rrect(g.bodyT.x1, g.yT - bodyH / 2, g.bodyT.x2 - g.bodyT.x1, bodyH, 0.06); ctx.fill();
+    ctx.strokeStyle = "#2c333b"; ctx.lineWidth = 0.02; ctx.stroke();
+  }
+  if (g.bodyB) {
+    ctx.fillStyle = "#5c6775"; rrect(g.bodyB.x1, g.yB - bodyH / 2, g.bodyB.x2 - g.bodyB.x1, bodyH, 0.06); ctx.fill();
+    ctx.strokeStyle = "#2c333b"; ctx.lineWidth = 0.02; ctx.stroke();
+    ctx.fillStyle = "#4d5866"; ctx.fillRect(g.hookX - 0.05, g.yB + bodyH / 2 - 0.02, 0.1, 0.15);
+  }
+  // anchor eye
+  ctx.strokeStyle = "#8d96a1"; ctx.lineWidth = 0.035;
+  if (rt.anchor === "ceiling") { ctx.fillStyle = "#4d5866"; ctx.fillRect(g.anchor.x - 0.04, L.beamY, 0.08, g.anchor.y - L.beamY); }
+  ctx.beginPath(); ctx.arc(g.anchor.x, g.anchor.y, 0.05, 0, Math.PI * 2); ctx.stroke();
+  // hook
+  ctx.strokeStyle = "#aab3bd"; ctx.lineWidth = 0.06; ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(g.hookX, g.hookY - 0.1); ctx.lineTo(g.hookX, g.hookY + 0.05);
+  ctx.arc(g.hookX - 0.09, g.hookY + 0.05, 0.09, 0, Math.PI * 0.85, false);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(g.hookX, g.hookY - 0.1, 0.06, 0, Math.PI * 2); ctx.stroke();
+  ctx.lineCap = "butt";
+  // sheaves
+  const angle = c.s.pulledM / g.r;
+  g.xT.forEach((x, i) => drawSheave(x, g.yT, g.r, angle, i < rt.usedTop));
+  g.xB.forEach((x, j) => drawSheave(x, g.yB, g.r, -angle, j < rt.usedBottom));
+}
+
+function drawRope(c) {
+  const { path, s, g } = c;
+  ctx.strokeStyle = "#dcc79c"; ctx.lineWidth = 0.045; ctx.lineCap = "round";
+  const stretch = s.lifts ? 0 : state.strain * 0.05;
+  ctx.beginPath();
+  for (const seg of path.segs) { ctx.moveTo(seg.x1, seg.y1); ctx.lineTo(seg.x2, seg.y2); }
+  ctx.stroke();
+  for (const a of path.arcs) { ctx.beginPath(); ctx.arc(a.x, a.y, a.r, a.a0, a.a1, a.ccw); ctx.stroke(); }
+  // rope tail beyond the hands
+  ctx.beginPath(); ctx.moveTo(g.hand.x, g.hand.y);
+  if (c.rt.pullDir === "down") ctx.quadraticCurveTo(g.hand.x + 0.05, g.hand.y + 0.35 + stretch, g.hand.x + 0.25, g.hand.y + 0.55);
+  else ctx.quadraticCurveTo(g.hand.x + 0.3, g.hand.y + 0.05, g.hand.x + 0.35, g.hand.y + 0.45);
+  ctx.stroke();
+  ctx.lineCap = "butt";
+  // tension labels on supporting segments
+  const each = fmtKg(c.load.kg / c.rt.ma) + " kg";
+  let n = 0;
+  for (const seg of path.segs) {
+    if (!seg.support) continue;
+    n++;
+    // badges alternate above/below the midpoint so dense rigs stay readable
+    const x = (seg.x1 + seg.x2) / 2, y = (seg.y1 + seg.y2) / 2 + (n % 2 ? -0.3 : 0.3);
+    ctx.fillStyle = "#f3b640"; ctx.beginPath(); ctx.arc(x, y, 0.11, 0, Math.PI * 2); ctx.fill();
+    text(String(n), x, y, 12, "#1b2027", "center", "700");
+    text(each, x, y + 0.22, 11, "#f3b640", "center", "600", "rgba(27,32,39,.85)");
+  }
+}
+
+const LOAD_DRAW = {
+  bucket(w, h) {
+    ctx.fillStyle = "#7f8fa0"; ctx.beginPath(); ctx.moveTo(-w / 2, 0.12); ctx.lineTo(w / 2, 0.12); ctx.lineTo(w * 0.38, h); ctx.lineTo(-w * 0.38, h); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "#5b6773"; ctx.lineWidth = 0.03; ctx.beginPath(); ctx.arc(0, 0.12, w / 2, Math.PI, 0); ctx.stroke();
+  },
+  crate(w, h) {
+    ctx.fillStyle = "#b98a4d"; ctx.fillRect(-w / 2, 0.05, w, h - 0.05);
+    ctx.strokeStyle = "#7d5a2f"; ctx.lineWidth = 0.03; ctx.strokeRect(-w / 2, 0.05, w, h - 0.05);
+    ctx.beginPath(); ctx.moveTo(-w / 2, 0.05); ctx.lineTo(w / 2, h); ctx.moveTo(w / 2, 0.05); ctx.lineTo(-w / 2, h); ctx.stroke();
+  },
+  anvil(w, h) {
+    ctx.fillStyle = "#3f4650";
+    ctx.beginPath(); ctx.moveTo(-w / 2, 0.1); ctx.lineTo(w / 2, 0.1); ctx.lineTo(w * 0.35, 0.28); ctx.lineTo(w * 0.15, 0.28);
+    ctx.lineTo(w * 0.2, h - 0.08); ctx.lineTo(w * 0.35, h); ctx.lineTo(-w * 0.35, h); ctx.lineTo(-w * 0.2, h - 0.08); ctx.lineTo(-w * 0.15, 0.28); ctx.lineTo(-w * 0.55, 0.22); ctx.closePath(); ctx.fill();
+  },
+  barrel(w, h) {
+    ctx.fillStyle = "#8c5a33"; rrect(-w / 2, 0.05, w, h - 0.05, 0.12); ctx.fill();
+    ctx.strokeStyle = "#3d2a19"; ctx.lineWidth = 0.035;
+    for (const f of [0.22, 0.5, 0.78]) { ctx.beginPath(); ctx.moveTo(-w / 2, 0.05 + (h - 0.05) * f); ctx.lineTo(w / 2, 0.05 + (h - 0.05) * f); ctx.stroke(); }
+  },
+  piano(w, h) {
+    ctx.fillStyle = "#2a2320"; ctx.fillRect(-w / 2, 0.06, w, h - 0.2);
+    ctx.fillStyle = "#f2efe6"; ctx.fillRect(-w / 2 + 0.06, h * 0.55, w - 0.12, 0.12);
+    ctx.fillStyle = "#2a2320"; for (let k = 0; k < 12; k++) if (k % 7 !== 2 && k % 7 !== 6) ctx.fillRect(-w / 2 + 0.08 + k * (w - 0.16) / 12, h * 0.55, 0.035, 0.07);
+    ctx.fillRect(-w / 2 + 0.05, h - 0.14, 0.08, 0.14); ctx.fillRect(w / 2 - 0.13, h - 0.14, 0.08, 0.14);
+  },
+  cow(w, h) {
+    ctx.fillStyle = "#f4efe6"; rrect(-w / 2 + 0.15, 0.2, w - 0.3, h * 0.5, 0.18); ctx.fill();
+    ctx.fillStyle = "#3b3330";
+    ctx.beginPath(); ctx.ellipse(-w * 0.15, 0.42, 0.16, 0.12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(w * 0.18, 0.5, 0.12, 0.1, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#f4efe6"; rrect(w / 2 - 0.3, 0.05, 0.3, 0.32, 0.08); ctx.fill();
+    ctx.fillStyle = "#e6a9b0"; ctx.fillRect(w / 2 - 0.12, 0.25, 0.12, 0.1);
+    ctx.fillStyle = "#f4efe6"; for (const lx of [-w * 0.36, -w * 0.2, w * 0.1, w * 0.26]) ctx.fillRect(lx, h * 0.5 + 0.15, 0.09, h * 0.5 - 0.15);
+    ctx.fillStyle = "#3b3330"; ctx.beginPath(); ctx.arc(w / 2 - 0.2, 0.14, 0.025, 0, Math.PI * 2); ctx.fill();
+  },
+  car(w, h) {
+    ctx.fillStyle = "#c8503f";
+    ctx.beginPath(); ctx.moveTo(-w / 2, h * 0.55); ctx.lineTo(-w * 0.32, h * 0.5); ctx.lineTo(-w * 0.18, 0.12); ctx.lineTo(w * 0.2, 0.12);
+    ctx.lineTo(w * 0.36, h * 0.5); ctx.lineTo(w / 2, h * 0.55); ctx.lineTo(w / 2, h * 0.82); ctx.lineTo(-w / 2, h * 0.82); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#9fd3f0"; ctx.beginPath(); ctx.moveTo(-w * 0.27, h * 0.48); ctx.lineTo(-w * 0.15, 0.18); ctx.lineTo(w * 0.17, 0.18); ctx.lineTo(w * 0.3, h * 0.48); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#222"; for (const wx of [-w * 0.3, w * 0.3]) { ctx.beginPath(); ctx.arc(wx, h * 0.82, 0.16, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = "#888"; for (const wx of [-w * 0.3, w * 0.3]) { ctx.beginPath(); ctx.arc(wx, h * 0.82, 0.07, 0, Math.PI * 2); ctx.fill(); }
+  },
+};
+
+function drawLoad(c) {
+  const { g, load } = c;
+  const top = g.hookY + 0.15;
+  ctx.save(); ctx.translate(g.hookX, top);
+  ctx.strokeStyle = "#8d96a1"; ctx.lineWidth = 0.035;
+  ctx.beginPath(); ctx.moveTo(0, -0.1); ctx.lineTo(-load.w * 0.3, 0.12); ctx.moveTo(0, -0.1); ctx.lineTo(load.w * 0.3, 0.12); ctx.stroke();
+  LOAD_DRAW[load.id](load.w, load.h);
+  ctx.restore();
+  text(`${load.name} · ${load.kg} kg`, g.hookX - load.w / 2 - 0.12, top + load.h / 2, 13, "#e9eef3", "right", "600");
+}
+
+function drawFigure(c) {
+  const { g, rt, s } = c;
+  const feetY = g.stand === "balcony" ? L.balconyY : L.floorY;
+  const strain = s.lifts ? 0 : state.strain;
+  const wobble = Math.sin(state.time * 40) * 0.02 * strain;
+  let bx;
+  if (g.handLift) bx = g.hand.x + 0.35;
+  else if (rt.pullDir === "down") bx = g.hand.x + 0.3;
+  else bx = g.hand.x + 0.4;
+  const lean = (rt.pullDir === "down" || g.handLift) ? -0.15 * strain : 0.1 * strain;
+  const hipY = feetY - 0.85, shoulderY = feetY - 1.4, headY = feetY - 1.62;
+  const hipX = bx + wobble, shX = bx + lean + wobble;
+  ctx.strokeStyle = "#e9eef3"; ctx.lineWidth = 0.06; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(hipX, hipY); ctx.lineTo(bx - 0.22, feetY); ctx.moveTo(hipX, hipY); ctx.lineTo(bx + 0.22, feetY);
+  ctx.moveTo(hipX, hipY); ctx.lineTo(shX, shoulderY);
+  ctx.moveTo(shX, shoulderY); ctx.lineTo(g.hand.x + 0.02, g.hand.y + 0.03);
+  ctx.moveTo(shX, shoulderY); ctx.lineTo(g.hand.x - 0.02, g.hand.y - 0.03);
+  ctx.stroke();
+  ctx.fillStyle = "#e9eef3"; ctx.beginPath(); ctx.arc(shX + lean * 0.5, headY, 0.16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#f3b640"; ctx.beginPath(); ctx.arc(g.hand.x, g.hand.y, 0.07, 0, Math.PI * 2); ctx.fill();
+  ctx.lineCap = "butt";
+  if (strain > 0.15) text("ngh!", shX + 0.35, headY - 0.1, 13, "#e8625c", "left", "700");
+  text("50 kg", bx + 0.2, hipY - 0.1, 11, "#98a3b0", "left", "500");
+}
+
+function dropZones(c) {
+  const x = Math.min(c.g.x0, L.x0) - 0.6, w = 3 * L.pitch + 1.6;
+  return [
+    { id: "top", label: "beam", x, y: L.beamY - 0.2, w, h: 1.25, full: state.top >= Pulley.MAX_SHEAVES },
+    { id: "bottom", label: "hook", x, y: c.g.yB - 0.5, w, h: 1.0, full: state.bottom >= Pulley.MAX_SHEAVES },
+  ];
+}
+function pointInZone(x, y, z) { return x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h; }
+
+function drawDropZones(c) {
+  if (!state.drag || state.drag.kind !== "pulley") return;
+  for (const z of dropZones(c)) {
+    const hover = pointInZone(state.drag.x, state.drag.y, z);
+    ctx.save(); ctx.setLineDash([0.08, 0.06]); ctx.lineWidth = 0.03;
+    ctx.strokeStyle = hover ? (z.full ? "#e8625c" : "#f3b640") : "#8d96a1";
+    ctx.fillStyle = hover ? (z.full ? "rgba(232,98,92,.12)" : "rgba(243,182,64,.12)") : "rgba(141,150,161,.06)";
+    ctx.beginPath(); ctx.rect(z.x, z.y, z.w, z.h); ctx.fill(); ctx.stroke(); ctx.restore();
+    text(z.full ? `${z.label} (full)` : z.label, z.x + z.w / 2, z.y + 0.16, 12, hover ? "#f3b640" : "#98a3b0");
+  }
+}
+
+function drawGhost() {
+  if (!state.drag || state.drag.kind !== "pulley") return;
+  ctx.save(); ctx.globalAlpha = 0.85; drawSheave(state.drag.x, state.drag.y, L.r, 0, true); ctx.restore();
+}
+
+function draw() {
+  const c = current();
+  ctx.setTransform(metrics.sx * PX, 0, 0, metrics.sy * PX, 0, 0);
+  ctx.clearRect(0, 0, L.sceneW, L.sceneH);
+  drawBackground(c);
+  drawBlocks(c);
+  drawRope(c);
+  drawLoad(c);
+  drawFigure(c);
+  drawDropZones(c);
+  drawGhost();
+}
+
+function updatePanel() {
+  const c = current();
+  const { rt, load, s } = c;
+  $("ma").textContent = rt.ma + "×";
+  $("loadKg").textContent = `${load.kg} kg  (${Math.round(load.kg * Pulley.G)} N)`;
+  $("needKg").textContent = `${fmtKg(s.neededKg)} kg  (${Math.round(s.neededKg * Pulley.G)} N)`;
+  $("strength").textContent = `${Pulley.STRENGTH_KG} kg`;
+  const fill = $("barFill");
+  fill.style.width = Math.min(100, (s.neededKg / Pulley.STRENGTH_KG) * 50) + "%";
+  fill.className = s.lifts ? "" : "bad";
+  const st = $("status");
+  if (!s.lifts) {
+    const need = Pulley.segmentsNeeded(load.kg, Pulley.STRENGTH_KG);
+    const max = 2 * Pulley.MAX_SHEAVES;
+    st.className = "status bad";
+    st.textContent = need > max
+      ? `Too heavy. It would take ${need} rope segments; even a full rig gives only ${max}.`
+      : `Too heavy. Needs ${need} rope segments, you have ${rt.ma}. Add pulleys.`;
+  } else if (s.blocked) {
+    st.className = "status warn";
+    st.textContent = "Two-blocked: the blocks have met, no more travel.";
+  } else {
+    st.className = "status";
+    st.textContent = s.neededKg === Pulley.STRENGTH_KG ? "Lifts, just barely!" : "Lifts!";
+  }
+  $("pulled").textContent = s.pulledM.toFixed(1) + " m";
+  $("height").textContent = s.heightM.toFixed(2) + " m";
+  $("sentence").textContent = Pulley.rigSentence(rt, load.kg);
+  const hint = Pulley.idleHint(rt);
+  $("hint").hidden = !hint; $("hint").textContent = hint;
+  for (const b of $("loads").children) b.classList.toggle("on", b.dataset.id === state.loadId);
+}
+
+function buildLoadButtons() {
+  const box = $("loads");
+  for (const l of Pulley.LOADS) {
+    const b = document.createElement("button");
+    b.dataset.id = l.id; b.innerHTML = `<span>${l.name}</span><small>${l.kg} kg</small>`;
+    b.addEventListener("click", () => { setLoad(l.id); updatePanel(); });
+    box.appendChild(b);
+  }
+}
+
+function initFromQuery() {
+  const q = new URLSearchParams(location.search);
+  setRig(parseInt(q.get("top") || "0", 10) || 0, parseInt(q.get("bottom") || "0", 10) || 0);
+  if (q.get("load") && Pulley.LOADS.some((l) => l.id === q.get("load"))) state.loadId = q.get("load");
+  state.pulledM = Math.max(0, parseFloat(q.get("pulled") || "0") || 0);
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now; state.time += dt;
+  if (state.holdPull) applyPull(dt * 1.2);
+  state.strain = Math.max(0, state.strain - dt * 0.8);
+  draw(); updatePanel();
+  requestAnimationFrame(frame);
+}
+
+//__INPUT__
+
+window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone };
+
+buildLoadButtons();
+initFromQuery();
+resize();
+window.addEventListener("resize", () => { resize(); draw(); });
+draw(); updatePanel();
+requestAnimationFrame(frame);
+})();
 </script>
 </body>
 </html>
