@@ -1407,10 +1407,42 @@ function drawUnicorn(x, y, w, h, facing, t, opts) {
 // the unicorn hit the floor: horn snaps off, and after a dazed moment it goes on the rampage
 function rampage(x, c) {
   state.swing.rampaging = true; state.swing.fallen = true; state.swing.landed = true;
-  state.horn = { x: x + 0.45 };
-  state.unicorn = { x, facing: 1, mode: "dazed", t0: state.time };
+  const load = c.load, facing = 1;
+  // the horn snaps off at its base and tumbles away, spinning
+  const bx = x + facing * (load.w * 0.4 - 0.045), by = L.floorY - load.h + load.h * 0.13 - 0.075;
+  state.horn = { x: bx + 0.05, y: by - 0.2, vx: facing * 1.8, vy: -3.4, ang: 0, spin: 11, bounces: 0, rest: false, t0: state.time };
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  for (let i = 0; i < 10; i++) state.debris.push({ x: bx, y: by, vx: rnd(-2.5, 2.5), vy: rnd(-3, -0.5), ang: 0, spin: 0, age: 0, life: rnd(0.5, 1.0), kind: "chip", r: rnd(0.012, 0.022) });
+  state.unicorn = { x, facing, mode: "dazed", t0: state.time };
   state.shake = 0.6;
   state.accidentAt = state.time;
+}
+
+// the loose horn: a spinning projectile that bounces on the floor and settles flat
+const HORN_HALF = 0.23; // half the horn's length along its axis
+function stepHorn(dt) {
+  const hn = state.horn;
+  if (!hn || hn.rest) return;
+  hn.vy += Pulley.G * dt; hn.x += hn.vx * dt; hn.y += hn.vy * dt; hn.ang += hn.spin * dt;
+  // the horn's axis makes angle (ang - 1.27) with the horizontal; this is how far below its centre it reaches
+  const extent = HORN_HALF * Math.abs(Math.sin(hn.ang - 1.27)) + 0.05;
+  if (hn.y + extent >= L.floorY && hn.vy > 0) {
+    hn.y = L.floorY - extent;
+    hn.bounces++;
+    hn.vy = -hn.vy * 0.45; hn.vx *= 0.65; hn.spin = hn.spin * 0.5 + (Math.random() - 0.5) * 3;
+    state.shake = Math.max(state.shake, 0.15);
+    if (Math.abs(hn.vy) < 0.6 || hn.bounces >= 4) { hn.rest = true; hn.vy = 0; }
+  }
+  if (hn.rest) {
+    // lie flat, tip pointing whichever way is nearer
+    const cands = [1.27, 1.27 - Math.PI];
+    let best = cands[0], bd = Infinity;
+    for (const cnd of cands) { const d = Math.atan2(Math.sin(hn.ang - cnd), Math.cos(hn.ang - cnd)); if (Math.abs(d) < bd) { bd = Math.abs(d); best = hn.ang - d; } }
+    hn.restAng = best; hn.settle = 0;
+  }
+  const lim = L.sceneW - 0.3;
+  if (hn.x > lim) { hn.x = lim; hn.vx = -Math.abs(hn.vx) * 0.5; }
+  if (hn.x < 0.3) { hn.x = 0.3; hn.vx = Math.abs(hn.vx) * 0.5; }
 }
 
 function stepUnicorn(dt, c) {
@@ -1433,12 +1465,18 @@ function stepUnicorn(dt, c) {
 }
 
 function drawUnicornLoose(c) {
-  if (state.horn) { // the snapped horn on the floor
-    const hx = state.horn.x, hy = L.floorY - 0.03;
-    ctx.save(); ctx.translate(hx, hy); ctx.rotate(-1.35);
-    ctx.fillStyle = "#ffe066"; ctx.beginPath(); ctx.moveTo(-0.045, 0); ctx.lineTo(0.045, 0); ctx.lineTo(0.14, -0.46); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = "#b8860b"; ctx.lineWidth = 0.01; ctx.stroke();
+  if (state.horn) { // the snapped horn, tumbling or lying on the floor
+    const hn = state.horn;
+    ctx.save(); ctx.translate(hn.x, hn.y); ctx.rotate(hn.ang);
+    const grad = ctx.createLinearGradient(-0.05, 0, 0.05, 0);
+    grad.addColorStop(0, "#c8930f"); grad.addColorStop(0.5, "#ffe680"); grad.addColorStop(1, "#c8930f");
+    ctx.fillStyle = grad; ctx.beginPath(); ctx.moveTo(-0.045, HORN_HALF); ctx.lineTo(0.045, HORN_HALF); ctx.lineTo(0.14, -HORN_HALF); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "rgba(120,80,0,.55)"; ctx.lineWidth = 0.009; ctx.beginPath();
+    for (let k = 1; k <= 6; k++) { const f = k / 7; ctx.moveTo(-0.045 + 0.185 * f * 0.5, HORN_HALF - 2 * HORN_HALF * f); ctx.lineTo(0.045 + 0.095 * f, HORN_HALF - 2 * HORN_HALF * f - 0.008); }
+    ctx.stroke();
+    ctx.fillStyle = "#f4f2f7"; ctx.beginPath(); ctx.ellipse(0, HORN_HALF, 0.045, 0.012, 0, 0, Math.PI * 2); ctx.fill(); // the broken base
     ctx.restore();
+    if (state.time - hn.t0 < 0.7) text("CRACK!", hn.x, hn.y - 0.45, 20 + (state.time - hn.t0) * 12, `rgba(255,230,120,${1 - (state.time - hn.t0) / 0.7})`, "center", "900");
   }
   const u = state.unicorn;
   if (!u) return;
@@ -1940,6 +1978,7 @@ function drawExplosion() {
     const k = 1 - d.age / d.life;
     if (d.kind === "smoke") { ctx.fillStyle = `rgba(70,70,75,${0.45 * k})`; ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2); ctx.fill(); }
     else if (d.kind === "spark") { ctx.fillStyle = `rgba(255,${120 + 120 * k},40,${k})`; ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2); ctx.fill(); }
+    else if (d.kind === "chip") { ctx.fillStyle = `rgba(255,225,110,${k})`; ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2); ctx.fill(); }
     else if (d.kind === "drop") { ctx.fillStyle = `rgba(120,190,240,${k})`; ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2); ctx.fill(); }
     else if (d.kind === "shard") { ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.ang); ctx.fillStyle = `rgba(190,225,255,${0.8 * k + 0.2})`; ctx.beginPath(); ctx.moveTo(-d.r, 0); ctx.lineTo(0, -d.r * 0.35); ctx.lineTo(d.r, 0); ctx.lineTo(0, d.r * 0.25); ctx.closePath(); ctx.fill(); ctx.restore(); }
     else { ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.ang); ctx.fillStyle = "#8a6238"; ctx.fillRect(-d.r, -0.012, d.r * 2, 0.024); ctx.restore(); }
@@ -2010,6 +2049,12 @@ function frame(now) {
   stepSwing(dt);
   stepExplosion(dt);
   stepCrab(dt, current());
+  stepHorn(dt);
+  if (state.horn && state.horn.rest && state.horn.settle !== undefined && state.horn.settle < 1) {
+    state.horn.settle = Math.min(1, state.horn.settle + dt * 5);
+    state.horn.ang += (state.horn.restAng - state.horn.ang) * Math.min(1, dt * 8);
+    state.horn.y = L.floorY - (HORN_HALF * Math.abs(Math.sin(state.horn.ang - 1.27)) + 0.05);
+  }
   stepUnicorn(dt, current());
   stepBars(dt, current());
   stepDroplets(dt, current());
@@ -2124,7 +2169,7 @@ window.addEventListener("keydown", (ev) => {
   else if (ev.key === "ArrowDown") { applyPull(-0.15); ev.preventDefault(); }
 });
 
-window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene, initFromQuery, cutRope, knockOff, hitRope, hitLoad, stepBars, explode, jolt, shatter, rampage };
+window.__pulleys = { state, current, applyPull, setRig, setLoad, draw, updatePanel, dropZones, pointInZone, canvasToScene, initFromQuery, cutRope, knockOff, hitRope, hitLoad, stepBars, explode, jolt, shatter, rampage, stepHorn };
 
 buildPresetButtons();
 buildLoadButtons();
