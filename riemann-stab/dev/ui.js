@@ -137,6 +137,11 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
         const zsx=RH.findZeros(40,95,0.15);
         const r=RH.explicitFormulaSidesCenter(60,1.5,zsx,95,12000,0.002);
         return Math.abs(r.zeroSide-r.rhs)/Math.max(1e-9,Math.abs(r.zeroSide));
+     }],
+    ['Lamzouri kernel K = f̂₀ normalised: |K(0) − 1|', ()=> Math.abs(RH.lamzouriKernel(0)-1)],
+    ['C_MT: |Q₀(0)+2∫αQ₀ − (½ + cot(1/√2)/√2)|, Simpson 400', ()=>{
+        const c=0.5+Math.cos(1/Math.SQRT2)/(Math.SQRT2*Math.sin(1/Math.SQRT2));
+        return Math.abs(RH.montgomeryTaylorViaQ(400)-c);
      }]
   ];
   const rows=[];
@@ -380,6 +385,124 @@ function argCountBox(sigmaLo,sigmaHi,tLo,tHi,mesh){
       btn.disabled=false;
     });
   };
+})();
+
+/* =====================================================================
+   §9 Lab F — Lamzouri's inequality: adversarial, live, and the constant
+===================================================================== */
+(function(){
+  if(!$('lfAdvRun')) return;
+  const cMT=0.5+Math.cos(1/Math.SQRT2)/(Math.SQRT2*Math.sin(1/Math.SQRT2));
+  const addStat=(grid,k,v,color)=>{const d=document.createElement('div');d.className='stat';
+    d.innerHTML='<span class="k">'+k+'</span><span class="v"'+(color?' style="color:'+color+'"':'')+'>'+v+'</span>';grid.appendChild(d);};
+  // ---- F·i: the finite proposition on random conjugation-invariant multisets
+  $('lfAdvRun').onclick=()=>{
+    const btn=$('lfAdvRun'); btn.disabled=true; $('lfAdvStatus').textContent='drawing…';
+    const seed0=1000+Math.floor(Math.random()*1e6);
+    const rows=[]; let viol=0,minS1=Infinity,minS2=Infinity,maxCharge=0,maxIm=0,tried=0;
+    const thunks=[];
+    for(let i=0;i<200;i++) thunks.push(()=>{
+      const pts=RH.randomLamzouriMultiset(seed0+i);
+      const r=RH.lamzouriMultiset(pts); tried++;
+      const s1=r.simpleReal-r.simpleBound, s2=r.distinct-r.distinctBound;
+      if(s1<-1e-9||s2<-1e-9||!r.symmetric) viol++;
+      minS1=Math.min(minS1,s1); minS2=Math.min(minS2,s2); maxIm=Math.max(maxIm,r.Sim);
+      let pairs=0,mult=0,simple=0,charge=0;
+      for(const p of pts){
+        if(p.im>0){ pairs++; const k=RH.lamzouriKernelC({re:0,im:2*p.im}).re; charge=Math.max(charge,2*k*k-2); }
+        else if(p.im===0){ if(p.m===1) simple++; else mult++; }
+      }
+      maxCharge=Math.max(maxCharge,charge);
+      rows.push({N:r.N,simple:r.simpleReal,bound:r.simpleBound,slack:s1,
+        comp:simple+' simple · '+mult+' multiple · '+pairs+' pair'+(pairs===1?'':'s')});
+    });
+    runChunks(thunks,()=>{
+      rows.sort((a,b)=>a.slack-b.slack);
+      const g=$('lfAdvStats'); g.innerHTML='';
+      addStat(g,'multisets tried',String(tried));
+      addStat(g,'violations of (2.4) or (2.5)',String(viol),viol?'var(--red)':'var(--green)');
+      addStat(g,'smallest slack of (2.4) — 0 to rounding is the tight case',sci(minS1));
+      addStat(g,'smallest slack of (2.5)',sci(minS2));
+      addStat(g,'largest off-line pair charge 2K(2iy)²−2',fmt(maxCharge,3));
+      addStat(g,'max |Im Σ K²| (must vanish)',sci(maxIm));
+      $('lfAdvTable').innerHTML='<tr><th>N (with multiplicity)</th><th>simple real</th><th>bound 2N−ΣK²</th><th>slack</th><th>composition</th></tr>'+
+        rows.slice(0,6).map(r=>'<tr><td class="num">'+r.N+'</td><td class="num">'+r.simple+'</td><td class="num">'+fmt(r.bound,6)+
+          '</td><td class="num">'+sci(r.slack)+'</td><td>'+r.comp+'</td></tr>').join('');
+      $('lfAdvWrap').style.display='block';
+      $('lfAdvVerdict').innerHTML='<div class="verdict '+(viol?'warn':'ok')+'">verdict: '+
+        (viol? viol+' violation(s) — that is a bug in this page&rsquo;s kernel; the theorem is certified'
+             : 'no violation in '+tried+' multisets; the tightest cases are listed first — the slack vanishes at a lone doubled real point (bound 0, truth 0) and at isolated simple reals (bound 1 each), exactly where the proposition is sharp')+'</div>';
+      $('lfAdvStatus').textContent='done'; btn.disabled=false;
+    },null);
+  };
+  // ---- F·ii: the bound on the live zeros, T-ladder plus what-if
+  let live=null;
+  function drawPlot(ladder){
+    const S=setupCanvas($('lfPlot')); const ctx=S.ctx;
+    const Tmax=600, ylo=0.6, yhi=1.0;
+    const X=t=>40+t/Tmax*(S.w-56), Y=v=>S.h-26-(v-ylo)/(yhi-ylo)*(S.h-44);
+    ctx.font='12px monospace'; ctx.fillStyle='#5d5a68';
+    for(let v=0.6;v<=1.0001;v+=0.1){ ctx.strokeStyle='#1c2130'; ctx.beginPath(); ctx.moveTo(40,Y(v)); ctx.lineTo(S.w-16,Y(v)); ctx.stroke(); ctx.fillText(v.toFixed(1),4,Y(v)+4); }
+    ctx.strokeStyle='#262c3a'; ctx.beginPath(); ctx.moveTo(40,S.h-26); ctx.lineTo(S.w-16,S.h-26); ctx.moveTo(40,18); ctx.lineTo(40,S.h-26); ctx.stroke();
+    for(let t=0;t<=600;t+=100) ctx.fillText(String(t),X(t)-8,S.h-10);
+    const hline=(v,color)=>{ ctx.strokeStyle=color; ctx.setLineDash([4,4]); ctx.beginPath(); ctx.moveTo(40,Y(v)); ctx.lineTo(S.w-16,Y(v)); ctx.stroke(); ctx.setLineDash([]); };
+    hline(2-cMT,'#e05f5f'); hline((3-cMT)/2,'#e05f5f');
+    const series=(key,color)=>{ ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=1.6; ctx.beginPath();
+      ladder.forEach((d,i)=>{ const px=X(d.T),py=Y(d.r[key]); if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py); }); ctx.stroke(); ctx.lineWidth=1;
+      ladder.forEach(d=>{ ctx.beginPath(); ctx.arc(X(d.T),Y(d.r[key]),3,0,2*Math.PI); ctx.fill(); }); };
+    series('ratioSimple','#5ec4b6'); series('ratioDistinct','#e0b458');
+  }
+  function whatIf(){
+    if(!live) return;
+    const p=parseInt($('lfPairs').value), beta=parseInt($('lfBeta').value)/100;
+    $('lfPairsLabel').textContent='p = '+p; $('lfBetaLabel').textContent='β = '+beta.toFixed(2);
+    const L=live.r600.L, y=(beta-0.5)*L/(2*Math.PI);
+    const zs=live.zs.filter(g=>g<=600), n=zs.length, pts=[];
+    for(let i=0;i<n;i++){ const x=zs[i]*L/(2*Math.PI);
+      if(i>=n-p){ pts.push({re:x,im:y,m:1}); pts.push({re:x,im:-y,m:1}); } else pts.push({re:x,im:0,m:1}); }
+    const r=RH.lamzouriMultiset(pts);
+    const k=RH.lamzouriKernelC({re:0,im:2*y}).re, charge=2*k*k-2;
+    const holds=r.simpleReal>=r.simpleBound-1e-9&&r.symmetric;
+    $('lfWhatIf').innerHTML='<b>What if.</b> With the '+p+' highest zeros below 600 moved to β = '+beta.toFixed(2)+' (their partners at 1−β come along): '+
+      'y = (β−½)·L/2π = '+fmt(y,4)+', per-pair charge 2K(2iy)²−2 = <span class="gold">'+fmt(charge,4)+'</span>. '+
+      'N becomes '+r.N+', the true simple-real count is '+r.simpleReal+', the bound 2N−ΣK² = <span class="gold">'+fmt(r.simpleBound,3)+'</span> ('+fmt(r.simpleBound/r.N,4)+' of N). '+
+      (holds?'<span class="green">Inequality holds</span>':'<span class="red">Inequality VIOLATED — a bug, not a counterexample</span>')+' — re-checked on this move.';
+  }
+  $('lfLiveRun').onclick=()=>{
+    const btn=$('lfLiveRun'); btn.disabled=true; $('lfLiveStatus').textContent='finding zeros…';
+    getZeros600(zs=>{
+      $('lfLiveStatus').textContent='summing pairs…';
+      const Ts=[]; for(let T=100;T<=600;T+=50) Ts.push(T);
+      const ladder=[];
+      runChunks(Ts.map(T=>()=>{ ladder.push({T,r:RH.lamzouriZeroBound(zs,T)}); }),()=>{
+        const r=ladder[ladder.length-1].r;
+        live={zs,ladder,r600:r};
+        drawPlot(ladder);
+        const g=$('lfLiveStats'); g.innerHTML='';
+        addStat(g,'zeros used, N(600)',String(r.N));
+        addStat(g,'L = log T',fmt(r.L,4));
+        addStat(g,'S/N (asymptote C_MT = '+fmt(cMT,5)+')',fmt(r.ratioS,5));
+        addStat(g,'simple bound (2N−S)/N (asymptote '+fmt(2-cMT,5)+')',fmt(r.ratioSimple,5),'var(--green)');
+        addStat(g,'distinct bound (3N−S)/2N (asymptote '+fmt((3-cMT)/2,5)+')',fmt(r.ratioDistinct,5));
+        addStat(g,'off-diagonal / N = the slack (asymptote '+fmt(cMT-1,5)+')',fmt(r.offDiag/r.N,5));
+        addStat(g,'same, rescaled by the local density log(t/2π)/2π — diagnostic, not the paper&rsquo;s normalisation',fmt(r.offDiagLocal/r.N,5));
+        addStat(g,'weighted piece Σ K²w / N',fmt(r.weightedPiece/r.N,5));
+        addStat(g,'correction piece Σ π²x²K²w/L² / N',fmt(r.correctionPiece/r.N,5));
+        addStat(g,'1/√log T at T = 600',fmt(1/Math.sqrt(r.L),3));
+        $('lfLiveStatus').textContent='done — '+r.N+' zeros, '+(r.N*r.N)+' kernel evaluations at T = 600';
+        $('lfPairs').setAttribute('max',String(Math.min(8,r.N)));
+        whatIf(); btn.disabled=false;
+      },'lfBar');
+    });
+  };
+  $('lfPairs').oninput=whatIf; $('lfBeta').oninput=whatIf;
+  // ---- F·iii: the constant, three ways
+  const viaQ=RH.montgomeryTaylorViaQ(400), viaR=RH.winFunctionalR('mt',1600);
+  $('lfConst').innerHTML=
+    'closed form ½ + cot(1/√2)/√2 &nbsp;= <span class="gold">'+cMT.toFixed(12)+'</span><br>'+
+    'Lamzouri: Q₀(0) + 2∫₀¹ αQ₀(α)dα &nbsp;= <span class="gold">'+viaQ.toFixed(12)+'</span> &nbsp;<span class="dim">Δ = '+sci(viaQ-cMT)+' (Q₀ closed-form, Simpson 400 outside)</span><br>'+
+    'this page: R(ψ<sub>MT</sub>) by midpoint rule &nbsp;= <span class="gold">'+viaR.toFixed(12)+'</span> &nbsp;<span class="dim">Δ = '+sci(viaR-cMT)+' (1600 points; the |u−v| kink costs the digits)</span><br>'+
+    '⇒ 2 − C<sub>MT</sub> = <span class="green">'+(2-cMT).toFixed(12)+'</span>, &nbsp;(3 − C<sub>MT</sub>)/2 = <span class="green">'+((3-cMT)/2).toFixed(12)+'</span>';
 })();
 
 /* =====================================================================

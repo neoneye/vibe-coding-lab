@@ -674,7 +674,129 @@ function mixtureStationarity(shapeA,shapeB,n){
   return {bilinear,parentB,gap:bilinear-parentB,slopeAtB};
 }
 
+// =====================================================================
+// Lamzouri, arXiv:2609.02882 (2 Sep 2026): the 67.25% theorem without
+// matrices.  Proposition 2.1 there is a finite statement about any
+// conjugation-invariant multiset Z and any entire kernel K = (eta^2)^hat
+// with K(0) = 1:
+//     #{ z in Z real, m_z = 1 }  >=  2 sum_z 1 - sum_{z,s} K(z-s)^2,
+//     #{ distinct z }            >=  (3/2) sum_z 1 - (1/2) sum_{z,s} K(z-s)^2.
+// The kernel used here is Lamzouri's limit kernel: eta^2 = f0 with
+//     f0(u) = cos(sqrt2 u) / (sqrt2 sin(1/sqrt2))  on [-1/2, 1/2],
+// so K(z) = f0-hat(z), entire, K(0) = 1, and for real x  K(x)^2 is
+// exactly the tiling weight of Lab E.iv (tiling_research.overlapWeight).
+// Proposition 2.1 needs only eta in L^2, so this unsmoothed kernel is an
+// admissible instance; the smoothing psi_delta in the paper is needed only
+// for the pair-correlation lemma, not for the finite proposition.
+const LZ_NORM=1/(2*Math.SQRT2*Math.sin(1/Math.SQRT2));
+function sincReal(w){ const a=Math.abs(w); if(a<1e-4){ const w2=w*w; return 1-w2/6+w2*w2/120; } return Math.sin(w)/w; }
+function sincC(w){
+  const a=Math.hypot(w.re,w.im);
+  if(a<1e-4){ const w2=Cmul(w,w), w4=Cmul(w2,w2); return {re:1-w2.re/6+w4.re/120, im:-w2.im/6+w4.im/120}; }
+  return Cdiv(Csin(w),w);
+}
+// K(x) for real x: [sinc((sqrt2-2pi x)/2) + sinc((sqrt2+2pi x)/2)] / (2 sqrt2 sin(1/sqrt2))
+function lamzouriKernel(x){
+  const b=2*Math.PI*x;
+  return LZ_NORM*(sincReal((Math.SQRT2-b)/2)+sincReal((Math.SQRT2+b)/2));
+}
+// K(z) for complex z = {re,im}; same closed form with the complex sine.
+function lamzouriKernelC(z){
+  const bre=2*Math.PI*z.re, bim=2*Math.PI*z.im;
+  const l=sincC({re:(Math.SQRT2-bre)/2, im:-bim/2});
+  const r=sincC({re:(Math.SQRT2+bre)/2, im:bim/2});
+  return {re:LZ_NORM*(l.re+r.re), im:LZ_NORM*(l.im+r.im)};
+}
+// Proposition 2.1 evaluated on a multiset given as [{re,im,m}] with distinct
+// (re,im) and integer m >= 1.  S = sum_{z,s} m_z m_s K(z-s)^2 (its imaginary
+// part must vanish when the multiset is conjugation-invariant; |Im| is
+// returned so a caller can check).  O(n^2).
+function lamzouriMultiset(points){
+  const n=points.length;
+  const key=(re,im)=>re+'|'+(im===0?0:im);
+  const map=new Map(); for(const p of points) map.set(key(p.re,p.im),p.m);
+  let N=0,simpleReal=0,symmetric=true;
+  for(const p of points){
+    N+=p.m; if(p.im===0&&p.m===1) simpleReal++;
+    if(p.im!==0&&map.get(key(p.re,-p.im))!==p.m) symmetric=false;
+  }
+  let Sre=0,Sim=0;
+  for(let i=0;i<n;i++){ const zi=points[i];
+    for(let j=0;j<n;j++){ const zj=points[j];
+      const dre=zi.re-zj.re, dim=zi.im-zj.im, mm=zi.m*zj.m;
+      if(dim===0){ const k=lamzouriKernel(dre); Sre+=mm*k*k; }
+      else { const k=lamzouriKernelC({re:dre,im:dim}); const k2=Cmul(k,k); Sre+=mm*k2.re; Sim+=mm*k2.im; }
+    } }
+  return {N,S:Sre,Sim:Math.abs(Sim),simpleReal,distinct:n,
+    simpleBound:2*N-Sre,distinctBound:1.5*N-Sre/2,symmetric};
+}
+// The same bound on ordinates 0 < gamma <= T assumed on the line:
+// Z_T = { gamma log T / 2pi }.  Also returns the two pieces of the
+// weight-removal identity (3.3): K(x)^2 = K^2 w + pi^2 x^2 K^2 w / L^2 with
+// w = 4/(4+(gamma-gamma')^2), which is how the unconditional pair-correlation
+// lemma's weight is taken off without a T-dependent test function.
+function lamzouriZeroBound(gammas,T){
+  const L=Math.log(T); const xs=[],gs=[];
+  for(const g of gammas) if(g>0&&g<=T){ xs.push(g*L/(2*Math.PI)); gs.push(g); }
+  const N=xs.length;
+  if(!N) return {N:0,L,S:0,offDiag:0,simpleBound:0,distinctBound:0,ratioS:NaN,ratioSimple:NaN,ratioDistinct:NaN,weightedPiece:0,correctionPiece:0};
+  let S=0,off=0,wp=0,cp=0,offLocal=0;
+  for(let j=0;j<N;j++){ for(let k=0;k<N;k++){
+    const x=xs[j]-xs[k]; const K=lamzouriKernel(x), K2=K*K;
+    const dg=gs[j]-gs[k], w=4/(4+dg*dg);
+    S+=K2; if(j!==k) off+=K2; wp+=K2*w; cp+=Math.PI*Math.PI*x*x*K2*w/(L*L);
+    // Diagnostic, NOT the paper's normalisation: rescale each pair by the
+    // local zero density log(t/2pi)/2pi at its mean height t, which is what
+    // the log T/2pi scaling converges to.  Shows how much of the finite-T
+    // shortfall of S/N is the density mismatch rather than the O(1/sqrt log T).
+    if(j!==k){ const m=(gs[j]+gs[k])/2; const xl=dg*Math.log(m/(2*Math.PI))/(2*Math.PI); const Kl=lamzouriKernel(xl); offLocal+=Kl*Kl; }
+  } }
+  return {N,L,S,offDiag:off,offDiagLocal:offLocal,simpleBound:2*N-S,distinctBound:1.5*N-S/2,
+    ratioS:S/N,ratioSimple:2-S/N,ratioDistinct:1.5-S/(2*N),weightedPiece:wp,correctionPiece:cp};
+}
+// C_MT the way Lamzouri writes it: Q0(0) + 2 int_0^1 alpha Q0(alpha) d alpha
+// with Q0 = f0 * f0 (autoconvolution).  Simpson on both integrals.  The
+// same integrals are int psi^2 + int int |u-v| psi psi with psi = f0, i.e.
+// the second-moment functional R(psi_MT) of this page: one number, three
+// computations.
+// Q0(alpha) = int_{alpha-1/2}^{1/2} f0(u) f0(alpha-u) du for 0 <= alpha < 1,
+// even in alpha, zero for |alpha| >= 1.  With r = sqrt2 the integrand is
+// [cos(r alpha) + cos(r(2u-alpha))]/2 / (2 sin^2(1/r)), so the inner
+// integral is closed-form.  (A Simpson version of this inner integral was
+// tried first and lost 5e-6: its support test dropped the sample at the
+// lower limit whenever alpha-(alpha-1/2) rounded to 0.5+ulp.)
+function lzQ0(alpha){
+  const al=Math.abs(alpha); if(al>=1) return 0;
+  const r=Math.SQRT2, s=Math.sin(1/r), a=al-0.5, b=0.5;
+  const t1=(b-a)*Math.cos(r*al)/2;
+  const t2=(Math.sin(r*(2*b-al))-Math.sin(r*(2*a-al)))/(4*r);
+  return (t1+t2)/(2*s*s);
+}
+function montgomeryTaylorViaQ(n){
+  n=n||400; if(n%2) n++;
+  const h=1/n; let outer=0;
+  for(let i=0;i<=n;i++){ const al=i*h; const w=(i===0||i===n)?1:(i%2?4:2); outer+=w*al*lzQ0(al); }
+  outer*=h/3;
+  return lzQ0(0)+2*outer;
+}
+// Deterministic random conjugation-invariant multisets for adversarial checks.
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+function randomLamzouriMultiset(seed,opts){
+  opts=opts||{}; const rnd=mulberry32(seed);
+  const n1=opts.n1!==undefined?opts.n1:Math.floor(rnd()*12);
+  const n2=opts.n2!==undefined?opts.n2:Math.floor(rnd()*4);
+  const n3=opts.n3!==undefined?opts.n3:Math.floor(rnd()*4);
+  const W=2+rnd()*38; const pts=[]; const used=new Set();
+  const fresh=()=>{ let x; do{ x=Math.round(rnd()*W*1e6)/1e6; }while(used.has(x)); used.add(x); return x; };
+  for(let i=0;i<n1;i++) pts.push({re:fresh(),im:0,m:1});
+  for(let i=0;i<n2;i++) pts.push({re:fresh(),im:0,m:2+Math.floor(rnd()*2)});
+  for(let i=0;i<n3;i++){ const x=fresh(), y=0.02+rnd()*0.58, m=1+Math.floor(rnd()*2); pts.push({re:x,im:y,m}); pts.push({re:x,im:-y,m}); }
+  if(!pts.length) pts.push({re:fresh(),im:0,m:1});
+  return pts;
+}
+
 const RH={Cadd,Csub,Cmul,Cdiv,Cscale,Cabs,Carg,Cexp,Clog,Csin,npow,
+  lamzouriKernel,lamzouriKernelC,lamzouriMultiset,lamzouriZeroBound,montgomeryTaylorViaQ,randomLamzouriMultiset,
   BERNOULLI,binom,logGamma,digamma,theta,thetaAsym,chi,
   emzetaRaw,emzeta,xi,xiLog,bigZ,bigZimagResidual,
   findZeros,gramPoint,sieveLambda,muArch,

@@ -15,6 +15,7 @@ const call=(id,evt)=>{ try{ const el=registry[id]; if(el&&typeof el[evt]==='func
 const DEFAULT_VALUE={
   zpT0:'0', zpT1:'60', auditT:'50', efTau:'300', efW:'20',
   gPairs:'0', gBeta:'72', cS2:'0', cPairs:'0', cOff:'100',
+  lfPairs:'0', lfBeta:'72',
 };
 function makeCtx(){
   return new Proxy({}, {
@@ -62,8 +63,8 @@ console.log('initializers executed without synchronous crash');
 
 // ---- drive every handler ----
 setTimeout(()=>{
-  ['zpFind','auditRun','efRun','pcRun','mixRun','convRun'].forEach(id=>call(id,'onclick'));
-  ['auditT','efTau','efW','cS2','cPairs','cOff','gPairs','gBeta','zpT0','zpT1','zpGram']
+  ['zpFind','auditRun','efRun','pcRun','mixRun','convRun','lfAdvRun','lfLiveRun'].forEach(id=>call(id,'onclick'));
+  ['auditT','efTau','efW','cS2','cPairs','cOff','gPairs','gBeta','zpT0','zpT1','zpGram','lfPairs','lfBeta']
     .forEach(id=>call(id,'oninput'));
   call('zpT0','onchange'); call('zpT1','onchange'); call('zpGram','onchange');
 },400);
@@ -75,10 +76,11 @@ const pollStart=Date.now();
 function poll(){
   const dataOK=cvRegistry['mixCanvas']&&cvRegistry['mixCanvas']._data;
   const convOK=registry['convTable']&&String(registry['convTable'].innerHTML).indexOf('HS\u00b2/tr G~')>=0;
-  if(!(dataOK&&convOK)){
+  const lfOK=registry['lfLiveStats']&&registry['lfLiveStats']._children.length>=6;
+  if(!(dataOK&&convOK&&lfOK)){
     if(Date.now()-pollStart<15000){
       // retry the guarded handlers through their wired entry points
-      ['mixRun','convRun'].forEach(id=>call(id,'onclick'));
+      ['mixRun','convRun','lfLiveRun'].forEach(id=>call(id,'onclick'));
       setTimeout(poll,300); return;
     }
     console.error('poll deadline exceeded (dataOK='+!!dataOK+' convOK='+!!convOK+')');
@@ -101,7 +103,14 @@ function inspect(){
     if(!pass){ fail++; console.error('SELFTEST FAIL:', r.querySelector('.st-name') && r.querySelector('.st-name').textContent, '->', val && val.textContent); }
     else console.log('selftest pass:', val.textContent);
   }
-  if(rows.length!==8){ fail++; console.error('expected 8 self-test rows, saw',rows.length); }
+  if(rows.length!==10){ fail++; console.error('expected 10 self-test rows, saw',rows.length); }
+  // Lab F
+  if(!registry['lfAdvStats'] || registry['lfAdvStats']._children.length<6){ fail++; console.error('Lab F-i stats empty'); }
+  if(!registry['lfAdvVerdict'] || String(registry['lfAdvVerdict'].innerHTML).indexOf('no violation')<0){ fail++; console.error('Lab F-i verdict not clean:', registry['lfAdvVerdict']&&String(registry['lfAdvVerdict'].innerHTML).slice(0,120)); }
+  if(!registry['lfLiveStats'] || registry['lfLiveStats']._children.length<6){ fail++; console.error('Lab F-ii stats empty'); }
+  else { const c=registry['lfLiveStats']._children; console.log('Lab F-ii:', c.map(d=>(d.querySelector('.k').textContent||'').slice(0,28)+'='+(d.querySelector('.v')?d.querySelector('.v').textContent:'')).slice(0,5).join(' | ')); }
+  if(!registry['lfWhatIf'] || String(registry['lfWhatIf'].innerHTML).indexOf('Inequality holds')<0){ fail++; console.error('Lab F what-if did not confirm the inequality:', registry['lfWhatIf']&&String(registry['lfWhatIf'].innerHTML).slice(0,160)); }
+  if(!registry['lfConst'] || String(registry['lfConst'].innerHTML).indexOf('1.327499296')<0){ fail++; console.error('Lab F-iii constants box wrong'); }
   if(!registry['efStats'] || !registry['efStats']._children.length){ fail++; console.error('Lab C stats empty'); }
   if(!registry['cStats'] || !registry['cStats']._children.length){ fail++; console.error('Lab E-i stats empty'); }
   if(!registry['auditVerdict'] || String(registry['auditVerdict'].innerHTML).indexOf('verdict')<0){ fail++; console.error('Lab B verdict missing'); }

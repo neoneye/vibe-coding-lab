@@ -297,5 +297,95 @@ console.log('--- the honest mixture functional has no interior optimum ---');
     `${withBilinear.minimum} vs ${withBilinear.parentB}`);
 }
 
+console.log('--- Lamzouri (arXiv:2609.02882): the kernel ---');
+{
+  const TR=require('./tiling_research.js');
+  ok('K(0) = 1', Math.abs(M.lamzouriKernel(0)-1)<1e-15, M.lamzouriKernel(0));
+  let worst=0;
+  for(let i=0;i<=400;i++){ const x=-10+i*0.05; worst=Math.max(worst,Math.abs(M.lamzouriKernel(x)**2-TR.overlapWeight(x))); }
+  ok('K(x)^2 is the tiling weight of E.iv, to 1e-13 on [-10,10]', worst<1e-13, worst);
+  let worstC=0;
+  for(let i=0;i<=200;i++){ const x=-5+i*0.05; const c=M.lamzouriKernelC({re:x,im:0});
+    worstC=Math.max(worstC,Math.abs(c.re-M.lamzouriKernel(x)),Math.abs(c.im)); }
+  ok('complex path agrees with the real path on the real axis', worstC<1e-14, worstC);
+  const z={re:0.7,im:0.3}, kz=M.lamzouriKernelC(z), kzb=M.lamzouriKernelC({re:0.7,im:-0.3});
+  ok('K(conj z) = conj K(z)', Math.abs(kz.re-kzb.re)<1e-15&&Math.abs(kz.im+kzb.im)<1e-15);
+  const kmz=M.lamzouriKernelC({re:-0.7,im:-0.3});
+  ok('K is even', Math.abs(kz.re-kmz.re)<1e-15&&Math.abs(kz.im-kmz.im)<1e-15);
+  let minIm=Infinity, imPart=0;
+  for(let i=0;i<=40;i++){ const y=i*0.05; const k=M.lamzouriKernelC({re:0,im:y}); minIm=Math.min(minIm,k.re); imPart=Math.max(imPart,Math.abs(k.im)); }
+  ok('K(iy) is real and >= 1 for y in [0,2]', minIm>=1-1e-15&&imPart<1e-14, `min ${minIm}, |im| ${imPart}`);
+  // sinc series branch continuity
+  const a=M.lamzouriKernel(0.2250790790392765), b=M.lamzouriKernel(0.2250790790392765+2e-5);
+  ok('kernel continuous across the sinc series branch', Math.abs(a-b)<1e-4, Math.abs(a-b));
+}
+
+console.log('--- Lamzouri: Proposition 2.1 on random conjugation-invariant multisets ---');
+{
+  let violations=0, minSlack1=Infinity, minSlack2=Infinity, maxIm=0, tried=0, asym=0;
+  for(let seed=1;seed<=300;seed++){
+    const pts=M.randomLamzouriMultiset(seed);
+    const r=M.lamzouriMultiset(pts); tried++;
+    if(!r.symmetric) asym++;
+    maxIm=Math.max(maxIm,r.Sim);
+    const s1=r.simpleReal-r.simpleBound, s2=r.distinct-r.distinctBound;
+    if(s1<-1e-9||s2<-1e-9) violations++;
+    minSlack1=Math.min(minSlack1,s1); minSlack2=Math.min(minSlack2,s2);
+  }
+  ok('300 random multisets: every one is conjugation-invariant', asym===0, asym);
+  ok('the pair sum is real on every one (|Im| < 1e-9)', maxIm<1e-9, maxIm);
+  ok('inequality (2.4) never violated', violations===0, `${violations} of ${tried}`);
+  ok('smallest slack of (2.4) is >= 0', minSlack1>=-1e-9, minSlack1);
+  ok('smallest slack of (2.5) is >= 0', minSlack2>=-1e-9, minSlack2);
+  // tight cases
+  const one=M.lamzouriMultiset([{re:3.1,im:0,m:1}]);
+  ok('one simple real point: bound is exactly 1', Math.abs(one.simpleBound-1)<1e-15&&one.simpleReal===1, one.simpleBound);
+  const far=M.lamzouriMultiset([{re:0,im:0,m:1},{re:400,im:0,m:1}]);
+  ok('two far-apart simple points: bound within 1e-4 of 2', Math.abs(far.simpleBound-2)<1e-4, far.simpleBound);
+  const y=0.25, pair=M.lamzouriMultiset([{re:1,im:y,m:1},{re:1,im:-y,m:1}]);
+  const k2=M.lamzouriKernelC({re:0,im:2*y}).re;
+  ok('a lone off-line pair: bound = 2 - 2K(2iy)^2 <= 0', Math.abs(pair.simpleBound-(2-2*k2*k2))<1e-12&&pair.simpleBound<=0, `${pair.simpleBound} vs ${2-2*k2*k2}`);
+  const dbl=M.lamzouriMultiset([{re:0,im:0,m:2}]);
+  ok('a doubled real point: bound 2*2 - 4 = 0, truth 0', Math.abs(dbl.simpleBound)<1e-15&&dbl.simpleReal===0, dbl.simpleBound);
+  const bad=M.lamzouriMultiset([{re:0,im:0.3,m:1}]);
+  ok('a non-symmetric input is flagged', bad.symmetric===false);
+}
+
+console.log('--- Lamzouri: one constant, three computations ---');
+{
+  const closed=0.5+Math.cos(1/Math.SQRT2)/(Math.SQRT2*Math.sin(1/Math.SQRT2));
+  const viaQ=M.montgomeryTaylorViaQ(400);
+  const viaR=M.winFunctionalR('mt',1600);
+  ok('Q0(0)+2 int alpha Q0 = 1/2 + cot(1/sqrt2)/sqrt2 to 1e-8', Math.abs(viaQ-closed)<1e-8, `${viaQ} vs ${closed}`);
+  ok('and equals R(psi_MT) of Lab E to 1e-5', Math.abs(viaQ-viaR)<1e-5, `${viaQ} vs ${viaR}`);
+  ok('2 - C_MT is the 0.67250 headline', Math.abs(2-closed-0.6725007036794116)<1e-12, 2-closed);
+}
+
+console.log('--- Lamzouri: the weight-removal identity (3.3), per term ---');
+{
+  let worst=0;
+  for(let i=0;i<200;i++){ const dg=-30+i*0.3+0.017, L=5+i*0.02; const x=dg*L/(2*Math.PI);
+    const K=M.lamzouriKernel(x), K2=K*K, w=4/(4+dg*dg);
+    const lhs=K2, rhs=K2*w+Math.PI*Math.PI*x*x*K2*w/(L*L);
+    worst=Math.max(worst,Math.abs(lhs-rhs)); }
+  ok('K^2 = K^2 w + pi^2 x^2 K^2 w / L^2 exactly (1e-13)', worst<1e-13, worst);
+}
+
+console.log('--- Lamzouri: the bound on the 30 reference zeros ---');
+{
+  const T=101.4, r=M.lamzouriZeroBound(REF,T);
+  ok('30 zeros counted', r.N===30, r.N);
+  ok('S/N > 1 (diagonal alone is 1)', r.ratioS>1, r.ratioS);
+  ok('simple bound below N, above 0', r.simpleBound<r.N&&r.simpleBound>0, r.simpleBound);
+  ok('pieces of (3.3) add up to S', Math.abs(r.weightedPiece+r.correctionPiece-r.S)<1e-9, r.weightedPiece+r.correctionPiece-r.S);
+  ok('off-diagonal = S - N', Math.abs(r.offDiag-(r.S-r.N))<1e-9);
+  ok('locally rescaled off-diagonal exceeds the log T one (lower zeros are sparser in log T units)', r.offDiagLocal>r.offDiag&&r.offDiagLocal<r.N, `${r.offDiagLocal} vs ${r.offDiag}`);
+  const pts=REF.map(g=>({re:g*r.L/(2*Math.PI),im:0,m:1}));
+  const m=M.lamzouriMultiset(pts);
+  ok('the multiset path gives the same S to 1e-9', Math.abs(m.S-r.S)<1e-9, `${m.S} vs ${r.S}`);
+  ok('all-simple slack is exactly the off-diagonal sum', Math.abs((m.simpleReal-m.simpleBound)-r.offDiag)<1e-9);
+  console.log(`   T=${T}: N=${r.N}, S/N=${r.ratioS.toFixed(5)}, bound ratio=${r.ratioSimple.toFixed(5)} (asymptote 0.67250), distinct ratio=${r.ratioDistinct.toFixed(5)}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
