@@ -1,0 +1,24 @@
+# Claim ledger
+
+Stage 1 of `CLAUDE_INVESTIGATION_PLAN.md`. Baseline: commit `107fbd9` (2026-09-07), macOS 24.6, Node v22.17.0, Python 3.14.6 (`mpmath` 1.4.1; `python-flint` 0.9.0 in a scratch venv, used through `ARB_PYTHON`), Lean via elan (`~/.elan/bin`). Suite: `sh dev/run_suite.sh` from `riemann-stab/`; it exits 1 at `tiling_interval_test.js` on a pre-existing transcript gap (14 recorded sweep rows without current input hashes), reproduced at the earlier commit `540aa38`, so the Lean steps after it do not run inside the suite. Fast gate: `node dev/test.js` (93), `labs_shipcheck.js`, `tiling_pressure_test.js`, `build.js`, `ui_dom_smoke.js`. Arb: `ARB_PYTHON=<venv python> node dev/check_arb.js` re-ran every Arb program on 2026-09-07; all transcripts reproduced.
+
+Strength scale: **search** (float optimiser; an upper bound on an infimum) < **subdivision** (double precision, exhaustive) < **enclosure** (proved bounds, this page's arithmetic) < **Arb** (independent ball arithmetic) < **Lean** (kernel-checked; hypotheses listed) < **theorem about ζ** (all inputs discharged).
+
+| claim | statement | strength | artifact | reproduce | outstanding |
+|---|---|---|---|---|---|
+| H = 0.6725007037 | ≥ 67.25% of zeros simple on the line | theorem about ζ (Lean, arXiv:2608.13637; reproof 2609.02882) | external | — | human review "ongoing" per the page's chip |
+| Lamzouri Prop. 2.1 on this page | (2.4), (2.5) hold on 1015 multisets; kernel matches an 80-digit oracle to 1.4e−15 relative | Arb-grade oracle of a Lean-certified statement | `investigation/labf_oracle.py` | `node dev/investigation/labf_dump.js && python dev/investigation/labf_oracle.py` | none; see `LAB_F_AUDIT.md` |
+| live bound at T = 600 | (2N−S)/N = 0.92320 on 341 zeros | exact finite statement on computed zeros | Lab F·ii | run the page | zeros assumed on the line (Lab B's argument-principle count) |
+| C_MT three ways | closed form, Q₀-form, R(ψ_MT) agree (5.5e−12; 1.2e−7 for the midpoint rule) | enclosure-grade numerics | self-test rows 9–10 | `node dev/test.js` | — |
+| K² = tiling weight | Lamzouri's kernel squared equals `overlapWeight` to 1e−13 | numerics | `test.js` | same | — |
+| isolated block minimum 0.003826231211 | `F6 ≥` this at a specific block | search (upper bound) | `tiling_research.golden.json` | `tiling_research_test.js` | — |
+| `F6 ≥ 19/5000` | Ainta's per-block certificate | subdivision (control, 3 147 403 boxes), Arb externally | `tiling_interval.results.json` | `node dev/sweep.js fast bare 0.0038` | not Lean |
+| chain floor 0.003956 (`sharp`) | telescoping certificate ≥ 0.003956 on `[0,16]⁶`, tail lemma beyond | enclosure (67 608 431 boxes) | `tiling_interval.results.json` (row reported, not transcripted) | `node dev/sweep.js rigorous sharp 0.003956` (74 min) | transcript stale; Arb rebuild of the sweep not done |
+| chain floor = E_alt − 2.2e−15 (pinned pair) | alternating chain is the minimiser | enclosure outside the tubes (75 004 893 boxes), **Arb** inside the tubes | `tiling_pair.sweep.rigorous.json`, `tube_arb.results.json` | `check_pair_sweep.js`; `tube_arb.py` | sweep half is modulo the page's arithmetic; proof tape sampled 39/220, 67/220, 0 refuted |
+| local coercivity, walls, branches, resonances, staircase | as stated in the note | **Arb** | `*_arb.results.json` | `check_arb.js` | wall infimum uncertified (upper bounds unconditional) |
+| Lean claims (16 theorems) | telescoping, cyclic identity, projection pins, MT complement | Lean, standard axioms | `dev/lean/ZetaClaims.lean` | `run_suite.sh` (Lean step) | none of them is about ζ |
+| projection 0.6731102697 | alternating energy through `projectedSimpleZeroBound` | arithmetic on a conditional formula | `tiling_research.golden.json` | `tiling_research_test.js` | **hypothesis mismatch**: formula is `n_point_bound`'s, whose hypothesis is per-block; window-sum variant unproved; boundary term unpaid — with it paid, 0.6730970 (pair) / 0.6731062 (sharp). See `ASSEMBLY_AUDIT.md` |
+| n = 8 peak, p* = 3370.45 | block-size and pressure optima | search | note | `tiling_pressure_test.js` | conditional on the same lemma; the parameters themselves are legitimate (Lean theorem takes n, p) |
+| zeta-lab Φ₃ = 0.6727373, Φ₄ = 0.6728470 | unconditional for Mathlib's `riemannZeta` | Lean, registry-replayed, unreviewed; **not rebuilt here yet** (build in progress) | external clone at `47d0241` | `cd lean/bridge && lake build V2Challenge V2Solution` | this repository's own build outcome |
+
+Superseded statements found and fixed on 2026-09-07: "Arb confirms 64 … 59" (note) → 39 / 67 per the transcript; "‖f_z‖² = K(0) = 1 for all z" (page, spec) → `K(z − z̄)`; "not checkable here at all" (note, page) → identified missing lemma; "0.6731102697 is the whole of the available improvement" → boundary term must be paid.

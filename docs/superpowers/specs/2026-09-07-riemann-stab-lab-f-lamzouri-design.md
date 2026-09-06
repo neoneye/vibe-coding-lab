@@ -19,7 +19,7 @@ The other entries that moved on vibemathed in September 2026 — bounded prime g
     #{ z ∈ 𝒵 ∩ ℝ : m_z = 1 }  ≥  2 Σ_{z∈𝒵} 1  −  Σ_{z,s∈𝒵} K(z − s)²          (2.4)
     #{ distinct elements of 𝒵 } ≥ (3/2) Σ_{z∈𝒵} 1 − (1/2) Σ_{z,s∈𝒵} K(z − s)²   (2.5)
 
-where sums over 𝒵 count multiplicity. The proof: f_z(u) = η(u)e^{−2πizu} has ⟨f_z, f_s⟩ = K(z − s̄) and ‖f_z‖² = K(0) = 1; F = Σ_z f_z ⊗ f_z has ‖F‖² = Σ_{z,s} K(z−s)²; Bessel against the diagonal products ψ_j ⊗ ψ_j of a Gram–Schmidt basis gives ‖F‖² ≥ Σ_j α_j², and the scalar inequalities a² + 1 ≥ 2a, a² + 4 ≥ 4a, and α_j ≤ 0 on the last range turn Σ α_j² into 2 Σ α_j − #simple with Σ α_j = Σ_z 1.
+where sums over 𝒵 count multiplicity. The proof: f_z(u) = η(u)e^{−2πizu} has ⟨f_z, f_s⟩ = K(z − s̄), hence ‖f_z‖² = K(z − z̄), which is 1 exactly for real z (the proof uses the unit norm only there, eq. (2.8)) and exceeds 1 off the axis (K(0.4i) = 1.26418 at z = 0.2i); F = Σ_z f_z ⊗ f_z has ‖F‖² = Σ_{z,s} K(z−s)²; Bessel against the diagonal products ψ_j ⊗ ψ_j of a Gram–Schmidt basis gives ‖F‖² ≥ Σ_j α_j², and the scalar inequalities a² + 1 ≥ 2a, a² + 4 ≥ 4a, and α_j ≤ 0 on the last range turn Σ α_j² into 2 Σ α_j − #simple with Σ α_j = Σ_z 1.
 
 **The kernel used on this page.** η² = f₀ with f₀(u) = cos(√2 u) / (√2 sin(1/√2)) on [−½, ½], zero outside. Then ∫f₀ = 1 and
 
@@ -33,7 +33,7 @@ valid for complex z (complex sine). K(0) = 1, K is even, K(z̄) = conj K(z), and
 
 Lemma 3.2 gives S(T) = (C_η + O(1/√log T))·N with C_η arbitrarily close to C_MT = ½ + cot(1/√2)/√2 = 1.32749929…, hence the constants 2 − C_MT = 0.67250… and (3 − C_MT)/2 = 0.83625…. The page already holds C_MT as R(ψ_MT), the second-moment functional at its Euler–Lagrange critical point; Lamzouri writes it as Q₀(0) + 2∫₀¹ αQ₀(α)dα with Q₀ = f₀ ∗ f₀, and the two are the same integrals. Remark 3.4 of the paper: C_MT is optimal for the method (Carneiro–Chandee–Littmann–Milinovich, Cor. 14); the page's Euler–Lagrange derivation is the elementary reason.
 
-**The weight-removal step (3.3).** The unconditional pair-correlation lemma carries the weight w(ρ−ρ′) = 4/(4 − (ρ−ρ′)²) = 4/(4 + (γ−γ′)²) on the line. With Q̂ = K² and Q̂″(x) = −4π²x²K(x)², the per-pair identity
+**The weight-removal step (3.3).** The unconditional pair-correlation lemma carries the weight w(ρ−ρ′) = 4/(4 − (ρ−ρ′)²) = 4/(4 + (γ−γ′)²) on the line. With Q̂ = K² and the transform of Q″ being (2πix)²Q̂(x) = −4π²x²K(x)² (the transform of the derivative, not the derivative of the transform), the per-pair identity
 
     K(x)² = Q̂(x)·w − Q̂″(x)·w / (4L²),    x = (γ−γ′)L/2π,
 

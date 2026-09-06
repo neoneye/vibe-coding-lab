@@ -58,8 +58,23 @@ previously exist.
   the alternating energy itself — no interval has touched any of them; and the
   entire block-size scan, which says the projection peaks at `n = 8`, not the
   `n = 7` the programme inherited.
-- **Not checkable here at all.**  The external shifted-block assembly the
-  projection encodes.  Everything downstream of it is conditional on it.
+- **The external shifted-block assembly — now checkable, and checked as far as
+  reading goes (2026-09-07).**  It is a Lean 4 theorem, `n_point_bound` in
+  `teal-sea/zeta-lab` (`lean/bridge/V2Challenge.lean`, proved in
+  `Zeta23Ext/Bridge/`), parametric in the point count `n` and the pressure
+  denominator `p`, registered at the Palomar Registry
+  (`PALOMAR-2026-08-25-000005`, kernel-replayed, `#print axioms` standard).
+  Its projection formula is term for term `projectedSimpleZeroBound` (see
+  `investigation/ASSEMBLY_AUDIT.md`).  Its hypothesis is a **per-block**
+  floor `∀ g ≥ 0, c ≤ F n p g`, which no chain floor here satisfies (the
+  isolated-block minimum is `0.003826231`).  The proof consumes that
+  hypothesis in exactly one place, `block_energy` in `S11.lean`, and only as a
+  sum over the `m−(n−1)` consecutive windows of a sorted block.  So the exact
+  missing lemma is `n_point_bound` with hypothesis
+  `c·(m−(n−1)) ≤ Σ_windows F n p (windowGaps)` — which a telescoping coboundary
+  certificate supplies with `c` lowered by the boundary term over the window
+  count.  That lemma is identified, not proved; everything downstream of the
+  projection stays conditional on it, and on the sweep's own arithmetic.
 
 ### Evidentiary status of the sweep numbers
 
@@ -124,9 +139,15 @@ The failure that motivated all of this: a `compact 0.00385` row recorded
 derivative sign test gaining its safety margin.  Nothing in the suite would ever
 have noticed.
 
-What is still required before the improved simple-zero projection can be used:
-the assembly has to be checked by someone with the manuscript.  The rigorous
-sweep cleared `19/5000` on its own.
+What is still required before the improved simple-zero projection can be used
+(revised 2026-09-07; the assembly is no longer a manuscript nobody here can see,
+it is Lean, see the bullet above and `investigation/ASSEMBLY_AUDIT.md`): a
+variant of `n_point_bound` whose certificate hypothesis is the window-sum
+inequality rather than the per-block one, and the telescoping boundary term
+paid.  With it paid, the `sharp` chain floor `0.003956` (amplitude `1.2818e-3`,
+253 windows) projects to `0.6731062`, not `0.6731094`; the pinned pair
+certificate, on the record base's amplitude `5.2e-3`, to `0.6730970`, not
+`0.6731103`.  The rigorous sweep cleared `19/5000` on its own.
 
 One result here is off the tiling line entirely and is a **correction**, not an
 advance: the cross-window "interior mixture optimum" does not exist for the
@@ -1337,9 +1358,12 @@ reporting "complete" having silently dropped part of its domain — and it is th
 reason the object is worth emitting.
 
 **Arithmetic is verified on a sample, and the checker says how far it got.**  Of
-220 sampled discharged leaves Arb confirms **64** outright and finds 156 beyond
-its own resolution; of 220 sampled collapses, **59** and 161.  **Nothing is
-refuted.**
+220 sampled discharged leaves Arb confirms **39** outright and finds 181 beyond
+its own resolution; of 220 sampled collapses, **67** and 153.  **Nothing is
+refuted.**  (An earlier version of this sentence said 64 and 59; the committed
+transcript `sweep_proof_arb.results.json` says 39 and 67, and a re-run on
+2026-09-07 with python-flint 0.9.0 reproduced the transcript exactly.  The
+transcript is the number; a reviewer caught the mismatch.)
 
 Those numbers started at 3 and 35.  What moved them is closing part of the gap
 the previous section measured — the sweep's advantage was exact monotone-piece

@@ -132,21 +132,32 @@ def span(a, b):
 
 
 def pl_range(knots, coeffs, lo, hi):
+    # The interpolation is done in ball arithmetic, so the returned ball
+    # encloses the exact piecewise-linear value of the certificate as the
+    # doubles represent it.  A previous version interpolated in Python floats
+    # and then wrapped the result in a ball whose padding was relative to the
+    # interval WIDTH, not to the value's magnitude -- so at a degenerate or
+    # narrow interval the rounding of the interpolation itself was uncovered.
+    # Numerically that slack (~1e-21 on coefficients of size 2e-5) never bound,
+    # but the argument was by magnitude comparison, not by construction; a
+    # reviewer flagged it and this removes the need for the argument.
     n = len(knots)
     def at(x):
         if x <= knots[0]:
-            return coeffs[0]
+            return arb(coeffs[0])
         if x >= knots[-1]:
-            return coeffs[-1]
+            return arb(coeffs[-1])
         i, j = 0, n - 1
         while j - i > 1:
             m = (i + j) // 2
             if knots[m] <= x: i = m
             else: j = m
-        t = (x - knots[i]) / (knots[i + 1] - knots[i])
-        return coeffs[i] * (1 - t) + coeffs[i + 1] * t
-    vals = [at(lo), at(hi)] + [coeffs[i] for i in range(n) if lo < knots[i] < hi]
-    return span(min(vals), max(vals))
+        t = (arb(x) - arb(knots[i])) / (arb(knots[i + 1]) - arb(knots[i]))
+        return arb(coeffs[i]) * (1 - t) + arb(coeffs[i + 1]) * t
+    vals = [at(lo), at(hi)] + [arb(coeffs[i]) for i in range(n) if lo < knots[i] < hi]
+    lo_b = min(float(v.lower()) for v in vals)
+    hi_b = max(float(v.upper()) for v in vals)
+    return span(lo_b, hi_b)
 
 
 def pl_slope_range(knots, coeffs, lo, hi):
