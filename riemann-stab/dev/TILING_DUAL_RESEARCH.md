@@ -156,7 +156,10 @@ conservatively, `sharp` (`0.003956`, 253 windows) projects to `0.6731051`, not
 signed-endpoint extension through the offset average recovers `0.6731094`
 for `sharp` under the cap `cW + B <= 1`, met at `W = 252` -- and that
 extension is Lean as well (`n_point_bound_signed`, `investigation/lean/Signed.lean`,
-standard axioms, 2026-09-08), so the endpoint penalty is gone from the theorem.  The rigorous sweep cleared `19/5000` on its own, and the
+standard axioms, 2026-09-08), so the endpoint penalty is gone from the theorem;
+and `SharpPotential.lean` defines the shipped `sharp` state potential and proves
+its bounds, leaving the sweep's coboundary inequality as the only hypothesis of
+`sharp_chain_bound_signed_concrete`.  The rigorous sweep cleared `19/5000` on its own, and the
 rigorous `sharp 0.003956` row this section relies on was found ABSENT from the
 results table (only the fast row exists); it is being re-run.
 

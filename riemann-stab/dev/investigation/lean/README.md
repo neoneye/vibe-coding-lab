@@ -105,8 +105,29 @@ signed route of the follow-up plan's step 3 is a theorem: with the cap `c·W + (
 constant is `Phi_n n c m p` itself, and for `sharp` (`c = 0.003956`, `W = 252`, `B = 0.00171`,
 cap `0.998622`) that is `0.6731093501…`, the naive projection, with no endpoint penalty.
 
-What is *not* in Lean, and is exactly what `hcob`, `hΨ`, `hB` assume: the coboundary inequality
-on every window (the sweep), the concrete state potential `Ψ` of the shipped certificate, and its
-oscillation (`endpoint_oscillation.py`, exact rationals; the "extrema of a piecewise-linear
-function lie at its knots" step is not formalised).
+## The `sharp` state potential and its bounds, proved
+
+`SharpPotential.lean` (copied here) closes `hΨ` and `hB`:
+
+```
+def plClamp (N : ℕ) (k v : ℕ → ℝ) (x : ℝ) : ℝ        -- tiling_additive.js:piecewiseLinear, exactly
+theorem plClamp_mem : lo ≤ v i ≤ hi for i ≤ N  →  lo ≤ plClamp N k v x ≤ hi
+def sharpKnotNum sharpANum sharpHNum : List ℤ       -- the 51 exact binary64 values, as integers over 2^68
+def sharpPsi (g : Fin 5 → ℝ) : ℝ                    -- −a(g₀) − h(g₁) + h(g₃) + a(g₄), h = a + b
+theorem sharpPsi_bounds (g) : sharpLo ≤ sharpPsi g ∧ sharpPsi g ≤ sharpHi
+theorem sharp_oscillation : sharpHi - sharpLo ≤ 171 / 100000     -- exact: 0.00170904…
+theorem sharp_chain_bound_signed_concrete
+    (hcob : ∀ y : Fin 258 → ℝ, StrictMono y → ∀ i ∈ range 252,
+      3956 / 1000000 ≤ F 7 3000 (windowGaps 7 (sortedExt y) i)
+        + (sharpPsi (stateGaps 7 (sortedExt y) (i + 1)) - sharpPsi (stateGaps 7 (sortedExt y) i))) :
+    ∀ ε > 0, ∃ T₀ : ℝ, ∀ T ≥ T₀,
+      (Phi_n 7 (3956 / 1000000) 258 3000 - ε) * (Ncount T (2 * T) : ℝ) ≤ N0simple T (2 * T)
+```
+
+All with `[propext, Classical.choice, Quot.sound]`; the integer bound checks are `decide`, the
+oscillation is `norm_num`. So the only hypothesis left between the shipped `sharp` certificate and
+a theorem about ζ at `Phi_n 7 (3956/10⁶) 258 3000 = 0.6731093501…` is `hcob`: the coboundary
+inequality `F(window) + sharpPsi(next state) − sharpPsi(state) ≥ 0.003956` on every window of every
+sorted 258-point list — what the exhaustive interval subdivision of `R` on `[0,16]⁶` plus the tail
+lemma claims, on this page's own arithmetic, whose rigorous transcript is being restored.
 

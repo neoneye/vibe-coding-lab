@@ -23,14 +23,14 @@ Unchanged from the first pass in content, corrected in attribution: `R(g) ≥ E_
 - Unconditional, human-reviewed: 0.6725007037.
 - Unconditional for Mathlib's `riemannZeta`, kernel-checked, rebuilt here, unreviewed: 0.6728470198 (zeta-lab four-point).
 - Conditional, conservative: **0.6731051** (`sharp`), requiring (a) `sharp_chain_bound_of_windowSum` — **proved**; (b) the coboundary inequality `R ≥ 0.003956` on every window — exhaustive subdivision on the page's arithmetic, **rigorous transcript absent, re-run in progress**; (c) the endpoint bound `B` — exact rationals, the piecewise-linear-extrema step not formalised; (d) the tail lemma at `sharp`'s amplitude.
-- Conditional, signed-cap: **0.6731094** (`sharp` at `W = 252`), through `sharp_chain_bound_signed` — **proved**; the same premises (b)–(d) as the conservative score, and no endpoint penalty.
+- Conditional, signed-cap: **0.6731094** (`sharp` at `W = 252`), through `sharp_chain_bound_signed_concrete` — **proved**, with the shipped state potential defined in Lean and its bounds theorems (`SharpPotential.lean`); the only remaining premise is the sweep's coboundary inequality `hcob` (premises (b) and (d) above; (c) is now discharged).
 
 For comparison: zeta-lab's conditional eight-point 0.6730530; its measured seven-point per-block family ceiling 0.6730296. The `p : ℕ` in the theorem means the pressure optimum 3370.45 of the note needs integer neighbours.
 
 ## 4. Decisions and status of the plan's stages
 
 - Follow-up step 1 (corrections): done, witnesses preserved (`followup_checks.py`, `endpoint_oscillation.py`, oracle).
-- Step 2 (conservative window-sum theorem): **done**; PL-extrema formalisation listed as the remaining Lean obligation.
+- Step 2 (conservative window-sum theorem): **done**; the piecewise-linear bounds of the shipped `sharp` potential are also formalised (`SharpPotential.lean`).
 - Step 3 (signed endpoint through S15): **done in Lean** (`Signed.lean`: `offset_average_indexed`, the signed S11/S13/S9 chain, `pre_solve_signed`, `n_point_bound_signed`, `sharp_chain_bound_signed`; standard axioms, 2026-09-08). The finite model was the exact-rational rehearsal of the same bookkeeping.
 - Step 4 (certificate selection): `sharp` wins on both scores among the shipped certificates once endpoints are paid; the pair certificate's larger oscillation makes it worse conservatively and only marginally better under the signed cap.
 - Step 5 (certification of the selected input): the rigorous `sharp` sweep is being restored; independent arithmetic verification of that additive sweep does not yet exist and its cost has not been benchmarked.
@@ -39,7 +39,7 @@ For comparison: zeta-lab's conditional eight-point 0.6730530; its measured seven
 
 ## 5. One prioritised next step
 
-The rigorous `sharp 0.003956` transcript (re-run in progress) and then an independent arithmetic check of that additive sweep — the certificate's numerical premise `hcob` is now the only thing between `sharp_chain_bound_signed` and a theorem about ζ at 0.6731094, apart from the unformalised piecewise-linear-extrema step for `hΨ`/`hB`.
+The rigorous `sharp 0.003956` transcript (re-run in progress) and then an independent arithmetic check of that additive sweep — the certificate's numerical premise `hcob` is now the *only* thing between `sharp_chain_bound_signed_concrete` and a theorem about ζ at 0.6731094; the piecewise-linear bounds are formalised.
 
 ## Rigorous `sharp` sweep, restored (status)
 
