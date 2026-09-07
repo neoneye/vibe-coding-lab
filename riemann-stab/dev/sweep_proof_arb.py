@@ -293,6 +293,7 @@ class Cert:
             coef = arb(2) / (NPTS - (j - i))
             wd = KP.weight_d(pc[j] - pc[i]) * coef
             dbox = span(plo[j] - phi[i], phi[j] - plo[i])
+            dbox = span(max(0.0, lo_out(dbox)), hi_out(dbox))
             try:
                 wdd = KP.weight_dd(dbox) * coef
             except ValueError:
@@ -348,10 +349,18 @@ class Cert:
         val = s / 3000
         grad = [arb(1) / 3000 for _ in range(6)]
         for (i, j) in PAIRS:
+            # The pair distance y_j - y_i is a sum of gaps, hence >= 0; the dependency-blind
+            # interval [sum lo - sum hi, sum hi - sum lo] can reach below zero on wide boxes,
+            # and the kernel-range tables hold only positive breakpoints (w is even, w' odd),
+            # so an interval straddling zero MUST be clamped at zero before the lookup.  The
+            # unclamped version missed w's maximum at 0 and, for intervals reaching below
+            # -z_1, its minimum there -- a soundness fault found by the disjoint-enclosure
+            # control on 2026-09-08 (20 of 100 000 sampled nodes of the full sharp tape).
             d = span(plo[j] - phi[i], phi[j] - plo[i])
+            dlo, dhi = max(0.0, lo_out(d)), hi_out(d)
             c = arb(2) / (NPTS - (j - i))
-            val += self.pieces.w_range(lo_out(d), hi_out(d)) * c
-            dw = self.pieces.wd_range(lo_out(d), hi_out(d)) * c
+            val += self.pieces.w_range(dlo, dhi) * c
+            dw = self.pieces.wd_range(dlo, dhi) * c
             for k in range(i, j):
                 grad[k] += dw
         for i in range(6):
