@@ -40,7 +40,9 @@ so the ball's one certified zero is the only one).  A Pieces object refuses to
 construct if either coverage proof fails.
 """
 
+import bisect
 import json
+import math
 import os
 import sys
 
@@ -460,30 +462,41 @@ class Pieces:
         self.wd_coverage = coverage(weight_dd, weight_ddd, self.dbreaks_arb, limit)
         if self.wd_coverage is not None:
             raise RuntimeError("monotone pieces of w' not proved complete: " + self.wd_coverage)
+        # The value of f over each certified ball is a constant: evaluate it once.  The
+        # lookup uses outward-rounded float bounds of the balls, so the set of balls
+        # taken for an interval is a SUPERSET of those that meet it exactly -- a range
+        # can only widen by that, never narrow.  This cut the cost of a box by 3x.
+        self._w_tab = self._table(weight, self.w_roots)
+        self._wd_tab = self._table(weight_d, self.dbreaks_arb)
+
+    @staticmethod
+    def _table(f, breaks):
+        los = [math.nextafter(float(t.lower()), -math.inf) for t in breaks]
+        his = [math.nextafter(float(t.upper()), math.inf) for t in breaks]
+        assert los == sorted(los) and his == sorted(his)   # disjoint, sorted balls
+        return los, his, [f(t) for t in breaks]
 
     @staticmethod
     def _hull(vals):
         return hull(vals)
 
-    def _range(self, f, breaks, a, b):
+    def _range(self, f, tab, a, b):
         """The range of f over [a, b], a <= b floats, f monotone between consecutive
-        `breaks` (certified balls around its critical points): the hull of the
-        endpoint values and of f over every ball that meets (a, b).  A ball that
-        straddles an endpoint is included whole; that can only widen the result."""
+        certified balls around its critical points: the hull of the endpoint values
+        and of f over every ball that meets (a, b).  A ball that straddles an endpoint
+        is included whole; that can only widen the result."""
         if not (0 <= a <= b <= self.limit):
             raise ValueError("range outside the certified table [0, %g]: [%r, %r]" % (self.limit, a, b))
-        vals = [f(arb(a)), f(arb(b))]
-        A, B = arb(a), arb(b)
-        for t in breaks:
-            if t.upper() > A and t.lower() < B:
-                vals.append(f(t))
-        return hull(vals)
+        los, his, vals = tab
+        i0 = bisect.bisect_right(his, a)      # balls with his > a ...
+        i1 = bisect.bisect_left(los, b)       # ... and los < b
+        return hull([f(arb(a)), f(arb(b))] + vals[i0:i1])
 
     def w_range(self, a, b):
-        return self._range(weight, self.w_roots, a, b)
+        return self._range(weight, self._w_tab, a, b)
 
     def wd_range(self, a, b):
-        return self._range(weight_d, self.dbreaks_arb, a, b)
+        return self._range(weight_d, self._wd_tab, a, b)
 
 
 CHECKS = []

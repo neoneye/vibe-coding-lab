@@ -326,8 +326,9 @@ class Cert:
         self.mats = m
         self.pieces = KP.pieces(float(limit))
 
-    def bound_and_grad_centered(self, lo, hi):
-        """R(centre) + grad(box) . (x - centre): second order in the width."""
+    def bound_and_grad_centered(self, lo, hi, grad=None):
+        """R(centre) + grad(box) . (x - centre): second order in the width.  `grad` is
+        the natural gradient enclosure over the box if the caller already has it."""
         c = [(arb(lo[k]) + arb(hi[k])) / 2 for k in range(6)]
         rad = [span(lo[k], hi[k]) - c[k] for k in range(6)]
         pc = [arb(0)]
@@ -346,7 +347,8 @@ class Cert:
             ck, ck1 = float(c[k].mid()), float(c[k + 1].mid())
             pk, pk1 = point_pad(ck), point_pad(ck1)
             val += grid_range(self.mats[k], self.J, self.knots, ck - pk, ck + pk, ck1 - pk1, ck1 + pk1)
-        _, grad = self.bound_and_grad(lo, hi)
+        if grad is None:
+            _, grad = self.bound_and_grad(lo, hi)
         for k in range(6):
             val += grad[k] * rad[k]
         return val, grad
@@ -397,7 +399,7 @@ class Cert:
 
     def best_bound(self, lo, hi):
         nat, grad = self.bound_and_grad(lo, hi)
-        cen, _ = self.bound_and_grad_centered(lo, hi)
+        cen, _ = self.bound_and_grad_centered(lo, hi, grad)
         gcen = self.grad_centered(lo, hi)
         if gcen is not None:
             for k in range(6):
