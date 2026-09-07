@@ -523,10 +523,13 @@ def check(name, ok, detail=""):
 
 def main():
     print("Arb, %d bits.  Certified breakpoints of w and w'.\n" % ctx.prec)
-    P = Pieces(30.0)
+    # 170 covers six gaps of the widest tape's cube (28) with room; the tables are
+    # exported below for dev/tapecheck, the compiled checker, which consumes them
+    # as hashed data and re-checks each entry but takes completeness from here.
+    P = Pieces(170.0)
     check("every zero of K is certified and K vanishes there",
           all(arb(0) in kernel(z) for z in P.zs),
-          "%d zeros up to 30" % len(P.zs))
+          "%d zeros up to %g" % (len([z for z in P.zs if float(z.mid()) <= P.limit]), P.limit))
     check("and each is a zero of w",
           all(arb(0) in weight(z) for z in P.zs))
     check("every maximum between consecutive zeros is certified, with K' zero "
@@ -546,16 +549,16 @@ def main():
     # Completeness, which the sign scan does not give: the gaps between consecutive
     # certified balls are proved zero-free, so the tables hold EVERY critical point
     # and the hull over endpoints and table entries is the exact range.
-    check("every zero of w' in [0, 30] lies in a certified ball, so the monotone "
-          "pieces of w are complete", P.w_coverage is None,
+    check("every zero of w' in [0, %g] lies in a certified ball, so the monotone "
+          "pieces of w are complete" % P.limit, P.w_coverage is None,
           "%d balls" % len([t for t in P.w_roots if float(t.mid()) <= P.limit]))
-    check("every zero of w'' in [0, 30] lies in a certified ball, so the monotone "
-          "pieces of w' are complete", P.wd_coverage is None,
+    check("every zero of w'' in [0, %g] lies in a certified ball, so the monotone "
+          "pieces of w' are complete" % P.limit, P.wd_coverage is None,
           "%d balls" % len(P.dbreaks))
     # A review found w_range(0.5, 0.5) sitting 1.9e-17 ABOVE the direct evaluation:
     # the hull went through nearest-rounded floats.  The direct evaluation is now
     # contained, as a ball, in the point range.
-    pts = [0.5, 1.0, 1.85, 2.5, 7.25, 12.0, 29.5]
+    pts = [0.5, 1.0, 1.85, 2.5, 7.25, 12.0, 29.5, 96.3, 168.0]
     check("a point range contains the direct Arb evaluation there, as a ball",
           all(weight(arb(x)) in P.w_range(x, x) and weight_d(arb(x)) in P.wd_range(x, x)
               for x in pts), "%d points" % len(pts))
@@ -569,7 +572,7 @@ def main():
     import random
     rnd = random.Random(20260827)
     for _ in range(4000):
-        a = rnd.uniform(0.05, 25.0)
+        a = rnd.uniform(0.05, 160.0)
         b = a + rnd.uniform(0, 1.5)
         R = P.w_range(a, b)
         for _ in range(6):
@@ -632,7 +635,8 @@ def main():
             # costs at most w3/2 * d^2 of w' value, and that is the shortfall a
             # tabulated derivative range has to be widened to cover.
             "w_break_points": [{"mid": float(t.mid()), "rad": float(t.rad())}
-                               for t in P.zs + P.ms if float(t.mid()) <= P.limit],
+                               for t in sorted(P.zs + P.ms, key=lambda t: float(t.mid()))
+                               if float(t.mid()) <= P.limit],
             "wd_break_points": [
                 {"mid": float(t.mid()), "rad": float(t.rad()),
                  "w3": float(abs(weight_jet(arb(float(t.mid()), 1e-6), 4)[3]).upper())}
