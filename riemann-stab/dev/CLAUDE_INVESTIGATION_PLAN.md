@@ -2,6 +2,8 @@
 
 Prepared 2026-09-07 from repository commit `107fbd97ea3e6c4d9db3eae880e789a33414f3a9`.
 
+Follow-up after the audit commits: read `dev/CLAUDE_FOLLOWUP_PLAN.md` next. It corrects the endpoint-amplitude assumption, distinguishes the proof-tape domains, and specifies a signed-boundary extension through the existing offset average. Use that follow-up for the next execution order.
+
 Your task is to investigate the mathematics, conduct reproducible experiments, and establish what each result actually supports. Prioritize a sound connection between the auxiliary chain and the simple-zero bound, independent verification of existing certificates, and a potentially stronger finite inequality. Finish each numbered stage with its stated deliverable and decision before moving on. A refutation or a precisely identified missing lemma is a useful result. Do not turn unsuccessful searches into claims of impossibility.
 
 This is a research execution plan, not a request to build another visual lab first. Update the website after the underlying conclusions are settled.
