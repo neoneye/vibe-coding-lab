@@ -143,11 +143,22 @@ What is still required before the improved simple-zero projection can be used
 (revised 2026-09-07; the assembly is no longer a manuscript nobody here can see,
 it is Lean, see the bullet above and `investigation/ASSEMBLY_AUDIT.md`): a
 variant of `n_point_bound` whose certificate hypothesis is the window-sum
-inequality rather than the per-block one, and the telescoping boundary term
-paid.  With it paid, the `sharp` chain floor `0.003956` (amplitude `1.2818e-3`,
-253 windows) projects to `0.6731062`, not `0.6731094`; the pinned pair
-certificate, on the record base's amplitude `5.2e-3`, to `0.6730970`, not
-`0.6731103`.  The rigorous sweep cleared `19/5000` on its own.
+inequality rather than the per-block one, and the telescoping endpoint loss
+paid.  That variant is now Lean (`n_point_bound_of_windowSum`, branch
+`window-sum` of the zeta-lab clone, standard axioms; patch and axiom log in
+`investigation/lean/`), with the adapter from a coboundary certificate.  The
+loss to pay is the *oscillation of the state potential*, `B = 2 osc(a) +
+2 osc(a+b)` for an additive certificate -- not the tail amplitude, which a
+reviewer showed is too small: `sharp` `B = 0.00170904`, pinned pair
+`B = 0.00814654` (`investigation/endpoint_oscillation.py`).  Paid
+conservatively, `sharp` (`0.003956`, 253 windows) projects to `0.6731051`, not
+`0.6731094`; the pinned pair certificate to `0.6730895`, not `0.6731103`.  A
+signed-endpoint extension through the offset average would recover `0.6731094`
+for `sharp` under the cap `cW + B <= 1`, met at `W = 252`; its finite
+bookkeeping is checked exactly (`investigation/signed_endpoint_model.py`), its
+Lean is not written.  The rigorous sweep cleared `19/5000` on its own, and the
+rigorous `sharp 0.003956` row this section relies on was found ABSENT from the
+results table (only the fast row exists); it is being re-run.
 
 One result here is off the tiling line entirely and is a **correction**, not an
 advance: the cross-window "interior mixture optimum" does not exist for the

@@ -14,18 +14,26 @@ from mpmath import mp, mpf, mpc, cos, sin, sqrt, exp, pi, quad, fabs
 here=os.path.dirname(os.path.abspath(__file__))
 D=json.load(open(os.path.join(here,'labf_dump.json')))
 mp.dps=80
-S2=sqrt(2); NRM=1/(S2*sin(1/S2))
-def f0(u): return cos(S2*u)*NRM
+# Every constant is recomputed inside the current precision context: raising
+# mp.dps after computing sqrt(2) once would silently keep the old digits.
+def S2(): return sqrt(2)
+def NRM(): return 1/(S2()*sin(1/S2()))
+def f0(u): return cos(S2()*u)*NRM()
+def tompc(z):
+    # binary64 coordinates are converted to mpf EXACTLY (mpf(float)) before any
+    # arithmetic; subtracting Python floats first would round.
+    if isinstance(z,dict): return mpc(mpf(z['re']),mpf(z['im']))
+    return z
 def K_quad(z):
-    z=mpc(z['re'],z['im']) if isinstance(z,dict) else z
+    z=tompc(z)
     return quad(lambda u: f0(u)*exp(-2*pi*1j*z*u), [-mpf(1)/2, mpf(1)/2])
 def sinc(w):
     if fabs(w)<mpf('1e-30'): return mpf(1)-w*w/6
     return sin(w)/w
 def K_closed(z):
-    z=mpc(z['re'],z['im']) if isinstance(z,dict) else z
+    z=tompc(z)
     b=2*pi*z
-    return (sinc((S2-b)/2)+sinc((S2+b)/2))/(2*S2*sin(1/S2))
+    return (sinc((S2()-b)/2)+sinc((S2()+b)/2))/(2*S2()*sin(1/S2()))
 
 fail=0
 def check(name,cond,detail=''):
@@ -37,7 +45,7 @@ print('--- kernel battery: quadrature vs closed form vs core.js ---')
 worst_q=mpf(0); worst_js=mpf(0)
 for row in D['kernel']:
     z=row['z']; js=mpc(row['k']['re'],row['k']['im'])
-    near_sing = abs(abs(z['re'])-float(1/(S2*pi)))<1e-6 and z['im']==0
+    near_sing = abs(abs(z["re"])-float(1/(sqrt(2)*pi)))<1e-6 and z["im"]==0
     mp.dps = 160 if near_sing else 80
     kq=K_quad(z); kc=K_closed(z)
     worst_q=max(worst_q,fabs(kq-kc)); worst_js=max(worst_js,fabs(kc-js)/max(1,fabs(kc)))
@@ -46,9 +54,12 @@ for row in D['kernel']:
 check('quadrature and closed form agree to 1e-60 on the battery',worst_q<mpf('1e-60'),str(worst_q))
 check('core.js kernel agrees with the oracle to 4e-15 relative (double precision; K reaches ~20 on the battery)',worst_js<mpf('4e-15'),str(worst_js))
 check('K(0) = 1',fabs(K_quad({'re':0,'im':0})-1)<mpf('1e-70'))
-kq04=K_quad({'re':0,'im':0.4})
-check('||f_z||^2 = K(z - conj z) = K(0.4i) at z = 0.2i: reviewer quoted 1.26417876513369812067, correct to 16 digits',
-      fabs(kq04-mpf('1.26417876513369812067'))<mpf('1e-16'),'80-digit value '+mp.nstr(kq04,30)+' (digits 17+ of the quoted value do not hold)')
+kq_dec=K_quad(mpc(0,mpf('0.4')))      # exact decimal 0.4
+kq_bin=K_quad(mpc(0,mpf(0.4)))        # the binary64 nearest 0.4
+check('||f_z||^2 = K(z - conj z) = K(0.4i) at exact decimal z = 0.2i equals the reviewer\'s 1.26417876513369812067 (20 digits)',
+      fabs(kq_dec-mpf('1.26417876513369812067'))<mpf('5e-21'),mp.nstr(kq_dec,30))
+check('and at the binary64 0.4 it is 1.264178765133698152…; the two are different inputs, not conflicting evaluations',
+      fabs(kq_bin-mpf('1.264178765133698152235'))<mpf('1e-21'),mp.nstr(kq_bin,30))
 
 print('--- Proposition 2.1 on',len(D['multisets']),'multisets, closed form at 80 digits ---')
 viol=0; worst_abs=mpf(0); worst_rel=mpf(0); worst_im=mpf(0); asym=0; n_pts=0
@@ -62,7 +73,7 @@ for ms in D['multisets']:
     S=mpc(0); mag=mpf(0)
     for a in pts:
         for b in pts:
-            k=K_closed({'re':a['re']-b['re'],'im':a['im']-b['im']})
+            k=K_closed(mpc(mpf(a['re'])-mpf(b['re']),mpf(a['im'])-mpf(b['im'])))
             t=a['m']*b['m']*k*k; S+=t; mag+=fabs(t)
     n_pts+=len(pts)
     worst_im=max(worst_im,fabs(S.imag))

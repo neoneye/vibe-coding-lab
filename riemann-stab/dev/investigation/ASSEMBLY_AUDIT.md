@@ -49,7 +49,7 @@ So the page's projection is the Lean theorem's formula. The strictness offset `1
 
 ## Is `n` free? Is `p` free?
 
-Both are parameters of `n_point_bound`, with side conditions `2 ≤ n ≤ m`, `0 < p`, `0 < c`, `c(m−(n−1)) ≤ 1`, and the certificate at the same `(n, p)`. This answers the two questions the research note put to "whoever has the manuscript": the `1/3000` is a choice, not a derivation, and general `n` is allowed. The block-size scan and the pressure optimisation of the note are therefore mathematics about a well-posed parameter of the theorem — still subject to the missing lemma below, since they were run on chain floors.
+Both are parameters of `n_point_bound` (`p : ℕ`, so integer pressure denominators only — a real optimum such as 3370.45 needs integer neighbours or an extension), with side conditions `2 ≤ n ≤ m`, `0 < p`, `0 < c`, `c(m−(n−1)) ≤ 1`, and the certificate at the same `(n, p)`. This answers the two questions the research note put to "whoever has the manuscript": the `1/3000` is a choice, not a derivation, and general `n` is allowed. The block-size scan and the pressure optimisation of the note are therefore mathematics about a well-posed parameter of the theorem — still subject to the missing lemma below, since they were run on chain floors.
 
 ## The hypothesis is per-block, and the page's floors are not
 
@@ -77,17 +77,33 @@ theorem n_point_bound_sum (n : ℕ) (c : ℝ) (m p : ℕ) (hn : 2 ≤ n) (hm : n
 
 obtained by cutting `block_energy` at `hsum`. The hypothesis is needed only at the theorem's own `m`. **This lemma is identified, not proved.** It looks like a routine refactor of S11; it has not been attempted here because the Mathlib build was still running when this was written.
 
-## What a telescoping certificate supplies, and what it costs
+## What a telescoping certificate supplies, and what it costs (corrected 2026-09-07, second pass)
 
-If `R(g) = F(g) + Φ(σg) − Φ(g) ≥ c` for every window `g` (the page's certificates, with `Φ` the state potential on five consecutive gaps), then summing over the `W = m−(n−1)` windows of a sorted `m`-block gives `Σ F ≥ cW − (Φ(last) − Φ(first)) ≥ cW − 2 sup|Φ|`. So `hSum` holds at `c′ = c − 2 sup|Φ|/W`. The page records `amplitude ≥ 2 max|Φ|` for each additive certificate (the same quantity that bounds its tail cube), and the pair certificate adds at most `4 × cap = 8e−5` to that of its `record` base. Solving `W = ⌊1/c′⌋` self-consistently:
+If `R(g) = F(g) + Φ(σg) − Φ(g) ≥ c` on every window, summing over the `W = m−(n−1)` windows of a sorted `m`-block gives `Σ F ≥ cW − (Φ(state_W) − Φ(state_0))`. The quantity to bound is the **endpoint oscillation** `B = sup Φ − inf Φ` of the state potential, *not* the single-edge amplitude `A_tail = 2(max|a| + max|b| + max|a+b|)` that the tail lemma uses; the first version of this file used `A_tail`, and a reviewer showed by explicit positive-gap witnesses that it is too small. For the additive certificates the state potential on five gaps is `Φ(s₀..s₄) = −a(s₀) − h(s₁) + h(s₃) + a(s₄)`, `h = a + b` (checked by expansion against the shipped six-gap correction, `investigation/endpoint_oscillation.py`), so `B = 2·osc(a) + 2·osc(h)` exactly. For the pair certificate the four state edge functions are the cumulative negatives of the five `ψ_k` and `B` is computed by a dynamic programme over the union knot grid (extrema at vertices, validated against brute force on a sub-grid). Exact fractions of the shipped binary64 coefficients:
 
-| certificate | chain floor `c` | amplitude | `W`, `m` | `c′` | `Phi_n(c′)` | naive `Phi_n(c)` |
-|---|---|---|---|---|---|---|
-| `sharp` additive (rigorous sweep complete) | 0.003956 | 1.2818e−3 | 253, 259 | 0.0039509336 | **0.6731062160** | 0.6731093501 |
-| `record` additive | 0.003957227285 | 5.1968e−3 | 254, 260 | 0.0039367674 | 0.6730970728 | 0.6731101602 |
-| pinned pair (on `record`) | 0.003957393309 | 5.1968e−3 + 8e−5 | 254, 260 | 0.0039366185 | 0.6730969745 | 0.6731102697 |
+| certificate | chain floor `c` | `A_tail` (wrong for this purpose) | `B` (endpoint oscillation) |
+|---|---|---|---|
+| `sharp` | 0.003956 | 0.00128178 | **0.00170904** |
+| `compact` | 0.003950948 | 0.00110684 | 0.00131141 |
+| `record` | 0.003957227 | 0.00519679 | 0.00808341 |
+| pinned pair (on `record`) | 0.003957393 | — (earlier guess 0.00528) | **0.00814654** |
 
-Two consequences the note did not have. Paying the boundary term reverses the order: the amplitude-minimised `sharp` certificate is worth more than the pair certificate that "reaches the ceiling", because the pair certificate inherited the record base's amplitude. And `0.6731062` still exceeds both the eight-point conditional figure `0.6730530` and the seven-point per-block family ceiling `0.673029553` measured in zeta-lab (`lean/bridge/README.md`), which is what a coboundary certificate buys over a per-block one — conditional on `n_point_bound_sum`.
+Two scores follow, kept separate (`investigation/projection.py`, exact rationals for `c, B, W, m`, `H` and `Phi_n` in 40-digit mpmath — numerical, not enclosed):
+
+| certificate | conservative: `c_eff = min(cW−B,1)/W`, best integer `W` | signed-cap (unproved extension): `Phi_n(c)` at the largest `W` with `cW + B ≤ 1` | naive (not a valid target) |
+|---|---|---|---|
+| `sharp` | `W=253, m=259`: **0.6731051013** | `W=252, m=258`: 0.6731093501 | 0.6731093501 |
+| `compact` | `W=253`: 0.6731028043 | `W=252`: 0.6731060160 | 0.6731062256 |
+| `record` | `W=254`: 0.6730895711 | `W=250, m=256`: 0.6731097351 | 0.6731101602 |
+| pinned pair | `W=254`: 0.6730895166 | `W=250, m=256`: 0.6731098447 | 0.6731102697 |
+
+The compiled instance `sharp_chain_bound_of_windowSum` (below) uses the rational `c = 394924/10⁸ ≤ (0.003956·253 − B)/253` at `m = 259`, whose `Phi_n` is 0.6731050981.
+
+**The theorem, proved (conservative form).** In a branch `window-sum` of the zeta-lab clone (patch and logs in `investigation/lean/`), `S11.lean` gains `WindowSumCert n p m c`, `windowSum_of_cert` (per-block ⇒ window-sum), `windowSum_of_telescoping` (a coboundary certificate with endpoint loss ≤ `B` ⇒ window-sum at `c − B/W`), and `block_energy_of_windowSum`; `S13.lean` gains `block_bound_of_windowSum`; `Main.lean` gains `block_bound_eventually_of_windowSum`, `pre_solve_of_windowSum`, `n_point_bound_of_windowSum`, the regression `n_point_bound'` (the original theorem re-derived), and the instance `sharp_chain_bound_of_windowSum`. The upstream theorems are untouched. Build and axiom outcome: see `investigation/lean/README.md`.
+
+**The signed route (follow-up plan, step 3).** Keeping `Δ_s = Φ(state_{s+W}) − Φ(state_s)` signed through S13 and summing over every consecutive full block in S15 before bounding: `Σ_s Δ_s` telescopes to the last `W` potentials minus the first `W`, so `|Σ_s Δ_s| ≤ W·B` independent of the configuration length, and the S13 clipping step survives under the side condition `cW + B ≤ 1`. Both facts are checked exactly on rational data by `investigation/signed_endpoint_model.py`, with the clipping counterexample when the cap fails. `sharp` meets the cap at `W = 252` (`cW + B = 0.99862`), which would recover 0.6731093501. **Not formalised**: it needs `S15.offset_average` generalised to a block-dependent left-hand side with the signed sum retained, and the asymptotic elimination in `pre_solve` carrying a fixed `W·B` error; the exact statement to prove is in `investigation/lean/README.md`.
+
+Remaining numerical premise for either score: the `sharp` chain floor `0.003956` on `[0,16]⁶` with the tail lemma — whose rigorous transcript was found to be **absent** from `tiling_interval.results.json` (only the fast row exists; the rigorous rows stop at `compact 0.0038`). A rigorous `sharp 0.003956` run was started on 2026-09-07 to restore it; its outcome is in `REPORT.md`.
 
 ## Dependency table
 
@@ -99,10 +115,10 @@ Two consequences the note did not have. Paying the boundary term reverses the or
 | finite inequality, per block, at `(7, 19/5000, 3000)` | Arb program accepts; **not** Lean | Ainta; page's `bare` control sweep reproduces `F6 ≥ 19/5000` |
 | finite inequality, per block, at `n = 3, 4` | **Lean** (interval cell lemmas) | `ThreePoint.lean`, `FourPoint.lean` |
 | block/chain counting, multiplicities, off-line pairs, elimination | Lean (`S6`–`S16`) | `Zeta23Ext/Bridge/` |
-| window-sum variant of the hypothesis | **missing**; identified above | — |
 | telescoping lemma (coboundary → chain floor + O(1)) | Lean, page's own `coboundary_floor_telescopes`, `chain_inequality` | `dev/lean/ZetaClaims.lean` |
-| chain floor `0.003956` on `[0,16]⁶` + tail lemma | exhaustive subdivision with proved enclosures, **modulo the page's own arithmetic**; Arb sample-checked only (39/220, 67/220 confirmed, 0 refuted) | `tiling_interval.results.json`, `sweep_proof_arb.results.json` |
-| boundary term ≤ amplitude | derived above from the certificate's definition; not in Lean | — |
+| chain floor `0.003956` on `[0,16]⁶` + tail lemma | exhaustive subdivision with proved enclosures on the page's own arithmetic, **rigorous transcript absent** (re-run in progress); no independent arithmetic check of this sweep exists — the Arb tape sample (39/220, 67/220) belongs to the cube-1.6 pair tape, not to this sweep | `tiling_interval.results.json` |
+| endpoint loss ≤ `B` (oscillation of the state potential) | exact rationals, `endpoint_oscillation.py`; the adapter `windowSum_of_telescoping` is Lean, the PL-extrema-at-knots step for the concrete `Φ` is not | `investigation/endpoint_oscillation.py` |
+| window-sum variant of the assembly | **Lean** (`n_point_bound_of_windowSum`, standard axioms) | branch `window-sum`, `investigation/lean/` |
 
 ## Decision
 

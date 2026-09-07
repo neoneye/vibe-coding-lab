@@ -4,7 +4,7 @@ Stage 3 of `CLAUDE_INVESTIGATION_PLAN.md`, 2026-09-07.
 
 ## Corrections made to the exposition
 
-1. **Complex norm.** The page said `‖f_z‖² = K(0) = 1` for every `z`. From (2.7), `⟨f_z, f_s⟩ = K(z − s̄)`, so `‖f_z‖² = K(z − z̄) = K(2i·Im z)`, which is 1 exactly for real `z` and larger otherwise; the proof uses the unit norm only for the real points, eq. (2.8). Fixed in `template.html` and in the design spec. At `z = 0.2i`, `K(0.4i) = 1.264178765133698152…` (80-digit quadrature and closed form agree to 1e−80). The reviewer's quoted `1.26417876513369812067` is correct to 16 digits; its digits beyond that do not hold.
+1. **Complex norm.** The page said `‖f_z‖² = K(0) = 1` for every `z`. From (2.7), `⟨f_z, f_s⟩ = K(z − s̄)`, so `‖f_z‖² = K(z − z̄) = K(2i·Im z)`, which is 1 exactly for real `z` and larger otherwise; the proof uses the unit norm only for the real points, eq. (2.8). Fixed in `template.html` and in the design spec. At `z = 0.2i` with the **exact decimal** `0.2`, `K(0.4i) = 1.26417876513369812066990…`, which is the reviewer's 20-digit value exactly; at the **binary64** nearest `0.4` it is `1.264178765133698152235…`. The first version of this audit compared the decimal quotation against the binary input and wrongly said the quoted digits fail past the sixteenth — they are two different inputs, not conflicting evaluations. The oracle now checks both.
 2. **Sign convention.** On the line `i(ρ − ½)·log T/2π = −γ·log T/2π`; the page now says so and notes the reflection is global and harmless.
 3. **Transform of `Q″`.** The spec now says the transform of `Q″` is `(2πix)² Q̂(x) = −4π²x²K(x)²`, the transform of the derivative and not the derivative of the transform.
 4. **Unsmoothed kernel.** The page now says the limit kernel `f₀` is admissible for the finite proposition but not for Lemma 3.2 (`Q₀″` has point masses at `0, ±1`), so the asymptote drawn in F·ii is the `ε → 0` limit of the smoothed constants.
@@ -12,7 +12,7 @@ Stage 3 of `CLAUDE_INVESTIGATION_PLAN.md`, 2026-09-07.
 
 ## Experiment B — independent oracle
 
-`investigation/labf_dump.js` dumps the page's kernel values and Proposition 2.1 sums; `investigation/labf_oracle.py` (mpmath, 80 digits; 160 at the removable sinc singularities `x = ±1/(√2π)`) recomputes them two ways — direct quadrature of the defining Fourier integral on the fixed battery, and an independent closed-form implementation for every pair sum — and reports absolute error and error scaled by the sum of absolute term magnitudes.
+`investigation/labf_dump.js` dumps the page's kernel values and Proposition 2.1 sums; `investigation/labf_oracle.py` (mpmath, 80 digits; 160 at the removable sinc singularities `x = ±1/(√2π)`; every constant recomputed inside the active precision context; binary64 coordinates converted to mpf exactly before any subtraction) recomputes them two ways — direct quadrature of the defining Fourier integral on the fixed battery, and an independent closed-form implementation for every pair sum — and reports absolute error and error scaled by the sum of absolute term magnitudes.
 
 Run: `node dev/investigation/labf_dump.js && <python with mpmath> dev/investigation/labf_oracle.py` (13 s).
 
@@ -33,4 +33,4 @@ Input handling, stated: `lamzouriMultiset` requires distinct `(re, im)` records 
 
 ## Not claimed
 
-The oracle checks the page's implementation of a Lean-certified finite statement; it is not a proof of anything new. The live comparison in F·ii is against the `ε → 0` limit of Lemma 3.2's constants, and the finite-height gap is explained only as far as one measured diagnostic explains it.
+The oracle is a high-precision numerical comparison without proved error enclosures; it checks the page's implementation of a Lean-certified finite statement and is not a proof of anything new. The live comparison in F·ii is against the `ε → 0` limit of Lemma 3.2's constants, and the finite-height gap is explained only as far as one measured diagnostic explains it.
