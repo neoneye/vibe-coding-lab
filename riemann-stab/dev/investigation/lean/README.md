@@ -53,7 +53,7 @@ Every proof body is the upstream body with the per-window step replaced by the h
 
 ## What remains hypothetical for the `sharp` instance
 
-- `hSum : WindowSumCert 7 3000 259 (394924/10⁸)` — supplied, via `windowSum_of_telescoping`, by (i) the coboundary inequality `R(g) ≥ 0.003956` on every six-gap window of every sorted list (an exhaustive interval subdivision on `[0,16]⁶` plus the tail lemma; **its rigorous transcript is absent from `tiling_interval.results.json`** and is being re-run), (ii) `φ y i := Φ(gaps i..i+4 of y)` with the endpoint loss `Φ(state_W) − Φ(state_0) ≤ B = 0.00170904…` — exact in rationals of the shipped coefficients (`../endpoint_oscillation.py`), **not formalised** (the missing Lean step is: a function piecewise-linear between knots and constant beyond them attains its extrema at knots), (iii) `394924/10⁸ ≤ (0.003956·253 − B)/253 = 0.0039492449…`, arithmetic.
+- `hSum : WindowSumCert 7 3000 259 (394924/10⁸)` — supplied, via `windowSum_of_telescoping`, by (i) the coboundary inequality `R(g) ≥ 0.003956` on every six-gap window of every sorted list (an exhaustive interval subdivision on `[0,16]⁶` plus the tail lemma; its rigorous transcript, absent when this was first written, was restored on 2026-09-07), (ii) `φ y i := Φ(gaps i..i+4 of y)` with the endpoint loss `Φ(state_W) − Φ(state_0) ≤ B = 0.00170904…` — exact in rationals of the shipped coefficients (`../endpoint_oscillation.py`), **not formalised** (the missing Lean step is: a function piecewise-linear between knots and constant beyond them attains its extrema at knots), (iii) `394924/10⁸ ≤ (0.003956·253 − B)/253 = 0.0039492449…`, arithmetic.
 - `Phi_n 7 (394924/10⁸) 259 3000 = 0.6731050981…` (numerical; a Lean pin of the decimal is the same kind of statement as `dev/lean/ZetaClaims.lean` already carries and was not added).
 
 ## The signed-endpoint telescope, proved in isolation
@@ -129,5 +129,6 @@ oscillation is `norm_num`. So the only hypothesis left between the shipped `shar
 a theorem about ζ at `Phi_n 7 (3956/10⁶) 258 3000 = 0.6731093501…` is `hcob`: the coboundary
 inequality `F(window) + sharpPsi(next state) − sharpPsi(state) ≥ 0.003956` on every window of every
 sorted 258-point list — what the exhaustive interval subdivision of `R` on `[0,16]⁶` plus the tail
-lemma claims, on this page's own arithmetic, whose rigorous transcript is being restored.
+lemma claims, on this page's own arithmetic; its rigorous transcript was restored on 2026-09-07
+(67 608 431 boxes, checksum `37308f214a50bb25`) and its proof tape is structurally verified in full.
 

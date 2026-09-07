@@ -4,7 +4,8 @@ Two scores per certificate, kept separate as the follow-up plan requires:
   conservative : c_eff = min(c*W - B, 1)/W, the window-sum form the telescoping adapter gives,
                  W chosen among the integers near the cap (needs c*W - B > 0);
   signed-cap   : the projection at the floor c itself with the stricter cap c*W + B <= 1,
-                 which is what the (unproved) signed-endpoint extension would deliver.
+                 which is what the signed-endpoint extension delivers (n_point_bound_signed,
+                 proved in Lean 2026-09-08, investigation/lean/Signed.lean).
 Also the naive number (no endpoint term), which is NOT a valid target.
 Exact rationals for c, B, W, m, p; H and Phi in mpmath at 40 digits (numerical, not enclosed).
 Coefficients are the exact binary64 values of the shipped certificates (endpoint_oscillation.py).
