@@ -459,3 +459,709 @@ index 6285d69..6231640 100644
 +#print axioms block_bound_of_windowSum
  
  end Zeta23Ext.Bridge
+diff --git a/lean/bridge/Zeta23Ext/Bridge/Signed.lean b/lean/bridge/Zeta23Ext/Bridge/Signed.lean
+new file mode 100644
+index 0000000..1f74bd8
+--- /dev/null
++++ b/lean/bridge/Zeta23Ext/Bridge/Signed.lean
+@@ -0,0 +1,700 @@
++/-
++Copyright (c) 2026 Zeta Lab and contributors. All rights reserved.
++Released under MIT license as described in the file LICENSE.
++SPDX-License-Identifier: MIT
++-/
++import Zeta23Ext.Bridge.Main
++
++/-!
++# The signed-endpoint extension of the `n`-point bound
++
++A telescoping (coboundary) certificate `c ≤ F(window i) + Φ(state i+1) − Φ(state i)` bounds
++the window sum of every sorted `m`-point list only up to the endpoint term
++`Φ(state W) − Φ(state 0)`, `W = m − (n−1)`.  Paying that term on every block
++(`n_point_bound_of_windowSum` through `windowSum_of_telescoping`) costs `B/W` on the
++certificate constant.  This file keeps the term **signed** through S11, S13 and S15: summed over
++all consecutive full blocks of the sorted configuration it telescopes to the last `W` states
++minus the first `W` (`sum_shift_sub_telescope`), so the total loss is `W·B`, a constant that
++the asymptotic elimination absorbs.  The price is the side condition `c·W + B ≤ 1` in place of
++the cap `c·W ≤ 1`, which S13's clipping needs.
++
++Every proof below is the upstream proof with the endpoint term carried along; the upstream
++declarations are untouched.
++-/
++
++noncomputable section
++set_option linter.unusedSectionVars false
++
++open Matrix Finset RHLinalg Filter
++open scoped ComplexOrder BigOperators
++open Zeta23 Zeta23.ZeroSide Zeta23.ThmD
++
++namespace Zeta23Ext.Bridge
++
++section Abstract
++
++variable {ι : Type*} [Fintype ι] [DecidableEq ι]
++
++/-- The state of a telescoping certificate at window `i`: its first `n − 2` gaps. -/
++def stateGaps (n : ℕ) (Y : ℕ → ℝ) (i : ℕ) : Fin (n - 2) → ℝ :=
++  fun j => Y (i + ((j : ℕ) + 1)) - Y (i + j)
++
++/-- The block of the `m` points whose values are `y k`, `s ≤ k < s + m`, for an enumeration `y`
++of the values of `x`. -/
++def enumBlock (x : ι → ℝ) {N : ℕ} (y : Fin N → ℝ) (s m : ℕ) : Finset ι :=
++  univ.filter fun i => ∃ k : Fin N, s ≤ (k : ℕ) ∧ (k : ℕ) < s + m ∧ x i = y k
++
++/-- **S11 with the endpoint term kept.**  For every strictly increasing enumeration `y` of the
++block's values, `c·W − (φ y W − φ y 0) ≤ E + q·span`. -/
++theorem block_energy_signed {c : ℝ} {n p : ℕ} (hn : 2 ≤ n) (hp : 0 < p) {m : ℕ}
++    (φ : (Fin m → ℝ) → ℕ → ℝ)
++    (hcob : ∀ y : Fin m → ℝ, StrictMono y → ∀ i ∈ range (m - (n - 1)),
++      c ≤ F n p (windowGaps n (sortedExt y) i) + (φ y (i + 1) - φ y i))
++    (hm : n ≤ m) (hcard : Fintype.card ι = m) (x : ι → ℝ) (hx : Function.Injective x)
++    (y : Fin m → ℝ) (hymem : ∀ k, y k ∈ univ.image x) (hymono : StrictMono y) :
++    c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0)
++      ≤ energyOn x univ + (((n : ℝ) - 1) / (p : ℝ)) * spanOf x univ := by
++  classical
++  have hS : (univ.image x).card = m := by
++    rw [card_image_of_injective _ hx, card_univ, hcard]
++  have hn1' : (1 : ℝ) ≤ (n : ℝ) := by exact_mod_cast (by omega : 1 ≤ n)
++  have hcastn' : ((n - 1 : ℕ) : ℝ) = (n : ℝ) - 1 := by
++    rw [Nat.cast_sub (by omega : 1 ≤ n)]; norm_num
++  have hcast : ((m - (n - 1) : ℕ) : ℝ) = (m : ℝ) - ((n : ℝ) - 1) := by
++    rw [Nat.cast_sub (by omega : n - 1 ≤ m), hcastn']
++  have hsum : c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0)
++      ≤ ∑ i ∈ range (m - (n - 1)), F n p (windowGaps n (sortedExt y) i) := by
++    have h := sum_le_sum (hcob y hymono)
++    rw [sum_const, card_range, nsmul_eq_mul, sum_add_distrib, sum_range_sub, hcast] at h
++    linarith
++  have hyeq : y = ⇑((univ.image x).orderEmbOfFin hS) :=
++    Finset.orderEmbOfFin_unique hS hymem hymono
++  rw [hyeq] at hsum ⊢
++  set y : Fin m → ℝ := ⇑((univ.image x).orderEmbOfFin hS) with hydef
++  have hymem : ∀ k, y k ∈ univ.image x := fun k => Finset.orderEmbOfFin_mem _ hS k
++  have hymono : StrictMono y := ((univ.image x).orderEmbOfFin hS).strictMono
++  set Y := sortedExt y with hYdef
++  have hm0 : 0 < m := by omega
++  have hn1 : (1 : ℝ) ≤ (n : ℝ) := by exact_mod_cast (by omega : 1 ≤ n)
++  have hcastn : ((n - 1 : ℕ) : ℝ) = (n : ℝ) - 1 := by
++    rw [Nat.cast_sub (by omega : 1 ≤ n)]; norm_num
++  simp_rw [F_windowGaps] at hsum
++  rw [sum_add_distrib, ← mul_sum] at hsum
++  -- the linear term: each single gap is charged at most `n − 1` times
++  have hlin : ∑ i ∈ range (m - (n - 1)), (Y (i + (n - 1)) - Y i)
++      ≤ ((n : ℝ) - 1) * spanOf x univ := by
++    rw [sum_shift_sub]
++    have hterm : ∀ i ∈ range (n - 1), Y (m - (n - 1) + i) - Y i ≤ Y (m - 1) - Y 0 := by
++      intro i hi
++      rw [mem_range] at hi
++      have h1 := sortedExt_mono hymono (a := m - (n - 1) + i) (b := m - 1) (by omega) (by omega)
++      have h2 := sortedExt_mono hymono (a := 0) (b := i) (by omega) (by omega)
++      linarith
++    have hspan : Y (m - 1) - Y 0 ≤ spanOf x univ := by
++      obtain ⟨i₀, -, hi₀⟩ := mem_image.mp (hymem ⟨m - 1, by omega⟩)
++      obtain ⟨j₀, -, hj₀⟩ := mem_image.mp (hymem ⟨0, hm0⟩)
++      rw [hYdef, sortedExt_of_lt y (by omega : m - 1 < m), sortedExt_of_lt y hm0, ← hi₀, ← hj₀]
++      exact (le_abs_self _).trans (abs_sub_le_spanOf x (mem_univ i₀) (mem_univ j₀))
++    calc ∑ i ∈ range (n - 1), (Y (m - (n - 1) + i) - Y i)
++        ≤ ∑ i ∈ range (n - 1), (Y (m - 1) - Y 0) := sum_le_sum hterm
++      _ = ((n : ℝ) - 1) * (Y (m - 1) - Y 0) := by
++          rw [sum_const, card_range, nsmul_eq_mul, hcastn]
++      _ ≤ ((n : ℝ) - 1) * spanOf x univ := by nlinarith
++  -- the quadratic term
++  have hquad := window_pairs_le_energy hn hm x hx hS
++  simp only [pairCoef] at hquad
++  rw [← hydef, ← hYdef] at hquad
++  have hp' : 0 ≤ 1 / (p : ℝ) := by positivity
++  calc c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0)
++      ≤ _ := hsum
++    _ ≤ (1 / (p : ℝ)) * (((n : ℝ) - 1) * spanOf x univ) + energyOn x univ := by
++        gcongr
++    _ = energyOn x univ + (((n : ℝ) - 1) / (p : ℝ)) * spanOf x univ := by ring
++
++
++
++/-- **S15 with a block-dependent left-hand side.**  The proof of `offset_average`, with the per-block
++bound allowed to depend on the block's start `s` in the sorted order given by any strictly
++increasing enumeration `y` of the values, and the conclusion summed over the `n + 1 − m` full
++blocks instead of multiplied out. -/
++theorem offset_average_indexed (x : ι → ℝ) (hx : Function.Injective x)
++    {n : ℕ} (hn : Fintype.card ι = n)
++    (y : Fin n → ℝ) (hymono : StrictMono y) (hymem : ∀ k, y k ∈ univ.image x)
++    {m : ℕ} (hm : 1 ≤ m)
++    (Dblk : Finset ι → ℝ) (Dtot q : ℝ) (A : ℕ → ℝ) (hq : 0 ≤ q)
++    (hD0 : ∀ B, 0 ≤ Dblk B)
++    (hblock : ∀ s, s + m ≤ n → (enumBlock x y s m).card = m →
++      IsInterval x (enumBlock x y s m) →
++      A s ≤ Dblk (enumBlock x y s m) + q * spanOf x (enumBlock x y s m))
++    (hpinch : ∀ (κ : Type) [Fintype κ] [DecidableEq κ] (β : ι → κ),
++      ∑ b, Dblk (univ.filter fun i => β i = b) ≤ Dtot) :
++    ∑ s ∈ range (n + 1 - m), A s - q * ((m : ℝ) - 1) * spanOf x univ
++      ≤ m * Dtot := by
++  classical
++  have hndef : n = Fintype.card ι := hn.symm
++  have hDtot : 0 ≤ Dtot := by
++    have h := hpinch Unit (fun _ => ())
++    rw [Fintype.sum_unique] at h
++    exact (hD0 _).trans h
++  have hspan0 := spanOf_nonneg x (univ : Finset ι)
++  have hm0 : 0 < m := hm
++  have hm1 : (1 : ℝ) ≤ m := by exact_mod_cast hm
++  -- trivial case: fewer than `m` points
++  rcases lt_or_ge n m with hnm | hnm
++  · have h0 : n + 1 - m = 0 := by omega
++    rw [h0, sum_range_zero]
++    nlinarith [mul_nonneg hq (mul_nonneg (by linarith : (0:ℝ) ≤ (m : ℝ) - 1) hspan0),
++      mul_nonneg (by positivity : (0:ℝ) ≤ m) hDtot]
++  have hSt' : n + 1 - m = n - m + 1 := by omega
++  rw [hSt']
++  -- the given enumeration is a bijection onto the points
++  choose ι' hι' using fun k => mem_image.mp (hymem k)
++  have hι'inj : Function.Injective ι' := by
++    intro k k' h
++    apply hymono.injective
++    rw [← (hι' k).2, ← (hι' k').2, h]
++  have hbij : Function.Bijective ι' :=
++    (Fintype.bijective_iff_injective_and_card ι').mpr ⟨hι'inj, by simp [hndef]⟩
++  set e : Fin n ≃ ι := Equiv.ofBijective ι' hbij with hedef
++  set pos : ι → ℕ := fun i => (e.symm i : ℕ) with hposdef
++  set Y := sortedExt y with hYdef
++  have hpos_lt : ∀ i, pos i < n := fun i => (e.symm i).2
++  have hxY : ∀ i, x i = Y (pos i) := by
++    intro i
++    rw [hYdef, hposdef]; simp only
++    rw [sortedExt_of_lt y (e.symm i).2, Fin.eta, ← (hι' (e.symm i)).2]
++    congr 1
++    exact (Equiv.ofBijective_apply_symm_apply ι' hbij i).symm
++  have hpos_inj : Function.Injective pos := by
++    intro i i' h
++    have : e.symm i = e.symm i' := Fin.ext h
++    exact e.symm.injective this
++  have hle_iff : ∀ i i', x i ≤ x i' ↔ pos i ≤ pos i' := by
++    intro i i'
++    rw [hxY, hxY, hYdef, hposdef]; simp only
++    rw [sortedExt_of_lt y (e.symm i).2, sortedExt_of_lt y (e.symm i').2, Fin.eta, Fin.eta,
++      hymono.le_iff_le, Fin.le_def]
++  -- the blocks
++  set B : ℕ → Finset ι := fun s => univ.filter fun i => s ≤ pos i ∧ pos i < s + m with hBdef
++  have hmemB : ∀ s i, i ∈ B s ↔ s ≤ pos i ∧ pos i < s + m := by
++    intro s i; simp [hBdef]
++  have hxy : ∀ i, x i = y (e.symm i) := by
++    intro i
++    rw [hxY, hYdef, hposdef]; simp only
++    rw [sortedExt_of_lt y (e.symm i).2, Fin.eta]
++  have hB_eq : ∀ s, B s = enumBlock x y s m := by
++    intro s; ext i
++    rw [hmemB, enumBlock, mem_filter]
++    simp only [mem_univ, true_and]
++    constructor
++    · intro h
++      exact ⟨e.symm i, h.1, h.2, hxy i⟩
++    · rintro ⟨k, hk1, hk2, hk⟩
++      have hek : e.symm i = k := hymono.injective (by rw [← hxy i, hk])
++      show s ≤ (e.symm i : ℕ) ∧ (e.symm i : ℕ) < s + m
++      rw [hek]; exact ⟨hk1, hk2⟩
++  set toFin : ℕ → Fin n := fun t => if h : t < n then ⟨t, h⟩ else ⟨0, by omega⟩ with htoFin
++  have hcardB : ∀ s, s + m ≤ n → (B s).card = m := by
++    intro s hs
++    have : (B s).card = (Ico s (s + m)).card := by
++      refine card_nbij' pos (fun t => e (toFin t)) ?_ ?_ ?_ ?_
++      · intro i hi
++        rw [mem_coe, hmemB] at hi
++        rw [mem_coe, mem_Ico]; exact hi
++      · intro t ht
++        rw [mem_coe, mem_Ico] at ht
++        rw [mem_coe, hmemB]
++        have htn : t < n := by omega
++        simp only [hposdef, htoFin, dif_pos htn, Equiv.symm_apply_apply]
++        exact ht
++      · intro i hi
++        have h := hpos_lt i
++        simp only [htoFin, dif_pos h]
++        simp only [hposdef, Fin.eta, Equiv.apply_symm_apply]
++      · intro t ht
++        rw [mem_coe, mem_Ico] at ht
++        have htn : t < n := by omega
++        simp only [hposdef, htoFin, dif_pos htn, Equiv.symm_apply_apply]
++    rw [this, Nat.card_Ico]; omega
++  have hintB : ∀ s, IsInterval x (B s) := by
++    intro s i hi j hj k hik hkj
++    rw [hmemB] at hi hj ⊢
++    rw [hle_iff] at hik hkj
++    omega
++  have hspanB : ∀ s, s + m ≤ n → spanOf x (B s) ≤ Y (s + (m - 1)) - Y s := by
++    intro s hs
++    have hne : (B s).Nonempty := by
++      rw [← card_pos, hcardB s hs]; exact hm0
++    unfold spanOf
++    rw [dif_pos hne]
++    have h1 : (B s).sup' hne x ≤ Y (s + (m - 1)) := by
++      apply sup'_le
++      intro i hi
++      rw [hmemB] at hi
++      rw [hxY]
++      exact sortedExt_mono hymono (by omega) (by omega)
++    have h2 : Y s ≤ (B s).inf' hne x := by
++      apply le_inf'
++      intro i hi
++      rw [hmemB] at hi
++      rw [hxY]
++      exact sortedExt_mono hymono (by omega) (hpos_lt i)
++    linarith
++  -- the per-block bound summed over all full blocks
++  set St := range (n - m + 1) with hStdef
++  have hmemSt : ∀ s, s ∈ St ↔ s + m ≤ n := by
++    intro s; rw [hStdef, mem_range]; omega
++  have hsumblock : ∑ s ∈ St, A s ≤ ∑ s ∈ St, Dblk (B s) + q * ∑ s ∈ St, spanOf x (B s) := by
++    have h := sum_le_sum fun s (hs : s ∈ St) => by
++      have hs' := (hmemSt s).mp hs
++      have := hblock s hs' (by rw [← hB_eq]; exact hcardB s hs') (by rw [← hB_eq]; exact hintB s)
++      rwa [← hB_eq] at this
++    rw [sum_add_distrib, ← mul_sum] at h
++    exact h
++  -- the spans telescope
++  have hspans : ∑ s ∈ St, spanOf x (B s) ≤ ((m : ℝ) - 1) * spanOf x univ := by
++    have hY0 : ∀ i ∈ range (m - 1), Y (n - m + 1 + i) - Y i ≤ spanOf x univ := by
++      intro i hi
++      rw [mem_range] at hi
++      have hi' : n - m + 1 + i < n := by omega
++      obtain ⟨a, -, ha⟩ := mem_image.mp (hymem ⟨n - m + 1 + i, hi'⟩)
++      obtain ⟨b, -, hb⟩ := mem_image.mp (hymem ⟨i, by omega⟩)
++      rw [hYdef, sortedExt_of_lt y hi', sortedExt_of_lt y (by omega : i < n), ← ha, ← hb]
++      exact (le_abs_self _).trans (abs_sub_le_spanOf x (mem_univ a) (mem_univ b))
++    calc ∑ s ∈ St, spanOf x (B s)
++        ≤ ∑ s ∈ St, (Y (s + (m - 1)) - Y s) :=
++          sum_le_sum fun s hs => hspanB s ((hmemSt s).mp hs)
++      _ = ∑ i ∈ range (m - 1), (Y (n - m + 1 + i) - Y i) := sum_shift_sub Y (m - 1) (n - m + 1)
++      _ ≤ ∑ i ∈ range (m - 1), spanOf x univ := sum_le_sum hY0
++      _ = ((m : ℝ) - 1) * spanOf x univ := by
++          rw [sum_const, card_range, nsmul_eq_mul, Nat.cast_sub hm]; norm_num
++  -- the defects pinch, one partition per residue
++  have hdefects : ∑ s ∈ St, Dblk (B s) ≤ m * Dtot := by
++    rw [← sum_fiberwise_of_maps_to (g := fun s => s % m) (t := range m)
++      (fun s _ => mem_range.mpr (Nat.mod_lt s hm0))]
++    calc ∑ j ∈ range m, ∑ s ∈ St with s % m = j, Dblk (B s)
++        ≤ ∑ j ∈ range m, Dtot := by
++          refine sum_le_sum fun j hj => ?_
++          -- the partition of offset `j`
++          set β : ι → Fin (n + 1) := fun i =>
++            ⟨blockStart n m j (pos i), Nat.lt_succ_of_le (blockStart_le n m j (pos i))⟩ with hβ
++          have hclass : ∀ s (hs : s + m ≤ n) (hj : s % m = j),
++              (univ.filter fun i => β i = ⟨s, by omega⟩) = B s := by
++            intro s hs hj
++            ext i
++            rw [mem_filter, hmemB, hβ]
++            simp only [mem_univ, true_and, Fin.mk.injEq]
++            exact blockStart_eq_iff hm0 hs hj
++          set toFin' : ℕ → Fin (n + 1) := fun s => if h : s < n + 1 then ⟨s, h⟩ else 0 with htoFin'
++          have hinj : Set.InjOn toFin' (St.filter (fun s => s % m = j)) := by
++            intro s hs s' hs' h
++            rw [mem_coe, mem_filter, hmemSt] at hs hs'
++            simp only [htoFin', dif_pos (by omega : s < n + 1), dif_pos (by omega : s' < n + 1),
++              Fin.mk.injEq] at h
++            exact h
++          calc ∑ s ∈ St with s % m = j, Dblk (B s)
++              = ∑ s ∈ St with s % m = j, Dblk (univ.filter fun i => β i = toFin' s) := by
++                refine sum_congr rfl fun s hs => ?_
++                rw [mem_filter, hmemSt] at hs
++                have hsn : s < n + 1 := by omega
++                rw [← hclass s hs.1 hs.2]
++                congr 2
++                simp only [htoFin', dif_pos hsn]
++            _ = ∑ b ∈ (St.filter (fun s => s % m = j)).image toFin',
++                  Dblk (univ.filter fun i => β i = b) :=
++                (sum_image (f := fun b => Dblk (univ.filter fun i => β i = b)) hinj).symm
++            _ ≤ ∑ b, Dblk (univ.filter fun i => β i = b) :=
++                sum_le_sum_of_subset_of_nonneg (subset_univ _) fun b _ _ => hD0 _
++            _ ≤ Dtot := hpinch (Fin (n + 1)) β
++      _ = m * Dtot := by rw [sum_const, card_range, nsmul_eq_mul]
++  -- assemble
++  have hmn : (m : ℝ) ≤ n := by exact_mod_cast hnm
++  calc ∑ s ∈ St, A s - q * ((m : ℝ) - 1) * spanOf x univ
++      ≤ ∑ s ∈ St, Dblk (B s) + q * ∑ s ∈ St, spanOf x (B s)
++          - q * ((m : ℝ) - 1) * spanOf x univ := by linarith
++    _ ≤ m * Dtot := by nlinarith [mul_le_mul_of_nonneg_left hspans hq]
++
++
++/-- **S13 with the endpoint term kept.** -/
++theorem block_bound_signed {c : ℝ} {n m p : ℕ} (hn : 2 ≤ n) (hm : n ≤ m) (hp : 0 < p)
++    (φ : (Fin m → ℝ) → ℕ → ℝ)
++    (hcob : ∀ y : Fin m → ℝ, StrictMono y → ∀ i ∈ range (m - (n - 1)),
++      c ≤ F n p (windowGaps n (sortedExt y) i) + (φ y (i + 1) - φ y i))
++    (hA0 : ∀ y : Fin m → ℝ, StrictMono y →
++      c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0) ≤ 1)
++    (x : ι → ℝ) {G : Matrix ι ι ℂ} (hG : G.PosSemidef) (B : Finset ι) (hB : B.card = m)
++    (hx : Set.InjOn x B) {δ : ℝ} (hδ : 0 ≤ δ)
++    (hclose : ∀ i ∈ B, ∀ j ∈ B, i ≠ j → ‖G i j - (kfun (x i - x j) : ℂ)‖ ≤ δ)
++    (y : Fin m → ℝ) (hymem : ∀ k, ∃ i ∈ B, x i = y k) (hymono : StrictMono y) :
++    c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0) - 2 * (m : ℝ) ^ 2 * δ
++      ≤ blockDefect hG.1 B + (((n : ℝ) - 1) / (p : ℝ)) * spanOf x B := by
++  classical
++  have hn1 : (0 : ℝ) ≤ (n : ℝ) - 1 := by
++    have : (1 : ℝ) ≤ (n : ℝ) := by exact_mod_cast (by omega : 1 ≤ n)
++    linarith
++  -- S12 on the principal submatrix
++  have hS12 : min 1 (offDiagSqOn G B) ≤ blockDefect hG.1 B := by
++    have h := block_defect (hG.submatrix (Subtype.val : B → ι))
++    rw [offDiagSqOn_submatrix] at h
++    exact h
++  -- the off-diagonal mass dominates the energy up to `2m²δ`
++  have hoff : energyOn x B - 2 * (m : ℝ) ^ 2 * δ ≤ offDiagSqOn G B := by
++    have hterm : ∀ i ∈ B, ∀ j ∈ B,
++        (if i = j then (0 : ℝ) else wfun (x i - x j)) - 2 * δ
++          ≤ (if i = j then 0 else ‖G i j‖ ^ 2) := by
++      intro i hi j hj
++      split_ifs with hij
++      · linarith
++      · exact wfun_sub_le_norm_sq (hclose i hi j hj hij)
++    have hsum : ∑ i ∈ B, ∑ j ∈ B, ((if i = j then (0 : ℝ) else wfun (x i - x j)) - 2 * δ)
++        ≤ offDiagSqOn G B :=
++      sum_le_sum fun i hi => sum_le_sum fun j hj => hterm i hi j hj
++    have hsplit : ∑ i ∈ B, ∑ j ∈ B, ((if i = j then (0 : ℝ) else wfun (x i - x j)) - 2 * δ)
++        = energyOn x B - 2 * (m : ℝ) ^ 2 * δ := by
++      unfold energyOn
++      simp only [sum_sub_distrib, sum_const, nsmul_eq_mul, hB]
++      ring
++    linarith
++  -- S11 on the block
++  have hS11 : c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0)
++      ≤ energyOn x B + (((n : ℝ) - 1) / (p : ℝ)) * spanOf x B := by
++    have hcard : Fintype.card B = m := by simp [hB]
++    have hinj : Function.Injective (fun i : B => x i) := by
++      intro i j h
++      exact Subtype.ext (hx i.2 j.2 h)
++    have hymem' : ∀ k, y k ∈ (univ : Finset B).image (fun i : B => x i) := by
++      intro k
++      obtain ⟨i, hi, hxi⟩ := hymem k
++      exact mem_image.mpr ⟨⟨i, hi⟩, mem_univ _, hxi⟩
++    have h := block_energy_signed hn hp φ hcob hm hcard (fun i : B => x i) hinj y hymem' hymono
++    rw [energyOn_subtype] at h
++    have hp' : (0 : ℝ) ≤ ((n : ℝ) - 1) / (p : ℝ) := div_nonneg hn1 (by positivity)
++    have := mul_le_mul_of_nonneg_left (spanOf_subtype_le x B) hp'
++    linarith
++  -- assemble
++  have hcap := hA0 y hymono
++  have hspan := spanOf_nonneg x B
++  have hp' : (0 : ℝ) ≤ ((n : ℝ) - 1) / (p : ℝ) := div_nonneg hn1 (by positivity)
++  have hm2 : (0 : ℝ) ≤ 2 * (m : ℝ) ^ 2 * δ := by positivity
++  rcases le_or_gt 1 (offDiagSqOn G B) with h1 | h1
++  · rw [min_eq_left h1] at hS12
++    nlinarith [mul_nonneg hp' hspan]
++  · rw [min_eq_right h1.le] at hS12
++    nlinarith [mul_nonneg hp' hspan]
++
++
++end Abstract
++
++section Analytic
++
++open Classical
++
++/-- **S9 + S13 with the endpoint term kept**, uniform in `T`. -/
++theorem block_bound_eventually_signed (Z : ZeroConfig) (H : PaperInputs Z) {c : ℝ} {n m p : ℕ}
++    (hn : 2 ≤ n) (hm : n ≤ m) (hp : 0 < p)
++    (φ : (Fin m → ℝ) → ℕ → ℝ)
++    (hcob : ∀ y : Fin m → ℝ, StrictMono y → ∀ i ∈ range (m - (n - 1)),
++      c ≤ F n p (windowGaps n (sortedExt y) i) + (φ y (i + 1) - φ y i))
++    (hA0 : ∀ y : Fin m → ℝ, StrictMono y →
++      c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0) ≤ 1)
++    {η : ℝ} (hη : 0 < η) :
++    ∀ᶠ T in atTop, ∀ B : Finset (retained Z (mtParams T) T), B.card = m →
++      ∀ y : Fin m → ℝ, (∀ k, ∃ i ∈ B, xret Z (mtParams T) T i = y k) → StrictMono y →
++      c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0) - η
++        ≤ blockDefect (gram_isHermitian Z (mtParams T) T) B
++          + (((n : ℝ) - 1) / (p : ℝ)) * spanOf (xret Z (mtParams T) T) B := by
++  have hn' : (2 : ℝ) ≤ n := by exact_mod_cast hn
++  have hgap : (1 : ℝ) ≤ (n : ℝ) - 1 := by linarith
++  have hm' : (2 : ℝ) ≤ m := by exact_mod_cast (by omega : 2 ≤ m)
++  have hmsq : 0 < 2 * (m : ℝ) ^ 2 := by positivity
++  set δ : ℝ := η / (2 * (m : ℝ) ^ 2) with hδ
++  have hδpos : 0 < δ := div_pos hη hmsq
++  have hp' : (0 : ℝ) < p := by exact_mod_cast hp
++  filter_upwards [kernel_limit Z H ((p : ℝ) / ((n : ℝ) - 1)) δ hδpos, eventually_L_pos]
++    with T hclose hL
++  intro B hB y hymem hymono
++  set x := xret Z (mtParams T) T with hx
++  set q : ℝ := ((n : ℝ) - 1) / (p : ℝ) with hq
++  have hq0 : 0 < q := by rw [hq]; exact div_pos (by linarith) hp'
++  have hcap := hA0 y hymono
++  by_cases hsp : c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0) ≤ q * spanOf x B
++  · linarith [blockDefect_nonneg (gram_isHermitian Z (mtParams T) T) B]
++  · rw [not_le] at hsp
++    have hR : spanOf x B ≤ (p : ℝ) / ((n : ℝ) - 1) := by
++      have h1 : spanOf x B < 1 / q := by
++        rw [lt_div_iff₀ hq0]; linarith
++      have h1q : 1 / q = (p : ℝ) / ((n : ℝ) - 1) := by
++        rw [hq]; exact one_div_div ((n : ℝ) - 1) (p : ℝ)
++      linarith
++    have hcl : ∀ i ∈ B, ∀ j ∈ B, i ≠ j →
++        ‖gram Z (mtParams T) T i j - (kfun (x i - x j) : ℂ)‖ ≤ δ := by
++      intro i hi j hj _
++      exact hclose i j ((abs_sub_le_spanOf x hi hj).trans hR)
++    have h13 := block_bound_signed hn hm hp φ hcob hA0 x (gram_posSemidef Z (mtParams T) T) B hB
++      (xret_injective Z (mtParams T) T hL).injOn hδpos.le hcl y hymem hymono
++    have hη' : 2 * (m : ℝ) ^ 2 * δ = η := by rw [hδ]; field_simp
++    rw [hη'] at h13
++    exact h13
++
++
++
++/-- **`pre_solve` with the endpoint term kept**: the signed S15 followed by the telescope
++`sum_shift_sub_le`, whose fixed `W·B` is absorbed by the tolerance (`Cn` gains `+1`). -/
++theorem pre_solve_signed (Z : ZeroConfig) (H : PaperInputs Z) {c : ℝ} {n m p : ℕ}
++    (hn : 2 ≤ n) (hm : n ≤ m) (hp : 0 < p) (hc : 0 < c)
++    (Ψ : (Fin (n - 2) → ℝ) → ℝ) (lo hi : ℝ) (hΨ : ∀ g, lo ≤ Ψ g ∧ Ψ g ≤ hi)
++    (hcob : ∀ y : Fin m → ℝ, StrictMono y → ∀ i ∈ range (m - (n - 1)),
++      c ≤ F n p (windowGaps n (sortedExt y) i)
++        + (Ψ (stateGaps n (sortedExt y) (i + 1)) - Ψ (stateGaps n (sortedExt y) i)))
++    (hcap : c * ((m : ℝ) - ((n : ℝ) - 1)) + (hi - lo) ≤ 1) :
++    ∀ ε > 0, ∀ᶠ T in atTop,
++      (HD 1 - ((n : ℝ) - 1) * ((m : ℝ) - 1) / ((p : ℝ) * m) - ε) * (Z.N T (2 * T) : ℝ)
++        ≤ (1 - c * ((m : ℝ) - ((n : ℝ) - 1)) / m) * (Z.N0s T (2 * T) : ℝ) := by
++  intro ε hε
++  set φ : (Fin m → ℝ) → ℕ → ℝ := fun y i => Ψ (stateGaps n (sortedExt y) i) with hφdef
++  have hlohi : lo ≤ hi := by have := hΨ (fun _ => 0); linarith
++  have hA0 : c * ((m : ℝ) - ((n : ℝ) - 1)) ≤ 1 := by linarith
++  have hA0' : ∀ y : Fin m → ℝ, StrictMono y →
++      c * ((m : ℝ) - ((n : ℝ) - 1)) - (φ y (m - (n - 1)) - φ y 0) ≤ 1 := by
++    intro y _
++    have h1 := hΨ (stateGaps n (sortedExt y) (m - (n - 1)))
++    have h2 := hΨ (stateGaps n (sortedExt y) 0)
++    simp only [hφdef]
++    linarith
++  have hcastW : ((m - (n - 1) : ℕ) : ℝ) = (m : ℝ) - ((n : ℝ) - 1) := by
++    rw [Nat.cast_sub (by omega : n - 1 ≤ m), Nat.cast_sub (by omega : 1 ≤ n)]; norm_num
++  have hn' : (2 : ℝ) ≤ n := by exact_mod_cast hn
++  have hmn : (n : ℝ) ≤ (m : ℝ) := by exact_mod_cast hm
++  have hm' : (2 : ℝ) ≤ m := le_trans hn' hmn
++  have hmpos : (0 : ℝ) < m := by linarith
++  have hgap : (1 : ℝ) ≤ (n : ℝ) - 1 := by linarith
++  have hp' : (0 : ℝ) < p := by exact_mod_cast hp
++  have hp1 : (1 : ℝ) ≤ p := by exact_mod_cast hp
++  have hA₀pos : 0 < c * ((m : ℝ) - ((n : ℝ) - 1)) := mul_pos hc (by linarith)
++  have hq0 : (0 : ℝ) ≤ ((n : ℝ) - 1) / (p : ℝ) := div_nonneg (by linarith) hp'.le
++  have hqn : ((n : ℝ) - 1) / (p : ℝ) ≤ (n : ℝ) - 1 := by
++    rw [div_le_iff₀ hp']; nlinarith
++  -- the accumulated coefficient of the tolerance, and the tolerance scaled to it
++  set Cn : ℝ := (m : ℝ) + 4 + ((n : ℝ) - 1) * ((m : ℝ) - 1) with hCn
++  have hCnpos : 0 < Cn := by
++    have h := mul_nonneg (by linarith : (0 : ℝ) ≤ (n : ℝ) - 1) (by linarith : (0 : ℝ) ≤ (m : ℝ) - 1)
++    rw [hCn]; linarith
++  have hCne : Cn ≠ 0 := hCnpos.ne'
++  set ε₀ : ℝ := ε * (m : ℝ) / Cn with hε₀
++  have hε₀pos : 0 < ε₀ := by rw [hε₀]; positivity
++  have hηpos : 0 < min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))) := lt_min hε₀pos hA₀pos
++  have hηε : min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))) ≤ ε₀ := min_le_left _ _
++  have hηA : min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))) ≤ c * ((m : ℝ) - ((n : ℝ) - 1)) :=
++    min_le_right _ _
++  have hA' : 0 ≤ c * ((m : ℝ) - ((n : ℝ) - 1)) - min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))) := by
++    linarith
++  set WB : ℝ := ((m : ℝ) - ((n : ℝ) - 1)) * (hi - lo) with hWBdef
++  have hWB0 : 0 ≤ WB := by rw [hWBdef]; exact mul_nonneg (by linarith) (by linarith)
++  filter_upwards [block_bound_eventually_signed Z H hn hm hp φ hcob hA0' hηpos,
++    deleted_strips Z H _ hηpos, span_retained_le Z H _ hηpos,
++    tail_passage Z H (eventually_h7 Z) _ hηpos,
++    (Assembly.tendsto_N_atTop Z H.RvM).eventually_ge_atTop
++      (((m : ℝ) + WB) / min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1)))),
++    eventually_L_pos] with T hblk hstrip hspan h8 hNbig hL
++  -- the global sorted enumeration of the retained ordinates, and its blocks
++  set x := xret Z (mtParams T) T with hxdef
++  have hxinj := xret_injective Z (mtParams T) T hL
++  set Sn := Fintype.card (retained Z (mtParams T) T) with hSndef
++  have hSc : (univ.image x).card = Sn := by
++    rw [card_image_of_injective _ hxinj, card_univ]
++  set y : Fin Sn → ℝ := ⇑((univ.image x).orderEmbOfFin hSc) with hydef
++  have hymem : ∀ k, y k ∈ univ.image x := fun k => Finset.orderEmbOfFin_mem _ hSc k
++  have hymono : StrictMono y := ((univ.image x).orderEmbOfFin hSc).strictMono
++  set f : ℕ → ℝ := fun t => Ψ (stateGaps n (sortedExt y) t) with hfdef
++  set blockEnum : ℕ → Fin m → ℝ := fun s k => sortedExt y (s + k) with hbe
++  have hbe_mono : ∀ s, s + m ≤ Sn → StrictMono (blockEnum s) := by
++    intro s hs a b hab
++    have ha : s + (a : ℕ) < Sn := by have := a.2; omega
++    have hb : s + (b : ℕ) < Sn := by have := b.2; omega
++    show sortedExt y (s + a) < sortedExt y (s + b)
++    rw [sortedExt_of_lt y ha, sortedExt_of_lt y hb]
++    exact hymono (Fin.mk_lt_mk.mpr (by have := Fin.lt_def.mp hab; omega))
++  have hbe_mem : ∀ s, s + m ≤ Sn → ∀ k, ∃ i ∈ enumBlock x y s m, x i = blockEnum s k := by
++    intro s hs k
++    have hk : s + (k : ℕ) < Sn := by have := k.2; omega
++    obtain ⟨i, -, hi⟩ := mem_image.mp (hymem ⟨s + k, hk⟩)
++    refine ⟨i, ?_, ?_⟩
++    · rw [enumBlock, mem_filter]
++      refine ⟨mem_univ _, ⟨⟨s + k, hk⟩, ?_, ?_, hi⟩⟩
++      · simp
++      · simp only; have := k.2; omega
++    · show x i = sortedExt y (s + k)
++      rw [sortedExt_of_lt y hk]; exact hi
++  have hφ : ∀ s, s + m ≤ Sn → ∀ i, i + (n - 2) < m → φ (blockEnum s) i = f (s + i) := by
++    intro s hs i hi
++    simp only [hφdef, hfdef]
++    congr 1
++    funext j
++    have hj := j.2
++    have h1 : i + ((j : ℕ) + 1) < m := by omega
++    have h2 : i + (j : ℕ) < m := by omega
++    simp only [stateGaps]
++    rw [sortedExt_of_lt (blockEnum s) h1, sortedExt_of_lt (blockEnum s) h2]
++    show sortedExt y (s + (i + ((j : ℕ) + 1))) - sortedExt y (s + (i + (j : ℕ)))
++      = sortedExt y (s + i + ((j : ℕ) + 1)) - sortedExt y (s + i + (j : ℕ))
++    rw [Nat.add_assoc, Nat.add_assoc]
++  have hΔ : ∀ s, s + m ≤ Sn →
++      φ (blockEnum s) (m - (n - 1)) - φ (blockEnum s) 0 = f (s + (m - (n - 1))) - f s := by
++    intro s hs
++    rw [hφ s hs (m - (n - 1)) (by omega), hφ s hs 0 (by omega), Nat.add_zero]
++  -- S15 with the signed left-hand side, then the endpoint terms telescope
++  have h15 := offset_average_indexed x hxinj hSndef.symm y hymono hymem (show 1 ≤ m by omega)
++    (blockDefect (gram_isHermitian Z (mtParams T) T)) (Dcirc Z (mtParams T) T)
++    (((n : ℝ) - 1) / (p : ℝ))
++    (fun s => (c * ((m : ℝ) - ((n : ℝ) - 1)) - min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))))
++      - (f (s + (m - (n - 1))) - f s))
++    hq0 (blockDefect_nonneg _)
++    (fun s hs hcard _ => by
++      have h := hblk (enumBlock x y s m) hcard (blockEnum s) (hbe_mem s hs) (hbe_mono s hs)
++      rw [hΔ s hs] at h
++      linarith)
++    (fun κ _ _ β => pinching_partition (gram_isHermitian Z (mtParams T) T) κ β)
++  have hsumΔ : ∑ s ∈ range (Sn + 1 - m), (f (s + (m - (n - 1))) - f s)
++      ≤ ((m - (n - 1) : ℕ) : ℝ) * (hi - lo) :=
++    sum_shift_sub_le f _ _ lo hi (fun t => hΨ _)
++  have hsumA : ∑ s ∈ range (Sn + 1 - m),
++      ((c * ((m : ℝ) - ((n : ℝ) - 1)) - min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))))
++        - (f (s + (m - (n - 1))) - f s))
++      = ((Sn + 1 - m : ℕ) : ℝ)
++          * (c * ((m : ℝ) - ((n : ℝ) - 1)) - min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))))
++        - ∑ s ∈ range (Sn + 1 - m), (f (s + (m - (n - 1))) - f s) := by
++    rw [sum_sub_distrib, sum_const, card_range, nsmul_eq_mul]
++  have hSN : ((Sn : ℝ) - m)
++        * (c * ((m : ℝ) - ((n : ℝ) - 1)) - min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))))
++      ≤ ((Sn + 1 - m : ℕ) : ℝ)
++        * (c * ((m : ℝ) - ((n : ℝ) - 1)) - min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1)))) := by
++    rcases le_or_gt m Sn with h | h
++    · have hc' : ((Sn + 1 - m : ℕ) : ℝ) = (Sn : ℝ) + 1 - m := by
++        rw [Nat.cast_sub (by omega)]; push_cast; ring
++      rw [hc']
++      exact mul_le_mul_of_nonneg_right (by linarith) hA'
++    · have h0 : Sn + 1 - m = 0 := by omega
++      rw [h0]; simp only [Nat.cast_zero, zero_mul]
++      have hlt : (Sn : ℝ) < m := by exact_mod_cast h
++      have hprod := mul_nonneg (by linarith : (0 : ℝ) ≤ (m : ℝ) - Sn) hA'
++      linarith only [hprod]
++  have h15' : (c * ((m : ℝ) - ((n : ℝ) - 1)) - min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))))
++        * ((Sn : ℝ) - m) - WB
++      - (((n : ℝ) - 1) / (p : ℝ)) * ((m : ℝ) - 1) * spanOf x univ
++      ≤ m * Dcirc Z (mtParams T) T := by
++    rw [hsumA] at h15
++    rw [hcastW] at hsumΔ
++    rw [hWBdef]
++    linarith only [h15, hsumΔ, hSN]
++  have hcardcoe : (Sn : ℝ) = ((retained Z (mtParams T) T).card : ℝ) := by
++    rw [hSndef, Fintype.card_coe]
++  rw [hcardcoe] at h15'
++  have hN0 : (0 : ℝ) ≤ (Z.N T (2 * T) : ℝ) := Nat.cast_nonneg _
++  have hn0N : (Z.N0s T (2 * T) : ℝ) ≤ (Z.N T (2 * T) : ℝ) := by
++    have h := (Z.trivial_chain T (2 * T)).1.trans
++      ((Z.trivial_chain T (2 * T)).2.1.trans (Z.trivial_chain T (2 * T)).2.2.1)
++    exact_mod_cast h
++  have hmWB : (m : ℝ) + WB ≤ min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))) * (Z.N T (2 * T) : ℝ) := by
++    have := (div_le_iff₀ hηpos).mp hNbig; linarith
++  have hmN : (m : ℝ) ≤ min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))) * (Z.N T (2 * T) : ℝ) := by
++    linarith
++  have hWBN : WB ≤ min ε₀ (c * ((m : ℝ) - ((n : ℝ) - 1))) * (Z.N T (2 * T) : ℝ) := by
++    have : (0 : ℝ) ≤ m := by positivity
++    linarith
++  -- the real numbers at height T
++  set A₀ : ℝ := c * ((m : ℝ) - ((n : ℝ) - 1)) with hA₀
++  set q : ℝ := ((n : ℝ) - 1) / (p : ℝ) with hq
++  set η : ℝ := min ε₀ A₀ with hη
++  set N : ℝ := (Z.N T (2 * T) : ℝ) with hNdef
++  set n0 : ℝ := (Z.N0s T (2 * T) : ℝ) with hn0def
++  set S : ℝ := ((retained Z (mtParams T) T).card : ℝ) with hSdef
++  set D : ℝ := Dcirc Z (mtParams T) T with hDdef
++  set sp : ℝ := spanOf x univ with hspdef
++  clear_value A₀ q η N n0 S D sp WB
++  -- arithmetic, [A] lines 411–457 with explicit errors
++  have step1 : (A₀ - η) * (n0 - 2 * η * N) ≤ (A₀ - η) * (S - m) :=
++    mul_le_mul_of_nonneg_left (by linarith) hA'
++  have step2 : q * ((m : ℝ) - 1) * sp ≤ q * ((m : ℝ) - 1) * ((1 + η) * N) :=
++    mul_le_mul_of_nonneg_left hspan (mul_nonneg hq0 (by linarith))
++  have hηN : 0 ≤ η * N := mul_nonneg hηpos.le hN0
++  have e1 : A₀ * (η * N) ≤ 1 * (η * N) := mul_le_mul_of_nonneg_right hA0 hηN
++  have e2 : η * n0 ≤ η * N := mul_le_mul_of_nonneg_left hn0N hηpos.le
++  have e3 : 0 ≤ η * η * N := mul_nonneg (mul_nonneg hηpos.le hηpos.le) hN0
++  have step3 : A₀ * n0 - 3 * η * N ≤ (A₀ - η) * (n0 - 2 * η * N) := by linarith [e1, e2, e3]
++  have hmD : (m : ℝ) * D ≤ m * (n0 - (HD 1 - η) * N) :=
++    mul_le_mul_of_nonneg_left (by linarith) hmpos.le
++  have hq' : q * ((m : ℝ) - 1) ≤ ((n : ℝ) - 1) * ((m : ℝ) - 1) :=
++    mul_le_mul_of_nonneg_right hqn (by linarith)
++  have hcoef1 : η * ((m : ℝ) + 4 + q * ((m : ℝ) - 1)) ≤ η * Cn :=
++    mul_le_mul_of_nonneg_left (by rw [hCn]; linarith) hηpos.le
++  have hcoef2 : η * Cn ≤ ε₀ * Cn := mul_le_mul_of_nonneg_right hηε hCnpos.le
++  have hεCn : ε₀ * Cn = ε * (m : ℝ) := by
++    rw [hε₀, div_mul_eq_mul_div, mul_div_assoc, div_self hCne, mul_one]
++  have hcoef : η * ((m : ℝ) + 4 + q * ((m : ℝ) - 1)) ≤ m * ε := by
++    linarith [hcoef1, hcoef2, hεCn]
++  have hηN' : η * ((m : ℝ) + 4 + q * ((m : ℝ) - 1)) * N ≤ m * ε * N :=
++    mul_le_mul_of_nonneg_right hcoef hN0
++  have key : ((m : ℝ) * HD 1 - q * ((m : ℝ) - 1) - m * ε) * N ≤ ((m : ℝ) - A₀) * n0 := by
++    linarith [h15', step1, step2, step3, hmD, hηN', hWBN]
++  have hL1 : (HD 1 - ((n : ℝ) - 1) * ((m : ℝ) - 1) / ((p : ℝ) * m) - ε) * N
++      = ((m : ℝ) * HD 1 - q * ((m : ℝ) - 1) - m * ε) * N / m := by
++    rw [hq]; field_simp
++  have hR1 : (1 - A₀ / m) * n0 = ((m : ℝ) - A₀) * n0 / m := by
++    field_simp
++  rw [hL1, hR1]
++  exact div_le_div_of_nonneg_right key hmpos.le
++
++
++
++/-- **The `n`-point bound with a signed endpoint term.**  A telescoping certificate with state
++potential `Ψ` taking values in `[lo, hi]`, under the cap `c(m−(n−1)) + (hi − lo) ≤ 1`, gives the
++same constant `Phi_n n c m p` as the per-block theorem — no `B/W` is paid.  `hcob` is the
++certificate: not a theorem of Lean, but what an exhaustive interval subdivision claims. -/
++theorem n_point_bound_signed (n : ℕ) (c : ℝ) (m p : ℕ) (hn : 2 ≤ n) (hm : n ≤ m) (hp : 0 < p)
++    (hc : 0 < c)
++    (Ψ : (Fin (n - 2) → ℝ) → ℝ) (lo hi : ℝ) (hΨ : ∀ g, lo ≤ Ψ g ∧ Ψ g ≤ hi)
++    (hcob : ∀ y : Fin m → ℝ, StrictMono y → ∀ i ∈ range (m - (n - 1)),
++      c ≤ F n p (windowGaps n (sortedExt y) i)
++        + (Ψ (stateGaps n (sortedExt y) (i + 1)) - Ψ (stateGaps n (sortedExt y) i)))
++    (hcap : c * ((m : ℝ) - ((n : ℝ) - 1)) + (hi - lo) ≤ 1) :
++    ∀ ε > 0, ∃ T₀ : ℝ, ∀ T ≥ T₀,
++      (Phi_n n c m p - ε) * (Ncount T (2 * T) : ℝ) ≤ N0simple T (2 * T) := by
++  have hA0 : c * ((m : ℝ) - ((n : ℝ) - 1)) ≤ 1 := by
++    have := hΨ (fun _ => 0); linarith
++  have h := solve_linear (N := fun T => (Ncount T (2 * T) : ℝ))
++    (N0 := fun T => (N0simple T (2 * T) : ℝ)) hn hm hA0 (by
++      have := pre_solve_signed zetaZeroConfig paperInputs_zeta hn hm hp hc Ψ lo hi hΨ hcob hcap
++      simpa only [zetaZeroConfig_N, zetaZeroConfig_N0s] using this)
++  intro ε hε
++  exact eventually_atTop.mp (h ε hε)
++
++/-- **The `sharp` chain certificate, signed form.**  With its state potential's oscillation
++`hi − lo ≤ 0.00171` and the cap `0.003956·252 + 0.00171 = 0.998622 ≤ 1`, the certificate
++`R ≥ 0.003956` on every window of every sorted 258-point list gives
++`Phi_n 7 (3956/10⁶) 258 3000 = 0.6731093501…` — the naive projection, with no endpoint penalty.
++`hcob` is what the rigorous sweep claims; `hΨ`/`hB` are the exact oscillation of the shipped
++coefficients (`dev/investigation/endpoint_oscillation.py`). -/
++theorem sharp_chain_bound_signed (Ψ : (Fin 5 → ℝ) → ℝ) (lo hi : ℝ)
++    (hΨ : ∀ g, lo ≤ Ψ g ∧ Ψ g ≤ hi) (hB : hi - lo ≤ 171 / 100000)
++    (hcob : ∀ y : Fin 258 → ℝ, StrictMono y → ∀ i ∈ range 252,
++      3956 / 1000000 ≤ F 7 3000 (windowGaps 7 (sortedExt y) i)
++        + (Ψ (stateGaps 7 (sortedExt y) (i + 1)) - Ψ (stateGaps 7 (sortedExt y) i))) :
++    ∀ ε > 0, ∃ T₀ : ℝ, ∀ T ≥ T₀,
++      (Phi_n 7 (3956 / 1000000) 258 3000 - ε) * (Ncount T (2 * T) : ℝ)
++        ≤ N0simple T (2 * T) :=
++  n_point_bound_signed 7 (3956 / 1000000) 258 3000 (by norm_num) (by norm_num) (by norm_num)
++    (by norm_num) Ψ lo hi hΨ hcob (by norm_num; linarith [hB])
++
++end Analytic
++
++/-! ### Standing axiom audit (idiom of `Zeta23Ext/StableRankTrace.lean`) -/
++
++#print axioms block_energy_signed
++#print axioms offset_average_indexed
++#print axioms block_bound_signed
++#print axioms block_bound_eventually_signed
++#print axioms pre_solve_signed
++#print axioms n_point_bound_signed
++#print axioms sharp_chain_bound_signed
++
++end Zeta23Ext.Bridge

@@ -153,10 +153,10 @@ reviewer showed is too small: `sharp` `B = 0.00170904`, pinned pair
 `B = 0.00814654` (`investigation/endpoint_oscillation.py`).  Paid
 conservatively, `sharp` (`0.003956`, 253 windows) projects to `0.6731051`, not
 `0.6731094`; the pinned pair certificate to `0.6730895`, not `0.6731103`.  A
-signed-endpoint extension through the offset average would recover `0.6731094`
-for `sharp` under the cap `cW + B <= 1`, met at `W = 252`; its finite
-bookkeeping is checked exactly (`investigation/signed_endpoint_model.py`), its
-Lean is not written.  The rigorous sweep cleared `19/5000` on its own, and the
+signed-endpoint extension through the offset average recovers `0.6731094`
+for `sharp` under the cap `cW + B <= 1`, met at `W = 252` -- and that
+extension is Lean as well (`n_point_bound_signed`, `investigation/lean/Signed.lean`,
+standard axioms, 2026-09-08), so the endpoint penalty is gone from the theorem.  The rigorous sweep cleared `19/5000` on its own, and the
 rigorous `sharp 0.003956` row this section relies on was found ABSENT from the
 results table (only the fast row exists); it is being re-run.
 

@@ -69,12 +69,44 @@ theorem sum_shift_sub_le (f : ℕ → ℝ) (K W : ℕ) (lo hi : ℝ) (hf : ∀ s
 
 This is the finite identity behind step 3 of the follow-up plan: the endpoint terms of all `K` consecutive full blocks sum to at most `W·(sup φ − inf φ)`, independent of `K`. It is the one ingredient that was new; what remains is plumbing, described next.
 
-## The signed-endpoint extension: exact statement to prove (not attempted beyond the lemma above)
+## The signed-endpoint extension: proved
 
-Keep `Δ_s := Φ(state_{s+W}) − Φ(state_s)` in the S11 conclusion, `c·W − Δ_s ≤ E_s + q·span_s`; carry it through S13 with the side condition `c·W + B ≤ 1` (so `c·W − Δ_s ≤ 1` and the `min(1, ·)` clipping survives); generalise `S15.offset_average` to a block-dependent left-hand side
+`Signed.lean` (a new module importing `Main`, copied here verbatim; also in the patch) carries the
+whole extension, every proof being the upstream proof with the endpoint term kept:
 
 ```
-hblock : ∀ B, B.card = m → IsInterval x B → A_B ≤ Dblk B + q * spanOf x B
+def stateGaps (n : ℕ) (Y : ℕ → ℝ) (i : ℕ) : Fin (n - 2) → ℝ      -- the first n−2 gaps of window i
+def enumBlock (x : ι → ℝ) (y : Fin N → ℝ) (s m : ℕ) : Finset ι    -- the points of ranks s..s+m−1
+
+theorem block_energy_signed            -- S11:  c·W − (φ y W − φ y 0) ≤ E + q·span, for every sorted enumeration y of the block
+theorem offset_average_indexed         -- S15 with a block-dependent left-hand side, summed over the n+1−m full blocks
+theorem block_bound_signed             -- S13, under the cap  c·W − (φ y W − φ y 0) ≤ 1
+theorem block_bound_eventually_signed  -- S9 + S13, uniform in T
+theorem pre_solve_signed               -- S15 signed + the telescope: the fixed W·(hi−lo) is absorbed by the tolerance
+theorem n_point_bound_signed (n : ℕ) (c : ℝ) (m p : ℕ) (hn : 2 ≤ n) (hm : n ≤ m) (hp : 0 < p) (hc : 0 < c)
+    (Ψ : (Fin (n - 2) → ℝ) → ℝ) (lo hi : ℝ) (hΨ : ∀ g, lo ≤ Ψ g ∧ Ψ g ≤ hi)
+    (hcob : ∀ y : Fin m → ℝ, StrictMono y → ∀ i ∈ range (m - (n - 1)),
+      c ≤ F n p (windowGaps n (sortedExt y) i)
+        + (Ψ (stateGaps n (sortedExt y) (i + 1)) - Ψ (stateGaps n (sortedExt y) i)))
+    (hcap : c * ((m : ℝ) - ((n : ℝ) - 1)) + (hi - lo) ≤ 1) :
+    ∀ ε > 0, ∃ T₀ : ℝ, ∀ T ≥ T₀, (Phi_n n c m p - ε) * (Ncount T (2 * T) : ℝ) ≤ N0simple T (2 * T)
+
+theorem sharp_chain_bound_signed (Ψ : (Fin 5 → ℝ) → ℝ) (lo hi : ℝ)
+    (hΨ : ∀ g, lo ≤ Ψ g ∧ Ψ g ≤ hi) (hB : hi - lo ≤ 171 / 100000)
+    (hcob : ∀ y : Fin 258 → ℝ, StrictMono y → ∀ i ∈ range 252,
+      3956 / 1000000 ≤ F 7 3000 (windowGaps 7 (sortedExt y) i)
+        + (Ψ (stateGaps 7 (sortedExt y) (i + 1)) - Ψ (stateGaps 7 (sortedExt y) i))) :
+    ∀ ε > 0, ∃ T₀ : ℝ, ∀ T ≥ T₀,
+      (Phi_n 7 (3956 / 1000000) 258 3000 - ε) * (Ncount T (2 * T) : ℝ) ≤ N0simple T (2 * T)
 ```
 
-and conclude with `Σ_{consecutive full blocks} A_B` on the left, then use the exact telescope `Σ_s Δ_s = Σ(last W potentials) − Σ(first W potentials)`, `|Σ_s Δ_s| ≤ W·B`, and carry the fixed `W·B` through `pre_solve`'s elimination (it is `o(N)`). `../signed_endpoint_model.py` checks the telescope and the clipping condition exactly on rational data and exhibits the clipping counterexample without the cap. For `sharp` at `W = 252`, `c·W + B = 0.99862 ≤ 1`, and the projection would be `0.6731093501`.
+All seven print `[propext, Classical.choice, Quot.sound]` (`build-axioms.log`, 2026-09-08). So the
+signed route of the follow-up plan's step 3 is a theorem: with the cap `c·W + (hi − lo) ≤ 1` the
+constant is `Phi_n n c m p` itself, and for `sharp` (`c = 0.003956`, `W = 252`, `B = 0.00171`,
+cap `0.998622`) that is `0.6731093501…`, the naive projection, with no endpoint penalty.
+
+What is *not* in Lean, and is exactly what `hcob`, `hΨ`, `hB` assume: the coboundary inequality
+on every window (the sweep), the concrete state potential `Ψ` of the shipped certificate, and its
+oscillation (`endpoint_oscillation.py`, exact rationals; the "extrema of a piecewise-linear
+function lie at its knots" step is not formalised).
+

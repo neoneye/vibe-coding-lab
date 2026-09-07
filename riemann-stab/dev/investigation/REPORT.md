@@ -12,7 +12,7 @@ Executed against `CLAUDE_INVESTIGATION_PLAN.md` and then `CLAUDE_FOLLOWUP_PLAN.m
 
 **Refuted.** Nothing on the page; my own first-pass endpoint bound and my first-pass reading of the reviewer's decimal.
 
-**Newly established.** The window-sum variant of the assembly is a theorem: `n_point_bound_of_windowSum` and the adapter `windowSum_of_telescoping` compile in a branch of zeta-lab with standard axioms, the upstream theorem is re-derived from them as a regression, and the instance `sharp_chain_bound_of_windowSum` states the conditional bound at `c = 394924/10⁸`, `m = 259` (`lean/README.md`). The finite bookkeeping of the signed-endpoint route checks exactly: the total endpoint term over all consecutive full blocks telescopes to at most `W·B`, and the S13 clipping survives under `c·W + B ≤ 1`, which `sharp` meets at `W = 252`.
+**Newly established.** The signed-endpoint extension is a theorem (`n_point_bound_signed`, see `lean/README.md`), so `sharp`'s conditional projection is 0.6731094 with no endpoint penalty. The window-sum variant of the assembly is a theorem: `n_point_bound_of_windowSum` and the adapter `windowSum_of_telescoping` compile in a branch of zeta-lab with standard axioms, the upstream theorem is re-derived from them as a regression, and the instance `sharp_chain_bound_of_windowSum` states the conditional bound at `c = 394924/10⁸`, `m = 259` (`lean/README.md`). The finite bookkeeping of the signed-endpoint route checks exactly: the total endpoint term over all consecutive full blocks telescopes to at most `W·B`, and the S13 clipping survives under `c·W + B ≤ 1`, which `sharp` meets at `W = 252`.
 
 ## 2. Strongest auxiliary-chain statement and its coverage
 
@@ -23,7 +23,7 @@ Unchanged from the first pass in content, corrected in attribution: `R(g) ≥ E_
 - Unconditional, human-reviewed: 0.6725007037.
 - Unconditional for Mathlib's `riemannZeta`, kernel-checked, rebuilt here, unreviewed: 0.6728470198 (zeta-lab four-point).
 - Conditional, conservative: **0.6731051** (`sharp`), requiring (a) `sharp_chain_bound_of_windowSum` — **proved**; (b) the coboundary inequality `R ≥ 0.003956` on every window — exhaustive subdivision on the page's arithmetic, **rigorous transcript absent, re-run in progress**; (c) the endpoint bound `B` — exact rationals, the piecewise-linear-extrema step not formalised; (d) the tail lemma at `sharp`'s amplitude.
-- Conditional, signed-cap: 0.6731094 (`sharp` at `W = 252`), additionally requiring the signed-endpoint extension, **not formalised**, finite model passes.
+- Conditional, signed-cap: **0.6731094** (`sharp` at `W = 252`), through `sharp_chain_bound_signed` — **proved**; the same premises (b)–(d) as the conservative score, and no endpoint penalty.
 
 For comparison: zeta-lab's conditional eight-point 0.6730530; its measured seven-point per-block family ceiling 0.6730296. The `p : ℕ` in the theorem means the pressure optimum 3370.45 of the note needs integer neighbours.
 
@@ -31,7 +31,7 @@ For comparison: zeta-lab's conditional eight-point 0.6730530; its measured seven
 
 - Follow-up step 1 (corrections): done, witnesses preserved (`followup_checks.py`, `endpoint_oscillation.py`, oracle).
 - Step 2 (conservative window-sum theorem): **done**; PL-extrema formalisation listed as the remaining Lean obligation.
-- Step 3 (signed endpoint through S15): finite model done and passing; Lean **not attempted** — the exact statement to prove is in `lean/README.md`. No obstruction found; the S13 side condition is the one nontrivial ingredient and it holds for `sharp`.
+- Step 3 (signed endpoint through S15): **done in Lean** (`Signed.lean`: `offset_average_indexed`, the signed S11/S13/S9 chain, `pre_solve_signed`, `n_point_bound_signed`, `sharp_chain_bound_signed`; standard axioms, 2026-09-08). The finite model was the exact-rational rehearsal of the same bookkeeping.
 - Step 4 (certificate selection): `sharp` wins on both scores among the shipped certificates once endpoints are paid; the pair certificate's larger oscillation makes it worse conservatively and only marginally better under the signed cap.
 - Step 5 (certification of the selected input): the rigorous `sharp` sweep is being restored; independent arithmetic verification of that additive sweep does not yet exist and its cost has not been benchmarked.
 - Original stage 5 (Lamzouri stability slack): **deferred**, not conducted.
@@ -39,7 +39,7 @@ For comparison: zeta-lab's conditional eight-point 0.6730530; its measured seven
 
 ## 5. One prioritised next step
 
-Formalise the signed-endpoint extension (generalise `S15.offset_average` to a block-dependent left-hand side, keep `Σ_s Δ_s` and bound it by `W·B`, carry the fixed error through `pre_solve`). It removes the per-block endpoint penalty entirely for `sharp` and needs no new numerics. Alongside it, and independent of it, the rigorous `sharp 0.003956` transcript must exist before either score is quoted as resting on a swept floor.
+The rigorous `sharp 0.003956` transcript (re-run in progress) and then an independent arithmetic check of that additive sweep — the certificate's numerical premise `hcob` is now the only thing between `sharp_chain_bound_signed` and a theorem about ζ at 0.6731094, apart from the unformalised piecewise-linear-extrema step for `hΨ`/`hB`.
 
 ## Rigorous `sharp` sweep, restored (status)
 
