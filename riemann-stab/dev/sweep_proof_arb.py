@@ -310,6 +310,7 @@ def main():
     check_all = "--all" in args
     limit = int(opt("limit", "0"))
     refine = int(opt("refine", "0"))     # verified subdivision depth for unresolved nodes
+    sample_n = int(opt("sample", "220"))  # arithmetic sample size per node kind
     out_name = opt("out", None)
     meta = json.load(open(os.path.join(here, meta_name)))
     candidate = meta.get("candidate", "tiling_pair.stationary.json")
@@ -404,8 +405,8 @@ def main():
     leaves = splits = collapses = openleaf = 0
     bad_struct = 0
     sample_leaf, sample_collapse = [], []
-    step_leaf = max(1, meta["leaves"] // 220)
-    step_coll = max(1, meta["collapses"] // 220)
+    step_leaf = max(1, meta["leaves"] // sample_n)
+    step_coll = max(1, meta["collapses"] // sample_n)
     for lo0, hi0 in roots:
         stack = [(list(lo0), list(hi0))]
         while stack:
@@ -419,7 +420,7 @@ def main():
                     leaves += 1
                     if check_all and (limit == 0 or acc["checked"] < limit):
                         leaf_arith(tuple(lo), tuple(hi))
-                    elif leaves % step_leaf == 0 and len(sample_leaf) < 220:
+                    elif leaves % step_leaf == 0 and len(sample_leaf) < sample_n:
                         sample_leaf.append((tuple(lo), tuple(hi)))
                     break
                 if op in (LEAF_TUBE, LEAF_OPEN):
@@ -443,7 +444,7 @@ def main():
                     collapses += 1
                     if check_all and (limit == 0 or acc["checked"] < limit):
                         coll_arith(tuple(lo), tuple(hi), k, 'lo' if op < OP_HI else 'hi')
-                    elif collapses % step_coll == 0 and len(sample_collapse) < 220:
+                    elif collapses % step_coll == 0 and len(sample_collapse) < sample_n:
                         sample_collapse.append((tuple(lo), tuple(hi), k,
                                                 'lo' if op < OP_HI else 'hi'))
                     if op < OP_HI:
@@ -465,31 +466,18 @@ def main():
           openleaf == 0)
 
     # ---- arithmetic, on the sample (or, with --all, already done inline)
-    confirmed, unresolved, refuted = acc["leaf"]
-    gconf, gunres, gref = acc["coll"]
+    cnt = list(acc["leaf"])
     for lo, hi in sample_leaf:
-        val, _ = cert.best_bound(lo, hi)
-        if float(val.lower()) >= target:
-            confirmed += 1
-        elif float(val.upper()) < target:
-            refuted += 1
-        else:
-            unresolved += 1
+        cnt[verdict_leaf(lo, hi, refine)] += 1
+    confirmed, unresolved, refuted = cnt
     check("no sampled discharged leaf is refuted by Arb", refuted == 0,
           "%d confirmed outright, %d beyond this checker's resolution, %d refuted"
           % (confirmed, unresolved, refuted))
 
+    gcnt = list(acc["coll"])
     for lo, hi, k, side in sample_collapse:
-        _, grad = cert.best_bound(lo, hi)
-        g = grad[k]
-        if side == 'hi' and float(g.lower()) > 0:
-            gconf += 1
-        elif side == 'lo' and float(g.upper()) < 0:
-            gconf += 1
-        elif (side == 'hi' and float(g.upper()) <= 0) or (side == 'lo' and float(g.lower()) >= 0):
-            gref += 1
-        else:
-            gunres += 1
+        gcnt[verdict_coll(lo, hi, k, side, refine)] += 1
+    gconf, gunres, gref = gcnt
     check("no sampled collapse is refuted by Arb", gref == 0,
           "%d confirmed outright, %d beyond this checker's resolution, %d refuted"
           % (gconf, gunres, gref))
@@ -524,9 +512,9 @@ def main():
             "nodes": len(tape), "leaves": leaves, "splits": splits,
             "collapses": collapses,
             "structure_checked": "all nodes",
-            "leaf_sample": {"size": len(sample_leaf), "confirmed": confirmed,
+            "leaf_sample": {"size": (sum(acc["leaf"]) if check_all else len(sample_leaf)), "confirmed": confirmed,
                             "beyond_resolution": unresolved, "refuted": refuted},
-            "collapse_sample": {"size": len(sample_collapse), "confirmed": gconf,
+            "collapse_sample": {"size": (sum(acc["coll"]) if check_all else len(sample_collapse)), "confirmed": gconf,
                                 "beyond_resolution": gunres, "refuted": gref},
             "not_established": "that the unsampled nodes' arithmetic claims hold, "
                                "nor the sampled ones whose margin is finer than a "

@@ -41,6 +41,22 @@ For comparison: zeta-lab's conditional eight-point 0.6730530; its measured seven
 
 The rigorous `sharp 0.003956` transcript (re-run in progress) and then an independent arithmetic check of that additive sweep — the certificate's numerical premise `hcob` is now the *only* thing between `sharp_chain_bound_signed_concrete` and a theorem about ζ at 0.6731094; the piecewise-linear bounds are formalised.
 
+
+## Independent verification of the `sharp` sweep: proof tapes (2026-09-08)
+
+The proof-tape machinery (`sweep_proof.js` / `sweep_proof_arb.py`) was parametrised so it can be pointed at the `sharp` certificate alone (`tiling_sharp.candidate.json`: the `sharp` base with every pair correction zero; no tube; target 0.003956), and the checker gained an all-nodes mode with checkpoints and a verified-subdivision mode (`--refine=D`: an unresolved box is bisected up to depth `D`; any refuted sub-box refutes, confirmation needs every sub-box).
+
+Small domain first (cube 1.6, 64 roots, 8662 nodes, 3869 discharged leaves, 988 collapses): structure checked for every node, and **every** arithmetic obligation evaluated in Arb:
+
+| refine depth | leaves confirmed / unresolved / refuted | collapses confirmed / unresolved / refuted | Arb sub-boxes |
+|---|---|---|---|
+| 0 | 344 / 3525 / 0 | 281 / 707 / 0 | 4 857 |
+| 2 | 1100 / 2769 / 0 | 290 / 698 / 0 | 28 271 |
+| 4 | 2013 / 1856 / 0 | 299 / 689 / 0 | 88 693 |
+| 6 | 2452 / 1417 / 0 | 312 / 676 / 0 | 230 909 |
+
+Nothing refuted at any depth. The discharged-leaf claims resolve with subdivision (63% at depth 6 and still rising); the collapse claims — a derivative keeping its sign across a box — barely do, because the checker's gradient enclosure is a natural extension with no centred form, and that is where a better checker would spend its effort. Cost: about 2.3 ms per plain node, so the full cube-16 tape (of order 5·10⁷ nodes) cannot be arithmetically checked in full overnight; its structural check and a refined arithmetic sample are reported below when the emission finishes.
+
 ## Rigorous `sharp` sweep, restored (status)
 
 `node dev/sweep.js rigorous sharp 0.003956` was launched on 2026-09-07 (expected ~75 min from the note's timing). Outcome: see the last commit touching `tiling_interval.results.json`; if that file still has no rigorous `sharp` row, the run had not finished when this report was written.
