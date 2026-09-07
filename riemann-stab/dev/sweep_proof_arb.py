@@ -203,23 +203,78 @@ def cell(knots, x):
     return i
 
 
+def _cells(knots, lo, hi):
+    """Cells [i, i+1] whose interior meets [lo, hi], plus the clamped end cells when the
+    interval leaves the knot range (constant extension there)."""
+    n = len(knots)
+    out = []
+    for i in range(n - 1):
+        if knots[i + 1] > lo and knots[i] < hi:
+            out.append(i)
+    if lo < knots[0] and 0 not in out: out.append(0)
+    if hi > knots[-1] and n - 2 not in out: out.append(n - 2)
+    return out
+
+
+def _bilin(grid, J, knots, i, j, x, y):
+    """The bilinear interpolant on cell (i, j) at the (arb) point (x, y), with the
+    coordinates clamped into the cell -- constant extension beyond the knot range."""
+    kx0, kx1 = arb(knots[i]), arb(knots[i + 1])
+    ky0, ky1 = arb(knots[j]), arb(knots[j + 1])
+    fx = (x - kx0) / (kx1 - kx0)
+    fy = (y - ky0) / (ky1 - ky0)
+    c00, c01 = arb(grid[i * J + j]), arb(grid[i * J + j + 1])
+    c10, c11 = arb(grid[(i + 1) * J + j]), arb(grid[(i + 1) * J + j + 1])
+    return (1 - fx) * ((1 - fy) * c00 + fy * c01) + fx * ((1 - fy) * c10 + fy * c11)
+
+
 def grid_range(grid, J, knots, aLo, aHi, bLo, bHi):
-    i0, i1 = cell(knots, aLo), cell(knots, aHi)
-    j0, j1 = cell(knots, bLo), cell(knots, bHi)
-    vals = [grid[i * J + j] for i in range(i0, i1 + 2) for j in range(j0, j1 + 2)]
-    return span(min(vals), max(vals))
+    """Exact range of the bilinear correction over the box: per cell, the interpolant
+    is bilinear on the clipped sub-rectangle and attains its extrema at that
+    sub-rectangle's four corners (the sweep's own argument).  The previous version
+    hulled the corner VALUES of every cell touched, first-order loose."""
+    lo_b, hi_b = float('inf'), float('-inf')
+    for i in _cells(knots, aLo, aHi):
+        xs = [max(aLo, knots[i]) if aLo > knots[0] else knots[0] if aLo < knots[0] else aLo,
+              min(aHi, knots[i + 1]) if aHi < knots[-1] else knots[-1] if aHi > knots[-1] else aHi]
+        xs = [min(max(v, knots[i]), knots[i + 1]) for v in (max(aLo, knots[i]), min(aHi, knots[i + 1]))]
+        if aLo < knots[0]: xs[0] = knots[0]
+        if aHi > knots[-1]: xs[1] = knots[-1]
+        for j in _cells(knots, bLo, bHi):
+            ys = [min(max(v, knots[j]), knots[j + 1]) for v in (max(bLo, knots[j]), min(bHi, knots[j + 1]))]
+            if bLo < knots[0]: ys[0] = knots[0]
+            if bHi > knots[-1]: ys[1] = knots[-1]
+            for x in xs:
+                for y in ys:
+                    v = _bilin(grid, J, knots, i, j, arb(x), arb(y))
+                    lo_b = min(lo_b, float(v.lower())); hi_b = max(hi_b, float(v.upper()))
+    return span(lo_b, hi_b)
 
 
 def grid_slopes(grid, J, knots, aLo, aHi, bLo, bHi):
-    i0, i1 = cell(knots, aLo), cell(knots, aHi)
-    j0, j1 = cell(knots, bLo), cell(knots, bHi)
-    xs = [(grid[(i + 1) * J + j] - grid[i * J + j]) / (knots[i + 1] - knots[i])
-          for i in range(i0, i1 + 1) for j in range(j0, j1 + 2)]
-    ys = [(grid[i * J + j + 1] - grid[i * J + j]) / (knots[j + 1] - knots[j])
-          for j in range(j0, j1 + 1) for i in range(i0, i1 + 2)]
-    if aLo <= knots[0] or aHi >= knots[-1]: xs.append(0.0)
-    if bLo <= knots[0] or bHi >= knots[-1]: ys.append(0.0)
-    return span(min(xs), max(xs)), span(min(ys), max(ys))
+    """Exact ranges of the two partial derivatives of the bilinear correction over the
+    box: on a cell d/dx is linear in y (extrema at the clipped y-endpoints) and constant
+    in x, and vanishes where x is clamped outside the knots; symmetrically for d/dy."""
+    xlo, xhi, ylo, yhi = float('inf'), float('-inf'), float('inf'), float('-inf')
+    for i in _cells(knots, aLo, aHi):
+        hx = arb(knots[i + 1]) - arb(knots[i])
+        xs = [min(max(v, knots[i]), knots[i + 1]) for v in (max(aLo, knots[i]), min(aHi, knots[i + 1]))]
+        for j in _cells(knots, bLo, bHi):
+            hy = arb(knots[j + 1]) - arb(knots[j])
+            ys = [min(max(v, knots[j]), knots[j + 1]) for v in (max(bLo, knots[j]), min(bHi, knots[j + 1]))]
+            c00, c01 = arb(grid[i * J + j]), arb(grid[i * J + j + 1])
+            c10, c11 = arb(grid[(i + 1) * J + j]), arb(grid[(i + 1) * J + j + 1])
+            for y in ys:
+                fy = (arb(y) - arb(knots[j])) / hy
+                dx = ((1 - fy) * (c10 - c00) + fy * (c11 - c01)) / hx
+                xlo = min(xlo, float(dx.lower())); xhi = max(xhi, float(dx.upper()))
+            for x in xs:
+                fx = (arb(x) - arb(knots[i])) / hx
+                dy = ((1 - fx) * (c01 - c00) + fx * (c11 - c10)) / hy
+                ylo = min(ylo, float(dy.lower())); yhi = max(yhi, float(dy.upper()))
+    if aLo <= knots[0] or aHi >= knots[-1]: xlo, xhi = min(xlo, 0.0), max(xhi, 0.0)
+    if bLo <= knots[0] or bHi >= knots[-1]: ylo, yhi = min(ylo, 0.0), max(yhi, 0.0)
+    return span(xlo, xhi), span(ylo, yhi)
 
 
 class Cert:
