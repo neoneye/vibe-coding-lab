@@ -56,7 +56,20 @@ Every proof body is the upstream body with the per-window step replaced by the h
 - `hSum : WindowSumCert 7 3000 259 (394924/10⁸)` — supplied, via `windowSum_of_telescoping`, by (i) the coboundary inequality `R(g) ≥ 0.003956` on every six-gap window of every sorted list (an exhaustive interval subdivision on `[0,16]⁶` plus the tail lemma; **its rigorous transcript is absent from `tiling_interval.results.json`** and is being re-run), (ii) `φ y i := Φ(gaps i..i+4 of y)` with the endpoint loss `Φ(state_W) − Φ(state_0) ≤ B = 0.00170904…` — exact in rationals of the shipped coefficients (`../endpoint_oscillation.py`), **not formalised** (the missing Lean step is: a function piecewise-linear between knots and constant beyond them attains its extrema at knots), (iii) `394924/10⁸ ≤ (0.003956·253 − B)/253 = 0.0039492449…`, arithmetic.
 - `Phi_n 7 (394924/10⁸) 259 3000 = 0.6731050981…` (numerical; a Lean pin of the decimal is the same kind of statement as `dev/lean/ZetaClaims.lean` already carries and was not added).
 
-## The signed-endpoint extension: exact statement to prove (not attempted)
+## The signed-endpoint telescope, proved in isolation
+
+Also in `S11.lean` (rebuilt alone afterwards, standard axioms):
+
+```
+theorem sum_shift_sub_telescope (f : ℕ → ℝ) (K W : ℕ) :
+    ∑ s ∈ range K, (f (s + W) - f s) = ∑ s ∈ range W, (f (K + s) - f s)
+theorem sum_shift_sub_le (f : ℕ → ℝ) (K W : ℕ) (lo hi : ℝ) (hf : ∀ s, lo ≤ f s ∧ f s ≤ hi) :
+    ∑ s ∈ range K, (f (s + W) - f s) ≤ (W : ℝ) * (hi - lo)
+```
+
+This is the finite identity behind step 3 of the follow-up plan: the endpoint terms of all `K` consecutive full blocks sum to at most `W·(sup φ − inf φ)`, independent of `K`. It is the one ingredient that was new; what remains is plumbing, described next.
+
+## The signed-endpoint extension: exact statement to prove (not attempted beyond the lemma above)
 
 Keep `Δ_s := Φ(state_{s+W}) − Φ(state_s)` in the S11 conclusion, `c·W − Δ_s ≤ E_s + q·span_s`; carry it through S13 with the side condition `c·W + B ≤ 1` (so `c·W − Δ_s ≤ 1` and the `min(1, ·)` clipping survives); generalise `S15.offset_average` to a block-dependent left-hand side
 
