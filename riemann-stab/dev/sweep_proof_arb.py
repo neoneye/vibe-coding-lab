@@ -292,7 +292,7 @@ class Cert:
         for (i, j) in PAIRS:
             coef = arb(2) / (NPTS - (j - i))
             wd = KP.weight_d(pc[j] - pc[i]) * coef
-            dbox = span(plo[j] - phi[i], phi[j] - plo[i])
+            dbox = span(plo[j] - plo[i], phi[j] - phi[i])
             dbox = span(max(0.0, lo_out(dbox)), hi_out(dbox))
             try:
                 wdd = KP.weight_dd(dbox) * coef
@@ -356,7 +356,13 @@ class Cert:
             # unclamped version missed w's maximum at 0 and, for intervals reaching below
             # -z_1, its minimum there -- a soundness fault found by the disjoint-enclosure
             # control on 2026-09-08 (20 of 100 000 sampled nodes of the full sharp tape).
-            d = span(plo[j] - phi[i], phi[j] - plo[i])
+            # The exact interval of y_j - y_i = sum_{k in [i,j)} g_k is [sum lo_k, sum hi_k] over
+            # k in [i, j): the gaps are independent coordinates, so this is the tightest
+            # enclosure and it is nonnegative by construction.  The sweep uses it
+            # (tiling_interval.js: plo[j]-plo[i], phi[j]-phi[i]); this checker had used the
+            # difference of prefix sums plo[j]-phi[i], looser by the widths of every
+            # coordinate before i, which is where the zero-straddling fault came from.
+            d = span(plo[j] - plo[i], phi[j] - phi[i])
             dlo, dhi = max(0.0, lo_out(d)), hi_out(d)
             c = arb(2) / (NPTS - (j - i))
             val += self.pieces.w_range(dlo, dhi) * c
@@ -401,6 +407,10 @@ def main():
     limit = int(opt("limit", "0"))
     refine = int(opt("refine", "0"))     # verified subdivision depth for unresolved nodes
     sample_n = int(opt("sample", "220"))  # arithmetic sample size per node kind
+    roots_opt = opt("roots", None)        # "a:b": with --all, do arithmetic only under roots a..b-1
+    root_lo, root_hi = (0, 10**9)
+    if roots_opt:
+        root_lo, root_hi = [int(t) for t in roots_opt.split(":")]
     out_name = opt("out", None)
     meta = json.load(open(os.path.join(here, meta_name)))
     candidate = meta.get("candidate", "tiling_pair.stationary.json")
@@ -497,7 +507,8 @@ def main():
     sample_leaf, sample_collapse = [], []
     step_leaf = max(1, meta["leaves"] // sample_n)
     step_coll = max(1, meta["collapses"] // sample_n)
-    for lo0, hi0 in roots:
+    for ridx, (lo0, hi0) in enumerate(roots):
+        in_shard = root_lo <= ridx < root_hi
         stack = [(list(lo0), list(hi0))]
         while stack:
             lo, hi = stack.pop()
@@ -508,7 +519,7 @@ def main():
                 op = tape[pos]; pos += 1
                 if op == LEAF_BOUND:
                     leaves += 1
-                    if check_all and (limit == 0 or acc["checked"] < limit):
+                    if check_all and in_shard and (limit == 0 or acc["checked"] < limit):
                         leaf_arith(tuple(lo), tuple(hi))
                     elif leaves % step_leaf == 0 and len(sample_leaf) < sample_n:
                         sample_leaf.append((tuple(lo), tuple(hi)))
@@ -532,7 +543,7 @@ def main():
                     continue
                 if op < LEAF_BOUND:                  # collapse
                     collapses += 1
-                    if check_all and (limit == 0 or acc["checked"] < limit):
+                    if check_all and in_shard and (limit == 0 or acc["checked"] < limit):
                         coll_arith(tuple(lo), tuple(hi), k, 'lo' if op < OP_HI else 'hi')
                     elif collapses % step_coll == 0 and len(sample_collapse) < sample_n:
                         sample_collapse.append((tuple(lo), tuple(hi), k,
@@ -596,6 +607,7 @@ def main():
                                   else len(sample_leaf) + len(sample_collapse),
             "refine_depth": refine,
             "sub_boxes_evaluated": acc["sub"],
+            "roots_shard": roots_opt,
             # Two commands, and only the first is a replay of THIS transcript.
             # dev/check_arb.js executes `replay`, so it must not write a repo
             # file that is also a declared input -- regenerating sweep_proof.json
