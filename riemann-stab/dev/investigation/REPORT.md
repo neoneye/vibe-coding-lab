@@ -1,4 +1,4 @@
-# Investigation report — 2026-09-07 (interim)
+# Investigation report — 2026-09-07
 
 Executed against `CLAUDE_INVESTIGATION_PLAN.md`. Stages 1–3 are done to the plan's completion criteria; stage 4 is started (one soundness repair, transcript re-run, all Arb programs re-run); stages 5–7 are not started, and the reasons are in "Decisions". Everything expensive that was not run is named as not run.
 
@@ -18,7 +18,7 @@ Executed against `CLAUDE_INVESTIGATION_PLAN.md`. Stages 1–3 are done to the pl
 
 ## 3. Strongest supported zero-count conclusion, with dependencies
 
-Unconditional, human-reviewed: 0.6725007037 (Alpöge–Furman; Lamzouri's reproof). Unconditional for Mathlib's `riemannZeta`, kernel-checked, registry-replayed, unreviewed by any person, **not yet rebuilt here** (Mathlib build in progress at the time of writing): 0.6728470198 (zeta-lab four-point). Conditional: 0.6731062 (this page's `sharp` chain floor) requires, in order, (a) `n_point_bound_sum` — a cut at `hsum` in S11, unproved; (b) the page's telescoping lemma (Lean) applied to the `sharp` certificate; (c) the `sharp` rigorous sweep (proved enclosures on this page's arithmetic; its transcript is stale in the suite); (d) the tail lemma at the `sharp` amplitude; (e) the boundary term ≤ amplitude, derived in `ASSEMBLY_AUDIT.md`, not in Lean.
+Unconditional, human-reviewed: 0.6725007037 (Alpöge–Furman; Lamzouri's reproof). Unconditional for Mathlib's `riemannZeta`, kernel-checked, registry-replayed, **rebuilt on this machine** (8905 jobs, `#print axioms` standard for all seven declarations), unreviewed by any person beyond one reading of the statements here: 0.6728470198 (zeta-lab four-point). Conditional: 0.6731062 (this page's `sharp` chain floor) requires, in order, (a) `n_point_bound_sum` — a cut at `hsum` in S11, unproved; (b) the page's telescoping lemma (Lean) applied to the `sharp` certificate; (c) the `sharp` rigorous sweep (proved enclosures on this page's arithmetic; its transcript is stale in the suite); (d) the tail lemma at the `sharp` amplitude; (e) the boundary term ≤ amplitude, derived in `ASSEMBLY_AUDIT.md`, not in Lean.
 
 ## 4. Decisions
 
@@ -30,7 +30,7 @@ Unconditional, human-reviewed: 0.6725007037 (Alpöge–Furman; Lamzouri's reproo
 
 ## 5. One prioritised next step
 
-Prove `n_point_bound_sum` in a fork of `teal-sea/zeta-lab`: restate `block_energy` with `hsum` as the hypothesis (S11 lines 240–252 are the only lines that change), thread the new hypothesis through `S13.block_bound`, `Main.block_bound_eventually` and `pre_solve`, and build. If it compiles, the page's `sharp` sweep becomes the binding item and the honest conditional record is 0.6731062; the remaining obligations are (c)–(e) above. Prerequisite: this machine's Mathlib build, started 2026-09-07, must finish.
+Prove `n_point_bound_sum` in a fork of `teal-sea/zeta-lab`: restate `block_energy` with `hsum` as the hypothesis (S11 lines 240–252 are the only lines that change), thread the new hypothesis through `S13.block_bound`, `Main.block_bound_eventually` and `pre_solve`, and build. If it compiles, the page's `sharp` sweep becomes the binding item and the honest conditional record is 0.6731062; the remaining obligations are (c)–(e) above. The prerequisite is met: this machine's build of the bridge finished on 2026-09-07 (exit 0, standard axioms), so the fork can be edited and rebuilt incrementally.
 
 ## Commands
 
