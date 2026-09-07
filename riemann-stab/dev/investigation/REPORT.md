@@ -35,7 +35,7 @@ For comparison: zeta-lab's conditional eight-point 0.6730530; its measured seven
 - Step 4 (certificate selection): `sharp` wins on both scores among the shipped certificates once endpoints are paid; the pair certificate's larger oscillation makes it worse conservatively and only marginally better under the signed cap.
 - Step 5 (certification of the selected input): the rigorous `sharp` sweep is being restored; independent arithmetic verification of that additive sweep does not yet exist and its cost has not been benchmarked.
 - Original stage 5 (Lamzouri stability slack): **deferred**, not conducted.
-- Suite: the legacy transcript failure stays a failure; the Lean/axiom checks were run directly.
+- Suite: the 14 legacy rows were regenerated (every box count and checksum reproduced exactly) and `sh dev/run_suite.sh` is **green end to end** on 2026-09-08 — interval-sweep checks, Lean, the fail-closed axiom audit (16 theorems, standard axioms), build and DOM smoke — with `ARB_PYTHON` pointing at a python-flint interpreter.
 
 ## 5. One prioritised next step
 
@@ -59,7 +59,7 @@ Nothing refuted at any depth. The discharged-leaf claims resolve with subdivisio
 
 ## Rigorous `sharp` sweep, restored
 
-`node dev/sweep.js rigorous sharp 0.003956` completed on 2026-09-07: `complete: true`, 67 608 431 boxes (the historical report's count exactly), 26 117 375 collapses, no counterexample, checksum `37308f214a50bb25:67608431`, 4764.8 s, with current input hashes and its replay command; the row is now in `tiling_interval.results.json` under `rigorousRuns`, the pinned transcripted rigorous floor was consciously raised from 0.0038 to 0.003956, and the tripwire in `tiling_interval_test.js` that asserted "does not yet exceed 19/5000" was updated together with the note's and the page's ladders. The suite's remaining two failures are the 14 legacy rows without provenance hashes; their regeneration (about 25 minutes of sweeps in total) was launched.
+`node dev/sweep.js rigorous sharp 0.003956` completed on 2026-09-07: `complete: true`, 67 608 431 boxes (the historical report's count exactly), 26 117 375 collapses, no counterexample, checksum `37308f214a50bb25:67608431`, 4764.8 s, with current input hashes and its replay command; the row is now in `tiling_interval.results.json` under `rigorousRuns`, the pinned transcripted rigorous floor was consciously raised from 0.0038 to 0.003956, and the tripwire in `tiling_interval_test.js` that asserted "does not yet exceed 19/5000" was updated together with the note's and the page's ladders. The 14 legacy rows without provenance hashes were regenerated in about 25 minutes of sweeps; every one reproduced its recorded box count and traversal checksum exactly, and the suite is green.
 
 **Full-cube tape.** The `sharp` tape on `[0,16]⁶` (double precision, table kernel, target 0.003956): 729 roots, 74 694 256 nodes, 26 688 759 discharged leaves, 21 317 467 collapses, 0 unresolved, emitted in 515 s (75 MB, regenerated on demand, sha256 in `sweep_proof_sharp_full.json`). The checker replays its structure in full with no fault; on a 5000+5000 refined sample (depth 4) it confirmed 4657 leaves and 4798 collapses outright, 0 refuted (a rerun with the repaired checker below is recorded in `sweep_proof_sharp_full.sample5000.results.json`).
 
