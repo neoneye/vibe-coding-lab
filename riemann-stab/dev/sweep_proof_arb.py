@@ -34,6 +34,7 @@ Run:  python3 dev/sweep_proof_arb.py                 # check the committed tape
 
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -126,10 +127,31 @@ def weight_deriv_ball(d):
     return 2 * k * kp / (K0 * K0)
 
 
+def lo_out(x):
+    """A float at or below every point of the ball `x`: the rounding of the conversion
+    is taken outward, so the caller never narrows an enclosure by a float conversion."""
+    return math.nextafter(float(x.lower()), -math.inf)
+
+
+def hi_out(x):
+    return math.nextafter(float(x.upper()), math.inf)
+
+
 def span(a, b):
-    m = (arb(a) + arb(b)) / 2
-    rad = (arb(b) - arb(a)) / 2
-    return arb(m.mid(), float(rad.upper()) * (1 + 1e-12) + 1e-300)
+    """The hull [a, b] as a ball.  `a`, `b` may be floats or balls; the midpoint's own
+    radius (the rounding of (a+b)/2 when a, b are balls) is carried into the result,
+    which the previous version dropped -- an unsoundness of ~1e-20 that showed up as
+    disjoint enclosures at point boxes."""
+    a = a if isinstance(a, arb) else arb(a)
+    b = b if isinstance(b, arb) else arb(b)
+    m = (a + b) / 2
+    rad = (b - a) / 2
+    return arb(m.mid(), (float(rad.upper()) + float(m.rad())) * (1 + 1e-12) + 1e-300)
+
+
+def point_pad(x):
+    """A ball around the float `x` wide enough to contain the exact centre it stands for."""
+    return abs(x) * 2.3e-16 + 1e-300
 
 
 def pl_range(knots, coeffs, lo, hi):
@@ -239,23 +261,81 @@ class Cert:
         for (i, j) in PAIRS:
             val += KP.weight(pc[j] - pc[i]) * (arb(2) / (NPTS - (j - i)))
         for i in range(6):
-            ci = float(c[i].mid())
+            ci = float(c[i].mid()); pi_ = point_pad(ci)
             if SIGN_A[i]:
-                val += SIGN_A[i] * pl_range(self.base["knots"], self.base["a"], ci, ci)
+                val += SIGN_A[i] * pl_range(self.base["knots"], self.base["a"], ci - pi_, ci + pi_)
             if SIGN_B[i]:
-                val += SIGN_B[i] * pl_range(self.base["knots"], self.base["b"], ci, ci)
+                val += SIGN_B[i] * pl_range(self.base["knots"], self.base["b"], ci - pi_, ci + pi_)
         for k in range(5):
             ck, ck1 = float(c[k].mid()), float(c[k + 1].mid())
-            val += grid_range(self.mats[k], self.J, self.knots, ck, ck, ck1, ck1)
+            pk, pk1 = point_pad(ck), point_pad(ck1)
+            val += grid_range(self.mats[k], self.J, self.knots, ck - pk, ck + pk, ck1 - pk1, ck1 + pk1)
         _, grad = self.bound_and_grad(lo, hi)
         for k in range(6):
             val += grad[k] * rad[k]
         return val, grad
 
+    def grad_centered(self, lo, hi):
+        """The pair part of the gradient in centred form: grad(centre) plus the second
+        derivative over the box times the half-widths (mean value theorem, componentwise;
+        the pair part is smooth).  The additive and pair-state parts keep their exact slope
+        hulls, since a piecewise-linear slope has no centred form across a knot."""
+        c = [(arb(lo[k]) + arb(hi[k])) / 2 for k in range(6)]
+        rad = [span(lo[k], hi[k]) - c[k] for k in range(6)]
+        pc, plo, phi = [arb(0)], [arb(0)], [arb(0)]
+        for k in range(6):
+            pc.append(pc[k] + c[k])
+            plo.append(plo[k] + arb(lo[k]))
+            phi.append(phi[k] + arb(hi[k]))
+        g = [arb(1) / 3000 for _ in range(6)]
+        H = [[arb(0) for _ in range(6)] for _ in range(6)]
+        for (i, j) in PAIRS:
+            coef = arb(2) / (NPTS - (j - i))
+            wd = KP.weight_d(pc[j] - pc[i]) * coef
+            dbox = span(plo[j] - phi[i], phi[j] - plo[i])
+            try:
+                wdd = KP.weight_dd(dbox) * coef
+            except ValueError:
+                # the jet arithmetic has no series branch at the kernel's removable
+                # singularity 1/(sqrt2 pi); a box straddling it keeps the natural gradient
+                return None
+            for k in range(i, j):
+                g[k] += wd
+                for l in range(i, j):
+                    H[k][l] += wdd
+        for i in range(6):
+            if SIGN_A[i]:
+                g[i] += SIGN_A[i] * pl_slope_range(self.base["knots"], self.base["a"], lo[i], hi[i])
+            if SIGN_B[i]:
+                g[i] += SIGN_B[i] * pl_slope_range(self.base["knots"], self.base["b"], lo[i], hi[i])
+        for k in range(5):
+            dx, dy = grid_slopes(self.mats[k], self.J, self.knots,
+                                 lo[k], hi[k], lo[k + 1], hi[k + 1])
+            g[k] += dx
+            g[k + 1] += dy
+        for k in range(6):
+            for l in range(6):
+                g[k] += H[k][l] * rad[l]
+        return g
+
     def best_bound(self, lo, hi):
         nat, grad = self.bound_and_grad(lo, hi)
         cen, _ = self.bound_and_grad_centered(lo, hi)
-        return nat.intersection(cen), grad
+        gcen = self.grad_centered(lo, hi)
+        if gcen is not None:
+            for k in range(6):
+                try:
+                    grad[k] = grad[k].intersection(gcen[k])
+                except ValueError:
+                    CONFLICTS.append({"kind": "grad", "k": k, "lo": list(lo), "hi": list(hi),
+                                      "natural": str(grad[k]), "centred": str(gcen[k])})
+        try:
+            val = nat.intersection(cen)
+        except ValueError:
+            CONFLICTS.append({"kind": "value", "lo": list(lo), "hi": list(hi),
+                              "natural": str(nat), "centred": str(cen)})
+            val = nat
+        return val, grad
 
     def bound_and_grad(self, lo, hi):
         plo, phi = [arb(0)], [arb(0)]
@@ -268,10 +348,10 @@ class Cert:
         val = s / 3000
         grad = [arb(1) / 3000 for _ in range(6)]
         for (i, j) in PAIRS:
-            d = span(float((plo[j] - phi[i]).lower()), float((phi[j] - plo[i]).upper()))
+            d = span(plo[j] - phi[i], phi[j] - plo[i])
             c = arb(2) / (NPTS - (j - i))
-            val += self.pieces.w_range(float(d.lower()), float(d.upper())) * c
-            dw = self.pieces.wd_range(float(d.lower()), float(d.upper())) * c
+            val += self.pieces.w_range(lo_out(d), hi_out(d)) * c
+            dw = self.pieces.wd_range(lo_out(d), hi_out(d)) * c
             for k in range(i, j):
                 grad[k] += dw
         for i in range(6):
@@ -291,6 +371,7 @@ class Cert:
 
 
 CHECKS = []
+CONFLICTS = []   # disjoint enclosures of one quantity: a soundness fault somewhere, recorded, never hidden
 
 
 def check(name, ok, detail=""):
@@ -482,6 +563,12 @@ def main():
           "%d confirmed outright, %d beyond this checker's resolution, %d refuted"
           % (gconf, gunres, gref))
 
+    check("no pair of enclosures of one quantity was disjoint (a disjoint pair means one is unsound)",
+          len(CONFLICTS) == 0, "%d conflicts" % len(CONFLICTS))
+    if CONFLICTS:
+        cpath = os.path.join(here, (out_name or "sweep_proof_arb.results.json").replace(".json", ".conflicts.json"))
+        json.dump(CONFLICTS[:200], open(cpath, "w"), indent=1)
+        print("conflicts written to", cpath)
     bad = [x for x in CHECKS if not x[1]]
     print("\n%d checks, %d failed" % (len(CHECKS), len(bad)))
     n_leaf_checked = sum(acc["leaf"]) if check_all else len(sample_leaf)

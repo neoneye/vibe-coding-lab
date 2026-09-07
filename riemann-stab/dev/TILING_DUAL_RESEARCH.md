@@ -100,10 +100,16 @@ Three different things were being called "verified", and they are not the same.
 | | floor | conditional projection |
 |---|---:|---:|
 | replayed by the suite, rigorous | `0.003` | `0.6724883611` |
-| **transcripted, rigorous** | **`0.0038`** | **`0.6730085279`** |
+| **transcripted, rigorous** (`sharp`, re-run 2026-09-07, 67 608 431 boxes, checksum `37308f214a50bb25`) | **`0.003956`** | **`0.6731093501`** |
+| transcripted, rigorous (`compact`) | `0.0038` | `0.6730085279` |
 | transcripted, fast, unreplayed | `0.003956` | `0.6731093501` |
-| reported without transcript | rigorous above `0.0038` | — |
-| **defensible unconditional record** | — | **`0.6725007037`** |
+| **defensible unconditional record** | — | **`0.6725007037`** (human-reviewed); `0.6728470198` (zeta-lab four-point, Lean, unreviewed) |
+
+The projection in the second row is through `n_point_bound_signed` (the
+endpoint loss kept signed, cap `0.003956·252 + 0.00170904 = 0.99862 ≤ 1`), for
+which the theorem's only remaining hypothesis is that sweep's coboundary
+inequality; see `investigation/lean/README.md`.  Its earlier version, before
+the rigorous `sharp` row existed, follows for the record.
 
 The rigorous rung now *reaches* the published local floor `19/5000`.  Precisely:
 that row is **transcripted, not replayed** — 7 048 899 boxes, checksum

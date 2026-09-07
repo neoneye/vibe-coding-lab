@@ -273,14 +273,15 @@ check('the file refuses to call anything simply "verified"',
 // asserted explicitly rather than inferred from a maximum.
 // The rigorous rung is the one that would carry a claim, so where it stands
 // relative to the published local floor is asserted explicitly rather than left
-// to be inferred from a maximum.  It currently reaches 19/5000 and does not
-// exceed it: matching the published certificate, not improving on it.
+// to be inferred from a maximum.  Until 2026-09-07 it reached 19/5000 and did not
+// exceed it; the rigorous sharp row (0.003956, 67 608 431 boxes) then landed, and
+// the tripwire below was updated together with the note and the page.
 check('the rigorous ladder reaches the published local floor',
   results.bestTranscriptedRigorousFloor >= 19 / 5000 - 1e-12,
   `${results.bestTranscriptedRigorousFloor}`);
-check('and does not yet exceed it',
-  results.bestTranscriptedRigorousFloor <= 19 / 5000 + 1e-12,
-  `${results.bestTranscriptedRigorousFloor} -- if this fires the ladder moved and both surfaces need updating`);
+check('and now exceeds it, at the sharp certificate\'s floor -- the ladder moved on 2026-09-07 and both surfaces were updated',
+  Math.abs(results.bestTranscriptedRigorousFloor - 0.003956) < 1e-12,
+  `${results.bestTranscriptedRigorousFloor}`);
 
 // --------------------------------- the tables against certified breakpoints
 // The sweep finds its w' breakpoints by scanning sign changes of a FINITE
