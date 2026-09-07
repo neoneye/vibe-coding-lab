@@ -22,6 +22,6 @@ Every finding was reproduced with the reviewer's own `review_probes_69d3f99.py` 
 
 ## What remains open, stated plainly
 
-- The complete verification of the `sharp` tape under the frozen checker is what the status table in `REPORT.md` tracks; until it reads `complete`, the `sharp` coboundary inequality is supported by the sweep's own arithmetic and by Arb samples, not by a complete independent check.
+- The complete verification of the `sharp` tape is **done** — not by this Python checker (the owner stopped its eight-hour shard run) but by a compiled sibling, `dev/tapecheck`, with the same semantics and checks: every obligation confirmed, `tapecheck_sharp_full.results.json`. The Python checker remains the reference the compiled one is compared against (small domain in full, full tape on a 5000+5000 sample).
 - Even complete, the tape is a check of a *double-precision* sweep's claims in Arb; the Lean theorem `sharp_chain_bound_signed_concrete` still takes `hcob` as a hypothesis, and no mechanism imports the checker's verdict into Lean.
 - The pair tape's floor inside its tubes is `E_alt − 2.19e-15`, not the target; the tape proves the target on the complement only. The number is in the transcript.

@@ -80,7 +80,7 @@ fn two_pi() -> I {
 /// of q times the library's enclosure of pi/2; Taylor polynomials with the Lagrange
 /// remainder |r|^(2N+1)/(2N+1)! and |r|^(2N)/(2N)!, everything in intervals; then the
 /// quadrant swap.  19! and 18! are exactly representable doubles.
-fn sincos_at(t: f64) -> (I, I) {
+fn sincos_at_slow(t: f64) -> (I, I) {
     let q = (t / std::f64::consts::FRAC_PI_2).round();
     let r = pt(t) - pt(q) * (Interval::PI * pt(0.5));
     let m = r.abs().sup();
@@ -101,6 +101,54 @@ fn sincos_at(t: f64) -> (I, I) {
     let rem_c = m.powi(18) / 6402373705728000.0 * (1.0 + 1e-13) + 1e-300;
     let s = (r * sacc + iv(-rem_s, rem_s)).intersection(iv(-1.0, 1.0));
     let c = (cacc + iv(-rem_c, rem_c)).intersection(iv(-1.0, 1.0));
+    match (q as i64).rem_euclid(4) {
+        0 => (s, c),
+        1 => (c, -s),
+        2 => (-s, -c),
+        _ => (-c, s),
+    }
+}
+/// (sin t, cos t) at a point t, fast: the same reduction in intervals, then the Taylor
+/// polynomials evaluated by Horner in plain f64 at the midpoint m of the reduced
+/// argument, enclosed by three explicit terms --
+///   * the rounding error of Horner: Higham, Accuracy and Stability of Numerical
+///     Algorithms, Thm 5.1: |fl(p(x)) - p(x)| <= gamma_{2n} * p~(|x|), with p~ the
+///     polynomial of absolute coefficients (here <= cosh(0.8) = 1.34 for the cosine
+///     series and <= sinh(0.8)/0.8 = 1.11 for the sine's), n = 9 coefficients, and
+///     gamma_18 = 18u/(1-18u) = 2.0e-15 at u = 2^-53, coefficient rounding included
+///     by taking gamma_19; the bound used is 4e-15, twice the worst case;
+///   * the Lagrange remainder of the truncated series at |m| + rad;
+///   * the width of the reduced argument, since |sin'|, |cos'| <= 1.
+/// The pure-interval version above is kept as the oracle: at start-up the two are
+/// compared at hundreds of thousands of points and must overlap, and both must
+/// contain libm's value.
+fn sincos_at(t: f64) -> (I, I) {
+    let q = (t / std::f64::consts::FRAC_PI_2).round();
+    let r = pt(t) - pt(q) * (Interval::PI * pt(0.5));
+    let m = r.mid();
+    let rad = (r.sup() - r.inf()) * 0.5 * (1.0 + 1e-15) + 1e-300;
+    let mm = m.abs() + rad;
+    if mm > 0.8 {
+        return (iv(-1.0, 1.0), iv(-1.0, 1.0));
+    }
+    const SIN_D: [f64; 9] = [0.0, 6.0, 20.0, 42.0, 72.0, 110.0, 156.0, 210.0, 272.0];
+    const COS_D: [f64; 9] = [0.0, 2.0, 12.0, 30.0, 56.0, 90.0, 132.0, 182.0, 240.0];
+    let x2 = m * m;
+    let mut sacc = 1.0f64;
+    let mut cacc = 1.0f64;
+    for n in (1..9).rev() {
+        sacc = 1.0 - x2 * sacc / SIN_D[n];
+        cacc = 1.0 - x2 * cacc / COS_D[n];
+    }
+    let sv = m * sacc;
+    let cv = cacc;
+    const HORNER: f64 = 4e-15;
+    let rem_s = mm.powi(19) / 121645100408832000.0 * (1.0 + 1e-13);
+    let rem_c = mm.powi(18) / 6402373705728000.0 * (1.0 + 1e-13);
+    let es = HORNER + rem_s + rad + 1e-300;
+    let ec = HORNER + rem_c + rad + 1e-300;
+    let s = iv((sv - es).max(-1.0), (sv + es).min(1.0));
+    let c = iv((cv - ec).max(-1.0), (cv + ec).min(1.0));
     match (q as i64).rem_euclid(4) {
         0 => (s, c),
         1 => (c, -s),
@@ -742,12 +790,30 @@ struct Walk {
 }
 
 /// One pass over the tape; arithmetic only under roots in [ra, rb).
-fn walk(tape: &[u8], roots: &[Box6], ra: usize, rb: usize, cert: Option<&Cert>, target: f64, refine: u32, tally: &mut Tally, progress: bool) -> Walk {
+/// `claim`: with a counter, roots in [ra, rb) are handed out one at a time across the
+/// threads (each thread walks the whole tape, cheaply, and does arithmetic on the roots it
+/// claimed); without one, every root in [ra, rb) is done here.
+fn walk(tape: &[u8], roots: &[Box6], ra: usize, rb: usize, cert: Option<&Cert>, target: f64, refine: u32, tally: &mut Tally, progress: bool, claim: Option<&AtomicUsize>) -> Walk {
     let mut w = Walk { leaves: 0, splits: 0, collapses: 0, open: 0, tube: 0, bad: 0, pos: 0 };
     let started = Instant::now();
     let mut next_report = 200_000u64;
+    let mut claimed = claim.map(|c| ra + c.fetch_add(1, Ordering::SeqCst)).unwrap_or(ra);
     'roots: for (ridx, (lo0, hi0)) in roots.iter().enumerate() {
-        let in_shard = ra <= ridx && ridx < rb;
+        let in_shard = match claim {
+            Some(c) => {
+                if ridx == claimed && ridx < rb {
+                    true
+                } else {
+                    false
+                }
+            }
+            None => ra <= ridx && ridx < rb,
+        };
+        let _ = &claim;
+        let mut claim_next = false;
+        if in_shard && claim.is_some() {
+            claim_next = true;
+        }
         let mut stack: Vec<Box6> = vec![(*lo0, *hi0)];
         while let Some((mut lo, mut hi)) = stack.pop() {
             loop {
@@ -828,6 +894,9 @@ fn walk(tape: &[u8], roots: &[Box6], ra: usize, rb: usize, cert: Option<&Cert>, 
                     eprintln!("  {} obligations, leaves {:?}, collapses {:?}, {:.0} s", done, tally.leaf, tally.coll, started.elapsed().as_secs_f64());
                 }
             }
+        }
+        if claim_next {
+            claimed = ra + claim.unwrap().fetch_add(1, Ordering::SeqCst);
         }
     }
     w
@@ -921,17 +990,21 @@ fn main() {
     {
         let mut bad = 0;
         let mut worst = 0.0f64;
-        let mut x = -400.0f64;
-        while x < 400.0 {
+        let mut x = -600.0f64;
+        let mut count = 0u64;
+        while x < 600.0 {
             let (s, c) = sincos_at(x);
-            if !s.contains(x.sin()) || !c.contains(x.cos()) {
+            let (so, co) = sincos_at_slow(x);
+            if !s.contains(x.sin()) || !c.contains(x.cos()) || !so.contains(x.sin()) || !co.contains(x.cos())
+                || s.intersection(so).is_empty() || c.intersection(co).is_empty() {
                 bad += 1;
                 if bad <= 3 {
-                    eprintln!("  trig miss at x = {:.17}: sin [{:.17}, {:.17}] libm {:.17}; cos [{:.17}, {:.17}] libm {:.17}", x, s.inf(), s.sup(), x.sin(), c.inf(), c.sup(), x.cos());
+                    eprintln!("  trig miss at x = {:.17}: fast sin [{:.17}, {:.17}] slow [{:.17}, {:.17}] libm {:.17}", x, s.inf(), s.sup(), so.inf(), so.sup(), x.sin());
                 }
             }
             worst = worst.max(s.wid()).max(c.wid());
-            x += 0.0173;
+            x += 0.00173;
+            count += 1;
         }
         // ranges over intervals contain sampled values
         let mut bad_r = 0;
@@ -949,8 +1022,8 @@ fn main() {
                 }
             }
         }
-        check("the interval sine and cosine contain libm's values at 46 000 points, and the ranges over 4000 intervals contain sampled values",
-              bad == 0 && bad_r == 0, format!("{} misses, widest point enclosure {:.1e}", bad + bad_r, worst));
+        check("the fast and the pure-interval sine/cosine both contain libm's values and overlap each other at every one of the sample points, and the ranges over 4000 intervals contain sampled values",
+              bad == 0 && bad_r == 0, format!("{} points, {} misses, widest point enclosure {:.1e}", count, bad + bad_r, worst));
         let w0 = kern.w(pt(0.0));
         check("w(0) = 1 in these intervals, tightly",
               w0.contains(1.0) && w0.wid() < 1e-13, format!("w(0) = [{:.17}, {:.17}]", w0.inf(), w0.sup()));
@@ -1051,7 +1124,7 @@ fn main() {
     // ---- structural pass (no arithmetic), then the arithmetic in parallel over root ranges
     let target = meta["target"].as_f64().unwrap();
     let mut t0 = Tally::default();
-    let w = walk(&tape, &roots, 0, 0, None, target, 0, &mut t0, false);
+    let w = walk(&tape, &roots, 0, 0, None, target, 0, &mut t0, false, None);
     check("the tape is consumed exactly, with nothing left over, every opcode known and no tube leaf claimed", w.pos == tape.len() && w.bad == 0 && w.tube == 0, format!("{} of {} bytes, {} structural faults, {} tube leaves", w.pos, tape.len(), w.bad, w.tube));
     check("the node counts agree with the metadata", w.leaves == meta["leaves"].as_u64().unwrap() && w.splits == meta["splits"].as_u64().unwrap() && w.collapses == meta["collapses"].as_u64().unwrap(), format!("{} leaves, {} splits, {} collapses", w.leaves, w.splits, w.collapses));
     check("no leaf was left open, so the subdivision terminated everywhere", w.open == 0, String::new());
@@ -1062,14 +1135,13 @@ fn main() {
     let tallies: Mutex<Vec<Tally>> = Mutex::new(vec![]);
     if structural_ok && rb > ra {
         let nthreads = threads.max(1).min(rb - ra);
+        let counter = AtomicUsize::new(0);
         std::thread::scope(|s| {
             for t in 0..nthreads {
-                let a = ra + (rb - ra) * t / nthreads;
-                let b = ra + (rb - ra) * (t + 1) / nthreads;
-                let (tape, roots, cert, tallies) = (&tape, &roots, &cert, &tallies);
+                let (tape, roots, cert, tallies, counter) = (&tape, &roots, &cert, &tallies, &counter);
                 s.spawn(move || {
                     let mut tally = Tally::default();
-                    walk(tape, roots, a, b, Some(cert), target, refine, &mut tally, t == 0);
+                    walk(tape, roots, ra, rb, Some(cert), target, refine, &mut tally, t == 0, Some(counter));
                     tallies.lock().unwrap().push(tally);
                 });
             }
