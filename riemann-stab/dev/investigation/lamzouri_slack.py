@@ -140,6 +140,35 @@ def fmt(d):
             % (d['N'], d['S'] / d['N'], d['slack'], p['bessel'], p['second'], p['dim'], p['first_sq'], p['first_mult'], p['third'],
                d['identity_residual'], d['frob_vs_S'], d['trace_vs_N'], d['rank']))
 
+def review_counterexample():
+    """The multiset an external review (COMMIT_REVIEW_69d3f99, issue 6) certified at 256
+    bits as a counterexample to Delta >= D1: ten simple real points clustered at spacing
+    1e-4 and one off-line pair at +-i/20.  Delta - D1 = -0.01306034... there."""
+    xs = [106 / 100 + j / 10000 for j in range(10)]
+    pts = [(complex(x, 0), 1) for x in xs] + [(complex(0, 0.05), 1), (complex(0, -0.05), 1)]
+    d = decompose(pts)
+    return pts, d, offdiag_simple(pts)
+
+def certify_review_counterexample():
+    """The same quantity in complex ball arithmetic, if python-flint is present: the
+    sign of Delta - D1 comes back certified, not floating."""
+    try:
+        from flint import arb, acb, ctx
+    except ImportError:
+        return None
+    ctx.prec = 256
+    r = arb(2).sqrt(); pi = arb.pi()
+    def Kb(z):
+        a, b = (r - 2 * pi * z) / 2, (r + 2 * pi * z) / 2
+        return (a.sin() / a + b.sin() / b) / (2 * r * (1 / r).sin())
+    xs = [acb(arb(106) / 100 + arb(j) / 10000) for j in range(10)]
+    points = xs + [acb(0, arb(1) / 20), acb(0, -arb(1) / 20)]
+    S = sum((Kb(z - s) ** 2 for z in points for s in points), acb(0))
+    delta = S.real - 14
+    D1 = sum((Kb(xs[j] - xs[k]) ** 2 for j in range(10) for k in range(10) if j != k), acb(0))
+    diff = delta - D1.real
+    return diff, bool(diff < 0)
+
 if __name__ == '__main__':
     rng = random.Random(11)
     print('--- controls ---')
@@ -156,15 +185,32 @@ if __name__ == '__main__':
             pts = rnd_multiset(rng, n1, n2, n3, W=20.0 if name != 'dense simple' else 12.0)
             d = decompose(pts); worst = max(worst, abs(d['identity_residual']))
             d1 = offdiag_simple(pts); da = offdiag_all(pts)
-            rows.append((name, d, d1, da))
+            rows.append((name, d, d1, da, pts))
             if t < 2: print('%-15s' % name, fmt(d))
     print('worst identity residual over %d multisets: %.2e' % (len(rows), worst))
     print('--- candidate corrections D(Z), ratio Delta/D over the families (min is what matters) ---')
+    saved = {}
     for label, pick in [('D1 = simple-simple pair energy', lambda r: r[2]), ('Dall = all-pairs energy sum_{z!=s} m m K^2', lambda r: r[3])]:
-        ratios = [(r[1]['slack'] / pick(r), r[0]) for r in rows if pick(r) > 1e-12]
-        viol = [(v, nm) for v, nm in ratios if v < 1 - 1e-9]
-        print('%-45s min Delta/D = %.6f (%s); Delta < D on %d of %d' % (label, min(ratios)[0], min(ratios)[1], len(viol), len(ratios)))
-        if viol: print('      counterexamples (ratio, family):', [(round(v, 4), nm) for v, nm in viol[:5]])
+        ratios = [(r[1]['slack'] / pick(r), r[0], r[4]) for r in rows if pick(r) > 1e-12]
+        viol = [(v, nm, pts) for v, nm, pts in ratios if v < 1 - 1e-9]
+        print('%-45s min Delta/D = %.6f (%s); Delta < D on %d of %d' % (label, min(ratios, key=lambda r: r[0])[0], min(ratios, key=lambda r: r[0])[1], len(viol), len(ratios)))
+        if viol: print('      counterexamples (ratio, family):', [(round(v, 4), nm) for v, nm, _ in viol[:5]])
+        saved[label] = [{'ratio': v, 'family': nm, 'points': [[z.real, z.imag, m] for z, m in pts]} for v, nm, pts in viol]
+    # The review's certified counterexample to D1: the random families never produced a
+    # tight cluster of simple reals next to an off-line pair, and 30 passes were taken
+    # for validity.  They were not.  D1 is REFUTED as a universal correction.
+    pts, d, d1 = review_counterexample()
+    print("review's counterexample to Delta >= D1: ten simple reals 1.06 + j/10000 and the pair +-i/20:")
+    print('      Delta = %.12f  D1 = %.12f  Delta - D1 = %.12f  (float64)' % (d['slack'], d1, d['slack'] - d1))
+    cert = certify_review_counterexample()
+    if cert is not None:
+        print('      Arb, 256 bits: Delta - D1 = %s, strictly negative: %s' % (cert[0].str(20), cert[1]))
+    saved['D1 review counterexample'] = {'points': [[z.real, z.imag, m] for z, m in pts], 'delta': d['slack'], 'D1': d1,
+                                          'delta_minus_D1_float64': d['slack'] - d1,
+                                          'arb_256': (cert[0].str(30) if cert else None), 'certified_negative': (cert[1] if cert else None),
+                                          'replay': 'python3 dev/investigation/lamzouri_slack.py'}
+    json.dump(saved, open(os.path.join(here, 'lamzouri_slack.counterexamples.json'), 'w'), indent=1)
+    print('      counterexample coordinates written to investigation/lamzouri_slack.counterexamples.json')
     # the live zeros: all real and simple, so Delta = off-diagonal mass exactly
     zpath = os.path.join(here, 'zeros600.json')
     if os.path.exists(zpath):

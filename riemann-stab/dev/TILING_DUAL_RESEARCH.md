@@ -1378,12 +1378,19 @@ reporting "complete" having silently dropped part of its domain — and it is th
 reason the object is worth emitting.
 
 **Arithmetic is verified on a sample, and the checker says how far it got.**  Of
-220 sampled discharged leaves Arb confirms **39** outright and finds 181 beyond
-its own resolution; of 220 sampled collapses, **67** and 153.  **Nothing is
-refuted.**  (An earlier version of this sentence said 64 and 59; the committed
-transcript `sweep_proof_arb.results.json` says 39 and 67, and a re-run on
-2026-09-07 with python-flint 0.9.0 reproduced the transcript exactly.  The
-transcript is the number; a reviewer caught the mismatch.)
+220 sampled discharged leaves Arb now confirms **220**, and of 220 sampled
+collapses **220**.  **Nothing is refuted.**  (The history of that number is
+instructive: 3, then 39 and 67 — an earlier version of this sentence said 64 and
+59, the transcript said 39 and 67, and a reviewer caught the mismatch — then
+220/220 once the checker enclosed each pair distance as the sum of its gap
+intervals instead of a difference of prefix sums.  An external review of
+2026-09-07 (`dev/investigation/COMMIT_REVIEW_69d3f99.md`) then showed the checker
+itself unsound in four places — hulls through nearest-rounded floats, a float
+acceptance comparison, kernel tables stopping at distance 30 while the full
+tapes reach 96 and 168, and a tube leaf accepted on its word — each repaired,
+each given a negative control in `dev/sweep_proof_arb_controls.py`, and the
+breakpoint tables proved complete by interval bisection between certified roots.
+The transcript `sweep_proof_arb.results.json` is the number.)
 
 Those numbers started at 3 and 35.  What moved them is closing part of the gap
 the previous section measured — the sweep's advantage was exact monotone-piece

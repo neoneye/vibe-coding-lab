@@ -80,6 +80,7 @@ def partition(cube, rho):
     edges = sorted(cuts)
     slabs = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
     out = []
+    excluded = []
     lo = [0.0] * 6
     hi = [0.0] * 6
 
@@ -90,8 +91,8 @@ def partition(cube, rho):
     def walk(k):
         if k == 6:
             for phase in (0, 1):
-                c = [LOW if (i + phase) % 2 == 0 else HIGH for i in range(6)]
-                if inside(c):
+                if inside(centres(phase)):
+                    excluded.append((tuple(lo), tuple(hi), phase))
                     return
             out.append((tuple(lo), tuple(hi)))
             return
@@ -100,7 +101,17 @@ def partition(cube, rho):
             walk(k + 1)
 
     walk(0)
-    return out
+    return out, excluded
+
+
+def centres(phase):
+    return [LOW if (i + phase) % 2 == 0 else HIGH for i in range(6)]
+
+
+# The value the pair candidate is pinned at, E_alt, as dev/tube_arb.py states it.
+# The tube theorem gives R >= E_alt - shortfall inside the tubes; the tape's target
+# is the double nearest E_alt, so inside the tubes the floor is that, not the target.
+E_ALT = "0.003957393309109343844588308250635018628261217786065732772034"
 
 
 def weight_ball(d):
@@ -138,15 +149,16 @@ def hi_out(x):
 
 
 def span(a, b):
-    """The hull [a, b] as a ball.  `a`, `b` may be floats or balls; the midpoint's own
-    radius (the rounding of (a+b)/2 when a, b are balls) is carried into the result,
-    which the previous version dropped -- an unsoundness of ~1e-20 that showed up as
-    disjoint enclosures at point boxes."""
+    """The hull [a, b] as a ball.  `a`, `b` may be floats or balls; the result is
+    built from the EXACT lower end of `a` and upper end of `b` (kernel_pieces_arb.ball),
+    so no float conversion can narrow it.  The previous version carried the midpoint's
+    rounding but took its endpoints through nearest-rounded floats."""
     a = a if isinstance(a, arb) else arb(a)
     b = b if isinstance(b, arb) else arb(b)
-    m = (a + b) / 2
-    rad = (b - a) / 2
-    return arb(m.mid(), (float(rad.upper()) + float(m.rad())) * (1 + 1e-12) + 1e-300)
+    return KP.ball(a.lower(), b.upper())
+
+
+hull = KP.hull
 
 
 def point_pad(x):
@@ -178,18 +190,23 @@ def pl_range(knots, coeffs, lo, hi):
         t = (arb(x) - arb(knots[i])) / (arb(knots[i + 1]) - arb(knots[i]))
         return arb(coeffs[i]) * (1 - t) + arb(coeffs[i + 1]) * t
     vals = [at(lo), at(hi)] + [arb(coeffs[i]) for i in range(n) if lo < knots[i] < hi]
-    lo_b = min(float(v.lower()) for v in vals)
-    hi_b = max(float(v.upper()) for v in vals)
-    return span(lo_b, hi_b)
+    # the hull from the balls' exact endpoints -- a review found the float hull
+    # 6.8e-21 off the exact interpolant at a knot-interior point
+    return hull(vals)
 
 
 def pl_slope_range(knots, coeffs, lo, hi):
-    s = [(coeffs[i + 1] - coeffs[i]) / (knots[i + 1] - knots[i])
-         for i in range(len(knots) - 1)
-         if knots[i + 1] > lo and knots[i] < hi]
+    """The hull of the slopes of the cells whose interior meets (lo, hi), in ball
+    arithmetic; a box that only touches a knot (lo == hi at a knot) takes both
+    neighbouring cells.  Beyond the knot range the extension is constant: slope 0."""
+    def slope(i):
+        return (arb(coeffs[i + 1]) - arb(coeffs[i])) / (arb(knots[i + 1]) - arb(knots[i]))
+    s = [slope(i) for i in range(len(knots) - 1) if knots[i + 1] > lo and knots[i] < hi]
+    if not s:
+        s = [slope(i) for i in range(len(knots) - 1) if knots[i + 1] >= lo and knots[i] <= hi]
     if lo <= knots[0] or hi >= knots[-1]:
-        s.append(0.0)
-    return span(min(s), max(s)) if s else arb(0)
+        s.append(arb(0))
+    return hull(s) if s else arb(0)
 
 
 def cell(knots, x):
@@ -213,6 +230,10 @@ def _cells(knots, lo, hi):
             out.append(i)
     if lo < knots[0] and 0 not in out: out.append(0)
     if hi > knots[-1] and n - 2 not in out: out.append(n - 2)
+    if not out:
+        # a degenerate interval sitting exactly on a knot: take the cells that touch it
+        # (a superset of what the value needs, so the range can only widen)
+        out = [i for i in range(n - 1) if knots[i + 1] >= lo and knots[i] <= hi]
     return out
 
 
@@ -233,10 +254,8 @@ def grid_range(grid, J, knots, aLo, aHi, bLo, bHi):
     is bilinear on the clipped sub-rectangle and attains its extrema at that
     sub-rectangle's four corners (the sweep's own argument).  The previous version
     hulled the corner VALUES of every cell touched, first-order loose."""
-    lo_b, hi_b = float('inf'), float('-inf')
+    vals = []
     for i in _cells(knots, aLo, aHi):
-        xs = [max(aLo, knots[i]) if aLo > knots[0] else knots[0] if aLo < knots[0] else aLo,
-              min(aHi, knots[i + 1]) if aHi < knots[-1] else knots[-1] if aHi > knots[-1] else aHi]
         xs = [min(max(v, knots[i]), knots[i + 1]) for v in (max(aLo, knots[i]), min(aHi, knots[i + 1]))]
         if aLo < knots[0]: xs[0] = knots[0]
         if aHi > knots[-1]: xs[1] = knots[-1]
@@ -246,16 +265,15 @@ def grid_range(grid, J, knots, aLo, aHi, bLo, bHi):
             if bHi > knots[-1]: ys[1] = knots[-1]
             for x in xs:
                 for y in ys:
-                    v = _bilin(grid, J, knots, i, j, arb(x), arb(y))
-                    lo_b = min(lo_b, float(v.lower())); hi_b = max(hi_b, float(v.upper()))
-    return span(lo_b, hi_b)
+                    vals.append(_bilin(grid, J, knots, i, j, arb(x), arb(y)))
+    return hull(vals)
 
 
 def grid_slopes(grid, J, knots, aLo, aHi, bLo, bHi):
     """Exact ranges of the two partial derivatives of the bilinear correction over the
     box: on a cell d/dx is linear in y (extrema at the clipped y-endpoints) and constant
     in x, and vanishes where x is clamped outside the knots; symmetrically for d/dy."""
-    xlo, xhi, ylo, yhi = float('inf'), float('-inf'), float('inf'), float('-inf')
+    dxs, dys = [], []
     for i in _cells(knots, aLo, aHi):
         hx = arb(knots[i + 1]) - arb(knots[i])
         xs = [min(max(v, knots[i]), knots[i + 1]) for v in (max(aLo, knots[i]), min(aHi, knots[i + 1]))]
@@ -266,15 +284,13 @@ def grid_slopes(grid, J, knots, aLo, aHi, bLo, bHi):
             c10, c11 = arb(grid[(i + 1) * J + j]), arb(grid[(i + 1) * J + j + 1])
             for y in ys:
                 fy = (arb(y) - arb(knots[j])) / hy
-                dx = ((1 - fy) * (c10 - c00) + fy * (c11 - c01)) / hx
-                xlo = min(xlo, float(dx.lower())); xhi = max(xhi, float(dx.upper()))
+                dxs.append(((1 - fy) * (c10 - c00) + fy * (c11 - c01)) / hx)
             for x in xs:
                 fx = (arb(x) - arb(knots[i])) / hx
-                dy = ((1 - fx) * (c01 - c00) + fx * (c11 - c10)) / hy
-                ylo = min(ylo, float(dy.lower())); yhi = max(yhi, float(dy.upper()))
-    if aLo <= knots[0] or aHi >= knots[-1]: xlo, xhi = min(xlo, 0.0), max(xhi, 0.0)
-    if bLo <= knots[0] or bHi >= knots[-1]: ylo, yhi = min(ylo, 0.0), max(yhi, 0.0)
-    return span(xlo, xhi), span(ylo, yhi)
+                dys.append(((1 - fx) * (c01 - c00) + fx * (c11 - c10)) / hy)
+    if aLo <= knots[0] or aHi >= knots[-1]: dxs.append(arb(0))
+    if bLo <= knots[0] or bHi >= knots[-1]: dys.append(arb(0))
+    return hull(dxs), hull(dys)
 
 
 class Cert:
@@ -291,7 +307,12 @@ class Cert:
     checker is a step towards and not a substitute for.
     """
 
-    def __init__(self, here, candidate="tiling_pair.stationary.json"):
+    def __init__(self, here, candidate="tiling_pair.stationary.json", limit=30.0):
+        """`limit` is the largest pair distance the kernel tables must cover: six gaps
+        of at most `cube` each, so 6 * cube.  The tables used to stop at 30 whatever
+        the tape, and beyond 30 a range silently became the hull of its two endpoint
+        values -- no critical points -- which is not a range at all.  Found when the
+        tables started refusing intervals beyond their limit (2026-09-07)."""
         cand = json.load(open(os.path.join(here, candidate)))
         bundle = json.load(open(os.path.join(here, "tiling_additive.certificate.json")))
         certs = bundle["certificates"]
@@ -303,7 +324,7 @@ class Cert:
              for k in range(cand["free"])]
         m.append([-sum(x[i] for x in m) for i in range(self.J * self.J)])
         self.mats = m
-        self.pieces = KP.Pieces(30.0)
+        self.pieces = KP.pieces(float(limit))
 
     def bound_and_grad_centered(self, lo, hi):
         """R(centre) + grad(box) . (x - centre): second order in the width."""
@@ -475,14 +496,30 @@ def main():
         sources[sources.index("sweep_proof.json")] = meta_name
     if candidate not in sources:
         sources.append(candidate)
-    cert = Cert(here, candidate)
+    has_tube = meta["tubeRadius"] > 0
+    if has_tube:
+        sources += ["tube_arb.py", "tube_arb.results.json"]
+    # Provenance is taken NOW, before any work, and again at the end.  The previous
+    # version hashed the sources when it wrote its result; a run of several hours
+    # then carried the hash of whatever the files had become, not of the code it
+    # executed -- a review showed the overnight shards doing exactly that.  The
+    # modules were imported moments before this line; a run whose end hashes differ
+    # from these is refused a clean verdict.
+    inputs_start = arb_provenance.hash_inputs(sources)
+    options = {"meta": meta_name, "candidate": candidate, "all": check_all, "limit": limit,
+               "refine": refine, "sample": sample_n, "roots": roots_opt,
+               "precision_bits": ctx.prec, "argv": args}
+    cert = Cert(here, candidate, limit=max(30.0, 6.0 * float(meta["cube"]) + 1.0))
     tape = open(os.path.join(here, meta["tape"]), "rb").read()
+    target = meta["target"]
+    T = arb(target)          # the tape's target, the double the metadata holds, exactly
     # inline arithmetic (every node, or the first `limit`), with checkpoints
-    acc = {"leaf": [0, 0, 0], "coll": [0, 0, 0], "checked": 0, "started": time.time()}
+    acc = {"leaf": [0, 0, 0], "coll": [0, 0, 0], "checked": 0, "started": time.time(),
+           "sub": 0, "unresolved": []}
+    shard = {"leaves": 0, "coll": 0, "skipped_leaf": 0, "skipped_coll": 0}
     def ckpt_path():
         return os.path.join(here, (out_name or "sweep_proof_arb.results.json")
                             .replace(".json", ".checkpoint.json"))
-    acc["sub"] = 0     # sub-boxes evaluated during verified subdivision
     def widest(lo, hi):
         k, w = -1, -1.0
         for i in range(6):
@@ -491,11 +528,13 @@ def main():
     def verdict_leaf(lo, hi, depth):
         """0 confirmed, 1 unresolved, 2 refuted -- with verified subdivision to `depth`.
         A refutation on any sub-box refutes the leaf (its minimum over the sub-box is
-        below the target); confirmation needs every sub-box confirmed."""
+        below the target); confirmation needs every sub-box confirmed.  The comparisons
+        are between exact balls: a review showed float(val.lower()) >= target accepting
+        a value 2^-70 BELOW the target, the float conversion rounding to nearest."""
         val, _ = cert.best_bound(lo, hi)
         acc["sub"] += 1
-        if float(val.lower()) >= target: return 0
-        if float(val.upper()) < target: return 2
+        if val.lower() >= T: return 0
+        if val.upper() < T: return 2
         if depth == 0: return 1
         k, w = widest(lo, hi)
         if k < 0 or w <= 0: return 1
@@ -511,9 +550,9 @@ def main():
         _, grad = cert.best_bound(lo, hi)
         acc["sub"] += 1
         g = grad[k]
-        if side == 'hi' and float(g.lower()) > 0: return 0
-        if side == 'lo' and float(g.upper()) < 0: return 0
-        if (side == 'hi' and float(g.upper()) <= 0) or (side == 'lo' and float(g.lower()) >= 0): return 2
+        if side == 'hi' and g.lower() > 0: return 0
+        if side == 'lo' and g.upper() < 0: return 0
+        if (side == 'hi' and g.upper() <= 0) or (side == 'lo' and g.lower() >= 0): return 2
         if depth == 0: return 1
         kk, w = widest(lo, hi)
         if kk < 0 or w <= 0: return 1
@@ -525,19 +564,23 @@ def main():
         b = verdict_coll(tuple(lo2), tuple(hi), k, side, depth - 1)
         if b == 2: return 2
         return 0 if (a == 0 and b == 0) else 1
-    def dump(kind, lo, hi, k=None, side=None):
+    def note_unresolved(kind, lo, hi, root, at, k=None, side=None):
+        # identity: root index and tape offset, so a retry can REPLACE this verdict
+        rec = {"kind": kind, "root": root, "pos": at, "lo": list(lo), "hi": list(hi), "k": k, "side": side}
+        if len(acc["unresolved"]) < 5000:
+            acc["unresolved"].append({"kind": kind, "root": root, "pos": at})
         if dump_unresolved:
             with open(os.path.join(here, dump_unresolved), "a") as f:
-                f.write(json.dumps({"kind": kind, "lo": list(lo), "hi": list(hi), "k": k, "side": side}) + "\n")
-    def leaf_arith(lo, hi):
+                f.write(json.dumps(rec) + "\n")
+    def leaf_arith(lo, hi, root, at):
         v = verdict_leaf(lo, hi, refine)
-        if v == 1: dump("leaf", lo, hi)
+        if v == 1: note_unresolved("leaf", lo, hi, root, at)
         acc["leaf"][v] += 1
         acc["checked"] += 1
         if acc["checked"] % 20000 == 0: checkpoint()
-    def coll_arith(lo, hi, k, side):
+    def coll_arith(lo, hi, k, side, root, at):
         v = verdict_coll(lo, hi, k, side, refine)
-        if v == 1: dump("collapse", lo, hi, k, side)
+        if v == 1: note_unresolved("collapse", lo, hi, root, at, k, side)
         acc["coll"][v] += 1
         acc["checked"] += 1
         if acc["checked"] % 20000 == 0: checkpoint()
@@ -548,7 +591,8 @@ def main():
                "leaf_confirmed_unresolved_refuted": list(acc["leaf"]),
                "collapse_confirmed_unresolved_refuted": list(acc["coll"]),
                "refine_depth": refine, "sub_boxes_evaluated": acc["sub"],
-               "seconds": round(el, 1), "per_node_ms": round(1000 * el / max(1, acc["checked"]), 3)}
+               "seconds": round(el, 1), "per_node_ms": round(1000 * el / max(1, acc["checked"]), 3),
+               "inputs_at_start": inputs_start, "options": options}
         json.dump(rec, open(ckpt_path(), "w"), indent=1)
         print("  checkpoint: %d checked, leaves %s, collapses %s, %.1f s (%.3f ms/node)"
               % (acc["checked"], acc["leaf"], acc["coll"], el, 1000 * el / max(1, acc["checked"])), flush=True)
@@ -559,14 +603,63 @@ def main():
     check("the tape is the one the metadata describes", digest == meta["tape_sha256"],
           digest[:16])
 
-    roots = partition(meta["cube"], meta["tubeRadius"])
+    roots, excluded = partition(meta["cube"], meta["tubeRadius"])
     check("the root partition recomputed here matches the count the sweep used",
           len(roots) == meta["roots"], "%d pieces" % len(roots))
 
+    # ---- the tube exclusion is bound to its theorem.  The emitter never writes a
+    # tube LEAF; it drops whole root pieces that lie inside a tube, and those pieces
+    # are covered by dev/tube_arb.py's theorem -- for the candidate that theorem is
+    # about, for the phases it certifies, at a radius that contains the float box
+    # the sweep excluded, compared exactly.  A review forged a one-byte tube-leaf
+    # tape for the no-tube sharp candidate and the previous version accepted it.
+    tube_record = None
+    if has_tube:
+        cand = json.load(open(os.path.join(here, candidate)))
+        tube = json.load(open(os.path.join(here, "tube_arb.results.json")))
+        bound = (candidate == "tiling_pair.stationary.json" and bool(cand.get("stationary"))
+                 and all(inputs_start.get(k) == v for k, v in tube["inputs"].items())
+                 and all(c["ok"] for c in tube["checks"]))
+        check("the tube theorem's transcript is about the candidate in use, was produced "
+              "from the files in use, and passed", bound,
+              "%d tube certificates" % len(tube.get("tubes", [])))
+        need = {}
+        for lo, hi, phase in excluded:
+            c = centres(phase)
+            exc = arb(0)
+            for i in range(6):
+                for v in (arb(c[i]) - arb(lo[i]), arb(hi[i]) - arb(c[i])):
+                    if v > exc: exc = v
+            if phase not in need or exc > need[phase]:
+                need[phase] = exc
+        used = {}
+        for phase, exc in need.items():
+            fits = [t for t in tube.get("tubes", []) if t.get("phase", 0) == phase and arb(t["radius"]) >= exc]
+            if fits:
+                used[phase] = min(fits, key=lambda t: t["radius"])
+        check("every root piece excluded as a tube lies, exactly, inside a certified tube "
+              "of its phase", bound and len(used) == len(need),
+              "%d pieces excluded, phases %s" % (len(excluded), sorted(need)))
+        floors = {}
+        for phase, t in used.items():
+            floors[phase] = lo_out(arb(E_ALT) - arb(t["shortfall_upper"]))
+        floor_in = min(floors.values()) if floors else None
+        tube_record = {
+            "excluded_root_pieces": len(excluded), "phases": sorted(need),
+            "certified_by": used,
+            "floor_inside_tubes": floor_in,
+            "target_minus_floor_inside": (target - floor_in) if floor_in is not None else None,
+            "statement": "inside the excluded tubes R >= E_alt - shortfall by dev/tube_arb.py, "
+                         "which is the number above, not the tape's target; the tape "
+                         "establishes R >= target on the complement only",
+        }
+    else:
+        check("no root piece is excluded, since the candidate has no tube theorem",
+              len(excluded) == 0, "%d excluded" % len(excluded))
+
     # ---- structural replay: every node, no arithmetic
-    target = meta["target"]
     pos = 0
-    leaves = splits = collapses = openleaf = 0
+    leaves = splits = collapses = openleaf = tubeleaf = 0
     bad_struct = 0
     sample_leaf, sample_collapse = [], []
     step_leaf = max(1, meta["leaves"] // sample_n)
@@ -574,7 +667,9 @@ def main():
     for ridx, (lo0, hi0) in enumerate(roots):
         in_shard = root_lo <= ridx < root_hi
         stack = [(list(lo0), list(hi0))]
-        while stack:
+        if bad_struct:
+            break          # a malformed tape is refused; no box after the fault is meaningful
+        while stack and not bad_struct:
             lo, hi = stack.pop()
             while True:
                 if pos >= len(tape):
@@ -583,36 +678,60 @@ def main():
                 op = tape[pos]; pos += 1
                 if op == LEAF_BOUND:
                     leaves += 1
-                    if check_all and in_shard and (limit == 0 or acc["checked"] < limit):
-                        leaf_arith(tuple(lo), tuple(hi))
-                    elif leaves % step_leaf == 0 and len(sample_leaf) < sample_n:
+                    if in_shard:
+                        shard["leaves"] += 1
+                        if check_all:
+                            if limit == 0 or acc["checked"] < limit:
+                                leaf_arith(tuple(lo), tuple(hi), ridx, pos - 1)
+                            else:
+                                shard["skipped_leaf"] += 1
+                    # sampling belongs to sample mode only: in --all mode nothing is
+                    # collected outside the shard (a review found out-of-shard samples
+                    # added to the shard's totals, 217 extra leaves on shard 0)
+                    if not check_all and leaves % step_leaf == 0 and len(sample_leaf) < sample_n:
                         sample_leaf.append((tuple(lo), tuple(hi)))
                     break
-                if op in (LEAF_TUBE, LEAF_OPEN):
+                if op == LEAF_OPEN:
                     leaves += 1
-                    if op == LEAF_OPEN:
-                        openleaf += 1
+                    openleaf += 1
+                    break
+                if op == LEAF_TUBE:
+                    # a claim with no certificate behind it: the emitter never writes
+                    # one (tube exclusion is done at the root partition, bound above)
+                    leaves += 1
+                    tubeleaf += 1
+                    bad_struct += 1
                     break
                 k = op & 0x07
+                if k > 5 or op >= LEAF_OPEN + 1:
+                    bad_struct += 1
+                    break
                 if op < OP_LO:                       # split
-                    if not (hi[k] > lo[k]):
-                        bad_struct += 1
                     mid = (lo[k] + hi[k]) / 2
-                    if not (lo[k] <= mid <= hi[k]):
+                    if not (hi[k] > lo[k] and lo[k] <= mid <= hi[k]):
                         bad_struct += 1
+                        break
                     splits += 1
                     right = (list(lo), list(hi)); right[0][k] = mid
                     stack.append((right[0], right[1]))
                     hi = list(hi); hi[k] = mid
                     continue
                 if op < LEAF_BOUND:                  # collapse
+                    if not (hi[k] > lo[k]):
+                        bad_struct += 1
+                        break
                     collapses += 1
-                    if check_all and in_shard and (limit == 0 or acc["checked"] < limit):
-                        coll_arith(tuple(lo), tuple(hi), k, 'lo' if op < OP_HI else 'hi')
-                    elif collapses % step_coll == 0 and len(sample_collapse) < sample_n:
-                        sample_collapse.append((tuple(lo), tuple(hi), k,
-                                                'lo' if op < OP_HI else 'hi'))
-                    if op < OP_HI:
+                    side = 'lo' if op < OP_HI else 'hi'
+                    if in_shard:
+                        shard["coll"] += 1
+                        if check_all:
+                            if limit == 0 or acc["checked"] < limit:
+                                coll_arith(tuple(lo), tuple(hi), k, side, ridx, pos - 1)
+                            else:
+                                shard["skipped_coll"] += 1
+                    if not check_all and collapses % step_coll == 0 and len(sample_collapse) < sample_n:
+                        sample_collapse.append((tuple(lo), tuple(hi), k, side))
+                    if side == 'lo':
                         lo = list(lo); lo[k] = hi[k]
                     else:
                         hi = list(hi); hi[k] = lo[k]
@@ -620,9 +739,10 @@ def main():
                 bad_struct += 1
                 break
 
-    check("the tape is consumed exactly, with nothing left over",
-          pos == len(tape) and bad_struct == 0,
-          "%d of %d bytes, %d structural faults" % (pos, len(tape), bad_struct))
+    check("the tape is consumed exactly, with nothing left over, every opcode known "
+          "and no tube leaf claimed",
+          pos == len(tape) and bad_struct == 0 and tubeleaf == 0,
+          "%d of %d bytes, %d structural faults, %d tube leaves" % (pos, len(tape), bad_struct, tubeleaf))
     check("the node counts agree with the metadata",
           leaves == meta["leaves"] and splits == meta["splits"]
           and collapses == meta["collapses"],
@@ -631,11 +751,13 @@ def main():
           openleaf == 0)
 
     # ---- arithmetic, on the sample (or, with --all, already done inline)
+    if bad_struct:
+        sample_leaf, sample_collapse = [], []     # nothing after a structural fault is a box
     cnt = list(acc["leaf"])
     for lo, hi in sample_leaf:
         cnt[verdict_leaf(lo, hi, refine)] += 1
     confirmed, unresolved, refuted = cnt
-    check("no sampled discharged leaf is refuted by Arb", refuted == 0,
+    check("no checked discharged leaf is refuted by Arb", refuted == 0,
           "%d confirmed outright, %d beyond this checker's resolution, %d refuted"
           % (confirmed, unresolved, refuted))
 
@@ -643,7 +765,7 @@ def main():
     for lo, hi, k, side in sample_collapse:
         gcnt[verdict_coll(lo, hi, k, side, refine)] += 1
     gconf, gunres, gref = gcnt
-    check("no sampled collapse is refuted by Arb", gref == 0,
+    check("no checked collapse is refuted by Arb", gref == 0,
           "%d confirmed outright, %d beyond this checker's resolution, %d refuted"
           % (gconf, gunres, gref))
 
@@ -653,48 +775,86 @@ def main():
         cpath = os.path.join(here, (out_name or "sweep_proof_arb.results.json").replace(".json", ".conflicts.json"))
         json.dump(CONFLICTS[:200], open(cpath, "w"), indent=1)
         print("conflicts written to", cpath)
+
+    whole = root_lo == 0 and root_hi >= len(roots)
+    if check_all:
+        # A complete verification is one with nothing left over, and it says so by
+        # failing otherwise.  The previous version exited 0 with unresolved obligations,
+        # the sample-mode criterion (no refutation) carried over; a review's one-leaf
+        # tape came back "8 checks, 0 failed" having confirmed nothing.
+        check("every arithmetic obligation in the shard was taken on (no --limit cut the run short)",
+              shard["skipped_leaf"] == 0 and shard["skipped_coll"] == 0,
+              "%d leaves and %d collapses skipped" % (shard["skipped_leaf"], shard["skipped_coll"]))
+        check("the verdicts account for exactly the shard's obligations",
+              sum(acc["leaf"]) + shard["skipped_leaf"] == shard["leaves"]
+              and sum(acc["coll"]) + shard["skipped_coll"] == shard["coll"],
+              "%d leaves, %d collapses in roots %d:%d" % (shard["leaves"], shard["coll"], root_lo, min(root_hi, len(roots))))
+        check("every obligation taken on is confirmed outright: none is beyond this checker's resolution",
+              unresolved == 0 and gunres == 0,
+              "%d leaves, %d collapses unresolved" % (unresolved, gunres))
+    inputs_end = arb_provenance.hash_inputs(sources)
+    check("no declared input changed while the run was in progress (hashes at start and end agree)",
+          inputs_end == inputs_start,
+          ", ".join(k for k in inputs_start if inputs_end.get(k) != inputs_start[k]) or "all stable")
+
     bad = [x for x in CHECKS if not x[1]]
     print("\n%d checks, %d failed" % (len(CHECKS), len(bad)))
     n_leaf_checked = sum(acc["leaf"]) if check_all else len(sample_leaf)
     n_coll_checked = sum(acc["coll"]) if check_all else len(sample_collapse)
     print("Structure is checked for all %d nodes; arithmetic on %d leaves and %d "
           "collapses." % (len(tape), n_leaf_checked, n_coll_checked))
-    if not bad:
-        json.dump({
-            "what": "independent replay and partial Arb check of the sweep's "
-                    "subdivision proof",
-            "engine": "python-flint / Arb, %d bits" % ctx.prec,
-            "inputs": arb_provenance.hash_inputs(sources),
-            "mode": "every node, inline" if check_all else "sample",
-            "candidate": candidate,
-            "arithmetic_checked": (sum(acc["leaf"]) + sum(acc["coll"])) if check_all
-                                  else len(sample_leaf) + len(sample_collapse),
-            "refine_depth": refine,
-            "sub_boxes_evaluated": acc["sub"],
-            "roots_shard": roots_opt,
-            # Two commands, and only the first is a replay of THIS transcript.
-            # dev/check_arb.js executes `replay`, so it must not write a repo
-            # file that is also a declared input -- regenerating sweep_proof.json
-            # restamps its commit and leaves the worktree dirty after every suite
-            # run.  Rebuilding the tape is a separate, rarer act, so it gets its
-            # own field: recorded for whoever wants it, never run by the checker.
-            "replay": "python3 dev/sweep_proof_arb.py",
-            "tape_replay": "node dev/sweep_proof.js 1.6 0.008",
-            "tape_sha256": digest,
-            "nodes": len(tape), "leaves": leaves, "splits": splits,
-            "collapses": collapses,
-            "structure_checked": "all nodes",
-            "leaf_sample": {"size": (sum(acc["leaf"]) if check_all else len(sample_leaf)), "confirmed": confirmed,
-                            "beyond_resolution": unresolved, "refuted": refuted},
-            "collapse_sample": {"size": (sum(acc["coll"]) if check_all else len(sample_collapse)), "confirmed": gconf,
-                                "beyond_resolution": gunres, "refuted": gref},
-            "not_established": "that the unsampled nodes' arithmetic claims hold, "
-                               "nor the sampled ones whose margin is finer than a "
-                               "straightforward Arb enclosure can resolve",
-            "checks": [{"name": n, "ok": ok} for n, ok in CHECKS],
-        }, open(os.path.join(here, out_name or "sweep_proof_arb.results.json"), "w"),
-            indent=2, sort_keys=True)
-        print("wrote dev/" + (out_name or "sweep_proof_arb.results.json"))
+    if not check_all:
+        status = "sample"
+    elif bad:
+        status = "incomplete"
+    elif whole:
+        status = "complete"
+    else:
+        status = "shard complete (roots %d:%d of %d)" % (root_lo, min(root_hi, len(roots)), len(roots))
+    print("status:", status)
+    el = time.time() - acc["started"]
+    json.dump({
+        "what": "independent replay and Arb check of the sweep's subdivision proof",
+        "status": status,
+        "engine": "python-flint / Arb, %d bits" % ctx.prec,
+        "inputs": inputs_start,
+        "inputs_hashed": "at start, before any work; re-hashed at the end and compared",
+        "sources_unchanged_during_run": inputs_end == inputs_start,
+        "options": options,
+        "mode": "every node, inline" if check_all else "sample",
+        "candidate": candidate,
+        "arithmetic_checked": (sum(acc["leaf"]) + sum(acc["coll"])) if check_all
+                              else len(sample_leaf) + len(sample_collapse),
+        "refine_depth": refine,
+        "sub_boxes_evaluated": acc["sub"],
+        "roots_shard": roots_opt,
+        "roots_total": len(roots),
+        "shard_obligations": {"leaves": shard["leaves"], "collapses": shard["coll"],
+                              "skipped_leaves": shard["skipped_leaf"], "skipped_collapses": shard["skipped_coll"]}
+                             if check_all else None,
+        "unresolved_obligations": acc["unresolved"] if check_all else None,
+        "tube": tube_record,
+        # The replay is THIS run's command, options included.  dev/check_arb.js
+        # executes the default one; rebuilding the tape is a separate act.
+        "replay": ("python3 dev/sweep_proof_arb.py " + " ".join(args)).rstrip(),
+        "tape_replay": "node dev/sweep_proof.js %s %s" % (meta["cube"], meta["tubeRadius"])
+                       + (" --candidate=%s" % candidate if "candidate" in meta else ""),
+        "tape_sha256": digest,
+        "nodes": len(tape), "leaves": leaves, "splits": splits,
+        "collapses": collapses,
+        "structure_checked": "all nodes",
+        "leaf_sample": {"size": (sum(acc["leaf"]) if check_all else len(sample_leaf)), "confirmed": confirmed,
+                        "beyond_resolution": unresolved, "refuted": refuted},
+        "collapse_sample": {"size": (sum(acc["coll"]) if check_all else len(sample_collapse)), "confirmed": gconf,
+                            "beyond_resolution": gunres, "refuted": gref},
+        "not_established": ("nothing is left unestablished by this run within its shard"
+                            if (check_all and not bad) else
+                            "that the unsampled nodes' arithmetic claims hold, nor the "
+                            "sampled ones whose margin is finer than this checker resolves"),
+        "checks": [{"name": n, "ok": ok} for n, ok in CHECKS],
+    }, open(os.path.join(here, out_name or "sweep_proof_arb.results.json"), "w"),
+        indent=2, sort_keys=True)
+    print("wrote dev/" + (out_name or "sweep_proof_arb.results.json"))
     return 1 if bad else 0
 
 

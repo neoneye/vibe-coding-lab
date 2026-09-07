@@ -24,6 +24,20 @@ each piece and certified the same way.
 Every breakpoint here is certified by an interval Newton test: a unique root in
 an explicit bracket, refined until strict containment stops holding, which is
 the resolution limit and not a failure.
+
+Two things a review (COMMIT_REVIEW_69d3f99) found wanting, both repaired here.
+The hull of the endpoint and breakpoint values used to be taken through Python
+floats -- `float(v.lower())` rounds to NEAREST, so a range could exclude the
+exact value by an ulp; the reported point w(0.5) sat 1.9e-17 ABOVE the true
+one.  Hulls are now formed from the exact endpoints of the balls, and the
+breakpoints enter as their certified balls, not their float midpoints.  And the
+"exact range" argument needs every critical point to be in the table, which the
+sign scan that finds the roots of w'' did not establish.  `coverage` now proves
+it: the gaps between consecutive certified balls are shown zero-free by
+interval bisection, and the piece touching a ball by strict monotonicity of the
+function across the hull of ball and piece (its derivative excludes zero there,
+so the ball's one certified zero is the only one).  A Pieces object refuses to
+construct if either coverage proof fails.
 """
 
 import json
@@ -114,20 +128,61 @@ def weight_jet(x, n):
     return out
 
 
-def weight_d(x):
+def _sd(z):
+    """sinc'(z) = (z cos z - sin z)/z^2, with the alternating series where the ball
+    contains 0: -z/3 + z^3/30 - z^5/840 + ..., remainder bounded by the first
+    omitted term (terms decrease for |z| < 6)."""
+    if arb(0) in z:
+        m = max(abs(float(z.lower())), abs(float(z.upper())))
+        if m >= 4:
+            raise ValueError("series branch of sinc' needs a small ball")
+        return (-z / 3 + z ** 3 / 30 - z ** 5 / 840) + arb(0, m ** 7 / 45360)
+    return (z * z.cos() - z.sin()) / (z * z)
+
+
+def _sd2(z):
+    """sinc''(z) = (2 sin z - 2 z cos z - z^2 sin z)/z^3; series near 0:
+    -1/3 + z^2/10 - z^4/168 + z^6/6480 - z^8/443520 + ..."""
+    if arb(0) in z:
+        m = max(abs(float(z.lower())), abs(float(z.upper())))
+        if m >= 4:
+            raise ValueError("series branch of sinc'' needs a small ball")
+        return ((-arb(1) / 3 + z ** 2 / 10 - z ** 4 / 168 + z ** 6 / 6480)
+                + arb(0, m ** 8 / 443520))
+    return (2 * z.sin() - 2 * z * z.cos() - z * z * z.sin()) / (z * z * z)
+
+
+def _sinc_parts(x):
     _init()
     r = arb(2).sqrt()
     tp = 2 * arb.pi()
     zl = (r - tp * x) / 2
     zr = (r + tp * x) / 2
+    return zl, zr
+
+
+def weight_d(x):
+    """w' = 2 K K' / K0^2 through the sinc form, enclosed at every x."""
+    zl, zr = _sinc_parts(x)
     k = (zl.sinc() + zr.sinc()) / 2
-    def sd(z):
-        if arb(0) in z:
-            m = max(abs(float(z.lower())), abs(float(z.upper())))
-            return (-z / 3 + z ** 3 / 30 - z ** 5 / 840) + arb(0, m ** 7 / 45360)
-        return (z * z.cos() - z.sin()) / (z * z)
-    kp = arb.pi() * (sd(zr) - sd(zl)) / 2
+    kp = arb.pi() * (_sd(zr) - _sd(zl)) / 2
     return 2 * k * kp / (K0 * K0)
+
+
+def weight_dd(x):
+    """w'' = 2 (K'^2 + K K'') / K0^2 through the sinc form -- defined and enclosed
+    at every x, the removable singularity of the closed form included.  The jet
+    version (`weight_dd_jet`) is kept for the Newton certification, which only
+    ever runs at x >= 1.05."""
+    zl, zr = _sinc_parts(x)
+    k = (zl.sinc() + zr.sinc()) / 2
+    kp = arb.pi() * (_sd(zr) - _sd(zl)) / 2
+    kpp = arb.pi() ** 2 * (_sd2(zr) + _sd2(zl)) / 2
+    return 2 * (kp * kp + k * kpp) / (K0 * K0)
+
+
+def weight_ddd(x):
+    return weight_jet(x, 4)[3]
 
 
 def _newton(f, fp, x0, tol=1e-100, steps=200):
@@ -218,8 +273,127 @@ def maxima(zs):
     return out
 
 
-def weight_dd(x):
+def weight_dd_jet(x):
     return weight_jet(x, 3)[2]
+
+
+def ball(lo, hi):
+    """The interval [lo, hi] (exact arbs, lo <= hi) as a ball that contains it: the
+    rounded midpoint keeps its own radius, and the half-width is rounded up."""
+    m = (lo + hi) / 2
+    r = (hi - lo) / 2
+    return m + arb(0, float(r.upper()) * (1 + 1e-12) + 1e-300)
+
+
+def hull(vals):
+    """The hull of balls from their EXACT endpoints (arb.lower()/upper() are exact
+    arbs and compare exactly).  No float conversion anywhere, so the result
+    contains every point of every input -- the property the float version lacked."""
+    if not vals:
+        raise ValueError("hull of no balls")
+    lo = hi = None
+    for v in vals:
+        a, b = v.lower(), v.upper()
+        if lo is None or a < lo:
+            lo = a
+        if hi is None or b > hi:
+            hi = b
+    return ball(lo, hi)
+
+
+def _split_point(lo, hi):
+    m = arb(((lo + hi) / 2).mid())
+    return m if (lo < m and m < hi) else None
+
+
+def _no_zero(h, lo, hi, depth=0, max_depth=60):
+    """h has no zero on [lo, hi]: its enclosure excludes 0, or both halves do."""
+    try:
+        if arb(0) not in h(ball(lo, hi)):
+            return True
+    except (ValueError, ZeroDivisionError):
+        pass
+    if depth >= max_depth:
+        return False
+    m = _split_point(lo, hi)
+    if m is None:
+        return False
+    return (_no_zero(h, lo, m, depth + 1, max_depth)
+            and _no_zero(h, m, hi, depth + 1, max_depth))
+
+
+def _clear_beside(h, hp, X, lo, hi, left, depth=0, max_depth=60):
+    """[lo, hi] touches the root ball X (X on the left if `left`).  It is zero-free
+    if h' excludes 0 on hull(X, [lo, hi]): h is then strictly monotone across the
+    hull, X holds one zero of h by its certification, and that zero is the only
+    one.  Failing that, the half away from X is tried as an ordinary piece and the
+    half touching X recurses."""
+    H = hull([X, ball(lo, hi)])
+    try:
+        if arb(0) not in hp(H):
+            return True
+    except (ValueError, ZeroDivisionError):
+        pass
+    if depth >= max_depth:
+        return False
+    m = _split_point(lo, hi)
+    if m is None:
+        return False
+    if left:
+        return (_no_zero(h, m, hi)
+                and _clear_beside(h, hp, X, lo, m, left, depth + 1, max_depth))
+    return (_no_zero(h, lo, m)
+            and _clear_beside(h, hp, X, m, hi, left, depth + 1, max_depth))
+
+
+def coverage(h, hp, balls, limit):
+    """Prove that every zero of h in [0, limit] lies in one of `balls`, each a
+    certified enclosure of exactly one zero of h.  The balls must be disjoint and
+    sorted; a gap between consecutive balls is split in three, the outer thirds
+    handled by `_clear_beside` and the middle by `_no_zero`.  Returns None when the
+    proof succeeds, else a description of the gap that failed."""
+    limit = arb(limit)
+    cur, curX = arb(0), None
+    for X in balls:
+        a, b = X.lower(), X.upper()
+        if not (a > cur) and curX is not None:
+            return "balls overlap or are unsorted at %s" % X.str(8)
+        if a > cur:
+            hi = a if a <= limit else limit
+            if not _gap(h, hp, curX, cur, X if a <= limit else None, hi):
+                return "zero-freeness not established on [%s, %s]" % (cur.str(8), hi.str(8))
+        if a > limit:
+            return None
+        cur, curX = b, X
+    if cur < limit:
+        if not _gap(h, hp, curX, cur, None, limit):
+            return "zero-freeness not established on [%s, %s]" % (cur.str(8), limit.str(8))
+    return None
+
+
+def _gap(h, hp, Xl, lo, Xr, hi):
+    if not (lo < hi):
+        return True
+    t1 = _split_point(lo, hi)
+    if t1 is None:
+        return False
+    # thirds: [lo, p], [p, q], [q, hi]
+    p = arb((lo + (hi - lo) / 3).mid())
+    q = arb((lo + 2 * (hi - lo) / 3).mid())
+    if not (lo < p < q < hi):
+        p = q = t1
+    ok = True
+    if Xl is not None:
+        ok = ok and _clear_beside(h, hp, Xl, lo, p, True)
+    else:
+        ok = ok and _no_zero(h, lo, p)
+    if p < q:
+        ok = ok and _no_zero(h, p, q)
+    if Xr is not None:
+        ok = ok and _clear_beside(h, hp, Xr, q, hi, False)
+    else:
+        ok = ok and _no_zero(h, q, hi)
+    return ok
 
 
 def wd_breaks(zs, ms, samples=24):
@@ -250,6 +424,17 @@ def wd_breaks(zs, ms, samples=24):
     return sorted(out, key=lambda t: float(t.mid()))
 
 
+_PIECES = {}
+
+
+def pieces(limit=30.0):
+    """One Pieces per limit per process: the coverage proofs take seconds and every
+    checker run, control included, would otherwise repeat them."""
+    if limit not in _PIECES:
+        _PIECES[limit] = Pieces(limit)
+    return _PIECES[limit]
+
+
 class Pieces:
     """Breakpoint tables, and the exact ranges they give."""
 
@@ -261,31 +446,44 @@ class Pieces:
         wbreaks = sorted([float(t.mid()) for t in self.zs]
                          + [float(t.mid()) for t in self.ms])
         self.wbreaks = [b for b in wbreaks if b <= limit]
-        db = [t for t in wd_breaks(self.zs, self.ms)
-              if t is not None and float(t.mid()) <= limit]
-        self.dbreaks_arb = db
-        self.dbreaks = [float(t.mid()) for t in db]
+        db = [t for t in wd_breaks(self.zs, self.ms) if t is not None]
+        self.dbreaks_arb = sorted(db, key=lambda t: float(t.mid()))
+        self.dbreaks = [float(t.mid()) for t in self.dbreaks_arb if float(t.mid()) <= limit]
+        # The certified balls the ranges use: the zeros of w' (0 itself, since w is
+        # even, then the zeros and maxima of K) and the zeros of w''.  Both lists are
+        # proved complete on [0, limit] before any range is served.
+        self.w_roots = sorted([arb(0)] + list(self.zs) + list(self.ms),
+                              key=lambda t: float(t.mid()))
+        self.w_coverage = coverage(weight_d, weight_dd, self.w_roots, limit)
+        if self.w_coverage is not None:
+            raise RuntimeError("monotone pieces of w not proved complete: " + self.w_coverage)
+        self.wd_coverage = coverage(weight_dd, weight_ddd, self.dbreaks_arb, limit)
+        if self.wd_coverage is not None:
+            raise RuntimeError("monotone pieces of w' not proved complete: " + self.wd_coverage)
 
     @staticmethod
     def _hull(vals):
-        lo = min(float(v.lower()) for v in vals)
-        hi = max(float(v.upper()) for v in vals)
-        mid = (arb(lo) + arb(hi)) / 2
-        rad = (arb(hi) - arb(lo)) / 2
-        return arb(mid.mid(), float(rad.upper()) * (1 + 1e-12) + 1e-300)
+        return hull(vals)
 
     def _range(self, f, breaks, a, b):
+        """The range of f over [a, b], a <= b floats, f monotone between consecutive
+        `breaks` (certified balls around its critical points): the hull of the
+        endpoint values and of f over every ball that meets (a, b).  A ball that
+        straddles an endpoint is included whole; that can only widen the result."""
+        if not (0 <= a <= b <= self.limit):
+            raise ValueError("range outside the certified table [0, %g]: [%r, %r]" % (self.limit, a, b))
         vals = [f(arb(a)), f(arb(b))]
+        A, B = arb(a), arb(b)
         for t in breaks:
-            if a < t < b:
-                vals.append(f(arb(t)))
-        return self._hull(vals)
+            if t.upper() > A and t.lower() < B:
+                vals.append(f(t))
+        return hull(vals)
 
     def w_range(self, a, b):
-        return self._range(weight, self.wbreaks, a, b)
+        return self._range(weight, self.w_roots, a, b)
 
     def wd_range(self, a, b):
-        return self._range(weight_d, self.dbreaks, a, b)
+        return self._range(weight_d, self.dbreaks_arb, a, b)
 
 
 CHECKS = []
@@ -318,6 +516,25 @@ def main():
     check("every w' breakpoint is certified, with w'' zero on its enclosure",
           all(arb(0) in weight_dd(t) for t in P.dbreaks_arb),
           "%d breakpoints" % len(P.dbreaks))
+    # Completeness, which the sign scan does not give: the gaps between consecutive
+    # certified balls are proved zero-free, so the tables hold EVERY critical point
+    # and the hull over endpoints and table entries is the exact range.
+    check("every zero of w' in [0, 30] lies in a certified ball, so the monotone "
+          "pieces of w are complete", P.w_coverage is None,
+          "%d balls" % len([t for t in P.w_roots if float(t.mid()) <= P.limit]))
+    check("every zero of w'' in [0, 30] lies in a certified ball, so the monotone "
+          "pieces of w' are complete", P.wd_coverage is None,
+          "%d balls" % len(P.dbreaks))
+    # A review found w_range(0.5, 0.5) sitting 1.9e-17 ABOVE the direct evaluation:
+    # the hull went through nearest-rounded floats.  The direct evaluation is now
+    # contained, as a ball, in the point range.
+    pts = [0.5, 1.0, 1.85, 2.5, 7.25, 12.0, 29.5]
+    check("a point range contains the direct Arb evaluation there, as a ball",
+          all(weight(arb(x)) in P.w_range(x, x) and weight_d(arb(x)) in P.wd_range(x, x)
+              for x in pts), "%d points" % len(pts))
+    check("and the sinc form of w'' agrees with the series-jet form away from the "
+          "singularity", all(weight_dd(arb(x)).overlaps(weight_dd_jet(arb(x)))
+                             for x in (0.05, 1.3, 4.7, 21.2)))
 
     # the ranges are ranges: sampled values must lie inside
     bad = 0
@@ -379,6 +596,8 @@ def main():
             "zero_equation": "b tan b = a tan a, b = pi x, a = 1/sqrt(2)",
             "zeros": len(P.zs), "maxima": len(P.ms),
             "w_breakpoints": len(P.wbreaks), "wd_breakpoints": len(P.dbreaks),
+            "coverage_proved": "every zero of w' and of w'' on [0, limit] lies in a "
+                               "certified ball; gaps proved zero-free by interval bisection",
             # The certified positions themselves, so a consumer without Arb can
             # check its own breakpoints against them.  Each w' breakpoint also
             # carries a certified bound on |w'''| over a 1e-6 neighbourhood: at a

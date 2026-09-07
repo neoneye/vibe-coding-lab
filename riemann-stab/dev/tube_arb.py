@@ -187,7 +187,14 @@ def smallest_eigenvalue_lower(H, n, hi=6.0, steps=36):
     return arb(lo)
 
 
-def certify(radius, cuts):
+# The sweep excludes the tube as a FLOAT box: its cut points fl(c - rho), fl(c + rho)
+# round outward by 6.9e-18, so the excluded region sticks out of the exact
+# radius-0.008 tube by that much.  The theorem is therefore certified at a radius
+# that covers the float box, compared exactly by the tape checker.
+R_WIDE = 0.00800000000000001
+
+
+def certify(radius, cuts, phase=0):
     cand, base, mats, J = load()
     knots = cand["knots"]
     # The BLOCK functional's linear term is (sum g)/p, not (6/p)(sum g): the
@@ -196,7 +203,11 @@ def certify(radius, cuts):
     # (L+H)/2 * 5/3000 -- the test caught it because the gradient at a critical
     # point is supposed to vanish and did not.
     alpha = arb(1) / 3000
-    centre = [arb(LOW) if i % 2 == 0 else arb(HIGH) for i in range(6)]
+    # phase 1 is the other alternating block (HIGH, LOW, ...).  The sweep excludes
+    # BOTH phases' tubes, and the pair candidate is not reversal-symmetric (1188 of
+    # its bilinear entries differ from their mirror), so the second phase needs its
+    # own certificate rather than a symmetry argument.
+    centre = [arb(LOW) if (i + phase) % 2 == 0 else arb(HIGH) for i in range(6)]
 
     clear = min(min(clearance(knots, float(x.mid())) for x in centre),
                 min(clearance(base["knots"], float(x.mid())) for x in centre))
@@ -232,7 +243,7 @@ def certify(radius, cuts):
     ealt = arb(E_ALT)
     deficit = ealt - value
     worst = (-deficit - grad_norm * grad_norm / (2 * lam)) if lam > 0 else None
-    return {"holds": bool(lam > 0), "radius": radius, "cuts": cuts,
+    return {"holds": bool(lam > 0), "radius": radius, "cuts": cuts, "phase": phase,
             "clearance": clear, "lambda": lam, "value": value,
             "grad_norm": grad_norm, "deficit": deficit, "worst": worst}
 
@@ -270,14 +281,18 @@ def main():
           float(sq.sqrt().upper()) < 1e-14, "|grad| <= %.3e" % float(sq.sqrt().upper()))
 
     results = []
-    for radius, cuts in ((0.003, 3), (0.005, 4), (0.008, 6)):
-        r = certify(radius, cuts)
+    for radius, cuts, phase in ((0.003, 3, 0), (0.005, 4, 0), (R_WIDE, 6, 0), (R_WIDE, 6, 1)):
+        r = certify(radius, cuts, phase)
         results.append((radius, r))
-        check("the Hessian is positive definite over the radius-%g tube" % radius,
-              r["holds"], "lambda >= %.6f" % float(r["lambda"].lower()))
+        check("the Hessian is positive definite over the radius-%r tube, phase %d"
+              % (radius, phase), r["holds"], "lambda >= %.6f" % float(r["lambda"].lower()))
         check("so R >= E_alt - %.3e there" % float((-r["worst"]).upper()),
               float((-r["worst"]).upper()) < 1e-10,
               "Arb, no tiling_rigorous.js anywhere in this file")
+    check("the wide radius covers the float box the sweep excludes: fl(c +- 0.008) "
+          "lies inside [c - R, c + R] exactly, both centres",
+          all(arb(c) - arb(R_WIDE) <= arb(c - 0.008) and arb(c + 0.008) <= arb(c) + arb(R_WIDE)
+              for c in (LOW, HIGH)))
 
     js = 1.163e-11
     best = min(float((-r["worst"]).upper()) for _, r in results)
@@ -296,7 +311,7 @@ def main():
             "inputs": arb_provenance.hash_inputs(SOURCES),
             "replay": "python3 dev/tube_arb.py   (needs python-flint)",
             "clearance": clear,
-            "tubes": [{"radius": radius, "cuts": r["cuts"],
+            "tubes": [{"radius": radius, "cuts": r["cuts"], "phase": r["phase"],
                        "lambda_lower": float(r["lambda"].lower()),
                        "shortfall_upper": float((-r["worst"]).upper())}
                       for radius, r in results],

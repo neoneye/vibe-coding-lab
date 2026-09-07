@@ -26,6 +26,7 @@ const UNITS = [
   {src: 'interface_arb.py', results: 'interface_arb.results.json'},
   {src: 'sweep_proof_arb.py', results: 'sweep_proof_arb.results.json'},
   {src: 'kernel_pieces_arb.py', results: 'kernel_pieces_arb.results.json'},
+  {src: 'sweep_proof_arb_controls.py', results: 'sweep_proof_arb_controls.results.json'},
   {src: 'staircase_arb.py', results: 'staircase_arb.results.json'}
 ];
 
