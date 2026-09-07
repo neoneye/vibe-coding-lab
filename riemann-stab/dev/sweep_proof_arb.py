@@ -408,6 +408,7 @@ def main():
     refine = int(opt("refine", "0"))     # verified subdivision depth for unresolved nodes
     sample_n = int(opt("sample", "220"))  # arithmetic sample size per node kind
     roots_opt = opt("roots", None)        # "a:b": with --all, do arithmetic only under roots a..b-1
+    dump_unresolved = opt("dump-unresolved", None)   # file to append unresolved boxes to (JSON lines)
     root_lo, root_hi = (0, 10**9)
     if roots_opt:
         root_lo, root_hi = [int(t) for t in roots_opt.split(":")]
@@ -469,12 +470,20 @@ def main():
         b = verdict_coll(tuple(lo2), tuple(hi), k, side, depth - 1)
         if b == 2: return 2
         return 0 if (a == 0 and b == 0) else 1
+    def dump(kind, lo, hi, k=None, side=None):
+        if dump_unresolved:
+            with open(os.path.join(here, dump_unresolved), "a") as f:
+                f.write(json.dumps({"kind": kind, "lo": list(lo), "hi": list(hi), "k": k, "side": side}) + "\n")
     def leaf_arith(lo, hi):
-        acc["leaf"][verdict_leaf(lo, hi, refine)] += 1
+        v = verdict_leaf(lo, hi, refine)
+        if v == 1: dump("leaf", lo, hi)
+        acc["leaf"][v] += 1
         acc["checked"] += 1
         if acc["checked"] % 20000 == 0: checkpoint()
     def coll_arith(lo, hi, k, side):
-        acc["coll"][verdict_coll(lo, hi, k, side, refine)] += 1
+        v = verdict_coll(lo, hi, k, side, refine)
+        if v == 1: dump("collapse", lo, hi, k, side)
+        acc["coll"][v] += 1
         acc["checked"] += 1
         if acc["checked"] % 20000 == 0: checkpoint()
     def checkpoint():
