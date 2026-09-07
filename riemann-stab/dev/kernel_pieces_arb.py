@@ -130,6 +130,17 @@ def weight_jet(x, n):
     return out
 
 
+def _abs_pow(z, n):
+    """|z|^n for a ball z not containing 0, from the exact endpoints of |z|.  Ball
+    multiplication of a wide ball by itself does not know its factors are equal:
+    (-1.745 +/- 0.82)^2 comes out as [-0.49, 6.58], straddling zero, and dividing by
+    it gave nan -- which left every collapse on a wide box unresolvable (found on
+    the first complete shard of the sharp tape, 2026-09-07)."""
+    a = abs(z)
+    lo, hi = a.lower(), a.upper()
+    return hull([lo ** n, hi ** n])
+
+
 def _sd(z):
     """sinc'(z) = (z cos z - sin z)/z^2, with the alternating series where the ball
     contains 0: -z/3 + z^3/30 - z^5/840 + ..., remainder bounded by the first
@@ -139,7 +150,7 @@ def _sd(z):
         if m >= 4:
             raise ValueError("series branch of sinc' needs a small ball")
         return (-z / 3 + z ** 3 / 30 - z ** 5 / 840) + arb(0, m ** 7 / 45360)
-    return (z * z.cos() - z.sin()) / (z * z)
+    return (z * z.cos() - z.sin()) / _abs_pow(z, 2)
 
 
 def _sd2(z):
@@ -151,7 +162,10 @@ def _sd2(z):
             raise ValueError("series branch of sinc'' needs a small ball")
         return ((-arb(1) / 3 + z ** 2 / 10 - z ** 4 / 168 + z ** 6 / 6480)
                 + arb(0, m ** 8 / 443520))
-    return (2 * z.sin() - 2 * z * z.cos() - z * z * z.sin()) / (z * z * z)
+    den = _abs_pow(z, 3)
+    if z.upper() < 0:
+        den = -den
+    return (2 * z.sin() - 2 * z * z.cos() - _abs_pow(z, 2) * z.sin()) / den
 
 
 def _sinc_parts(x):
