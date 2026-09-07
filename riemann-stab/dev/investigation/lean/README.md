@@ -1,13 +1,13 @@
 # The window-sum variant of `n_point_bound`, in Lean
 
-Branch `window-sum` of a clone of `teal-sea/zeta-lab` at `47d02411673f2a3f4bc07dde31c0b323459646ae`, subdirectory `lean/bridge` (Lean `v4.33.0-rc2`, Mathlib and `anthropics/zeta-23-lean@3635e74` at the manifest's pinned revisions). `window-sum.patch` is the full diff (373 added lines, nothing removed); `build-axioms.log` is the filtered output of `lake build Zeta23Ext.Bridge.Main` on that branch on 2026-09-07 (exit 0, no errors).
+Branch `window-sum` of a clone of `teal-sea/zeta-lab` at `47d02411673f2a3f4bc07dde31c0b323459646ae`, subdirectory `lean/bridge` (Lean `v4.33.0-rc2`, Mathlib and `anthropics/zeta-23-lean@3635e74` at the manifest's pinned revisions). `window-sum.patch` is the full diff (three files extended, two new modules, nothing removed; it applies cleanly to a fresh clone at that commit, checked 2026-09-08); `build-axioms.log` is the filtered output of the builds on that branch (exit 0, no errors).
 
 Reproduce:
 
 ```
 git clone https://github.com/teal-sea/zeta-lab && cd zeta-lab && git checkout 47d0241
 git apply <this dir>/window-sum.patch
-cd lean/bridge && PATH="$HOME/.elan/bin:$PATH" lake exe cache get && lake build Zeta23Ext.Bridge.Main
+cd lean/bridge && PATH="$HOME/.elan/bin:$PATH" lake exe cache get && lake build Zeta23Ext.Bridge.Main Zeta23Ext.Bridge.Signed Zeta23Ext.Bridge.SharpPotential
 ```
 
 ## What was added (upstream declarations untouched)
