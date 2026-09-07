@@ -36,6 +36,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 
 from flint import arb, ctx
 
@@ -213,8 +214,8 @@ class Cert:
     checker is a step towards and not a substitute for.
     """
 
-    def __init__(self, here):
-        cand = json.load(open(os.path.join(here, "tiling_pair.stationary.json")))
+    def __init__(self, here, candidate="tiling_pair.stationary.json"):
+        cand = json.load(open(os.path.join(here, candidate)))
         bundle = json.load(open(os.path.join(here, "tiling_additive.certificate.json")))
         certs = bundle["certificates"]
         self.base = next(e for e in (certs.values() if isinstance(certs, dict) else certs)
@@ -299,8 +300,93 @@ def check(name, ok, detail=""):
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
-    meta = json.load(open(os.path.join(here, "sweep_proof.json")))
+    args = sys.argv[1:]
+    def opt(name, default=None):
+        for a in args:
+            if a.startswith("--" + name + "="):
+                return a[len(name) + 3:]
+        return default
+    meta_name = opt("meta", "sweep_proof.json")
+    check_all = "--all" in args
+    limit = int(opt("limit", "0"))
+    refine = int(opt("refine", "0"))     # verified subdivision depth for unresolved nodes
+    out_name = opt("out", None)
+    meta = json.load(open(os.path.join(here, meta_name)))
+    candidate = meta.get("candidate", "tiling_pair.stationary.json")
+    sources = list(SOURCES)
+    if meta_name != "sweep_proof.json":
+        sources[sources.index("sweep_proof.json")] = meta_name
+    if candidate not in sources:
+        sources.append(candidate)
+    cert = Cert(here, candidate)
     tape = open(os.path.join(here, meta["tape"]), "rb").read()
+    # inline arithmetic (every node, or the first `limit`), with checkpoints
+    acc = {"leaf": [0, 0, 0], "coll": [0, 0, 0], "checked": 0, "started": time.time()}
+    def ckpt_path():
+        return os.path.join(here, (out_name or "sweep_proof_arb.results.json")
+                            .replace(".json", ".checkpoint.json"))
+    acc["sub"] = 0     # sub-boxes evaluated during verified subdivision
+    def widest(lo, hi):
+        k, w = -1, -1.0
+        for i in range(6):
+            if hi[i] - lo[i] > w: k, w = i, hi[i] - lo[i]
+        return k, w
+    def verdict_leaf(lo, hi, depth):
+        """0 confirmed, 1 unresolved, 2 refuted -- with verified subdivision to `depth`.
+        A refutation on any sub-box refutes the leaf (its minimum over the sub-box is
+        below the target); confirmation needs every sub-box confirmed."""
+        val, _ = cert.best_bound(lo, hi)
+        acc["sub"] += 1
+        if float(val.lower()) >= target: return 0
+        if float(val.upper()) < target: return 2
+        if depth == 0: return 1
+        k, w = widest(lo, hi)
+        if k < 0 or w <= 0: return 1
+        mid = (lo[k] + hi[k]) / 2
+        lo2 = list(lo); lo2[k] = mid
+        hi2 = list(hi); hi2[k] = mid
+        a = verdict_leaf(tuple(lo), tuple(hi2), depth - 1)
+        if a == 2: return 2
+        b = verdict_leaf(tuple(lo2), tuple(hi), depth - 1)
+        if b == 2: return 2
+        return 0 if (a == 0 and b == 0) else 1
+    def verdict_coll(lo, hi, k, side, depth):
+        _, grad = cert.best_bound(lo, hi)
+        acc["sub"] += 1
+        g = grad[k]
+        if side == 'hi' and float(g.lower()) > 0: return 0
+        if side == 'lo' and float(g.upper()) < 0: return 0
+        if (side == 'hi' and float(g.upper()) <= 0) or (side == 'lo' and float(g.lower()) >= 0): return 2
+        if depth == 0: return 1
+        kk, w = widest(lo, hi)
+        if kk < 0 or w <= 0: return 1
+        mid = (lo[kk] + hi[kk]) / 2
+        lo2 = list(lo); lo2[kk] = mid
+        hi2 = list(hi); hi2[kk] = mid
+        a = verdict_coll(tuple(lo), tuple(hi2), k, side, depth - 1)
+        if a == 2: return 2
+        b = verdict_coll(tuple(lo2), tuple(hi), k, side, depth - 1)
+        if b == 2: return 2
+        return 0 if (a == 0 and b == 0) else 1
+    def leaf_arith(lo, hi):
+        acc["leaf"][verdict_leaf(lo, hi, refine)] += 1
+        acc["checked"] += 1
+        if acc["checked"] % 20000 == 0: checkpoint()
+    def coll_arith(lo, hi, k, side):
+        acc["coll"][verdict_coll(lo, hi, k, side, refine)] += 1
+        acc["checked"] += 1
+        if acc["checked"] % 20000 == 0: checkpoint()
+    def checkpoint():
+        el = time.time() - acc["started"]
+        rec = {"what": "checkpoint of an inline Arb check of every node of a proof tape",
+               "meta": meta_name, "candidate": candidate, "checked": acc["checked"],
+               "leaf_confirmed_unresolved_refuted": list(acc["leaf"]),
+               "collapse_confirmed_unresolved_refuted": list(acc["coll"]),
+               "refine_depth": refine, "sub_boxes_evaluated": acc["sub"],
+               "seconds": round(el, 1), "per_node_ms": round(1000 * el / max(1, acc["checked"]), 3)}
+        json.dump(rec, open(ckpt_path(), "w"), indent=1)
+        print("  checkpoint: %d checked, leaves %s, collapses %s, %.1f s (%.3f ms/node)"
+              % (acc["checked"], acc["leaf"], acc["coll"], el, 1000 * el / max(1, acc["checked"])), flush=True)
     print("Arb, %d bits.  Checking a subdivision proof of %d nodes.\n"
           % (ctx.prec, len(tape)))
 
@@ -331,7 +417,9 @@ def main():
                 op = tape[pos]; pos += 1
                 if op == LEAF_BOUND:
                     leaves += 1
-                    if leaves % step_leaf == 0 and len(sample_leaf) < 220:
+                    if check_all and (limit == 0 or acc["checked"] < limit):
+                        leaf_arith(tuple(lo), tuple(hi))
+                    elif leaves % step_leaf == 0 and len(sample_leaf) < 220:
                         sample_leaf.append((tuple(lo), tuple(hi)))
                     break
                 if op in (LEAF_TUBE, LEAF_OPEN):
@@ -353,7 +441,9 @@ def main():
                     continue
                 if op < LEAF_BOUND:                  # collapse
                     collapses += 1
-                    if collapses % step_coll == 0 and len(sample_collapse) < 220:
+                    if check_all and (limit == 0 or acc["checked"] < limit):
+                        coll_arith(tuple(lo), tuple(hi), k, 'lo' if op < OP_HI else 'hi')
+                    elif collapses % step_coll == 0 and len(sample_collapse) < 220:
                         sample_collapse.append((tuple(lo), tuple(hi), k,
                                                 'lo' if op < OP_HI else 'hi'))
                     if op < OP_HI:
@@ -374,9 +464,9 @@ def main():
     check("no leaf was left open, so the subdivision terminated everywhere",
           openleaf == 0)
 
-    # ---- arithmetic, on the sample
-    cert = Cert(here)
-    confirmed = unresolved = refuted = 0
+    # ---- arithmetic, on the sample (or, with --all, already done inline)
+    confirmed, unresolved, refuted = acc["leaf"]
+    gconf, gunres, gref = acc["coll"]
     for lo, hi in sample_leaf:
         val, _ = cert.best_bound(lo, hi)
         if float(val.lower()) >= target:
@@ -389,7 +479,6 @@ def main():
           "%d confirmed outright, %d beyond this checker's resolution, %d refuted"
           % (confirmed, unresolved, refuted))
 
-    gconf = gunres = gref = 0
     for lo, hi, k, side in sample_collapse:
         _, grad = cert.best_bound(lo, hi)
         g = grad[k]
@@ -407,14 +496,22 @@ def main():
 
     bad = [x for x in CHECKS if not x[1]]
     print("\n%d checks, %d failed" % (len(CHECKS), len(bad)))
+    n_leaf_checked = sum(acc["leaf"]) if check_all else len(sample_leaf)
+    n_coll_checked = sum(acc["coll"]) if check_all else len(sample_collapse)
     print("Structure is checked for all %d nodes; arithmetic on %d leaves and %d "
-          "collapses." % (len(tape), len(sample_leaf), len(sample_collapse)))
+          "collapses." % (len(tape), n_leaf_checked, n_coll_checked))
     if not bad:
         json.dump({
             "what": "independent replay and partial Arb check of the sweep's "
                     "subdivision proof",
             "engine": "python-flint / Arb, %d bits" % ctx.prec,
-            "inputs": arb_provenance.hash_inputs(SOURCES),
+            "inputs": arb_provenance.hash_inputs(sources),
+            "mode": "every node, inline" if check_all else "sample",
+            "candidate": candidate,
+            "arithmetic_checked": (sum(acc["leaf"]) + sum(acc["coll"])) if check_all
+                                  else len(sample_leaf) + len(sample_collapse),
+            "refine_depth": refine,
+            "sub_boxes_evaluated": acc["sub"],
             # Two commands, and only the first is a replay of THIS transcript.
             # dev/check_arb.js executes `replay`, so it must not write a repo
             # file that is also a declared input -- regenerating sweep_proof.json
@@ -435,9 +532,9 @@ def main():
                                "nor the sampled ones whose margin is finer than a "
                                "straightforward Arb enclosure can resolve",
             "checks": [{"name": n, "ok": ok} for n, ok in CHECKS],
-        }, open(os.path.join(here, "sweep_proof_arb.results.json"), "w"),
+        }, open(os.path.join(here, out_name or "sweep_proof_arb.results.json"), "w"),
             indent=2, sort_keys=True)
-        print("wrote dev/sweep_proof_arb.results.json")
+        print("wrote dev/" + (out_name or "sweep_proof_arb.results.json"))
     return 1 if bad else 0
 
 

@@ -44,9 +44,10 @@ const A = require('./tiling_additive');
 const OP_SPLIT = 0x00, OP_LO = 0x08, OP_HI = 0x10;
 const LEAF_BOUND = 0x20, LEAF_TUBE = 0x21, LEAF_OPEN = 0x22;
 
-function emit(cube, rho, rigorous, target, out) {
+function emit(cube, rho, rigorous, target, out, candidateFile) {
   const here = __dirname;
-  const cand = JSON.parse(fs.readFileSync(path.join(here, 'tiling_pair.stationary.json'), 'utf8'));
+  const candName = candidateFile || 'tiling_pair.stationary.json';
+  const cand = JSON.parse(fs.readFileSync(path.join(here, candName), 'utf8'));
   const bundle = JSON.parse(fs.readFileSync(path.join(here, 'tiling_additive.certificate.json'), 'utf8'));
   const certs = bundle.certificates;
   const base = (Array.isArray(certs) ? certs : Object.values(certs))
@@ -116,6 +117,7 @@ function emit(cube, rho, rigorous, target, out) {
     seconds: +((Date.now() - started) / 1000).toFixed(1),
     commit: execSync('git rev-parse HEAD').toString().trim()
   };
+  if (candidateFile) meta.candidate = candName;
   fs.writeFileSync(out.replace(/\.bin$/, '.json'), JSON.stringify(meta, null, 2) + '\n');
   console.log(JSON.stringify(meta, null, 2));
 }
@@ -124,10 +126,13 @@ if (require.main === module) {
   const cube = parseFloat(process.argv[2] || '3');
   const rho = parseFloat(process.argv[3] || '0.008');
   const rigorous = process.argv.includes('--rigorous');
+  const opt = (k) => { const a = process.argv.find(x => x.startsWith('--' + k + '=')); return a ? a.slice(k.length + 3) : null; };
   const EALT = 0.003957393309109344;
+  const target = opt('target') ? parseFloat(opt('target')) : EALT;
+  const candidate = opt('candidate');
   const name = path.join(__dirname,
-    'sweep_proof' + (rigorous ? '.rigorous' : '') + '.bin');
-  emit(cube, rho, rigorous, EALT, name);
+    opt('out') || ('sweep_proof' + (rigorous ? '.rigorous' : '') + '.bin'));
+  emit(cube, rho, rigorous, target, name, candidate);
 }
 
 module.exports = {emit, OP_SPLIT, OP_LO, OP_HI, LEAF_BOUND, LEAF_TUBE, LEAF_OPEN};
