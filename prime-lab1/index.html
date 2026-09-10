@@ -33,6 +33,8 @@
   .seg button + button { border-left: 1px solid var(--axis); }
   .seg button:hover { color: var(--fg); }
   .seg button[aria-pressed=true] { background: var(--accent); color: #0b1a19; font-weight: 600; }
+  .seg button:disabled { opacity: .4; cursor: default; }
+  .seg button:disabled[aria-pressed=true] { background: var(--axis); color: var(--fg); }
   #view { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; cursor: grab; }
   #view.dragging { cursor: grabbing; }
   canvas { display: block; }
@@ -50,6 +52,12 @@
     <button data-mode="chart" aria-pressed="false">Chart</button>
     <button data-mode="factors" aria-pressed="false">Factors</button>
   </div>
+  <label id="yaxis-label">y-axis
+    <div class="seg" id="yaxis" role="group" aria-label="Y-axis scale">
+      <button data-scale="linear" aria-pressed="true">Linear</button>
+      <button data-scale="log" aria-pressed="false">Log</button>
+    </div>
+  </label>
   <label>from <input id="start" type="number" min="1" step="1" value="1"></label>
   <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
   <button id="apply">Go</button>
@@ -169,13 +177,37 @@ const PrimeLab = (() => {
   }
 
   // Map value v in [lo, hi] to a pixel row inside [top, top+height) with v=hi at the top.
-  function valueToRow(v, lo, hi, top, height) {
+  // scale: 'linear' (default) or 'log' (values must be positive; lo is floored at 1).
+  function valueToRow(v, lo, hi, top, height, scale) {
+    if (scale === 'log') {
+      lo = Math.max(1, lo); hi = Math.max(lo, hi); v = Math.max(lo, v);
+      const a = Math.log(lo), b = Math.log(hi);
+      if (b <= a) return top + height - 1;
+      return top + (b - Math.log(v)) / (b - a) * height;
+    }
     if (hi <= lo) return top + height - 1;
     return top + (hi - v) / (hi - lo) * height;
   }
 
+  // Tick values for a log axis over [lo, hi]: 1,2,5 per decade, thinned to powers of ten
+  // when there would be more than maxCount ticks.
+  function logTicks(lo, hi, maxCount) {
+    lo = Math.max(1, lo);
+    if (hi < lo) return [];
+    const full = [], decades = [];
+    for (let k = Math.floor(Math.log10(lo)); k <= Math.ceil(Math.log10(hi)); k++) {
+      const d = Math.pow(10, k);
+      if (d >= lo && d <= hi) decades.push(d);
+      for (const m of [1, 2, 5]) { const v = m * d; if (v >= lo && v <= hi) full.push(v); }
+    }
+    if (full.length <= maxCount) return full;
+    if (decades.length <= maxCount) return decades;
+    const every = Math.ceil(decades.length / maxCount);
+    return decades.filter((_, i) => i % every === 0);
+  }
+
   return { MAX_N, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
-           zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow, primeFactors, multiplesInRange };
+           zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow, logTicks, primeFactors, multiplesInRange };
 })();
 
 const XTests = {
@@ -226,6 +258,15 @@ const XTests = {
     eq(P.multiplesInRange(5, 10, 10), 1, 'single multiple');
     eq(P.multiplesInRange(5, 11, 14), 0, 'no multiples');
     eq(P.multiplesInRange(2, 7, 6), 0, 'empty range');
+    eq(P.valueToRow(100, 1, 100, 0, 100, 'log'), 0, 'log: top value at top');
+    eq(P.valueToRow(1, 1, 100, 0, 100, 'log'), 100, 'log: bottom value at bottom');
+    eq(Math.abs(P.valueToRow(10, 1, 100, 0, 100, 'log') - 50) < 1e-9, true, 'log: geometric middle at middle');
+    eq(P.valueToRow(10, 0.5, 100, 0, 100, 'log'), P.valueToRow(10, 1, 100, 0, 100, 'log'), 'log: lo floored at 1');
+    eq(P.logTicks(1, 100, 20), [1,2,5,10,20,50,100], 'log ticks 1..100');
+    eq(P.logTicks(3, 40, 20), [5,10,20], 'log ticks clipped to range');
+    eq(P.logTicks(1, 1e6, 8), [1,10,100,1000,1e4,1e5,1e6], 'log ticks thinned to decades');
+    eq(P.logTicks(1, 1e12, 5), [1,1000,1e6,1e9,1e12], 'log ticks thinned further');
+    eq(P.logTicks(50, 20, 5), [], 'log ticks empty range');
     const big = P.sieve(1_000_000); const cb = P.prefixCount(big);
     eq(cb[1_000_000], 78498, 'pi(1e6)');
     return true;
@@ -248,6 +289,7 @@ const XTests = {
   let sieveLimit = 0, S = null, C = null;
   let hoverN = -1;
   let mode = 'bars';
+  let yScale = 'linear';
 
   function ensureSieve(limit) {
     limit = Math.min(P.MAX_N, Math.max(1000, limit));
@@ -316,7 +358,7 @@ const XTests = {
 
     // side captions
     ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    const yNote = mode === 'bars' ? '' : '   ·   y = n';
+    const yNote = mode === 'bars' ? '' : (yScale === 'log' ? '   ·   y = n (log)' : '   ·   y = n');
     const fNote = mode === 'factors' ? ', dots at y = prime factors of n' : '';
     ctx.fillStyle = cComp; ctx.fillText('non-primes ↑   (gaps are the primes)' + yNote + fNote, 12, 10);
     ctx.fillStyle = cPrime; ctx.textBaseline = 'bottom'; ctx.fillText('primes ↓   (gaps are the non-primes)' + yNote, 12, H - 10);
@@ -383,7 +425,7 @@ const XTests = {
     if (view.ppn >= 2) {
       const drawN = (n, top, color) => {
         const xa = (n - 0.5 - view.x0) * ppnD, xb = (n + 0.5 - view.x0) * ppnD;
-        const ya = P.valueToRow(n - 0.5, lo, hi, top, halfD) - t, yb = P.valueToRow(n + 0.5, lo, hi, top, halfD) - t;
+        const ya = P.valueToRow(n - 0.5, lo, hi, top, halfD, yScale) - t, yb = P.valueToRow(n + 0.5, lo, hi, top, halfD, yScale) - t;
         ctx.fillStyle = color;
         P.plotSegment(xa, ya, xb, yb, plotAt);
       };
@@ -399,7 +441,7 @@ const XTests = {
             ctx.fillStyle = hot ? '#ffffff' : cPrime;
             for (const q of P.primeFactors(n)) {
               if (q < lo || q > hi) continue;
-              ctx.fillRect(x, Math.floor(P.valueToRow(q, lo, hi, topD, halfD)) - t, dotW, t);
+              ctx.fillRect(x, Math.floor(P.valueToRow(q, lo, hi, topD, halfD, yScale)) - t, dotW, t);
             }
           }
         }
@@ -421,7 +463,7 @@ const XTests = {
           const total = b - a + 1;
           for (const q of smallPrimes) {
             if (q < lo) continue;
-            const row = Math.floor(P.valueToRow(q, lo, hi, 0, halfD)) - t;
+            const row = Math.floor(P.valueToRow(q, lo, hi, 0, halfD, yScale)) - t;
             if (row < 0 || row >= rowAlpha.length) continue;
             rowAlpha[row] += P.multiplesInRange(q, a, b) / total;
           }
@@ -432,8 +474,8 @@ const XTests = {
           }
         }
         const mid = (a + b) / 2;
-        const yTop = Math.floor(P.valueToRow(mid, lo, hi, topD, halfD)) - t;
-        const yBot = Math.floor(P.valueToRow(mid, lo, hi, botD, halfD)) - t;
+        const yTop = Math.floor(P.valueToRow(mid, lo, hi, topD, halfD, yScale)) - t;
+        const yBot = Math.floor(P.valueToRow(mid, lo, hi, botD, halfD, yScale)) - t;
         ctx.fillStyle = `rgba(${cr_},${cg_},${cb_},${(0.15 + 0.85 * (1 - pf)).toFixed(3)})`;
         ctx.fillRect(px, yTop, 1, t);
         ctx.fillStyle = `rgba(${pr_},${pg_},${pb_},${(0.15 + 0.85 * pf).toFixed(3)})`;
@@ -445,12 +487,17 @@ const XTests = {
     // y-axis labels (value of n) on the left of each half
     ctx.fillStyle = css('--muted'); ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    const ystep = P.tickStep(half / span, 28);
-    const first = Math.max(ystep, Math.ceil(lo / ystep) * ystep);
+    let ticks;
+    if (yScale === 'log') ticks = P.logTicks(lo, hi, Math.max(2, Math.floor(half / 28)));
+    else {
+      ticks = [];
+      const ystep = P.tickStep(half / span, 28);
+      for (let v = Math.max(ystep, Math.ceil(lo / ystep) * ystep); v <= hi; v += ystep) ticks.push(v);
+    }
     ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
-    for (let v = first; v <= hi; v += ystep) {
+    for (const v of ticks) {
       for (const top of [topBase - half, botBase]) {
-        const y = Math.round(P.valueToRow(v, lo, hi, top, half)) + 0.5;
+        const y = Math.round(P.valueToRow(v, lo, hi, top, half, yScale)) + 0.5;
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(6, y); ctx.stroke();
         ctx.fillText(v.toLocaleString(), 9, y);
       }
@@ -522,11 +569,27 @@ const XTests = {
     mode = m;
     for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
     try { localStorage.setItem('prime-lab1.mode', m); } catch (_) {}
-    render();
+    syncScaleButtons(); render();
   }
   for (const b of modeButtons) b.addEventListener('click', () => setMode(b.dataset.mode));
   try { const m = localStorage.getItem('prime-lab1.mode'); if (m && modeButtons.some((b) => b.dataset.mode === m)) mode = m; } catch (_) {}
   for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+
+  const scaleButtons = [...document.querySelectorAll('#yaxis button')];
+  function syncScaleButtons() {
+    for (const b of scaleButtons) {
+      b.setAttribute('aria-pressed', String(b.dataset.scale === yScale));
+      b.disabled = mode === 'bars';            // bars have no y-axis
+    }
+  }
+  function setYScale(sc) {
+    yScale = sc;
+    try { localStorage.setItem('prime-lab1.yscale', sc); } catch (_) {}
+    syncScaleButtons(); render();
+  }
+  for (const b of scaleButtons) b.addEventListener('click', () => setYScale(b.dataset.scale));
+  try { const sc = localStorage.getItem('prime-lab1.yscale'); if (sc === 'linear' || sc === 'log') yScale = sc; } catch (_) {}
+  syncScaleButtons();
 
   document.getElementById('apply').addEventListener('click', () => setRange(+startEl.value, +countEl.value));
   for (const el of [startEl, countEl]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') setRange(+startEl.value, +countEl.value); });
@@ -546,7 +609,7 @@ const XTests = {
   W = r.width; H = r.height;
   setRange(1, 200);
   resize();
-  window.__primeLab = { get view() { return view; }, setRange, setMode, render };
+  window.__primeLab = { get view() { return view; }, setRange, setMode, setYScale, render };
 })();
 </script>
 </body>
