@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prime Lab 1 — split view</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --fg: #d7dde5;
+    --muted: #7d8794;
+    --axis: #3a4350;
+    --composite: #8b93a1;
+    --prime: #4fd1c5;
+    --unit: #d29a3a;
+    --accent: #4fd1c5;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; overflow: hidden; }
+  #bar { position: absolute; top: 0; left: 0; right: 0; height: 44px; display: flex; align-items: center; gap: 14px;
+    padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--axis); box-sizing: border-box; z-index: 2; }
+  #bar h1 { font-size: 14px; font-weight: 600; margin: 0 6px 0 0; letter-spacing: .02em; }
+  #bar label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  #bar input[type=number] { width: 110px; background: var(--bg); color: var(--fg); border: 1px solid var(--axis);
+    border-radius: 4px; padding: 3px 6px; font: inherit; }
+  #bar button { background: var(--bg); color: var(--fg); border: 1px solid var(--axis); border-radius: 4px;
+    padding: 3px 10px; font: inherit; cursor: pointer; }
+  #bar button:hover { border-color: var(--accent); }
+  #hint { margin-left: auto; color: var(--muted); }
+  #view { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; cursor: grab; }
+  #view.dragging { cursor: grabbing; }
+  canvas { display: block; }
+  #tip { position: absolute; pointer-events: none; background: rgba(22,27,34,.96); border: 1px solid var(--axis);
+    border-radius: 6px; padding: 6px 9px; font-size: 12px; white-space: nowrap; display: none; z-index: 3; }
+  #tip b { font-size: 14px; }
+  #tip .p { color: var(--prime); } #tip .c { color: var(--composite); } #tip .u { color: var(--unit); }
+</style>
+</head>
+<body>
+<div id="bar">
+  <h1>Prime Lab 1</h1>
+  <label>from <input id="start" type="number" min="1" step="1" value="1"></label>
+  <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
+  <button id="apply">Go</button>
+  <button id="reset">Reset</button>
+  <span id="hint">scroll to zoom · drag to pan · hover a number</span>
+</div>
+<div id="view"><canvas id="c"></canvas></div>
+<div id="tip"></div>
+
+<script id="shared-code">
+// ---- Pure logic (no DOM). Extracted and tested by test.mjs. ----
+const PrimeLab = (() => {
+  const MAX_N = 50_000_000;
+
+  // Sieve of Eratosthenes. Returns Uint8Array where s[n] === 1 iff n is prime, 0 <= n <= limit.
+  function sieve(limit) {
+    const s = new Uint8Array(limit + 1);
+    if (limit >= 2) s.fill(1, 2);
+    for (let p = 2; p * p <= limit; p++) {
+      if (!s[p]) continue;
+      for (let m = p * p; m <= limit; m += p) s[m] = 0;
+    }
+    return s;
+  }
+
+  // Prefix count: c[n] = number of primes <= n.
+  function prefixCount(s) {
+    const c = new Uint32Array(s.length);
+    let acc = 0;
+    for (let i = 0; i < s.length; i++) { acc += s[i]; c[i] = acc; }
+    return c;
+  }
+
+  // Number of primes in the closed interval [a, b] using a prefix table.
+  function countInRange(c, a, b) {
+    a = Math.max(0, a); b = Math.min(c.length - 1, b);
+    if (b < a) return 0;
+    return c[b] - (a > 0 ? c[a - 1] : 0);
+  }
+
+  // Trial-division factorisation, returns [[p, e], ...]. n >= 2.
+  function factorize(n) {
+    const out = [];
+    for (let p = 2; p * p <= n; p += (p === 2 ? 1 : 2)) {
+      if (n % p) continue;
+      let e = 0;
+      while (n % p === 0) { n /= p; e++; }
+      out.push([p, e]);
+    }
+    if (n > 1) out.push([n, 1]);
+    return out;
+  }
+
+  function formatFactors(f) {
+    return f.map(([p, e]) => e > 1 ? `${p}^${e}` : `${p}`).join(' × ');
+  }
+
+  // Previous and next prime around n (exclusive) within the sieve; -1 if none.
+  function prevPrime(s, n) { for (let i = n - 1; i >= 2; i--) if (s[i]) return i; return -1; }
+  function nextPrime(s, n) { for (let i = n + 1; i < s.length; i++) if (s[i]) return i; return -1; }
+
+  // Viewport: x0 is the natural number at the left edge (fractional), ppn = pixels per number.
+  // Zoom keeps the number under the cursor fixed.
+  function zoomAt(view, px, factor, width) {
+    const nAtCursor = view.x0 + px / view.ppn;
+    let ppn = view.ppn * factor;
+    ppn = Math.min(400, Math.max(width / MAX_N, ppn));
+    let x0 = nAtCursor - px / ppn;
+    return clampView({ x0, ppn }, width);
+  }
+
+  function clampView(view, width) {
+    const span = width / view.ppn;
+    let x0 = view.x0;
+    if (x0 < 0.5) x0 = 0.5;           // number 1 sits at the left edge
+    if (x0 + span > MAX_N + 0.5) x0 = MAX_N + 0.5 - span;
+    if (x0 < 0.5) x0 = 0.5;
+    return { x0, ppn: view.ppn };
+  }
+
+  // Backing-store sizing for HiDPI: 1 backing px = 1 device px.
+  function fitCanvasMetrics(cssW, cssH, dpr) {
+    const bw = Math.max(1, Math.round(cssW * dpr));
+    const bh = Math.max(1, Math.round(cssH * dpr));
+    return { bw, bh, cssW: bw / dpr, cssH: bh / dpr };
+  }
+
+  // Choose a "nice" tick step so that labels are at least minPx apart.
+  function tickStep(ppn, minPx) {
+    const raw = minPx / ppn;
+    const pow = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-9))));
+    for (const m of [1, 2, 5, 10]) if (m * pow >= raw) return Math.max(1, m * pow);
+    return 10 * pow;
+  }
+
+  return { MAX_N, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
+           zoomAt, clampView, fitCanvasMetrics, tickStep };
+})();
+
+const XTests = {
+  run() {
+    const P = PrimeLab;
+    const eq = (a, b, msg) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${msg}: got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`); };
+    const s = P.sieve(100);
+    const primes = []; for (let i = 0; i <= 100; i++) if (s[i]) primes.push(i);
+    eq(primes, [2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59,61,67,71,73,79,83,89,97], 'primes to 100');
+    eq(s[0], 0, '0 not prime'); eq(s[1], 0, '1 not prime');
+    const c = P.prefixCount(s);
+    eq(c[100], 25, 'pi(100)'); eq(c[10], 4, 'pi(10)');
+    eq(P.countInRange(c, 11, 20), 4, 'primes in [11,20]');
+    eq(P.countInRange(c, 0, 1), 0, 'primes in [0,1]');
+    eq(P.countInRange(c, 90, 200), 1, 'range clipped at sieve end');
+    eq(P.factorize(360), [[2,3],[3,2],[5,1]], 'factorize 360');
+    eq(P.factorize(97), [[97,1]], 'factorize prime');
+    eq(P.factorize(1000003), [[1000003,1]], 'factorize large prime');
+    eq(P.formatFactors(P.factorize(360)), '2^3 × 3^2 × 5', 'format factors');
+    eq(P.prevPrime(s, 10), 7, 'prevPrime'); eq(P.nextPrime(s, 10), 11, 'nextPrime');
+    eq(P.prevPrime(s, 2), -1, 'no prev before 2'); eq(P.nextPrime(s, 97), -1, 'no next in sieve');
+    const v = { x0: 0.5, ppn: 10 };
+    const z = P.zoomAt(v, 100, 2, 1000);
+    eq(Math.abs((z.x0 + 100 / z.ppn) - (v.x0 + 100 / v.ppn)) < 1e-9, true, 'zoom keeps cursor number fixed');
+    eq(z.ppn, 20, 'zoom doubles ppn');
+    eq(P.clampView({ x0: -5, ppn: 10 }, 1000).x0, 0.5, 'clamp left edge');
+    eq(P.zoomAt({ x0: 0.5, ppn: 10 }, 0, 1000, 1000).ppn, 400, 'zoom in capped');
+    const m = P.fitCanvasMetrics(801, 600.4, 2);
+    eq(m, { bw: 1602, bh: 1201, cssW: 801, cssH: 600.5 }, 'hidpi metrics');
+    eq(P.tickStep(10, 60), 10, 'tick step 10'); eq(P.tickStep(1, 60), 100, 'tick step 100');
+    eq(P.tickStep(0.01, 60), 10000, 'tick step 1e4'); eq(P.tickStep(50, 60), 2, 'tick step 2');
+    const big = P.sieve(1_000_000); const cb = P.prefixCount(big);
+    eq(cb[1_000_000], 78498, 'pi(1e6)');
+    return true;
+  }
+};
+</script>
+
+<script>
+(() => {
+  const P = PrimeLab;
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const viewEl = document.getElementById('view');
+  const tip = document.getElementById('tip');
+  const startEl = document.getElementById('start');
+  const countEl = document.getElementById('count');
+
+  let W = 0, H = 0, dpr = 1;
+  let view = { x0: 0.5, ppn: 1 };
+  let sieveLimit = 0, S = null, C = null;
+  let hoverN = -1;
+
+  function ensureSieve(limit) {
+    limit = Math.min(P.MAX_N, Math.max(1000, limit));
+    if (limit <= sieveLimit) return;
+    // grow geometrically so panning does not resieve every frame
+    const target = Math.min(P.MAX_N, Math.max(limit, sieveLimit * 2));
+    S = P.sieve(target); C = P.prefixCount(S); sieveLimit = target;
+  }
+
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    const r = viewEl.getBoundingClientRect();
+    const m = P.fitCanvasMetrics(r.width, r.height, dpr);
+    canvas.width = m.bw; canvas.height = m.bh;
+    canvas.style.width = m.cssW + 'px'; canvas.style.height = m.cssH + 'px';
+    W = m.cssW; H = m.cssH;
+    view = P.clampView(view, W);
+    render();
+  }
+
+  function setRange(start, count) {
+    start = Math.max(1, Math.floor(start)); count = Math.max(10, Math.floor(count));
+    view = P.clampView({ x0: start - 0.5, ppn: W / count }, W);
+    render();
+  }
+
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  function render() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = css('--bg'); ctx.fillRect(0, 0, W, H);
+    const midY = Math.round(H / 2);
+    const axisH = 22;                        // strip around the axis for labels
+    const topBase = midY - axisH / 2, botBase = midY + axisH / 2;
+    const cap = 30;                          // caption strip at top and bottom
+    const half = topBase - cap;              // usable bar height each side
+    const span = W / view.ppn;
+    const nLeft = Math.floor(view.x0), nRight = Math.ceil(view.x0 + span);
+    ensureSieve(nRight + 1);
+
+    const cComp = css('--composite'), cPrime = css('--prime'), cUnit = css('--unit');
+
+    if (view.ppn >= 2) {
+      // one bar per number, gaps where the other class lives
+      const bw = Math.max(1, view.ppn - Math.min(2, view.ppn * 0.25));
+      for (let n = Math.max(1, nLeft); n <= Math.min(nRight, sieveLimit); n++) {
+        const x = (n - view.x0) * view.ppn - bw / 2;
+        const hot = n === hoverN;
+        if (S[n]) {
+          ctx.fillStyle = hot ? '#ffffff' : cPrime;
+          ctx.fillRect(x, botBase, bw, half);
+        } else {
+          ctx.fillStyle = hot ? '#ffffff' : (n === 1 ? cUnit : cComp);
+          ctx.fillRect(x, topBase - half, bw, half);
+        }
+      }
+    } else {
+      // density mode: each pixel column covers several numbers
+      for (let px = 0; px < W; px++) {
+        const a = Math.max(1, Math.floor(view.x0 + px / view.ppn));
+        const b = Math.min(sieveLimit, Math.floor(view.x0 + (px + 1) / view.ppn) - 1);
+        if (b < a) continue;
+        const total = b - a + 1;
+        const pr = P.countInRange(C, a, b);
+        const pf = pr / total;
+        ctx.fillStyle = cPrime;
+        ctx.fillRect(px, botBase, 1, Math.max(pf > 0 ? 1 : 0, half * pf));
+        ctx.fillStyle = cComp;
+        const cf = 1 - pf;
+        ctx.fillRect(px, topBase - half * cf, 1, half * cf);
+      }
+    }
+
+    // axis
+    ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, topBase + 0.5); ctx.lineTo(W, topBase + 0.5);
+    ctx.moveTo(0, botBase - 0.5); ctx.lineTo(W, botBase - 0.5); ctx.stroke();
+
+    ctx.fillStyle = css('--muted'); ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const step = P.tickStep(view.ppn, 64);
+    const first = Math.max(step, Math.ceil(nLeft / step) * step);
+    for (let n = first; n <= nRight; n += step) {
+      const x = (n - view.x0) * view.ppn;
+      ctx.fillText(n.toLocaleString(), x, midY);
+    }
+    if (view.ppn >= 24) {
+      // label every number when there is room
+      for (let n = Math.max(1, nLeft); n <= nRight; n++) {
+        if (n % step === 0) continue;
+        ctx.fillText(String(n), (n - view.x0) * view.ppn, midY);
+      }
+    }
+
+    // side captions
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillStyle = cComp; ctx.fillText('non-primes ↑   (gaps are the primes)', 12, 10);
+    ctx.fillStyle = cPrime; ctx.textBaseline = 'bottom'; ctx.fillText('primes ↓   (gaps are the non-primes)', 12, H - 10);
+    ctx.textAlign = 'right';
+    const a = Math.max(1, Math.ceil(view.x0)), b = Math.min(Math.floor(view.x0 + span), sieveLimit);
+    const np = P.countInRange(C, a, b);
+    if (document.activeElement !== startEl && document.activeElement !== countEl) {
+      startEl.value = a; countEl.value = b - a + 1;
+    }
+    ctx.fillStyle = css('--muted');
+    ctx.fillText(`${a.toLocaleString()} … ${b.toLocaleString()}   ·   ${np.toLocaleString()} primes, ${(b - a + 1 - np).toLocaleString()} non-primes` +
+                 (view.ppn < 2 ? `   ·   ${(1 / view.ppn).toFixed(1)} numbers per pixel` : ''), W - 12, H - 10);
+  }
+
+  // ---- interaction ----
+  let drag = null;
+  viewEl.addEventListener('pointerdown', (e) => {
+    drag = { px: e.clientX, x0: view.x0, moved: false };
+    viewEl.classList.add('dragging'); viewEl.setPointerCapture(e.pointerId);
+  });
+  viewEl.addEventListener('pointermove', (e) => {
+    if (drag) {
+      const dx = e.clientX - drag.px;
+      if (Math.abs(dx) > 2) drag.moved = true;
+      view = P.clampView({ x0: drag.x0 - dx / view.ppn, ppn: view.ppn }, W);
+      render();
+    }
+    updateHover(e);
+  });
+  const endDrag = (e) => { drag = null; viewEl.classList.remove('dragging'); };
+  viewEl.addEventListener('pointerup', endDrag);
+  viewEl.addEventListener('pointercancel', endDrag);
+  viewEl.addEventListener('pointerleave', () => { hoverN = -1; tip.style.display = 'none'; render(); });
+
+  viewEl.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    const px = e.clientX - r.left;
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    view = P.zoomAt(view, px, factor, W);
+    render(); updateHover(e);
+  }, { passive: false });
+
+  function updateHover(e) {
+    const r = canvas.getBoundingClientRect();
+    const px = e.clientX - r.left;
+    if (view.ppn < 2) { hoverN = -1; tip.style.display = 'none'; return; }
+    const n = Math.round(view.x0 + px / view.ppn);
+    if (n < 1 || n > sieveLimit) { hoverN = -1; tip.style.display = 'none'; render(); return; }
+    if (n !== hoverN) { hoverN = n; render(); }
+    let body;
+    if (n === 1) body = `<span class="u">1 — the unit, neither prime nor composite</span>`;
+    else if (S[n]) {
+      const pp = P.prevPrime(S, n), np = P.nextPrime(S, n);
+      const idx = C[n];
+      body = `<span class="p">prime</span> · p<sub>${idx.toLocaleString()}</sub>` +
+             (pp > 0 ? ` · gap from ${pp.toLocaleString()}: ${n - pp}` : '') +
+             (np > 0 ? ` · gap to ${np.toLocaleString()}: ${np - n}` : '');
+    } else body = `<span class="c">composite</span> = ${P.formatFactors(P.factorize(n))}`;
+    tip.innerHTML = `<b>${n.toLocaleString()}</b><br>${body}`;
+    tip.style.display = 'block';
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let tx = e.clientX + 14, ty = e.clientY + 14;
+    if (tx + tw > window.innerWidth - 8) tx = e.clientX - tw - 14;
+    if (ty + th > window.innerHeight - 8) ty = e.clientY - th - 14;
+    tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
+  }
+
+  document.getElementById('apply').addEventListener('click', () => setRange(+startEl.value, +countEl.value));
+  for (const el of [startEl, countEl]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') setRange(+startEl.value, +countEl.value); });
+  document.getElementById('reset').addEventListener('click', () => { startEl.value = 1; countEl.value = 200; setRange(1, 200); });
+  window.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    const span = W / view.ppn;
+    if (e.key === 'ArrowLeft') { view = P.clampView({ x0: view.x0 - span * 0.1, ppn: view.ppn }, W); render(); }
+    if (e.key === 'ArrowRight') { view = P.clampView({ x0: view.x0 + span * 0.1, ppn: view.ppn }, W); render(); }
+    if (e.key === '+' || e.key === '=') { view = P.zoomAt(view, W / 2, 1.25, W); render(); }
+    if (e.key === '-') { view = P.zoomAt(view, W / 2, 0.8, W); render(); }
+  });
+
+  window.addEventListener('resize', resize);
+  // startup
+  const r = viewEl.getBoundingClientRect();
+  W = r.width; H = r.height;
+  setRange(1, 200);
+  resize();
+  window.__primeLab = { get view() { return view; }, setRange, render };
+})();
+</script>
+</body>
+</html>
