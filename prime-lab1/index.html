@@ -20,14 +20,15 @@
     font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; overflow: hidden; }
   #bar { position: absolute; top: 0; left: 0; right: 0; height: 44px; display: flex; align-items: center; gap: 14px;
     padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--axis); box-sizing: border-box; z-index: 2; }
+  #bar > * { white-space: nowrap; flex: 0 0 auto; }
   #bar h1 { font-size: 14px; font-weight: 600; margin: 0 6px 0 0; letter-spacing: .02em; }
   #bar label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
-  #bar input[type=number] { width: 110px; background: var(--bg); color: var(--fg); border: 1px solid var(--axis);
+  #bar input[type=number] { width: 90px; background: var(--bg); color: var(--fg); border: 1px solid var(--axis);
     border-radius: 4px; padding: 3px 6px; font: inherit; }
   #bar button { background: var(--bg); color: var(--fg); border: 1px solid var(--axis); border-radius: 4px;
     padding: 3px 10px; font: inherit; cursor: pointer; }
   #bar button:hover { border-color: var(--accent); }
-  #hint { margin-left: auto; color: var(--muted); }
+  #hint { margin-left: auto; color: var(--muted); overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
   .seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 5px; overflow: hidden; }
   .seg button { border: 0; border-radius: 0; padding: 4px 12px; background: var(--bg); color: var(--muted); }
   .seg button + button { border-left: 1px solid var(--axis); }
@@ -57,6 +58,7 @@
       <button data-scale="linear" aria-pressed="true">Linear</button>
       <button data-scale="log" aria-pressed="false">Log</button>
       <button data-scale="stretched" aria-pressed="false">Stretched</button>
+      <button data-scale="logstretched" aria-pressed="false">Log stretched</button>
     </div>
   </label>
   <label>from <input id="start" type="number" min="1" step="1" value="1"></label>
@@ -192,9 +194,11 @@ const PrimeLab = (() => {
 
   // The y-range and mapping used for the column of number n. The origin is pinned: 'linear'
   // spans 0..hi and 'log' spans 1..hi, where hi is the largest visible number, so panning along
-  // x never moves the origin. 'stretched' gives every column its own range 0..n.
+  // x never moves the origin. 'stretched' gives every column its own range 0..n, and
+  // 'logstretched' its own log range 1..n (so a factor p sits at log p / log n).
   function yRangeAt(scale, hi, n) {
     if (scale === 'stretched') return { lo: 0, hi: n, scale: 'linear' };
+    if (scale === 'logstretched') return { lo: 1, hi: Math.max(1, n), scale: 'log' };
     if (scale === 'log') return { lo: 1, hi: Math.max(1, hi), scale: 'log' };
     return { lo: 0, hi, scale: 'linear' };
   }
@@ -281,6 +285,11 @@ const XTests = {
     eq(P.yRangeAt('log', 90, 36), { lo: 1, hi: 90, scale: 'log' }, 'log range starts at 1');
     eq(P.yRangeAt('linear', 90, 36), { lo: 0, hi: 90, scale: 'linear' }, 'linear range starts at 0');
     eq(P.yRangeAt('linear', 5090, 5036).lo, 0, 'linear origin stays 0 after panning');
+    eq(P.yRangeAt('logstretched', 90, 36), { lo: 1, hi: 36, scale: 'log' }, 'logstretched range is 1..n');
+    { const r = P.yRangeAt('logstretched', 400, 64);
+      eq(P.valueToRow(64, r.lo, r.hi, 0, 100, r.scale), 0, 'logstretched: n at the top');
+      eq(Math.abs(P.valueToRow(8, r.lo, r.hi, 0, 100, r.scale) - 50) < 1e-9, true, 'logstretched: sqrt(n) at the middle');
+      eq(Math.abs(P.valueToRow(2, r.lo, r.hi, 0, 100, r.scale) - 500 / 6) < 1e-9, true, 'logstretched: 2 at log2/log64'); }
     { const r = P.yRangeAt('stretched', 400, 36);
       eq(P.valueToRow(36, r.lo, r.hi, 0, 100, r.scale), 0, 'stretched: n itself at the top');
       eq(P.valueToRow(18, r.lo, r.hi, 0, 100, r.scale), 50, 'stretched: n/2 at the middle'); }
@@ -375,7 +384,7 @@ const XTests = {
 
     // side captions
     ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    const yNote = mode === 'bars' ? '' : yScale === 'log' ? '   ·   y = n (log)' : yScale === 'stretched' ? '   ·   y = n, axis 0..N per column' : '   ·   y = n';
+    const yNote = mode === 'bars' ? '' : yScale === 'log' ? '   ·   y = n (log)' : yScale === 'stretched' ? '   ·   y = n, axis 0..N per column' : yScale === 'logstretched' ? '   ·   y = n, log axis 1..N per column' : '   ·   y = n';
     const fNote = mode === 'factors' ? ', dots at y = prime factors of n' : '';
     ctx.fillStyle = cComp; ctx.fillText('non-primes ↑   (gaps are the primes)' + yNote + fNote, 12, 10);
     ctx.fillStyle = cPrime; ctx.textBaseline = 'bottom'; ctx.fillText('primes ↓   (gaps are the non-primes)' + yNote, 12, H - 10);
@@ -435,6 +444,7 @@ const XTests = {
     const topD = (topBase - half) * dpr, botD = botBase * dpr;
     const WD = W * dpr;
 
+    const perColumn = yScale === 'stretched' || yScale === 'logstretched';
     // row of value v inside the half starting at `top`, for the column of number n
     const rowOf = (v, n, top) => { const r = P.yRangeAt(yScale, hi, n); return P.valueToRow(v, r.lo, r.hi, top, halfD - t, r.scale); };
 
@@ -460,7 +470,7 @@ const XTests = {
             const x = Math.round((n - view.x0) * ppnD - dotW / 2);
             ctx.fillStyle = hot ? '#ffffff' : cPrime;
             for (const q of P.primeFactors(n)) {
-              if (yScale !== 'stretched' && q > hi) continue;
+              if (!perColumn && q > hi) continue;
               ctx.fillRect(x, Math.floor(rowOf(q, n, topD)), dotW, t);
             }
           }
@@ -510,6 +520,9 @@ const XTests = {
     if (yScale === 'stretched') {
       ticks = [0, 0.25, 0.5, 0.75, 1];
       label = (f) => ({ 0: '0', 0.25: 'N/4', 0.5: 'N/2', 0.75: '3N/4', 1: 'N' })[f];
+    } else if (yScale === 'logstretched') {
+      ticks = [0, 0.25, 0.5, 0.75, 1];
+      label = (f) => ({ 0: '1', 0.25: 'N^¼', 0.5: '√N', 0.75: 'N^¾', 1: 'N' })[f];
     } else if (yScale === 'log') ticks = P.logTicks(1, hi, Math.max(2, Math.floor(half / 28)));
     else {
       ticks = [0];
@@ -519,7 +532,7 @@ const XTests = {
     ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
     for (const v of ticks) {
       for (const top of [topBase - half, botBase]) {
-        const y = yScale === 'stretched'
+        const y = perColumn
           ? Math.round(P.valueToRow(v, 0, 1, top, half - 1)) + 0.5
           : Math.round(P.valueToRow(v, yScale === 'log' ? 1 : 0, hi, top, half, yScale)) + 0.5;
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(6, y); ctx.stroke();
@@ -612,7 +625,7 @@ const XTests = {
     syncScaleButtons(); render();
   }
   for (const b of scaleButtons) b.addEventListener('click', () => setYScale(b.dataset.scale));
-  try { const sc = localStorage.getItem('prime-lab1.yscale'); if (['linear', 'log', 'stretched'].includes(sc)) yScale = sc; } catch (_) {}
+  try { const sc = localStorage.getItem('prime-lab1.yscale'); if (['linear', 'log', 'stretched', 'logstretched'].includes(sc)) yScale = sc; } catch (_) {}
   syncScaleButtons();
 
   document.getElementById('apply').addEventListener('click', () => setRange(+startEl.value, +countEl.value));
