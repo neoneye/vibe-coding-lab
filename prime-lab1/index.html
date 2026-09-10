@@ -48,6 +48,7 @@
   <div class="seg" id="modes" role="group" aria-label="Visualization mode">
     <button data-mode="bars" aria-pressed="true">Bars</button>
     <button data-mode="chart" aria-pressed="false">Chart</button>
+    <button data-mode="factors" aria-pressed="false">Factors</button>
   </div>
   <label>from <input id="start" type="number" min="1" step="1" value="1"></label>
   <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
@@ -100,6 +101,15 @@ const PrimeLab = (() => {
     }
     if (n > 1) out.push([n, 1]);
     return out;
+  }
+
+  // Distinct prime factors of n in increasing order (n >= 2).
+  function primeFactors(n) { return factorize(n).map(([p]) => p); }
+
+  // How many multiples of p lie in the closed interval [a, b].
+  function multiplesInRange(p, a, b) {
+    if (b < a) return 0;
+    return Math.floor(b / p) - Math.floor((a - 1) / p);
   }
 
   function formatFactors(f) {
@@ -165,7 +175,7 @@ const PrimeLab = (() => {
   }
 
   return { MAX_N, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
-           zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow };
+           zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow, primeFactors, multiplesInRange };
 })();
 
 const XTests = {
@@ -209,6 +219,13 @@ const XTests = {
     eq(P.valueToRow(10, 0, 10, 100, 50), 100, 'top value maps to top row');
     eq(P.valueToRow(0, 0, 10, 100, 50), 150, 'bottom value maps to bottom edge');
     eq(P.valueToRow(5, 0, 10, 100, 50), 125, 'mid value maps to middle');
+    eq(P.primeFactors(36), [2,3], 'prime factors of 36');
+    eq(P.primeFactors(97), [97], 'prime factors of a prime');
+    eq(P.primeFactors(2310), [2,3,5,7,11], 'prime factors of 2310');
+    eq(P.multiplesInRange(3, 1, 10), 3, 'multiples of 3 in [1,10]');
+    eq(P.multiplesInRange(5, 10, 10), 1, 'single multiple');
+    eq(P.multiplesInRange(5, 11, 14), 0, 'no multiples');
+    eq(P.multiplesInRange(2, 7, 6), 0, 'empty range');
     const big = P.sieve(1_000_000); const cb = P.prefixCount(big);
     eq(cb[1_000_000], 78498, 'pi(1e6)');
     return true;
@@ -273,7 +290,7 @@ const XTests = {
 
     const cComp = css('--composite'), cPrime = css('--prime'), cUnit = css('--unit');
 
-    if (mode === 'chart') renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit);
+    if (mode === 'chart' || mode === 'factors') renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit, mode === 'factors');
     else renderBars(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit);
 
     // axis
@@ -299,8 +316,9 @@ const XTests = {
 
     // side captions
     ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    const yNote = mode === 'chart' ? '   ·   y = n' : '';
-    ctx.fillStyle = cComp; ctx.fillText('non-primes ↑   (gaps are the primes)' + yNote, 12, 10);
+    const yNote = mode === 'bars' ? '' : '   ·   y = n';
+    const fNote = mode === 'factors' ? ', dots at y = prime factors of n' : '';
+    ctx.fillStyle = cComp; ctx.fillText('non-primes ↑   (gaps are the primes)' + yNote + fNote, 12, 10);
     ctx.fillStyle = cPrime; ctx.textBaseline = 'bottom'; ctx.fillText('primes ↓   (gaps are the non-primes)' + yNote, 12, H - 10);
     ctx.textAlign = 'right';
     const a = Math.max(1, Math.ceil(view.x0)), b = Math.min(Math.floor(view.x0 + span), sieveLimit);
@@ -349,7 +367,7 @@ const XTests = {
   // Chart mode: every number n is the point (n, n). The top half draws that diagonal only over the
   // non-primes, the bottom half only over the primes, so each half has holes where the other lives.
   // Drawn in device pixels through an integer rasteriser, so the diagonals are never anti-aliased.
-  function renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit) {
+  function renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit, showFactors) {
     const span = W / view.ppn;
     const lo = view.x0, hi = view.x0 + span;           // y-range of each half == visible x-range
     const t = Math.max(1, Math.round(dpr));            // line thickness in device px (1 logical px)
@@ -369,19 +387,50 @@ const XTests = {
         ctx.fillStyle = color;
         P.plotSegment(xa, ya, xb, yb, plotAt);
       };
+      const dotW = Math.max(t, Math.round(ppnD - Math.min(2 * t, ppnD * 0.25)));
       for (let n = Math.max(1, nLeft); n <= Math.min(nRight, sieveLimit); n++) {
         const hot = n === hoverN;
         if (S[n]) drawN(n, botD, hot ? '#ffffff' : cPrime);
-        else drawN(n, topD, hot ? '#ffffff' : (n === 1 ? cUnit : cComp));
+        else {
+          drawN(n, topD, hot ? '#ffffff' : (n === 1 ? cUnit : cComp));
+          if (showFactors && n > 1) {
+            // a dot in n's column at the height of every prime that divides n
+            const x = Math.round((n - view.x0) * ppnD - dotW / 2);
+            ctx.fillStyle = hot ? '#ffffff' : cPrime;
+            for (const q of P.primeFactors(n)) {
+              if (q < lo || q > hi) continue;
+              ctx.fillRect(x, Math.floor(P.valueToRow(q, lo, hi, topD, halfD)) - t, dotW, t);
+            }
+          }
+        }
       }
     } else {
       // density: each device column covers several numbers; shade the diagonal by class fraction
       const [pr_, pg_, pb_] = hexRgb(cPrime), [cr_, cg_, cb_] = hexRgb(cComp);
+      // small primes only: a prime q contributes ~1/q of a column, invisible past a few hundred
+      const smallPrimes = [];
+      if (showFactors) for (let q = 2; q <= Math.min(1000, hi, sieveLimit); q++) if (S[q]) smallPrimes.push(q);
+      const rowAlpha = new Float32Array(Math.ceil(halfD) + 2);
       for (let px = 0; px < WD; px++) {
         const a = Math.max(1, Math.floor(view.x0 + px / ppnD));
         const b = Math.min(sieveLimit, Math.floor(view.x0 + (px + 1) / ppnD) - 1);
         if (b < a) continue;
         const pf = P.countInRange(C, a, b) / (b - a + 1);
+        if (showFactors) {
+          rowAlpha.fill(0);
+          const total = b - a + 1;
+          for (const q of smallPrimes) {
+            if (q < lo) continue;
+            const row = Math.floor(P.valueToRow(q, lo, hi, 0, halfD)) - t;
+            if (row < 0 || row >= rowAlpha.length) continue;
+            rowAlpha[row] += P.multiplesInRange(q, a, b) / total;
+          }
+          for (let r = 0; r < rowAlpha.length; r++) {
+            if (rowAlpha[r] <= 0.002) continue;
+            ctx.fillStyle = `rgba(${pr_},${pg_},${pb_},${Math.min(1, rowAlpha[r]).toFixed(3)})`;
+            ctx.fillRect(px, topD + r, 1, t);
+          }
+        }
         const mid = (a + b) / 2;
         const yTop = Math.floor(P.valueToRow(mid, lo, hi, topD, halfD)) - t;
         const yBot = Math.floor(P.valueToRow(mid, lo, hi, botD, halfD)) - t;
