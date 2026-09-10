@@ -28,6 +28,11 @@
     padding: 3px 10px; font: inherit; cursor: pointer; }
   #bar button:hover { border-color: var(--accent); }
   #hint { margin-left: auto; color: var(--muted); }
+  .seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 5px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 4px 12px; background: var(--bg); color: var(--muted); }
+  .seg button + button { border-left: 1px solid var(--axis); }
+  .seg button:hover { color: var(--fg); }
+  .seg button[aria-pressed=true] { background: var(--accent); color: #0b1a19; font-weight: 600; }
   #view { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; cursor: grab; }
   #view.dragging { cursor: grabbing; }
   canvas { display: block; }
@@ -40,6 +45,10 @@
 <body>
 <div id="bar">
   <h1>Prime Lab 1</h1>
+  <div class="seg" id="modes" role="group" aria-label="Visualization mode">
+    <button data-mode="bars" aria-pressed="true">Bars</button>
+    <button data-mode="chart" aria-pressed="false">Chart</button>
+  </div>
   <label>from <input id="start" type="number" min="1" step="1" value="1"></label>
   <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
   <button id="apply">Go</button>
@@ -135,8 +144,28 @@ const PrimeLab = (() => {
     return 10 * pow;
   }
 
+  // Rasterise the segment (xa,ya)-(xb,yb) as a staircase of integer pixels stepping along the
+  // major axis (no anti-aliasing). Calls plot(x, y) once per pixel, in order from a to b.
+  function plotSegment(xa, ya, xb, yb, plot) {
+    const dx = xb - xa, dy = yb - ya;
+    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy))));
+    let lx = null, ly = null;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = Math.floor(xa + dx * t), y = Math.floor(ya + dy * t);
+      if (x === lx && y === ly) continue;
+      plot(x, y); lx = x; ly = y;
+    }
+  }
+
+  // Map value v in [lo, hi] to a pixel row inside [top, top+height) with v=hi at the top.
+  function valueToRow(v, lo, hi, top, height) {
+    if (hi <= lo) return top + height - 1;
+    return top + (hi - v) / (hi - lo) * height;
+  }
+
   return { MAX_N, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
-           zoomAt, clampView, fitCanvasMetrics, tickStep };
+           zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow };
 })();
 
 const XTests = {
@@ -168,6 +197,18 @@ const XTests = {
     eq(m, { bw: 1602, bh: 1201, cssW: 801, cssH: 600.5 }, 'hidpi metrics');
     eq(P.tickStep(10, 60), 10, 'tick step 10'); eq(P.tickStep(1, 60), 100, 'tick step 100');
     eq(P.tickStep(0.01, 60), 10000, 'tick step 1e4'); eq(P.tickStep(50, 60), 2, 'tick step 2');
+    const px = []; P.plotSegment(0, 0, 4, 2, (x, y) => px.push([x, y]));
+    eq(px, [[0,0],[1,0],[2,1],[3,1],[4,2]], 'shallow segment steps along x, no duplicates');
+    const py = []; P.plotSegment(0, 0, 1, 3, (x, y) => py.push([x, y]));
+    eq(py, [[0,0],[0,1],[0,2],[1,3]], 'steep segment steps along y');
+    const pv = []; P.plotSegment(4, 2, 0, 0, (x, y) => pv.push([x, y]));
+    eq(pv.length, 5, 'reverse direction covers every column');
+    eq(pv[0], [4,2], 'reverse starts at a');
+    const p1 = []; P.plotSegment(3.2, 7.9, 3.2, 7.9, (x, y) => p1.push([x, y]));
+    eq(p1, [[3,7]], 'degenerate segment plots one pixel');
+    eq(P.valueToRow(10, 0, 10, 100, 50), 100, 'top value maps to top row');
+    eq(P.valueToRow(0, 0, 10, 100, 50), 150, 'bottom value maps to bottom edge');
+    eq(P.valueToRow(5, 0, 10, 100, 50), 125, 'mid value maps to middle');
     const big = P.sieve(1_000_000); const cb = P.prefixCount(big);
     eq(cb[1_000_000], 78498, 'pi(1e6)');
     return true;
@@ -189,6 +230,7 @@ const XTests = {
   let view = { x0: 0.5, ppn: 1 };
   let sieveLimit = 0, S = null, C = null;
   let hoverN = -1;
+  let mode = 'bars';
 
   function ensureSieve(limit) {
     limit = Math.min(P.MAX_N, Math.max(1000, limit));
@@ -231,6 +273,47 @@ const XTests = {
 
     const cComp = css('--composite'), cPrime = css('--prime'), cUnit = css('--unit');
 
+    if (mode === 'chart') renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit);
+    else renderBars(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit);
+
+    // axis
+    ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, topBase + 0.5); ctx.lineTo(W, topBase + 0.5);
+    ctx.moveTo(0, botBase - 0.5); ctx.lineTo(W, botBase - 0.5); ctx.stroke();
+
+    ctx.fillStyle = css('--muted'); ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const step = P.tickStep(view.ppn, 64);
+    const first = Math.max(step, Math.ceil(nLeft / step) * step);
+    for (let n = first; n <= nRight; n += step) {
+      const x = (n - view.x0) * view.ppn;
+      ctx.fillText(n.toLocaleString(), x, midY);
+    }
+    if (view.ppn >= 24) {
+      // label every number when there is room
+      for (let n = Math.max(1, nLeft); n <= nRight; n++) {
+        if (n % step === 0) continue;
+        ctx.fillText(String(n), (n - view.x0) * view.ppn, midY);
+      }
+    }
+
+    // side captions
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    const yNote = mode === 'chart' ? '   ·   y = n' : '';
+    ctx.fillStyle = cComp; ctx.fillText('non-primes ↑   (gaps are the primes)' + yNote, 12, 10);
+    ctx.fillStyle = cPrime; ctx.textBaseline = 'bottom'; ctx.fillText('primes ↓   (gaps are the non-primes)' + yNote, 12, H - 10);
+    ctx.textAlign = 'right';
+    const a = Math.max(1, Math.ceil(view.x0)), b = Math.min(Math.floor(view.x0 + span), sieveLimit);
+    const np = P.countInRange(C, a, b);
+    if (document.activeElement !== startEl && document.activeElement !== countEl) {
+      startEl.value = a; countEl.value = b - a + 1;
+    }
+    ctx.fillStyle = css('--muted');
+    ctx.fillText(`${a.toLocaleString()} … ${b.toLocaleString()}   ·   ${np.toLocaleString()} primes, ${(b - a + 1 - np).toLocaleString()} non-primes` +
+                 (view.ppn < 2 ? `   ·   ${(1 / view.ppn).toFixed(1)} numbers per pixel` : ''), W - 12, H - 10);
+  }
+
+  function renderBars(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit) {
     if (view.ppn >= 2) {
       // one bar per number, gaps where the other class lives
       const bw = Math.max(1, view.ppn - Math.min(2, view.ppn * 0.25));
@@ -261,41 +344,74 @@ const XTests = {
         ctx.fillRect(px, topBase - half * cf, 1, half * cf);
       }
     }
+  }
 
-    // axis
-    ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, topBase + 0.5); ctx.lineTo(W, topBase + 0.5);
-    ctx.moveTo(0, botBase - 0.5); ctx.lineTo(W, botBase - 0.5); ctx.stroke();
+  // Chart mode: every number n is the point (n, n). The top half draws that diagonal only over the
+  // non-primes, the bottom half only over the primes, so each half has holes where the other lives.
+  // Drawn in device pixels through an integer rasteriser, so the diagonals are never anti-aliased.
+  function renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit) {
+    const span = W / view.ppn;
+    const lo = view.x0, hi = view.x0 + span;           // y-range of each half == visible x-range
+    const t = Math.max(1, Math.round(dpr));            // line thickness in device px (1 logical px)
+    const ppnD = view.ppn * dpr;                       // device px per number
+    const halfD = half * dpr;
+    const topD = (topBase - half) * dpr, botD = botBase * dpr;
+    const WD = W * dpr;
 
-    ctx.fillStyle = css('--muted'); ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const step = P.tickStep(view.ppn, 64);
-    const first = Math.max(step, Math.ceil(nLeft / step) * step);
-    for (let n = first; n <= nRight; n += step) {
-      const x = (n - view.x0) * view.ppn;
-      ctx.fillText(n.toLocaleString(), x, midY);
-    }
-    if (view.ppn >= 24) {
-      // label every number when there is room
-      for (let n = Math.max(1, nLeft); n <= nRight; n++) {
-        if (n % step === 0) continue;
-        ctx.fillText(String(n), (n - view.x0) * view.ppn, midY);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const plotAt = (x, y) => ctx.fillRect(x, y, t, t);
+
+    if (view.ppn >= 2) {
+      const drawN = (n, top, color) => {
+        const xa = (n - 0.5 - view.x0) * ppnD, xb = (n + 0.5 - view.x0) * ppnD;
+        const ya = P.valueToRow(n - 0.5, lo, hi, top, halfD) - t, yb = P.valueToRow(n + 0.5, lo, hi, top, halfD) - t;
+        ctx.fillStyle = color;
+        P.plotSegment(xa, ya, xb, yb, plotAt);
+      };
+      for (let n = Math.max(1, nLeft); n <= Math.min(nRight, sieveLimit); n++) {
+        const hot = n === hoverN;
+        if (S[n]) drawN(n, botD, hot ? '#ffffff' : cPrime);
+        else drawN(n, topD, hot ? '#ffffff' : (n === 1 ? cUnit : cComp));
+      }
+    } else {
+      // density: each device column covers several numbers; shade the diagonal by class fraction
+      const [pr_, pg_, pb_] = hexRgb(cPrime), [cr_, cg_, cb_] = hexRgb(cComp);
+      for (let px = 0; px < WD; px++) {
+        const a = Math.max(1, Math.floor(view.x0 + px / ppnD));
+        const b = Math.min(sieveLimit, Math.floor(view.x0 + (px + 1) / ppnD) - 1);
+        if (b < a) continue;
+        const pf = P.countInRange(C, a, b) / (b - a + 1);
+        const mid = (a + b) / 2;
+        const yTop = Math.floor(P.valueToRow(mid, lo, hi, topD, halfD)) - t;
+        const yBot = Math.floor(P.valueToRow(mid, lo, hi, botD, halfD)) - t;
+        ctx.fillStyle = `rgba(${cr_},${cg_},${cb_},${(0.15 + 0.85 * (1 - pf)).toFixed(3)})`;
+        ctx.fillRect(px, yTop, 1, t);
+        ctx.fillStyle = `rgba(${pr_},${pg_},${pb_},${(0.15 + 0.85 * pf).toFixed(3)})`;
+        ctx.fillRect(px, yBot, 1, t);
       }
     }
+    ctx.restore();
 
-    // side captions
-    ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    ctx.fillStyle = cComp; ctx.fillText('non-primes ↑   (gaps are the primes)', 12, 10);
-    ctx.fillStyle = cPrime; ctx.textBaseline = 'bottom'; ctx.fillText('primes ↓   (gaps are the non-primes)', 12, H - 10);
-    ctx.textAlign = 'right';
-    const a = Math.max(1, Math.ceil(view.x0)), b = Math.min(Math.floor(view.x0 + span), sieveLimit);
-    const np = P.countInRange(C, a, b);
-    if (document.activeElement !== startEl && document.activeElement !== countEl) {
-      startEl.value = a; countEl.value = b - a + 1;
+    // y-axis labels (value of n) on the left of each half
+    ctx.fillStyle = css('--muted'); ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const ystep = P.tickStep(half / span, 28);
+    const first = Math.max(ystep, Math.ceil(lo / ystep) * ystep);
+    ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
+    for (let v = first; v <= hi; v += ystep) {
+      for (const top of [topBase - half, botBase]) {
+        const y = Math.round(P.valueToRow(v, lo, hi, top, half)) + 0.5;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(6, y); ctx.stroke();
+        ctx.fillText(v.toLocaleString(), 9, y);
+      }
     }
-    ctx.fillStyle = css('--muted');
-    ctx.fillText(`${a.toLocaleString()} … ${b.toLocaleString()}   ·   ${np.toLocaleString()} primes, ${(b - a + 1 - np).toLocaleString()} non-primes` +
-                 (view.ppn < 2 ? `   ·   ${(1 / view.ppn).toFixed(1)} numbers per pixel` : ''), W - 12, H - 10);
+  }
+
+  function hexRgb(h) {
+    h = h.replace('#', '');
+    if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
   }
 
   // ---- interaction ----
@@ -352,6 +468,17 @@ const XTests = {
     tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
   }
 
+  const modeButtons = [...document.querySelectorAll('#modes button')];
+  function setMode(m) {
+    mode = m;
+    for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
+    try { localStorage.setItem('prime-lab1.mode', m); } catch (_) {}
+    render();
+  }
+  for (const b of modeButtons) b.addEventListener('click', () => setMode(b.dataset.mode));
+  try { const m = localStorage.getItem('prime-lab1.mode'); if (m && modeButtons.some((b) => b.dataset.mode === m)) mode = m; } catch (_) {}
+  for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+
   document.getElementById('apply').addEventListener('click', () => setRange(+startEl.value, +countEl.value));
   for (const el of [startEl, countEl]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') setRange(+startEl.value, +countEl.value); });
   document.getElementById('reset').addEventListener('click', () => { startEl.value = 1; countEl.value = 200; setRange(1, 200); });
@@ -370,7 +497,7 @@ const XTests = {
   W = r.width; H = r.height;
   setRange(1, 200);
   resize();
-  window.__primeLab = { get view() { return view; }, setRange, render };
+  window.__primeLab = { get view() { return view; }, setRange, setMode, render };
 })();
 </script>
 </body>
