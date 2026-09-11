@@ -47,6 +47,7 @@
     border-radius: 6px; padding: 6px 9px; font-size: 12px; white-space: nowrap; display: none; z-index: 3; }
   #tip b { font-size: 14px; }
   #tip .p { color: var(--prime); } #tip .c { color: var(--composite); } #tip .u { color: var(--unit); }
+  #tip .hit { color: #fff; } #tip .dim { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -345,6 +346,16 @@ const PrimeLab = (() => {
     return top + (hi - v) / (hi - lo) * height;
   }
 
+  // Inverse of valueToRow: the value at pixel row `row`.
+  function rowToValue(row, lo, hi, top, height, scale) {
+    const f = height > 0 ? (row - top) / height : 0;     // 0 at the top (hi), 1 at the bottom (lo)
+    if (scale === 'log') {
+      lo = Math.max(1, lo); hi = Math.max(lo, hi);
+      return Math.exp(Math.log(hi) - f * (Math.log(hi) - Math.log(lo)));
+    }
+    return hi - f * (hi - lo);
+  }
+
   // The y-range and mapping used for the column of number n. The origin is pinned: 'linear'
   // spans 0..hi and 'log' spans 2..hi (2 is the smallest prime, so nothing lives below it),
   // where hi is the largest visible number, so panning along x never moves the origin.
@@ -376,7 +387,7 @@ const PrimeLab = (() => {
   }
 
   return { MAX_N, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
-           zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow, logTicks, yRangeAt, LOG_ORIGIN, primeFactors, properDivisors, multiplesInRange, goldbachPairs, goldbachTriples, threePrimeSum,
+           zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow, rowToValue, logTicks, yRangeAt, LOG_ORIGIN, primeFactors, properDivisors, multiplesInRange, goldbachPairs, goldbachTriples, threePrimeSum,
            consecutiveRuns, squareDifferences, twoSquares, twoTriangulars, remainderSet, aliquotSum,
            primePlusSquare, gcd, coprimeSplits, weightedSquares, binomialReps };
 })();
@@ -484,6 +495,9 @@ const XTests = {
     eq(P.valueToRow(1, 1, 100, 0, 100, 'log'), 100, 'log: bottom value at bottom');
     eq(Math.abs(P.valueToRow(10, 1, 100, 0, 100, 'log') - 50) < 1e-9, true, 'log: geometric middle at middle');
     eq(P.valueToRow(10, 0.5, 100, 0, 100, 'log'), P.valueToRow(10, 1, 100, 0, 100, 'log'), 'log: lo floored at 1');
+    eq(P.rowToValue(P.valueToRow(37, 0, 100, 10, 200), 0, 100, 10, 200), 37, 'linear row/value round trip');
+    eq(Math.abs(P.rowToValue(P.valueToRow(37, 2, 500, 10, 200, 'log'), 2, 500, 10, 200, 'log') - 37) < 1e-9, true, 'log row/value round trip');
+    eq(P.rowToValue(10, 0, 100, 10, 200), 100, 'top row is hi'); eq(P.rowToValue(210, 0, 100, 10, 200), 0, 'bottom row is lo');
     eq(P.logTicks(1, 100, 20), [1,2,5,10,20,50,100], 'log ticks 1..100');
     eq(P.logTicks(3, 40, 20), [5,10,20], 'log ticks clipped to range');
     eq(P.logTicks(1, 1e6, 8), [1,10,100,1000,1e4,1e5,1e6], 'log ticks thinned to decades');
@@ -631,6 +645,9 @@ const XTests = {
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
+  // panel geometry, kept for hit-testing
+  const layout = { midY: 0, topBase: 0, botBase: 0, half: 0 };
+
   function render() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = css('--bg'); ctx.fillRect(0, 0, W, H);
@@ -639,6 +656,7 @@ const XTests = {
     const topBase = midY - axisH / 2, botBase = midY + axisH / 2;
     const cap = 30;                          // caption strip at top and bottom
     const half = topBase - cap;              // usable height of each panel
+    Object.assign(layout, { midY, topBase, botBase, half });
     const span = W / view.ppn;
     const nLeft = Math.floor(view.x0), nRight = Math.ceil(view.x0 + span);
     ensureSieve(nRight + 1);
@@ -764,35 +782,71 @@ const XTests = {
   // through an integer rasteriser, so nothing is anti-aliased.
   // Marks for number n in the given mode: [{ v, v2?, c }] — a dot at value v (or a bar from v to v2),
   // in colour key c ('prime' teal, 'composite' grey, 'unit' amber, 'white').
+  // Marks also carry a short `what` used by the tooltip when the cursor is on the mark.
   function marksFor(mode, n) {
-    const byPrimality = (q) => ({ v: q, c: S[q] ? 'prime' : 'composite' });
+    const byPrimality = (what) => (q) => ({ v: q, c: S[q] ? 'prime' : 'composite', what: what(q) });
     switch (mode) {
-      case 'factors': return P.primeFactors(n).filter((q) => q !== n).map(byPrimality);
-      case 'divisors': return P.properDivisors(n).map(byPrimality);
+      case 'factors': return P.primeFactors(n).filter((q) => q !== n).map(byPrimality((q) => `prime factor ${q} of ${n}`));
+      case 'divisors': return P.properDivisors(n).map(byPrimality((q) => `divisor ${q} of ${n}`));
       case 'divoffset': {
         const c = offsetBase();
-        return P.properDivisors(n).flatMap((d) => [{ v: n, x: c + d, c: S[d] ? 'prime' : 'composite' }, { v: n, x: c - d, c: S[d] ? 'prime' : 'composite' }]);
+        return P.properDivisors(n).flatMap((d) => [
+          { v: n, x: c + d, c: S[d] ? 'prime' : 'composite', what: `divisor ${d} of ${n}, at centre + ${d}` },
+          { v: n, x: c - d, c: S[d] ? 'prime' : 'composite', what: `divisor ${d} of ${n}, at centre − ${d}` }]);
       }
-      case 'goldbach': return goldbachDots(n).map(byPrimality);
+      case 'goldbach': return goldbachDots(n).map(byPrimality((q) => `${n} = ${q} + ${n - q}`));
       case 'goldbach3': {
         if (n > TRIPLE_MAX) return [];
-        const seen = new Set();
-        for (const t of goldbachTriplesCached(n)) for (const v of t) seen.add(v);
-        return [...seen].map((v) => ({ v, c: 'prime' }));
+        const seen = new Map();
+        for (const tr of goldbachTriplesCached(n)) for (const v of tr) if (!seen.has(v)) seen.set(v, tr);
+        return [...seen].map(([v, tr]) => ({ v, c: 'prime', what: `prime ${v} in ${n} = ${tr.join(' + ')}` }));
       }
-      case 'consecutive': return P.consecutiveRuns(n).map(([a, k]) => ({ v: a, v2: a + k - 1, c: 'prime' }));
-      case 'sqdiff': return P.squareDifferences(n).flatMap(([a, b]) => [{ v: a, c: 'prime' }, { v: b, c: 'unit' }]);
-      case 'sqsum': return P.twoSquares(n).flatMap(([a, b]) => [{ v: a * a, c: 'prime' }, { v: b * b, c: 'unit' }]);
-      case 'trisum': return P.twoTriangulars(n).flatMap(([T, U]) => [{ v: T, c: 'prime' }, { v: U, c: 'unit' }]);
-      case 'remainders': return n > REMAINDERS_MAX ? [] : P.remainderSet(n).map((r) => ({ v: r, c: r === 0 ? 'unit' : 'composite' }));
-      case 'aliquot': { const a = P.aliquotSum(n); return [{ v: a, c: a === n ? 'white' : a > n ? 'unit' : 'composite' }]; }
-      case 'primesq': return P.primePlusSquare(S, n).flatMap(([p, a]) => [{ v: p, c: 'prime' }, { v: a, c: 'unit' }]);
-      case 'coprime': return n > COPRIME_MAX ? [] : P.coprimeSplits(n).map(([a, g]) => ({ v: a, c: g === 1 ? 'prime' : g === a ? 'unit' : 'composite' }));
-      case 'exponents': return P.factorize(n).filter(([p]) => p !== n).map(([p, e]) => ({ v: p, h: e, c: 'prime' }));
-      case 'weighted': return P.weightedSquares(n, weightK).flatMap(([a, b]) => [{ v: a * a, c: 'prime' }, { v: weightK * b * b, c: 'unit' }]);
-      case 'binomial': return P.binomialReps(n).map(([m, r]) => ({ v: m, c: r === 2 ? 'prime' : 'unit' }));
+      case 'consecutive': return P.consecutiveRuns(n).map(([a, k]) => ({ v: a, v2: a + k - 1, c: 'prime', what: `${n} = ${a} + … + ${a + k - 1} (${k} terms)` }));
+      case 'sqdiff': return P.squareDifferences(n).flatMap(([a, b]) => [{ v: a, c: 'prime', what: `a = ${a} in ${n} = ${a}² − ${b}²` }, { v: b, c: 'unit', what: `b = ${b} in ${n} = ${a}² − ${b}²` }]);
+      case 'sqsum': return P.twoSquares(n).flatMap(([a, b]) => [{ v: a * a, c: 'prime', what: `${a}² in ${n} = ${a}² + ${b}²` }, { v: b * b, c: 'unit', what: `${b}² in ${n} = ${a}² + ${b}²` }]);
+      case 'trisum': return P.twoTriangulars(n).flatMap(([T, U]) => [{ v: T, c: 'prime', what: `T = ${T} in ${n} = ${T} + ${U}` }, { v: U, c: 'unit', what: `U = ${U} in ${n} = ${T} + ${U}` }]);
+      case 'remainders': return n > REMAINDERS_MAX ? [] : P.remainderSet(n).map((r) => ({ v: r, c: r === 0 ? 'unit' : 'composite', what: `${n} mod k = ${r} for some 2 ≤ k < ${n}` }));
+      case 'aliquot': { const a = P.aliquotSum(n); return [{ v: a, c: a === n ? 'white' : a > n ? 'unit' : 'composite', what: `s(${n}) = ${a} (${a === n ? 'perfect' : a > n ? 'abundant' : 'deficient'})` }]; }
+      case 'primesq': return P.primePlusSquare(S, n).flatMap(([p, a]) => [{ v: p, c: 'prime', what: `p = ${p} in ${n} = ${p} + ${a}²` }, { v: a, c: 'unit', what: `a = ${a} in ${n} = ${p} + ${a}²` }]);
+      case 'coprime': return n > COPRIME_MAX ? [] : P.coprimeSplits(n).map(([a, g]) => ({ v: a, c: g === 1 ? 'prime' : g === a ? 'unit' : 'composite', what: `${n} = ${a} + ${n - a}, gcd ${g}` }));
+      case 'exponents': return P.factorize(n).filter(([p]) => p !== n).map(([p, e]) => ({ v: p, h: e, c: 'prime', what: `${p}^${e} divides ${n}` }));
+      case 'weighted': return P.weightedSquares(n, weightK).flatMap(([a, b]) => [{ v: a * a, c: 'prime', what: `${a}² in ${n} = ${a}² + ${weightK}·${b}²` }, { v: weightK * b * b, c: 'unit', what: `${weightK}·${b}² in ${n} = ${a}² + ${weightK}·${b}²` }]);
+      case 'binomial': return P.binomialReps(n).map(([m, r]) => ({ v: m, c: r === 2 ? 'prime' : 'unit', what: `${n} = C(${m}, ${r})` }));
       default: return [];
     }
+  }
+
+  // What is under the cursor in a chart panel: the cursor's chart coordinates and, if it sits on
+  // a mark, that mark's exact (x, y) and meaning. mx, my are CSS px inside the canvas.
+  function hitTest(panel, top, half, mx, my) {
+    if (panel.mode === 'bars' || view.ppn < 2) return null;
+    const m = mapper(panel, top, half);
+    const myD = my * dpr;
+    if (myD < m.topD || myD > m.topD + m.halfD) return null;
+    const xn = view.x0 + mx / view.ppn;                            // cursor x in numbers
+    const ppnD = view.ppn * dpr;
+    const dotW = Math.max(m.t, Math.round(ppnD - Math.min(2 * m.t, ppnD * 0.25)));
+    let n, candidates = [];
+    if (panel.mode === 'divoffset') {
+      // rows are y = n; the x-axis does not identify n, so read n off the row instead
+      n = Math.round(m.valueAt(myD, 0));
+      if (n >= 1 && n <= sieveLimit && inClass(panel, n)) candidates = marksFor(panel.mode, n);
+    } else {
+      n = Math.round(xn);
+      if (n >= 1 && n <= sieveLimit && inClass(panel, n)) candidates = marksFor(panel.mode, n);
+    }
+    const cursor = { x: xn, y: m.valueAt(myD, n >= 1 ? n : 1) };
+    let hit = null;
+    for (const mk of candidates) {
+      const xc = mk.x !== undefined ? mk.x : n;                    // mark centre in numbers
+      const xpx = Math.round((xc - view.x0) * ppnD - dotW / 2);
+      if (mx * dpr < xpx || mx * dpr > xpx + dotW) continue;
+      let r0 = Math.floor(m.rowOf(mk.v, n)), r1 = mk.v2 === undefined ? r0 : Math.floor(m.rowOf(mk.v2, n));
+      if (r1 < r0) [r0, r1] = [r1, r0];
+      if (mk.h) r0 -= (mk.h - 1) * m.t;
+      if (myD >= r0 - 1 && myD <= r1 + m.t + 1) { hit = { x: xc, y: mk.v, y2: mk.v2, what: mk.what, n }; break; }
+    }
+    return { cursor, hit, n };
   }
 
   // from + count/2 of the visible range, as the toolbar shows it: the screen centre in numbers
@@ -801,21 +855,30 @@ const XTests = {
     return a + (b - a + 1) / 2;
   }
 
+  // Device-pixel mapping between values and rows for a chart panel occupying [top, top + half).
+  function mapper(panel, top, half) {
+    const { yScale } = panel;
+    const hi = view.x0 + W / view.ppn;                 // top of the y-range == largest visible number
+    const t = Math.max(1, Math.round(dpr));            // line thickness in device px (1 logical px)
+    const halfD = half * dpr, topD = top * dpr;
+    const perColumn = yScale === 'stretched' || yScale === 'logstretched';
+    // logstretched maps 2..n/2 into the panel; n itself sits above it on the top edge, so leave headroom
+    const pad = yScale === 'logstretched' ? 2 * t : 0;
+    const range = (n) => P.yRangeAt(yScale, hi, n);
+    // row (device px) of value v for the column of number n, and its inverse
+    const rowOf = (v, n) => { const r = range(n); return P.valueToRow(v, r.lo, r.hi, topD + pad, halfD - t - pad, r.scale); };
+    const valueAt = (row, n) => { const r = range(n); return P.rowToValue(row, r.lo, r.hi, topD + pad, halfD - t - pad, r.scale); };
+    return { hi, t, halfD, topD, pad, perColumn, rowOf, valueAt };
+  }
+
   function renderChart(panel, top, half, nLeft, nRight, colors) {
     const { mode, yScale } = panel;
     const dots = ({ factors: 'primes', divisors: 'all', goldbach: 'goldbach' })[mode] || (EXACT_ONLY.has(mode) ? mode : null);
     const colorKey = { prime: colors.prime, composite: colors.composite, unit: colors.unit, white: '#ffffff' };
     const span = W / view.ppn;
-    const hi = view.x0 + span;                         // top of the y-range == largest visible number
-    const t = Math.max(1, Math.round(dpr));            // line thickness in device px (1 logical px)
     const ppnD = view.ppn * dpr;                       // device px per number
-    const halfD = half * dpr, topD = top * dpr, WD = W * dpr;
-
-    const perColumn = yScale === 'stretched' || yScale === 'logstretched';
-    // logstretched maps 2..n/2 into the panel; n itself sits above it on the top edge, so leave headroom
-    const pad = yScale === 'logstretched' ? 2 * t : 0;
-    // row (device px) of value v for the column of number n
-    const rowOf = (v, n) => { const r = P.yRangeAt(yScale, hi, n); return P.valueToRow(v, r.lo, r.hi, topD + pad, halfD - t - pad, r.scale); };
+    const WD = W * dpr;
+    const { hi, t, halfD, topD, pad, perColumn, rowOf } = mapper(panel, top, half);
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -989,9 +1052,14 @@ const XTests = {
 
   function updateHover(e) {
     const r = canvas.getBoundingClientRect();
-    const px = e.clientX - r.left;
+    const px = e.clientX - r.left, py = e.clientY - r.top;
     if (view.ppn < 2) { hoverN = -1; tip.style.display = 'none'; return; }
-    const n = Math.round(view.x0 + px / view.ppn);
+    // which panel is the cursor in, and what is under it there
+    const inTop = py < layout.midY;
+    const panel = inTop ? panels[0] : panels[1];
+    const probe = hitTest(panel, inTop ? layout.topBase - layout.half : layout.botBase, layout.half, px, py);
+    // the number the tooltip describes: the hit mark's n, else the column under the cursor
+    const n = probe && probe.hit ? probe.hit.n : (panel.mode === 'divoffset' && probe ? probe.n : Math.round(view.x0 + px / view.ppn));
     if (n < 1 || n > sieveLimit) { hoverN = -1; tip.style.display = 'none'; render(); return; }
     if (n !== hoverN) { hoverN = n; render(); }
     let body;
@@ -1020,6 +1088,13 @@ const XTests = {
     if (n >= 6 && n <= TRIPLE_MAX) {
       const tr = goldbachTriplesCached(n);
       if (tr.length) body += `<br>sum of three primes: ${tr[0].join(' + ')}${tr.length > 1 ? `, … (${tr.length.toLocaleString()} ways)` : ''}`;
+    }
+    if (probe) {
+      const fmt = (v) => Number.isInteger(v) ? v.toLocaleString() : (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+      if (probe.hit) {
+        const h = probe.hit;
+        body += `<br><span class="hit">dot at (x, y) = (${fmt(h.x)}, ${fmt(h.y)}${h.y2 !== undefined ? `…${fmt(h.y2)}` : ''})</span> · ${h.what}`;
+      } else body += `<br><span class="dim">cursor (x, y) ≈ (${fmt(probe.cursor.x)}, ${fmt(probe.cursor.y)})</span>`;
     }
     tip.innerHTML = `<b>${n.toLocaleString()}</b><br>${body}`;
     tip.style.display = 'block';
@@ -1098,7 +1173,7 @@ const XTests = {
   W = r.width; H = r.height;
   { const r0 = loadRange(); setRange(r0.start, r0.count); }
   resize();
-  window.__primeLab = { get view() { return view; }, panels, setRange, setPanel, render, setK(k) { kEl.value = k; kEl.dispatchEvent(new Event('change')); } };
+  window.__primeLab = { get view() { return view; }, panels, layout, hitTest, setRange, setPanel, render, setK(k) { kEl.value = k; kEl.dispatchEvent(new Event('change')); } };
 })();
 </script>
 </body>
