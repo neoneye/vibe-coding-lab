@@ -53,6 +53,7 @@
     <button data-mode="chart" aria-pressed="false">Chart</button>
     <button data-mode="factors" aria-pressed="false">Factors</button>
     <button data-mode="divisors" aria-pressed="false">Divisors</button>
+    <button data-mode="goldbach" aria-pressed="false">Goldbach</button>
   </div>
   <label id="yaxis-label">y-axis
     <div class="seg" id="yaxis" role="group" aria-label="Y-axis scale">
@@ -406,7 +407,8 @@ const XTests = {
 
     const cComp = css('--composite'), cPrime = css('--prime'), cUnit = css('--unit');
 
-    if (mode !== 'bars') renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit, mode === 'factors' ? 'primes' : mode === 'divisors' ? 'all' : null);
+    if (mode !== 'bars') renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit,
+      ({ factors: 'primes', divisors: 'all', goldbach: 'goldbach' })[mode] || null);
     else renderBars(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit);
 
     // axis
@@ -433,7 +435,8 @@ const XTests = {
     // side captions
     ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     const yNote = mode === 'bars' ? '' : yScale === 'log' ? '   ·   y = n (log)' : yScale === 'stretched' ? '   ·   y = n, axis 0..N per column' : yScale === 'logstretched' ? '   ·   n on the top edge, log axis 2..N/2 per column' : '   ·   y = n';
-    const fNote = mode === 'factors' ? ', dots at y = prime factors of n' : mode === 'divisors' ? ', dots at y = divisors of n (teal = prime)' : '';
+    const fNote = mode === 'factors' ? ', dots at y = prime factors of n' : mode === 'divisors' ? ', dots at y = divisors of n (teal = prime)'
+                : mode === 'goldbach' ? ', dots at y = p and n − p for every n = p + q with p, q prime' + (Math.floor(view.x0 + W / view.ppn) > 200000 && view.ppn >= 2 ? ' (shown for n ≤ 200,000)' : '') : '';
     ctx.fillStyle = cComp; ctx.fillText('non-primes ↑   (gaps are the primes)' + yNote + fNote, 12, 10);
     ctx.fillStyle = cPrime; ctx.textBaseline = 'bottom'; ctx.fillText('primes ↓   (gaps are the non-primes)' + yNote, 12, H - 10);
     ctx.textAlign = 'right';
@@ -483,10 +486,21 @@ const XTests = {
   // Chart mode: every number n is the point (n, n). The top half draws that diagonal only over the
   // non-primes, the bottom half only over the primes, so each half has holes where the other lives.
   // Drawn in device pixels through an integer rasteriser, so the diagonals are never anti-aliased.
-  // dots: null (no dots), 'primes' (a dot per prime factor) or 'all' (a dot per proper divisor > 1)
+  // Goldbach pairs cost O(n) each, so cache them and stop past a bound that stays interactive.
+  const GOLDBACH_MAX = 200000;
+  const goldbachCache = new Map();
+  function goldbachDots(n) {
+    if (n > GOLDBACH_MAX) return [];
+    let v = goldbachCache.get(n);
+    if (!v) { v = P.goldbachPairs(S, n).flat(); goldbachCache.set(n, v); }
+    return v;
+  }
+
+  // dots: null (no dots), 'primes' (a dot per prime factor), 'all' (a dot per proper divisor > 1)
+  // or 'goldbach' (a dot at p and n - p for every way n = p + q with both prime)
   function renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit, dots) {
     const showFactors = dots !== null;
-    const dotValues = dots === 'all' ? P.properDivisors : P.primeFactors;
+    const dotValues = dots === 'all' ? P.properDivisors : dots === 'goldbach' ? goldbachDots : P.primeFactors;
     const span = W / view.ppn;
     const lo = view.x0, hi = view.x0 + span;           // y-range of each half == visible x-range
     const t = Math.max(1, Math.round(dpr));            // line thickness in device px (1 logical px)
@@ -524,9 +538,10 @@ const XTests = {
             // a dot in n's column at the height of every prime factor (or every proper divisor)
             const x = Math.round((n - view.x0) * ppnD - dotW / 2);
             for (const q of dotValues(n)) {
-              if (!perColumn && q > hi) continue;
+              const row = Math.floor(rowOf(q, n, topD));
+              if (row < topD || row > topD + halfD - t) continue;   // outside this column's axis
               ctx.fillStyle = hot ? '#ffffff' : (S[q] ? cPrime : cComp);
-              ctx.fillRect(x, Math.floor(rowOf(q, n, topD)), dotW, t);
+              ctx.fillRect(x, row, dotW, t);
             }
           }
         }
@@ -539,6 +554,7 @@ const XTests = {
       if (showFactors) for (let q = 2; q <= Math.min(1000, hi, sieveLimit); q++) if (dots === 'all' || S[q]) smallDivs.push(q);
       const rowAlpha = new Float32Array(Math.ceil(halfD) + 2);   // prime divisors
       const rowAlphaC = new Float32Array(rowAlpha.length);          // composite divisors
+      const rowHits = new Uint16Array(rowAlpha.length);              // goldbach: primes landing per row
       for (let px = 0; px < WD; px++) {
         const a = Math.max(1, Math.floor(view.x0 + px / ppnD));
         const b = Math.min(sieveLimit, Math.floor(view.x0 + (px + 1) / ppnD) - 1);
@@ -546,21 +562,40 @@ const XTests = {
         const pf = P.countInRange(C, a, b) / (b - a + 1);
         const mid = (a + b) / 2;
         if (showFactors) {
-          rowAlpha.fill(0); rowAlphaC.fill(0);
+          rowAlpha.fill(0); rowAlphaC.fill(0); rowHits.fill(0);
           const total = b - a + 1;
           for (const q of smallDivs) {
+            if (dots === 'goldbach') {
+              // share of n in the column with n - q prime: q pairs with n - q, and mirrors at n - q
+              if (!S[q]) continue;
+              const f = P.countInRange(C, a - q, b - q) / total;
+              for (const v of [q, mid - q]) {
+                const row = Math.floor(rowOf(v, mid, 0));
+                if (row >= 0 && row < rowAlpha.length) { rowAlpha[row] += f; rowHits[row]++; }
+              }
+              continue;
+            }
             const row = Math.floor(rowOf(q, mid, 0));
             if (row < 0 || row >= rowAlpha.length) continue;
             (S[q] ? rowAlpha : rowAlphaC)[row] += P.multiplesInRange(q, a, b) / total;
           }
+          if (dots === 'goldbach') {
+            // many primes share a pixel row: show the average pairing share, boosted so the
+            // ~2x prime density of even n reads as a clear band rather than a faint one
+            for (let r = 0; r < rowAlpha.length; r++) if (rowHits[r]) rowAlpha[r] = 2.5 * rowAlpha[r] / rowHits[r];
+          }
+          // each row is t device px tall; take the max over the rows covering a pixel so that
+          // neighbouring rows do not compound their alpha
           for (let r = 0; r < rowAlpha.length; r++) {
-            if (rowAlphaC[r] > 0.002) {
-              ctx.fillStyle = `rgba(${cr_},${cg_},${cb_},${Math.min(1, rowAlphaC[r]).toFixed(3)})`;
-              ctx.fillRect(px, topD + r, 1, t);
+            let ac = 0, ap = 0;
+            for (let k = 0; k < t && r - k >= 0; k++) { ac = Math.max(ac, rowAlphaC[r - k]); ap = Math.max(ap, rowAlpha[r - k]); }
+            if (ac > 0.002) {
+              ctx.fillStyle = `rgba(${cr_},${cg_},${cb_},${Math.min(1, ac).toFixed(3)})`;
+              ctx.fillRect(px, topD + r, 1, 1);
             }
-            if (rowAlpha[r] > 0.002) {
-              ctx.fillStyle = `rgba(${pr_},${pg_},${pb_},${Math.min(1, rowAlpha[r]).toFixed(3)})`;
-              ctx.fillRect(px, topD + r, 1, t);
+            if (ap > 0.002) {
+              ctx.fillStyle = `rgba(${pr_},${pg_},${pb_},${Math.min(1, ap).toFixed(3)})`;
+              ctx.fillRect(px, topD + r, 1, 1);
             }
           }
         }
