@@ -53,7 +53,7 @@
 <div id="bar">
   <div class="row">
     <h1>Prime Lab 1</h1>
-    <label>from <input id="start" type="number" min="1" step="1" value="1"></label>
+    <label>from <input id="start" type="number" step="1" value="1" title="may be negative, down to −count/2"></label>
     <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
     <button id="apply">Go</button>
     <button id="reset">Reset</button>
@@ -292,12 +292,14 @@ const PrimeLab = (() => {
     return clampView({ x0, ppn }, width);
   }
 
+  // The view may start as far left as from = -count/2, so the screen centre can reach 0.
+  function minX0(span) { return -span / 2 - 0.5; }
   function clampView(view, width) {
     const span = width / view.ppn;
     let x0 = view.x0;
-    if (x0 < 0.5) x0 = 0.5;           // number 1 sits at the left edge
+    if (x0 < minX0(span)) x0 = minX0(span);
     if (x0 + span > MAX_N + 0.5) x0 = MAX_N + 0.5 - span;
-    if (x0 < 0.5) x0 = 0.5;
+    if (x0 < minX0(span)) x0 = minX0(span);
     return { x0, ppn: view.ppn };
   }
 
@@ -402,7 +404,8 @@ const XTests = {
     const z = P.zoomAt(v, 100, 2, 1000);
     eq(Math.abs((z.x0 + 100 / z.ppn) - (v.x0 + 100 / v.ppn)) < 1e-9, true, 'zoom keeps cursor number fixed');
     eq(z.ppn, 20, 'zoom doubles ppn');
-    eq(P.clampView({ x0: -5, ppn: 10 }, 1000).x0, 0.5, 'clamp left edge');
+    eq(P.clampView({ x0: -5, ppn: 10 }, 1000).x0, -5, 'negative start allowed');
+    eq(P.clampView({ x0: -500, ppn: 10 }, 1000).x0, -50.5, 'clamp left edge at from = -count/2');
     eq(P.zoomAt({ x0: 0.5, ppn: 10 }, 0, 1000, 1000).ppn, 400, 'zoom in capped');
     const m = P.fitCanvasMetrics(801, 600.4, 2);
     eq(m, { bw: 1602, bh: 1201, cssW: 801, cssH: 600.5 }, 'hidpi metrics');
@@ -613,13 +616,14 @@ const XTests = {
   function loadRange() {
     try {
       const r = JSON.parse(localStorage.getItem('prime-lab1.range') || 'null');
-      if (r && Number.isFinite(r.start) && Number.isFinite(r.count) && r.start >= 1 && r.count >= 10) return r;
+      if (r && Number.isFinite(r.start) && Number.isFinite(r.count) && r.count >= 10 && r.start >= -r.count / 2) return r;
     } catch (_) {}
     return { start: 1, count: 200 };
   }
 
   function setRange(start, count) {
-    start = Math.max(1, Math.floor(start)); count = Math.max(10, Math.floor(count));
+    count = Math.max(10, Math.floor(count));
+    start = Math.max(-Math.floor(count / 2), Math.floor(start));
     view = P.clampView({ x0: start - 0.5, ppn: W / count }, W);
     render();
   }
@@ -653,11 +657,11 @@ const XTests = {
     ctx.fillStyle = css('--muted'); ctx.font = '11px ' + FONT;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const step = P.tickStep(view.ppn, 64);
-    const first = Math.max(step, Math.ceil(nLeft / step) * step);
+    const first = Math.ceil(nLeft / step) * step;
     for (let n = first; n <= nRight; n += step) ctx.fillText(n.toLocaleString(), (n - view.x0) * view.ppn, midY);
     if (view.ppn >= 24) {
       // label every number when there is room
-      for (let n = Math.max(1, nLeft); n <= nRight; n++) {
+      for (let n = nLeft; n <= nRight; n++) {
         if (n % step === 0) continue;
         ctx.fillText(String(n), (n - view.x0) * view.ppn, midY);
       }
@@ -669,14 +673,15 @@ const XTests = {
     ctx.textBaseline = 'bottom'; ctx.fillStyle = colors[panels[1].cls]; ctx.fillText(caption(panels[1], '↓'), 12, H - 10);
 
     ctx.textAlign = 'right';
-    const a = Math.max(1, Math.ceil(view.x0)), b = Math.min(Math.floor(view.x0 + span), sieveLimit);
-    const np = P.countInRange(C, a, b);
+    const a = Math.ceil(view.x0), b = Math.min(Math.floor(view.x0 + span), sieveLimit);
+    const a1 = Math.max(1, a);
+    const np = P.countInRange(C, a1, b);
     if (document.activeElement !== startEl && document.activeElement !== countEl) {
       startEl.value = a; countEl.value = b - a + 1;
     }
     saveRange(a, b - a + 1);
     ctx.fillStyle = css('--muted');
-    ctx.fillText(`${a.toLocaleString()} … ${b.toLocaleString()}   ·   ${np.toLocaleString()} primes, ${(b - a + 1 - np).toLocaleString()} non-primes` +
+    ctx.fillText(`${a.toLocaleString()} … ${b.toLocaleString()}   ·   ${np.toLocaleString()} primes, ${Math.max(0, b - a1 + 1 - np).toLocaleString()} non-primes` +
                  (view.ppn < 2 ? `   ·   ${(1 / view.ppn).toFixed(1)} numbers per pixel` : ''), W - 12, H - 10);
   }
 
@@ -792,7 +797,7 @@ const XTests = {
 
   // from + count/2 of the visible range, as the toolbar shows it: the screen centre in numbers
   function offsetBase() {
-    const a = Math.max(1, Math.ceil(view.x0)), b = Math.min(Math.floor(view.x0 + W / view.ppn), sieveLimit);
+    const a = Math.ceil(view.x0), b = Math.min(Math.floor(view.x0 + W / view.ppn), sieveLimit);
     return a + (b - a + 1) / 2;
   }
 
