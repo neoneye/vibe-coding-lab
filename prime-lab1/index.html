@@ -18,11 +18,13 @@
   }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
     font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; overflow: hidden; }
-  #bar { position: absolute; top: 0; left: 0; right: 0; height: 44px; display: flex; align-items: center; gap: 14px;
-    padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--axis); box-sizing: border-box; z-index: 2; }
-  #bar > * { white-space: nowrap; flex: 0 0 auto; }
+  body { display: flex; flex-direction: column; }
+  #bar { flex: 0 0 auto; background: var(--panel); border-bottom: 1px solid var(--axis); padding: 4px 14px; z-index: 2; }
+  #bar .row { display: flex; align-items: center; gap: 12px; height: 34px; }
+  #bar .row > * { white-space: nowrap; flex: 0 0 auto; }
   #bar h1 { font-size: 14px; font-weight: 600; margin: 0 6px 0 0; letter-spacing: .02em; }
   #bar label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  #bar .rowlabel { color: var(--muted); min-width: 56px; }
   #bar input[type=number] { width: 90px; background: var(--bg); color: var(--fg); border: 1px solid var(--axis);
     border-radius: 4px; padding: 3px 6px; font: inherit; }
   #bar button { background: var(--bg); color: var(--fg); border: 1px solid var(--axis); border-radius: 4px;
@@ -36,7 +38,7 @@
   #bar .seg button[aria-pressed=true] { background: var(--accent); color: #0b1a19; font-weight: 600; }
   #bar .seg button:disabled { opacity: .4; cursor: default; }
   #bar .seg button:disabled[aria-pressed=true] { background: var(--axis); color: var(--fg); }
-  #view { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; cursor: grab; }
+  #view { flex: 1 1 auto; position: relative; min-height: 0; cursor: grab; }
   #view.dragging { cursor: grabbing; }
   canvas { display: block; }
   #tip { position: absolute; pointer-events: none; background: rgba(22,27,34,.96); border: 1px solid var(--axis);
@@ -47,27 +49,15 @@
 </head>
 <body>
 <div id="bar">
-  <h1>Prime Lab 1</h1>
-  <div class="seg" id="modes" role="group" aria-label="Visualization mode">
-    <button data-mode="bars" aria-pressed="true">Bars</button>
-    <button data-mode="chart" aria-pressed="false">Chart</button>
-    <button data-mode="factors" aria-pressed="false">Factors</button>
-    <button data-mode="divisors" aria-pressed="false">Divisors</button>
-    <button data-mode="goldbach" aria-pressed="false">Goldbach</button>
+  <div class="row">
+    <h1>Prime Lab 1</h1>
+    <label>from <input id="start" type="number" min="1" step="1" value="1"></label>
+    <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
+    <button id="apply">Go</button>
+    <button id="reset">Reset</button>
+    <span id="hint">scroll to zoom · drag to pan · hover a number</span>
   </div>
-  <label id="yaxis-label">y-axis
-    <div class="seg" id="yaxis" role="group" aria-label="Y-axis scale">
-      <button data-scale="linear" aria-pressed="true">Linear</button>
-      <button data-scale="log" aria-pressed="false">Log</button>
-      <button data-scale="stretched" aria-pressed="false">Stretched</button>
-      <button data-scale="logstretched" aria-pressed="false">Log stretched</button>
-    </div>
-  </label>
-  <label>from <input id="start" type="number" min="1" step="1" value="1"></label>
-  <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
-  <button id="apply">Go</button>
-  <button id="reset">Reset</button>
-  <span id="hint">scroll to zoom · drag to pan · hover a number</span>
+  <div id="panel-rows"></div>
 </div>
 <div id="view"><canvas id="c"></canvas></div>
 <div id="tip"></div>
@@ -359,12 +349,28 @@ const XTests = {
   const startEl = document.getElementById('start');
   const countEl = document.getElementById('count');
 
+  // ---- panel settings: the top and bottom halves are configured independently ----
+  const MODES = [['bars', 'Bars'], ['chart', 'Chart'], ['factors', 'Factors'], ['divisors', 'Divisors'], ['goldbach', 'Goldbach']];
+  const CLASSES = [['composite', 'Non-primes'], ['prime', 'Primes']];
+  const SCALES = [['linear', 'Linear'], ['log', 'Log'], ['stretched', 'Stretched'], ['logstretched', 'Log stretched']];
+  const panels = [
+    { mode: 'bars', cls: 'composite', yScale: 'linear' },
+    { mode: 'bars', cls: 'prime', yScale: 'linear' },
+  ];
+  try {
+    const saved = JSON.parse(localStorage.getItem('prime-lab1.panels') || 'null');
+    if (Array.isArray(saved)) saved.forEach((p, i) => {
+      if (!panels[i] || !p) return;
+      if (MODES.some(([k]) => k === p.mode)) panels[i].mode = p.mode;
+      if (CLASSES.some(([k]) => k === p.cls)) panels[i].cls = p.cls;
+      if (SCALES.some(([k]) => k === p.yScale)) panels[i].yScale = p.yScale;
+    });
+  } catch (_) {}
+
   let W = 0, H = 0, dpr = 1;
   let view = { x0: 0.5, ppn: 1 };
   let sieveLimit = 0, S = null, C = null;
   let hoverN = -1;
-  let mode = 'bars';
-  let yScale = 'linear';
 
   function ensureSieve(limit) {
     limit = Math.min(P.MAX_N, Math.max(1000, limit));
@@ -392,6 +398,7 @@ const XTests = {
   }
 
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
   function render() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -400,30 +407,27 @@ const XTests = {
     const axisH = 22;                        // strip around the axis for labels
     const topBase = midY - axisH / 2, botBase = midY + axisH / 2;
     const cap = 30;                          // caption strip at top and bottom
-    const half = topBase - cap;              // usable bar height each side
+    const half = topBase - cap;              // usable height of each panel
     const span = W / view.ppn;
     const nLeft = Math.floor(view.x0), nRight = Math.ceil(view.x0 + span);
     ensureSieve(nRight + 1);
 
-    const cComp = css('--composite'), cPrime = css('--prime'), cUnit = css('--unit');
+    const colors = { composite: css('--composite'), prime: css('--prime'), unit: css('--unit') };
 
-    if (mode !== 'bars') renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit,
-      ({ factors: 'primes', divisors: 'all', goldbach: 'goldbach' })[mode] || null);
-    else renderBars(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit);
+    // top panel sits on the axis (bars grow upward); bottom panel hangs from it (bars grow downward)
+    renderPanel(panels[0], topBase - half, half, 'up', nLeft, nRight, colors);
+    renderPanel(panels[1], botBase, half, 'down', nLeft, nRight, colors);
 
     // axis
     ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, topBase + 0.5); ctx.lineTo(W, topBase + 0.5);
     ctx.moveTo(0, botBase - 0.5); ctx.lineTo(W, botBase - 0.5); ctx.stroke();
 
-    ctx.fillStyle = css('--muted'); ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillStyle = css('--muted'); ctx.font = '11px ' + FONT;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const step = P.tickStep(view.ppn, 64);
     const first = Math.max(step, Math.ceil(nLeft / step) * step);
-    for (let n = first; n <= nRight; n += step) {
-      const x = (n - view.x0) * view.ppn;
-      ctx.fillText(n.toLocaleString(), x, midY);
-    }
+    for (let n = first; n <= nRight; n += step) ctx.fillText(n.toLocaleString(), (n - view.x0) * view.ppn, midY);
     if (view.ppn >= 24) {
       // label every number when there is room
       for (let n = Math.max(1, nLeft); n <= nRight; n++) {
@@ -432,13 +436,11 @@ const XTests = {
       }
     }
 
-    // side captions
-    ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    const yNote = mode === 'bars' ? '' : yScale === 'log' ? '   ·   y = n (log)' : yScale === 'stretched' ? '   ·   y = n, axis 0..N per column' : yScale === 'logstretched' ? '   ·   n on the top edge, log axis 2..N/2 per column' : '   ·   y = n';
-    const fNote = mode === 'factors' ? ', dots at y = prime factors of n' : mode === 'divisors' ? ', dots at y = divisors of n (teal = prime)'
-                : mode === 'goldbach' ? ', dots at y = p and n − p for every n = p + q with p, q prime' + (Math.floor(view.x0 + W / view.ppn) > 200000 && view.ppn >= 2 ? ' (shown for n ≤ 200,000)' : '') : '';
-    ctx.fillStyle = cComp; ctx.fillText('non-primes ↑   (gaps are the primes)' + yNote + fNote, 12, 10);
-    ctx.fillStyle = cPrime; ctx.textBaseline = 'bottom'; ctx.fillText('primes ↓   (gaps are the non-primes)' + yNote, 12, H - 10);
+    // captions
+    ctx.font = '12px ' + FONT; ctx.textAlign = 'left';
+    ctx.textBaseline = 'top'; ctx.fillStyle = colors[panels[0].cls]; ctx.fillText(caption(panels[0], '↑'), 12, 10);
+    ctx.textBaseline = 'bottom'; ctx.fillStyle = colors[panels[1].cls]; ctx.fillText(caption(panels[1], '↓'), 12, H - 10);
+
     ctx.textAlign = 'right';
     const a = Math.max(1, Math.ceil(view.x0)), b = Math.min(Math.floor(view.x0 + span), sieveLimit);
     const np = P.countInRange(C, a, b);
@@ -450,42 +452,55 @@ const XTests = {
                  (view.ppn < 2 ? `   ·   ${(1 / view.ppn).toFixed(1)} numbers per pixel` : ''), W - 12, H - 10);
   }
 
-  function renderBars(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit) {
+  function caption(panel, arrow) {
+    const prime = panel.cls === 'prime';
+    let s = (prime ? 'primes ' : 'non-primes ') + arrow + '   (gaps are the ' + (prime ? 'non-primes' : 'primes') + ')';
+    if (panel.mode === 'bars') return s;
+    s += ({ linear: '   ·   y = n', log: '   ·   y = n (log)', stretched: '   ·   y = n, axis 0..N per column',
+            logstretched: '   ·   n on the top edge, log axis 2..N/2 per column' })[panel.yScale];
+    if (panel.mode === 'factors') s += prime ? '' : ', dots at y = prime factors of n';
+    else if (panel.mode === 'divisors') s += prime ? '' : ', dots at y = divisors of n (teal = prime)';
+    else if (panel.mode === 'goldbach') {
+      s += prime ? ', dots at 2 and p − 2 when both are prime (twin primes)'
+                 : ', dots at y = p and n − p for every n = p + q with p, q prime';
+      if (!prime && view.ppn >= 2 && Math.floor(view.x0 + W / view.ppn) > GOLDBACH_MAX) s += ' (shown for n ≤ 200,000)';
+    }
+    return s;
+  }
+
+  // ---- one panel ----
+  function renderPanel(panel, top, half, dir, nLeft, nRight, colors) {
+    if (panel.mode === 'bars') renderBars(panel, top, half, dir, nLeft, nRight, colors);
+    else renderChart(panel, top, half, nLeft, nRight, colors);
+  }
+
+  const inClass = (panel, n) => panel.cls === 'prime' ? S[n] === 1 : S[n] === 0;
+  const colorOf = (panel, n, colors) => panel.cls === 'prime' ? colors.prime : (n === 1 ? colors.unit : colors.composite);
+
+  function renderBars(panel, top, half, dir, nLeft, nRight, colors) {
     if (view.ppn >= 2) {
       // one bar per number, gaps where the other class lives
       const bw = Math.max(1, view.ppn - Math.min(2, view.ppn * 0.25));
       for (let n = Math.max(1, nLeft); n <= Math.min(nRight, sieveLimit); n++) {
-        const x = (n - view.x0) * view.ppn - bw / 2;
-        const hot = n === hoverN;
-        if (S[n]) {
-          ctx.fillStyle = hot ? '#ffffff' : cPrime;
-          ctx.fillRect(x, botBase, bw, half);
-        } else {
-          ctx.fillStyle = hot ? '#ffffff' : (n === 1 ? cUnit : cComp);
-          ctx.fillRect(x, topBase - half, bw, half);
-        }
+        if (!inClass(panel, n)) continue;
+        ctx.fillStyle = n === hoverN ? '#ffffff' : colorOf(panel, n, colors);
+        ctx.fillRect((n - view.x0) * view.ppn - bw / 2, top, bw, half);
       }
     } else {
-      // density mode: each pixel column covers several numbers
+      // density mode: each pixel column covers several numbers; bar height = class share
+      ctx.fillStyle = colors[panel.cls];
       for (let px = 0; px < W; px++) {
         const a = Math.max(1, Math.floor(view.x0 + px / view.ppn));
         const b = Math.min(sieveLimit, Math.floor(view.x0 + (px + 1) / view.ppn) - 1);
         if (b < a) continue;
-        const total = b - a + 1;
-        const pr = P.countInRange(C, a, b);
-        const pf = pr / total;
-        ctx.fillStyle = cPrime;
-        ctx.fillRect(px, botBase, 1, Math.max(pf > 0 ? 1 : 0, half * pf));
-        ctx.fillStyle = cComp;
-        const cf = 1 - pf;
-        ctx.fillRect(px, topBase - half * cf, 1, half * cf);
+        const pf = P.countInRange(C, a, b) / (b - a + 1);
+        const f = panel.cls === 'prime' ? pf : 1 - pf;
+        const h = Math.max(f > 0 ? 1 : 0, half * f);
+        ctx.fillRect(px, dir === 'up' ? top + half - h : top, 1, h);
       }
     }
   }
 
-  // Chart mode: every number n is the point (n, n). The top half draws that diagonal only over the
-  // non-primes, the bottom half only over the primes, so each half has holes where the other lives.
-  // Drawn in device pixels through an integer rasteriser, so the diagonals are never anti-aliased.
   // Goldbach pairs cost O(n) each, so cache them and stop past a bound that stays interactive.
   const GOLDBACH_MAX = 200000;
   const goldbachCache = new Map();
@@ -496,121 +511,126 @@ const XTests = {
     return v;
   }
 
-  // dots: null (no dots), 'primes' (a dot per prime factor), 'all' (a dot per proper divisor > 1)
-  // or 'goldbach' (a dot at p and n - p for every way n = p + q with both prime)
-  function renderChart(nLeft, nRight, topBase, botBase, half, cComp, cPrime, cUnit, dots) {
-    const showFactors = dots !== null;
+  // Chart modes: every number n of the panel's class is the point (n, n), so the panel shows the
+  // diagonal with holes where the other class lives. Dot modes add, in n's column, a dot at the
+  // height of each prime factor / proper divisor / Goldbach partner. Drawn in device pixels
+  // through an integer rasteriser, so nothing is anti-aliased.
+  function renderChart(panel, top, half, nLeft, nRight, colors) {
+    const { mode, yScale } = panel;
+    const dots = ({ factors: 'primes', divisors: 'all', goldbach: 'goldbach' })[mode] || null;
     const dotValues = dots === 'all' ? P.properDivisors : dots === 'goldbach' ? goldbachDots : P.primeFactors;
     const span = W / view.ppn;
-    const lo = view.x0, hi = view.x0 + span;           // y-range of each half == visible x-range
+    const hi = view.x0 + span;                         // top of the y-range == largest visible number
     const t = Math.max(1, Math.round(dpr));            // line thickness in device px (1 logical px)
     const ppnD = view.ppn * dpr;                       // device px per number
-    const halfD = half * dpr;
-    const topD = (topBase - half) * dpr, botD = botBase * dpr;
-    const WD = W * dpr;
+    const halfD = half * dpr, topD = top * dpr, WD = W * dpr;
 
     const perColumn = yScale === 'stretched' || yScale === 'logstretched';
-    // row of value v inside the half starting at `top`, for the column of number n
-    // logstretched maps 2..n/2 into the half; n itself sits above it on the top edge, so leave headroom
+    // logstretched maps 2..n/2 into the panel; n itself sits above it on the top edge, so leave headroom
     const pad = yScale === 'logstretched' ? 2 * t : 0;
-    const rowOf = (v, n, top) => { const r = P.yRangeAt(yScale, hi, n); return P.valueToRow(v, r.lo, r.hi, top + pad, halfD - t - pad, r.scale); };
+    // row (device px) of value v for the column of number n
+    const rowOf = (v, n) => { const r = P.yRangeAt(yScale, hi, n); return P.valueToRow(v, r.lo, r.hi, topD + pad, halfD - t - pad, r.scale); };
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const plotAt = (x, y) => ctx.fillRect(x, y, t, t);
 
     if (view.ppn >= 2) {
-      const drawN = (n, top, color) => {
-        const xa = (n - 0.5 - view.x0) * ppnD, xb = (n + 0.5 - view.x0) * ppnD;
-        // per-column axes put n at its own top, so the diagonal is flat there
-        const ya = perColumn ? top : rowOf(n - 0.5, n - 0.5, top);
-        const yb = perColumn ? ya : rowOf(n + 0.5, n + 0.5, top);
-        ctx.fillStyle = color;
-        P.plotSegment(xa, ya, xb, yb, plotAt);
-      };
       const dotW = Math.max(t, Math.round(ppnD - Math.min(2 * t, ppnD * 0.25)));
       for (let n = Math.max(1, nLeft); n <= Math.min(nRight, sieveLimit); n++) {
+        if (!inClass(panel, n)) continue;
         const hot = n === hoverN;
-        if (S[n]) drawN(n, botD, hot ? '#ffffff' : cPrime);
-        else {
-          drawN(n, topD, hot ? '#ffffff' : (n === 1 ? cUnit : cComp));
-          if (showFactors && n > 1) {
-            // a dot in n's column at the height of every prime factor (or every proper divisor)
-            const x = Math.round((n - view.x0) * ppnD - dotW / 2);
-            for (const q of dotValues(n)) {
-              const row = Math.floor(rowOf(q, n, topD));
-              if (row < topD || row > topD + halfD - t) continue;   // outside this column's axis
-              ctx.fillStyle = hot ? '#ffffff' : (S[q] ? cPrime : cComp);
-              ctx.fillRect(x, row, dotW, t);
-            }
+        const xa = (n - 0.5 - view.x0) * ppnD, xb = (n + 0.5 - view.x0) * ppnD;
+        // per-column axes put n at its own top, so the diagonal is flat there
+        const ya = perColumn ? topD : rowOf(n - 0.5, n - 0.5);
+        const yb = perColumn ? ya : rowOf(n + 0.5, n + 0.5);
+        ctx.fillStyle = hot ? '#ffffff' : colorOf(panel, n, colors);
+        P.plotSegment(xa, ya, xb, yb, plotAt);
+        if (dots && n > 1) {
+          const x = Math.round((n - view.x0) * ppnD - dotW / 2);
+          for (const q of dotValues(n)) {
+            if (q === n) continue;                               // a prime's only factor is itself
+            const row = Math.floor(rowOf(q, n));
+            if (row < topD || row > topD + halfD - t) continue;  // outside this column's axis
+            ctx.fillStyle = hot ? '#ffffff' : (S[q] ? colors.prime : colors.composite);
+            ctx.fillRect(x, row, dotW, t);
           }
         }
       }
     } else {
-      // density: each device column covers several numbers; shade the diagonal by class fraction
-      const [pr_, pg_, pb_] = hexRgb(cPrime), [cr_, cg_, cb_] = hexRgb(cComp);
+      // density: each device column covers several numbers; shade the diagonal by class share
+      const [pr_, pg_, pb_] = hexRgb(colors.prime), [cr_, cg_, cb_] = hexRgb(colors.composite);
+      const prime = panel.cls === 'prime';
       // small values only: a divisor q contributes ~1/q of a column, invisible past a few hundred
       const smallDivs = [];
-      if (showFactors) for (let q = 2; q <= Math.min(1000, hi, sieveLimit); q++) if (dots === 'all' || S[q]) smallDivs.push(q);
-      const rowAlpha = new Float32Array(Math.ceil(halfD) + 2);   // prime divisors
-      const rowAlphaC = new Float32Array(rowAlpha.length);          // composite divisors
+      if (dots) for (let q = 2; q <= Math.min(1000, hi, sieveLimit); q++) if (dots === 'all' || S[q]) smallDivs.push(q);
+      const rowAlpha = new Float32Array(Math.ceil(halfD) + 2);   // prime-valued dots
+      const rowAlphaC = new Float32Array(rowAlpha.length);          // composite-valued dots
       const rowHits = new Uint16Array(rowAlpha.length);              // goldbach: primes landing per row
+      const rowAt = (v, mid) => Math.floor(rowOf(v, mid)) - Math.floor(topD);
       for (let px = 0; px < WD; px++) {
         const a = Math.max(1, Math.floor(view.x0 + px / ppnD));
         const b = Math.min(sieveLimit, Math.floor(view.x0 + (px + 1) / ppnD) - 1);
         if (b < a) continue;
-        const pf = P.countInRange(C, a, b) / (b - a + 1);
+        const total = b - a + 1;
+        const pf = P.countInRange(C, a, b) / total;
         const mid = (a + b) / 2;
-        if (showFactors) {
+        let any = false;
+        if (dots) {
           rowAlpha.fill(0); rowAlphaC.fill(0); rowHits.fill(0);
-          const total = b - a + 1;
-          for (const q of smallDivs) {
-            if (dots === 'goldbach') {
-              // share of n in the column with n - q prime: q pairs with n - q, and mirrors at n - q
-              if (!S[q]) continue;
-              const f = P.countInRange(C, a - q, b - q) / total;
-              for (const v of [q, mid - q]) {
-                const row = Math.floor(rowOf(v, mid, 0));
-                if (row >= 0 && row < rowAlpha.length) { rowAlpha[row] += f; rowHits[row]++; }
-              }
-              continue;
+          if (dots === 'goldbach' && prime) {
+            // a prime p pairs only as 2 + (p - 2): count the twin-prime upper members in the column
+            if (total <= 5000) {
+              let twins = 0;
+              for (let n = Math.max(a, 5); n <= b; n++) if (S[n] && S[n - 2]) twins++;
+              const f = twins / total;
+              for (const v of [2, mid - 2]) { const r = rowAt(v, mid); if (r >= 0 && r < rowAlpha.length) rowAlpha[r] += f; }
+              any = twins > 0;
             }
-            const row = Math.floor(rowOf(q, mid, 0));
-            if (row < 0 || row >= rowAlpha.length) continue;
-            (S[q] ? rowAlpha : rowAlphaC)[row] += P.multiplesInRange(q, a, b) / total;
+          } else if (!prime) {
+            for (const q of smallDivs) {
+              if (dots === 'goldbach') {
+                // share of n in the column with n - q prime: q pairs with n - q, and mirrors at n - q
+                const f = P.countInRange(C, a - q, b - q) / total;
+                for (const v of [q, mid - q]) {
+                  const r = rowAt(v, mid);
+                  if (r >= 0 && r < rowAlpha.length) { rowAlpha[r] += f; rowHits[r]++; }
+                }
+                continue;
+              }
+              const r = rowAt(q, mid);
+              if (r < 0 || r >= rowAlpha.length) continue;
+              (S[q] ? rowAlpha : rowAlphaC)[r] += P.multiplesInRange(q, a, b) / total;
+            }
+            if (dots === 'goldbach') {
+              // many primes share a pixel row: show the average pairing share, boosted so the
+              // ~2x prime density of even n reads as a clear band rather than a faint one
+              for (let r = 0; r < rowAlpha.length; r++) if (rowHits[r]) rowAlpha[r] = 2.5 * rowAlpha[r] / rowHits[r];
+            }
+            any = true;
           }
-          if (dots === 'goldbach') {
-            // many primes share a pixel row: show the average pairing share, boosted so the
-            // ~2x prime density of even n reads as a clear band rather than a faint one
-            for (let r = 0; r < rowAlpha.length; r++) if (rowHits[r]) rowAlpha[r] = 2.5 * rowAlpha[r] / rowHits[r];
-          }
+        }
+        if (any) {
           // each row is t device px tall; take the max over the rows covering a pixel so that
           // neighbouring rows do not compound their alpha
           for (let r = 0; r < rowAlpha.length; r++) {
             let ac = 0, ap = 0;
             for (let k = 0; k < t && r - k >= 0; k++) { ac = Math.max(ac, rowAlphaC[r - k]); ap = Math.max(ap, rowAlpha[r - k]); }
-            if (ac > 0.002) {
-              ctx.fillStyle = `rgba(${cr_},${cg_},${cb_},${Math.min(1, ac).toFixed(3)})`;
-              ctx.fillRect(px, topD + r, 1, 1);
-            }
-            if (ap > 0.002) {
-              ctx.fillStyle = `rgba(${pr_},${pg_},${pb_},${Math.min(1, ap).toFixed(3)})`;
-              ctx.fillRect(px, topD + r, 1, 1);
-            }
+            if (ac > 0.002) { ctx.fillStyle = `rgba(${cr_},${cg_},${cb_},${Math.min(1, ac).toFixed(3)})`; ctx.fillRect(px, Math.floor(topD) + r, 1, 1); }
+            if (ap > 0.002) { ctx.fillStyle = `rgba(${pr_},${pg_},${pb_},${Math.min(1, ap).toFixed(3)})`; ctx.fillRect(px, Math.floor(topD) + r, 1, 1); }
           }
         }
-        const yTop = perColumn ? topD : Math.floor(rowOf(mid, mid, topD));
-        const yBot = perColumn ? botD : Math.floor(rowOf(mid, mid, botD));
-        ctx.fillStyle = `rgba(${cr_},${cg_},${cb_},${(0.15 + 0.85 * (1 - pf)).toFixed(3)})`;
-        ctx.fillRect(px, yTop, 1, t);
-        ctx.fillStyle = `rgba(${pr_},${pg_},${pb_},${(0.15 + 0.85 * pf).toFixed(3)})`;
-        ctx.fillRect(px, yBot, 1, t);
+        const y = perColumn ? topD : Math.floor(rowOf(mid, mid));
+        const f = prime ? pf : 1 - pf;
+        const [r_, g_, b_] = prime ? [pr_, pg_, pb_] : [cr_, cg_, cb_];
+        ctx.fillStyle = `rgba(${r_},${g_},${b_},${(0.15 + 0.85 * f).toFixed(3)})`;
+        ctx.fillRect(px, y, 1, t);
       }
     }
     ctx.restore();
 
-    // y-axis labels (value of n) on the left of each half
-    ctx.fillStyle = css('--muted'); ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    // y-axis labels (value of n) on the left of the panel
+    ctx.fillStyle = css('--muted'); ctx.font = '11px ' + FONT;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     let ticks, label = (v) => v.toLocaleString();
     if (yScale === 'stretched') {
@@ -627,13 +647,11 @@ const XTests = {
     }
     ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
     for (const v of ticks) {
-      for (const top of [topBase - half, botBase]) {
-        const y = perColumn
-          ? Math.round(P.valueToRow(v, 0, 1, top + pad / dpr, half - 1 - pad / dpr)) + 0.5
-          : Math.round(P.valueToRow(v, yScale === 'log' ? P.LOG_ORIGIN : 0, hi, top, half, yScale)) + 0.5;
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(6, y); ctx.stroke();
-        ctx.fillText(label(v), 9, y);
-      }
+      const y = perColumn
+        ? Math.round(P.valueToRow(v, 0, 1, top + pad / dpr, half - 1 - pad / dpr)) + 0.5
+        : Math.round(P.valueToRow(v, yScale === 'log' ? P.LOG_ORIGIN : 0, hi, top, half, yScale)) + 0.5;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(6, y); ctx.stroke();
+      ctx.fillText(label(v), 9, y);
     }
   }
 
@@ -687,6 +705,7 @@ const XTests = {
       body = `<span class="p">prime</span> · p<sub>${idx.toLocaleString()}</sub>` +
              (pp > 0 ? ` · gap from ${pp.toLocaleString()}: ${n - pp}` : '') +
              (np > 0 ? ` · gap to ${np.toLocaleString()}: ${np - n}` : '');
+      if (n >= 5 && S[n - 2]) body += `<br>sum of two primes: 2 + ${n - 2} (twin prime)`;
     } else {
       body = `<span class="c">composite</span> = ${P.formatFactors(P.factorize(n))}`;
       const pairs = P.goldbachPairs(S, n);
@@ -709,32 +728,43 @@ const XTests = {
     tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
   }
 
-  const modeButtons = [...document.querySelectorAll('#modes button')];
-  function setMode(m) {
-    mode = m;
-    for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
-    try { localStorage.setItem('prime-lab1.mode', m); } catch (_) {}
-    syncScaleButtons(); render();
+  // ---- panel controls: one row per panel, each with class, mode and y-axis segmented controls ----
+  const rowsEl = document.getElementById('panel-rows');
+  function seg(i, key, options) {
+    const el = document.createElement('div');
+    el.className = 'seg'; el.dataset.panel = i; el.dataset.key = key; el.setAttribute('role', 'group');
+    for (const [value, text] of options) {
+      const b = document.createElement('button');
+      b.dataset.value = value; b.textContent = text;
+      b.addEventListener('click', () => setPanel(i, { [key]: value }));
+      el.appendChild(b);
+    }
+    return el;
   }
-  for (const b of modeButtons) b.addEventListener('click', () => setMode(b.dataset.mode));
-  try { const m = localStorage.getItem('prime-lab1.mode'); if (m && modeButtons.some((b) => b.dataset.mode === m)) mode = m; } catch (_) {}
-  for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
-
-  const scaleButtons = [...document.querySelectorAll('#yaxis button')];
-  function syncScaleButtons() {
-    for (const b of scaleButtons) {
-      b.setAttribute('aria-pressed', String(b.dataset.scale === yScale));
-      b.disabled = mode === 'bars';            // bars have no y-axis
+  panels.forEach((_, i) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const lab = document.createElement('span'); lab.className = 'rowlabel'; lab.textContent = i === 0 ? 'top ↑' : 'bottom ↓';
+    row.append(lab, seg(i, 'cls', CLASSES), seg(i, 'mode', MODES));
+    const ylab = document.createElement('span'); ylab.className = 'rowlabel'; ylab.textContent = 'y-axis';
+    row.append(ylab, seg(i, 'yScale', SCALES));
+    rowsEl.appendChild(row);
+  });
+  function syncControls() {
+    for (const el of rowsEl.querySelectorAll('.seg')) {
+      const p = panels[+el.dataset.panel], key = el.dataset.key;
+      for (const b of el.querySelectorAll('button')) {
+        b.setAttribute('aria-pressed', String(b.dataset.value === p[key]));
+        b.disabled = key === 'yScale' && p.mode === 'bars';   // bars have no y-axis
+      }
     }
   }
-  function setYScale(sc) {
-    yScale = sc;
-    try { localStorage.setItem('prime-lab1.yscale', sc); } catch (_) {}
-    syncScaleButtons(); render();
+  function setPanel(i, patch) {
+    Object.assign(panels[i], patch);
+    try { localStorage.setItem('prime-lab1.panels', JSON.stringify(panels)); } catch (_) {}
+    syncControls(); render();
   }
-  for (const b of scaleButtons) b.addEventListener('click', () => setYScale(b.dataset.scale));
-  try { const sc = localStorage.getItem('prime-lab1.yscale'); if (['linear', 'log', 'stretched', 'logstretched'].includes(sc)) yScale = sc; } catch (_) {}
-  syncScaleButtons();
+  syncControls();
 
   document.getElementById('apply').addEventListener('click', () => setRange(+startEl.value, +countEl.value));
   for (const el of [startEl, countEl]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') setRange(+startEl.value, +countEl.value); });
@@ -754,7 +784,7 @@ const XTests = {
   W = r.width; H = r.height;
   setRange(1, 200);
   resize();
-  window.__primeLab = { get view() { return view; }, setRange, setMode, setYScale, render };
+  window.__primeLab = { get view() { return view; }, panels, setRange, setPanel, render };
 })();
 </script>
 </body>
