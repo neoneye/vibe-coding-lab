@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hex Editor</title>
+<style>
+  * { box-sizing: border-box; }
+  :root { color-scheme: dark; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: #141821; color: #dce3ef; font: 13px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  header { padding: 14px 18px; background: #1d2431; border-bottom: 1px solid #344057; }
+  h1 { font: 600 17px system-ui; margin: 0 0 12px; }
+  h1 small { font: 12px system-ui; color: #a6b5cd; margin-left: 12px; }
+  .tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  button, input, select, textarea { font: inherit; border: 1px solid #44536c; border-radius: 5px; color: inherit; background: #242e40; padding: 6px 10px; }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { background: #344866; }
+  button:disabled { opacity: .45; cursor: default; }
+  :focus-visible { outline: 2px solid #8cbaff; outline-offset: 2px; }
+  #goto { width: 155px; }
+  #replacement { width: 220px; }
+  #message { min-height: 24px; padding-top: 8px; color: #adc4e7; overflow-wrap: anywhere; }
+  #labels { padding: 8px 12px; color: #90a5c5; white-space: pre; overflow: hidden; border-bottom: 1px solid #303c51; }
+  #container { flex: 1; min-height: 0; overflow: auto; position: relative; overscroll-behavior: contain; outline: none; }
+  #content { position: relative; min-width: 78ch; user-select: none; -webkit-user-select: none; }
+  #rows { position: absolute; left: 12px; right: 0; }
+  .row { display: flex; height: 22px; line-height: 22px; white-space: pre; }
+  .offset { width: 10ch; flex: none; color: #748eb1; }
+  .hex { display: flex; width: 50ch; flex: none; }
+  .ascii-panel { display: flex; flex: none; }
+  .hexbyte { width: 3ch; flex: none; }
+  .ascii { width: 1ch; flex: none; }
+  .hexbyte, .ascii { cursor: text; }
+  .muted { color: #62748e; }
+  .changed { color: #ffc67d; }
+  .sel { background: #29486e; color: #fff; }
+  .active { background: #376ba6; }
+  footer { padding: 8px 12px; border-top: 1px solid #344057; color: #a6b5cd; font-size: 12px; }
+  #status { overflow-wrap: anywhere; }
+  .hint { margin-top: 5px; color: #7f93b1; }
+  dialog { width: min(650px, 95vw); border: 1px solid #44536c; border-radius: 8px; background: #1d2431; color: inherit; }
+  dialog textarea { width: 100%; height: 200px; margin: 10px 0; }
+  body.dragover { outline: 3px solid #8cbaff; outline-offset: -3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Hex Editor <small>Local files · no upload · 16 bytes / row</small></h1>
+  <div class="tools">
+    <button id="openBtn">Open file…</button><input type="file" id="fileInput" hidden>
+    <button id="saveBtn" disabled>Save copy</button>
+    <button id="undoBtn" disabled>Undo</button>
+    <input id="goto" aria-label="Hexadecimal offset" placeholder="Offset: 0x0000" spellcheck="false">
+    <button id="gotoBtn" disabled>Go</button>
+    <button id="copyBtn" disabled>Copy selection</button>
+    <select id="editMode" aria-label="Replacement format"><option value="hex">Hex bytes</option><option value="ascii">ASCII text</option></select>
+    <input id="replacement" aria-label="Replacement bytes or text" placeholder="Overwrite at selection…" spellcheck="false">
+    <button id="applyBtn" disabled>Overwrite</button>
+  </div>
+  <div id="message" role="status">Open or drop a file to begin. Your original file is never modified.</div>
+</header>
+<div id="labels" aria-hidden="true">OFFSET    HEX                                               ASCII</div>
+<div id="container" tabindex="0" role="region" aria-label="Hex and ASCII editor. Drag to select; Shift and arrow keys extend selection."><div id="content"><div id="rows"></div></div></div>
+<footer><div id="status">No file loaded</div><div class="hint">Drag in either panel · Shift-click extends · Ctrl/Cmd+C copies that panel · Ctrl/Cmd+A selects all · Go accepts hexadecimal</div></footer>
+<dialog id="copyDialog"><label for="copyText">Copy with Ctrl/Cmd+C:</label><textarea id="copyText" readonly></textarea><button id="closeDialog">Close</button></dialog>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const container = $("container"), content = $("content"), rows = $("rows");
+const ROW_H = 22, WIDTH = 16, CHUNK = 65536, MAX_HEIGHT = 4000000, MAX_CACHE = 128, COPY_LIMIT = 2 * 1024 * 1024;
+const cache = new Map(), pending = new Map(), edits = new Map(), history = [];
+let file = null, generation = 0, numRows = 0, topRow = 0, scrollPosition = 0;
+let anchor = -1, focus = -1, panel = "hex", drag = null, frame = false, saving = false;
+const hex = (n, width = 2) => n.toString(16).toUpperCase().padStart(width, "0");
+const printable = b => b >= 32 && b <= 126 ? String.fromCharCode(b) : ".";
+const bounds = () => [Math.min(anchor, focus), Math.max(anchor, focus) + 1];
+const visibleRows = () => Math.max(1, Math.floor(container.clientHeight / ROW_H));
+const maxTop = () => Math.max(0, numRows - visibleRows());
+const clamp = n => Math.max(0, Math.min(file.size - 1, n));
+const notice = text => { $("message").textContent = text; };
+
+async function loadChunk(index) {
+  if (cache.has(index)) {
+    const bytes = cache.get(index);
+    cache.delete(index);
+    cache.set(index, bytes);
+    return bytes;
+  }
+  if (pending.has(index)) return pending.get(index);
+  const version = generation, source = file;
+  const promise = source.slice(index * CHUNK, (index + 1) * CHUNK).arrayBuffer().then(buffer => {
+    const bytes = new Uint8Array(buffer);
+    if (version === generation) {
+      cache.set(index, bytes);
+      while (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value);
+      schedule();
+    }
+    return bytes;
+  }).finally(() => { if (version === generation) pending.delete(index); });
+  pending.set(index, promise);
+  return promise;
+}
+
+function byteAt(offset) {
+  if (edits.has(offset)) return edits.get(offset);
+  return cache.get(Math.floor(offset / CHUNK))?.[offset % CHUNK];
+}
+
+function schedule() {
+  if (frame) return;
+  frame = true;
+  requestAnimationFrame(() => { frame = false; render(); });
+}
+
+function setTop(value) {
+  topRow = Math.max(0, Math.min(maxTop(), Math.round(value)));
+  const height = Math.min(MAX_HEIGHT, Math.max(container.clientHeight, numRows * ROW_H));
+  content.style.height = height + "px";
+  scrollPosition = maxTop() ? topRow / maxTop() * (height - container.clientHeight) : 0;
+  container.scrollTop = scrollPosition;
+  scrollPosition = container.scrollTop;
+  schedule();
+}
+
+function render() {
+  rows.style.top = container.scrollTop + "px";
+  const fragment = document.createDocumentFragment();
+  const endRow = Math.min(numRows, topRow + Math.ceil(container.clientHeight / ROW_H));
+  const [a, b] = bounds();
+  const missing = new Set();
+  for (let r = topRow; r < endRow; r++) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const offset = document.createElement("span");
+    offset.className = "offset";
+    offset.textContent = hex(r * WIDTH, 8);
+    const left = document.createElement("span"), right = document.createElement("span");
+    left.className = "hex"; right.className = "ascii-panel";
+    for (let c = 0; c < WIDTH; c++) {
+      const index = r * WIDTH + c, exists = index < file.size;
+      const value = exists ? byteAt(index) : undefined;
+      if (exists && value === undefined) missing.add(Math.floor(index / CHUNK));
+      for (const side of ["hex", "ascii"]) {
+        const cell = document.createElement("span");
+        cell.className = side === "hex" ? "hexbyte" : "ascii";
+        if (exists) {
+          cell.dataset.byte = index;
+          cell.dataset.panel = side;
+          cell.textContent = value === undefined ? (side === "hex" ? "··" : "·") : side === "hex" ? hex(value) : printable(value);
+          if (edits.has(index)) cell.classList.add("changed");
+          else if (value !== undefined && (value < 32 || value > 126)) cell.classList.add("muted");
+          if (anchor >= 0 && index >= a && index < b) {
+            cell.classList.add("sel");
+            if (side === panel) cell.classList.add("active");
+          }
+        }
+        (side === "hex" ? left : right).appendChild(cell);
+      }
+    }
+    row.append(offset, left, right);
+    fragment.appendChild(row);
+  }
+  rows.replaceChildren(fragment);
+  const version = generation;
+  for (const index of missing) loadChunk(index).catch(error => {
+    if (version === generation) notice("Read failed: " + error.message);
+  });
+}
+
+function updateStatus() {
+  const [a, b] = bounds();
+  $("status").textContent = file ? `${file.name} · ${file.size.toLocaleString()} bytes · ${(file.size / 1048576).toFixed(2)} MiB${anchor >= 0 ? ` · ${panel.toUpperCase()} selection 0x${hex(a)}–0x${hex(b - 1)} (${(b - a).toLocaleString()} bytes)` : ""} · ${edits.size.toLocaleString()} modified bytes` : "No file loaded";
+  $("saveBtn").disabled = !file || saving;
+  $("undoBtn").disabled = !history.length;
+  $("gotoBtn").disabled = !file?.size;
+  $("copyBtn").disabled = $("applyBtn").disabled = anchor < 0;
+}
+
+function select(a, b, side = panel) {
+  if (!file?.size) return;
+  anchor = clamp(a); focus = clamp(b); panel = side;
+  schedule(); updateStatus();
+}
+
+function reveal() {
+  const row = Math.floor(focus / WIDTH);
+  if (row < topRow) setTop(row);
+  else if (row >= topRow + visibleRows()) setTop(row - visibleRows() + 1);
+}
+
+function dragByte(x, y) {
+  const rect = container.getBoundingClientRect();
+  const firstCell = rows.querySelector(panel === "hex" ? ".hexbyte" : ".ascii");
+  if (!firstCell) return focus;
+  const cellRect = firstCell.getBoundingClientRect();
+  const column = Math.max(0, Math.min(15, Math.floor((x - cellRect.left) / cellRect.width)));
+  const row = topRow + Math.max(0, Math.min(visibleRows() - 1, Math.floor((y - rect.top) / ROW_H)));
+  return clamp(row * WIDTH + column);
+}
+
+container.addEventListener("pointerdown", event => {
+  const cell = event.target.closest("[data-byte]");
+  if (!cell || event.button !== 0) return;
+  event.preventDefault();
+  const index = Number(cell.dataset.byte);
+  select(event.shiftKey && anchor >= 0 ? anchor : index, index, cell.dataset.panel);
+  container.focus();
+  drag = { x: event.clientX, y: event.clientY, id: event.pointerId };
+  container.setPointerCapture(event.pointerId);
+  requestAnimationFrame(dragTick);
+});
+container.addEventListener("pointermove", event => {
+  if (!drag) return;
+  drag.x = event.clientX; drag.y = event.clientY;
+  select(anchor, dragByte(drag.x, drag.y));
+});
+function stopDrag() { drag = null; }
+container.addEventListener("pointerup", stopDrag);
+container.addEventListener("pointercancel", stopDrag);
+container.addEventListener("lostpointercapture", stopDrag);
+window.addEventListener("blur", stopDrag);
+function dragTick() {
+  if (!drag) return;
+  const rect = container.getBoundingClientRect();
+  const distance = drag.y < rect.top + 22 ? drag.y - rect.top - 22 : drag.y > rect.bottom - 22 ? drag.y - rect.bottom + 22 : 0;
+  if (distance) {
+    setTop(topRow + Math.sign(distance) * Math.min(30, Math.ceil(Math.abs(distance) / 15)));
+    select(anchor, dragByte(drag.x, drag.y));
+  }
+  requestAnimationFrame(dragTick);
+}
+
+container.addEventListener("scroll", () => {
+  if (Math.abs(container.scrollTop - scrollPosition) > 1) {
+    const extent = content.offsetHeight - container.clientHeight;
+    topRow = extent > 0 ? Math.round(container.scrollTop / extent * maxTop()) : 0;
+    scrollPosition = container.scrollTop;
+  }
+  schedule();
+});
+container.addEventListener("wheel", event => {
+  if (!file || event.ctrlKey || event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY) || !event.deltaY) return;
+  event.preventDefault();
+  const delta = event.deltaY * (event.deltaMode === 1 ? ROW_H : event.deltaMode === 2 ? container.clientHeight : 1);
+  setTop(topRow + Math.sign(delta) * Math.max(1, Math.round(Math.abs(delta) / ROW_H)));
+}, { passive: false });
+
+async function copySelection() {
+  if (anchor < 0) return;
+  const [a, b] = bounds(), side = panel, version = generation, source = file;
+  if (b - a > COPY_LIMIT) { notice("Clipboard selection is limited to 2 MiB. Use Save copy for the full binary."); return; }
+  const changes = new Map(edits);
+  try {
+    const bytes = new Uint8Array(await source.slice(a, b).arrayBuffer());
+    if (version !== generation) return;
+    const parts = [];
+    for (let start = 0; start < bytes.length; start += 8192) {
+      const part = [];
+      for (let i = start; i < Math.min(bytes.length, start + 8192); i++) {
+        const value = changes.has(a + i) ? changes.get(a + i) : bytes[i];
+        part.push(side === "hex" ? (i ? " " : "") + hex(value) : printable(value));
+      }
+      parts.push(part.join(""));
+    }
+    const text = parts.join("");
+    try { await navigator.clipboard.writeText(text); notice(`Copied ${(b - a).toLocaleString()} bytes as ${side === "hex" ? "hex" : "displayed ASCII"}.`); }
+    catch {
+      $("copyText").value = text;
+      $("copyDialog").showModal();
+      $("copyText").focus(); $("copyText").select();
+    }
+  } catch (error) { notice("Copy failed: " + error.message); }
+}
+
+container.addEventListener("keydown", event => {
+  if (!file?.size) return;
+  const modifier = event.metaKey || event.ctrlKey, key = event.key.toLowerCase();
+  if (modifier && key === "c") { event.preventDefault(); copySelection(); return; }
+  if (modifier && key === "a") { event.preventDefault(); select(0, file.size - 1); return; }
+  if (modifier && key === "z") { event.preventDefault(); undo(); return; }
+  if (key === "escape") { anchor = focus = -1; schedule(); updateStatus(); return; }
+  const current = focus < 0 ? topRow * WIDTH : focus;
+  const targets = { ArrowLeft: current - 1, ArrowRight: current + 1, ArrowUp: current - WIDTH, ArrowDown: current + WIDTH, PageUp: current - visibleRows() * WIDTH, PageDown: current + visibleRows() * WIDTH, Home: modifier ? 0 : Math.floor(current / WIDTH) * WIDTH, End: modifier ? file.size - 1 : Math.floor(current / WIDTH) * WIDTH + 15 };
+  if (event.key in targets) {
+    event.preventDefault();
+    const target = clamp(targets[event.key]);
+    select(event.shiftKey && anchor >= 0 ? anchor : target, target); reveal();
+  }
+});
+
+function overwrite() {
+  if (anchor < 0) return;
+  const text = $("replacement").value;
+  let values;
+  if ($("editMode").value === "hex") {
+    const compact = text.replace(/\s/g, "");
+    if (!/^(?:[0-9a-fA-F]{2})+$/.test(compact)) { notice("Enter complete hex byte pairs, for example: 48 65 6C 6C 6F."); return; }
+    values = compact.match(/../g).map(value => parseInt(value, 16));
+  } else {
+    if (!text || /[^\x00-\x7f]/.test(text)) { notice("Enter ASCII characters only. Use hex bytes for other encodings."); return; }
+    values = Array.from(text, char => char.charCodeAt(0));
+  }
+  const [start] = bounds();
+  if (start + values.length > file.size) { notice("Replacement would extend past the end of the file; no bytes changed."); return; }
+  const previous = [];
+  values.forEach((value, i) => {
+    previous.push([start + i, edits.get(start + i)]);
+    edits.set(start + i, value);
+  });
+  history.push(previous);
+  select(start, start + values.length - 1);
+  notice(`Overwrote ${values.length} bytes starting at 0x${hex(start)}. Save copy to download changes.`);
+}
+function undo() {
+  const previous = history.pop();
+  if (!previous) return;
+  for (const [offset, value] of previous) {
+    if (value === undefined) edits.delete(offset); else edits.set(offset, value);
+  }
+  schedule(); updateStatus(); notice("Last overwrite undone.");
+}
+async function save() {
+  if (!file || saving) return;
+  const source = file, version = generation, changes = new Map(edits);
+  saving = true; updateStatus(); notice("Preparing download…");
+  try {
+    const indices = [...new Set([...changes.keys()].map(offset => Math.floor(offset / CHUNK)))].sort((a, b) => a - b);
+    const parts = [];
+    let cursor = 0;
+    for (const index of indices) {
+      const start = index * CHUNK;
+      if (start > cursor) parts.push(source.slice(cursor, start));
+      const bytes = new Uint8Array(await source.slice(start, start + CHUNK).arrayBuffer());
+      for (let i = 0; i < bytes.length; i++) if (changes.has(start + i)) bytes[i] = changes.get(start + i);
+      parts.push(bytes); cursor = start + bytes.length;
+    }
+    parts.push(source.slice(cursor));
+    const url = URL.createObjectURL(new Blob(parts, { type: "application/octet-stream" }));
+    const link = document.createElement("a");
+    link.href = url; link.download = source.name + ".edited";
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    if (version === generation) notice("Download started. The original file is unchanged.");
+  } catch (error) { notice("Save failed: " + error.message); }
+  finally { saving = false; updateStatus(); }
+}
+
+function openFile(source) {
+  if (edits.size && !confirm("Discard unsaved in-memory edits and open another file?")) return;
+  generation++; file = source; numRows = Math.ceil(file.size / WIDTH);
+  cache.clear(); pending.clear(); edits.clear(); history.length = 0;
+  anchor = focus = -1; drag = null;
+  setTop(0); updateStatus();
+  notice(file.size ? "Drag to select bytes in either panel. Non-printable ASCII bytes appear as dots." : "Empty file: there are no bytes to select or overwrite.");
+  container.focus();
+}
+function go() {
+  const text = $("goto").value.trim();
+  if (!file?.size) return;
+  if (!/^(?:0x)?[0-9a-f]+$/i.test(text)) { notice("Enter a hexadecimal offset, for example 0x1000."); return; }
+  const offset = parseInt(text.replace(/^0x/i, ""), 16);
+  if (!Number.isSafeInteger(offset) || offset >= file.size) { notice("Offset is outside this file."); return; }
+  select(offset, offset); setTop(Math.floor(offset / WIDTH)); container.focus();
+}
+$("openBtn").onclick = () => $("fileInput").click();
+$("fileInput").onchange = event => { if (event.target.files[0]) openFile(event.target.files[0]); event.target.value = ""; };
+$("gotoBtn").onclick = go;
+$("goto").onkeydown = event => { if (event.key === "Enter") go(); };
+$("copyBtn").onclick = copySelection;
+$("applyBtn").onclick = overwrite;
+$("replacement").onkeydown = event => { if (event.key === "Enter") overwrite(); };
+$("undoBtn").onclick = undo;
+$("saveBtn").onclick = save;
+$("closeDialog").onclick = () => $("copyDialog").close();
+window.addEventListener("dragover", event => { event.preventDefault(); document.body.classList.add("dragover"); });
+window.addEventListener("dragleave", event => { if (!event.relatedTarget) document.body.classList.remove("dragover"); });
+window.addEventListener("drop", event => {
+  event.preventDefault(); document.body.classList.remove("dragover");
+  if (event.dataTransfer.files[0]) openFile(event.dataTransfer.files[0]);
+});
+window.addEventListener("resize", () => setTop(topRow));
+window.addEventListener("beforeunload", event => { if (edits.size) { event.preventDefault(); event.returnValue = ""; } });
+setTop(0);
+</script>
+</body>
+</html>
