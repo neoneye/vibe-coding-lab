@@ -173,6 +173,7 @@
     <div class="tablewrap"><table id="mb-table"></table></div>
   </div>
   <div class="panel" id="panel-bounds">
+    <div class="chips" id="bd-mode"></div>
     <div class="chips" id="bd-chips"></div>
     <p class="status" id="bd-intro"></p>
     <div class="tablewrap"><table id="bd-table"></table></div>
@@ -719,6 +720,57 @@ const CF = (() => {
     return { ...r, source: 'interval' };
   };
 
+  // The one-sided best approximations of x: the convergents plus the SEMICONVERGENTS
+  // (p_{k-1} + j*p_k)/(q_{k-1} + j*q_k) for j = 1..a_{k+1}-1. Every fraction that is the
+  // closest on its own side for its denominator appears here, so this is the right pool to
+  // choose bounds from.
+  const semiconvergents = (key, maxQ) => {
+    const k = constant(key);
+    const x = k.exact || k.lo;
+    const rows = convergentRowsFor(key, 34, 'floor').rows;
+    const out = [];
+    const add = (p, q) => {
+      if (q <= 0n || q > maxQ) return;
+      const v = Rat.make(p, q), err = Rat.sub(x, v);
+      if (Rat.isZero(err)) return;                   // an exact hit is neither bound
+      out.push({ p, q, v, err, abs: err.n < 0n ? Rat.neg(err) : err, below: err.n > 0n });
+    };
+    for (let i = 0; i < rows.length; i++) {
+      add(rows[i].p, rows[i].q);
+      if (i + 1 < rows.length) {
+        const pm = i > 0 ? rows[i - 1].p : 1n, qm = i > 0 ? rows[i - 1].q : 0n;
+        for (let j = 1n; j < rows[i + 1].a; j++) add(pm + j * rows[i].p, qm + j * rows[i].q);
+      }
+    }
+    return out;
+  };
+
+  // Choose the bracket whose MIDPOINT is best rather than whose endpoints are each best.
+  // The midpoint error is |errUpper - errLower| / 2, so the pair to want is the one whose
+  // two errors are closest in size - deliberately taking a worse bound on the better side
+  // so the two cancel. Sorting by error magnitude puts that pair adjacent, so one scan finds it.
+  const balancedPair = (key, maxQ) => {
+    const pool = semiconvergents(key, maxQ);
+    if (pool.length < 2) return null;
+    pool.sort((a, b) => Rat.cmp(a.abs, b.abs));
+    // For each element the nearest opposite-side partner in sorted order gives its smallest
+    // gap, and scanning forward to the first one covers every such pair (a backward partner
+    // for i is a forward partner for that earlier element). So this is exact, not a heuristic.
+    let best = null;
+    for (let i = 0; i + 1 < pool.length; i++) {
+      for (let j = i + 1; j < pool.length; j++) {
+        if (pool[i].below === pool[j].below) continue;
+        const d = Rat.sub(pool[j].abs, pool[i].abs);
+        const gap = d.n < 0n ? Rat.neg(d) : d;
+        if (!best || Rat.cmp(gap, best.gap) < 0) {
+          best = { gap, lower: pool[i].below ? pool[i] : pool[j], upper: pool[i].below ? pool[j] : pool[i] };
+        }
+        break;                                     // first opposite-side partner is the nearest
+      }
+    }
+    return best;
+  };
+
   // ---- two bounding continued fractions and their midpoint ----
   //
   // A regular expansion's convergents alternate: the even-indexed ones rise toward the
@@ -732,7 +784,7 @@ const CF = (() => {
   // The MEDIANT (pA+pB)/(qA+qB) is the classical way to combine two bounds - it is the next
   // semiconvergent - and it beats the midpoint far more often, with a much smaller
   // denominator. It is reported alongside rather than instead, so the comparison is visible.
-  const boundRows = (key, maxLevels) => {
+  const boundRows = (key, maxLevels, mode) => {
     const k = constant(key);
     const x = k.exact || k.lo;
     const { rows, stopReason } = convergentRowsFor(key, maxLevels * 2 + 2, 'floor');
@@ -740,7 +792,18 @@ const CF = (() => {
     const absR = (r) => (r.n < 0n ? Rat.neg(r) : r);
     const out = [];
     for (let i = 0; 2 * i + 1 < rows.length && out.length < maxLevels; i++) {
-      const B = rows[2 * i], A = rows[2 * i + 1];
+      let B = rows[2 * i], A = rows[2 * i + 1];
+      // In balanced mode the denominator budget is the same - the larger of the two the
+      // independent split would have used - but the pair is chosen to make the midpoint
+      // best rather than to make each endpoint best. The independent pair is itself in the
+      // pool, so balanced can never do worse.
+      if (mode === 'balanced') {
+        const bp = balancedPair(key, A.q > B.q ? A.q : B.q);
+        if (bp) {
+          B = { p: bp.lower.p, q: bp.lower.q };
+          A = { p: bp.upper.p, q: bp.upper.q };
+        }
+      }
       const lower = Rat.make(B.p, B.q), upper = Rat.make(A.p, A.q);
       const mid = Rat.div(Rat.add(lower, upper), two);
       const mediant = Rat.make(B.p + A.p, B.q + A.q);
@@ -1263,7 +1326,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows, raceKind, mobiusDisks, boundRows, unitFractions, unitFractionRows,
+           cascadeRows, raceKind, mobiusDisks, boundRows, semiconvergents, balancedPair, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            imaginaryWake,
@@ -2456,6 +2519,59 @@ XTests.test('the midpoint is not uniformly better, and the mediant usually beats
   XTests.ok(med > n / 2, `mediant beat the midpoint only ${med} of ${n}`);
 });
 
+XTests.test('the semiconvergent pool respects its budget and takes a side', () => {
+  const pool = CF.semiconvergents('pi', 1000n);
+  XTests.ok(pool.length > 5, `expected a decent pool, got ${pool.length}`);
+  const x = CF.constant('pi').lo;
+  for (const z of pool) {
+    XTests.ok(z.q <= 1000n && z.q > 0n, `denominator ${z.q} out of budget`);
+    const cmp = CF.Rat.cmp(z.v, x);
+    XTests.ok(cmp !== 0, 'an exact hit should not be in the pool');
+    XTests.eq(z.below, cmp < 0, `${z.p}/${z.q} side flag wrong`);
+  }
+});
+
+XTests.test('balanced bounds still bracket the value', () => {
+  for (const c of CF.CONSTANTS) {
+    const x = CF.constant(c.key).exact || CF.constant(c.key).lo;
+    for (const r of CF.boundRows(c.key, 6, 'balanced').rows) {
+      XTests.ok(CF.Rat.cmp(r.lower, x) < 0 && CF.Rat.cmp(x, r.upper) < 0,
+                `${c.key} k=${r.k} balanced pair did not bracket`);
+    }
+  }
+});
+
+XTests.test('balanced is never worse than independent', () => {
+  // The independent pair is itself in the pool, so the balanced search can only match or
+  // beat it. A violation would mean the pool or the search is wrong.
+  for (const c of CF.CONSTANTS) {
+    const ind = CF.boundRows(c.key, 6, 'independent').rows;
+    const bal = CF.boundRows(c.key, 6, 'balanced').rows;
+    for (let i = 0; i < Math.min(ind.length, bal.length); i++) {
+      XTests.ok(CF.Rat.cmp(bal[i].eMid, ind[i].eMid) <= 0,
+                `${c.key} k=${i}: balanced ${bal[i].eMidStr} lost to independent ${ind[i].eMidStr}`);
+    }
+  }
+});
+
+XTests.test('balancing buys orders of magnitude on sqrt2 and nothing on phi', () => {
+  // sqrt2: the search finds p/q paired with 2q/p, whose errors are nearly equal and
+  // opposite, so the midpoint cancels to second order.
+  const bal = CF.boundRows('sqrt2', 7, 'balanced').rows;
+  const ind = CF.boundRows('sqrt2', 7, 'independent').rows;
+  const last = bal.length - 1;
+  XTests.ok(CF.Rat.cmp(bal[last].eMid, CF.Rat.make(1n, 10n ** 15n)) < 0,
+            `expected sqrt2 balanced under 1e-15, got ${bal[last].eMidStr}`);
+  XTests.ok(CF.Rat.cmp(ind[last].eMid, CF.Rat.make(1n, 10n ** 12n)) > 0,
+            'expected independent sqrt2 to be much worse');
+  // phi: every partial quotient is 1, so there are no semiconvergents and nothing to choose.
+  const bp = CF.boundRows('phi', 6, 'balanced').rows;
+  const ip = CF.boundRows('phi', 6, 'independent').rows;
+  for (let i = 0; i < bp.length; i++) {
+    XTests.eq(CF.Rat.cmp(bp[i].eMid, ip[i].eMid), 0, `phi k=${i} should be unimprovable`);
+  }
+});
+
 XTests.test('real constants run through the complex algorithm too', () => {
   for (const c of CF.CONSTANTS) {
     const k = CF.complexConstant(c.key);
@@ -3345,7 +3461,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderMobius();
 
   // ---------- Bounds tab ----------
-  state.bounds = { key: 'pi' };
+  state.bounds = { key: 'pi', mode: 'independent' };
   const BD_LEVELS = 8;
 
   function renderBounds() {
@@ -3357,17 +3473,35 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       s.key = b.dataset.key; renderBounds();
     }));
 
+    const BD_MODES = [
+      { key: 'independent', label: 'each bound its own best' },
+      { key: 'balanced',    label: 'bounds chosen so C is best' },
+    ];
+    el('bd-mode').innerHTML = BD_MODES
+      .map(m => `<button class="chip ${m.key === s.mode ? 'active' : ''}" data-mode="${m.key}">${m.label}</button>`)
+      .join('');
+    el('bd-mode').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.mode = b.dataset.mode; renderBounds();
+    }));
+
     const label = CF.constant(s.key).label;
-    const { rows } = CF.boundRows(s.key, BD_LEVELS);
+    const { rows } = CF.boundRows(s.key, BD_LEVELS, s.mode);
+    const other = CF.boundRows(s.key, BD_LEVELS,
+      s.mode === 'balanced' ? 'independent' : 'balanced').rows;
 
     el('bd-intro').innerHTML =
-      `A regular expansion's convergents alternate sides, so splitting them by parity gives ` +
-      `<strong>two</strong> bounding sequences: the even-indexed ones rise toward ${label} from ` +
-      'below, the odd-indexed ones fall toward it from above. <strong>C</strong> is their ' +
-      'midpoint (A+B)/2. Its error is exactly <em>half the difference of the two errors</em>, ' +
-      'so it beats both bounds only when they are comparably wrong. The <strong>mediant</strong> ' +
-      '(pᴬ+pᴮ)/(qᴬ+qᴮ) is shown beside it — the classical way to combine two bounds, and ' +
-      'the one that usually wins, with a far smaller denominator.';
+      (s.mode === 'independent'
+        ? `A regular expansion's convergents alternate sides, so splitting them by parity gives `
+          + `<strong>two</strong> bounding sequences: the even-indexed ones rise toward ${label} `
+          + 'from below, the odd-indexed ones fall toward it from above. Each bound is '
+          + 'individually as close as it can be — and <strong>C</strong>, their midpoint, suffers for it.'
+        : `The bounds are no longer each chosen to be closest. C's error is exactly <em>half the `
+          + 'difference</em> of the two errors, so C is best when the bounds are <em>equally</em> '
+          + `wrong on opposite sides of ${label} — the search deliberately takes a worse bound on `
+          + 'the better side and lets the two errors cancel. Both come from the same pool of '
+          + 'one-sided best approximations (convergents and semiconvergents) under the same '
+          + 'denominator budget, so this never costs accuracy.') +
+      ' The <strong>mediant</strong> (pᴬ+pᴮ)/(qᴬ+qᴮ) is shown beside C throughout.';
 
     el('bd-table').innerHTML =
       '<tr><th>k</th><th>B lower</th><th>|err B|</th><th>A upper</th><th>|err A|</th>' +
@@ -3390,11 +3524,21 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
 
     const midWins = rows.filter(r => r.midBeatsBoth).length;
     const medWins = rows.filter(r => r.mediantBeatsMid).length;
+    const last = rows[rows.length - 1], lastOther = other[other.length - 1];
+    let gain = '';
+    if (last && lastOther) {
+      const bal = s.mode === 'balanced' ? last.eMid : lastOther.eMid;
+      const ind = s.mode === 'balanced' ? lastOther.eMid : last.eMid;
+      gain = CF.Rat.isZero(bal) ? ' Balancing lands exactly on the value at the deepest level shown.'
+        : CF.Rat.cmp(bal, ind) === 0 ? ' Balancing changes nothing here: every partial quotient is 1,'
+            + ' so there are no semiconvergents to choose between.'
+        : ` At the deepest level shown, balancing improves C from ${CF.sci(ind, 3)} to `
+            + `${CF.sci(bal, 3)} — a factor of ${CF.sci(CF.Rat.div(ind, bal), 3)}.`;
+    }
     el('bd-verdict').textContent =
       `Over these ${rows.length} levels the midpoint beat both bounds ${midWins} time` +
       `${midWins === 1 ? '' : 's'}, and the mediant beat the midpoint ${medWins} time` +
-      `${medWins === 1 ? '' : 's'}. The midpoint wins exactly when the two bounds are about ` +
-      'equally wrong; when one is far better, averaging it with a poor partner throws accuracy away.';
+      `${medWins === 1 ? '' : 's'}.` + gain;
   }
 
   function drawBounds(rows) {
