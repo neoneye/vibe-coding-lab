@@ -781,9 +781,6 @@ const CF = (() => {
   // |mid - x| = |errA - errB| / 2. It therefore only beats both endpoints when the two
   // errors are close in size, which is why it wins less than half the time.
   //
-  // The MEDIANT (pA+pB)/(qA+qB) is the classical way to combine two bounds - it is the next
-  // semiconvergent - and it beats the midpoint far more often, with a much smaller
-  // denominator. It is reported alongside rather than instead, so the comparison is visible.
   const boundRows = (key, maxLevels, mode) => {
     const k = constant(key);
     const x = k.exact || k.lo;
@@ -806,22 +803,20 @@ const CF = (() => {
       }
       const lower = Rat.make(B.p, B.q), upper = Rat.make(A.p, A.q);
       const mid = Rat.div(Rat.add(lower, upper), two);
-      const mediant = Rat.make(B.p + A.p, B.q + A.q);
+
       const eLower = absR(Rat.sub(x, lower)), eUpper = absR(Rat.sub(x, upper));
-      const eMid = absR(Rat.sub(x, mid)), eMediant = absR(Rat.sub(x, mediant));
+      const eMid = absR(Rat.sub(x, mid));
       const width = Rat.sub(upper, lower);
       const bestEnd = Rat.cmp(eLower, eUpper) < 0 ? eLower : eUpper;
       out.push({
         k: i,
         lowerP: B.p, lowerQ: B.q, upperP: A.p, upperQ: A.q,
-        lower, upper, mid, mediant,
-        mediantP: B.p + A.p, mediantQ: B.q + A.q,
-        eLower, eUpper, eMid, eMediant,
+        lower, upper, mid,
+        eLower, eUpper, eMid,
         eLowerStr: sci(eLower, 4), eUpperStr: sci(eUpper, 4),
-        eMidStr: sci(eMid, 4), eMediantStr: sci(eMediant, 4),
+        eMidStr: sci(eMid, 4),
         width, widthStr: sci(width, 4),
         midBeatsBoth: Rat.cmp(eMid, bestEnd) < 0,
-        mediantBeatsMid: Rat.cmp(eMediant, eMid) < 0,
       });
     }
     return { rows: out, stopReason };
@@ -2495,28 +2490,15 @@ XTests.test('the midpoint error is exactly half the difference of the two errors
   }
 });
 
-XTests.test('the mediant lies strictly between the bounds and has the summed denominator', () => {
+XTests.test('the midpoint is not uniformly better than its own bounds', () => {
+  // With each bound chosen to be individually closest, the midpoint only wins when the two
+  // errors are close in size - so it beats both endpoints some of the time, not always.
+  let mid = 0, n = 0;
   for (const c of CF.CONSTANTS) {
-    for (const r of CF.boundRows(c.key, 6).rows) {
-      XTests.ok(CF.Rat.cmp(r.lower, r.mediant) < 0 && CF.Rat.cmp(r.mediant, r.upper) < 0,
-                `${c.key} k=${r.k} mediant escaped the bracket`);
-      XTests.eq(r.mediantQ, r.lowerQ + r.upperQ, `${c.key} k=${r.k} mediant denominator`);
-    }
-  }
-});
-
-XTests.test('the midpoint is not uniformly better, and the mediant usually beats it', () => {
-  // Recorded rather than asserted as a bound: the midpoint only wins when the two errors
-  // are close in size, so it beats both endpoints well under half the time.
-  let mid = 0, med = 0, n = 0;
-  for (const c of CF.CONSTANTS) {
-    for (const r of CF.boundRows(c.key, 6).rows) {
-      n++; if (r.midBeatsBoth) mid++; if (r.mediantBeatsMid) med++;
-    }
+    for (const r of CF.boundRows(c.key, 6, 'independent').rows) { n++; if (r.midBeatsBoth) mid++; }
   }
   XTests.ok(n >= 20, `expected a decent sample, got ${n}`);
   XTests.ok(mid > 0 && mid < n, `midpoint won ${mid} of ${n} - expected a mix`);
-  XTests.ok(med > n / 2, `mediant beat the midpoint only ${med} of ${n}`);
 });
 
 XTests.test('the semiconvergent pool respects its budget and takes a side', () => {
@@ -3501,12 +3483,11 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
           + 'the better side and lets the two errors cancel. Both come from the same pool of '
           + 'one-sided best approximations (convergents and semiconvergents) under the same '
           + 'denominator budget, so this never costs accuracy.') +
-      ' The <strong>mediant</strong> (pᴬ+pᴮ)/(qᴬ+qᴮ) is shown beside C throughout.';
+      '';
 
     el('bd-table').innerHTML =
       '<tr><th>k</th><th>B lower</th><th>|err B|</th><th>A upper</th><th>|err A|</th>' +
-      '<th>C = (A+B)/2</th><th>|err C|</th><th>mediant</th><th>|err med|</th>' +
-      '<th>best</th></tr>' +
+      '<th>C = (A+B)/2</th><th>|err C|</th><th>best</th></tr>' +
       rows.map(r => {
         const best = r.midBeatsBoth ? 'C'
           : (CF.Rat.cmp(r.eLower, r.eUpper) < 0 ? 'B' : 'A');
@@ -3516,14 +3497,13 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
           `<td class="mono">${f(r.upperP, r.upperQ)}</td><td class="mono">${r.eUpperStr}</td>` +
           `<td class="mono">${CF.Rat.toDecimalString(r.mid, 12)}</td>` +
           `<td class="mono">${r.eMidStr}</td>` +
-          `<td class="mono">${f(r.mediantP, r.mediantQ)}</td>` +
-          `<td class="mono">${r.eMediantStr}</td><td><strong>${best}</strong></td></tr>`;
+          `<td><strong>${best}</strong></td></tr>`;
       }).join('');
 
     drawBounds(rows);
 
     const midWins = rows.filter(r => r.midBeatsBoth).length;
-    const medWins = rows.filter(r => r.mediantBeatsMid).length;
+
     // Report the BEST improvement across levels, not just the deepest - the two modes can
     // tie at one level while differing sharply at others. And only give the "no
     // semiconvergents" explanation when that is actually the reason, which needs every
@@ -3549,8 +3529,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     }
     el('bd-verdict').textContent =
       `Over these ${rows.length} levels the midpoint beat both bounds ${midWins} time` +
-      `${midWins === 1 ? '' : 's'}, and the mediant beat the midpoint ${medWins} time` +
-      `${medWins === 1 ? '' : 's'}.` + gain;
+      `${midWins === 1 ? '' : 's'}.` + gain;
   }
 
   function drawBounds(rows) {
@@ -3562,7 +3541,6 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       { name: 'B lower', color: '#1a5fb4', get: (r) => r.eLower },
       { name: 'A upper', color: '#c64600', get: (r) => r.eUpper },
       { name: 'C midpoint', color: '#2d7d46', get: (r) => r.eMid },
-      { name: 'mediant', color: '#7a4fbf', get: (r) => r.eMediant },
     ];
     const logs = [];
     for (const s2 of series) for (const r of rows) {
