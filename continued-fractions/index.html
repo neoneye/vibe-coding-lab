@@ -798,6 +798,7 @@ const CF = (() => {
     const out = [];
     for (let i = 0; 2 * i + 1 < rows.length && out.length < maxLevels; i++) {
       let B = rows[2 * i], A = rows[2 * i + 1];
+      if (B.resolved === false || A.resolved === false) break;   // past the reference's precision
       // In balanced mode the denominator budget is the same - the larger of the two the
       // independent split would have used - but the pair is chosen to make the midpoint
       // best rather than to make each endpoint best. The independent pair is itself in the
@@ -852,6 +853,7 @@ const CF = (() => {
     const two = Rat.fromInt(2);
     const disks = [];
     for (let n = 1; n < rows.length && disks.length < maxLevels; n++) {
+      if (rows[n].resolved === false) break;             // past the reference's precision
       const a = Rat.make(rows[n - 1].p, rows[n - 1].q), b = Rat.make(rows[n].p, rows[n].q);
       const centre = Rat.div(Rat.add(a, b), two);
       const diff = Rat.sub(b, a);
@@ -887,6 +889,7 @@ const CF = (() => {
     const out = [];
 
     for (let n = 1; n < vals.length && out.length < maxRows; n++) {
+      if (cr[n] && cr[n].resolved === false) break;      // past the reference's precision
       // Decide per row, not per mode: if consecutive convergents straddle the target the
       // bracket between them is the informative interval; otherwise the interval from the
       // target to the newer convergent is. Mixed modes need both, sometimes in one cascade.
@@ -1261,6 +1264,12 @@ const CF = (() => {
   const convergentRowsFor = (key, maxTerms, mode) => {
     const k = constant(key);
     const x = k.exact || k.lo;
+    // The quadratic generator yields exact terms far past the stored precision, so a deep
+    // convergent can be closer to the true value than the reference x is. Past that point
+    // the computed "error" is really the REFERENCE's error, and the derived quantities go
+    // impossible (error*q^2 in the trillions, a discarded distance above 1). Anything at or
+    // below the enclosure width is therefore unresolved and withheld rather than shown.
+    const eps = k.exact ? Rat.fromInt(0) : k.eps;
     const e = expandMode(key, mode, maxTerms);
     const cs = semiregularConvergents(e.terms, e.signs);
     // |x_k - a_k|, the distance from the complete quotient to the integer it rounded to -
@@ -1275,12 +1284,14 @@ const CF = (() => {
       const scaled = Rat.mul(Rat.fromInt(c.q), abs);
       const rem = Rat.isZero(prevScaled) ? Rat.fromInt(0) : Rat.div(scaled, prevScaled);
       prevScaled = scaled;
+      const resolved = Rat.isZero(eps) || Rat.cmp(abs, eps) > 0;
       return {
-        rem, remStr: Rat.toDecimalString(rem, 6),
+        resolved,
+        rem, remStr: resolved ? Rat.toDecimalString(rem, 6) : '\u2014',
         n: i, a: e.terms[i], sign: i === 0 ? 1 : e.signs[i - 1], p: c.p, q: c.q,
         decimal: Rat.toDecimalString(val, 20),
-        error, errorStr: sci(error, 5),
-        errQ2: Rat.toDecimalString(Rat.mul(abs, Rat.fromInt(c.q * c.q)), 6),
+        error, errorStr: resolved ? sci(error, 5) : '\u2014',
+        errQ2: resolved ? Rat.toDecimalString(Rat.mul(abs, Rat.fromInt(c.q * c.q)), 6) : '\u2014',
       };
     });
     return { rows, stopReason: e.stopReason, source: e.source };
@@ -1478,6 +1489,58 @@ XTests.test('sqrt5 stays periodic, and nearest mode stops instead of guessing', 
   // that it stays within the small set those two roundings can produce.
   for (const r of CF.convergentRowsFor('sqrt5', 30, 'alt').rows.slice(1)) {
     XTests.ok(r.a === 1n || r.a === 4n || r.a === 5n, `sqrt5/alt produced ${r.a}`);
+  }
+});
+
+XTests.test('no displayed row reports an impossible error bound', () => {
+  // Deep convergents from the exact quadratic generator can beat the stored reference, and
+  // the computed "error" then measures the reference instead. Such rows are unresolved and
+  // must be withheld; every row that IS shown has to satisfy |error|*q^2 < 1 and a
+  // discarded distance below 1.
+  for (const c of CF.CONSTANTS) {
+    for (const m of CF.SEMI_MODES) {
+      const { rows } = CF.convergentRowsFor(c.key, 60, m.key);
+      for (const r of rows) {
+        if (!r.resolved) {
+          XTests.eq(r.errQ2, '\u2014', `${c.key}/${m.key} row ${r.n} leaked an errQ2`);
+          XTests.eq(r.remStr, '\u2014', `${c.key}/${m.key} row ${r.n} leaked a distance`);
+          continue;
+        }
+        if (CF.Rat.isZero(r.error)) continue;            // an exact hit
+        // The discarded distance is a rounding remainder, so it is below 1 in every mode
+        // (and below 1/2 where the rounding is to nearest). This is what went to 4.236.
+        XTests.ok(Number(r.remStr) < 1,
+                  `${c.key}/${m.key} row ${r.n}: discarded ${r.remStr} is impossible`);
+        if (m.key === 'nearest') {
+          XTests.ok(Number(r.remStr) <= 0.5,
+                    `${c.key}/nearest row ${r.n}: discarded ${r.remStr} exceeds a half`);
+        }
+        const absErr = r.error.n < 0n ? CF.Rat.neg(r.error) : r.error;
+        XTests.ok(CF.Rat.cmp(absErr, CF.Rat.fromInt(1)) < 0,
+                  `${c.key}/${m.key} row ${r.n}: |error| is at least 1`);
+        // |x - p/q| < 1/q^2 is a theorem about REGULAR convergents. Nearest-mode
+        // convergents are a subset of those, so it holds there too - but alternating and
+        // ceiling modes produce fractions that are not best approximations (pi's 25/8 is
+        // beaten by 22/7), and their errQ2 legitimately exceeds 1.
+        if (m.key === 'floor' || m.key === 'nearest') {
+          XTests.ok(Number(r.errQ2) < 1,
+                    `${c.key}/${m.key} row ${r.n}: errQ2 ${r.errQ2} breaks the 1/q^2 bound`);
+        }
+      }
+    }
+  }
+});
+
+XTests.test('the cascade, bounds and disks stop at the last resolved row', () => {
+  for (const c of CF.CONSTANTS) {
+    const rows = CF.convergentRowsFor(c.key, 60, 'floor').rows;
+    const lastResolved = rows.filter(r => r.resolved).length - 1;
+    for (const d of CF.mobiusDisks(c.key, 40).disks) {
+      XTests.ok(d.n <= lastResolved, `${c.key} disk ${d.n} past the resolved depth`);
+    }
+    for (const r of CF.cascadeRows(c.key, 'floor', 40)) {
+      XTests.ok(r.n <= lastResolved, `${c.key} cascade row ${r.n} past the resolved depth`);
+    }
   }
 });
 
