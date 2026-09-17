@@ -307,6 +307,135 @@ const CF = (() => {
     return `${neg ? '-' : ''}${mant}e${exp < 0 ? '-' : '+'}${Math.abs(exp)}`;
   };
 
+  // ---- generalized continued fractions: b0 + a1/(b1 + a2/(b2 + ...)) ----
+
+  const primes = (count) => {
+    const out = [];
+    const limit = Math.max(20, Math.ceil(count * (Math.log(count + 2) + Math.log(Math.log(count + 2)) + 1)));
+    const sieve = new Uint8Array(limit + 1);
+    for (let i = 2; i <= limit && out.length < count; i++) {
+      if (sieve[i]) continue;
+      out.push(BigInt(i));
+      for (let j = i * i; j <= limit; j += i) sieve[j] = 1;
+    }
+    return out;
+  };
+
+  let PRIME_CACHE = primes(200);
+  const primeAt = (n) => {
+    if (n > PRIME_CACHE.length) PRIME_CACHE = primes(n * 2);
+    return PRIME_CACHE[n - 1];
+  };
+
+  // Sequence values for the irrational entries are truncated to 30 decimals. The full
+  // enclosure would make the exact recurrence carry thousands of digits by level 60,
+  // slow enough to stutter on a slider drag; 30 decimals is far beyond what is displayed.
+  const GEN_SEQ_DIGITS = 30;
+  const constRat = (key) => trunc(constant(key).lo, GEN_SEQ_DIGITS);
+
+  const SEQUENCES = [
+    { key: 'one',    label: '1',            irrational: false, at: () => Rat.fromInt(1) },
+    { key: 'n',      label: 'n',            irrational: false, at: (n) => Rat.fromInt(n) },
+    { key: 'n1',     label: 'n + 1',        irrational: false, at: (n) => Rat.fromInt(n + 1) },
+    { key: 'odd',    label: '2n − 1',  irrational: false, at: (n) => Rat.fromInt(2 * n - 1) },
+    { key: 'oddp',   label: '2n + 1',       irrational: false, at: (n) => Rat.fromInt(2 * n + 1) },
+    { key: 'n2',     label: 'n²',      irrational: false, at: (n) => Rat.fromInt(n * n) },
+    { key: 'odd2',   label: '(2n − 1)²', irrational: false, at: (n) => Rat.fromInt((2 * n - 1) ** 2) },
+    { key: 'prime',  label: 'nth prime',    irrational: false, at: (n) => ({ n: primeAt(n), d: 1n }) },
+    { key: 'prime2', label: '(nth prime)²', irrational: false, at: (n) => { const q = primeAt(n); return { n: q * q, d: 1n }; } },
+    { key: 'pi',     label: 'π',       irrational: true,  at: () => constRat('pi') },
+    { key: 'e',      label: 'e',            irrational: true,  at: () => constRat('e') },
+    { key: 'sqrt2',  label: '√2',      irrational: true,  at: () => constRat('sqrt2') },
+    { key: 'k',      label: 'k',            irrational: true,  at: () => Rat.fromInt(1) },
+  ];
+
+  const seq = (key, k) => {
+    const s = SEQUENCES.find(x => x.key === key);
+    if (!s) throw new Error('unknown sequence ' + key);
+    if (key === 'k') {
+      // An integer k keeps the higher term cap; only a fractional one counts as irrational.
+      const v = k || Rat.fromInt(1);
+      return { key, label: 'k', irrational: v.d !== 1n, at: () => v };
+    }
+    return s;
+  };
+
+  const MAX_GEN_TERMS_INT = 150;
+  const MAX_GEN_TERMS_IRRATIONAL = 60;
+
+  const genConvergents = ({ b0, aSeq, bSeq, negateA, terms }) => {
+    const cap = (aSeq.irrational || bSeq.irrational) ? MAX_GEN_TERMS_IRRATIONAL : MAX_GEN_TERMS_INT;
+    const N = Math.min(terms, cap);
+    let Am1 = Rat.fromInt(1), A0 = b0, Bm1 = Rat.fromInt(0), B0 = Rat.fromInt(1);
+    const values = [];
+    for (let n = 1; n <= N; n++) {
+      let a = aSeq.at(n);
+      if (negateA) a = Rat.neg(a);
+      const b = bSeq.at(n);
+      const A = Rat.add(Rat.mul(b, A0), Rat.mul(a, Am1));
+      const B = Rat.add(Rat.mul(b, B0), Rat.mul(a, Bm1));
+      Am1 = A0; A0 = A; Bm1 = B0; B0 = B;
+      values.push(Rat.isZero(B0) ? Rat.fromInt(0) : Rat.div(A0, B0));
+    }
+    return { values, cap };
+  };
+
+  // Constant denominators (2 and 6) ride on the `k` sequence rather than getting
+  // single-purpose menu entries; the UI sets the k input when a preset is loaded.
+  const GEN_PRESETS = [
+    { key: 'brouncker', label: 'Brouncker: 4/π = 1 + 1²/(2 + 3²/(2 + 5²/(2 + …)))',
+      b0: Rat.fromInt(1), aKey: 'odd2', bKey: 'k', kValue: Rat.fromInt(2), negateA: false, expect: null },
+    { key: 'pi-6', label: 'π = 3 + 1²/(6 + 3²/(6 + 5²/(6 + …)))',
+      b0: Rat.fromInt(3), aKey: 'odd2', bKey: 'k', kValue: Rat.fromInt(6), negateA: false, expect: 'pi' },
+    { key: 'e-ladder', label: 'e = 2 + 2/(2 + 3/(3 + 4/(4 + …)))',
+      b0: Rat.fromInt(2), aKey: 'n1', bKey: 'n1', kValue: null, negateA: false, expect: 'e' },
+    { key: 'sqrt2', label: '√2 = 1 + 1/(2 + 1/(2 + …))',
+      b0: Rat.fromInt(1), aKey: 'one', bKey: 'k', kValue: Rat.fromInt(2), negateA: false, expect: 'sqrt2' },
+  ];
+
+  const NAMED_VALUES = () => {
+    const c = (k) => constant(k).lo;
+    const R = Rat, i = Rat.fromInt;
+    return [
+      { label: 'π', value: c('pi') },
+      { label: 'e', value: c('e') },
+      { label: '√2', value: c('sqrt2') },
+      { label: '√3', value: c('sqrt3') },
+      { label: '√5', value: c('sqrt5') },
+      { label: 'φ', value: c('phi') },
+      { label: 'ln 2', value: c('ln2') },
+      { label: 'γ', value: c('gamma') },
+      { label: '∛2', value: c('cbrt2') },
+      { label: 'π/2', value: R.div(c('pi'), i(2)) },
+      { label: 'π/4', value: R.div(c('pi'), i(4)) },
+      { label: '4/π', value: R.div(i(4), c('pi')) },
+      { label: '2/π', value: R.div(i(2), c('pi')) },
+      { label: 'π²', value: R.mul(c('pi'), c('pi')) },
+      { label: 'π²/6', value: R.div(R.mul(c('pi'), c('pi')), i(6)) },
+      { label: 'e − 1', value: R.sub(c('e'), i(1)) },
+      { label: '1/e', value: R.div(i(1), c('e')) },
+      { label: 'e²', value: R.mul(c('e'), c('e')) },
+      { label: 'ln 10', value: Rat.fromDecimalString('2.302585092994045684017991454684364207601101488628772976033') },
+      { label: 'Catalan G', value: Rat.fromDecimalString('0.915965594177219015054603514932384110774149374281672134266') },
+      { label: 'ζ(3)', value: Rat.fromDecimalString('1.202056903159594285399738161511449990764986292340498881792') },
+      { label: '1 + √2', value: R.add(i(1), c('sqrt2')) },
+    ];
+  };
+
+  let NAMED = null;
+  // Compare with a tolerance rather than by comparing truncated decimal strings: two values
+  // differing by far less than 10^-digits still print differently across a digit boundary.
+  const identify = (r, digits = 12) => {
+    if (!NAMED) NAMED = NAMED_VALUES();
+    const tol = Rat.make(1n, 10n ** BigInt(digits));
+    for (const nv of NAMED) {
+      const d = Rat.sub(r, nv.value);
+      const abs = d.n < 0n ? Rat.neg(d) : d;
+      if (Rat.cmp(abs, tol) < 0) return { label: nv.label, matched: true };
+    }
+    return { label: 'no match in the table', matched: false };
+  };
+
   // ---- best rational approximation, checked by exhaustive search ----
 
   const MAX_RACE_Q = 200000;
@@ -361,7 +490,9 @@ const CF = (() => {
            CONSTANTS, constant, EPS,
            termsExact, termsFromInterval, quadraticTerms, expand,
            convergents, sci, convergentRows,
-           MAX_RACE_Q, bestApproximations };
+           MAX_RACE_Q, bestApproximations,
+           primes, SEQUENCES, seq, GEN_SEQ_DIGITS, MAX_GEN_TERMS_INT, MAX_GEN_TERMS_IRRATIONAL,
+           genConvergents, GEN_PRESETS, identify };
 })();
 
 XTests.test('Rat reduces and normalizes sign', () => {
@@ -566,6 +697,77 @@ XTests.test('the race refuses denominators it cannot search', () => {
 XTests.test('best approximations of phi are Fibonacci ratios', () => {
   const best = CF.bestApproximations('phi', 89, 2);
   XTests.eq(`${best[0].p}/${best[0].q}`, '144/89');
+});
+
+XTests.test('sieve produces primes', () => {
+  XTests.eq(CF.primes(10).join(','), '2,3,5,7,11,13,17,19,23,29');
+});
+
+XTests.test('generalized recurrence reproduces a simple continued fraction', () => {
+  const terms = CF.expand('pi', 4).terms;
+  const aSeq = { at: () => CF.Rat.fromInt(1), irrational: false };
+  const bSeq = { at: (n) => CF.Rat.fromInt(terms[n]), irrational: false };
+  const { values } = CF.genConvergents({ b0: CF.Rat.fromInt(terms[0]), aSeq, bSeq, negateA: false, terms: 3 });
+  XTests.eq(`${values[2].n}/${values[2].d}`, '355/113');
+});
+
+XTests.test('Brouncker converges to 4/pi', () => {
+  const p = CF.GEN_PRESETS.find(x => x.key === 'brouncker');
+  const { values } = CF.genConvergents({
+    b0: p.b0, aSeq: CF.seq(p.aKey, p.kValue), bSeq: CF.seq(p.bKey, p.kValue),
+    negateA: p.negateA, terms: 120 });
+  const last = values[values.length - 1];
+  const target = CF.Rat.div(CF.Rat.fromInt(4), CF.constant('pi').lo);
+  const diff = CF.Rat.sub(last, target);
+  const abs = diff.n < 0n ? CF.Rat.neg(diff) : diff;
+  XTests.ok(CF.Rat.cmp(abs, CF.Rat.fromDecimalString('0.01')) < 0, `off by ${CF.sci(abs, 4)}`);
+});
+
+XTests.test('every preset converges to the constant it claims', () => {
+  for (const p of CF.GEN_PRESETS) {
+    if (!p.expect) continue;
+    const { values } = CF.genConvergents({
+      b0: p.b0, aSeq: CF.seq(p.aKey, p.kValue), bSeq: CF.seq(p.bKey, p.kValue),
+      negateA: p.negateA, terms: 120 });
+    const last = values[values.length - 1];
+    // 5 digits, not more: the pi = 3 + 1^2/(6 + ...) form is only good to ~3e-7 after 120 levels.
+    const id = CF.identify(last, 5);
+    XTests.eq(id.label, CF.constant(p.expect).label, `preset ${p.key} identified as ${id.label}`);
+  }
+});
+
+XTests.test('the e preset matches e to 8 digits', () => {
+  const p = CF.GEN_PRESETS.find(x => x.key === 'e-ladder');
+  const { values } = CF.genConvergents({
+    b0: p.b0, aSeq: CF.seq(p.aKey, p.kValue), bSeq: CF.seq(p.bKey, p.kValue),
+    negateA: false, terms: 25 });
+  const last = values[values.length - 1];
+  XTests.eq(CF.Rat.toDecimalString(last, 8), CF.Rat.toDecimalString(CF.constant('e').lo, 8));
+});
+
+XTests.test('irrational sequences are capped harder than integer ones', () => {
+  const r1 = CF.genConvergents({ b0: CF.Rat.fromInt(1), aSeq: CF.seq('pi'), bSeq: CF.seq('n'),
+    negateA: false, terms: 500 });
+  XTests.eq(r1.cap, CF.MAX_GEN_TERMS_IRRATIONAL);
+  XTests.eq(r1.values.length, CF.MAX_GEN_TERMS_IRRATIONAL);
+  const r2 = CF.genConvergents({ b0: CF.Rat.fromInt(1), aSeq: CF.seq('prime'), bSeq: CF.seq('oddp'),
+    negateA: false, terms: 500 });
+  XTests.eq(r2.cap, CF.MAX_GEN_TERMS_INT);
+});
+
+XTests.test('identify matches known values and admits when it cannot', () => {
+  XTests.eq(CF.identify(CF.constant('pi').lo).label, '\u03c0');
+  XTests.eq(CF.identify(CF.Rat.div(CF.Rat.fromInt(4), CF.constant('pi').lo)).label, '4/\u03c0');
+  XTests.eq(CF.identify(CF.Rat.fromDecimalString('1.56639929860261')).matched, false);
+});
+
+XTests.test('the owner ideas produce finite values', () => {
+  for (const [aKey, bKey] of [['prime', 'oddp'], ['pi', 'n'], ['e', 'n']]) {
+    const { values } = CF.genConvergents({ b0: CF.Rat.fromInt(1), aSeq: CF.seq(aKey),
+      bSeq: CF.seq(bKey), negateA: false, terms: 30 });
+    const last = values[values.length - 1];
+    XTests.ok(last.d !== 0n && Number.isFinite(CF.Rat.toNumber(last)), `${aKey}/${bKey} diverged`);
+  }
 });
 
 </script>
