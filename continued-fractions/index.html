@@ -423,6 +423,20 @@ const CF = (() => {
     return Rat.make(isqrt((m.n * s * s) / m.d), s);
   };
 
+  // One arithmetic interface, two instantiations, so the generalized recurrence can run
+  // over the reals or the Gaussian rationals without a second copy of itself.
+  const RAT_OPS = {
+    add: Rat.add, sub: Rat.sub, mul: Rat.mul, div: Rat.div, neg: Rat.neg,
+    isZero: Rat.isZero, zero: Rat.fromInt(0), one: Rat.fromInt(1),
+    lift: (r) => r,
+  };
+  const CRAT_OPS = {
+    add: cAdd, sub: cSub, mul: cMul,
+    div: (a, b) => cMul(a, cInv(b)), neg: (a) => cSub(cOf(Rat.fromInt(0), Rat.fromInt(0)), a),
+    isZero: cIsZero, zero: cOf(Rat.fromInt(0), Rat.fromInt(0)), one: cOf(Rat.fromInt(1), Rat.fromInt(0)),
+    lift: (r) => (r && r.re !== undefined ? r : cOf(r, Rat.fromInt(0))),
+  };
+
   // ---- Hurwitz continued fractions over the Gaussian integers ----
 
   const COMPLEX_CONSTANTS = [
@@ -893,10 +907,18 @@ const CF = (() => {
     { key: 'odd2',   label: '(2n − 1)²', irrational: false, at: (n) => Rat.fromInt((2 * n - 1) ** 2) },
     { key: 'prime',  label: 'nth prime',    irrational: false, at: (n) => ({ n: primeAt(n), d: 1n }) },
     { key: 'prime2', label: '(nth prime)²', irrational: false, at: (n) => { const q = primeAt(n); return { n: q * q, d: 1n }; } },
-    { key: 'pi',     label: 'π',       irrational: true,  at: () => constRat('pi') },
-    { key: 'e',      label: 'e',            irrational: true,  at: () => constRat('e') },
-    { key: 'sqrt2',  label: '√2',      irrational: true,  at: () => constRat('sqrt2') },
+    { key: 'pi',     label: 'π',       irrational: true, truncated: true, at: () => constRat('pi') },
+    { key: 'e',      label: 'e',            irrational: true, truncated: true, at: () => constRat('e') },
+    { key: 'sqrt2',  label: '√2',      irrational: true, truncated: true, at: () => constRat('sqrt2') },
     { key: 'k',      label: 'k',            irrational: true,  at: () => Rat.fromInt(1) },
+    // Complex entries. They count as irrational for the term cap: CRat values grow
+    // the same way, and the recurrence costs the same.
+    { key: 'i',      label: 'i',            irrational: true, complex: true,
+      at: () => cOf(Rat.fromInt(0), Rat.fromInt(1)) },
+    { key: 'ni',     label: 'n\u00b7i',         irrational: true, complex: true,
+      at: (n) => cOf(Rat.fromInt(0), Rat.fromInt(n)) },
+    { key: 'onepi',  label: '1 + i',        irrational: true, complex: true,
+      at: () => cOf(Rat.fromInt(1), Rat.fromInt(1)) },
   ];
 
   const seq = (key, k) => {
@@ -916,18 +938,20 @@ const CF = (() => {
   const genConvergents = ({ b0, aSeq, bSeq, negateA, terms }) => {
     const cap = (aSeq.irrational || bSeq.irrational) ? MAX_GEN_TERMS_IRRATIONAL : MAX_GEN_TERMS_INT;
     const N = Math.min(terms, cap);
-    let Am1 = Rat.fromInt(1), A0 = b0, Bm1 = Rat.fromInt(0), B0 = Rat.fromInt(1);
+    const complex = !!(aSeq.complex || bSeq.complex);
+    const O = complex ? CRAT_OPS : RAT_OPS;
+    let Am1 = O.one, A0 = O.lift(b0), Bm1 = O.zero, B0 = O.one;
     const values = [];
     for (let n = 1; n <= N; n++) {
-      let a = aSeq.at(n);
-      if (negateA) a = Rat.neg(a);
-      const b = bSeq.at(n);
-      const A = Rat.add(Rat.mul(b, A0), Rat.mul(a, Am1));
-      const B = Rat.add(Rat.mul(b, B0), Rat.mul(a, Bm1));
+      let a = O.lift(aSeq.at(n));
+      if (negateA) a = O.neg(a);
+      const b = O.lift(bSeq.at(n));
+      const A = O.add(O.mul(b, A0), O.mul(a, Am1));
+      const B = O.add(O.mul(b, B0), O.mul(a, Bm1));
       Am1 = A0; A0 = A; Bm1 = B0; B0 = B;
-      values.push(Rat.isZero(B0) ? Rat.fromInt(0) : Rat.div(A0, B0));
+      values.push(O.isZero(B0) ? O.zero : O.div(A0, B0));
     }
-    return { values, cap };
+    return { values, cap, complex };
   };
 
   // Constant denominators (2 and 6) ride on the `k` sequence rather than getting
@@ -1085,7 +1109,7 @@ const CF = (() => {
            convergents, sci, convergentRows, convergentRowsFor,
            MAX_RACE_Q, bestApproximations, bestApproximationsAbove,
            primes, SEQUENCES, seq, GEN_SEQ_DIGITS, MAX_GEN_TERMS_INT, MAX_GEN_TERMS_IRRATIONAL,
-           genConvergents, GEN_PRESETS, identify, identifyGraded,
+           genConvergents, GEN_PRESETS, identify, identifyGraded, RAT_OPS, CRAT_OPS,
            dissect,
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
@@ -1369,6 +1393,52 @@ XTests.test('the owner ideas produce finite values', () => {
     const last = values[values.length - 1];
     XTests.ok(last.d !== 0n && Number.isFinite(CF.Rat.toNumber(last)), `${aKey}/${bKey} diverged`);
   }
+});
+
+XTests.test('both arithmetic ops objects obey the ring laws', () => {
+  const R = CF.Rat;
+  const a = R.make(3n, 7n);
+  XTests.eq(R.cmp(CF.RAT_OPS.add(a, CF.RAT_OPS.zero), a), 0);
+  XTests.eq(R.cmp(CF.RAT_OPS.mul(a, CF.RAT_OPS.one), a), 0);
+  XTests.ok(CF.RAT_OPS.isZero(CF.RAT_OPS.sub(a, a)));
+  const z = CF.cOf(R.make(3n, 7n), R.make(-2n, 5n));
+  const sum = CF.CRAT_OPS.add(z, CF.CRAT_OPS.zero);
+  XTests.eq(R.cmp(sum.re, z.re), 0); XTests.eq(R.cmp(sum.im, z.im), 0);
+  const prod = CF.CRAT_OPS.mul(z, CF.CRAT_OPS.one);
+  XTests.eq(R.cmp(prod.re, z.re), 0); XTests.eq(R.cmp(prod.im, z.im), 0);
+  XTests.ok(CF.CRAT_OPS.isZero(CF.CRAT_OPS.sub(z, z)));
+});
+
+XTests.test('the real generalized path is unchanged by the ops refactor', () => {
+  const p = CF.GEN_PRESETS.find(x => x.key === 'e-ladder');
+  const { values } = CF.genConvergents({
+    b0: p.b0, aSeq: CF.seq(p.aKey, p.kValue), bSeq: CF.seq(p.bKey, p.kValue),
+    negateA: false, terms: 25 });
+  const last = values[values.length - 1];
+  XTests.eq(CF.Rat.toDecimalString(last, 8), CF.Rat.toDecimalString(CF.constant('e').lo, 8));
+});
+
+XTests.test('a complex sequence actually produces a complex value', () => {
+  const r = CF.genConvergents({ b0: CF.Rat.fromInt(1), aSeq: CF.seq('i'), bSeq: CF.seq('n'),
+    negateA: false, terms: 12 });
+  XTests.ok(r.complex, 'the run should be flagged complex');
+  const last = r.values[r.values.length - 1];
+  XTests.ok(!CF.Rat.isZero(last.im), 'imaginary part collapsed to zero');
+});
+
+XTests.test('a complex generalized fraction converges', () => {
+  const r = CF.genConvergents({ b0: CF.Rat.fromInt(0), aSeq: CF.seq('i'), bSeq: CF.seq('one'),
+    negateA: false, terms: 20 });
+  const n = r.values.length;
+  const diff = (k) => CF.ratSqrtLower(CF.cNormSq(CF.cSub(r.values[k], r.values[k - 1])), 30);
+  XTests.ok(CF.Rat.cmp(diff(n - 1), diff(Math.floor(n / 2))) < 0,
+            'successive differences did not shrink');
+});
+
+XTests.test('complex sequences take the irrational term cap', () => {
+  const r = CF.genConvergents({ b0: CF.Rat.fromInt(1), aSeq: CF.seq('ni'), bSeq: CF.seq('n'),
+    negateA: false, terms: 500 });
+  XTests.eq(r.cap, CF.MAX_GEN_TERMS_IRRATIONAL);
 });
 
 XTests.test('dissection square counts equal the continued fraction terms', () => {
@@ -2283,7 +2353,8 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
 
   // Level n of the tower is a_n over (b_n + level n+1); b0 sits outside the whole stack.
   function genTowerHTML(g, seqs, depth) {
-    const fmt = (r, irr) => CF.Rat.toDecimalString(r, irr ? 4 : 0);
+    const fmt = (r, irr) =>
+      (r && r.re !== undefined) ? CF.cStr(r, 0) : CF.Rat.toDecimalString(r, irr ? 4 : 0);
     const level = (n) => {
       const num = (g.negate ? '−' : '') + fmt(seqs.a.at(n), seqs.a.irrational);
       const den = n >= depth
@@ -2313,9 +2384,16 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     el('gen-a').innerHTML = opts(g.aKey);
     el('gen-b').innerHTML = opts(g.bKey);
 
-    const { values, cap } = CF.genConvergents({
+    const { values, cap, complex } = CF.genConvergents({
       b0: CF.Rat.fromDecimalString(String(g.b0)), aSeq: seqs.a, bSeq: seqs.b,
       negateA: g.negate, terms: g.terms });
+    // |x| and differences for either arithmetic, so the table and plot below do not
+    // each need to know which one ran.
+    const magOf = (v) => (v.re !== undefined)
+      ? CF.ratSqrtLower(CF.cNormSq(v), 30)
+      : (v.n < 0n ? CF.Rat.neg(v) : v);
+    const diffOf = (a, b) => (a.re !== undefined) ? CF.cSub(a, b) : CF.Rat.sub(a, b);
+    const showOf = (v, d) => (v.re !== undefined) ? CF.cStr(v, d) : CF.Rat.toDecimalString(v, d);
 
     el('gen-terms').max = String(cap);
     el('gen-terms-label').textContent = `${values.length} levels (cap ${cap}` +
@@ -2324,9 +2402,8 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
 
     const rows = values.map((v, i) => {
       const prev = i > 0 ? values[i - 1] : null;
-      const d = prev ? CF.Rat.sub(v, prev) : null;
-      const abs = d && (d.n < 0n ? CF.Rat.neg(d) : d);
-      return { n: i + 1, decimal: CF.Rat.toDecimalString(v, 14),
+      const abs = prev ? magOf(diffOf(v, prev)) : null;
+      return { n: i + 1, decimal: showOf(v, 14),
                step: abs ? CF.sci(abs, 4) : '—', absRat: abs };
     });
     el('gen-table').innerHTML =
@@ -2335,14 +2412,20 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
                     `<td class="mono">${r.step}</td></tr>`).join('');
 
     const last = values[values.length - 1];
-    const id = CF.identifyGraded(last, 12, 4);
-    const note = (seqs.a.irrational || seqs.b.irrational)
+    const id = complex ? null : CF.identifyGraded(last, 12, 4);
+    // Only the truncated entries (pi, e, sqrt2) carry an approximation caveat. The
+    // complex entries are flagged irrational for the term cap, but i and 1+i are exact.
+    const note = (seqs.a.truncated || seqs.b.truncated)
       ? ` Computed from the irrational sequence value to ${CF.GEN_SEQ_DIGITS} decimals — exact for that approximation, not for the constant itself.`
-      : ' Computed in exact integer arithmetic.';
+      : ' Computed in exact arithmetic.';
     el('gen-identify').innerHTML =
       `<span class="verdict">Value after ${values.length} levels: ` +
-      `<strong class="mono">${CF.Rat.toDecimalString(last, 14)}</strong> — ` +
-      (id.matched ? `agrees with <strong>${id.label}</strong> to ${id.digits} digits.` : `${id.label}.`) +
+      `<strong class="mono">${showOf(last, 14)}</strong> — ` +
+      (complex
+        ? 'no identification for complex values — the table of named constants is real.'
+        : id.matched
+          ? `agrees with <strong>${id.label}</strong> to ${id.digits} digits.`
+          : `${id.label}.`) +
       note + '</span>';
 
     drawGenPlot(rows);
