@@ -747,7 +747,15 @@ const CF = (() => {
   const semiconvergents = (key, maxQ) => {
     const k = constant(key);
     const x = k.exact || k.lo;
-    const rows = convergentRowsFor(key, 34, 'floor').rows;
+    // Generate until the convergent denominators pass the budget, rather than a fixed count.
+    // A fixed 34 silently truncated the pool at deep budgets, and "balanced is never worse"
+    // then failed - phi level 17 gave 1.112e-14 against the independent 1.623e-15.
+    let rows = [];
+    for (let want = 34; want <= 400; want *= 2) {
+      rows = convergentRowsFor(key, want, 'floor').rows;
+      const last = rows[rows.length - 1];
+      if (!last || last.q > maxQ || rows.length < want) break;
+    }
     const out = [];
     const add = (p, q) => {
       if (q <= 0n || q > maxQ) return;
@@ -769,8 +777,19 @@ const CF = (() => {
   // The midpoint error is |errUpper - errLower| / 2, so the pair to want is the one whose
   // two errors are closest in size - deliberately taking a worse bound on the better side
   // so the two cancel. Sorting by error magnitude puts that pair adjacent, so one scan finds it.
-  const balancedPair = (key, maxQ) => {
+  const balancedPair = (key, maxQ, floorPair) => {
     const pool = semiconvergents(key, maxQ);
+    // The caller's own pair is always a candidate, so the search cannot return something
+    // worse than what it was handed even if the pool is short of it.
+    if (floorPair) for (const z of floorPair) {
+      if (!pool.some(w => w.p === z.p && w.q === z.q)) {
+        const k2 = constant(key), x2 = k2.exact || k2.lo;
+        const v = Rat.make(z.p, z.q), err = Rat.sub(x2, v);
+        if (!Rat.isZero(err)) {
+          pool.push({ p: z.p, q: z.q, v, err, abs: err.n < 0n ? Rat.neg(err) : err, below: err.n > 0n });
+        }
+      }
+    }
     if (pool.length < 2) return null;
     pool.sort((a, b) => Rat.cmp(a.abs, b.abs));
     // For each element the nearest opposite-side partner in sorted order gives its smallest
@@ -816,7 +835,7 @@ const CF = (() => {
       // best rather than to make each endpoint best. The independent pair is itself in the
       // pool, so balanced can never do worse.
       if (mode === 'balanced') {
-        const bp = balancedPair(key, A.q > B.q ? A.q : B.q);
+        const bp = balancedPair(key, A.q > B.q ? A.q : B.q, [B, A]);
         if (bp) {
           B = { p: bp.lower.p, q: bp.lower.q };
           A = { p: bp.upper.p, q: bp.upper.q };
@@ -1324,7 +1343,11 @@ const CF = (() => {
     const shortlist = [];
     let worst = Infinity;
     for (let q = 1; q <= Q; q++) {
-      const p = Math.ceil(xd * q);
+      let p = Math.ceil(xd * q);
+      // An exact hit is not an upper bound. Stepping past it here - rather than filtering
+      // afterwards - stops exact hits from filling the shortlist and crowding out the real
+      // candidates, which made the search return nothing at all for a rational target.
+      if (Rat.cmp(Rat.make(BigInt(p), BigInt(q)), x) <= 0) p += 1;
       const err = p / q - xd;
       if (err < 0) continue;                       // double noise near an exact hit
       if (shortlist.length < 50 || err < worst) {
@@ -2743,6 +2766,33 @@ XTests.test('balancing buys orders of magnitude on sqrt2 and nothing on phi', ()
   for (let i = 0; i < bp.length; i++) {
     XTests.eq(CF.Rat.cmp(bp[i].eMid, ip[i].eMid), 0, `phi k=${i} should be unimprovable`);
   }
+});
+
+XTests.test('balanced is never worse than independent, at depth too', () => {
+  // The pool was capped at a fixed 34 convergents regardless of the budget, so at deep
+  // levels it could miss the independent pair itself and lose to it - phi level 17 gave
+  // 1.112e-14 against 1.623e-15.
+  for (const c of CF.CONSTANTS) {
+    const ind = CF.boundRows(c.key, 18, 'independent').rows;
+    const bal = CF.boundRows(c.key, 18, 'balanced').rows;
+    for (let i = 0; i < Math.min(ind.length, bal.length); i++) {
+      XTests.ok(CF.Rat.cmp(bal[i].eMid, ind[i].eMid) <= 0,
+                `${c.key} k=${i}: balanced ${bal[i].eMidStr} lost to independent ${ind[i].eMidStr}`);
+    }
+  }
+});
+
+XTests.test('the strict-upper search finds candidates for a rational target', () => {
+  // Exact hits used to fill the 50-item shortlist and were removed only afterwards, so the
+  // search returned nothing for 355/113 even though 22/7 is plainly above it.
+  const best = CF.bestApproximationsAbove('r355_113', 10000, 5);
+  XTests.ok(best.length === 5, `expected 5 candidates, got ${best.length}`);
+  const x = CF.constant('r355_113').exact;
+  for (const b of best) {
+    XTests.ok(CF.Rat.cmp(CF.Rat.make(b.p, b.q), x) > 0, `${b.p}/${b.q} is not strictly above`);
+  }
+  // and the same for an irrational target, unchanged
+  XTests.eq(CF.bestApproximationsAbove('pi', 113, 1)[0].q, 113n);
 });
 
 XTests.test('real constants run through the complex algorithm too', () => {
