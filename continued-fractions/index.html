@@ -369,6 +369,8 @@ const CF = (() => {
     return `${neg ? '-' : ''}${mant}e${exp < 0 ? '-' : '+'}${Math.abs(exp)}`;
   };
 
+  const raceKind = (mode) => (mode === 'ceil' ? 'above' : 'any');
+
   // ---- semiregular continued fractions: x = a + eps/x', eps in {+1, -1} ----
   //
   // The rounding rule IS the knob. a = floor(x) puts the remainder in (0,1), forcing
@@ -466,18 +468,21 @@ const CF = (() => {
     const out = [];
 
     for (let n = 1; n < vals.length && out.length < maxRows; n++) {
+      // Decide per row, not per mode: if consecutive convergents straddle the target the
+      // bracket between them is the informative interval; otherwise the interval from the
+      // target to the newer convergent is. Mixed modes need both, sometimes in one cascade.
       let lo, hi, loLabel, hiLabel;
-      if (mode === 'ceil') {
-        // Both convergents sit above the target, so the informative interval runs
-        // from the target up to the newest convergent.
-        lo = x; hi = vals[n]; loLabel = 'x'; hiLabel = labels[n];
-        if (Rat.cmp(hi, lo) <= 0) break;            // an exact hit: nothing left to draw
-      } else {
-        const a = vals[n - 1], b = vals[n];
+      const a = vals[n - 1], b = vals[n];
+      const aAbove = Rat.cmp(a, x) > 0, bAbove = Rat.cmp(b, x) > 0;
+      if (aAbove !== bAbove) {
         if (Rat.cmp(a, b) < 0) { lo = a; hi = b; loLabel = labels[n - 1]; hiLabel = labels[n]; }
         else { lo = b; hi = a; loLabel = labels[n]; hiLabel = labels[n - 1]; }
-        if (Rat.cmp(lo, x) >= 0 || Rat.cmp(x, hi) >= 0) break;   // target no longer inside
+      } else if (bAbove) {
+        lo = x; hi = b; loLabel = 'x'; hiLabel = labels[n];
+      } else {
+        lo = b; hi = x; loLabel = labels[n]; hiLabel = 'x';
       }
+      if (Rat.cmp(hi, lo) <= 0) break;            // an exact hit: nothing left to draw
       const width = Rat.sub(hi, lo);
       if (Rat.isZero(width)) break;
 
@@ -886,7 +891,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows,
+           cascadeRows, raceKind,
            SEMI_MODES, ratRound, pickInteger, semiregularTerms, semiregularConvergents };
 })();
 
@@ -1562,6 +1567,65 @@ XTests.test('alt is labelled as a construction', () => {
   for (const m of CF.SEMI_MODES) {
     if (m.key !== 'alt') XTests.ok(m.note === null, `${m.key} should have no note`);
   }
+});
+
+XTests.test('raceKind restricts only the ceiling mode', () => {
+  XTests.eq(CF.raceKind('ceil'), 'above');
+  for (const m of ['floor', 'nearest', 'alt']) XTests.eq(CF.raceKind(m), 'any');
+});
+
+XTests.test('cascade rows in a mixed mode switch shape partway down', () => {
+  // e in nearest mode has convergents above, above, below, below, above, above, below.
+  const rows = CF.cascadeRows('e', 'nearest', 10);
+  const kinds = new Set(rows.map(r => r.brackets));
+  XTests.ok(kinds.has(true) && kinds.has(false),
+            `expected both bracketing and one-sided rows, got ${[...kinds].join(',')}`);
+});
+
+XTests.test('cascade still brackets throughout in floor mode and never in ceil mode', () => {
+  for (const r of CF.cascadeRows('pi', 'floor', 8)) XTests.ok(r.brackets, `floor row ${r.n}`);
+  for (const r of CF.cascadeRows('pi', 'ceil', 8)) XTests.ok(!r.brackets, `ceil row ${r.n}`);
+});
+
+XTests.test('cascade rows stay nested and drawable in all four modes', () => {
+  for (const m of CF.SEMI_MODES) {
+    for (const key of ['pi', 'e', 'phi']) {
+      const rows = CF.cascadeRows(key, m.key, 10);
+      const x = CF.constant(key).lo;
+      XTests.ok(rows.length > 0, `${key}/${m.key} produced no rows`);
+      for (let i = 1; i < rows.length; i++) {
+        // Widths shrink while the row SHAPE holds. A mixed mode switching from a
+        // one-sided row [x, c] to a bracket row [c', c] necessarily widens, because
+        // the one-sided interval is a subinterval of the bracket - so only compare
+        // rows of the same shape.
+        if (rows[i].brackets !== rows[i - 1].brackets) continue;
+        XTests.ok(CF.Rat.cmp(rows[i].width, rows[i - 1].width) < 0,
+                  `${key}/${m.key} row ${rows[i].n} was not narrower`);
+      }
+      for (const r of rows) {
+        XTests.ok(CF.Rat.cmp(r.lo, x) <= 0 && CF.Rat.cmp(x, r.hi) <= 0,
+                  `${key}/${m.key} row ${r.n} does not contain the target`);
+        for (const pos of [r.loPos, r.hiPos, r.targetPos]) {
+          XTests.ok(pos >= 0 && pos <= 1 && Number.isFinite(pos),
+                    `${key}/${m.key} row ${r.n}: position ${pos} out of range`);
+        }
+      }
+    }
+  }
+});
+
+XTests.test('nearest convergents win their races, alternating ones need not', () => {
+  // Nearest-integer convergents are a subset of the regular convergents, so they win.
+  for (const row of CF.convergentRowsFor('pi', 8, 'nearest').rows) {
+    if (row.q > BigInt(CF.MAX_RACE_Q) || row.q < 2n) continue;
+    const best = CF.bestApproximations('pi', Number(row.q), 1)[0];
+    XTests.eq(`${best.p}/${best.q}`, `${row.p}/${row.q}`, `nearest row n=${row.n}`);
+  }
+  // The alternating expansion yields 25/8, which 22/7 beats with a smaller denominator.
+  const alt = CF.convergentRowsFor('pi', 4, 'alt').rows;
+  XTests.eq(`${alt[1].p}/${alt[1].q}`, '25/8');
+  const winner = CF.bestApproximations('pi', 8, 1)[0];
+  XTests.eq(`${winner.p}/${winner.q}`, '22/7');
 });
 
 </script>
