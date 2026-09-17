@@ -6,6 +6,14 @@ Tests: `node continued-fractions/test.mjs` — 133 tests
 Written for review. Claims are labelled **proved**, **verified** (computed in exact
 rational arithmetic) or **assumed** (relied on, not established here).
 
+> **Review outcome (Codex, 2026-09-17).** The core mathematics — the midpoint
+> identity, the quadratic law, the 1.26e+11 √2 figure — was confirmed, including
+> against an exhaustive check of 31,518 candidate pairs. Six defects were found in
+> the surrounding code, all now fixed (`continued-fractions/index.html`, 144 tests).
+> Two claims in *this document* were wrong and are corrected in place below: §3.3
+> on whether the conversion problem reaches the page, and §4 on why φ resists
+> balancing. Full report: `2026-09-17-balanced-bounds-review.md`.
+
 ## 1. The construction
 
 For a real irrational `x`, the regular continued fraction's convergents alternate
@@ -63,12 +71,18 @@ brackets. Selected pairs:
 275807/195025 & 390050/275807      1607521/1136689 & 2273378/1607521
 ```
 
-**Assumed, worth checking:** that `2q/p` is in the pool at all, i.e. that for
-`√2 = [1;2,2,2,…]` the intermediate semiconvergent between consecutive
-convergents equals `2q/p`. This is verified numerically at every level above; the
-induction from the Pell identity `p² − 2q² = ±1` looks routine but is **not**
-carried out here. If it fails at some depth the search would silently fall back
-to a worse pair — it would still be correct, just less effective.
+**Resolved by review.** That `2q/p` is a semiconvergent of `√2` at every depth was
+left assumed here; Codex established it. Separately, that convergents plus
+semiconvergents are exactly the one-sided best approximations is a theorem
+(Hančl & Turek, *One-sided Diophantine approximations*, Thm 4.5), and the `j`
+range in `semiconvergents()` was confirmed correct — `j = 0` is the previous
+convergent and `j = a` the next, both added separately.
+
+The real defect was elsewhere: the pool was generated from a **fixed 34
+convergents** regardless of the budget, so at deep budgets it could omit even the
+independent pair and balanced mode lost to it (φ level 17: `1.112e-14` against
+`1.623e-15`). Fixed — the pool now grows until the denominators pass the budget,
+and the caller's pair is injected as a candidate.
 
 ### 3.2 Why the midpoint is then quadratically accurate
 
@@ -114,11 +128,21 @@ k   B lower            A upper             |err C|      ratio
 8   1607521/1136689    2273378/1607521     2.647e-26    1.0000000000
 ```
 
-**A trap worth recording.** The first version of this check used
-`CF.Rat.toNumber`, which routes through `toDecimalString(…, 20)`. Below `1e-20`
-it floors, so k=6 read `0.851` and k=7 read `0.000` — an artifact of the *check*,
-not of the page, whose values are exact `BigInt` rationals throughout. Any
-verification of these claims must stay in exact arithmetic.
+**A trap worth recording — and a claim this document got wrong.** The first
+version of this check used `CF.Rat.toNumber`, which routes through
+`toDecimalString(…, 20)` and floors below `1e-20`, so k=6 read `0.851` and k=7
+read `0.000`.
+
+This document originally called that "an artifact of the *check*, not of the
+page". **That was false.** The page's arithmetic is exact, but its *charts*
+converted through the same function — so the level-7 midpoint error `3.05e-23`
+became zero and vanished from the Bounds plot, deleting precisely the result the
+tab exists to show. Fixed by adding `Rat.log10`, which reads the exponent off the
+BigInt digit counts and is valid at any magnitude; the Bounds, Generalized and
+Complex plots now use it. Two further underflows of the same family were fixed at
+the same time (the Möbius zoom strip divided two separately-converted doubles;
+the Complex plot took its radial magnitude from a double difference of order-1
+values).
 
 ### 3.4 The resulting gain
 
@@ -136,9 +160,16 @@ roughly `q_k / q_{k+2}` — nowhere near equal, so nothing cancels.
 
 - **The magnitude is √2-specific.** Largest gain across 8 levels: √2 `×1.26e+11`,
   e `×3.33e+2`, π `×4.22`, φ `×1` (none).
-- **φ is unimprovable**, and provably so: every partial quotient is 1, so there
-  are no semiconvergents and the pool contains only the convergents. Test:
-  `balancing buys orders of magnitude on sqrt2 and nothing on phi`.
+- **φ is unimprovable** — but the reason given here originally ("every partial
+  quotient is 1, so there are no semiconvergents") does **not** by itself prove
+  it, as Codex pointed out: older convergents remain in the pool and could in
+  principle pair better. The completion is via the error sizes. With
+  `E_n = |φ − p_n/q_n| = φ^(−n−1)/F_(n+1)`, one has `E_n/E_(n+1) > 2` for `n ≥ 1`,
+  so the adjacent gaps `g_n = E_n − E_(n+1)` strictly decrease for `n ≥ 1`, and
+  `g_0 > g_2` by direct check on 1, 2, 3/2, 5/3. At a budget ending on an
+  odd-indexed convergent the smallest adjacent gap is therefore `g_(2k)`; adjacent
+  errors alternate sides and no non-adjacent pair has a smaller gap. The
+  independent pair is thus optimal within the complete pool.
 - **No claim that C beats the best single bound in general.** In independent mode
   the midpoint beats both bounds well under half the time; that is the point of
   §2 and is itself a test (`the midpoint is not uniformly better than its own bounds`).
@@ -147,8 +178,11 @@ roughly `q_k / q_{k+2}` — nowhere near equal, so nothing cancels.
   one-sided best approximations (convergents plus semiconvergents). If that set
   is incomplete the search remains sound but may not be optimal.
 - **C's denominator is not bounded by Q.** `(A+B)/2` has denominator up to
-  `2·qA·qB`. Both modes pay this equally, so the comparison is fair, but C is not
-  a low-denominator approximation and should not be read as one.
+  `2·qA·qB`. Both modes obey the same *endpoint* budget, which is the stated
+  fairness control — but their resulting midpoint denominators are not equal, so
+  "both modes pay this equally" means they face the same constraint, not that
+  their outputs are the same size. C is not a low-denominator approximation and
+  should not be read as one.
 
 ## 5. Reproducing
 
@@ -170,15 +204,19 @@ Relevant tests: `the midpoint error is exactly half the difference of the two er
 `balancing buys orders of magnitude on sqrt2 and nothing on phi`,
 `the semiconvergent pool respects its budget and takes a side`.
 
-## 6. Specific things to attack
+## 6. Attack targets, and what came of them
 
-1. The §3.1 assumption that `2q/p` is a semiconvergent of `√2` at every depth —
-   verified to k=8, not proved.
-2. Whether `semiconvergents()` really enumerates every one-sided best
-   approximation under the budget. It emits convergents plus
-   `(p_{k-1} + j·p_k)/(q_{k-1} + j·q_k)` for `j = 1 … a_{k+1}-1`. Off-by-one in
-   the `j` range would silently shrink the pool.
-3. Whether the budget `Q = max(qA, qB)` is the right fairness control, or whether
-   balanced should be charged for the combined denominator it actually uses.
-4. `balancedPair` breaks after the first opposite-side partner. The argument for
-   exactness is in §5; it deserves a second reading.
+1. `2q/p` a semiconvergent of `√2` at every depth — **resolved**, established by
+   Codex rather than left at k=8.
+2. Whether `semiconvergents()` enumerates every one-sided best approximation —
+   **the `j` range was correct**, but the enumeration was capped at a fixed 34
+   convergents, which broke the "never worse" guarantee at depth. Fixed.
+3. The fairness control — **accepted as legitimate and explicitly stated**, with
+   the wording tightened (see §4).
+4. `balancedPair` breaking after the first opposite-side partner — **confirmed
+   correct**, and cross-checked against an exhaustive search over 31,518 pairs.
+
+Four further defects were found outside these targets: unsound interval widths
+(five constants, producing uncertified terms), deep rows reporting impossible
+error bounds, singular convergents printed as zero, and the strict-upper search
+returning nothing for a rational target. All fixed; see the review report.
