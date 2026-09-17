@@ -186,9 +186,20 @@
     <div class="chips" id="mp-chips"></div>
     <p class="status" id="mp-intro"></p>
     <div class="tablewrap"><table id="mp-table"></table></div>
+    <div class="controls">
+      <label>weight t <input type="range" id="mp-weight" min="0" max="1000" value="500"></label>
+      <span class="muted" id="mp-weight-label"></span>
+      <button class="chip" id="mp-weight-half">midpoint ½</button>
+      <button class="chip" id="mp-weight-best">minimax fixed weight</button>
+      <button class="chip" id="mp-weight-deep">deepest t*</button>
+    </div>
     <canvas id="mp-plot" width="900" height="300"></canvas>
     <p class="status" id="mp-caption"></p>
     <p class="status" id="mp-verdict"></p>
+    <h2 class="sectionhead">Where the optimum sits</h2>
+    <canvas id="mp-weights" width="900" height="240"></canvas>
+    <p class="status" id="mp-weights-caption"></p>
+    <p class="status" id="mp-weights-verdict"></p>
   </div>
 </div>
 
@@ -910,12 +921,26 @@ const CF = (() => {
         bal = { eBal, lowerP: bp.lower.p, lowerQ: bp.lower.q, upperP: bp.upper.p, upperQ: bp.upper.q,
                 q: bp.lower.q > bp.upper.q ? bp.lower.q : bp.upper.q };
       }
+      // The weight at which V(t) = f(n) + t (f(n+1) - f(n)) lands on x itself. Since
+      // x = (p_n+1 xi + p_n) / (q_n+1 xi + q_n) with xi the complete quotient x_n+2, this is
+      // t* = xi q_n+1 / (xi q_n+1 + q_n) - knowing t* is knowing x. The next term pins xi
+      // to [a_n+2, a_n+2 + 1), which brackets t* between f(n+2) and the semiconvergent after it.
+      // An exact hit by f(n+1) (355/113) puts t* at 1 with no bracket.
+      const tStar = Rat.div(eF, Rat.add(eF, eG));
+      const next = rows[n + 2];
+      let tLo = null, tHi = null;
+      if (next && !Rat.isZero(eG)) {
+        tLo = Rat.make(next.a * G.q, next.a * G.q + F.q);
+        tHi = Rat.make((next.a + 1n) * G.q, (next.a + 1n) * G.q + F.q);
+      }
       out.push({
         n,
         fP: F.p, fQ: F.q, gP: G.p, gQ: G.q, f, g, mid,
         eF, eG, eMid, eFStr: sci(eF, 4), eGStr: sci(eG, 4), eMidStr: sci(eMid, 4),
         ratio, ratioStr: ratio === null ? '∞' : Rat.toDecimalString(ratio, 2),
         beatsNext,
+        tStar, tStarStr: Rat.toDecimalString(tStar, 4),
+        tLo, tHi,
         eBal: bal ? bal.eBal : null, eBalStr: bal ? sci(bal.eBal, 4) : '—',
         balLowerP: bal ? bal.lowerP : null, balLowerQ: bal ? bal.lowerQ : null,
         balUpperP: bal ? bal.upperP : null, balUpperQ: bal ? bal.upperQ : null,
@@ -925,6 +950,49 @@ const CF = (() => {
       if (Rat.isZero(eG)) break;                                   // f(n+1) is x itself
     }
     return { rows: out, stopReason };
+  };
+
+  // V(t) = f(n) + t (f(n+1) - f(n)) and its error |t - t*| (|e_n| + |e_n+1|), both exact.
+  const weightedAt = (row, t) => {
+    const value = Rat.add(row.f, Rat.mul(t, Rat.sub(row.g, row.f)));
+    const d = Rat.sub(t, row.tStar);
+    const error = Rat.mul(d.n < 0n ? Rat.neg(d) : d, Rat.add(row.eF, row.eG));
+    return { value, error };
+  };
+
+  // For a fixed weight t, the error relative to just taking f(n+1) is |t - t*_n| / (1 - t*_n)
+  // at each level. worstRatio is the largest of these; bestFixedWeight minimises it. That
+  // objective is a maximum of V-shaped functions, so its minimum sits at a kink: one of
+  // the t*_n themselves or a crossing of two of the V's. Checking every kink is exact.
+  // Levels where f(n+1) is x itself (t* = 1) are skipped: nothing is relative to zero.
+  const worstRatio = (rows, t) => {
+    let worst = Rat.fromInt(0);
+    for (const r of rows) {
+      if (Rat.isZero(r.eG)) continue;
+      const d = Rat.sub(t, r.tStar);
+      const ratio = Rat.div(d.n < 0n ? Rat.neg(d) : d, Rat.sub(Rat.fromInt(1), r.tStar));
+      if (Rat.cmp(ratio, worst) > 0) worst = ratio;
+    }
+    return worst;
+  };
+  const bestFixedWeight = (rows) => {
+    const one = Rat.fromInt(1);
+    const ts = rows.filter(r => !Rat.isZero(r.eG)).map(r => r.tStar);
+    if (!ts.length) return null;
+    const cands = ts.slice();
+    for (let i = 0; i < ts.length; i++) for (let j = i + 1; j < ts.length; j++) {
+      const a = Rat.cmp(ts[i], ts[j]) < 0 ? ts[i] : ts[j], b = Rat.cmp(ts[i], ts[j]) < 0 ? ts[j] : ts[i];
+      if (Rat.cmp(a, b) === 0) continue;
+      // (t - a)/(1 - a) = (b - t)/(1 - b)  =>  t = (a(1-b) + b(1-a)) / ((1-b) + (1-a))
+      const num = Rat.add(Rat.mul(a, Rat.sub(one, b)), Rat.mul(b, Rat.sub(one, a)));
+      cands.push(Rat.div(num, Rat.add(Rat.sub(one, b), Rat.sub(one, a))));
+    }
+    let best = null;
+    for (const t of cands) {
+      const worst = worstRatio(rows, t);
+      if (!best || Rat.cmp(worst, best.worst) < 0) best = { t, worst };
+    }
+    return best;
   };
 
   // ---- Mobius disks: the LFT picture of a real continued fraction ----
@@ -1443,7 +1511,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows, raceKind, mobiusDisks, boundRows, midpointRows, semiconvergents, balancedPair, unitFractions, unitFractionRows,
+           cascadeRows, raceKind, mobiusDisks, boundRows, midpointRows, weightedAt, worstRatio, bestFixedWeight, semiconvergents, balancedPair, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            imaginaryWake,
@@ -2937,6 +3005,116 @@ XTests.test('the consecutive midpoint stops at the last resolved row and at an e
   XTests.ok(CF.Rat.isZero(rat[1].eG));
 });
 
+XTests.test('the optimal weight is never the midpoint: it is |e_n| / (|e_n| + |e_n+1|), always above 1/2', () => {
+  // V(t) = f(n) + t (f(n+1) - f(n)) equals x exactly at t* = |e_n| / (|e_n| + |e_n+1|).
+  // The later convergent is closer, so t* > 1/2 - the optimum always leans toward f(n+1).
+  const half = CF.Rat.make(1n, 2n);
+  for (const c of CF.CONSTANTS) {
+    const x = CF.constant(c.key).exact || CF.constant(c.key).lo;
+    for (const r of CF.midpointRows(c.key, 12).rows) {
+      XTests.eq(CF.Rat.cmp(r.tStar, CF.Rat.div(r.eF, CF.Rat.add(r.eF, r.eG))), 0, `${c.key} n=${r.n} t*`);
+      XTests.ok(CF.Rat.cmp(r.tStar, half) > 0, `${c.key} n=${r.n} t* = ${r.tStarStr} not above 1/2`);
+      XTests.ok(CF.Rat.cmp(r.tStar, CF.Rat.fromInt(1)) <= 0, `${c.key} n=${r.n} t* above 1`);
+      const w = CF.weightedAt(r, r.tStar);
+      XTests.ok(CF.Rat.isZero(w.error), `${c.key} n=${r.n} V(t*) should be x itself`);
+      XTests.eq(CF.Rat.cmp(w.value, x), 0, `${c.key} n=${r.n} V(t*) value`);
+    }
+  }
+});
+
+XTests.test('the weighted error is |t - t*| times the gap, and recovers f(n), M and f(n+1)', () => {
+  const R = CF.Rat;
+  for (const c of CF.CONSTANTS) {
+    for (const r of CF.midpointRows(c.key, 12).rows) {
+      XTests.eq(R.cmp(CF.weightedAt(r, R.fromInt(0)).error, r.eF), 0, `${c.key} n=${r.n} t=0`);
+      XTests.eq(R.cmp(CF.weightedAt(r, R.make(1n, 2n)).error, r.eMid), 0, `${c.key} n=${r.n} t=1/2`);
+      XTests.eq(R.cmp(CF.weightedAt(r, R.fromInt(1)).error, r.eG), 0, `${c.key} n=${r.n} t=1`);
+      const t = R.make(7n, 10n);
+      const d = R.sub(t, r.tStar), ad = d.n < 0n ? R.neg(d) : d;
+      XTests.eq(R.cmp(CF.weightedAt(r, t).error, R.mul(ad, R.add(r.eF, r.eG))), 0, `${c.key} n=${r.n} identity`);
+    }
+  }
+});
+
+XTests.test('the next term brackets the optimum between f(n+2) and the semiconvergent after it', () => {
+  // x = (p_n+1 xi + p_n) / (q_n+1 xi + q_n) with xi the complete quotient, so
+  // t* = xi q_n+1 / (xi q_n+1 + q_n). With xi in [a_n+2, a_n+2 + 1) that pins t* to
+  // [tLo, tHi), and V(tLo) is exactly f(n+2): a weight built from the next term is just
+  // one more term of the expansion.
+  const R = CF.Rat;
+  let bracketed = 0;
+  for (const c of CF.CONSTANTS) {
+    const conv = CF.convergentRowsFor(c.key, 16, 'floor').rows;
+    for (const r of CF.midpointRows(c.key, 12).rows) {
+      if (r.tLo === null) { XTests.ok(!conv[r.n + 2], `${c.key} n=${r.n} bracket missing`); continue; }
+      bracketed++;
+      XTests.ok(R.cmp(r.tLo, r.tStar) <= 0 && R.cmp(r.tStar, r.tHi) < 0,
+                `${c.key} n=${r.n} t*=${r.tStarStr} outside [${R.toDecimalString(r.tLo, 4)}, ${R.toDecimalString(r.tHi, 4)})`);
+      const v = CF.weightedAt(r, r.tLo).value;
+      XTests.eq(R.cmp(v, R.make(conv[r.n + 2].p, conv[r.n + 2].q)), 0, `${c.key} n=${r.n} V(tLo) is not f(n+2)`);
+    }
+  }
+  XTests.ok(bracketed >= 60, `expected most rows bracketed, got ${bracketed}`);
+});
+
+XTests.test('the best fixed weight is minimax against f(n+1), and pays off only for periodic expansions', () => {
+  // A fixed t has error |t - t*_n| times the gap; relative to f(n+1) that is
+  // |t - t*_n| / (1 - t*_n). The best fixed weight minimises the worst level.
+  const R = CF.Rat;
+  const check = (key, lo, hi, worstBelow, worstAbove) => {
+    const rows = CF.midpointRows(key, 12).rows;
+    const b = CF.bestFixedWeight(rows);
+    const t = R.toNumber(b.t), w = R.toNumber(b.worst);
+    XTests.ok(t > lo && t < hi, `${key} best t = ${t}, expected in (${lo}, ${hi})`);
+    if (worstBelow !== null) XTests.ok(w < worstBelow, `${key} worst ratio ${w} not below ${worstBelow}`);
+    if (worstAbove !== null) XTests.ok(w > worstAbove, `${key} worst ratio ${w} not above ${worstAbove}`);
+    // truly minimax: no grid point does better
+    for (let g = 1; g < 1000; g++) {
+      const tg = R.make(BigInt(g), 1000n);
+      XTests.ok(R.cmp(CF.worstRatio(rows, tg), b.worst) >= 0, `${key}: t=${g}/1000 beats the claimed minimax`);
+    }
+  };
+  // sqrt2: t* settles at xi^2/(xi^2+1) = 0.8536 with xi = 1+sqrt2, so one weight serves every level.
+  check('sqrt2', 0.84, 0.86, 0.1, null);
+  check('sqrt5', 0.94, 0.95, 0.03, null);
+  check('phi', 0.70, 0.73, 0.25, null);
+  // pi: t* jumps between 0.63 and 0.997, so no fixed weight is much better than f(n+1) itself.
+  check('pi', 0.99, 1.0, null, 0.9);
+  // a single level: the best weight is its own t*, with zero error.
+  const rat = CF.midpointRows('r355_113', 12).rows;
+  const one = CF.bestFixedWeight([rat[0]]);
+  XTests.eq(R.cmp(one.t, rat[0].tStar), 0);
+  XTests.ok(R.isZero(one.worst));
+});
+
+XTests.test('for a periodic expansion, one fixed weight beats the balanced Bounds pair at every level', () => {
+  // t* = xi q_n+1 / (xi q_n+1 + q_n) settles to a constant when the expansion is periodic.
+  // Holding t at the deepest level's t* then beats even the Bounds tab's balanced pair at
+  // every earlier level: a weighted combination is not confined to the semiconvergent pool,
+  // which is why it works for phi too, where balancing has nothing to choose between.
+  // (The deepest level itself is circular - its t* was computed from the value - so it is
+  // excluded.) Non-periodic expansions get no such weight: pi's deepest t* loses somewhere.
+  const R = CF.Rat;
+  for (const c of CF.CONSTANTS.filter(c => c.quad)) {
+    const rows = CF.midpointRows(c.key, 12).rows;
+    const tDeep = rows[rows.length - 1].tStar;
+    for (const r of rows.slice(0, -1)) {
+      const e = CF.weightedAt(r, tDeep).error;
+      XTests.ok(R.cmp(e, r.eBal) < 0, `${c.key} n=${r.n}: V(t_deep) ${CF.sci(e, 3)} did not beat balanced ${r.eBalStr}`);
+      XTests.ok(R.cmp(e, r.eG) < 0, `${c.key} n=${r.n}: V(t_deep) did not beat f(n+1)`);
+    }
+    // and the settling is real: the last four t* lie within 1e-3 of the deepest
+    for (const r of rows.slice(-4)) {
+      const d = R.sub(r.tStar, tDeep), ad = d.n < 0n ? R.neg(d) : d;
+      XTests.ok(R.cmp(ad, R.make(1n, 1000n)) < 0, `${c.key} n=${r.n} t* ${r.tStarStr} has not settled`);
+    }
+  }
+  const pi = CF.midpointRows('pi', 12).rows;
+  const tDeep = pi[pi.length - 1].tStar;
+  XTests.ok(pi.slice(0, -1).some(r => R.cmp(CF.weightedAt(r, tDeep).error, r.eBal) > 0),
+            'pi should have no fixed weight that beats balancing everywhere');
+});
+
 XTests.test('the strict-upper search finds candidates for a rational target', () => {
   // Exact hits used to fill the 50-item shortlist and were removed only afterwards, so the
   // search returned nothing for 355/113 even though 22/7 is plainly above it.
@@ -3990,8 +4168,24 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderBounds();
 
   // ---------- Midpoint tab ----------
-  state.midpoint = { key: 'pi' };
+  state.midpoint = { key: 'pi', t: CF.Rat.make(1n, 2n) };
   const MP_LEVELS = 12;
+
+  el('mp-weight').addEventListener('input', () => {
+    state.midpoint.t = CF.Rat.make(BigInt(el('mp-weight').value), 1000n);
+    renderMidpoint();
+  });
+  el('mp-weight-half').addEventListener('click', () => {
+    state.midpoint.t = CF.Rat.make(1n, 2n); renderMidpoint();
+  });
+  el('mp-weight-best').addEventListener('click', () => {
+    const best = CF.bestFixedWeight(CF.midpointRows(state.midpoint.key, MP_LEVELS).rows);
+    if (best) { state.midpoint.t = best.t; renderMidpoint(); }
+  });
+  el('mp-weight-deep').addEventListener('click', () => {
+    const rows = CF.midpointRows(state.midpoint.key, MP_LEVELS).rows;
+    if (rows.length) { state.midpoint.t = rows[rows.length - 1].tStar; renderMidpoint(); }
+  });
 
   function renderMidpoint() {
     const s = state.midpoint;
@@ -4020,7 +4214,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
 
     el('mp-table').innerHTML =
       '<tr><th>n</th><th>f(n)</th><th>|err f(n)|</th><th>|err f(n+1)|</th>' +
-      '<th>ratio</th><th>M(n)</th><th>|err M|</th><th>M beats f(n+1)</th>' +
+      '<th>ratio</th><th>t*</th><th>M(n)</th><th>|err M|</th><th>M beats f(n+1)</th>' +
       '<th>Bounds balanced, q ≤ q<sub>n+1</sub></th><th>|err balanced|</th><th>best</th></tr>' +
       rows.map(r => {
         const f = (n, d) => `${elide(String(n), 12)}/${elide(String(d), 12)}`;
@@ -4033,18 +4227,72 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
         return `<tr class="${r.n % 2 === 0 ? 'even' : ''}"><td>${r.n}</td>` +
           `<td class="mono">${f(r.fP, r.fQ)}</td><td class="mono">${r.eFStr}</td>` +
           `<td class="mono">${r.eGStr}</td><td class="mono">${r.ratioStr}</td>` +
+          `<td class="mono">${r.tStarStr}</td>` +
           `<td class="mono">${CF.Rat.toDecimalString(r.mid, 12)}</td>` +
           `<td class="mono">${r.eMidStr}</td><td>${r.beatsNext ? '<strong>yes</strong>' : 'no'}</td>` +
           `<td class="mono">${balPair}</td><td class="mono">${r.eBalStr}</td>` +
           `<td><strong>${best[0]}</strong></td></tr>`;
       }).join('');
 
-    drawMidpoint(rows, ind);
+    const tStr = CF.Rat.toDecimalString(s.t, 4);
+    const best = CF.bestFixedWeight(rows);
+    const weighted = rows.map(r => CF.weightedAt(r, s.t).error);
+    const wBeatsNext = rows.filter((r, i) => !CF.Rat.isZero(r.eG) && CF.Rat.cmp(weighted[i], r.eG) < 0).length;
+    const wBeatsMid = rows.filter((r, i) => CF.Rat.cmp(weighted[i], r.eMid) < 0).length;
+    el('mp-weight').value = String(Math.round(CF.Rat.toNumber(s.t) * 1000));
+    el('mp-weight-label').textContent =
+      `V(t) = f(n) + t·(f(n+1) − f(n)) at t = ${tStr} — beats f(n+1) at ${wBeatsNext} of ` +
+      `${rows.length} levels, beats M at ${wBeatsMid}`;
+
+    drawMidpoint(rows, ind, weighted, tStr);
+    drawWeights(rows, s.t, best);
 
     el('mp-caption').textContent =
       'Hollow squares are the Bounds tab’s independent C at level k = n/2; they land ' +
       'exactly on M(n) at every even n. The dashed line is that tab’s balanced C given ' +
-      'the same denominator budget as f(n+1).';
+      'the same denominator budget as f(n+1). The purple line is V(t) at the slider’s weight.';
+
+    el('mp-weights-caption').textContent =
+      'Each level’s optimal weight t* = |eₙ| / (|eₙ| + |eₙ₊₁|), the point on the segment ' +
+      `from f(n) (t = 0) to f(n+1) (t = 1) where V(t) is ${label} itself. The grey bar is ` +
+      'where the next term aₙ₊₂ alone would place it: from f(n+2) up to the semiconvergent ' +
+      'after it. Dashed: the midpoint ½; purple: the slider; orange: the minimax fixed weight.';
+
+    const ts = rows.filter(r => !CF.Rat.isZero(r.eG)).map(r => CF.Rat.toNumber(r.tStar));
+    const tMin = Math.min(...ts), tMax = Math.max(...ts);
+    const quad = CF.constant(s.key).quad;
+    let where = 'The optimum is never at the midpoint: t* = ξ·qₙ₊₁ / (ξ·qₙ₊₁ + qₙ) with ξ the ' +
+      'complete quotient xₙ₊₂, and since ξ·qₙ₊₁ > qₙ it always lies above ½, toward f(n+1). ' +
+      `For ${label} it ranges from ${tMin.toFixed(3)} to ${tMax.toFixed(3)}.`;
+    let fixed = '';
+    if (best && ts.length > 1) {
+      const bStr = CF.Rat.toDecimalString(best.t, 4);
+      const w = CF.Rat.toNumber(best.worst);
+      const wHalf = CF.Rat.toNumber(CF.worstRatio(rows, CF.Rat.make(1n, 2n)));
+      fixed = ` The minimax fixed weight t = ${bStr} is the one whose worst level is least bad: there it is ` +
+        (w < 1 ? `still ${(1 / w).toFixed(w < 0.1 ? 1 : 2)}× better than f(n+1)`
+               : `${w.toFixed(2)}× worse than f(n+1)`) +
+        `, where the midpoint’s worst level is ${wHalf.toFixed(2)}× worse.`;
+    }
+    if (quad && rows.length > 2) {
+      const tDeep = rows[rows.length - 1].tStar;
+      const gains = rows.slice(0, -1).map(r => CF.Rat.div(r.eBal, CF.weightedAt(r, tDeep).error));
+      let minGain = gains[0];
+      for (const g of gains) if (CF.Rat.cmp(g, minGain) < 0) minGain = g;
+      fixed += ` The expansion is periodic, so ξ repeats and t* settles at ` +
+        `${CF.Rat.toDecimalString(tDeep, 4)}. Hold t there (the deepest t* chip) and V(t) beats ` +
+        `even the Bounds tab’s balanced pair at every level below the last, by at least ` +
+        `${CF.sci(minGain, 2)}× — a weighted combination is not confined to the semiconvergent pool, ` +
+        'so this works for φ too, where balancing has nothing to choose between. The minimax weight ' +
+        'above sits lower because the first levels have not settled yet. The deepest level itself ' +
+        'is circular: its t* was computed from the value.';
+    } else {
+      fixed += ' The partial quotients keep changing, so t* jumps and no single weight fits; the ' +
+        'deepest t* chip shows how badly one level’s optimum serves the others.';
+    }
+    fixed += ` Knowing t* exactly is knowing ${label}: at t* the combination is the value itself. ` +
+      'And a weight built from the next term is no shortcut — it lands on f(n+2), one more term of the expansion.';
+    el('mp-weights-verdict').textContent = where + fixed;
 
     const wins = rows.filter(r => r.beatsNext).length;
     const balWins = rows.filter(r => r.balBeatsMid).length;
@@ -4070,7 +4318,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     el('mp-verdict').textContent = verdictVsNext + verdictVsBounds;
   }
 
-  function drawMidpoint(rows, ind) {
+  function drawMidpoint(rows, ind, weighted, tStr) {
     const W = 900, H = 300, padL = 52, padB = 34, padT = 16, padR = 150;
     const ctx = fitCanvas(el('mp-plot'), W, H);
     ctx.clearRect(0, 0, W, H);
@@ -4079,15 +4327,16 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       { name: 'f(n) convergent', color: '#1a5fb4', get: (r) => r.eF },
       { name: 'M(n) midpoint', color: '#2d7d46', get: (r) => r.eMid },
       { name: 'Bounds balanced', color: '#c64600', dash: [5, 4], get: (r) => r.eBal },
+      { name: `V(t), t = ${tStr}`, color: '#7a3e9d', get: (r, i) => weighted[i] },
     ];
     // Exact-rational log10: these errors fall far below what toNumber can carry.
     const logs = [];
-    for (const s2 of series) for (const r of rows) {
-      const v = s2.get(r);
-      if (!v) continue;
+    for (const s2 of series) rows.forEach((r, i) => {
+      const v = s2.get(r, i);
+      if (!v) return;
       const L = CF.Rat.log10(v);
       if (Number.isFinite(L)) logs.push(L);
-    }
+    });
     if (!logs.length) return;
     const hi = Math.max(...logs), lo = Math.min(...logs);
     const span = Math.max(1, hi - lo);
@@ -4106,8 +4355,8 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       ctx.strokeStyle = s2.color; ctx.lineWidth = 1.5; ctx.setLineDash(s2.dash || []);
       ctx.beginPath();
       let started = false;
-      rows.forEach((r) => {
-        const v = s2.get(r);
+      rows.forEach((r, i) => {
+        const v = s2.get(r, i);
         if (!v) return;
         const L = CF.Rat.log10(v);
         if (!Number.isFinite(L)) return;
@@ -4117,8 +4366,8 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = s2.color;
-      rows.forEach((r) => {
-        const v = s2.get(r);
+      rows.forEach((r, i) => {
+        const v = s2.get(r, i);
         if (!v) return;
         const L = CF.Rat.log10(v);
         if (Number.isFinite(L)) ctx.fillRect(X(r.n) - 2, Y(L) - 2, 4, 4);
@@ -4134,12 +4383,66 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       const L = CF.Rat.log10(b.eMid);
       if (Number.isFinite(L)) ctx.strokeRect(X(n) - 4.5, Y(L) - 4.5, 9, 9);
     });
-    ctx.strokeRect(W - padR + 6, padT + 14 + 3 * 15 - 8, 9, 9);
+    ctx.strokeRect(W - padR + 6, padT + 14 + 4 * 15 - 8, 9, 9);
     ctx.fillStyle = '#2d7d46';
-    ctx.fillText('Bounds independent', W - padR + 20, padT + 14 + 3 * 15);
+    ctx.fillText('Bounds independent', W - padR + 20, padT + 14 + 4 * 15);
     ctx.fillStyle = '#666'; ctx.font = '11px sans-serif';
     ctx.fillText('n nested fractions', (W - padR) / 2 - 30, H - 8);
     ctx.fillStyle = '#666';
+    rows.forEach((r) => { if (r.n % 2 === 0) ctx.fillText(String(r.n), X(r.n) - 3, H - padB + 12); });
+  }
+
+  function drawWeights(rows, t, best) {
+    const W = 900, H = 240, padL = 52, padB = 34, padT = 16, padR = 150;
+    const ctx = fitCanvas(el('mp-weights'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    if (rows.length < 1) return;
+    const X = (n) => padL + n / Math.max(1, rows.length - 1) * (W - padL - padR);
+    const Y = (v) => (H - padB) - v * (H - padB - padT);
+    const R = CF.Rat;
+    ctx.font = '9px sans-serif';
+    for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+      ctx.strokeStyle = v === 0.5 ? '#999' : '#eee';
+      ctx.setLineDash(v === 0.5 ? [4, 4] : []);
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(padL, Y(v)); ctx.lineTo(W - padR, Y(v)); ctx.stroke();
+      ctx.fillStyle = '#bbb';
+      ctx.fillText(v === 0 ? 'f(n)' : v === 1 ? 'f(n+1)' : String(v), 6, Y(v) + 3);
+    }
+    ctx.setLineDash([]);
+    const hline = (v, color) => {
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(padL, Y(v)); ctx.lineTo(W - padR, Y(v)); ctx.stroke();
+    };
+    hline(R.toNumber(t), '#7a3e9d');
+    if (best) hline(R.toNumber(best.t), '#c64600');
+    // the bracket the next term gives, then t* on top of it
+    rows.forEach((r) => {
+      if (!r.tLo) return;
+      ctx.strokeStyle = '#bbb'; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(X(r.n), Y(R.toNumber(r.tLo))); ctx.lineTo(X(r.n), Y(R.toNumber(r.tHi))); ctx.stroke();
+    });
+    ctx.strokeStyle = '#2d7d46'; ctx.lineWidth = 1.5; ctx.beginPath();
+    rows.forEach((r, i) => {
+      const v = R.toNumber(r.tStar);
+      i ? ctx.lineTo(X(r.n), Y(v)) : ctx.moveTo(X(r.n), Y(v));
+    });
+    ctx.stroke();
+    ctx.fillStyle = '#2d7d46';
+    rows.forEach((r) => {
+      ctx.beginPath(); ctx.arc(X(r.n), Y(R.toNumber(r.tStar)), 3.5, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.font = '11px sans-serif';
+    const leg = [
+      ['t* optimal weight', '#2d7d46'],
+      ['next-term bracket', '#999'],
+      [`slider t = ${R.toDecimalString(t, 3)}`, '#7a3e9d'],
+      best ? [`minimax fixed ${R.toDecimalString(best.t, 3)}`, '#c64600'] : null,
+      ['midpoint ½', '#999'],
+    ].filter(Boolean);
+    leg.forEach(([name, color], i) => { ctx.fillStyle = color; ctx.fillText(name, W - padR + 6, padT + 14 + i * 15); });
+    ctx.fillStyle = '#666';
+    ctx.fillText('n nested fractions', (W - padR) / 2 - 30, H - 8);
     rows.forEach((r) => { if (r.n % 2 === 0) ctx.fillText(String(r.n), X(r.n) - 3, H - padB + 12); });
   }
 

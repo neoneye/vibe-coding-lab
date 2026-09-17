@@ -48,6 +48,33 @@ square at n = 2k so the coincidence with M(n) is visible rather than asserted.
 A verdict line counts M's wins over f(n+1) and the balanced pair's wins over M,
 with the largest factor.
 
+## Where the optimum sits (added later the same day)
+
+The midpoint is t = ½ on the segment V(t) = f(n) + t·(f(n+1) − f(n)). The
+question was whether the optimum is elsewhere. It always is.
+
+- **t* = |e_n| / (|e_n| + |e_n+1|) = ξ·q_n+1 / (ξ·q_n+1 + q_n)**, ξ the
+  complete quotient x_n+2. Since ξ·q_n+1 > q_n, t* > ½ at every level: the
+  optimum leans toward f(n+1). V(t*) is x itself, so knowing t* is knowing x.
+- **The next term brackets it.** ξ ∈ [a_n+2, a_n+2+1) puts t* between the
+  position of f(n+2) and of the semiconvergent after it; V(tLo) is exactly
+  f(n+2). A weight built from the next term is one more term of the expansion.
+- **Periodic expansions have a limit weight.** For the quadratic irrationals
+  t* settles (√2 at 0.8536, φ at 0.7236, √5 at 0.9472). Holding t at the
+  deepest level's t* beats even the balanced Bounds pair at every earlier
+  level, φ included, since a weighted combination is not confined to the
+  semiconvergent pool. The deepest level itself is circular and excluded.
+- **Non-periodic expansions have none.** For π, e, ln 2, γ, ∛2 the value of
+  t* jumps with the partial quotients. The minimax fixed weight, the t whose
+  worst level relative to f(n+1) is least bad, is found exactly at a kink of
+  the max of V-shaped functions; for π it is 0.9957 and barely beats f(n+1).
+
+Engine: `weightedAt(row, t)`, `worstRatio(rows, t)`, `bestFixedWeight(rows)`,
+and `tStar`, `tLo`, `tHi` on each midpoint row. UI: a weight slider with
+"midpoint ½", "minimax fixed weight" and "deepest t*" chips, a V(t) series on
+the error plot, a t* column, and a second plot of t* per level with the
+next-term bracket, the midpoint, the slider and the minimax weight as lines.
+
 ## Non-goals
 
 No weighted or Richardson-style combinations; the question was the plain
