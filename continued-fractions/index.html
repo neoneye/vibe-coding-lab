@@ -84,6 +84,7 @@
     <button class="tab" data-panel="unit">Unit fractions</button>
     <button class="tab" data-panel="complex">Complex</button>
     <button class="tab" data-panel="mobius">Möbius</button>
+    <button class="tab" data-panel="bracket">Bracket</button>
     <button class="tab" data-panel="bounds">Balanced pair</button>
     <button class="tab" data-panel="midpoint">Consecutive pair</button>
   </div>
@@ -173,6 +174,20 @@
     <canvas id="mb-canvas" width="900" height="240"></canvas>
     <p class="status" id="mb-caption"></p>
     <div class="tablewrap"><table id="mb-table"></table></div>
+  </div>
+  <div class="panel" id="panel-bracket">
+    <div class="chips" id="br-chips"></div>
+    <div class="controls">
+      <label>depth n <input type="range" id="br-depth" min="0" max="12" value="3"></label>
+      <span id="br-depth-label" class="muted"></span>
+    </div>
+    <p class="status" id="br-intro"></p>
+    <div class="tablewrap"><table id="br-terms"></table></div>
+    <p class="status" id="br-terms-caption"></p>
+    <h2 class="sectionhead">Every depth</h2>
+    <div class="tablewrap"><table id="br-table"></table></div>
+    <canvas id="br-plot" width="900" height="300"></canvas>
+    <p class="status" id="br-verdict"></p>
   </div>
   <div class="panel" id="panel-bounds">
     <div class="chips" id="bd-mode"></div>
@@ -1026,6 +1041,48 @@ const CF = (() => {
     return best;
   };
 
+  // ---- two continued fractions that bracket x, sharing every term but the last ----
+  //
+  // Cut the expansion at depth n: x = [a0; a1, ..., an, t] with tail t > 1. The value is
+  // monotone in t, and t ranges over (1, infinity), so x lies strictly between
+  // [a0; ..., an] (t = infinity, the convergent) and [a0; ..., an + 1] (t = 1). Which is
+  // above depends on the parity of n. These are the closest continued fractions of that
+  // length on either side; every real whose expansion starts a0..an lies between them.
+  // C = (A + B)/2 is rational and interior, so its own expansion starts a0..an too.
+  //
+  const bracketRows = (key, maxDepth) => {
+    const k = constant(key);
+    const x = k.exact || k.lo;
+    const eps = k.exact ? Rat.fromInt(0) : k.eps;
+    const e = expandMode(key, 'floor', maxDepth + 1);
+    const cs = convergents(e.terms);
+    const two = Rat.fromInt(2);
+    const absR = (r) => (r.n < 0n ? Rat.neg(r) : r);
+    const out = [];
+    for (let n = 0; n < e.terms.length && n < maxDepth; n++) {
+      const cut = e.terms.slice(0, n + 1);
+      const bumped = cut.slice(); bumped[n] += 1n;
+      const vCut = Rat.make(cs[n].p, cs[n].q);
+      const vb = convergents(bumped)[n];
+      const vBumped = Rat.make(vb.p, vb.q);
+      const cutBelow = Rat.cmp(vCut, x) < 0;
+      if (Rat.cmp(vCut, x) === 0 || Rat.cmp(vBumped, x) === 0) break;   // a bound on the value itself
+      const termsA = cutBelow ? bumped : cut, termsB = cutBelow ? cut : bumped;
+      const A = cutBelow ? vBumped : vCut, B = cutBelow ? vCut : vBumped;
+      const C = Rat.div(Rat.add(A, B), two);
+      const eA = absR(Rat.sub(A, x)), eB = absR(Rat.sub(x, B)), eC = absR(Rat.sub(C, x));
+      if (!Rat.isZero(eps) && [eA, eB, eC].some(v => Rat.cmp(v, eps) <= 0)) break;
+      const termsC = semiregularTerms(C, C, 'floor', 200).terms;
+      const bestEnd = Rat.cmp(eA, eB) < 0 ? eA : eB;
+      out.push({
+        n, termsA, termsB, termsC, A, B, C, eA, eB, eC,
+        eAStr: sci(eA, 4), eBStr: sci(eB, 4), eCStr: sci(eC, 4),
+        midBeatsBoth: Rat.cmp(eC, bestEnd) < 0,
+      });
+    }
+    return { rows: out, stopReason: e.stopReason };
+  };
+
   // ---- Mobius disks: the LFT picture of a real continued fraction ----
   //
   // T_n(z) = (A_n z + A_{n-1}) / (B_n z + B_{n-1}) has real coefficients and sends
@@ -1542,7 +1599,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows, raceKind, mobiusDisks, boundRows, midpointRows, weightedAt, worstRatio, bestFixedWeight, semiconvergents, balancedTrace, balancedPair, unitFractions, unitFractionRows,
+           cascadeRows, raceKind, mobiusDisks, bracketRows, boundRows, midpointRows, weightedAt, worstRatio, bestFixedWeight, semiconvergents, balancedTrace, balancedPair, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            imaginaryWake,
@@ -3192,6 +3249,78 @@ XTests.test('pool entries are labelled as the convergent or the rung they are', 
   XTests.ok(tr.entries[0].p === 286n && tr.entries[0].q === 227n, '286/227 is the closest yet is passed over');
 });
 
+XTests.test('bracket: the two continued fractions share every term but the last, which differ by one', () => {
+  for (const c of CF.CONSTANTS) {
+    const terms = CF.expandMode(c.key, 'floor', 40).terms;
+    for (const r of CF.bracketRows(c.key, 12).rows) {
+      XTests.eq(r.termsA.length, r.n + 1, `${c.key} n=${r.n} A length`);
+      XTests.eq(r.termsB.length, r.n + 1, `${c.key} n=${r.n} B length`);
+      for (let i = 0; i < r.n; i++) {
+        XTests.eq(r.termsA[i], terms[i], `${c.key} n=${r.n} A term ${i}`);
+        XTests.eq(r.termsB[i], terms[i], `${c.key} n=${r.n} B term ${i}`);
+      }
+      const lastA = r.termsA[r.n], lastB = r.termsB[r.n], a = terms[r.n];
+      // even depth: the cut-off expansion is below, so the upper one carries a_n + 1
+      if (r.n % 2 === 0) { XTests.eq(lastA, a + 1n, `${c.key} n=${r.n} A last`); XTests.eq(lastB, a, `${c.key} n=${r.n} B last`); }
+      else               { XTests.eq(lastA, a, `${c.key} n=${r.n} A last`); XTests.eq(lastB, a + 1n, `${c.key} n=${r.n} B last`); }
+    }
+  }
+});
+
+XTests.test('bracket: A is above the whole enclosure and B below it, at every depth shown', () => {
+  for (const c of CF.CONSTANTS) {
+    const k = CF.constant(c.key);
+    const lo = k.exact || k.lo, hi = k.exact || k.hi;
+    const { rows } = CF.bracketRows(c.key, 12);
+    XTests.ok(rows.length >= 2, `${c.key} expected at least two depths, got ${rows.length}`);
+    for (const r of rows) {
+      XTests.ok(CF.Rat.cmp(r.A, hi) > 0, `${c.key} n=${r.n} A not above`);
+      XTests.ok(CF.Rat.cmp(r.B, lo) < 0, `${c.key} n=${r.n} B not below`);
+      XTests.ok(CF.Rat.cmp(r.B, r.C) < 0 && CF.Rat.cmp(r.C, r.A) < 0, `${c.key} n=${r.n} C not between`);
+      XTests.eq(CF.Rat.cmp(r.C, CF.Rat.div(CF.Rat.add(r.A, r.B), CF.Rat.fromInt(2))), 0, `${c.key} n=${r.n} C is (A+B)/2`);
+      const d = CF.Rat.sub(r.eA, r.eB), half = CF.Rat.div(d.n < 0n ? CF.Rat.neg(d) : d, CF.Rat.fromInt(2));
+      XTests.eq(CF.Rat.cmp(r.eC, half), 0, `${c.key} n=${r.n} |err C| = |err A - err B| / 2`);
+    }
+  }
+});
+
+XTests.test('bracket: the midpoint\'s own continued fraction begins with the shared terms', () => {
+  // C lies strictly inside the set of reals whose expansion starts a_0..a_n, so its
+  // expansion starts the same way and then goes on.
+  for (const c of CF.CONSTANTS) {
+    const terms = CF.expandMode(c.key, 'floor', 40).terms;
+    for (const r of CF.bracketRows(c.key, 12).rows) {
+      XTests.ok(r.termsC.length > r.n + 1, `${c.key} n=${r.n} C's expansion should be longer than the bracket`);
+      for (let i = 0; i <= r.n; i++) XTests.eq(r.termsC[i], terms[i], `${c.key} n=${r.n} C term ${i}`);
+      const v = CF.convergents(r.termsC).pop();
+      XTests.eq(CF.Rat.cmp(CF.Rat.make(v.p, v.q), r.C), 0, `${c.key} n=${r.n} C's terms do not rebuild C`);
+    }
+  }
+});
+
+XTests.test('bracket: pi at depth 1 is 22/7 above, 25/8 below, midpoint 351/112 = [3; 7, 2, 7]', () => {
+  const r = CF.bracketRows('pi', 4).rows[1];
+  XTests.eq(r.termsA.join(','), '3,7'); XTests.eq(`${r.A.n}/${r.A.d}`, '22/7');
+  XTests.eq(r.termsB.join(','), '3,8'); XTests.eq(`${r.B.n}/${r.B.d}`, '25/8');
+  XTests.eq(`${r.C.n}/${r.C.d}`, '351/112');
+  XTests.eq(r.termsC.join(','), '3,7,2,7');
+  XTests.ok(!r.midBeatsBoth, '351/112 is worse than 22/7');
+  const r0 = CF.bracketRows('pi', 4).rows[0];
+  XTests.eq(r0.termsA.join(','), '4'); XTests.eq(r0.termsB.join(','), '3');
+});
+
+XTests.test('bracket: rows stop before any error falls below the reference precision', () => {
+  for (const c of CF.CONSTANTS) {
+    const k = CF.constant(c.key);
+    for (const r of CF.bracketRows(c.key, 60).rows) {
+      if (k.exact) continue;
+      for (const e of [r.eA, r.eB, r.eC]) XTests.ok(CF.Rat.cmp(e, k.eps) > 0, `${c.key} n=${r.n} unresolved error shown`);
+    }
+  }
+  // 355/113 = [3; 7, 16]: depth 2 would put a bound ON the value, so only depths 0 and 1 exist
+  XTests.eq(CF.bracketRows('r355_113', 10).rows.length, 2);
+});
+
 XTests.test('the strict-upper search finds candidates for a rational target', () => {
   // Exact hits used to fill the 50-item shortlist and were removed only afterwards, so the
   // search returned nothing for 355/113 even though 22/7 is plainly above it.
@@ -4099,6 +4228,148 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   }
 
   renderMobius();
+
+  // ---------- Bracket tab ----------
+  state.bracket = { key: 'pi', depth: 3 };
+  const BR_LEVELS = 14;
+
+  el('br-depth').addEventListener('input', (e) => {
+    state.bracket.depth = Number(e.target.value);
+    renderBracket();
+  });
+
+  function renderBracket() {
+    const s = state.bracket;
+    el('br-chips').innerHTML = CF.CONSTANTS
+      .map(c => `<button class="chip ${c.key === s.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
+      .join('');
+    el('br-chips').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.key = b.dataset.key; renderBracket();
+    }));
+
+    const label = CF.constant(s.key).label;
+    const { rows } = CF.bracketRows(s.key, BR_LEVELS);
+    if (!rows.length) { el('br-intro').textContent = 'Nothing to show.'; return; }
+    const maxN = rows[rows.length - 1].n;
+    if (s.depth > maxN) s.depth = maxN;
+    el('br-depth').max = String(maxN);
+    el('br-depth').value = String(s.depth);
+    el('br-depth-label').textContent = `n = ${s.depth}: continued fractions of ${s.depth + 1} term${s.depth ? 's' : ''}`;
+    const r = rows.find(z => z.n === s.depth);
+
+    el('br-intro').innerHTML =
+      `Cut the expansion of ${label} after a<sub>n</sub>. What is left over is a tail t &gt; 1, and the ` +
+      'value is monotone in t. So <strong>A</strong> and <strong>B</strong>, the continued fractions with ' +
+      'the <em>same terms except the last, which differ by one</em>, bracket ' + label + ': one is the ' +
+      'expansion cut off (t = ∞), the other has its last term raised by 1 (t = 1). Which is above ' +
+      'alternates with n. Every real number whose expansion starts a<sub>0</sub>…a<sub>n</sub> lies ' +
+      'between them, so they are the closest continued fractions of that length on either side. ' +
+      '<strong>C = (A + B) / 2</strong> is rational, and its own continued fraction is the middle row: ' +
+      'it starts with the same terms and then goes on.';
+
+    const width = r.termsC.length;
+    const cell = (v) => `<td class="mono">${v}</td>`;
+    const rowHtml = (name, terms, value, err, cls) => {
+      const cells = [];
+      for (let i = 0; i < width; i++) {
+        const t = terms[i];
+        const isLast = i === r.n && terms.length === r.n + 1;
+        cells.push(t === undefined ? '<td></td>' : `<td class="mono"${isLast ? ' style="font-weight:600"' : ''}>${t}</td>`);
+      }
+      return `<tr class="${cls}"><td><strong>${name}</strong></td>${cells.join('')}` +
+        cell(`${elide(String(value.n), 12)}/${elide(String(value.d), 12)}`) +
+        cell(CF.Rat.toDecimalString(value, 14)) + cell(err) + '</tr>';
+    };
+    const head = ['<th></th>'];
+    for (let i = 0; i < width; i++) head.push(`<th>a<sub>${i}</sub></th>`);
+    head.push('<th>p/q</th><th>value</th><th>|error|</th>');
+    el('br-terms').innerHTML =
+      `<tr>${head.join('')}</tr>` +
+      rowHtml('A upper', r.termsA, r.A, r.eAStr, '') +
+      rowHtml('C = (A+B)/2', r.termsC, r.C, r.eCStr, 'even') +
+      rowHtml('B lower', r.termsB, r.B, r.eBStr, '');
+
+    const extra = r.termsC.length - (r.n + 1);
+    el('br-terms-caption').textContent =
+      (r.n > 0 ? `A and B agree on a₀…a${r.n - 1} and differ only in the bold last term. ` : 'A and B differ only in their single term. ') + `C shares all ` +
+      `${r.n + 1} of them and continues for ${extra} more; its error is exactly half the difference of ` +
+      `A's and B's, so it beats both only when ${label} sits near the middle of the bracket — ` +
+      (r.midBeatsBoth ? 'as it does here.' : 'which it does not here.');
+
+    el('br-table').innerHTML =
+      '<tr><th>n</th><th>A upper</th><th>|err A|</th><th>B lower</th><th>|err B|</th>' +
+      '<th>C</th><th>|err C|</th><th>C continues with</th><th>best</th></tr>' +
+      rows.map(z => {
+        const best = z.midBeatsBoth ? 'C' : (CF.Rat.cmp(z.eA, z.eB) < 0 ? 'A' : 'B');
+        const cf = (t) => (t.length === 1 ? `[${t[0]}]` : `[${t[0]}; ${t.slice(1).join(', ')}]`);
+        return `<tr class="${z.n === s.depth ? 'even' : ''}"><td>${z.n}</td>` +
+          `<td class="mono">${cf(z.termsA)}</td><td class="mono">${z.eAStr}</td>` +
+          `<td class="mono">${cf(z.termsB)}</td><td class="mono">${z.eBStr}</td>` +
+          `<td class="mono">${CF.Rat.toDecimalString(z.C, 12)}</td><td class="mono">${z.eCStr}</td>` +
+          `<td class="mono">…, ${z.termsC.slice(z.n + 1, z.n + 9).join(', ')}${z.termsC.length > z.n + 9 ? ', …' : ''}</td>` +
+          `<td><strong>${best}</strong></td></tr>`;
+      }).join('');
+
+    drawBracket(rows);
+    const wins = rows.filter(z => z.midBeatsBoth).length;
+    el('br-verdict').textContent =
+      `Over these ${rows.length} depths C beat both A and B ${wins} time${wins === 1 ? '' : 's'}. ` +
+      'A and B are one convergent and the semiconvergent next to it, so the bracket narrows by about ' +
+      'one term per depth; C gains only when the two errors happen to be nearly equal.';
+  }
+
+  function drawBracket(rows) {
+    const W = 900, H = 300, padL = 52, padB = 34, padT = 16, padR = 90;
+    const ctx = fitCanvas(el('br-plot'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    if (rows.length < 2) return;
+    const series = [
+      { name: 'A upper', color: '#c64600', get: (r) => r.eA },
+      { name: 'B lower', color: '#1a5fb4', get: (r) => r.eB },
+      { name: 'C midpoint', color: '#2d7d46', get: (r) => r.eC },
+    ];
+    const logs = [];
+    for (const s2 of series) for (const r of rows) {
+      const L = CF.Rat.log10(s2.get(r));
+      if (Number.isFinite(L)) logs.push(L);
+    }
+    if (!logs.length) return;
+    const hi = Math.max(...logs), lo = Math.min(...logs);
+    const span = Math.max(1, hi - lo);
+    const X = (n) => padL + n / Math.max(1, rows.length - 1) * (W - padL - padR);
+    const Y = (L) => (H - padB) - (L - lo) / span * (H - padB - padT);
+    ctx.strokeStyle = '#eee';
+    for (let d = Math.floor(lo); d <= Math.ceil(hi); d++) {
+      const y = Y(d);
+      if (y < padT || y > H - padB) continue;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      ctx.fillStyle = '#bbb'; ctx.font = '9px sans-serif';
+      ctx.fillText(`1e${d}`, 6, y + 3);
+    }
+    series.forEach((s2, si) => {
+      ctx.strokeStyle = s2.color; ctx.lineWidth = 1.5; ctx.beginPath();
+      let started = false;
+      rows.forEach((r) => {
+        const L = CF.Rat.log10(s2.get(r));
+        if (!Number.isFinite(L)) return;
+        started ? ctx.lineTo(X(r.n), Y(L)) : ctx.moveTo(X(r.n), Y(L));
+        started = true;
+      });
+      ctx.stroke();
+      ctx.fillStyle = s2.color;
+      rows.forEach((r) => {
+        const L = CF.Rat.log10(s2.get(r));
+        if (Number.isFinite(L)) ctx.fillRect(X(r.n) - 2, Y(L) - 2, 4, 4);
+      });
+      ctx.font = '11px sans-serif';
+      ctx.fillText(s2.name, W - padR + 6, padT + 14 + si * 15);
+    });
+    ctx.fillStyle = '#666'; ctx.font = '11px sans-serif';
+    ctx.fillText('depth n', (W - padR) / 2, H - 8);
+    rows.forEach((r) => { if (r.n % 2 === 0) ctx.fillText(String(r.n), X(r.n) - 3, H - padB + 12); });
+  }
+
+  renderBracket();
 
   // ---------- Balanced-pair tab ----------
   state.bounds = { key: 'pi', mode: 'independent' };
