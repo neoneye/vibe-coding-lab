@@ -375,6 +375,59 @@ const CF = (() => {
     return `${neg ? '-' : ''}${mant}e${exp < 0 ? '-' : '+'}${Math.abs(exp)}`;
   };
 
+  // ---- Dirichlet series and Euler products ----
+
+  const ZETA_S = [2, 3, 4, 6];
+  const MAX_ZETA_N = 200;
+
+  const primesUpTo = (N) => {
+    if (N < 2) return [];
+    const sieve = new Uint8Array(N + 1);
+    const out = [];
+    for (let i = 2; i <= N; i++) {
+      if (sieve[i]) continue;
+      out.push(BigInt(i));
+      for (let j = i * i; j <= N; j += i) sieve[j] = 1;
+    }
+    return out;
+  };
+
+  // Sum over EVERY integer up to N.
+  const zetaPartialSum = (s, N) => {
+    let acc = Rat.fromInt(0);
+    for (let n = 1; n <= N; n++) acc = Rat.add(acc, Rat.make(1n, BigInt(n) ** BigInt(s)));
+    return acc;
+  };
+
+  // Product over the PRIMES up to N: prod (1 - p^-s)^-1 = prod p^s/(p^s - 1).
+  const eulerPartialProduct = (s, N) => {
+    let acc = Rat.fromInt(1);
+    for (const p of primesUpTo(N)) {
+      const ps = p ** BigInt(s);
+      acc = Rat.mul(acc, Rat.make(ps, ps - 1n));
+    }
+    return acc;
+  };
+
+  // One row per prime: the factor it contributes, and that factor minus 1 (the bar height).
+  const primeFactorRows = (s, N) => primesUpTo(N).map(p => {
+    const ps = p ** BigInt(s);
+    const factor = Rat.make(ps, ps - 1n);
+    return { p, factor, excess: Rat.sub(factor, Rat.fromInt(1)) };
+  });
+
+  // Integers whose prime factors are all <= N. 1 qualifies: it has no prime factors.
+  const smoothNumbers = (N, limit) => {
+    const ps = primesUpTo(Math.min(N, limit)).map(Number);
+    const out = [];
+    for (let m = 1; m <= limit; m++) {
+      let r = m;
+      for (const p of ps) while (r % p === 0) r /= p;
+      if (r === 1) out.push(m);
+    }
+    return out;
+  };
+
   // ---- geometry: fit the largest square, repeatedly ----
 
   // The rectangle starts w/h = x with h = 1. Generation 0 cuts a0 squares of side h off the
@@ -611,7 +664,9 @@ const CF = (() => {
            MAX_RACE_Q, bestApproximations,
            primes, SEQUENCES, seq, GEN_SEQ_DIGITS, MAX_GEN_TERMS_INT, MAX_GEN_TERMS_IRRATIONAL,
            genConvergents, GEN_PRESETS, identify, identifyGraded,
-           dissect };
+           dissect,
+           ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
+           primeFactorRows };
 })();
 
 XTests.test('Rat reduces and normalizes sign', () => {
@@ -931,6 +986,52 @@ XTests.test('every square lies inside the starting rectangle', () => {
     XTests.ok(CF.Rat.cmp(CF.Rat.add(sq.x, sq.side), CF.Rat.add(x, CF.Rat.make(1n, 1000n))) <= 0, 'square escaped in x');
     XTests.ok(CF.Rat.cmp(CF.Rat.add(sq.y, sq.side), CF.Rat.fromDecimalString('1.001')) <= 0, 'square escaped in y');
   }
+});
+
+XTests.test('primesUpTo lists the primes below a bound', () => {
+  XTests.eq(CF.primesUpTo(1).join(','), '');
+  XTests.eq(CF.primesUpTo(2).join(','), '2');
+  XTests.eq(CF.primesUpTo(20).join(','), '2,3,5,7,11,13,17,19');
+});
+
+XTests.test('zetaPartialSum is exact', () => {
+  const r = CF.zetaPartialSum(2, 3);                 // 1 + 1/4 + 1/9 = 49/36
+  XTests.eq(`${r.n}/${r.d}`, '49/36');
+  const r2 = CF.zetaPartialSum(3, 2);                // 1 + 1/8 = 9/8
+  XTests.eq(`${r2.n}/${r2.d}`, '9/8');
+  XTests.eq(`${CF.zetaPartialSum(2, 1).n}/${CF.zetaPartialSum(2, 1).d}`, '1/1');
+});
+
+XTests.test('eulerPartialProduct is exact', () => {
+  const r = CF.eulerPartialProduct(2, 3);            // 4/3 * 9/8 = 3/2
+  XTests.eq(`${r.n}/${r.d}`, '3/2');
+  const r2 = CF.eulerPartialProduct(3, 2);           // (1 - 1/8)^-1 = 8/7
+  XTests.eq(`${r2.n}/${r2.d}`, '8/7');
+  XTests.eq(`${CF.eulerPartialProduct(2, 1).n}/${CF.eulerPartialProduct(2, 1).d}`, '1/1');
+});
+
+XTests.test('smoothNumbers lists N-smooth integers', () => {
+  XTests.eq(CF.smoothNumbers(5, 40).join(','),
+            '1,2,3,4,5,6,8,9,10,12,15,16,18,20,24,25,27,30,32,36,40');
+  XTests.eq(CF.smoothNumbers(2, 40).join(','), '1,2,4,8,16,32');
+  XTests.eq(CF.smoothNumbers(40, 10).join(','), '1,2,3,4,5,6,7,8,9,10');
+});
+
+XTests.test('primeFactorRows gives each prime its factor', () => {
+  const rows = CF.primeFactorRows(2, 10);
+  XTests.eq(rows.map(r => String(r.p)).join(','), '2,3,5,7');
+  XTests.eq(CF.Rat.toDecimalString(rows[0].factor, 6), '1.333333');   // 4/3
+  XTests.eq(CF.Rat.toDecimalString(rows[1].factor, 6), '1.125000');   // 9/8
+  XTests.eq(CF.Rat.toDecimalString(rows[2].factor, 6), '1.041666');   // 25/24
+  XTests.eq(CF.Rat.toDecimalString(rows[0].excess, 6), '0.333333');
+  let acc = CF.Rat.fromInt(1);
+  for (const r of rows) acc = CF.Rat.mul(acc, r.factor);
+  XTests.eq(CF.Rat.cmp(acc, CF.eulerPartialProduct(2, 10)), 0);
+});
+
+XTests.test('s values and the N cap are declared', () => {
+  XTests.eq(CF.ZETA_S.join(','), '2,3,4,6');
+  XTests.eq(CF.MAX_ZETA_N, 200);
 });
 
 </script>
