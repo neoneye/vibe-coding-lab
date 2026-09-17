@@ -158,9 +158,15 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [datetime-week-number](datetime-week-number/) -- a year calendar with ISO 8601 week numbers.
 - [dmidi-survey](dmidi-survey/) -- a self-administered battery of judgment-and-decision-making and personality scales with scoring and export; nothing leaves the browser.
 - [education-computational-building-blocks](education-computational-building-blocks/) -- see highlights.
+- [education-cyber-vulnerability-atlas](education-cyber-vulnerability-atlas/) -- 18 cybersecurity concepts, each written at three depths from everyday analogy to the technical account.
+- [enigma-machine](enigma-machine/) -- Enigma I, M3 and M4 with rotors, ring settings, plugboard and a live lampboard; enciphers and deciphers, but does not crack unknown keys.
 - [forward-forward](forward-forward/) -- see highlights.
+- [hex-editor](hex-editor/) -- hex and ASCII editor for local files, loaded in chunks so large ones stay responsive; it saves a copy and never touches the original.
+- [intel-4004](intel-4004/) -- the 1971 Intel 4004, assembled and stepped one instruction at a time against a live block diagram.
 - [markdown-in-html](markdown-in-html/) -- a page that renders its own inline Markdown source.
+- [mos-6510](mos-6510/) -- the CPU inside the Commodore 64: assembler, every documented opcode plus the stable undocumented ones, and a VIC-II text screen. No Commodore ROMs.
 - [packing](packing/) -- square packing solver that squeezes rotated unit squares into a container by resolving overlaps.
+- [prime-lab1](prime-lab1/) -- the natural numbers split about an axis, non-primes above and primes below, with zoom, pan and factorisation tooltips.
 - [pythagorean-cup](pythagorean-cup/) -- see highlights.
 - [riemann-stab](riemann-stab/) -- see highlights.
 - [text-diff](text-diff/) -- side-by-side and unified diff with a line-level Myers implementation.
