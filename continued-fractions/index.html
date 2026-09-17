@@ -150,7 +150,12 @@
     <div class="chips" id="cx-chips"></div>
     <div class="muted" style="margin:2px 0 4px 0;font-size:12px">the page’s real constants, run through the same algorithm for comparison</div>
     <div class="chips" id="cx-chips-real"></div>
+    <div class="controls" id="cx-nudge-row">
+      <label>imaginary nudge <input type="range" id="cx-nudge" min="0" max="45" value="0"></label>
+      <span class="muted" id="cx-nudge-label"></span>
+    </div>
     <div class="terms" id="cx-terms"></div>
+    <p class="status" id="cx-wake"></p>
     <p class="status" id="cx-status"></p>
     <div class="tablewrap"><table id="cx-table"></table></div>
     <canvas id="cx-canvas" width="420" height="420"></canvas>
@@ -545,6 +550,29 @@ const CF = (() => {
       };
     });
     return { rows, stopReason: e.stopReason };
+  };
+
+  // Run a REAL constant through the complex algorithm with a tiny imaginary nudge.
+  // Every inversion amplifies the imaginary part by roughly 1/|r|^2, so after k levels the
+  // amplification is q_k^2 and the nudge becomes visible once eps*q_k^2 reaches the rounding
+  // threshold of 1/2 - the same q^2 that governs |x - p/q| < 1/q^2 on the Simple tab.
+  const imaginaryWake = (key, eps, maxTerms) => {
+    const k = complexConstant(key);
+    if (!k.real) throw new Error('imaginaryWake expects a real constant');
+    const z = cOf(k.centre.re, eps);
+    const e = hurwitzTerms(z, k.delta, maxTerms);
+    const idx = e.terms.findIndex(t => !Rat.isZero(t.im));
+    let predicted = null, qPredicted = null;
+    if (!Rat.isZero(eps)) {
+      const rows = convergentRowsFor(key, maxTerms + 4, 'nearest').rows;
+      for (const r of rows) {
+        if (Rat.cmp(Rat.mul(eps, Rat.fromInt(r.q * r.q)), Rat.make(1n, 2n)) >= 0) {
+          predicted = r.n; qPredicted = r.q; break;
+        }
+      }
+    }
+    return { terms: e.terms, stopReason: e.stopReason,
+             actual: idx < 0 ? null : idx, predicted, qPredicted };
   };
 
   // ---- greedy unit fractions (the Egyptian-fraction algorithm) ----
@@ -1167,6 +1195,7 @@ const CF = (() => {
            cascadeRows, raceKind, mobiusDisks, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
+           imaginaryWake,
            SEMI_MODES, ratRound, pickInteger, semiregularTerms, semiregularConvergents };
 })();
 
@@ -2223,6 +2252,39 @@ XTests.test('a fat disk withholds terms', () => {
             `fat disk gave ${fat.terms.length} terms, tight gave ${tight.terms.length}`);
 });
 
+XTests.test('an imaginary nudge leaves the expansion real until q^2 catches up', () => {
+  // Every inversion amplifies the imaginary part by about 1/|r|^2, so after k levels the
+  // amplification is q_k^2. The claim: at the level BEFORE the first complex term, the
+  // perturbation has not yet reached the rounding threshold - eps*q^2 < 1.
+  for (const key of ['pi', 'e', 'sqrt2', 'phi', 'gamma', 'ln2']) {
+    const k = CF.complexConstant(key);
+    const rows = CF.convergentRowsFor(key, 24, 'nearest').rows;
+    for (let p = 4; p <= 40; p += 3) {
+      const eps = CF.Rat.make(1n, 10n ** BigInt(p));
+      const w = CF.imaginaryWake(key, eps, 18);
+      if (w.actual === null || w.actual <= 0) continue;
+      const q = rows[w.actual - 1].q;
+      const v = CF.Rat.mul(eps, CF.Rat.fromInt(q * q));
+      XTests.ok(CF.Rat.cmp(v, CF.Rat.fromInt(1)) < 0,
+                `${key} eps=1e-${p}: eps*q^2 was already ${CF.sci(v, 4)} before the wake`);
+    }
+  }
+});
+
+XTests.test('a zero nudge keeps every term real', () => {
+  for (const key of ['pi', 'e', 'gamma']) {
+    const w = CF.imaginaryWake(key, CF.Rat.fromInt(0), 12);
+    XTests.eq(w.actual, null, `${key} went complex with no nudge`);
+    XTests.eq(w.predicted, null, `${key} predicted a wake with no nudge`);
+    for (const t of w.terms) XTests.ok(CF.Rat.isZero(t.im), `${key} grew an imaginary part`);
+  }
+});
+
+XTests.test('a large nudge wakes the expansion almost immediately', () => {
+  const w = CF.imaginaryWake('pi', CF.Rat.make(1n, 100n), 12);
+  XTests.ok(w.actual !== null && w.actual <= 2, `expected an early wake, got ${w.actual}`);
+});
+
 XTests.test('real constants run through the complex algorithm too', () => {
   for (const c of CF.CONSTANTS) {
     const k = CF.complexConstant(c.key);
@@ -2850,7 +2912,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderUnit();
 
   // ---------- Complex tab ----------
-  state.complex = { key: 'pi_e_i' };
+  state.complex = { key: 'pi_e_i', nudge: 0 };   // nudge 0 = exact, else eps = 1e-(46-nudge)
   const CX_MAX_TERMS = 10;
 
   function renderComplex() {
@@ -2863,8 +2925,37 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       b.addEventListener('click', () => { s.key = b.dataset.key; renderComplex(); }));
 
     const k = CF.complexConstant(s.key);
-    const { rows, stopReason } = CF.hurwitzRows(s.key, CX_MAX_TERMS);
+    // The nudge only means anything for a real constant, and only above the stored
+    // disk radius of 1e-48 - below that it would be smaller than the page's own
+    // uncertainty, so the slider stops at 1e-45.
+    el('cx-nudge-row').style.display = k.real ? '' : 'none';
+    const eps = (k.real && s.nudge > 0) ? CF.Rat.make(1n, 10n ** BigInt(46 - s.nudge)) : CF.Rat.fromInt(0);
+    const nudging = !CF.Rat.isZero(eps);
+    el('cx-nudge').value = String(s.nudge);
+    el('cx-nudge-label').textContent = nudging ? `\u03b5 = 1e-${46 - s.nudge}` : '\u03b5 = 0 (exactly real)';
+
+    const { rows, stopReason } = nudging ? hurwitzRowsNudged(s.key, eps) : CF.hurwitzRows(s.key, CX_MAX_TERMS);
     const continues = stopReason !== 'exact';
+
+    if (!k.real) {
+      el('cx-wake').textContent = '';
+    } else if (!nudging) {
+      el('cx-wake').textContent =
+        'The imaginary part is exactly zero, not a truncation residue, so every remainder ' +
+        'stays exactly real and every term reads +0i. Drag the nudge to give it something to work on.';
+    } else {
+      const w = CF.imaginaryWake(s.key, eps, CX_MAX_TERMS);
+      el('cx-wake').textContent =
+        (w.actual === null
+          ? `Still entirely real after ${w.terms.length} levels. `
+          : `The imaginary part wakes at level ${w.actual}. `) +
+        (w.predicted === null
+          ? 'No level within reach has q large enough to amplify it to the rounding threshold.'
+          : `Predicted at level ${w.predicted}, where q = ${w.qPredicted}: each inversion ` +
+            'amplifies the nudge by about 1/|r|\u00b2, so after k levels it has grown by q\u2096\u00b2, ' +
+            'and it becomes visible once \u03b5\u00b7q\u2096\u00b2 reaches \u00bd. That is the same q\u00b2 as ' +
+            '|x \u2212 p/q| < 1/q\u00b2 on the Simple tab.');
+    }
 
     el('cx-terms').textContent =
       `⟨${rows.map(r => CF.cStr(r.term, 0)).join('; ')}${continues ? '; …' : ''}⟩`;
@@ -2882,14 +2973,34 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
         ? 'everything the stored disk determines. The enclosing disk grows at every ' +
           'inversion, so the expansion stops where the nearest Gaussian integer stops being certain.'
         : `stopped at the display limit of ${CX_MAX_TERMS}.`) +
-      (k.real
+      (k.real && !nudging
         ? ' A real value has no imaginary part to develop, so this is the nearest-integer' +
           ' expansion from the Simple tab \u2014 the magnitudes are identical. The signs differ' +
           ' because this form keeps every numerator at +1 and pushes the sign into the term:' +
           ' each term here is that tab\u2019s term times the running product of its \u00b11 numerators.'
-        : '');
+        : k.real
+          ? ' With the nudge on this is no longer an expansion of the real constant at all \u2014'
+            + ' it expands the nudged value, and the convergents carry Gaussian-integer parts.'
+          : '');
 
     drawComplex(k, rows);
+  }
+
+  // hurwitzRows measures error against the shipped centre; with a nudge the target is the
+  // nudged value, so the rows are rebuilt against it rather than against the real constant.
+  function hurwitzRowsNudged(key, eps) {
+    const k = CF.complexConstant(key);
+    const target = CF.cOf(k.centre.re, eps);
+    const e = CF.hurwitzTerms(target, k.delta, CX_MAX_TERMS);
+    const cs = CF.hurwitzConvergents(e.terms);
+    const rows = cs.map((c, i) => {
+      const value = CF.cIsZero(c.B) ? CF.CRAT_OPS.zero : CF.cMul(c.A, CF.cInv(c.B));
+      const errSq = CF.cNormSq(CF.cSub(target, value));
+      return { k: i, term: e.terms[i], A: c.A, B: c.B, value,
+               valueStr: CF.cStr(value, 12), errSq,
+               errStr: CF.sci(CF.ratSqrtLower(errSq, 30), 4) };
+    });
+    return { rows, stopReason: e.stopReason };
   }
 
   function drawComplex(k, rows) {
@@ -2968,6 +3079,9 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
           + 'step is what the plain plot hides.');
   }
 
+  el('cx-nudge').addEventListener('input', (ev) => {
+    state.complex.nudge = Number(ev.target.value); renderComplex();
+  });
   renderComplex();
 
   // ---------- Mobius tab ----------
