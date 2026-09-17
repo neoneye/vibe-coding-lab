@@ -196,6 +196,12 @@
     <canvas id="mp-plot" width="900" height="300"></canvas>
     <p class="status" id="mp-caption"></p>
     <p class="status" id="mp-verdict"></p>
+    <h2 class="sectionhead">How the balanced pair is found</h2>
+    <div class="chips" id="mp-search-level"></div>
+    <p class="status" id="mp-search-intro"></p>
+    <div class="terms" id="mp-search-ladder"></div>
+    <div class="tablewrap"><table id="mp-search-table"></table></div>
+    <p class="status" id="mp-search-verdict"></p>
     <h2 class="sectionhead">Where the optimum sits</h2>
     <canvas id="mp-weights" width="900" height="240"></canvas>
     <p class="status" id="mp-weights-caption"></p>
@@ -778,20 +784,43 @@ const CF = (() => {
       if (!last || last.q > maxQ || rows.length < want) break;
     }
     const out = [];
-    const add = (p, q) => {
+    // Each entry says what it is: the convergent f(k), or rung j of the ladder that climbs
+    // from f(k-1) to f(k+1) in steps of f(k). The search does not use this; the page does.
+    const add = (p, q, kind, k, j) => {
       if (q <= 0n || q > maxQ) return;
       const v = Rat.make(p, q), err = Rat.sub(x, v);
       if (Rat.isZero(err)) return;                   // an exact hit is neither bound
-      out.push({ p, q, v, err, abs: err.n < 0n ? Rat.neg(err) : err, below: err.n > 0n });
+      out.push({ p, q, v, err, abs: err.n < 0n ? Rat.neg(err) : err, below: err.n > 0n, kind, k, j });
     };
     for (let i = 0; i < rows.length; i++) {
-      add(rows[i].p, rows[i].q);
+      add(rows[i].p, rows[i].q, 'convergent', i, 0n);
       if (i + 1 < rows.length) {
         const pm = i > 0 ? rows[i - 1].p : 1n, qm = i > 0 ? rows[i - 1].q : 0n;
-        for (let j = 1n; j < rows[i + 1].a; j++) add(pm + j * rows[i].p, qm + j * rows[i].q);
+        for (let j = 1n; j < rows[i + 1].a; j++) add(pm + j * rows[i].p, qm + j * rows[i].q, 'rung', i, j);
       }
     }
     return out;
+  };
+
+  // The same search as balancedPair, but keeping every step so a page can show it: the pool
+  // sorted by error size, each entry's partner (the first opposite-side entry further down
+  // the list) and the gap between their errors, and the index of the winning pair.
+  const balancedTrace = (key, maxQ) => {
+    const pool = semiconvergents(key, maxQ);
+    pool.sort((a, b) => Rat.cmp(a.abs, b.abs));
+    const entries = pool.map((z, rank) => ({ ...z, rank, partner: null, gap: null }));
+    let winner = null;
+    for (let i = 0; i + 1 < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        if (entries[i].below === entries[j].below) continue;
+        const d = Rat.sub(entries[j].abs, entries[i].abs);
+        entries[i].partner = j;
+        entries[i].gap = d.n < 0n ? Rat.neg(d) : d;
+        if (winner === null || Rat.cmp(entries[i].gap, entries[winner].gap) < 0) winner = i;
+        break;
+      }
+    }
+    return { entries, winner };
   };
 
   // Choose the bracket whose MIDPOINT is best rather than whose endpoints are each best.
@@ -1511,7 +1540,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows, raceKind, mobiusDisks, boundRows, midpointRows, weightedAt, worstRatio, bestFixedWeight, semiconvergents, balancedPair, unitFractions, unitFractionRows,
+           cascadeRows, raceKind, mobiusDisks, boundRows, midpointRows, weightedAt, worstRatio, bestFixedWeight, semiconvergents, balancedTrace, balancedPair, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            imaginaryWake,
@@ -3115,6 +3144,52 @@ XTests.test('for a periodic expansion, one fixed weight beats the balanced Bound
             'pi should have no fixed weight that beats balancing everywhere');
 });
 
+XTests.test('the balanced trace shows the same search and lands on the same pair', () => {
+  const R = CF.Rat;
+  for (const c of CF.CONSTANTS) {
+    for (const r of CF.midpointRows(c.key, 10).rows) {
+      const tr = CF.balancedTrace(c.key, r.gQ);
+      const bp = CF.balancedPair(c.key, r.gQ, null);
+      if (!bp) { XTests.ok(tr.winner === null, `${c.key} n=${r.n} trace found a pair the search did not`); continue; }
+      const w = tr.entries[tr.winner], v = tr.entries[w.partner];
+      const lower = w.below ? w : v, upper = w.below ? v : w;
+      XTests.eq(`${lower.p}/${lower.q}`, `${bp.lower.p}/${bp.lower.q}`, `${c.key} n=${r.n} lower`);
+      XTests.eq(`${upper.p}/${upper.q}`, `${bp.upper.p}/${bp.upper.q}`, `${c.key} n=${r.n} upper`);
+      // sorted by error size, every partner is on the other side, and the gap is the error difference
+      for (let i = 1; i < tr.entries.length; i++) {
+        XTests.ok(R.cmp(tr.entries[i - 1].abs, tr.entries[i].abs) <= 0, `${c.key} n=${r.n} pool not sorted`);
+      }
+      for (const e of tr.entries) {
+        if (e.partner === null) continue;
+        const f = tr.entries[e.partner];
+        XTests.ok(e.below !== f.below, `${c.key} n=${r.n} partner on the same side`);
+        XTests.eq(R.cmp(e.gap, R.sub(f.abs, e.abs)), 0, `${c.key} n=${r.n} gap`);
+      }
+    }
+  }
+});
+
+XTests.test('pool entries are labelled as the convergent or the rung they are', () => {
+  const conv = CF.convergentRowsFor('cbrt2', 12, 'floor').rows;
+  const pool = CF.semiconvergents('cbrt2', 227n);
+  for (const z of pool) {
+    if (z.kind === 'convergent') {
+      XTests.eq(`${z.p}/${z.q}`, `${conv[z.k].p}/${conv[z.k].q}`, 'convergent label');
+    } else {
+      const pm = z.k > 0 ? conv[z.k - 1].p : 1n, qm = z.k > 0 ? conv[z.k - 1].q : 0n;
+      XTests.eq(`${z.p}/${z.q}`, `${pm + z.j * conv[z.k].p}/${qm + z.j * conv[z.k].q}`, 'rung formula');
+      XTests.ok(z.j >= 1n && z.j < conv[z.k + 1].a, 'rung index inside the ladder');
+    }
+  }
+  // the worked example from the page: 160/127 is rung 2 of the ladder from f(4) to f(6)
+  const rung = pool.find(z => z.p === 160n && z.q === 127n);
+  XTests.eq(rung.kind, 'rung'); XTests.eq(rung.k, 5); XTests.eq(rung.j, 2n);
+  const tr = CF.balancedTrace('cbrt2', 227n);
+  const w = tr.entries[tr.winner], v = tr.entries[w.partner];
+  XTests.eq([w, v].map(z => `${z.p}/${z.q}`).sort().join(' '), '160/127 63/50');
+  XTests.ok(tr.entries[0].p === 286n && tr.entries[0].q === 227n, '286/227 is the closest yet is passed over');
+});
+
 XTests.test('the strict-upper search finds candidates for a rational target', () => {
   // Exact hits used to fill the 50-item shortlist and were removed only afterwards, so the
   // search returned nothing for 355/113 even though 22/7 is plainly above it.
@@ -4063,7 +4138,8 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
           + `wrong on opposite sides of ${label} — the search deliberately takes a worse bound on `
           + 'the better side and lets the two errors cancel. Both come from the same pool of '
           + 'one-sided best approximations (convergents and semiconvergents) under the same '
-          + 'denominator budget, so this never costs accuracy.') +
+          + 'denominator budget, so this never costs accuracy. The Midpoint tab walks through '
+          + 'this search step by step for one level.') +
       '';
 
     el('bd-table').innerHTML =
@@ -4168,7 +4244,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderBounds();
 
   // ---------- Midpoint tab ----------
-  state.midpoint = { key: 'pi', t: CF.Rat.make(1n, 2n) };
+  state.midpoint = { key: 'pi', t: CF.Rat.make(1n, 2n), searchLevel: null };
   const MP_LEVELS = 12;
 
   el('mp-weight').addEventListener('input', () => {
@@ -4193,11 +4269,12 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       .map(c => `<button class="chip ${c.key === s.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
       .join('');
     el('mp-chips').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
-      s.key = b.dataset.key; renderMidpoint();
+      s.key = b.dataset.key; s.searchLevel = null; renderMidpoint();
     }));
 
     const label = CF.constant(s.key).label;
     const { rows } = CF.midpointRows(s.key, MP_LEVELS);
+    renderBalancedSearch(rows, label);
     const ind = CF.boundRows(s.key, Math.ceil(MP_LEVELS / 2), 'independent').rows;
 
     el('mp-intro').innerHTML =
@@ -4316,6 +4393,106 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
         `${rows.length - balWins} level${rows.length - balWins === 1 ? '' : 's'} and strictly beats it at ` +
         `${balWins}, by up to a factor of ${CF.sci(bestGain, 3)} at n = ${bestAt}.`;
     el('mp-verdict').textContent = verdictVsNext + verdictVsBounds;
+  }
+
+  // One level of the balanced search, every step shown. Default to the level where
+  // balancing gains the most, since that is where the difference is easiest to see.
+  function renderBalancedSearch(rows, label) {
+    const s = state.midpoint;
+    const R = CF.Rat;
+    const usable = rows.filter(r => r.eBal && !R.isZero(r.eG));
+    if (!usable.length) {
+      el('mp-search-level').innerHTML = '';
+      el('mp-search-intro').textContent = 'No level to show.';
+      el('mp-search-ladder').innerHTML = ''; el('mp-search-table').innerHTML = '';
+      el('mp-search-verdict').textContent = ''; return;
+    }
+    if (s.searchLevel === null || !usable.some(r => r.n === s.searchLevel)) {
+      let best = usable[0], bestGain = null;
+      for (const r of usable) {
+        const g = R.div(r.eMid, r.eBal);
+        if (!bestGain || R.cmp(g, bestGain) > 0) { bestGain = g; best = r; }
+      }
+      s.searchLevel = best.n;
+    }
+    el('mp-search-level').innerHTML = usable
+      .map(r => `<button class="chip ${r.n === s.searchLevel ? 'active' : ''}" data-n="${r.n}">n = ${r.n}</button>`)
+      .join('');
+    el('mp-search-level').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.searchLevel = Number(b.dataset.n); renderMidpoint();
+    }));
+    const r = usable.find(z => z.n === s.searchLevel);
+    const fr = (p, q) => `${elide(String(p), 10)}/${elide(String(q), 10)}`;
+    const conv = CF.convergentRowsFor(s.key, r.n + 3, 'floor').rows;
+    const tr = CF.balancedTrace(s.key, r.gQ);
+
+    el('mp-search-intro').innerHTML =
+      `<strong>Step 1 — the budget.</strong> At level n = ${r.n} the midpoint averages f(${r.n}) = ` +
+      `${fr(r.fP, r.fQ)} and f(${r.n + 1}) = ${fr(r.gP, r.gQ)}. The balanced search may use any fraction ` +
+      `with denominator at most q<sub>${r.n + 1}</sub> = ${r.gQ}, so it never spends more than the midpoint does.<br>` +
+      `<strong>Step 2 — the menu.</strong> Not every fraction under the budget is worth trying: only the ` +
+      `<em>one-sided best approximations</em>, the fractions closer to ${label} than anything with a smaller ` +
+      `denominator on the same side. Those are the convergents f(k), plus the <em>rungs</em> between them. ` +
+      `The regular expansion jumps from f(k−1) to f(k+1) by adding f(k) to it a<sub>k+1</sub> times, and ` +
+      `only reports the last step; each earlier step is a rung, a real fraction the expansion skips:`;
+
+    // the ladder that ends at f(n+1): from f(n-1), adding f(n) each step
+    const F = conv[r.n], G = conv[r.n + 1];
+    const pm = r.n > 0 ? conv[r.n - 1].p : 1n, qm = r.n > 0 ? conv[r.n - 1].q : 0n;
+    const steps = [];
+    for (let j = 1n; j <= G.a; j++) {
+      const p = pm + j * F.p, q = qm + j * F.q;
+      const isTop = j === G.a;
+      steps.push(`<span class="mono">${fr(p, q)}</span>${isTop ? ` = f(${r.n + 1})` : ` (rung ${j})`}`);
+    }
+    el('mp-search-ladder').innerHTML =
+      (r.n === 0 ? 'ladder from 1/0 (the empty expansion) toward f(1), '
+                 : `ladder from f(${r.n - 1}) = <span class="mono">${fr(pm, qm)}</span> toward f(${r.n + 1}), `) +
+      `adding f(${r.n}) = <span class="mono">${fr(F.p, F.q)}</span> each step, a<sub>${r.n + 1}</sub> = ${G.a} times: ` +
+      steps.join(' → ') +
+      (G.a === 1n ? ' — a single step, so no rungs here.' : '');
+
+    const kindOf = (z) => z.kind === 'convergent' ? `f(${z.k})`
+      : z.k === 0 ? `rung ${z.j} before f(1)` : `rung ${z.j} of f(${z.k - 1})→f(${z.k + 1})`;
+    const winner = tr.winner === null ? null : tr.entries[tr.winner];
+    const partner = winner ? tr.entries[winner.partner] : null;
+    const isWin = (z) => winner && (z.rank === winner.rank || z.rank === partner.rank);
+    const isMidPair = (z) => (z.p === r.fP && z.q === r.fQ) || (z.p === r.gP && z.q === r.gQ);
+    el('mp-search-table').innerHTML =
+      '<tr><th>rank</th><th>fraction</th><th>what it is</th><th>side</th><th>|error|</th>' +
+      '<th>partner: next opposite side below it</th><th>gap in error</th><th>used by</th></tr>' +
+      tr.entries.map(z => {
+        const pt = z.partner === null ? '—' : fr(tr.entries[z.partner].p, tr.entries[z.partner].q);
+        const uses = [isWin(z) ? '<strong>balanced</strong>' : '', isMidPair(z) ? 'midpoint' : ''].filter(Boolean).join(', ');
+        return `<tr class="${isWin(z) ? 'even' : ''}"><td>${z.rank + 1}</td>` +
+          `<td class="mono">${fr(z.p, z.q)}</td><td>${kindOf(z)}</td>` +
+          `<td>${z.below ? 'below' : 'above'}</td><td class="mono">${CF.sci(z.abs, 4)}</td>` +
+          `<td class="mono">${pt}</td><td class="mono">${z.gap === null ? '—' : CF.sci(z.gap, 3)}</td>` +
+          `<td>${uses}</td></tr>`;
+      }).join('');
+
+    if (!winner) { el('mp-search-verdict').textContent = ''; return; }
+    const midGap = R.sub(r.eF, r.eG);
+    const lower = winner.below ? winner : partner, upper = winner.below ? partner : winner;
+    const same = isMidPair(winner) && isMidPair(partner);
+    el('mp-search-verdict').innerHTML =
+      `<strong>Step 3 — the pairing.</strong> Averaging a fraction below ${label} with one above gives an error of ` +
+      `exactly <em>half the gap</em> between their two errors, so the search wants the below/above pair whose ` +
+      `errors are most nearly equal. Sort the menu by error size, and for each fraction look down the list ` +
+      `for the first one on the other side: that is its partner, and the difference of their errors is the ` +
+      `gap. Any other pairing of that fraction has a wider gap, so this one scan finds the best pair exactly.<br>` +
+      `<strong>Step 4 — the winner.</strong> The smallest gap is ${CF.sci(winner.gap, 3)}, between ` +
+      `<span class="mono">${fr(lower.p, lower.q)}</span> below and <span class="mono">${fr(upper.p, upper.q)}</span> above. ` +
+      `Their average is <span class="mono">${R.toDecimalString(R.div(R.add(lower.v, upper.v), R.fromInt(2)), 12)}</span> ` +
+      `with error ${r.eBalStr}. ` +
+      (same
+        ? `That is the midpoint's own pair: no rung under this budget pairs up better, so balanced and midpoint agree here.`
+        : `The midpoint's pair, f(${r.n}) and f(${r.n + 1}), has gap ${CF.sci(midGap, 3)} and error ${r.eMidStr} — ` +
+          `${CF.sci(R.div(r.eMid, r.eBal), 2)}× worse.` +
+          (tr.entries[0].rank !== winner.rank && tr.entries[0].rank !== partner.rank
+            ? ` Note that the closest fraction of all, <span class="mono">${fr(tr.entries[0].p, tr.entries[0].q)}</span>, ` +
+              `is passed over: nothing on the other side matches its error, so it has no good partner.`
+            : ''));
   }
 
   function drawMidpoint(rows, ind, weighted, tStr) {
