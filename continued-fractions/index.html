@@ -428,6 +428,42 @@ const CF = (() => {
     return out;
   };
 
+  const binomial = (n, k) => {
+    let r = 1n;
+    for (let i = 0n; i < k; i++) r = r * (n - i) / (i + 1n);
+    return r;
+  };
+
+  // Apery's series: zeta(3) = (5/2) * sum_{n>=1} (-1)^(n-1) / (n^3 * C(2n,n)).
+  // Gains roughly 0.6 decimal digits per term, and is exact in rationals.
+  const apery = (terms) => {
+    let sum = Rat.fromInt(0);
+    for (let n = 1; n <= terms; n++) {
+      const bn = BigInt(n);
+      const t = Rat.make(1n, bn ** 3n * binomial(2n * bn, bn));
+      sum = (n % 2 === 1) ? Rat.add(sum, t) : Rat.sub(sum, t);
+    }
+    return Rat.mul(Rat.make(5n, 2n), sum);
+  };
+
+  let APERY_CACHE = null;
+
+  // Only s = 2, 3, 4, 6 ship: every target must be computable here. Even s comes from the
+  // stored pi; zeta(3) from Apery's series. s = 5 has no closed form and no series cheap
+  // enough to verify, so it is excluded rather than transcribed on faith.
+  const zetaValue = (s) => {
+    const pi = constant('pi').lo;
+    const powPi = (k) => { let a = Rat.fromInt(1); for (let i = 0; i < k; i++) a = Rat.mul(a, pi); return a; };
+    if (s === 2) return { rat: Rat.div(powPi(2), Rat.fromInt(6)),   label: 'ζ(2)', closedForm: 'π²/6' };
+    if (s === 4) return { rat: Rat.div(powPi(4), Rat.fromInt(90)),  label: 'ζ(4)', closedForm: 'π⁴/90' };
+    if (s === 6) return { rat: Rat.div(powPi(6), Rat.fromInt(945)), label: 'ζ(6)', closedForm: 'π⁶/945' };
+    if (s === 3) {
+      if (!APERY_CACHE) APERY_CACHE = trunc(apery(120), 50);
+      return { rat: APERY_CACHE, label: 'ζ(3)', closedForm: null };
+    }
+    throw new Error(`zeta(${s}) is not shipped: only s = 2, 3, 4, 6 can be verified by this page`);
+  };
+
   // ---- geometry: fit the largest square, repeatedly ----
 
   // The rectangle starts w/h = x with h = 1. Generation 0 cuts a0 squares of side h off the
@@ -666,7 +702,7 @@ const CF = (() => {
            genConvergents, GEN_PRESETS, identify, identifyGraded,
            dissect,
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
-           primeFactorRows };
+           primeFactorRows, binomial, apery, zetaValue };
 })();
 
 XTests.test('Rat reduces and normalizes sign', () => {
@@ -1032,6 +1068,44 @@ XTests.test('primeFactorRows gives each prime its factor', () => {
 XTests.test('s values and the N cap are declared', () => {
   XTests.eq(CF.ZETA_S.join(','), '2,3,4,6');
   XTests.eq(CF.MAX_ZETA_N, 200);
+});
+
+XTests.test('binomial coefficients', () => {
+  XTests.eq(CF.binomial(4n, 2n), 6n);
+  XTests.eq(CF.binomial(10n, 5n), 252n);
+  XTests.eq(CF.binomial(5n, 0n), 1n);
+});
+
+XTests.test("Apery's series reproduces zeta(3)", () => {
+  const known = CF.Rat.fromDecimalString('1.202056903159594285399738161511449990764986292340498881792');
+  XTests.eq(CF.Rat.toDecimalString(CF.apery(120), 40), CF.Rat.toDecimalString(known, 40));
+});
+
+XTests.test('zeta closed forms match powers of pi', () => {
+  const pi = CF.constant('pi').lo;
+  const pow = (r, k) => { let a = CF.Rat.fromInt(1); for (let i = 0; i < k; i++) a = CF.Rat.mul(a, r); return a; };
+  for (const [s, k, den] of [[2, 2, 6], [4, 4, 90], [6, 6, 945]]) {
+    const want = CF.Rat.div(pow(pi, k), CF.Rat.fromInt(den));
+    XTests.eq(CF.Rat.toDecimalString(CF.zetaValue(s).rat, 30),
+              CF.Rat.toDecimalString(want, 30), `zeta(${s})`);
+  }
+});
+
+XTests.test('zeta values are labelled honestly', () => {
+  XTests.eq(CF.zetaValue(2).closedForm, '\u03c0\u00b2/6');
+  XTests.eq(CF.zetaValue(4).closedForm, '\u03c0\u2074/90');
+  XTests.eq(CF.zetaValue(6).closedForm, '\u03c0\u2076/945');
+  // XTests.eq stringifies both sides, so null and the string "null" would both pass. Use ok().
+  XTests.ok(CF.zetaValue(3).closedForm === null, 'zeta(3) must claim no closed form');
+  XTests.eq(CF.zetaValue(3).label, '\u03b6(3)');
+});
+
+XTests.test('zeta(3) sits inside a brute-force enclosure', () => {
+  // Sum to N=2000 plus the integral tail bound 1/(2N^2) brackets zeta(3).
+  const lo = CF.zetaPartialSum(3, 2000);
+  const hi = CF.Rat.add(lo, CF.Rat.make(1n, 2n * 2000n * 2000n));
+  const z = CF.zetaValue(3).rat;
+  XTests.ok(CF.Rat.cmp(lo, z) < 0 && CF.Rat.cmp(z, hi) < 0, 'zeta(3) outside its own enclosure');
 });
 
 </script>
