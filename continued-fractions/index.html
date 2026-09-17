@@ -18,6 +18,37 @@
   .tab.active { color:var(--fg); border-color:var(--border); background:var(--bg);
     position:relative; top:1px; }
   .panel { display:none; } .panel.active { display:block; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+  .chip { padding:5px 12px; border:1px solid var(--border); background:var(--bg); cursor:pointer;
+    font:inherit; border-radius:3px; color:var(--fg); }
+  .chip:hover { border-color:var(--accent); }
+  .chip.active { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  .controls { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center; padding:8px 0; }
+  .muted { color:var(--muted); }
+  .status { color:var(--muted); margin:8px 0 12px 0; }
+  .terms { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; margin:12px 0;
+    word-break:break-word; }
+  .tower { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; margin:12px 0 4px 0;
+    overflow-x:auto; padding-bottom:4px; }
+  .frac { display:inline-flex; align-items:center; vertical-align:middle; }
+  .frac .stack { display:inline-flex; flex-direction:column; align-items:center; }
+  .frac .num { padding:0 6px; }
+  .frac .den { padding:0 6px; border-top:1px solid var(--fg); white-space:nowrap; }
+  .tablewrap { overflow-x:auto; }
+  table { border-collapse:collapse; font-size:13px; width:100%; }
+  th, td { border-bottom:1px solid var(--border); padding:5px 10px; text-align:right;
+    white-space:nowrap; font-variant-numeric:tabular-nums; }
+  th { color:var(--muted); font-weight:600; }
+  tr.clickable { cursor:pointer; }
+  tr.clickable:hover td { background:#f4f7fb; }
+  tr.selected td { background:#eaf1fb; }
+  .mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .twocol { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
+  .twocol > * { flex:1 1 320px; min-width:0; }
+  canvas { border:1px solid var(--border); max-width:100%; }
+  .verdict { display:block; padding:8px 12px; border-left:3px solid var(--accent); background:#f4f7fb; }
+  label { display:inline-flex; align-items:center; gap:6px; }
+  select, input[type=number] { font:inherit; padding:3px 4px; }
 </style>
 </head>
 <body>
@@ -29,7 +60,18 @@
     <button class="tab" data-panel="general">Generalized</button>
     <button class="tab" data-panel="geometry">Geometry</button>
   </div>
-  <div class="panel active" id="panel-simple"></div>
+  <div class="panel active" id="panel-simple">
+    <div class="chips" id="simple-chips"></div>
+    <div class="controls">
+      <label>Depth <input type="range" id="simple-depth" min="1" max="30" value="6"></label>
+      <span id="simple-depth-label" class="muted"></span>
+    </div>
+    <div class="tower" id="simple-tower"></div>
+    <div class="terms" id="simple-terms"></div>
+    <p class="status" id="simple-status"></p>
+    <div class="tablewrap"><table id="simple-table"></table></div>
+    <div id="simple-race"></div>
+  </div>
   <div class="panel" id="panel-general"></div>
   <div class="panel" id="panel-geometry"></div>
 </div>
@@ -857,6 +899,110 @@ XTests.test('every square lies inside the starting rectangle', () => {
 </script>
 
 <script>
+  const state = {
+    simple: { key: 'pi', depth: 6, selected: null },
+  };
+  const el = (id) => document.getElementById(id);
+  const MAX_SIMPLE_TERMS = 60;   // high enough that the precision cutoff, not this cap, is what stops pi
+
+  const elide = (s, max = 18) => (s.length <= max ? s : s.slice(0, 8) + '\u2026' + s.slice(-8));
+
+  // a0 + 1/(a1 + 1/(a2 + ...)) as nested CSS fractions.
+  function towerHTML(terms, depth) {
+    const build = (i) => {
+      const a = String(terms[i]);
+      if (i >= depth - 1) {
+        return i + 1 < terms.length ? `${a} + <span class="muted">\u2026</span>` : a;
+      }
+      return `${a} + <span class="frac"><span class="stack">` +
+             `<span class="num">1</span><span class="den">${build(i + 1)}</span>` +
+             `</span></span>`;
+    };
+    return build(0);
+  }
+
+  const STOP_REASON = {
+    exact: 'the value is rational, so the expansion terminates \u2014 these are all the terms there are',
+    periodic: 'a quadratic irrational: the terms repeat forever, so any number of them is exact',
+    'precision-exhausted': 'everything the stored 60 digits determine \u2014 the next term is genuinely unknown to this page',
+    'max-terms': 'stopped at the display limit',
+  };
+
+  function renderSimple() {
+    const s = state.simple;
+    const k = CF.constant(s.key);
+    const { rows, stopReason } = CF.convergentRows(s.key, MAX_SIMPLE_TERMS);
+    const terms = rows.map(r => r.a);
+
+    el('simple-chips').innerHTML = CF.CONSTANTS
+      .map(c => `<button class="chip ${c.key === s.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
+      .join('');
+    el('simple-chips').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.key = b.dataset.key; s.selected = null; renderSimple();
+    }));
+
+    el('simple-depth').max = String(Math.min(30, terms.length));
+    const depth = Math.min(s.depth, terms.length);
+    el('simple-depth-label').textContent = `showing ${depth} of ${terms.length} terms`;
+    el('simple-tower').innerHTML = `${k.label} = ` + towerHTML(terms, depth);
+    el('simple-terms').textContent =
+      `[${terms[0]}; ${terms.slice(1, depth).join(', ')}${depth < terms.length ? ', \u2026' : ''}]`;
+    el('simple-status').textContent = `${terms.length} terms \u2014 ${STOP_REASON[stopReason]}.`;
+
+    renderSimpleTable(rows);
+    renderRace(rows);
+  }
+
+  function renderSimpleTable(rows) {
+    const head = '<tr><th>n</th><th>a\u2099</th><th>p\u2099 / q\u2099</th><th>decimal</th>' +
+                 '<th>x \u2212 p\u2099/q\u2099</th><th>|error| \u00b7 q\u2099\u00b2</th></tr>';
+    const body = rows.map(r => {
+      const frac = `<span title="${r.p}/${r.q}">${elide(String(r.p))}/${elide(String(r.q))}</span>`;
+      const sel = state.simple.selected === r.n ? ' selected' : '';
+      return `<tr class="clickable${sel}" data-n="${r.n}"><td>${r.n}</td><td>${r.a}</td>` +
+             `<td class="mono">${frac}</td><td class="mono">${r.decimal.slice(0, 16)}</td>` +
+             `<td class="mono">${r.errorStr}</td><td class="mono">${r.errQ2}</td></tr>`;
+    }).join('');
+    el('simple-table').innerHTML = head + body;
+    el('simple-table').querySelectorAll('tr.clickable').forEach(tr =>
+      tr.addEventListener('click', () => { state.simple.selected = Number(tr.dataset.n); renderSimple(); }));
+  }
+
+  function renderRace(rows) {
+    const s = state.simple;
+    const box = el('simple-race');
+    if (s.selected === null) {
+      box.innerHTML = '<p class="status">Click a row to race its convergent against every ' +
+        'fraction with a denominator that small.</p>';
+      return;
+    }
+    const row = rows[s.selected];
+    if (row.q > BigInt(CF.MAX_RACE_Q)) {
+      box.innerHTML = `<p class="status">q = ${row.q} is too large to search exhaustively ` +
+        `(the limit is ${CF.MAX_RACE_Q.toLocaleString()}). This page will not claim a search it did not run.</p>`;
+      return;
+    }
+    const best = CF.bestApproximations(s.key, Number(row.q), 5);
+    const winner = `${best[0].p}/${best[0].q}` === `${row.p}/${row.q}`;
+    const list = best.map((b, i) => {
+      const isRow = `${b.p}/${b.q}` === `${row.p}/${row.q}`;
+      return `<tr class="${isRow ? 'selected' : ''}"><td>${i + 1}</td>` +
+             `<td class="mono">${b.p}/${b.q}</td><td class="mono">${b.errorStr}</td></tr>`;
+    }).join('');
+    box.innerHTML =
+      `<p class="status">Every fraction with q \u2264 ${row.q} checked. ` +
+      (winner
+        ? `The convergent <strong>${row.p}/${row.q}</strong> is the closest of them all.`
+        : `The convergent ${row.p}/${row.q} did <strong>not</strong> win \u2014 worth investigating.`) +
+      `</p><div class="tablewrap"><table><tr><th>rank</th><th>p/q</th><th>x \u2212 p/q</th></tr>${list}</table></div>`;
+  }
+
+  el('simple-depth').addEventListener('input', (e) => {
+    state.simple.depth = Number(e.target.value);
+    renderSimple();
+  });
+  renderSimple();
+
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
