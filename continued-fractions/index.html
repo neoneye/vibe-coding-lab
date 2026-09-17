@@ -761,11 +761,11 @@ const CF = (() => {
     }).sort((a, b) => Rat.cmp(a.abs, b.abs)).slice(0, count);
   };
 
-  const convergentRows = (key, maxTerms) => {
+  const convergentRowsFor = (key, maxTerms, mode) => {
     const k = constant(key);
     const x = k.exact || k.lo;
-    const e = expand(key, maxTerms);
-    const cs = convergents(e.terms);
+    const e = mode === 'minus' ? minusExpand(key, maxTerms) : expand(key, maxTerms);
+    const cs = mode === 'minus' ? minusConvergents(e.terms) : convergents(e.terms);
     const rows = cs.map((c, i) => {
       const val = Rat.make(c.p, c.q);
       const error = Rat.sub(x, val);
@@ -780,11 +780,43 @@ const CF = (() => {
     return { rows, stopReason: e.stopReason, source: e.source };
   };
 
+  const convergentRows = (key, maxTerms) => convergentRowsFor(key, maxTerms, 'plus');
+
+  // The closest fractions strictly ABOVE the target. Minus convergents are one-sided
+  // best approximations, so this is the race they are actually the answer to.
+  const bestApproximationsAbove = (key, Q, count) => {
+    if (Q > MAX_RACE_Q) throw new Error(`denominator ${Q} exceeds the searchable limit ${MAX_RACE_Q}`);
+    const k = constant(key);
+    const x = k.exact || k.lo;
+    const xd = Rat.toNumber(x);
+    const shortlist = [];
+    let worst = Infinity;
+    for (let q = 1; q <= Q; q++) {
+      const p = Math.ceil(xd * q);
+      const err = p / q - xd;
+      if (err < 0) continue;                       // double noise near an exact hit
+      if (shortlist.length < 50 || err < worst) {
+        shortlist.push({ p: BigInt(p), q: BigInt(q), err });
+        shortlist.sort((a, b) => a.err - b.err);
+        if (shortlist.length > 50) shortlist.pop();
+        worst = shortlist[shortlist.length - 1].err;
+      }
+    }
+    return shortlist.map(c => {
+      const error = Rat.sub(x, Rat.make(c.p, c.q));
+      const abs = error.n < 0n ? Rat.neg(error) : error;
+      return { p: c.p, q: c.q, error, abs, errorStr: sci(error, 5) };
+    })
+      .filter(c => Rat.cmp(Rat.make(c.p, c.q), x) > 0)   // exact filter, not the double one
+      .sort((a, b) => Rat.cmp(a.abs, b.abs))
+      .slice(0, count);
+  };
+
   return { bgcd, isqrt, Rat, trunc, ratSqrt, ratCbrt, ratExp1, ratLn2, ratArctanInv, ratPiMachin,
            CONSTANTS, constant, EPS,
            termsExact, termsFromInterval, quadraticTerms, expand,
-           convergents, sci, convergentRows,
-           MAX_RACE_Q, bestApproximations,
+           convergents, sci, convergentRows, convergentRowsFor,
+           MAX_RACE_Q, bestApproximations, bestApproximationsAbove,
            primes, SEQUENCES, seq, GEN_SEQ_DIGITS, MAX_GEN_TERMS_INT, MAX_GEN_TERMS_IRRATIONAL,
            genConvergents, GEN_PRESETS, identify, identifyGraded,
            dissect,
@@ -1298,6 +1330,51 @@ XTests.test('quadratic irrationals get minus terms from the interval path', () =
   const r = CF.minusExpand('sqrt2', 8);
   XTests.eq(r.source, 'interval');
   XTests.eq(r.terms.join(','), '2,2,4,2,4,2,4,2');
+});
+
+XTests.test('convergentRowsFor reproduces the regular rows', () => {
+  const a = CF.convergentRows('pi', 6).rows.map(r => `${r.p}/${r.q}`).join(' ');
+  const b = CF.convergentRowsFor('pi', 6, 'plus').rows.map(r => `${r.p}/${r.q}`).join(' ');
+  XTests.eq(a, b);
+});
+
+XTests.test('convergentRowsFor minus rows carry one-sided errors', () => {
+  const { rows } = CF.convergentRowsFor('pi', 8, 'minus');
+  XTests.eq(rows.map(r => `${r.p}/${r.q}`).join(' '),
+            '4/1 7/2 10/3 13/4 16/5 19/6 22/7 355/113');
+  for (const r of rows) XTests.ok(r.error.n <= 0n, `row ${r.n} had a positive error`);
+});
+
+XTests.test('bestApproximationsAbove only returns fractions above the target', () => {
+  const k = CF.constant('pi');
+  const best = CF.bestApproximationsAbove('pi', 113, 5);
+  for (const b of best) {
+    XTests.ok(CF.Rat.cmp(CF.Rat.make(b.p, b.q), k.lo) > 0, `${b.p}/${b.q} was not above pi`);
+  }
+  XTests.eq(`${best[0].p}/${best[0].q}`, '355/113');
+});
+
+XTests.test('every minus convergent of pi wins its own from-above race', () => {
+  const { rows } = CF.convergentRowsFor('pi', 10, 'minus');
+  for (const row of rows) {
+    if (row.q > BigInt(CF.MAX_RACE_Q) || row.q < 1n) continue;
+    const best = CF.bestApproximationsAbove('pi', Number(row.q), 1)[0];
+    XTests.eq(`${best.p}/${best.q}`, `${row.p}/${row.q}`, `minus row n=${row.n}`);
+  }
+});
+
+XTests.test('a minus convergent can lose an unrestricted race', () => {
+  // 4/1 is the closest fraction above pi with q = 1, but 3/1 is closer outright.
+  const outright = CF.bestApproximations('pi', 1, 1)[0];
+  XTests.eq(`${outright.p}/${outright.q}`, '3/1');
+  const above = CF.bestApproximationsAbove('pi', 1, 1)[0];
+  XTests.eq(`${above.p}/${above.q}`, '4/1');
+});
+
+XTests.test('the from-above race refuses denominators it cannot search', () => {
+  let threw = false;
+  try { CF.bestApproximationsAbove('pi', CF.MAX_RACE_Q + 1, 1); } catch (e) { threw = true; }
+  XTests.ok(threw, 'expected a throw for an oversized Q');
 });
 
 </script>
