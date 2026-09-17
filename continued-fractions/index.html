@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Continued Fractions</title>
+<style>
+  :root { --fg:#111; --muted:#666; --border:#ccc; --bg:#fff; --accent:#1a5fb4; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:var(--bg); color:var(--fg);
+    font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .app { max-width: 960px; margin: 0 auto; padding: 20px; }
+  h1 { font-size:18px; font-weight:600; margin:0 0 4px 0; }
+  .sub { color:var(--muted); margin:0 0 16px 0; }
+  .tabs { display:flex; border-bottom:1px solid var(--border); margin-bottom:16px; }
+  .tab { padding:8px 16px; background:none; border:1px solid transparent; border-bottom:none;
+    cursor:pointer; font:inherit; color:var(--muted); }
+  .tab.active { color:var(--fg); border-color:var(--border); background:var(--bg);
+    position:relative; top:1px; }
+  .panel { display:none; } .panel.active { display:block; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Continued Fractions</h1>
+  <p class="sub">Exact expansions of famous constants, generalized fractions you build yourself, and the picture behind both.</p>
+  <div class="tabs">
+    <button class="tab active" data-panel="simple">Simple</button>
+    <button class="tab" data-panel="general">Generalized</button>
+    <button class="tab" data-panel="geometry">Geometry</button>
+  </div>
+  <div class="panel active" id="panel-simple"></div>
+  <div class="panel" id="panel-general"></div>
+  <div class="panel" id="panel-geometry"></div>
+</div>
+
+<script id="shared-code">
+const XTests = (() => {
+  const cases = [];
+  const test = (name, fn) => cases.push([name, fn]);
+  const eq = (a, b, msg) => {
+    if (String(a) !== String(b)) throw new Error(`${msg || 'eq'}: expected ${b}, got ${a}`);
+  };
+  const ok = (c, msg) => { if (!c) throw new Error(msg || 'assertion failed'); };
+  const run = () => {
+    for (const [name, fn] of cases) {
+      try { fn(); } catch (e) { throw new Error(`${name}: ${e.message}`); }
+    }
+    return cases.length;
+  };
+  return { test, eq, ok, run };
+})();
+
+const CF = (() => {
+  const bgcd = (a, b) => {
+    a = a < 0n ? -a : a; b = b < 0n ? -b : b;
+    while (b) { const t = a % b; a = b; b = t; }
+    return a;
+  };
+
+  const isqrt = (n) => {
+    if (n < 0n) throw new Error('isqrt of negative');
+    if (n < 2n) return n;
+    let x = n, y = (x + 1n) / 2n;
+    while (y < x) { x = y; y = (x + n / x) / 2n; }
+    return x;
+  };
+
+  const Rat = {
+    make(n, d) {
+      if (d === 0n) throw new Error('zero denominator');
+      if (d < 0n) { n = -n; d = -d; }
+      const g = bgcd(n, d) || 1n;
+      return { n: n / g, d: d / g };
+    },
+    fromInt(v) { return { n: BigInt(v), d: 1n }; },
+    fromDecimalString(s) {
+      const t = String(s).trim();
+      const neg = t.startsWith('-');
+      const body = neg ? t.slice(1) : t;
+      const [ip, fp = ''] = body.split('.');
+      const n = BigInt((ip || '0') + fp);
+      return Rat.make(neg ? -n : n, 10n ** BigInt(fp.length));
+    },
+    add(a, b) { return Rat.make(a.n * b.d + b.n * a.d, a.d * b.d); },
+    sub(a, b) { return Rat.make(a.n * b.d - b.n * a.d, a.d * b.d); },
+    mul(a, b) { return Rat.make(a.n * b.n, a.d * b.d); },
+    div(a, b) { if (b.n === 0n) throw new Error('division by zero'); return Rat.make(a.n * b.d, a.d * b.n); },
+    neg(a) { return { n: -a.n, d: a.d }; },
+    isZero(a) { return a.n === 0n; },
+    cmp(a, b) { const l = a.n * b.d, r = b.n * a.d; return l < r ? -1 : l > r ? 1 : 0; },
+    floor(a) {
+      let q = a.n / a.d;
+      if (a.n % a.d !== 0n && a.n < 0n) q -= 1n;
+      return q;
+    },
+    toDecimalString(a, digits) {
+      const neg = a.n < 0n;
+      const n = neg ? -a.n : a.n;
+      const ip = n / a.d;
+      let rem = n % a.d;
+      let out = (neg ? '-' : '') + ip.toString();
+      if (digits > 0) {
+        let frac = '';
+        for (let i = 0; i < digits; i++) {
+          rem *= 10n;
+          frac += (rem / a.d).toString();
+          rem %= a.d;
+        }
+        out += '.' + frac;
+      }
+      return out;
+    },
+    toNumber(a) { return Number(Rat.toDecimalString(a, 20)); },
+  };
+
+  return { bgcd, isqrt, Rat };
+})();
+
+XTests.test('Rat reduces and normalizes sign', () => {
+  const r = CF.Rat.make(6n, -4n);
+  XTests.eq(r.n, -3n); XTests.eq(r.d, 2n);
+  XTests.eq(CF.Rat.make(0n, 5n).d, 1n);
+});
+
+XTests.test('Rat arithmetic', () => {
+  const { Rat } = CF;
+  const a = Rat.make(1n, 3n), b = Rat.make(1n, 6n);
+  XTests.eq(Rat.toDecimalString(Rat.add(a, b), 4), '0.5000');
+  XTests.eq(Rat.toDecimalString(Rat.sub(a, b), 4), '0.1666');
+  XTests.eq(Rat.toDecimalString(Rat.mul(a, b), 6), '0.055555');
+  XTests.eq(Rat.toDecimalString(Rat.div(a, b), 4), '2.0000');
+  XTests.eq(Rat.cmp(a, b), 1); XTests.eq(Rat.cmp(b, a), -1); XTests.eq(Rat.cmp(a, a), 0);
+});
+
+XTests.test('Rat.floor floors, does not truncate', () => {
+  XTests.eq(CF.Rat.floor(CF.Rat.make(7n, 2n)), 3n);
+  XTests.eq(CF.Rat.floor(CF.Rat.make(-7n, 2n)), -4n);
+  XTests.eq(CF.Rat.floor(CF.Rat.make(-4n, 2n)), -2n);
+});
+
+XTests.test('Rat decimal round trip', () => {
+  const r = CF.Rat.fromDecimalString('3.14159265358979');
+  XTests.eq(CF.Rat.toDecimalString(r, 14), '3.14159265358979');
+  XTests.eq(CF.Rat.toDecimalString(CF.Rat.neg(r), 5), '-3.14159');
+  XTests.eq(CF.Rat.toDecimalString(CF.Rat.fromDecimalString('-0.25'), 3), '-0.250');
+});
+
+XTests.test('isqrt floors integer square roots', () => {
+  XTests.eq(CF.isqrt(0n), 0n);
+  XTests.eq(CF.isqrt(15n), 3n);
+  XTests.eq(CF.isqrt(16n), 4n);
+  XTests.eq(CF.isqrt(10n ** 40n), 10n ** 20n);
+});
+</script>
+
+<script>
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('panel-' + t.dataset.panel).classList.add('active');
+  }));
+</script>
+</body>
+</html>
