@@ -1639,15 +1639,15 @@ XTests.test('nearest convergents win their races, alternating ones need not', ()
 
   const elide = (s, max = 18) => (s.length <= max ? s : s.slice(0, 8) + '\u2026' + s.slice(-8));
 
-  // a0 + 1/(a1 + 1/(a2 + ...)), or with minus signs for a minus expansion.
-  function towerHTML(terms, depth, minus) {
-    const op = minus ? ' \u2212 ' : ' + ';
+  // a0 + 1/(a1 + 1/(a2 + ...)), with each level's operator taken from that level's sign.
+  function towerHTML(terms, depth, signs) {
+    const opAt = (i) => (signs[i] < 0 ? ' \u2212 ' : ' + ');
     const build = (i) => {
       const a = String(terms[i]);
       if (i >= depth - 1) {
-        return i + 1 < terms.length ? `${a}${op}<span class="muted">\u2026</span>` : a;
+        return i + 1 < terms.length ? `${a}${opAt(i + 1)}<span class="muted">\u2026</span>` : a;
       }
-      return `${a}${op}<span class="frac"><span class="stack">` +
+      return `${a}${opAt(i + 1)}<span class="frac"><span class="stack">` +
              `<span class="num">1</span><span class="den">${build(i + 1)}</span>` +
              `</span></span>`;
     };
@@ -1661,20 +1661,16 @@ XTests.test('nearest convergents win their races, alternating ones need not', ()
     'max-terms': 'stopped at the display limit',
   };
 
-  const SIMPLE_MODES = [
-    { key: 'floor', label: 'regular\u2003a\u2080 + 1/(a\u2081 + \u2026)' },
-    { key: 'ceil',  label: 'minus\u2003b\u2080 \u2212 1/(b\u2081 \u2212 \u2026)' },
-  ];
-
   function renderSimple() {
     const s = state.simple;
     const k = CF.constant(s.key);
-    const minus = s.mode === 'ceil';
+    const mode = CF.SEMI_MODES.find(m => m.key === s.mode);
     const { rows, stopReason } = CF.convergentRowsFor(s.key, MAX_SIMPLE_TERMS, s.mode);
     const terms = rows.map(r => r.a);
 
-    el('simple-mode').innerHTML = SIMPLE_MODES
-      .map(m => `<button class="chip ${m.key === s.mode ? 'active' : ''}" data-mode="${m.key}">${m.label}</button>`)
+    el('simple-mode').innerHTML = CF.SEMI_MODES
+      .map(m => `<button class="chip ${m.key === s.mode ? 'active' : ''}" data-mode="${m.key}"` +
+                `${m.note ? ` title="${m.note}"` : ''}>${m.label}</button>`)
       .join('');
     el('simple-mode').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
       s.mode = b.dataset.mode; s.selected = null; renderSimple();
@@ -1690,12 +1686,18 @@ XTests.test('nearest convergents win their races, alternating ones need not', ()
     el('simple-depth').max = String(Math.min(30, terms.length));
     const depth = Math.min(s.depth, terms.length);
     el('simple-depth-label').textContent = `showing ${depth} of ${terms.length} terms`;
-    el('simple-tower').innerHTML = `${k.label} = ` + towerHTML(terms, depth, minus);
-    const open = minus ? '\u27e6' : '[', close = minus ? '\u27e7' : ']';
+    const signs = rows.map(r => r.sign);
+    el('simple-tower').innerHTML = `${k.label} = ` + towerHTML(terms, depth, signs);
+    // A leading minus on a term marks the level whose numerator is -1, so the list stays
+    // readable in the mixed modes where a bracket convention alone cannot say which is which.
+    const allPlus = signs.slice(1, depth).every(v => v > 0);
+    const open = allPlus ? '[' : '\u27e6', close = allPlus ? ']' : '\u27e7';
     el('simple-terms').textContent =
-      `${open}${terms[0]}; ${terms.slice(1, depth).join(', ')}${depth < terms.length ? ', \u2026' : ''}${close}` +
-      (minus ? '   (double brackets mark a minus expansion)' : '');
-    el('simple-status').textContent = `${terms.length} terms \u2014 ${STOP_REASON[stopReason]}.`;
+      `${open}${terms[0]}; ` +
+      terms.slice(1, depth).map((t, i) => (signs[i + 1] < 0 ? '\u2212' : '') + t).join(', ') +
+      `${depth < terms.length ? ', \u2026' : ''}${close}`;
+    el('simple-status').innerHTML = `${terms.length} terms \u2014 ${STOP_REASON[stopReason]}.` +
+      (mode.note ? ` <em>${mode.label} is ${mode.note}.</em>` : '');
 
     renderSimpleTable(rows);
     renderCascade();
@@ -1720,10 +1722,10 @@ XTests.test('nearest convergents win their races, alternating ones need not', ()
   function renderRace(rows) {
     const s = state.simple;
     const box = el('simple-race');
-    const minus = s.mode === 'ceil';
+    const above = CF.raceKind(s.mode) === 'above';
     if (s.selected === null) {
       box.innerHTML = '<p class="status">Click a row to race its convergent against every ' +
-        (minus ? 'fraction above the target ' : 'fraction ') +
+        (above ? 'fraction above the target ' : 'fraction ') +
         'with a denominator that small.</p>';
       return;
     }
@@ -1733,7 +1735,7 @@ XTests.test('nearest convergents win their races, alternating ones need not', ()
         `(the limit is ${CF.MAX_RACE_Q.toLocaleString()}). This page will not claim a search it did not run.</p>`;
       return;
     }
-    const best = minus
+    const best = above
       ? CF.bestApproximationsAbove(s.key, Number(row.q), 5)
       : CF.bestApproximations(s.key, Number(row.q), 5);
     const winner = best.length && `${best[0].p}/${best[0].q}` === `${row.p}/${row.q}`;
@@ -1743,12 +1745,12 @@ XTests.test('nearest convergents win their races, alternating ones need not', ()
              `<td class="mono">${b.p}/${b.q}</td><td class="mono">${b.errorStr}</td></tr>`;
     }).join('');
     box.innerHTML =
-      `<p class="status">Every fraction ${minus ? 'above ' + CF.constant(s.key).label + ' ' : ''}` +
+      `<p class="status">Every fraction ${above ? 'above ' + CF.constant(s.key).label + ' ' : ''}` +
       `with q ≤ ${row.q} checked. ` +
       (winner
-        ? `The convergent <strong>${row.p}/${row.q}</strong> is the closest` + (minus ? ' of those.' : ' of them all.')
+        ? `The convergent <strong>${row.p}/${row.q}</strong> is the closest` + (above ? ' of those.' : ' of them all.')
         : `The convergent ${row.p}/${row.q} did <strong>not</strong> win — worth investigating.`) +
-      (minus
+      (above
         ? ' Minus convergents are <em>one-sided</em> best approximations: they only ever approach ' +
           'from above, so an unrestricted race can be won by a closer fraction below — 4/1 ' +
           'loses outright to 3/1, for instance.'
@@ -1807,15 +1809,20 @@ XTests.test('nearest convergents win their races, alternating ones need not', ()
       ctx.fillText(CF.sci(r.width, 3), 34, y + 3);
     });
 
-    const minus = s.mode === 'ceil';
-    el('simple-cascade-caption').textContent = minus
-      ? 'Each row zooms in further than the last. Every convergent sits on the same side — above ' +
-        `${CF.constant(s.key).label} — and marches down onto it without ever crossing. ` +
-        'The bar runs from the target to the newest convergent; the number on the left is its width.'
-      : 'Each row zooms in further than the last. The two convergents land on opposite sides of ' +
-        `${CF.constant(s.key).label} and trap it between them, and every level tightens the trap ` +
-        'inside the previous one. Blue is below the target, orange above; the number on the left ' +
-        'is the bracket width.';
+    const bracketing = rows.filter(r => r.brackets).length;
+    const target = CF.constant(s.key).label;
+    el('simple-cascade-caption').textContent =
+      'Each row zooms in further than the last. ' +
+      (bracketing === rows.length
+        ? `The two convergents land on opposite sides of ${target} and trap it between them, ` +
+          'and every level tightens the trap inside the previous one.'
+        : bracketing === 0
+        ? `Every convergent sits on the same side of ${target} and marches onto it without ` +
+          'ever crossing. Each bar runs from the target to the newest convergent.'
+        : `${bracketing} of these ${rows.length} rows trap ${target} between two convergents; ` +
+          'in the rest both convergents land on the same side, and the bar runs from the ' +
+          'target to the newest one.') +
+      ' Blue is below the target, orange above; the number on the left is the interval width.';
   }
 
   el('simple-depth').addEventListener('input', (e) => {
