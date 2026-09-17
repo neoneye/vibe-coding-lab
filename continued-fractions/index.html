@@ -3435,8 +3435,42 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
 </script>
 
 <script>
+  // ---------- settings persist in localStorage ----------
+  // Every tab's state object is merged with what was saved last time, key by key, only
+  // where the saved value has the same shape as the default - so a stale or hand-edited
+  // entry cannot break a render. Rationals travel as {n, d} strings.
+  const STORE_KEY = 'continued-fractions:settings:v1';
+  const loadSaved = () => {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      return raw ? JSON.parse(raw, (k, v) => (v && typeof v === 'object' && '__big' in v ? BigInt(v.__big) : v)) : {};
+    } catch (e) { return {}; }
+  };
+  const SAVED = loadSaved();
+  const isRat = (v) => v && typeof v === 'object' && typeof v.n === 'bigint' && typeof v.d === 'bigint' && v.d > 0n;
+  const withSaved = (name, defaults) => {
+    const saved = SAVED[name];
+    if (!saved || typeof saved !== 'object') return defaults;
+    for (const k of Object.keys(defaults)) {
+      if (!(k in saved)) continue;
+      const d = defaults[k], v = saved[k];
+      if (isRat(d)) { if (isRat(v)) defaults[k] = CF.Rat.make(v.n, v.d); }
+      else if (d === null) { if (v === null || typeof v === 'number' || typeof v === 'string') defaults[k] = v; }
+      else if (typeof d === typeof v && typeof v !== 'object') defaults[k] = v;
+    }
+    return defaults;
+  };
+  const saveSettings = () => {
+    try {
+      const snapshot = { ...state, tab: document.querySelector('.tab.active')?.dataset.panel };
+      localStorage.setItem(STORE_KEY, JSON.stringify(snapshot, (k, v) => (typeof v === 'bigint' ? { __big: String(v) } : v)));
+    } catch (e) { /* private mode or quota: settings simply do not persist */ }
+  };
+  // Handlers on the controls update state synchronously; these run afterwards.
+  for (const ev of ['input', 'change', 'click']) document.addEventListener(ev, saveSettings);
+
   const state = {
-    simple: { key: 'pi', depth: 6, selected: null, mode: 'floor' },
+    simple: withSaved('simple', { key: 'pi', depth: 6, selected: null, mode: 'floor' }),
   };
   const el = (id) => document.getElementById(id);
   const MAX_SIMPLE_TERMS = 60;   // high enough that the precision cutoff, not this cap, is what stops pi
@@ -3489,6 +3523,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
 
     el('simple-depth').max = String(Math.min(30, terms.length));
     const depth = Math.min(s.depth, terms.length);
+    el('simple-depth').value = String(depth);
     el('simple-depth-label').textContent = `showing ${depth} of ${terms.length} terms`;
     const signs = rows.map(r => r.sign);
     el('simple-tower').innerHTML = `${k.label} = ` + towerHTML(terms, depth, signs);
@@ -3646,7 +3681,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderSimple();
 
   // ---------- Generalized tab ----------
-  state.general = { b0: 2, aKey: 'n1', bKey: 'n1', k: 2, negate: false, terms: 12 };
+  state.general = withSaved('general', { b0: 2, aKey: 'n1', bKey: 'n1', k: 2, negate: false, terms: 12 });
 
   function genSeqs() {
     const g = state.general;
@@ -3699,6 +3734,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     const showOf = (v, d) => (v.re !== undefined) ? CF.cStr(v, d) : CF.Rat.toDecimalString(v, d);
 
     el('gen-terms').max = String(cap);
+    el('gen-terms').value = String(Math.min(g.terms, cap));
     el('gen-terms-label').textContent = `${values.length} levels (cap ${cap}` +
       `${cap === CF.MAX_GEN_TERMS_IRRATIONAL ? ', lowered because a sequence is irrational' : ''})`;
     el('gen-tower').innerHTML = genTowerHTML(g, seqs, Math.min(4, Math.max(1, values.length)));
@@ -3782,7 +3818,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderGeneral();
 
   // ---------- Geometry tab ----------
-  state.geometry = { key: 'pi', depth: 4, zoom: 0 };
+  state.geometry = withSaved('geometry', { key: 'pi', depth: 4, zoom: 0 });
 
   const GEN_COLORS = ['#1a5fb4', '#c64600', '#2d7d46', '#7a4fbf', '#b5830c',
                       '#0b6e7a', '#a0355f', '#4a5568', '#8b5a2b', '#3b7d3b',
@@ -3801,6 +3837,8 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     const d = CF.dissect(e.terms.slice(0, g.depth), 400);
     const zoom = Math.min(g.zoom, Math.max(0, d.generations.length - 1));
     el('geo-zoom').max = String(Math.max(0, d.generations.length - 1));
+    el('geo-zoom').value = String(zoom);
+    el('geo-depth').value = String(g.depth);
 
     const W = 900, H = 420, pad = 20;
     const ctx = fitCanvas(el('geo-canvas'), W, H);
@@ -3860,10 +3898,11 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderGeometry();
 
   // ---------- Euler product tab ----------
-  state.euler = { s: 2, N: 30 };
+  state.euler = withSaved('euler', { s: 2, N: 30 });
   const EULER_GRID_LIMIT = 240;
 
   function renderEuler() {
+    el('euler-n').value = String(state.euler.N);
     const e = state.euler;
     el('euler-s').innerHTML = CF.ZETA_S
       .map(s => `<button class="chip ${s === e.s ? 'active' : ''}" data-s="${s}">s = ${s}</button>`)
@@ -3970,7 +4009,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderEuler();
 
   // ---------- Unit fractions tab ----------
-  state.unit = { key: 'pi' };
+  state.unit = withSaved('unit', { key: 'pi' });
   const UF_MAX_TERMS = 12;
 
   function renderUnit() {
@@ -4038,7 +4077,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderUnit();
 
   // ---------- Complex tab ----------
-  state.complex = { key: 'pi_e_i', nudge: 0 };   // nudge 0 = exact, else eps = 1e-(46-nudge)
+  state.complex = withSaved('complex', { key: 'pi_e_i', nudge: 0 });   // nudge 0 = exact, else eps = 1e-(46-nudge)
   const CX_MAX_TERMS = 10;
 
   function renderComplex() {
@@ -4215,7 +4254,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderComplex();
 
   // ---------- Mobius tab ----------
-  state.mobius = { key: 'pi' };
+  state.mobius = withSaved('mobius', { key: 'pi' });
   const MB_LEVELS = 8;
 
   function renderMobius() {
@@ -4301,7 +4340,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderMobius();
 
   // ---------- Bracket tab ----------
-  state.bracket = { key: 'pi', depth: 3, t: CF.Rat.make(1n, 2n) };
+  state.bracket = withSaved('bracket', { key: 'pi', depth: 3, t: CF.Rat.make(1n, 2n) });
   const BR_LEVELS = 14;
 
   el('br-depth').addEventListener('input', (e) => {
@@ -4525,7 +4564,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderBracket();
 
   // ---------- Balanced-pair tab ----------
-  state.bounds = { key: 'pi', mode: 'independent' };
+  state.bounds = withSaved('bounds', { key: 'pi', mode: 'independent' });
   const BD_LEVELS = 8;
 
   function renderBounds() {
@@ -4670,7 +4709,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderBounds();
 
   // ---------- Consecutive-pair tab ----------
-  state.midpoint = { key: 'pi', t: CF.Rat.make(1n, 2n), searchLevel: null };
+  state.midpoint = withSaved('midpoint', { key: 'pi', t: CF.Rat.make(1n, 2n), searchLevel: null });
   const MP_LEVELS = 12;
 
   el('mp-weight').addEventListener('input', () => {
@@ -5062,6 +5101,10 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     t.classList.add('active');
     document.getElementById('panel-' + t.dataset.panel).classList.add('active');
   }));
+  if (typeof SAVED.tab === 'string') {
+    const t = document.querySelector(`.tab[data-panel="${SAVED.tab}"]`);
+    if (t) t.click();
+  }
 </script>
 </body>
 </html>
