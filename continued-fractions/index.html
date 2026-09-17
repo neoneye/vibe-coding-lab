@@ -317,37 +317,7 @@ const CF = (() => {
 
   // ---- term extraction ----
 
-  // Exact Euclidean expansion of a rational; always terminates.
-  const termsExact = (r, maxTerms) => {
-    const terms = [];
-    let x = r;
-    for (let i = 0; i < maxTerms; i++) {
-      const a = Rat.floor(x);
-      terms.push(a);
-      const frac = Rat.sub(x, Rat.fromInt(a));
-      if (Rat.isZero(frac)) return { terms, stopReason: 'exact' };
-      x = Rat.div(Rat.fromInt(1), frac);
-    }
-    return { terms, stopReason: 'max-terms' };
-  };
 
-  // Gauss map run on both endpoints at once. A term is emitted only while both endpoints
-  // agree on it, so the expansion stops exactly where the stored precision runs out.
-  const termsFromInterval = (lo, hi, maxTerms) => {
-    const terms = [];
-    let a = lo, b = hi;
-    for (let i = 0; i < maxTerms; i++) {
-      const fa = Rat.floor(a), fb = Rat.floor(b);
-      if (fa !== fb) return { terms, stopReason: 'precision-exhausted' };
-      terms.push(fa);
-      const ra = Rat.sub(a, Rat.fromInt(fa)), rb = Rat.sub(b, Rat.fromInt(fb));
-      if (Rat.isZero(ra) || Rat.isZero(rb)) return { terms, stopReason: 'exact' };
-      // x -> 1/(x - a) is decreasing, so the endpoints swap.
-      a = Rat.div(Rat.fromInt(1), rb);
-      b = Rat.div(Rat.fromInt(1), ra);
-    }
-    return { terms, stopReason: 'max-terms' };
-  };
 
   // Terms of (P + sqrt(D)) / Q, D not a perfect square. Exact integer arithmetic, so this
   // runs as far as asked rather than stopping at the enclosure's precision.
@@ -373,16 +343,6 @@ const CF = (() => {
     return { terms, stopReason: periodLength ? 'periodic' : 'max-terms', periodStart, periodLength };
   };
 
-  const expand = (key, maxTerms) => {
-    const k = constant(key);
-    if (k.exact) return { ...termsExact(k.exact, maxTerms), source: 'exact' };
-    if (k.quad) {
-      const r = quadraticTerms(k.quad.P, k.quad.Q, k.quad.D, maxTerms);
-      return { terms: r.terms, stopReason: r.stopReason === 'periodic' ? 'periodic' : 'max-terms',
-               source: 'quadratic', periodStart: r.periodStart, periodLength: r.periodLength };
-    }
-    return { ...termsFromInterval(k.lo, k.hi, maxTerms), source: 'interval' };
-  };
 
   // ---- convergents ----
 
@@ -477,6 +437,24 @@ const CF = (() => {
     return out;
   };
 
+  const expandMode = (key, mode, maxTerms) => {
+    const k = constant(key);
+    if (k.exact) {
+      const r = semiregularTerms(k.exact, k.exact, mode, maxTerms);
+      return { ...r, source: 'exact' };
+    }
+    // Only the floor mode has an exact periodic generator, so only it can run past the
+    // enclosure's precision. The other three report what 60 digits determine.
+    if (mode === 'floor' && k.quad) {
+      const r = quadraticTerms(k.quad.P, k.quad.Q, k.quad.D, maxTerms);
+      return { terms: r.terms, signs: r.terms.slice(1).map(() => 1),
+               stopReason: r.stopReason === 'periodic' ? 'periodic' : 'max-terms',
+               source: 'quadratic' };
+    }
+    const r = semiregularTerms(k.lo, k.hi, mode, maxTerms);
+    return { ...r, source: 'interval' };
+  };
+
   // ---- telescoping bracket cascade ----
 
   const cascadeRows = (key, mode, maxRows) => {
@@ -489,7 +467,7 @@ const CF = (() => {
 
     for (let n = 1; n < vals.length && out.length < maxRows; n++) {
       let lo, hi, loLabel, hiLabel;
-      if (mode === 'minus') {
+      if (mode === 'ceil') {
         // Both convergents sit above the target, so the informative interval runs
         // from the target up to the newest convergent.
         lo = x; hi = vals[n]; loLabel = 'x'; hiLabel = labels[n];
@@ -543,56 +521,9 @@ const CF = (() => {
     return Rat.cmp(Rat.fromInt(f), a) === 0 ? f : f + 1n;
   };
 
-  const minusTermsExact = (r, maxTerms) => {
-    const terms = [];
-    let x = r;
-    for (let i = 0; i < maxTerms; i++) {
-      const b = ratCeil(x);
-      terms.push(b);
-      const d = Rat.sub(Rat.fromInt(b), x);
-      if (Rat.isZero(d)) return { terms, stopReason: 'exact' };
-      x = Rat.div(Rat.fromInt(1), d);
-    }
-    return { terms, stopReason: 'max-terms' };
-  };
 
-  const minusTermsFromInterval = (lo, hi, maxTerms) => {
-    const terms = [];
-    let a = lo, b = hi;
-    for (let i = 0; i < maxTerms; i++) {
-      const ca = ratCeil(a), cb = ratCeil(b);
-      if (ca !== cb) return { terms, stopReason: 'precision-exhausted' };
-      terms.push(ca);
-      const da = Rat.sub(Rat.fromInt(ca), a), db = Rat.sub(Rat.fromInt(cb), b);
-      if (Rat.isZero(da) || Rat.isZero(db)) return { terms, stopReason: 'exact' };
-      // x -> 1/(b - x) is INCREASING, so the endpoints keep their order (no swap).
-      a = Rat.div(Rat.fromInt(1), da);
-      b = Rat.div(Rat.fromInt(1), db);
-    }
-    return { terms, stopReason: 'max-terms' };
-  };
 
-  // p_n = b_n p_{n-1} - p_{n-2}. The q seed is -1, not +1: the regular seed makes
-  // every denominator negative.
-  const minusConvergents = (terms) => {
-    let pm1 = 1n, pm2 = 0n, qm1 = 0n, qm2 = -1n;
-    const out = [];
-    for (const b of terms) {
-      const p = b * pm1 - pm2, q = b * qm1 - qm2;
-      out.push({ p, q });
-      pm2 = pm1; pm1 = p; qm2 = qm1; qm1 = q;
-    }
-    return out;
-  };
 
-  // Minus mode uses the interval path for every irrational, quadratic ones included:
-  // their minus expansions are eventually periodic too, but a second periodic generator
-  // earns little, so they simply report what the enclosure determines.
-  const minusExpand = (key, maxTerms) => {
-    const k = constant(key);
-    if (k.exact) return { ...minusTermsExact(k.exact, maxTerms), source: 'exact' };
-    return { ...minusTermsFromInterval(k.lo, k.hi, maxTerms), source: 'interval' };
-  };
 
   // ---- Dirichlet series and Euler products ----
 
@@ -896,14 +827,14 @@ const CF = (() => {
   const convergentRowsFor = (key, maxTerms, mode) => {
     const k = constant(key);
     const x = k.exact || k.lo;
-    const e = mode === 'minus' ? minusExpand(key, maxTerms) : expand(key, maxTerms);
-    const cs = mode === 'minus' ? minusConvergents(e.terms) : convergents(e.terms);
+    const e = expandMode(key, mode, maxTerms);
+    const cs = semiregularConvergents(e.terms, e.signs);
     const rows = cs.map((c, i) => {
       const val = Rat.make(c.p, c.q);
       const error = Rat.sub(x, val);
       const abs = error.n < 0n ? Rat.neg(error) : error;
       return {
-        n: i, a: e.terms[i], p: c.p, q: c.q,
+        n: i, a: e.terms[i], sign: i === 0 ? 1 : e.signs[i - 1], p: c.p, q: c.q,
         decimal: Rat.toDecimalString(val, 20),
         error, errorStr: sci(error, 5),
         errQ2: Rat.toDecimalString(Rat.mul(abs, Rat.fromInt(c.q * c.q)), 6),
@@ -912,7 +843,7 @@ const CF = (() => {
     return { rows, stopReason: e.stopReason, source: e.source };
   };
 
-  const convergentRows = (key, maxTerms) => convergentRowsFor(key, maxTerms, 'plus');
+  const convergentRows = (key, maxTerms) => convergentRowsFor(key, maxTerms, 'floor');
 
   // The closest fractions strictly ABOVE the target. Minus convergents are one-sided
   // best approximations, so this is the race they are actually the answer to.
@@ -946,7 +877,7 @@ const CF = (() => {
 
   return { bgcd, isqrt, Rat, trunc, ratSqrt, ratCbrt, ratExp1, ratLn2, ratArctanInv, ratPiMachin,
            CONSTANTS, constant, EPS,
-           termsExact, termsFromInterval, quadraticTerms, expand,
+           quadraticTerms, expandMode,
            convergents, sci, convergentRows, convergentRowsFor,
            MAX_RACE_Q, bestApproximations, bestApproximationsAbove,
            primes, SEQUENCES, seq, GEN_SEQ_DIGITS, MAX_GEN_TERMS_INT, MAX_GEN_TERMS_IRRATIONAL,
@@ -954,7 +885,7 @@ const CF = (() => {
            dissect,
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
-           ratCeil, minusTermsExact, minusTermsFromInterval, minusConvergents, minusExpand,
+           ratCeil,
            cascadeRows,
            SEMI_MODES, ratRound, pickInteger, semiregularTerms, semiregularConvergents };
 })();
@@ -1048,42 +979,42 @@ XTests.test('355/113 is stored exactly', () => {
 });
 
 XTests.test('rational expansion terminates', () => {
-  const r = CF.expand('r355_113', 40);
+  const r = CF.expandMode('r355_113', 'floor', 40);
   XTests.eq(r.terms.join(','), '3,7,16');
   XTests.eq(r.stopReason, 'exact');
 });
 
 XTests.test('quadratic irrationals are periodic', () => {
-  XTests.eq(CF.expand('sqrt2', 8).terms.join(','), '1,2,2,2,2,2,2,2');
-  XTests.eq(CF.expand('sqrt3', 8).terms.join(','), '1,1,2,1,2,1,2,1');
-  XTests.eq(CF.expand('sqrt5', 5).terms.join(','), '2,4,4,4,4');
-  XTests.eq(CF.expand('phi', 8).terms.join(','), '1,1,1,1,1,1,1,1');
-  XTests.eq(CF.expand('sqrt2', 200).terms.length, 200, 'periodic generator runs past the enclosure');
+  XTests.eq(CF.expandMode('sqrt2', 'floor', 8).terms.join(','), '1,2,2,2,2,2,2,2');
+  XTests.eq(CF.expandMode('sqrt3', 'floor', 8).terms.join(','), '1,1,2,1,2,1,2,1');
+  XTests.eq(CF.expandMode('sqrt5', 'floor', 5).terms.join(','), '2,4,4,4,4');
+  XTests.eq(CF.expandMode('phi', 'floor', 8).terms.join(','), '1,1,1,1,1,1,1,1');
+  XTests.eq(CF.expandMode('sqrt2', 'floor', 200).terms.length, 200, 'periodic generator runs past the enclosure');
 });
 
 XTests.test('pi terms match the known list', () => {
   const known = '3,7,15,1,292,1,1,1,2,1,3,1,14,2,1,1,2,2,2,2';
-  XTests.eq(CF.expand('pi', 20).terms.join(','), known);
+  XTests.eq(CF.expandMode('pi', 'floor', 20).terms.join(','), known);
 });
 
 XTests.test('e terms follow the 2,4,6 pattern', () => {
-  XTests.eq(CF.expand('e', 12).terms.join(','), '2,1,2,1,1,4,1,1,6,1,1,8');
+  XTests.eq(CF.expandMode('e', 'floor', 12).terms.join(','), '2,1,2,1,1,4,1,1,6,1,1,8');
 });
 
 XTests.test('gamma digits agree with OEIS A002852', () => {
-  XTests.eq(CF.expand('gamma', 20).terms.join(','),
+  XTests.eq(CF.expandMode('gamma', 'floor', 20).terms.join(','),
             '0,1,1,2,1,2,1,4,3,13,5,1,1,8,1,2,4,1,1,40');
 });
 
 XTests.test('cbrt2 and ln2 expand without error', () => {
-  XTests.eq(CF.expand('cbrt2', 10).terms.join(','), '1,3,1,5,1,1,4,1,1,8');
-  XTests.ok(CF.expand('ln2', 10).terms.length === 10);
+  XTests.eq(CF.expandMode('cbrt2', 'floor', 10).terms.join(','), '1,3,1,5,1,1,4,1,1,8');
+  XTests.ok(CF.expandMode('ln2', 'floor', 10).terms.length === 10);
 });
 
 XTests.test('a low-precision enclosure stops honestly', () => {
   const lo = CF.Rat.fromDecimalString('3.14159');
   const hi = CF.Rat.add(lo, CF.Rat.make(1n, 100000n));
-  const r = CF.termsFromInterval(lo, hi, 50);
+  const r = CF.semiregularTerms(lo, hi, 'floor', 50);
   XTests.eq(r.stopReason, 'precision-exhausted');
   // Five digits of pi pin down only [3; 7]: the next complete quotient straddles
   // 15.997..16.09, so its floor is genuinely unknown and no third term is emitted.
@@ -1092,18 +1023,18 @@ XTests.test('a low-precision enclosure stops honestly', () => {
 
 XTests.test('interval expansion of pi runs deep then stops honestly', () => {
   const k = CF.constant('pi');
-  const r = CF.termsFromInterval(k.lo, k.hi, 200);
+  const r = CF.semiregularTerms(k.lo, k.hi, 'floor', 200);
   XTests.eq(r.stopReason, 'precision-exhausted');
   XTests.ok(r.terms.length >= 30, `expected 30+ certain terms, got ${r.terms.length}`);
 });
 
 XTests.test('convergents of pi include 22/7 and 355/113', () => {
-  const c = CF.convergents(CF.expand('pi', 4).terms);
+  const c = CF.convergents(CF.expandMode('pi', 'floor', 4).terms);
   XTests.eq(c.map(x => `${x.p}/${x.q}`).join(' '), '3/1 22/7 333/106 355/113');
 });
 
 XTests.test('convergents of phi are Fibonacci ratios', () => {
-  const c = CF.convergents(CF.expand('phi', 7).terms);
+  const c = CF.convergents(CF.expandMode('phi', 'floor', 7).terms);
   XTests.eq(c.map(x => `${x.p}/${x.q}`).join(' '), '1/1 2/1 3/2 5/3 8/5 13/8 21/13');
 });
 
@@ -1168,7 +1099,7 @@ XTests.test('sieve produces primes', () => {
 });
 
 XTests.test('generalized recurrence reproduces a simple continued fraction', () => {
-  const terms = CF.expand('pi', 4).terms;
+  const terms = CF.expandMode('pi', 'floor', 4).terms;
   const aSeq = { at: () => CF.Rat.fromInt(1), irrational: false };
   const bSeq = { at: (n) => CF.Rat.fromInt(terms[n]), irrational: false };
   const { values } = CF.genConvergents({ b0: CF.Rat.fromInt(terms[0]), aSeq, bSeq, negateA: false, terms: 3 });
@@ -1235,13 +1166,13 @@ XTests.test('the owner ideas produce finite values', () => {
 });
 
 XTests.test('dissection square counts equal the continued fraction terms', () => {
-  const terms = CF.expand('pi', 4).terms;         // 3, 7, 15, 1
+  const terms = CF.expandMode('pi', 'floor', 4).terms;         // 3, 7, 15, 1
   const d = CF.dissect(terms, 1000);
   XTests.eq(d.generations.map(g => g.count).join(','), '3,7,15,1');
 });
 
 XTests.test('dissection of a rational terminates on an exact square', () => {
-  const terms = CF.expand('r355_113', 10).terms;  // 3, 7, 16
+  const terms = CF.expandMode('r355_113', 'floor', 10).terms;  // 3, 7, 16
   const d = CF.dissect(terms, 1000);
   // The final generation consumes its rectangle exactly: nothing is left over.
   const last = d.generations[d.generations.length - 1];
@@ -1253,7 +1184,7 @@ XTests.test('dissection of a rational terminates on an exact square', () => {
 XTests.test('the remainder after each generation is the reciprocal complete quotient', () => {
   // dissect rebuilds x from the terms it is given, so use enough of them that the
   // rebuilt ratio agrees with sqrt2 to the six digits compared below.
-  const terms = CF.expand('sqrt2', 12).terms;
+  const terms = CF.expandMode('sqrt2', 'floor', 12).terms;
   const d = CF.dissect(terms, 1000);
   const g = d.generations[1];   // the rectangle left over after generation 0
   const ratio = CF.Rat.div(g.rect.w, g.rect.h);
@@ -1262,14 +1193,14 @@ XTests.test('the remainder after each generation is the reciprocal complete quot
 });
 
 XTests.test('dissection respects the square budget', () => {
-  const terms = CF.expand('phi', 40).terms;       // forty 1s
+  const terms = CF.expandMode('phi', 'floor', 40).terms;       // forty 1s
   const d = CF.dissect(terms, 10);
   XTests.ok(d.truncated, 'expected truncation');
   XTests.eq(d.generations.reduce((s, g) => s + g.count, 0), 10);
 });
 
 XTests.test('every square lies inside the starting rectangle', () => {
-  const terms = CF.expand('pi', 6).terms;
+  const terms = CF.expandMode('pi', 'floor', 6).terms;
   const d = CF.dissect(terms, 200);
   const x = CF.Rat.div(CF.Rat.fromInt(355), CF.Rat.fromInt(113));
   for (const g of d.generations) for (const sq of g.squares) {
@@ -1419,61 +1350,26 @@ XTests.test('ratCeil is the counterpart of floor', () => {
   XTests.eq(CF.ratCeil(CF.Rat.fromInt(0)), 0n);
 });
 
-XTests.test('minus expansion of pi matches the known terms', () => {
-  const r = CF.minusExpand('pi', 10);
-  XTests.eq(r.terms.slice(0, 10).join(','), '4,2,2,2,2,2,2,17,294,3');
-});
-
-XTests.test('minus convergents of pi need the q seed of -1', () => {
-  const r = CF.minusExpand('pi', 9);
-  const c = CF.minusConvergents(r.terms);
-  XTests.eq(c.map(x => `${x.p}/${x.q}`).join(' '),
-            '4/1 7/2 10/3 13/4 16/5 19/6 22/7 355/113 104348/33215');
-  for (const x of c) XTests.ok(x.q > 0n, `denominator ${x.q} was not positive`);
-});
-
 XTests.test('minus convergents never fall below the target', () => {
   for (const key of ['pi', 'e', 'sqrt2', 'sqrt3', 'phi', 'ln2', 'gamma', 'cbrt2']) {
     const k = CF.constant(key);
     const x = k.exact || k.lo;
-    const r = CF.minusExpand(key, 14);
-    for (const c of CF.minusConvergents(r.terms)) {
+    const r = CF.expandMode(key, 'ceil', 14);
+    for (const c of CF.semiregularConvergents(r.terms, r.signs)) {
       XTests.ok(CF.Rat.cmp(CF.Rat.make(c.p, c.q), x) >= 0,
                 `${key}: convergent ${c.p}/${c.q} fell below the target`);
     }
   }
 });
 
-XTests.test('minus expansion of a rational terminates on it', () => {
-  const r = CF.minusExpand('r355_113', 40);
-  XTests.eq(r.stopReason, 'exact');
-  const c = CF.minusConvergents(r.terms);
-  const last = c[c.length - 1];
-  XTests.eq(`${last.p}/${last.q}`, '355/113');
-});
-
-XTests.test('minus expansion stops honestly when precision runs out', () => {
-  const lo = CF.Rat.fromDecimalString('3.14159');
-  const hi = CF.Rat.add(lo, CF.Rat.make(1n, 100000n));
-  const r = CF.minusTermsFromInterval(lo, hi, 50);
-  XTests.eq(r.stopReason, 'precision-exhausted');
-  XTests.eq(r.terms.slice(0, 3).join(','), '4,2,2');
-});
-
-XTests.test('quadratic irrationals get minus terms from the interval path', () => {
-  const r = CF.minusExpand('sqrt2', 8);
-  XTests.eq(r.source, 'interval');
-  XTests.eq(r.terms.join(','), '2,2,4,2,4,2,4,2');
-});
-
 XTests.test('convergentRowsFor reproduces the regular rows', () => {
   const a = CF.convergentRows('pi', 6).rows.map(r => `${r.p}/${r.q}`).join(' ');
-  const b = CF.convergentRowsFor('pi', 6, 'plus').rows.map(r => `${r.p}/${r.q}`).join(' ');
+  const b = CF.convergentRowsFor('pi', 6, 'floor').rows.map(r => `${r.p}/${r.q}`).join(' ');
   XTests.eq(a, b);
 });
 
 XTests.test('convergentRowsFor minus rows carry one-sided errors', () => {
-  const { rows } = CF.convergentRowsFor('pi', 8, 'minus');
+  const { rows } = CF.convergentRowsFor('pi', 8, 'ceil');
   XTests.eq(rows.map(r => `${r.p}/${r.q}`).join(' '),
             '4/1 7/2 10/3 13/4 16/5 19/6 22/7 355/113');
   for (const r of rows) XTests.ok(r.error.n <= 0n, `row ${r.n} had a positive error`);
@@ -1489,7 +1385,7 @@ XTests.test('bestApproximationsAbove only returns fractions above the target', (
 });
 
 XTests.test('every minus convergent of pi wins its own from-above race', () => {
-  const { rows } = CF.convergentRowsFor('pi', 10, 'minus');
+  const { rows } = CF.convergentRowsFor('pi', 10, 'ceil');
   for (const row of rows) {
     if (row.q > BigInt(CF.MAX_RACE_Q) || row.q < 1n) continue;
     const best = CF.bestApproximationsAbove('pi', Number(row.q), 1)[0];
@@ -1512,7 +1408,7 @@ XTests.test('the from-above race refuses denominators it cannot search', () => {
 });
 
 XTests.test('cascade rows bracket the target in regular mode', () => {
-  const rows = CF.cascadeRows('pi', 'plus', 8);
+  const rows = CF.cascadeRows('pi', 'floor', 8);
   const x = CF.constant('pi').lo;
   XTests.ok(rows.length >= 6, `expected several rows, got ${rows.length}`);
   for (const r of rows) {
@@ -1523,7 +1419,7 @@ XTests.test('cascade rows bracket the target in regular mode', () => {
 });
 
 XTests.test('cascade rows are strictly nested', () => {
-  for (const mode of ['plus', 'minus']) {
+  for (const mode of ['floor', 'ceil']) {
     const rows = CF.cascadeRows('pi', mode, 8);
     for (let i = 1; i < rows.length; i++) {
       const prev = rows[i - 1], cur = rows[i];
@@ -1536,7 +1432,7 @@ XTests.test('cascade rows are strictly nested', () => {
 });
 
 XTests.test('cascade rows in minus mode sit entirely above the target', () => {
-  const rows = CF.cascadeRows('pi', 'minus', 8);
+  const rows = CF.cascadeRows('pi', 'ceil', 8);
   const x = CF.constant('pi').lo;
   for (const r of rows) {
     XTests.ok(!r.brackets, `minus row ${r.n} claimed to bracket the target`);
@@ -1546,7 +1442,7 @@ XTests.test('cascade rows in minus mode sit entirely above the target', () => {
 });
 
 XTests.test('cascade positions stay inside the drawable range', () => {
-  for (const mode of ['plus', 'minus']) {
+  for (const mode of ['floor', 'ceil']) {
     for (const key of ['pi', 'e', 'sqrt2', 'phi']) {
       for (const r of CF.cascadeRows(key, mode, 10)) {
         for (const pos of [r.loPos, r.hiPos, r.targetPos]) {
@@ -1559,7 +1455,7 @@ XTests.test('cascade positions stay inside the drawable range', () => {
 });
 
 XTests.test('cascade survives brackets narrower than a double can subtract', () => {
-  const rows = CF.cascadeRows('phi', 'plus', 14);
+  const rows = CF.cascadeRows('phi', 'floor', 14);
   const last = rows[rows.length - 1];
   XTests.ok(CF.Rat.cmp(last.width, CF.Rat.make(1n, 10n ** 5n)) < 0, 'expected a narrow last row');
   XTests.ok(Number.isFinite(last.targetPos) && last.targetPos > 0 && last.targetPos < 1,
@@ -1672,7 +1568,7 @@ XTests.test('alt is labelled as a construction', () => {
 
 <script>
   const state = {
-    simple: { key: 'pi', depth: 6, selected: null, mode: 'plus' },
+    simple: { key: 'pi', depth: 6, selected: null, mode: 'floor' },
   };
   const el = (id) => document.getElementById(id);
   const MAX_SIMPLE_TERMS = 60;   // high enough that the precision cutoff, not this cap, is what stops pi
@@ -1702,14 +1598,14 @@ XTests.test('alt is labelled as a construction', () => {
   };
 
   const SIMPLE_MODES = [
-    { key: 'plus',  label: 'regular\u2003a\u2080 + 1/(a\u2081 + \u2026)' },
-    { key: 'minus', label: 'minus\u2003b\u2080 \u2212 1/(b\u2081 \u2212 \u2026)' },
+    { key: 'floor', label: 'regular\u2003a\u2080 + 1/(a\u2081 + \u2026)' },
+    { key: 'ceil',  label: 'minus\u2003b\u2080 \u2212 1/(b\u2081 \u2212 \u2026)' },
   ];
 
   function renderSimple() {
     const s = state.simple;
     const k = CF.constant(s.key);
-    const minus = s.mode === 'minus';
+    const minus = s.mode === 'ceil';
     const { rows, stopReason } = CF.convergentRowsFor(s.key, MAX_SIMPLE_TERMS, s.mode);
     const terms = rows.map(r => r.a);
 
@@ -1760,7 +1656,7 @@ XTests.test('alt is labelled as a construction', () => {
   function renderRace(rows) {
     const s = state.simple;
     const box = el('simple-race');
-    const minus = s.mode === 'minus';
+    const minus = s.mode === 'ceil';
     if (s.selected === null) {
       box.innerHTML = '<p class="status">Click a row to race its convergent against every ' +
         (minus ? 'fraction above the target ' : 'fraction ') +
@@ -1847,7 +1743,7 @@ XTests.test('alt is labelled as a construction', () => {
       ctx.fillText(CF.sci(r.width, 3), 34, y + 3);
     });
 
-    const minus = s.mode === 'minus';
+    const minus = s.mode === 'ceil';
     el('simple-cascade-caption').textContent = minus
       ? 'Each row zooms in further than the last. Every convergent sits on the same side — above ' +
         `${CF.constant(s.key).label} — and marches down onto it without ever crossing. ` +
@@ -1999,7 +1895,7 @@ XTests.test('alt is labelled as a construction', () => {
       g.key = b.dataset.key; g.zoom = 0; el('geo-zoom').value = '0'; renderGeometry();
     }));
 
-    const e = CF.expand(g.key, 20);
+    const e = CF.expandMode(g.key, 'floor', 20);
     const d = CF.dissect(e.terms.slice(0, g.depth), 400);
     const zoom = Math.min(g.zoom, Math.max(0, d.generations.length - 1));
     el('geo-zoom').max = String(Math.max(0, d.generations.length - 1));
