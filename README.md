@@ -171,6 +171,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [riemann-stab](riemann-stab/) -- see highlights.
 - [text-diff](text-diff/) -- side-by-side and unified diff with a line-level Myers implementation.
 - [text-ngram](text-ngram/) -- n-gram frequency analysis of dropped text files with many tokenization modes.
+- [zilog-z80a](zilog-z80a/) -- the Z80A as the Amstrad CPC used it: all five opcode tables, the gate array's three screen modes and 300 Hz interrupt, and CRTC hardware scrolling. No Amstrad ROMs.
 
 ## License
 
