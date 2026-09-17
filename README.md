@@ -151,6 +151,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 
 ### Tools, explainers and the rest
 
+- [acorn-arm1](acorn-arm1/) -- the ARM1 as Acorn built it in 1985: the whole of ARMv1 in 25,000 transistors, with no multiply instruction, conditional execution on every instruction and a barrel shifter on the way into the ALU.
 - [camera-face-manipulator](camera-face-manipulator/) -- webcam face remixer that swaps, mirrors and time-lags eyes, nose and mouth using MediaPipe landmarks.
 - [cartoon-face](cartoon-face/) -- cartoon face studio with 60 expression presets and fine sliders, drawn as parameterised SVG.
 - [dag-lab](dag-lab/) -- a Werkkzeug-style DAG editor where nodes connect by adjacency on a grid instead of wires.
