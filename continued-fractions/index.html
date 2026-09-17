@@ -494,7 +494,7 @@ const CF = (() => {
   };
 
   const hurwitzTerms = (centre, delta, maxTerms) => {
-    const terms = [];
+    const terms = [], remSqs = [];
     const half = Rat.make(1n, 2n);
     const absR = (r) => (r.n < 0n ? Rat.neg(r) : r);
     let z = centre, d = delta;
@@ -506,20 +506,21 @@ const CF = (() => {
       if (!Rat.isZero(d)) {
         const dr = absR(Rat.sub(z.re, a.re)), di = absR(Rat.sub(z.im, a.im));
         if (Rat.cmp(Rat.add(dr, d), half) >= 0 || Rat.cmp(Rat.add(di, d), half) >= 0) {
-          return { terms, stopReason: 'precision-exhausted' };
+          return { terms, remSqs, stopReason: 'precision-exhausted' };
         }
       }
       terms.push(a);
       const r = cSub(z, a);
-      if (cIsZero(r)) return { terms, stopReason: 'exact' };
+      remSqs.push(cNormSq(r));      // |z - a|^2, the distance discarded by this rounding
+      if (cIsZero(r)) return { terms, remSqs, stopReason: 'exact' };
       if (!Rat.isZero(d)) {
         const L = ratSqrtLower(cNormSq(r), 40);          // L <= |r|
-        if (Rat.cmp(d, L) >= 0) return { terms, stopReason: 'precision-exhausted' };
+        if (Rat.cmp(d, L) >= 0) return { terms, remSqs, stopReason: 'precision-exhausted' };
         d = Rat.div(d, Rat.mul(L, Rat.sub(L, d)));       // |1/r - 1/r_hat| bound
       }
       z = cInv(r);
     }
-    return { terms, stopReason: 'max-terms' };
+    return { terms, remSqs, stopReason: 'max-terms' };
   };
 
   // A_k = a_k A_{k-1} + A_{k-2}; no sign choice - nearest-Gaussian rounding already
@@ -547,6 +548,7 @@ const CF = (() => {
         k: i, term: e.terms[i], A: c.A, B: c.B, value,
         valueStr: cStr(value, 12),
         errSq, errStr: sci(ratSqrtLower(errSq, 30), 4),
+        remStr: e.remSqs[i] === undefined ? '' : Rat.toDecimalString(ratSqrtLower(e.remSqs[i], 12), 6),
       };
     });
     return { rows, stopReason: e.stopReason };
@@ -734,9 +736,13 @@ const CF = (() => {
       const radius = Rat.div(diff.n < 0n ? Rat.neg(diff) : diff, two);
       if (Rat.isZero(radius)) break;
       const off = Rat.sub(x, centre);
+      const aoff = off.n < 0n ? Rat.neg(off) : off;
       const prev = disks.length ? disks[disks.length - 1] : null;
       disks.push({
         n, centre, radius,
+        offset: aoff, offsetStr: sci(aoff, 4),
+        offsetFrac: Rat.div(aoff, radius),
+        offsetFracStr: Rat.toDecimalString(Rat.div(aoff, radius), 4),
         radiusStr: sci(radius, 4),
         shrink: prev ? Rat.div(radius, prev.radius) : null,
         shrinkStr: prev ? sci(Rat.div(radius, prev.radius), 3) : '—',
@@ -1135,11 +1141,20 @@ const CF = (() => {
     const x = k.exact || k.lo;
     const e = expandMode(key, mode, maxTerms);
     const cs = semiregularConvergents(e.terms, e.signs);
+    // |x_k - a_k|, the distance from the complete quotient to the integer it rounded to -
+    // the part the algorithm discards. Derived from the convergents as
+    // |q_k e_k| / |q_{k-1} e_{k-1}| (with the k=0 denominator 1, since q_{-1}=0, p_{-1}=1),
+    // so it works whatever produced the terms, including the periodic generator.
+    let prevScaled = Rat.fromInt(1);
     const rows = cs.map((c, i) => {
       const val = Rat.make(c.p, c.q);
       const error = Rat.sub(x, val);
       const abs = error.n < 0n ? Rat.neg(error) : error;
+      const scaled = Rat.mul(Rat.fromInt(c.q), abs);
+      const rem = Rat.isZero(prevScaled) ? Rat.fromInt(0) : Rat.div(scaled, prevScaled);
+      prevScaled = scaled;
       return {
+        rem, remStr: Rat.toDecimalString(rem, 6),
         n: i, a: e.terms[i], sign: i === 0 ? 1 : e.signs[i - 1], p: c.p, q: c.q,
         decimal: Rat.toDecimalString(val, 20),
         error, errorStr: sci(error, 5),
@@ -2285,6 +2300,56 @@ XTests.test('a large nudge wakes the expansion almost immediately', () => {
   XTests.ok(w.actual !== null && w.actual <= 2, `expected an early wake, got ${w.actual}`);
 });
 
+XTests.test('the discarded distance is bounded by its rounding rule', () => {
+  const half = CF.Rat.make(1n, 2n), one = CF.Rat.fromInt(1);
+  for (const c of CF.CONSTANTS) {
+    for (const m of CF.SEMI_MODES) {
+      const { rows } = CF.convergentRowsFor(c.key, 10, m.key);
+      for (const r of rows.slice(0, -1)) {
+        XTests.ok(CF.Rat.cmp(r.rem, one) <= 0, `${c.key}/${m.key} n=${r.n} discarded ${r.remStr}`);
+        if (m.key === 'nearest') {
+          XTests.ok(CF.Rat.cmp(r.rem, half) <= 0,
+                    `${c.key}/nearest n=${r.n} discarded ${r.remStr}, over the half bound`);
+        }
+      }
+    }
+  }
+});
+
+XTests.test('a periodic expansion discards a constant distance', () => {
+  // sqrt2 in floor mode discards sqrt2 - 1; phi discards 1/phi; phi in nearest mode 2 - phi.
+  const check = (key, mode, expected) => {
+    const { rows } = CF.convergentRowsFor(key, 8, mode);
+    for (const r of rows.slice(0, 6)) {
+      XTests.eq(CF.Rat.toDecimalString(r.rem, 6), expected, `${key}/${mode} n=${r.n}`);
+    }
+  };
+  check('sqrt2', 'floor', '0.414213');     // sqrt2 - 1
+  check('phi', 'floor', '0.618033');       // 1/phi
+  check('phi', 'nearest', '0.381966');     // 2 - phi
+});
+
+XTests.test('the discarded distance predicts the next term', () => {
+  // In floor mode the next term is exactly floor(1 / discarded distance).
+  const { rows } = CF.convergentRowsFor('pi', 10, 'floor');
+  for (let i = 0; i + 1 < rows.length; i++) {
+    if (CF.Rat.isZero(rows[i].rem)) continue;
+    const inv = CF.Rat.div(CF.Rat.fromInt(1), rows[i].rem);
+    XTests.eq(CF.Rat.floor(inv), rows[i + 1].a, `level ${i + 1} not predicted by the remainder`);
+  }
+});
+
+XTests.test('Mobius offsets sit inside their disk', () => {
+  for (const c of CF.CONSTANTS) {
+    for (const d of CF.mobiusDisks(c.key, 8).disks) {
+      XTests.ok(CF.Rat.cmp(d.offset, d.radius) <= 0, `${c.key} level ${d.n} offset exceeded the radius`);
+      XTests.ok(CF.Rat.cmp(d.offsetFrac, CF.Rat.fromInt(1)) <= 0 &&
+                CF.Rat.cmp(d.offsetFrac, CF.Rat.fromInt(0)) >= 0,
+                `${c.key} level ${d.n} offset fraction ${d.offsetFracStr} out of range`);
+    }
+  }
+});
+
 XTests.test('real constants run through the complex algorithm too', () => {
   for (const c of CF.CONSTANTS) {
     const k = CF.complexConstant(c.key);
@@ -2397,12 +2462,14 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   }
 
   function renderSimpleTable(rows) {
-    const head = '<tr><th>n</th><th>a\u2099</th><th>p\u2099 / q\u2099</th><th>decimal</th>' +
-                 '<th>x \u2212 p\u2099/q\u2099</th><th>|error| \u00b7 q\u2099\u00b2</th></tr>';
+    const head = '<tr><th>n</th><th>aₙ</th><th>discarded |x − aₙ|</th>' +
+                 '<th>pₙ / qₙ</th><th>decimal</th>' +
+                 '<th>x − pₙ/qₙ</th><th>|error| · qₙ²</th></tr>';
     const body = rows.map(r => {
       const frac = `<span title="${r.p}/${r.q}">${elide(String(r.p))}/${elide(String(r.q))}</span>`;
       const sel = state.simple.selected === r.n ? ' selected' : '';
       return `<tr class="clickable${sel}" data-n="${r.n}"><td>${r.n}</td><td>${r.a}</td>` +
+             `<td class="mono">${r.remStr}</td>` +
              `<td class="mono">${frac}</td><td class="mono">${r.decimal.slice(0, 16)}</td>` +
              `<td class="mono">${r.errorStr}</td><td class="mono">${r.errQ2}</td></tr>`;
     }).join('');
@@ -2961,8 +3028,10 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       `⟨${rows.map(r => CF.cStr(r.term, 0)).join('; ')}${continues ? '; …' : ''}⟩`;
 
     el('cx-table').innerHTML =
-      '<tr><th>k</th><th>term</th><th>Aₖ / Bₖ</th><th>value</th><th>|z − Aₖ/Bₖ|</th></tr>' +
+      '<tr><th>k</th><th>term</th><th>discarded |z − aₖ|</th><th>Aₖ / Bₖ</th>' +
+        '<th>value</th><th>|z − Aₖ/Bₖ|</th></tr>' +
       rows.map(r => `<tr><td>${r.k}</td><td class="mono">${CF.cStr(r.term, 0)}</td>` +
+        `<td class="mono">${r.remStr}</td>` +
         `<td class="mono">${CF.cStr(r.A, 0)} / ${CF.cStr(r.B, 0)}</td>` +
         `<td class="mono">${r.valueStr}</td><td class="mono">${r.errStr}</td></tr>`).join('');
 
@@ -3109,12 +3178,13 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
 
     el('mb-table').innerHTML =
       '<tr><th>n</th><th>diameter ends</th><th>centre</th><th>radius</th>' +
-      '<th>shrink</th><th>holds target</th></tr>' +
+      '<th>shrink</th><th>target offset</th><th>of radius</th></tr>' +
       disks.map(d => `<tr><td>${d.n}</td>` +
         `<td class="mono">${d.loLabel} ↔ ${d.hiLabel}</td>` +
         `<td class="mono">${CF.Rat.toDecimalString(d.centre, 14)}</td>` +
         `<td class="mono">${d.radiusStr}</td><td class="mono">${d.shrinkStr}</td>` +
-        `<td>${d.containsTarget ? 'yes' : 'NO'}</td></tr>`).join('');
+        `<td class="mono">${d.offsetStr}</td>` +
+        `<td class="mono">${d.containsTarget ? d.offsetFracStr : 'OUTSIDE'}</td></tr>`).join('');
 
     drawMobius(disks);
   }
