@@ -260,6 +260,18 @@ const CF = (() => {
       return out;
     },
     toNumber(a) { return Number(Rat.toDecimalString(a, 20)); },
+    // log10 for plotting, valid at ANY magnitude. toNumber routes through a 20-decimal
+    // string and floors below 1e-20, which silently deleted the balanced sqrt2 midpoint
+    // error (3.05e-23) from the Bounds chart. This reads the exponent off the digit
+    // counts instead, so nothing underflows.
+    log10(a) {
+      if (a.n === 0n) return -Infinity;
+      const mag = (b) => {
+        const s = (b < 0n ? -b : b).toString();
+        return (s.length - 1) + Math.log10(Number(s.slice(0, 17)) / Math.pow(10, Math.min(16, s.length - 1)));
+      };
+      return mag(a.n) - mag(a.d);
+    },
   };
 
   // ---- series helpers, used to pin the transcribed digit strings in the tests ----
@@ -1381,6 +1393,35 @@ XTests.test('isqrt floors integer square roots', () => {
   XTests.eq(CF.isqrt(15n), 3n);
   XTests.eq(CF.isqrt(16n), 4n);
   XTests.eq(CF.isqrt(10n ** 40n), 10n ** 20n);
+});
+
+XTests.test('Rat.log10 survives magnitudes toNumber cannot reach', () => {
+  const R = CF.Rat;
+  // agrees with the double path where the double path works
+  for (const [n, d] of [[1n, 1n], [1n, 1000n], [355n, 113n], [7n, 3n], [999n, 1000n]]) {
+    const r = R.make(n, d);
+    XTests.ok(Math.abs(R.log10(r) - Math.log10(R.toNumber(r))) < 1e-9, `${n}/${d}`);
+  }
+  // and keeps working far below 1e-20, where toNumber floors to zero
+  for (const p of [21, 23, 40, 60, 200]) {
+    const r = R.make(1n, 10n ** BigInt(p));
+    XTests.eq(R.toNumber(r), 0, `toNumber should floor at 1e-${p}`);
+    XTests.ok(Math.abs(R.log10(r) + p) < 1e-9, `log10 wrong at 1e-${p}`);
+  }
+  XTests.eq(R.log10(R.fromInt(0)), -Infinity);
+  XTests.ok(Math.abs(R.log10(R.make(3054n, 10n ** 26n)) - (-22.5150)) < 1e-3, 'sqrt2 headline value');
+});
+
+XTests.test('every balanced sqrt2 midpoint error is plottable', () => {
+  // The bug: the level-7 error 3.05e-23 went through toNumber, became 0, and vanished from
+  // the chart - deleting exactly the result the tab exists to show.
+  for (const r of CF.boundRows('sqrt2', 8, 'balanced').rows) {
+    XTests.ok(Number.isFinite(CF.Rat.log10(r.eMid)),
+              `level ${r.k} midpoint error is not plottable`);
+  }
+  const last = CF.boundRows('sqrt2', 8, 'balanced').rows.slice(-1)[0];
+  XTests.eq(CF.Rat.toNumber(last.eMid), 0, 'toNumber still floors it - that is the point');
+  XTests.ok(CF.Rat.log10(last.eMid) < -22, 'log10 must still place it');
 });
 
 XTests.test('every constant carries at least 60 significant digits', () => {
@@ -3016,7 +3057,8 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     const ctx = fitCanvas(el('gen-plot'), W, H);
     ctx.clearRect(0, 0, W, H);
     const pts = rows.filter(r => r.absRat && !CF.Rat.isZero(r.absRat))
-      .map(r => ({ n: r.n, y: Math.log10(CF.Rat.toNumber(r.absRat)) }));
+      .map(r => ({ n: r.n, y: CF.Rat.log10(r.absRat) }))
+      .filter(p => Number.isFinite(p.y));
     ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1; ctx.strokeRect(pad, 10, W - pad - 10, H - pad - 10);
     ctx.fillStyle = '#666'; ctx.font = '11px sans-serif';
     ctx.fillText('log₁₀ |xₙ − xₙ₋₁|', pad + 6, 24);
@@ -3421,10 +3463,12 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     // the target sits at the centre, and the spiral becomes visible.
     const num = (r) => CF.Rat.toNumber(r);
     const tx = num(k.centre.re), ty = num(k.centre.im);
-    const pts = rows.map(r => {
-      const dx = num(r.value.re) - tx, dy = num(r.value.im) - ty;
-      return { dx, dy, mag: Math.hypot(dx, dy), k: r.k };
-    }).filter(p => p.mag > 0);
+    // Direction from doubles is fine; the MAGNITUDE comes from the exact errSq, since the
+    // double difference of two order-1 values cannot resolve an offset below about 1e-16.
+    const pts = rows.map(r => ({
+      dx: num(r.value.re) - tx, dy: num(r.value.im) - ty,
+      logMag: CF.Rat.log10(r.errSq) / 2, k: r.k,
+    })).filter(p => Number.isFinite(p.logMag) && (p.dx !== 0 || p.dy !== 0));
     const cx = W / 2, cy = H / 2, RMAX = Math.min(W, H) / 2 - pad;
     if (!pts.length) {
       ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
@@ -3432,10 +3476,10 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       el('cx-caption').textContent = '';
       return;
     }
-    const logs = pts.map(p => Math.log10(p.mag));
+    const logs = pts.map(p => p.logMag);
     const hi = Math.ceil(Math.max(...logs)), lo = Math.floor(Math.min(...logs));
     const span = Math.max(1, hi - lo);
-    const radius = (mag) => RMAX * (Math.log10(mag) - lo) / span;
+    const radius = (logMag) => RMAX * (logMag - lo) / span;
 
     // decade rings
     ctx.font = '9px sans-serif';
@@ -3449,7 +3493,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     }
 
     const P = (p) => {
-      const rr = radius(p.mag), ang = Math.atan2(p.dy, p.dx);
+      const rr = radius(p.logMag), ang = Math.atan2(p.dy, p.dx);
       return [cx + rr * Math.cos(ang), cy - rr * Math.sin(ang)];
     };
     ctx.strokeStyle = '#1a5fb4'; ctx.lineWidth = 1.2; ctx.beginPath();
@@ -3545,9 +3589,10 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
 
       // inner disk, positioned and scaled relative to the outer one
-      const scale = R / CF.Rat.toNumber(outer.radius);
-      const dx = CF.Rat.toNumber(CF.Rat.sub(inner.centre, outer.centre)) * scale;
-      const rIn = Math.max(1, CF.Rat.toNumber(inner.radius) * scale);
+      // Take the RATIOS exactly and convert once: outer.radius reaches 1e-11 and deeper,
+      // where dividing two separately-converted doubles loses the answer entirely.
+      const dx = CF.Rat.toNumber(CF.Rat.div(CF.Rat.sub(inner.centre, outer.centre), outer.radius)) * R;
+      const rIn = Math.max(1, CF.Rat.toNumber(CF.Rat.div(inner.radius, outer.radius)) * R);
       ctx.strokeStyle = '#c64600'; ctx.fillStyle = '#c6460022'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(cx + dx, cy, rIn, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
 
@@ -3555,7 +3600,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       ctx.fillText(`n=${outer.n} ⊃ n=${inner.n}`, cxp + 6, cyp + 13);
       ctx.fillStyle = '#666';
       ctx.fillText(`×${inner.shrinkStr}`, cxp + 6, cyp + panelH - 6);
-      if (CF.Rat.toNumber(inner.radius) * scale < 1) {
+      if (CF.Rat.toNumber(CF.Rat.div(inner.radius, outer.radius)) * R < 1) {
         ctx.fillStyle = '#c64600';
         ctx.fillText('drawn at 1px floor', cxp + 60, cyp + panelH - 6);
       }
@@ -3670,19 +3715,21 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       { name: 'A upper', color: '#c64600', get: (r) => r.eUpper },
       { name: 'C midpoint', color: '#2d7d46', get: (r) => r.eMid },
     ];
+    // Exact-rational log10: these errors reach 1e-23, far below what toNumber can carry.
     const logs = [];
     for (const s2 of series) for (const r of rows) {
-      const v = CF.Rat.toNumber(s2.get(r));
-      if (v > 0) logs.push(Math.log10(v));
+      const L = CF.Rat.log10(s2.get(r));
+      if (Number.isFinite(L)) logs.push(L);
     }
+    if (!logs.length) return;
     const hi = Math.max(...logs), lo = Math.min(...logs);
     const span = Math.max(1, hi - lo);
     const X = (k) => padL + k / Math.max(1, rows.length - 1) * (W - padL - padR);
-    const Y = (v) => (H - padB) - (Math.log10(v) - lo) / span * (H - padB - padT);
+    const Y = (L) => (H - padB) - (L - lo) / span * (H - padB - padT);
 
     ctx.strokeStyle = '#eee';
     for (let d = Math.floor(lo); d <= Math.ceil(hi); d++) {
-      const y = Y(Math.pow(10, d));
+      const y = Y(d);
       if (y < padT || y > H - padB) continue;
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
       ctx.fillStyle = '#bbb'; ctx.font = '9px sans-serif';
@@ -3692,16 +3739,16 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       ctx.strokeStyle = s2.color; ctx.lineWidth = 1.5; ctx.beginPath();
       let started = false;
       rows.forEach((r, k) => {
-        const v = CF.Rat.toNumber(s2.get(r));
-        if (!(v > 0)) return;
-        started ? ctx.lineTo(X(k), Y(v)) : ctx.moveTo(X(k), Y(v));
+        const L = CF.Rat.log10(s2.get(r));
+        if (!Number.isFinite(L)) return;
+        started ? ctx.lineTo(X(k), Y(L)) : ctx.moveTo(X(k), Y(L));
         started = true;
       });
       ctx.stroke();
       ctx.fillStyle = s2.color;
       rows.forEach((r, k) => {
-        const v = CF.Rat.toNumber(s2.get(r));
-        if (v > 0) ctx.fillRect(X(k) - 2, Y(v) - 2, 4, 4);
+        const L = CF.Rat.log10(s2.get(r));
+        if (Number.isFinite(L)) ctx.fillRect(X(k) - 2, Y(L) - 2, 4, 4);
       });
       ctx.font = '11px sans-serif';
       ctx.fillText(s2.name, W - padR + 6, padT + 14 + si * 15);
