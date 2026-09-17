@@ -76,6 +76,7 @@
     <button class="tab" data-panel="general">Generalized</button>
     <button class="tab" data-panel="geometry">Geometry</button>
     <button class="tab" data-panel="euler">Euler product</button>
+    <button class="tab" data-panel="unit">Unit fractions</button>
   </div>
   <div class="panel active" id="panel-simple">
     <div class="chips" id="simple-mode"></div>
@@ -134,6 +135,13 @@
     <h2 class="sectionhead">What each prime contributes</h2>
     <canvas id="euler-bars" width="900" height="220"></canvas>
     <p class="status" id="euler-bars-caption"></p>
+  </div>
+  <div class="panel" id="panel-unit">
+    <div class="chips" id="uf-chips"></div>
+    <div class="terms" id="uf-expansion"></div>
+    <p class="status" id="uf-status"></p>
+    <div class="tablewrap"><table id="uf-table"></table></div>
+    <p class="status" id="uf-compare"></p>
   </div>
 </div>
 
@@ -2279,6 +2287,74 @@ XTests.test('unitFractionRows reports digits and shrinking error', () => {
 
   el('euler-n').addEventListener('input', ev => { state.euler.N = Number(ev.target.value); renderEuler(); });
   renderEuler();
+
+  // ---------- Unit fractions tab ----------
+  state.unit = { key: 'pi' };
+  const UF_MAX_TERMS = 12;
+
+  function renderUnit() {
+    const s = state.unit;
+    el('uf-chips').innerHTML = CF.CONSTANTS
+      .map(c => `<button class="chip ${c.key === s.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
+      .join('');
+    el('uf-chips').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.key = b.dataset.key; renderUnit();
+    }));
+
+    const k = CF.constant(s.key);
+    const { whole, rows, stopReason } = CF.unitFractionRows(s.key, UF_MAX_TERMS);
+    const continues = stopReason !== 'exact';
+
+    el('uf-expansion').textContent = `${k.label} = ${whole}` +
+      rows.map(r => ` + 1/${r.den}`).join('') + (continues ? ' + …' : '');
+
+    el('uf-table').innerHTML =
+      '<tr><th>k</th><th>nₖ</th><th>digits</th><th>partial sum</th><th>error</th></tr>' +
+      rows.map(r => {
+        const d = String(r.den);
+        const shown = d.length <= 18 ? d : d.slice(0, 8) + '…' + d.slice(-8);
+        return `<tr><td>${r.k}</td><td class="mono" title="${d}">${shown}</td>` +
+               `<td>${r.digits}</td><td class="mono">${r.partialStr.slice(0, 18)}</td>` +
+               `<td class="mono">${r.errorStr}</td></tr>`;
+      }).join('');
+
+    el('uf-status').textContent =
+      `${rows.length} unit fractions — ` +
+      (stopReason === 'exact'
+        ? 'the value is rational, so the sum closes exactly and these are all there are.'
+        : stopReason === 'precision-exhausted'
+        ? 'everything the stored 60 digits determine. The remainder roughly squares at each ' +
+          'step, so the expansion is short because it converges fast, not because the page gave up.'
+        : `stopped at the display limit of ${UF_MAX_TERMS}.`);
+
+    renderUnitCompare(rows);
+  }
+
+  // How many regular continued-fraction terms are needed to match the accuracy the
+  // unit-fraction sum reached? Computed, not asserted.
+  function renderUnitCompare(rows) {
+    const box = el('uf-compare');
+    if (!rows.length) { box.textContent = ''; return; }
+    const s = state.unit;
+    const target = rows[rows.length - 1].error;
+    const absT = target.n < 0n ? CF.Rat.neg(target) : target;
+    const cf = CF.convergentRowsFor(s.key, 40, 'floor').rows;
+    const hit = cf.find(r => {
+      const a = r.error.n < 0n ? CF.Rat.neg(r.error) : r.error;
+      return CF.Rat.cmp(a, absT) <= 0;
+    });
+    const maxDigits = Math.max(...rows.map(r => r.digits));
+    const cfDigits = hit ? Math.max(...cf.slice(0, hit.n + 1).map(r => String(r.a).length)) : 0;
+    box.textContent =
+      `${rows.length} unit fractions reach an error of ${CF.sci(absT, 4)}. ` +
+      (hit
+        ? `The regular continued fraction needs ${hit.n + 1} terms to match it — but its ` +
+          `largest term has ${cfDigits} digits, where the largest denominator here has ${maxDigits}. ` +
+          'Fast convergence bought with exploding denominators.'
+        : 'The regular continued fraction does not match it within the terms this page can certify.');
+  }
+
+  renderUnit();
 
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
