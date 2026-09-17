@@ -409,6 +409,74 @@ const CF = (() => {
     return `${neg ? '-' : ''}${mant}e${exp < 0 ? '-' : '+'}${Math.abs(exp)}`;
   };
 
+  // ---- semiregular continued fractions: x = a + eps/x', eps in {+1, -1} ----
+  //
+  // The rounding rule IS the knob. a = floor(x) puts the remainder in (0,1), forcing
+  // eps = +1; a = ceil(x) puts it in (-1,0), forcing eps = -1. So "always floor" is the
+  // regular expansion and "always ceiling" is the minus one; they are not separate
+  // algorithms. In every mode the next value is x' = 1/|x - a|.
+
+  const SEMI_MODES = [
+    { key: 'floor',   label: '⌊x⌋ always',                      note: null },
+    { key: 'nearest', label: 'nearest',                                   note: null },
+    { key: 'alt',     label: '⌊x⌋ ⌈x⌉ alternating',
+      note: 'a construction, not a classical expansion' },
+    { key: 'ceil',    label: '⌈x⌉ always',                      note: null },
+  ];
+
+  const ratRound = (a) => {
+    const f = Rat.floor(a);
+    const frac = Rat.sub(a, Rat.fromInt(f));
+    return Rat.cmp(frac, Rat.make(1n, 2n)) >= 0 ? f + 1n : f;   // halves round up
+  };
+
+  // level is 0-based; alt starts with floor so its first sign is +1.
+  const pickInteger = (x, mode, level) => {
+    if (mode === 'floor') return Rat.floor(x);
+    if (mode === 'ceil') return ratCeil(x);
+    if (mode === 'nearest') return ratRound(x);
+    if (mode === 'alt') return level % 2 === 0 ? Rat.floor(x) : ratCeil(x);
+    throw new Error('unknown mode ' + mode);
+  };
+
+  const semiregularTerms = (lo, hi, mode, maxTerms) => {
+    const terms = [], signs = [];
+    let a = lo, b = hi;
+    for (let i = 0; i < maxTerms; i++) {
+      const ia = pickInteger(a, mode, i), ib = pickInteger(b, mode, i);
+      if (ia !== ib) return { terms, signs, stopReason: 'precision-exhausted' };
+      const ra = Rat.sub(a, Rat.fromInt(ia)), rb = Rat.sub(b, Rat.fromInt(ib));
+      if (Rat.isZero(ra) && Rat.isZero(rb)) { terms.push(ia); return { terms, signs, stopReason: 'exact' }; }
+      // The SIGN must be certain too, not just the integer: an enclosure straddling ia
+      // determines the term while leaving the side of it unknown.
+      const sa = Rat.cmp(ra, Rat.fromInt(0)), sb = Rat.cmp(rb, Rat.fromInt(0));
+      if (sa === 0 || sb === 0 || sa !== sb) return { terms, signs, stopReason: 'precision-exhausted' };
+      terms.push(ia);
+      signs.push(sa > 0 ? 1 : -1);
+      // x -> 1/|x - a|. Both endpoints lie on the same side of ia, so the map is monotone
+      // across the whole enclosure and its image is exactly the interval between the two
+      // images - which way round is settled by comparing them.
+      const abs = (r) => (r.n < 0n ? Rat.neg(r) : r);
+      const na = Rat.div(Rat.fromInt(1), abs(ra)), nb = Rat.div(Rat.fromInt(1), abs(rb));
+      if (Rat.cmp(na, nb) <= 0) { a = na; b = nb; } else { a = nb; b = na; }
+    }
+    return { terms, signs, stopReason: 'max-terms' };
+  };
+
+  // A_k = a_k A_{k-1} + eps_k A_{k-2}, with eps_0 = +1: there is no numerator before the
+  // first term, and eps_0 only multiplies the seed. That is what makes B_0 = 1 in every mode.
+  const semiregularConvergents = (terms, signs) => {
+    let Am2 = 0n, Am1 = 1n, Bm2 = 1n, Bm1 = 0n;
+    const out = [];
+    for (let k = 0; k < terms.length; k++) {
+      const e = BigInt(k === 0 ? 1 : signs[k - 1]);
+      const A = terms[k] * Am1 + e * Am2, B = terms[k] * Bm1 + e * Bm2;
+      out.push({ p: A, q: B });
+      Am2 = Am1; Am1 = A; Bm2 = Bm1; Bm1 = B;
+    }
+    return out;
+  };
+
   // ---- telescoping bracket cascade ----
 
   const cascadeRows = (key, mode, maxRows) => {
@@ -887,7 +955,8 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil, minusTermsExact, minusTermsFromInterval, minusConvergents, minusExpand,
-           cascadeRows };
+           cascadeRows,
+           SEMI_MODES, ratRound, pickInteger, semiregularTerms, semiregularConvergents };
 })();
 
 XTests.test('Rat reduces and normalizes sign', () => {
@@ -1495,6 +1564,108 @@ XTests.test('cascade survives brackets narrower than a double can subtract', () 
   XTests.ok(CF.Rat.cmp(last.width, CF.Rat.make(1n, 10n ** 5n)) < 0, 'expected a narrow last row');
   XTests.ok(Number.isFinite(last.targetPos) && last.targetPos > 0 && last.targetPos < 1,
             `target position collapsed to ${last.targetPos}`);
+});
+
+XTests.test('ratRound rounds to nearest, halves up', () => {
+  XTests.eq(CF.ratRound(CF.Rat.make(7n, 2n)), 4n);       // 3.5 -> 4
+  XTests.eq(CF.ratRound(CF.Rat.make(5n, 2n)), 3n);       // 2.5 -> 3
+  XTests.eq(CF.ratRound(CF.Rat.make(7n, 3n)), 2n);       // 2.33 -> 2
+  XTests.eq(CF.ratRound(CF.Rat.make(-7n, 2n)), -3n);     // -3.5 -> -3
+});
+
+XTests.test('the four modes give the known expansions of pi', () => {
+  const k = CF.constant('pi');
+  const t = (mode, n) => CF.semiregularTerms(k.lo, k.hi, mode, n);
+  XTests.eq(t('floor', 8).terms.join(','), '3,7,15,1,292,1,1,1');
+  XTests.eq(t('ceil', 9).terms.join(','), '4,2,2,2,2,2,2,17,294');
+  const near = t('nearest', 7);
+  XTests.eq(near.terms.join(','), '3,7,16,294,3,4,5');
+  XTests.eq(near.signs.slice(0, 6).join(','), '1,1,-1,-1,-1,-1');
+  const alt = t('alt', 8);
+  XTests.eq(alt.terms.join(','), '3,8,1,15,293,2,2,3');
+  XTests.eq(alt.signs.slice(0, 7).join(','), '1,-1,1,-1,1,-1,1');
+});
+
+XTests.test('signs are constant in the floor and ceil modes', () => {
+  const k = CF.constant('e');
+  XTests.eq(new Set(CF.semiregularTerms(k.lo, k.hi, 'floor', 10).signs).size, 1);
+  XTests.eq(CF.semiregularTerms(k.lo, k.hi, 'floor', 10).signs[0], 1);
+  XTests.eq(CF.semiregularTerms(k.lo, k.hi, 'ceil', 10).signs[0], -1);
+});
+
+XTests.test('the recurrence reproduces both existing convergent sets', () => {
+  const plus = CF.semiregularConvergents([3n, 7n, 15n, 1n, 292n], [1, 1, 1, 1]);
+  XTests.eq(plus.map(c => `${c.p}/${c.q}`).join(' '),
+            '3/1 22/7 333/106 355/113 103993/33102');
+  const minus = CF.semiregularConvergents(
+    [4n, 2n, 2n, 2n, 2n, 2n, 2n, 17n, 294n], [-1, -1, -1, -1, -1, -1, -1, -1]);
+  XTests.eq(minus.map(c => `${c.p}/${c.q}`).join(' '),
+            '4/1 7/2 10/3 13/4 16/5 19/6 22/7 355/113 104348/33215');
+  for (const c of minus) XTests.ok(c.q > 0n, `denominator ${c.q} was not positive`);
+});
+
+XTests.test('sqrt2 in nearest mode is its regular expansion, all signs plus', () => {
+  const k = CF.constant('sqrt2');
+  const r = CF.semiregularTerms(k.lo, k.hi, 'nearest', 8);
+  XTests.eq(r.terms.join(','), '1,2,2,2,2,2,2,2');
+  XTests.eq(new Set(r.signs).size, 1);
+  XTests.eq(r.signs[0], 1);
+});
+
+XTests.test('phi in nearest mode is a minus expansion, all signs minus', () => {
+  const k = CF.constant('phi');
+  const r = CF.semiregularTerms(k.lo, k.hi, 'nearest', 8);
+  XTests.eq(r.terms.join(','), '2,3,3,3,3,3,3,3');
+  XTests.eq(new Set(r.signs).size, 1);
+  XTests.eq(r.signs[0], -1);
+  const x = k.lo;
+  for (const c of CF.semiregularConvergents(r.terms, r.signs)) {
+    XTests.ok(CF.Rat.cmp(CF.Rat.make(c.p, c.q), x) > 0, `${c.p}/${c.q} was not above phi`);
+  }
+});
+
+XTests.test('every mode converges to the constant it expands', () => {
+  for (const key of ['pi', 'e', 'sqrt2', 'sqrt3', 'phi', 'ln2', 'gamma', 'cbrt2']) {
+    const k = CF.constant(key);
+    for (const m of CF.SEMI_MODES) {
+      const r = CF.semiregularTerms(k.lo, k.hi, m.key, 12);
+      const cs = CF.semiregularConvergents(r.terms, r.signs);
+      const last = cs[cs.length - 1];
+      const d = CF.Rat.sub(k.lo, CF.Rat.make(last.p, last.q));
+      const abs = d.n < 0n ? CF.Rat.neg(d) : d;
+      XTests.ok(CF.Rat.cmp(abs, CF.Rat.fromDecimalString('0.0001')) < 0,
+                `${key}/${m.key} last convergent off by ${CF.sci(abs, 4)}`);
+    }
+  }
+});
+
+XTests.test('a term is withheld when the sign is undetermined', () => {
+  // An enclosure straddling a half-integer: the nearest integer may be certain while
+  // the side - and therefore the sign - is not.
+  const lo = CF.Rat.fromDecimalString('2.4999');
+  const hi = CF.Rat.fromDecimalString('2.5001');
+  const r = CF.semiregularTerms(lo, hi, 'nearest', 10);
+  XTests.eq(r.stopReason, 'precision-exhausted');
+  XTests.ok(r.terms.length <= 1, `expected to stop immediately, got ${r.terms.length} terms`);
+});
+
+XTests.test('a rational terminates in every mode', () => {
+  const k = CF.constant('r355_113');
+  for (const m of CF.SEMI_MODES) {
+    const r = CF.semiregularTerms(k.exact, k.exact, m.key, 40);
+    XTests.eq(r.stopReason, 'exact', `${m.key} did not terminate`);
+    const cs = CF.semiregularConvergents(r.terms, r.signs);
+    const last = cs[cs.length - 1];
+    XTests.eq(CF.Rat.cmp(CF.Rat.make(last.p, last.q), k.exact), 0, `${m.key} missed the value`);
+  }
+});
+
+XTests.test('alt is labelled as a construction', () => {
+  const alt = CF.SEMI_MODES.find(m => m.key === 'alt');
+  XTests.ok(alt.note && alt.note.length > 0, 'alt must carry a note');
+  for (const m of CF.SEMI_MODES) {
+    if (m.key !== 'alt') XTests.ok(m.note === null, `${m.key} should have no note`);
+  }
 });
 
 </script>
