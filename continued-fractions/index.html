@@ -307,6 +307,45 @@ const CF = (() => {
     return `${neg ? '-' : ''}${mant}e${exp < 0 ? '-' : '+'}${Math.abs(exp)}`;
   };
 
+  // ---- geometry: fit the largest square, repeatedly ----
+
+  // The rectangle starts w/h = x with h = 1. Generation 0 cuts a0 squares of side h off the
+  // left, leaving a taller-than-wide rectangle; generation 1 cuts a1 squares off the bottom,
+  // and so on, alternating. x is rebuilt from the terms themselves, so the picture and the
+  // term list can never disagree.
+  const dissect = (terms, maxSquares) => {
+    const cs = convergents(terms);
+    const last = cs[cs.length - 1];
+    const x = Rat.make(last.p, last.q);
+    let rect = { x: Rat.fromInt(0), y: Rat.fromInt(0), w: x, h: Rat.fromInt(1) };
+    const generations = [];
+    let budget = maxSquares, truncated = false;
+    for (let i = 0; i < terms.length; i++) {
+      const horizontal = Rat.cmp(rect.w, rect.h) >= 0;
+      const side = horizontal ? rect.h : rect.w;
+      if (Rat.isZero(side)) break;
+      let count = Number(terms[i]);
+      if (count > budget) { count = budget; truncated = true; }
+      const squares = [];
+      for (let j = 0; j < count; j++) {
+        const off = Rat.mul(Rat.fromInt(j), side);
+        squares.push(horizontal
+          ? { x: Rat.add(rect.x, off), y: rect.y, side }
+          : { x: rect.x, y: Rat.add(rect.y, off), side });
+      }
+      const consumed = Rat.mul(Rat.fromInt(count), side);
+      const next = horizontal
+        ? { x: Rat.add(rect.x, consumed), y: rect.y, w: Rat.sub(rect.w, consumed), h: rect.h }
+        : { x: rect.x, y: Rat.add(rect.y, consumed), w: rect.w, h: Rat.sub(rect.h, consumed) };
+      generations.push({ index: i, count, side, squares, rect });   // rect is the PRE-cut rectangle
+      budget -= count;
+      rect = next;
+      if (budget <= 0) { truncated = truncated || i < terms.length - 1; break; }
+      if (Rat.isZero(rect.w) || Rat.isZero(rect.h)) break;
+    }
+    return { generations, truncated };
+  };
+
   // ---- generalized continued fractions: b0 + a1/(b1 + a2/(b2 + ...)) ----
 
   const primes = (count) => {
@@ -492,7 +531,8 @@ const CF = (() => {
            convergents, sci, convergentRows,
            MAX_RACE_Q, bestApproximations,
            primes, SEQUENCES, seq, GEN_SEQ_DIGITS, MAX_GEN_TERMS_INT, MAX_GEN_TERMS_IRRATIONAL,
-           genConvergents, GEN_PRESETS, identify };
+           genConvergents, GEN_PRESETS, identify,
+           dissect };
 })();
 
 XTests.test('Rat reduces and normalizes sign', () => {
@@ -767,6 +807,50 @@ XTests.test('the owner ideas produce finite values', () => {
       bSeq: CF.seq(bKey), negateA: false, terms: 30 });
     const last = values[values.length - 1];
     XTests.ok(last.d !== 0n && Number.isFinite(CF.Rat.toNumber(last)), `${aKey}/${bKey} diverged`);
+  }
+});
+
+XTests.test('dissection square counts equal the continued fraction terms', () => {
+  const terms = CF.expand('pi', 4).terms;         // 3, 7, 15, 1
+  const d = CF.dissect(terms, 1000);
+  XTests.eq(d.generations.map(g => g.count).join(','), '3,7,15,1');
+});
+
+XTests.test('dissection of a rational terminates on an exact square', () => {
+  const terms = CF.expand('r355_113', 10).terms;  // 3, 7, 16
+  const d = CF.dissect(terms, 1000);
+  // The final generation consumes its rectangle exactly: nothing is left over.
+  const last = d.generations[d.generations.length - 1];
+  const consumed = CF.Rat.mul(CF.Rat.fromInt(last.count), last.side);
+  const long = CF.Rat.cmp(last.rect.w, last.rect.h) >= 0 ? last.rect.w : last.rect.h;
+  XTests.eq(CF.Rat.cmp(consumed, long), 0, 'remainder was not empty');
+});
+
+XTests.test('the remainder after each generation is the reciprocal complete quotient', () => {
+  // dissect rebuilds x from the terms it is given, so use enough of them that the
+  // rebuilt ratio agrees with sqrt2 to the six digits compared below.
+  const terms = CF.expand('sqrt2', 12).terms;
+  const d = CF.dissect(terms, 1000);
+  const g = d.generations[1];   // the rectangle left over after generation 0
+  const ratio = CF.Rat.div(g.rect.w, g.rect.h);
+  const flipped = CF.Rat.cmp(ratio, CF.Rat.fromInt(1)) < 0 ? CF.Rat.div(CF.Rat.fromInt(1), ratio) : ratio;
+  XTests.eq(CF.Rat.toDecimalString(flipped, 6), '2.414213');
+});
+
+XTests.test('dissection respects the square budget', () => {
+  const terms = CF.expand('phi', 40).terms;       // forty 1s
+  const d = CF.dissect(terms, 10);
+  XTests.ok(d.truncated, 'expected truncation');
+  XTests.eq(d.generations.reduce((s, g) => s + g.count, 0), 10);
+});
+
+XTests.test('every square lies inside the starting rectangle', () => {
+  const terms = CF.expand('pi', 6).terms;
+  const d = CF.dissect(terms, 200);
+  const x = CF.Rat.div(CF.Rat.fromInt(355), CF.Rat.fromInt(113));
+  for (const g of d.generations) for (const sq of g.squares) {
+    XTests.ok(CF.Rat.cmp(CF.Rat.add(sq.x, sq.side), CF.Rat.add(x, CF.Rat.make(1n, 1000n))) <= 0, 'square escaped in x');
+    XTests.ok(CF.Rat.cmp(CF.Rat.add(sq.y, sq.side), CF.Rat.fromDecimalString('1.001')) <= 0, 'square escaped in y');
   }
 });
 
