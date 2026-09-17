@@ -64,6 +64,14 @@ the same Gaussian integer:
 Both sides are `Rat`, so the comparison is exact. If either fails, the expansion
 stops with `precision-exhausted` and the UI says so, exactly as the real tabs do.
 
+**A consequence found while building.** A value whose real or imaginary part is
+*exactly* a half-integer has a genuinely ambiguous nearest Gaussian integer, and
+the rule then refuses to emit even a first term. `(1 + i√7)/2` — the obvious
+choice for a complex quadratic irrational — is exactly such a value, and produced
+an empty expansion. It is replaced by `i·√7`, whose real part is 0, and the
+boundary case is kept as a test rather than discarded, since it pins the rule's
+behaviour at its sharpest point.
+
 ## 3. Convergents
 
 `Aₖ = aₖAₖ₋₁ + Aₖ₋₂`, `Bₖ = aₖBₖ₋₁ + Bₖ₋₂`, seeded `A₋₂ = 0, A₋₁ = 1, B₋₂ = 1,
@@ -79,7 +87,7 @@ All derivable from values the page already stores, plus `ratSqrt` for √7:
 |---|---|---|
 | `pi_e_i` | `π + e·i` | terms 3+3i, 1+3i, 2+1i, 1+5i, … |
 | `rot8` | `(1+i)/√2` | periodic: 1+i, then −2+2i, 2+2i repeating |
-| `quad7` | `(1 + i√7)/2` | a complex quadratic irrational |
+| `quad7` | `i·√7` | a complex quadratic irrational, root of `z² + 7 = 0`; periodic `3i, 3i, 6i, 3i, 6i, …` |
 | `g45` | `(3+4i)/5` | a Gaussian rational; terminates in two terms |
 | `gamma_phi` | `γ + φ·i` | |
 | `ln2_sqrt3` | `ln 2 + √3·i` | |
