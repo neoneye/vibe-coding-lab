@@ -52,6 +52,7 @@
   select, input[type=number] { font:inherit; padding:3px 4px; }
   #simple-mode .chip { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
   #simple-cascade { display:block; margin:10px 0 4px 0; }
+  #cx-canvas { display:block; margin:14px 0 4px 0; }
   .sectionhead { font-size:14px; font-weight:600; margin:22px 0 8px 0; }
   .numgrid { display:grid; grid-template-columns:repeat(24, 1fr); gap:2px; max-width:720px; }
   .numgrid div { font-size:9px; text-align:center; padding:2px 0; border-radius:2px;
@@ -77,6 +78,7 @@
     <button class="tab" data-panel="geometry">Geometry</button>
     <button class="tab" data-panel="euler">Euler product</button>
     <button class="tab" data-panel="unit">Unit fractions</button>
+    <button class="tab" data-panel="complex">Complex</button>
   </div>
   <div class="panel active" id="panel-simple">
     <div class="chips" id="simple-mode"></div>
@@ -142,6 +144,14 @@
     <p class="status" id="uf-status"></p>
     <div class="tablewrap"><table id="uf-table"></table></div>
     <p class="status" id="uf-compare"></p>
+  </div>
+  <div class="panel" id="panel-complex">
+    <div class="chips" id="cx-chips"></div>
+    <div class="terms" id="cx-terms"></div>
+    <p class="status" id="cx-status"></p>
+    <div class="tablewrap"><table id="cx-table"></table></div>
+    <canvas id="cx-canvas" width="420" height="420"></canvas>
+    <p class="status" id="cx-caption"></p>
   </div>
 </div>
 
@@ -416,7 +426,7 @@ const CF = (() => {
   const COMPLEX_CONSTANTS = [
     { key: 'pi_e_i',     label: 'π + e·i' },
     { key: 'rot8',       label: '(1+i)/√2' },
-    { key: 'quad7',      label: '(1 + i√7)/2' },
+    { key: 'quad7',      label: 'i·√7' },
     { key: 'g45',        label: '(3+4i)/5' },
     { key: 'gamma_phi',  label: 'γ + φ·i' },
     { key: 'ln2_sqrt3',  label: 'ln 2 + √3·i' },
@@ -2595,6 +2605,117 @@ XTests.test('a fat disk withholds terms', () => {
   }
 
   renderUnit();
+
+  // ---------- Complex tab ----------
+  state.complex = { key: 'pi_e_i' };
+  const CX_MAX_TERMS = 10;
+
+  function renderComplex() {
+    const s = state.complex;
+    el('cx-chips').innerHTML = CF.COMPLEX_CONSTANTS
+      .map(c => `<button class="chip ${c.key === s.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
+      .join('');
+    el('cx-chips').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.key = b.dataset.key; renderComplex();
+    }));
+
+    const k = CF.complexConstant(s.key);
+    const { rows, stopReason } = CF.hurwitzRows(s.key, CX_MAX_TERMS);
+    const continues = stopReason !== 'exact';
+
+    el('cx-terms').textContent =
+      `⟨${rows.map(r => CF.cStr(r.term, 0)).join('; ')}${continues ? '; …' : ''}⟩`;
+
+    el('cx-table').innerHTML =
+      '<tr><th>k</th><th>term</th><th>Aₖ / Bₖ</th><th>value</th><th>|z − Aₖ/Bₖ|</th></tr>' +
+      rows.map(r => `<tr><td>${r.k}</td><td class="mono">${CF.cStr(r.term, 0)}</td>` +
+        `<td class="mono">${CF.cStr(r.A, 0)} / ${CF.cStr(r.B, 0)}</td>` +
+        `<td class="mono">${r.valueStr}</td><td class="mono">${r.errStr}</td></tr>`).join('');
+
+    el('cx-status').textContent = `${rows.length} terms — ` +
+      (stopReason === 'exact'
+        ? 'a Gaussian rational, so the expansion terminates exactly.'
+        : stopReason === 'precision-exhausted'
+        ? 'everything the stored disk determines. The enclosing disk grows at every ' +
+          'inversion, so the expansion stops where the nearest Gaussian integer stops being certain.'
+        : `stopped at the display limit of ${CX_MAX_TERMS}.`);
+
+    drawComplex(k, rows);
+  }
+
+  function drawComplex(k, rows) {
+    const W = 420, H = 420, pad = 26;
+    const ctx = fitCanvas(el('cx-canvas'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    if (!rows.length) {
+      ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+      ctx.fillText('no certain terms to plot', pad, H / 2);
+      el('cx-caption').textContent = '';
+      return;
+    }
+
+    // Plotted straight, the convergents collapse: by k=3 they are inside one pixel of
+    // the target. So this is a LOG-RADIAL view - the direction from the target is kept,
+    // the distance is compressed to its logarithm. Each ring is one order of magnitude,
+    // the target sits at the centre, and the spiral becomes visible.
+    const num = (r) => CF.Rat.toNumber(r);
+    const tx = num(k.centre.re), ty = num(k.centre.im);
+    const pts = rows.map(r => {
+      const dx = num(r.value.re) - tx, dy = num(r.value.im) - ty;
+      return { dx, dy, mag: Math.hypot(dx, dy), k: r.k };
+    }).filter(p => p.mag > 0);
+    const cx = W / 2, cy = H / 2, RMAX = Math.min(W, H) / 2 - pad;
+    if (!pts.length) {
+      ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+      ctx.fillText('every convergent is exact', pad, H / 2);
+      el('cx-caption').textContent = '';
+      return;
+    }
+    const logs = pts.map(p => Math.log10(p.mag));
+    const hi = Math.ceil(Math.max(...logs)), lo = Math.floor(Math.min(...logs));
+    const span = Math.max(1, hi - lo);
+    const radius = (mag) => RMAX * (Math.log10(mag) - lo) / span;
+
+    // decade rings
+    ctx.font = '9px sans-serif';
+    for (let d = lo; d <= hi; d++) {
+      const rr = RMAX * (d - lo) / span;
+      if (rr <= 0.5) continue;
+      ctx.strokeStyle = '#eee'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#bbb';
+      ctx.fillText(`1e${d}`, cx + 3, cy - rr + 10);
+    }
+
+    const P = (p) => {
+      const rr = radius(p.mag), ang = Math.atan2(p.dy, p.dx);
+      return [cx + rr * Math.cos(ang), cy - rr * Math.sin(ang)];
+    };
+    ctx.strokeStyle = '#1a5fb4'; ctx.lineWidth = 1.2; ctx.beginPath();
+    pts.forEach((p, idx) => { const [x, y] = P(p); idx ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+    ctx.fillStyle = '#1a5fb4'; ctx.font = '9px sans-serif';
+    pts.forEach((p, idx) => {
+      const [x, y] = P(p);
+      ctx.beginPath(); ctx.arc(x, y, idx === pts.length - 1 ? 4 : 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillText(String(p.k), x + 5, y - 4);
+    });
+
+    ctx.strokeStyle = '#c64600'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - 6, cy); ctx.lineTo(cx + 6, cy);
+    ctx.moveTo(cx, cy - 6); ctx.lineTo(cx, cy + 6);
+    ctx.stroke();
+
+    el('cx-caption').textContent =
+      `Each convergent's offset from ${k.label}, drawn in its true direction but at a ` +
+      'logarithmic distance — one ring per order of magnitude, the target at the centre. ' +
+      'There is no above or below in ℂ, so nothing alternates the way a real continued ' +
+      'fraction does; the convergents spiral inward instead, and the direction of each step ' +
+      'is what the plain plot hides.';
+  }
+
+  renderComplex();
 
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
