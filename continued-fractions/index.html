@@ -1170,9 +1170,12 @@ const CF = (() => {
       const A = O.add(O.mul(b, A0), O.mul(a, Am1));
       const B = O.add(O.mul(b, B0), O.mul(a, Bm1));
       Am1 = A0; A0 = A; Bm1 = B0; B0 = B;
-      values.push(O.isZero(B0) ? O.zero : O.div(A0, B0));
+      // A zero denominator is a genuine pole, not a zero. Substituting O.zero printed an
+      // all-zero table for b0=0, a=1, b=0, whose convergents actually alternate between
+      // infinity and 0. null marks the pole; callers render it rather than averaging it in.
+      values.push(O.isZero(B0) ? null : O.div(A0, B0));
     }
-    return { values, cap, complex };
+    return { values, cap, complex, singular: values.filter(v => v === null).length };
   };
 
   // Constant denominators (2 and 6) ride on the `k` sequence rather than getting
@@ -1810,6 +1813,25 @@ XTests.test('a complex generalized fraction converges', () => {
   const diff = (k) => CF.ratSqrtLower(CF.cNormSq(CF.cSub(r.values[k], r.values[k - 1])), 30);
   XTests.ok(CF.Rat.cmp(diff(n - 1), diff(Math.floor(n / 2))) < 0,
             'successive differences did not shrink');
+});
+
+XTests.test('a zero denominator is a pole, not a zero', () => {
+  // b0 = 0, a = 1, b = 0 gives convergents that alternate between infinity and 0.
+  // Substituting 0 for the pole printed an all-zero table, hiding that entirely.
+  const r = CF.genConvergents({ b0: CF.Rat.fromInt(0), aSeq: CF.seq('one'),
+    bSeq: CF.seq('k', CF.Rat.fromInt(0)), negateA: false, terms: 6 });
+  XTests.ok(r.singular > 0, 'expected some poles');
+  const shape = r.values.map(v => (v === null ? 'inf' : CF.Rat.toDecimalString(v, 0))).join(',');
+  XTests.eq(shape, 'inf,0,inf,0,inf,0');
+});
+
+XTests.test('ordinary generalized fractions carry no poles', () => {
+  for (const p of CF.GEN_PRESETS) {
+    const r = CF.genConvergents({ b0: p.b0, aSeq: CF.seq(p.aKey, p.kValue),
+      bSeq: CF.seq(p.bKey, p.kValue), negateA: p.negateA, terms: 20 });
+    XTests.eq(r.singular, 0, `preset ${p.key} produced a pole`);
+    for (const v of r.values) XTests.ok(v !== null, `preset ${p.key} produced a null`);
+  }
 });
 
 XTests.test('complex sequences take the irrational term cap', () => {
@@ -3023,8 +3045,9 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
 
     const rows = values.map((v, i) => {
       const prev = i > 0 ? values[i - 1] : null;
-      const abs = prev ? magOf(diffOf(v, prev)) : null;
-      return { n: i + 1, decimal: showOf(v, 14),
+      const abs = (v !== null && prev !== null) ? magOf(diffOf(v, prev)) : null;
+      return { n: i + 1,
+               decimal: v === null ? '∞  (zero denominator)' : showOf(v, 14),
                step: abs ? CF.sci(abs, 4) : '—', absRat: abs };
     });
     el('gen-table').innerHTML =
@@ -3033,7 +3056,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
                     `<td class="mono">${r.step}</td></tr>`).join('');
 
     const last = values[values.length - 1];
-    const id = complex ? null : CF.identifyGraded(last, 12, 4);
+    const id = (complex || last === null) ? null : CF.identifyGraded(last, 12, 4);
     // Only the truncated entries (pi, e, sqrt2) carry an approximation caveat. The
     // complex entries are flagged irrational for the term cap, but i and 1+i are exact.
     const note = (seqs.a.truncated || seqs.b.truncated)
@@ -3041,13 +3064,15 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       : ' Computed in exact arithmetic.';
     el('gen-identify').innerHTML =
       `<span class="verdict">Value after ${values.length} levels: ` +
-      `<strong class="mono">${showOf(last, 14)}</strong> — ` +
-      (complex
+      `<strong class="mono">${last === null ? '∞  (zero denominator)' : showOf(last, 14)}</strong> — ` +
+      (last === null
+        ? 'this level has a zero denominator, so the convergent is a pole rather than a value.'
+        : complex
         ? 'no identification for complex values — the table of named constants is real.'
         : id.matched
           ? `agrees with <strong>${id.label}</strong> to ${id.digits} digits.`
           : `${id.label}.`) +
-      note + '</span>';
+      (last === null ? '' : note) + '</span>';
 
     drawGenPlot(rows);
   }
