@@ -72,7 +72,24 @@
     <div class="tablewrap"><table id="simple-table"></table></div>
     <div id="simple-race"></div>
   </div>
-  <div class="panel" id="panel-general"></div>
+  <div class="panel" id="panel-general">
+    <div class="chips" id="gen-presets"></div>
+    <div class="controls">
+      <label>b₀ <input type="number" id="gen-b0" value="2" step="1" style="width:66px"></label>
+      <label>aₙ = <select id="gen-a"></select></label>
+      <label>bₙ = <select id="gen-b"></select></label>
+      <label>k = <input type="number" id="gen-k" value="2" step="1" style="width:66px"></label>
+      <label><input type="checkbox" id="gen-negate"> negate aₙ</label>
+      <label>levels <input type="range" id="gen-terms" min="2" max="60" value="12"></label>
+      <span class="muted" id="gen-terms-label"></span>
+    </div>
+    <div class="tower" id="gen-tower"></div>
+    <p id="gen-identify"></p>
+    <div class="twocol">
+      <div class="tablewrap"><table id="gen-table"></table></div>
+      <canvas id="gen-plot" width="420" height="260"></canvas>
+    </div>
+  </div>
   <div class="panel" id="panel-geometry"></div>
 </div>
 
@@ -504,6 +521,17 @@ const CF = (() => {
   };
 
   let NAMED = null;
+  // Report the tightest precision at which a value matches something named, so the panel can
+  // say "agrees to 6 digits" instead of a bare yes/no. Floors at 4 digits: looser than that,
+  // an agreement is coincidence rather than evidence.
+  const identifyGraded = (r, maxDigits = 12, minDigits = 4) => {
+    for (let d = maxDigits; d >= minDigits; d--) {
+      const hit = identify(r, d);
+      if (hit.matched) return { label: hit.label, matched: true, digits: d };
+    }
+    return { label: 'no match in the table', matched: false, digits: 0 };
+  };
+
   // Compare with a tolerance rather than by comparing truncated decimal strings: two values
   // differing by far less than 10^-digits still print differently across a digit boundary.
   const identify = (r, digits = 12) => {
@@ -573,7 +601,7 @@ const CF = (() => {
            convergents, sci, convergentRows,
            MAX_RACE_Q, bestApproximations,
            primes, SEQUENCES, seq, GEN_SEQ_DIGITS, MAX_GEN_TERMS_INT, MAX_GEN_TERMS_IRRATIONAL,
-           genConvergents, GEN_PRESETS, identify,
+           genConvergents, GEN_PRESETS, identify, identifyGraded,
            dissect };
 })();
 
@@ -1002,6 +1030,125 @@ XTests.test('every square lies inside the starting rectangle', () => {
     renderSimple();
   });
   renderSimple();
+
+  // ---------- Generalized tab ----------
+  state.general = { b0: 2, aKey: 'n1', bKey: 'n1', k: 2, negate: false, terms: 12 };
+
+  function genSeqs() {
+    const g = state.general;
+    const kRat = CF.Rat.fromDecimalString(String(Number.isFinite(g.k) ? g.k : 1));
+    return { a: CF.seq(g.aKey, kRat), b: CF.seq(g.bKey, kRat) };
+  }
+
+  // Level n of the tower is a_n over (b_n + level n+1); b0 sits outside the whole stack.
+  function genTowerHTML(g, seqs, depth) {
+    const fmt = (r, irr) => CF.Rat.toDecimalString(r, irr ? 4 : 0);
+    const level = (n) => {
+      const num = (g.negate ? '−' : '') + fmt(seqs.a.at(n), seqs.a.irrational);
+      const den = n >= depth
+        ? `${fmt(seqs.b.at(n), seqs.b.irrational)} + <span class="muted">…</span>`
+        : `${fmt(seqs.b.at(n), seqs.b.irrational)} + ${level(n + 1)}`;
+      return `<span class="frac"><span class="stack"><span class="num">${num}</span>` +
+             `<span class="den">${den}</span></span></span>`;
+    };
+    return `${g.b0} + ${level(1)}`;
+  }
+
+  function fitCanvas(canvas, cssW, cssH) {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+    canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return ctx;
+  }
+
+  function renderGeneral() {
+    const g = state.general;
+    const seqs = genSeqs();
+
+    const opts = (sel) => CF.SEQUENCES.map(x =>
+      `<option value="${x.key}" ${x.key === sel ? 'selected' : ''}>${x.label}</option>`).join('');
+    el('gen-a').innerHTML = opts(g.aKey);
+    el('gen-b').innerHTML = opts(g.bKey);
+
+    const { values, cap } = CF.genConvergents({
+      b0: CF.Rat.fromDecimalString(String(g.b0)), aSeq: seqs.a, bSeq: seqs.b,
+      negateA: g.negate, terms: g.terms });
+
+    el('gen-terms').max = String(cap);
+    el('gen-terms-label').textContent = `${values.length} levels (cap ${cap}` +
+      `${cap === CF.MAX_GEN_TERMS_IRRATIONAL ? ', lowered because a sequence is irrational' : ''})`;
+    el('gen-tower').innerHTML = genTowerHTML(g, seqs, Math.min(4, Math.max(1, values.length)));
+
+    const rows = values.map((v, i) => {
+      const prev = i > 0 ? values[i - 1] : null;
+      const d = prev ? CF.Rat.sub(v, prev) : null;
+      const abs = d && (d.n < 0n ? CF.Rat.neg(d) : d);
+      return { n: i + 1, decimal: CF.Rat.toDecimalString(v, 14),
+               step: abs ? CF.sci(abs, 4) : '—', absRat: abs };
+    });
+    el('gen-table').innerHTML =
+      '<tr><th>level</th><th>value</th><th>|xₙ − xₙ₋₁|</th></tr>' +
+      rows.map(r => `<tr><td>${r.n}</td><td class="mono">${r.decimal}</td>` +
+                    `<td class="mono">${r.step}</td></tr>`).join('');
+
+    const last = values[values.length - 1];
+    const id = CF.identifyGraded(last, 12, 4);
+    const note = (seqs.a.irrational || seqs.b.irrational)
+      ? ` Computed from the irrational sequence value to ${CF.GEN_SEQ_DIGITS} decimals — exact for that approximation, not for the constant itself.`
+      : ' Computed in exact integer arithmetic.';
+    el('gen-identify').innerHTML =
+      `<span class="verdict">Value after ${values.length} levels: ` +
+      `<strong class="mono">${CF.Rat.toDecimalString(last, 14)}</strong> — ` +
+      (id.matched ? `agrees with <strong>${id.label}</strong> to ${id.digits} digits.` : `${id.label}.`) +
+      note + '</span>';
+
+    drawGenPlot(rows);
+  }
+
+  function drawGenPlot(rows) {
+    const W = 420, H = 260, pad = 40;
+    const ctx = fitCanvas(el('gen-plot'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    const pts = rows.filter(r => r.absRat && !CF.Rat.isZero(r.absRat))
+      .map(r => ({ n: r.n, y: Math.log10(CF.Rat.toNumber(r.absRat)) }));
+    ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1; ctx.strokeRect(pad, 10, W - pad - 10, H - pad - 10);
+    ctx.fillStyle = '#666'; ctx.font = '11px sans-serif';
+    ctx.fillText('log₁₀ |xₙ − xₙ₋₁|', pad + 6, 24);
+    if (!pts.length) { ctx.fillText('nothing to plot yet', pad + 6, H / 2); return; }
+    const yMin = Math.min(...pts.map(p => p.y)), yMax = Math.max(...pts.map(p => p.y));
+    const span = Math.max(1e-9, yMax - yMin);
+    const X = (n) => pad + (n - pts[0].n) / Math.max(1, pts[pts.length - 1].n - pts[0].n) * (W - pad - 14);
+    const Y = (y) => (H - pad) - (y - yMin) / span * (H - pad - 26);
+    ctx.fillText(yMax.toFixed(1), 6, Y(yMax) + 4);
+    ctx.fillText(yMin.toFixed(1), 6, Y(yMin) + 4);
+    ctx.fillText('level', W / 2 - 14, H - 12);
+    ctx.strokeStyle = '#1a5fb4'; ctx.lineWidth = 1.5; ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(X(p.n), Y(p.y)) : ctx.moveTo(X(p.n), Y(p.y))));
+    ctx.stroke();
+    ctx.fillStyle = '#1a5fb4';
+    pts.forEach(p => ctx.fillRect(X(p.n) - 1.5, Y(p.y) - 1.5, 3, 3));
+  }
+
+  el('gen-presets').innerHTML = CF.GEN_PRESETS
+    .map(p => `<button class="chip" data-key="${p.key}">${p.label}</button>`).join('');
+  el('gen-presets').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+    const p = CF.GEN_PRESETS.find(x => x.key === b.dataset.key);
+    const g = state.general;
+    g.b0 = Number(CF.Rat.toDecimalString(p.b0, 0));
+    g.aKey = p.aKey; g.bKey = p.bKey; g.negate = p.negateA;
+    if (p.kValue) g.k = Number(CF.Rat.toDecimalString(p.kValue, 0));
+    el('gen-b0').value = g.b0; el('gen-k').value = g.k; el('gen-negate').checked = g.negate;
+    renderGeneral();
+  }));
+  el('gen-b0').addEventListener('input', e => { state.general.b0 = Number(e.target.value); renderGeneral(); });
+  el('gen-k').addEventListener('input', e => { state.general.k = Number(e.target.value); renderGeneral(); });
+  el('gen-a').addEventListener('change', e => { state.general.aKey = e.target.value; renderGeneral(); });
+  el('gen-b').addEventListener('change', e => { state.general.bKey = e.target.value; renderGeneral(); });
+  el('gen-negate').addEventListener('change', e => { state.general.negate = e.target.checked; renderGeneral(); });
+  el('gen-terms').addEventListener('input', e => { state.general.terms = Number(e.target.value); renderGeneral(); });
+  renderGeneral();
 
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
