@@ -49,6 +49,8 @@
   .verdict { display:block; padding:8px 12px; border-left:3px solid var(--accent); background:#f4f7fb; }
   label { display:inline-flex; align-items:center; gap:6px; }
   select, input[type=number] { font:inherit; padding:3px 4px; }
+  #simple-mode .chip { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+  #simple-cascade { display:block; margin:10px 0 4px 0; }
   .sectionhead { font-size:14px; font-weight:600; margin:22px 0 8px 0; }
   .numgrid { display:grid; grid-template-columns:repeat(24, 1fr); gap:2px; max-width:720px; }
   .numgrid div { font-size:9px; text-align:center; padding:2px 0; border-radius:2px;
@@ -75,6 +77,7 @@
     <button class="tab" data-panel="euler">Euler product</button>
   </div>
   <div class="panel active" id="panel-simple">
+    <div class="chips" id="simple-mode"></div>
     <div class="chips" id="simple-chips"></div>
     <div class="controls">
       <label>Depth <input type="range" id="simple-depth" min="1" max="30" value="6"></label>
@@ -83,6 +86,8 @@
     <div class="tower" id="simple-tower"></div>
     <div class="terms" id="simple-terms"></div>
     <p class="status" id="simple-status"></p>
+    <canvas id="simple-cascade" width="900" height="380"></canvas>
+    <p class="status" id="simple-cascade-caption"></p>
     <div class="tablewrap"><table id="simple-table"></table></div>
     <div id="simple-race"></div>
   </div>
@@ -430,11 +435,22 @@ const CF = (() => {
       const width = Rat.sub(hi, lo);
       if (Rat.isZero(width)) break;
 
-      // The view is the PREVIOUS row's interval, padded 15% each side; row 0 uses its own.
+      // The view starts as the PREVIOUS row's interval padded 15% each side, so the nesting
+      // shows. But a large term (pi's 292) can shrink a bracket thousands of times in one
+      // step, collapsing it to an unreadable dot. So the view is also capped: it never spans
+      // more than width/0.15, i.e. the bracket always occupies at least 15% of the row.
+      // When that cap binds, the view is re-centred on this row's own bracket.
       const base = out.length ? out[out.length - 1] : { lo, hi, width };
-      const pad = Rat.mul(base.width, Rat.make(15n, 100n));   // 15% of the base width
-      const viewLo = Rat.sub(base.lo, pad), viewHi = Rat.add(base.hi, pad);
-      const span = Rat.sub(viewHi, viewLo);
+      const pad = Rat.mul(base.width, Rat.make(15n, 100n));
+      let viewLo = Rat.sub(base.lo, pad), viewHi = Rat.add(base.hi, pad);
+      let span = Rat.sub(viewHi, viewLo);
+      const maxSpan = Rat.div(width, Rat.make(15n, 100n));
+      if (Rat.cmp(span, maxSpan) > 0) {
+        const mid = Rat.div(Rat.add(lo, hi), Rat.fromInt(2));
+        const half = Rat.div(maxSpan, Rat.fromInt(2));
+        viewLo = Rat.sub(mid, half); viewHi = Rat.add(mid, half);
+        span = maxSpan;
+      }
       const pos = (v) => {
         const t = Rat.toNumber(Rat.div(Rat.sub(v, viewLo), span));
         return t < 0 ? 0 : t > 1 ? 1 : t;
@@ -443,6 +459,7 @@ const CF = (() => {
       out.push({
         n, lo, hi, width,
         brackets: Rat.cmp(lo, x) < 0 && Rat.cmp(x, hi) < 0,
+        viewLo, viewHi,
         loPos: pos(lo), hiPos: pos(hi), targetPos: pos(x),
         loLabel, hiLabel,
         loAbove: Rat.cmp(lo, x) > 0, hiAbove: Rat.cmp(hi, x) > 0,
@@ -1484,21 +1501,22 @@ XTests.test('cascade survives brackets narrower than a double can subtract', () 
 
 <script>
   const state = {
-    simple: { key: 'pi', depth: 6, selected: null },
+    simple: { key: 'pi', depth: 6, selected: null, mode: 'plus' },
   };
   const el = (id) => document.getElementById(id);
   const MAX_SIMPLE_TERMS = 60;   // high enough that the precision cutoff, not this cap, is what stops pi
 
   const elide = (s, max = 18) => (s.length <= max ? s : s.slice(0, 8) + '\u2026' + s.slice(-8));
 
-  // a0 + 1/(a1 + 1/(a2 + ...)) as nested CSS fractions.
-  function towerHTML(terms, depth) {
+  // a0 + 1/(a1 + 1/(a2 + ...)), or with minus signs for a minus expansion.
+  function towerHTML(terms, depth, minus) {
+    const op = minus ? ' \u2212 ' : ' + ';
     const build = (i) => {
       const a = String(terms[i]);
       if (i >= depth - 1) {
-        return i + 1 < terms.length ? `${a} + <span class="muted">\u2026</span>` : a;
+        return i + 1 < terms.length ? `${a}${op}<span class="muted">\u2026</span>` : a;
       }
-      return `${a} + <span class="frac"><span class="stack">` +
+      return `${a}${op}<span class="frac"><span class="stack">` +
              `<span class="num">1</span><span class="den">${build(i + 1)}</span>` +
              `</span></span>`;
     };
@@ -1512,11 +1530,24 @@ XTests.test('cascade survives brackets narrower than a double can subtract', () 
     'max-terms': 'stopped at the display limit',
   };
 
+  const SIMPLE_MODES = [
+    { key: 'plus',  label: 'regular\u2003a\u2080 + 1/(a\u2081 + \u2026)' },
+    { key: 'minus', label: 'minus\u2003b\u2080 \u2212 1/(b\u2081 \u2212 \u2026)' },
+  ];
+
   function renderSimple() {
     const s = state.simple;
     const k = CF.constant(s.key);
-    const { rows, stopReason } = CF.convergentRows(s.key, MAX_SIMPLE_TERMS);
+    const minus = s.mode === 'minus';
+    const { rows, stopReason } = CF.convergentRowsFor(s.key, MAX_SIMPLE_TERMS, s.mode);
     const terms = rows.map(r => r.a);
+
+    el('simple-mode').innerHTML = SIMPLE_MODES
+      .map(m => `<button class="chip ${m.key === s.mode ? 'active' : ''}" data-mode="${m.key}">${m.label}</button>`)
+      .join('');
+    el('simple-mode').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.mode = b.dataset.mode; s.selected = null; renderSimple();
+    }));
 
     el('simple-chips').innerHTML = CF.CONSTANTS
       .map(c => `<button class="chip ${c.key === s.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
@@ -1528,12 +1559,15 @@ XTests.test('cascade survives brackets narrower than a double can subtract', () 
     el('simple-depth').max = String(Math.min(30, terms.length));
     const depth = Math.min(s.depth, terms.length);
     el('simple-depth-label').textContent = `showing ${depth} of ${terms.length} terms`;
-    el('simple-tower').innerHTML = `${k.label} = ` + towerHTML(terms, depth);
+    el('simple-tower').innerHTML = `${k.label} = ` + towerHTML(terms, depth, minus);
+    const open = minus ? '\u27e6' : '[', close = minus ? '\u27e7' : ']';
     el('simple-terms').textContent =
-      `[${terms[0]}; ${terms.slice(1, depth).join(', ')}${depth < terms.length ? ', \u2026' : ''}]`;
+      `${open}${terms[0]}; ${terms.slice(1, depth).join(', ')}${depth < terms.length ? ', \u2026' : ''}${close}` +
+      (minus ? '   (double brackets mark a minus expansion)' : '');
     el('simple-status').textContent = `${terms.length} terms \u2014 ${STOP_REASON[stopReason]}.`;
 
     renderSimpleTable(rows);
+    renderCascade();
     renderRace(rows);
   }
 
@@ -1555,9 +1589,11 @@ XTests.test('cascade survives brackets narrower than a double can subtract', () 
   function renderRace(rows) {
     const s = state.simple;
     const box = el('simple-race');
+    const minus = s.mode === 'minus';
     if (s.selected === null) {
       box.innerHTML = '<p class="status">Click a row to race its convergent against every ' +
-        'fraction with a denominator that small.</p>';
+        (minus ? 'fraction above the target ' : 'fraction ') +
+        'with a denominator that small.</p>';
       return;
     }
     const row = rows[s.selected];
@@ -1566,19 +1602,89 @@ XTests.test('cascade survives brackets narrower than a double can subtract', () 
         `(the limit is ${CF.MAX_RACE_Q.toLocaleString()}). This page will not claim a search it did not run.</p>`;
       return;
     }
-    const best = CF.bestApproximations(s.key, Number(row.q), 5);
-    const winner = `${best[0].p}/${best[0].q}` === `${row.p}/${row.q}`;
+    const best = minus
+      ? CF.bestApproximationsAbove(s.key, Number(row.q), 5)
+      : CF.bestApproximations(s.key, Number(row.q), 5);
+    const winner = best.length && `${best[0].p}/${best[0].q}` === `${row.p}/${row.q}`;
     const list = best.map((b, i) => {
       const isRow = `${b.p}/${b.q}` === `${row.p}/${row.q}`;
       return `<tr class="${isRow ? 'selected' : ''}"><td>${i + 1}</td>` +
              `<td class="mono">${b.p}/${b.q}</td><td class="mono">${b.errorStr}</td></tr>`;
     }).join('');
     box.innerHTML =
-      `<p class="status">Every fraction with q \u2264 ${row.q} checked. ` +
+      `<p class="status">Every fraction ${minus ? 'above ' + CF.constant(s.key).label + ' ' : ''}` +
+      `with q ≤ ${row.q} checked. ` +
       (winner
-        ? `The convergent <strong>${row.p}/${row.q}</strong> is the closest of them all.`
-        : `The convergent ${row.p}/${row.q} did <strong>not</strong> win \u2014 worth investigating.`) +
-      `</p><div class="tablewrap"><table><tr><th>rank</th><th>p/q</th><th>x \u2212 p/q</th></tr>${list}</table></div>`;
+        ? `The convergent <strong>${row.p}/${row.q}</strong> is the closest` + (minus ? ' of those.' : ' of them all.')
+        : `The convergent ${row.p}/${row.q} did <strong>not</strong> win — worth investigating.`) +
+      (minus
+        ? ' Minus convergents are <em>one-sided</em> best approximations: they only ever approach ' +
+          'from above, so an unrestricted race can be won by a closer fraction below — 4/1 ' +
+          'loses outright to 3/1, for instance.'
+        : '') +
+      `</p><div class="tablewrap"><table><tr><th>rank</th><th>p/q</th><th>x − p/q</th></tr>${list}</table></div>`;
+  }
+
+  const CASCADE_ROWS = 12;
+
+  function renderCascade() {
+    const s = state.simple;
+    const rows = CF.cascadeRows(s.key, s.mode, CASCADE_ROWS);
+    const rowH = 34, padL = 84, padR = 16, padT = 16;
+    const W = 900, H = padT + Math.max(1, rows.length) * rowH + 10;
+    const ctx = fitCanvas(el('simple-cascade'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    const BELOW = '#1a5fb4', ABOVE = '#c64600';
+    const inner = W - padL - padR;
+    const X = (t) => padL + t * inner;
+
+    if (!rows.length) {
+      ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+      ctx.fillText('nothing left to bracket — the expansion is exact', padL, padT + 16);
+      el('simple-cascade-caption').textContent = '';
+      return;
+    }
+
+    rows.forEach((r, i) => {
+      const y = padT + i * rowH + rowH / 2;
+      ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+
+      ctx.strokeStyle = '#999'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(X(r.loPos), y); ctx.lineTo(X(r.hiPos), y); ctx.stroke();
+
+      // Endpoint ticks, coloured by side. An endpoint labelled "x" IS the target, already
+      // drawn as the black line below, so it gets no tick of its own. The two labels are
+      // staggered above and below the line: even a 15%-wide bracket is narrower than two
+      // fractions like 80143857/25510582 set side by side.
+      [[r.loPos, r.loLabel, r.loAbove, -1], [r.hiPos, r.hiLabel, r.hiAbove, 1]]
+        .forEach(([t, label, above, dir]) => {
+          if (label === 'x') return;
+          ctx.strokeStyle = above ? ABOVE : BELOW; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(X(t), y - 7); ctx.lineTo(X(t), y + 7); ctx.stroke();
+          ctx.fillStyle = above ? ABOVE : BELOW; ctx.font = '10px ui-monospace, Menlo, monospace';
+          const w = ctx.measureText(label).width;
+          const lx = Math.min(Math.max(X(t) - w / 2, padL), W - padR - w);
+          ctx.fillText(label, lx, dir < 0 ? y - 11 : y + 18);
+        });
+
+      ctx.strokeStyle = '#111'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(X(r.targetPos), y - 11); ctx.lineTo(X(r.targetPos), y + 11); ctx.stroke();
+
+      ctx.fillStyle = '#666'; ctx.font = '10px sans-serif';
+      ctx.fillText(`n=${r.n}`, 4, y + 3);
+      ctx.fillText(CF.sci(r.width, 3), 34, y + 3);
+    });
+
+    const minus = s.mode === 'minus';
+    el('simple-cascade-caption').textContent = minus
+      ? 'Each row zooms in further than the last. Every convergent sits on the same side — above ' +
+        `${CF.constant(s.key).label} — and marches down onto it without ever crossing. ` +
+        'The bar runs from the target to the newest convergent; the number on the left is its width.'
+      : 'Each row zooms in further than the last. The two convergents land on opposite sides of ' +
+        `${CF.constant(s.key).label} and trap it between them, and every level tightens the trap ` +
+        'inside the previous one. Blue is below the target, orange above; the number on the left ' +
+        'is the bracket width.';
   }
 
   el('simple-depth').addEventListener('input', (e) => {
