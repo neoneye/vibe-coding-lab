@@ -404,6 +404,53 @@ const CF = (() => {
     return `${neg ? '-' : ''}${mant}e${exp < 0 ? '-' : '+'}${Math.abs(exp)}`;
   };
 
+  // ---- telescoping bracket cascade ----
+
+  const cascadeRows = (key, mode, maxRows) => {
+    const k = constant(key);
+    const x = k.exact || k.lo;
+    const { rows: cr } = convergentRowsFor(key, maxRows + 2, mode);
+    const vals = cr.map(r => Rat.make(r.p, r.q));
+    const labels = cr.map(r => `${r.p}/${r.q}`);
+    const out = [];
+
+    for (let n = 1; n < vals.length && out.length < maxRows; n++) {
+      let lo, hi, loLabel, hiLabel;
+      if (mode === 'minus') {
+        // Both convergents sit above the target, so the informative interval runs
+        // from the target up to the newest convergent.
+        lo = x; hi = vals[n]; loLabel = 'x'; hiLabel = labels[n];
+        if (Rat.cmp(hi, lo) <= 0) break;            // an exact hit: nothing left to draw
+      } else {
+        const a = vals[n - 1], b = vals[n];
+        if (Rat.cmp(a, b) < 0) { lo = a; hi = b; loLabel = labels[n - 1]; hiLabel = labels[n]; }
+        else { lo = b; hi = a; loLabel = labels[n]; hiLabel = labels[n - 1]; }
+        if (Rat.cmp(lo, x) >= 0 || Rat.cmp(x, hi) >= 0) break;   // target no longer inside
+      }
+      const width = Rat.sub(hi, lo);
+      if (Rat.isZero(width)) break;
+
+      // The view is the PREVIOUS row's interval, padded 15% each side; row 0 uses its own.
+      const base = out.length ? out[out.length - 1] : { lo, hi, width };
+      const pad = Rat.mul(base.width, Rat.make(15n, 100n));   // 15% of the base width
+      const viewLo = Rat.sub(base.lo, pad), viewHi = Rat.add(base.hi, pad);
+      const span = Rat.sub(viewHi, viewLo);
+      const pos = (v) => {
+        const t = Rat.toNumber(Rat.div(Rat.sub(v, viewLo), span));
+        return t < 0 ? 0 : t > 1 ? 1 : t;
+      };
+
+      out.push({
+        n, lo, hi, width,
+        brackets: Rat.cmp(lo, x) < 0 && Rat.cmp(x, hi) < 0,
+        loPos: pos(lo), hiPos: pos(hi), targetPos: pos(x),
+        loLabel, hiLabel,
+        loAbove: Rat.cmp(lo, x) > 0, hiAbove: Rat.cmp(hi, x) > 0,
+      });
+    }
+    return out;
+  };
+
   // ---- minus ("Hirzebruch-Jung") continued fractions: b0 - 1/(b1 - 1/(b2 - ...)) ----
 
   const ratCeil = (a) => {
@@ -822,7 +869,8 @@ const CF = (() => {
            dissect,
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
-           ratCeil, minusTermsExact, minusTermsFromInterval, minusConvergents, minusExpand };
+           ratCeil, minusTermsExact, minusTermsFromInterval, minusConvergents, minusExpand,
+           cascadeRows };
 })();
 
 XTests.test('Rat reduces and normalizes sign', () => {
@@ -1375,6 +1423,61 @@ XTests.test('the from-above race refuses denominators it cannot search', () => {
   let threw = false;
   try { CF.bestApproximationsAbove('pi', CF.MAX_RACE_Q + 1, 1); } catch (e) { threw = true; }
   XTests.ok(threw, 'expected a throw for an oversized Q');
+});
+
+XTests.test('cascade rows bracket the target in regular mode', () => {
+  const rows = CF.cascadeRows('pi', 'plus', 8);
+  const x = CF.constant('pi').lo;
+  XTests.ok(rows.length >= 6, `expected several rows, got ${rows.length}`);
+  for (const r of rows) {
+    XTests.ok(r.brackets, `row ${r.n} did not bracket the target`);
+    XTests.ok(CF.Rat.cmp(r.lo, x) < 0 && CF.Rat.cmp(x, r.hi) < 0, `target outside row ${r.n}`);
+    XTests.ok(r.loAbove === false && r.hiAbove === true, `row ${r.n} endpoints on wrong sides`);
+  }
+});
+
+XTests.test('cascade rows are strictly nested', () => {
+  for (const mode of ['plus', 'minus']) {
+    const rows = CF.cascadeRows('pi', mode, 8);
+    for (let i = 1; i < rows.length; i++) {
+      const prev = rows[i - 1], cur = rows[i];
+      XTests.ok(CF.Rat.cmp(cur.width, prev.width) < 0,
+                `${mode} row ${cur.n} was not narrower than row ${prev.n}`);
+      XTests.ok(CF.Rat.cmp(prev.lo, cur.lo) <= 0 && CF.Rat.cmp(cur.hi, prev.hi) <= 0,
+                `${mode} row ${cur.n} escaped row ${prev.n}`);
+    }
+  }
+});
+
+XTests.test('cascade rows in minus mode sit entirely above the target', () => {
+  const rows = CF.cascadeRows('pi', 'minus', 8);
+  const x = CF.constant('pi').lo;
+  for (const r of rows) {
+    XTests.ok(!r.brackets, `minus row ${r.n} claimed to bracket the target`);
+    XTests.ok(CF.Rat.cmp(r.lo, x) >= 0, `minus row ${r.n} extended below the target`);
+    XTests.eq(r.loLabel, 'x', `minus row ${r.n} should start at the target`);
+  }
+});
+
+XTests.test('cascade positions stay inside the drawable range', () => {
+  for (const mode of ['plus', 'minus']) {
+    for (const key of ['pi', 'e', 'sqrt2', 'phi']) {
+      for (const r of CF.cascadeRows(key, mode, 10)) {
+        for (const pos of [r.loPos, r.hiPos, r.targetPos]) {
+          XTests.ok(pos >= 0 && pos <= 1 && Number.isFinite(pos),
+                    `${key}/${mode} row ${r.n}: position ${pos} out of range`);
+        }
+      }
+    }
+  }
+});
+
+XTests.test('cascade survives brackets narrower than a double can subtract', () => {
+  const rows = CF.cascadeRows('phi', 'plus', 14);
+  const last = rows[rows.length - 1];
+  XTests.ok(CF.Rat.cmp(last.width, CF.Rat.make(1n, 10n ** 5n)) < 0, 'expected a narrow last row');
+  XTests.ok(Number.isFinite(last.targetPos) && last.targetPos > 0 && last.targetPos < 1,
+            `target position collapsed to ${last.targetPos}`);
 });
 
 </script>
