@@ -49,16 +49,30 @@
   .verdict { display:block; padding:8px 12px; border-left:3px solid var(--accent); background:#f4f7fb; }
   label { display:inline-flex; align-items:center; gap:6px; }
   select, input[type=number] { font:inherit; padding:3px 4px; }
+  .sectionhead { font-size:14px; font-weight:600; margin:22px 0 8px 0; }
+  .numgrid { display:grid; grid-template-columns:repeat(24, 1fr); gap:2px; max-width:720px; }
+  .numgrid div { font-size:9px; text-align:center; padding:2px 0; border-radius:2px;
+    background:#f2f2f2; color:#bbb; font-variant-numeric:tabular-nums; }
+  .numgrid div.both { background:#1a5fb4; color:#fff; }
+  .numgrid div.prod { background:#c8dcf5; color:#1a5fb4; }
+  .legend { display:flex; gap:16px; flex-wrap:wrap; margin:8px 0; font-size:12px; color:var(--muted); }
+  .legend span::before { content:''; display:inline-block; width:10px; height:10px; margin-right:5px;
+    vertical-align:-1px; border-radius:2px; }
+  .legend .k-both::before { background:#1a5fb4; }
+  .legend .k-prod::before { background:#c8dcf5; }
+  .legend .k-none::before { background:#f2f2f2; }
+  #euler-race td:first-child, #euler-race th:first-child { text-align:left; color:var(--muted); }
 </style>
 </head>
 <body>
 <div class="app">
   <h1>Continued Fractions</h1>
-  <p class="sub">Exact expansions of famous constants, generalized fractions you build yourself, and the picture behind both.</p>
+  <p class="sub">Ways a constant gets built out of the integers: continued fractions, and a product over the primes alone.</p>
   <div class="tabs">
     <button class="tab active" data-panel="simple">Simple</button>
     <button class="tab" data-panel="general">Generalized</button>
     <button class="tab" data-panel="geometry">Geometry</button>
+    <button class="tab" data-panel="euler">Euler product</button>
   </div>
   <div class="panel active" id="panel-simple">
     <div class="chips" id="simple-chips"></div>
@@ -99,6 +113,21 @@
     </div>
     <canvas id="geo-canvas" width="900" height="420"></canvas>
     <p class="status" id="geo-status"></p>
+  </div>
+  <div class="panel" id="panel-euler">
+    <div class="chips" id="euler-s"></div>
+    <div class="controls">
+      <label>cutoff N <input type="range" id="euler-n" min="2" max="200" value="30"></label>
+      <span class="muted" id="euler-n-label"></span>
+    </div>
+    <p id="euler-target"></p>
+    <div class="tablewrap"><table id="euler-race"></table></div>
+    <h2 class="sectionhead">Why the product is ahead</h2>
+    <div id="euler-grid"></div>
+    <p class="status" id="euler-grid-caption"></p>
+    <h2 class="sectionhead">What each prime contributes</h2>
+    <canvas id="euler-bars" width="900" height="220"></canvas>
+    <p class="status" id="euler-bars-caption"></p>
   </div>
 </div>
 
@@ -1461,6 +1490,116 @@ XTests.test('the product uses far fewer factors than the sum uses terms', () => 
   el('geo-depth').addEventListener('input', e => { state.geometry.depth = Number(e.target.value); renderGeometry(); });
   el('geo-zoom').addEventListener('input', e => { state.geometry.zoom = Number(e.target.value); renderGeometry(); });
   renderGeometry();
+
+  // ---------- Euler product tab ----------
+  state.euler = { s: 2, N: 30 };
+  const EULER_GRID_LIMIT = 240;
+
+  function renderEuler() {
+    const e = state.euler;
+    el('euler-s').innerHTML = CF.ZETA_S
+      .map(s => `<button class="chip ${s === e.s ? 'active' : ''}" data-s="${s}">s = ${s}</button>`)
+      .join('');
+    el('euler-s').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      e.s = Number(b.dataset.s); renderEuler();
+    }));
+
+    const z = CF.zetaValue(e.s);
+    const sum = CF.zetaPartialSum(e.s, e.N);
+    const prod = CF.eulerPartialProduct(e.s, e.N);
+    const nPrimes = CF.primesUpTo(e.N).length;
+    const errSum = CF.Rat.sub(z.rat, sum);
+    const errProd = CF.Rat.sub(z.rat, prod);
+
+    el('euler-n-label').textContent =
+      `${e.N} integers in the sum, ${nPrimes} primes in the product`;
+
+    el('euler-target').innerHTML = '<span class="verdict">' +
+      `<strong>${z.label}</strong> = ` +
+      (z.closedForm ? `<strong>${z.closedForm}</strong> = ` : '') +
+      `<span class="mono">${CF.Rat.toDecimalString(z.rat, 16)}…</span>` +
+      (z.closedForm ? ''
+        : ' — Apéry’s constant. No closed form is known; Apéry proved in 1978 that it is irrational.') +
+      '</span>';
+
+    el('euler-race').innerHTML =
+      '<tr><th></th><th>over every integer</th><th>over the primes only</th></tr>' +
+      `<tr><td>expression</td><td class="mono">Σ<sub>n≤${e.N}</sub> 1/n<sup>${e.s}</sup></td>` +
+      `<td class="mono">∏<sub>p≤${e.N}</sub> (1 − p<sup>−${e.s}</sup>)<sup>−1</sup></td></tr>` +
+      `<tr><td>value</td><td class="mono">${CF.Rat.toDecimalString(sum, 16)}</td>` +
+      `<td class="mono">${CF.Rat.toDecimalString(prod, 16)}</td></tr>` +
+      `<tr><td>still short by</td><td class="mono">${CF.sci(errSum, 5)}</td>` +
+      `<td class="mono">${CF.sci(errProd, 5)}</td></tr>` +
+      `<tr><td>work done</td><td>${e.N} terms</td><td>${nPrimes} factors</td></tr>`;
+
+    renderEulerGrid();
+    renderEulerBars();
+  }
+
+  function renderEulerGrid() {
+    const e = state.euler;
+    const smooth = new Set(CF.smoothNumbers(e.N, EULER_GRID_LIMIT));
+    let html = '<div class="numgrid">';
+    for (let m = 1; m <= EULER_GRID_LIMIT; m++) {
+      const cls = m <= e.N ? 'both' : (smooth.has(m) ? 'prod' : '');
+      html += `<div class="${cls}" title="${m}">${m}</div>`;
+    }
+    html += '</div><div class="legend">' +
+      `<span class="k-both">reached by both (n ≤ ${e.N})</span>` +
+      '<span class="k-prod">reached by the product alone</span>' +
+      '<span class="k-none">reached by neither</span></div>';
+    el('euler-grid').innerHTML = html;
+
+    const extra = [...smooth].filter(m => m > e.N);
+    const preview = extra.slice(0, 12).join(', ');
+    el('euler-grid-caption').textContent =
+      `The sum has reached ${e.N} integers. The product over ${CF.primesUpTo(e.N).length} primes ` +
+      `already accounts for ${extra.length} more below ${EULER_GRID_LIMIT}` +
+      (preview ? ` — ${preview}${extra.length > 12 ? ' and so on' : ''}` : '') +
+      '. That is unique factorisation: the product over primes p ≤ N is exactly the sum over ' +
+      'integers whose prime factors are all ≤ N.';
+  }
+
+  function renderEulerBars() {
+    const e = state.euler;
+    const W = 900, H = 220, padL = 40, padB = 28, padT = 14;
+    const ctx = fitCanvas(el('euler-bars'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    const rows = CF.primeFactorRows(e.s, e.N)
+      .map(r => ({ p: r.p, f: r.factor, excess: CF.Rat.toNumber(r.excess) }));
+    if (!rows.length) {
+      ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+      ctx.fillText('no primes below N yet', padL, H / 2);
+      el('euler-bars-caption').textContent = '';
+      return;
+    }
+    const maxEx = rows[0].excess;
+    const bw = (W - padL - 12) / rows.length;
+    ctx.fillStyle = '#1a5fb4';
+    rows.forEach((r, i) => {
+      const h = (r.excess / maxEx) * (H - padB - padT);
+      ctx.fillRect(padL + i * bw + 1, H - padB - h, Math.max(1, bw - 2), h);
+    });
+    ctx.fillStyle = '#666'; ctx.font = '10px sans-serif';
+    const every = Math.max(1, Math.ceil(16 / bw));
+    rows.forEach((r, i) => {
+      if (i % every !== 0) return;
+      ctx.fillText(String(r.p), padL + i * bw + 1, H - padB + 12);
+    });
+    ctx.font = '11px sans-serif';
+    ctx.fillText('factor − 1', 4, padT + 4);
+    ctx.fillText('prime', W / 2 - 14, H - 6);
+
+    const first = rows.slice(0, 4).map(r => `${r.p} → ${CF.Rat.toDecimalString(r.f, 6)}`).join(', ');
+    const lastRow = rows[rows.length - 1];
+    el('euler-bars-caption').textContent =
+      `Each prime multiplies in (1 − p⁻ˢ)⁻¹: ${first}` +
+      `, and by ${lastRow.p} only ${CF.Rat.toDecimalString(lastRow.f, 6)}. ` +
+      'The small primes do nearly all the work, and raising s makes the decay steeper.';
+  }
+
+  el('euler-n').addEventListener('input', ev => { state.euler.N = Number(ev.target.value); renderEuler(); });
+  renderEuler();
 
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
