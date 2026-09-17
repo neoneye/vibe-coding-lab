@@ -351,14 +351,22 @@ const CF = (() => {
       exactNum: 355n, exactDen: 113n },
   ];
 
-  const EPS = Rat.make(1n, 10n ** 60n);
+  // The interval width MUST come from how many fractional digits were actually stored.
+  // A truncated decimal with n fractional digits satisfies 0 <= value - lo < 10^-n, so
+  // hi = lo + 10^-n contains the value. A fixed 10^-60 was wrong: five constants carry
+  // only 59 fractional digits, and their true values lie above lo + 10^-60 - which let
+  // the expansion certify terms it had not earned (nearest-mode sqrt5 emitted a 5 where
+  // the periodic expansion has a 4).
+  const fracDigits = (d) => { const i = d.indexOf('.'); return i < 0 ? 0 : d.length - i - 1; };
 
   const constant = (key) => {
     const c = CONSTANTS.find(x => x.key === key);
     if (!c) throw new Error('unknown constant ' + key);
     const lo = Rat.fromDecimalString(c.digits);
+    const eps = Rat.make(1n, 10n ** BigInt(fracDigits(c.digits)));
     const exact = c.exactNum !== undefined ? Rat.make(c.exactNum, c.exactDen) : null;
-    return { key: c.key, label: c.label, lo, hi: Rat.add(lo, EPS), exact, quad: c.quad || null };
+    return { key: c.key, label: c.label, lo, hi: Rat.add(lo, eps), eps, exact,
+             quad: c.quad || null };
   };
 
   // ---- term extraction ----
@@ -1311,7 +1319,7 @@ const CF = (() => {
   };
 
   return { bgcd, isqrt, Rat, trunc, ratSqrt, ratCbrt, ratExp1, ratLn2, ratArctanInv, ratPiMachin,
-           CONSTANTS, constant, EPS,
+           CONSTANTS, constant, fracDigits,
            quadraticTerms, expandMode,
            convergents, sci, convergentRows, convergentRowsFor,
            MAX_RACE_Q, bestApproximations, bestApproximationsAbove,
@@ -1414,6 +1422,63 @@ XTests.test('355/113 is stored exactly', () => {
   const k = CF.constant('r355_113');
   XTests.ok(k.exact !== null, 'exact rational present');
   XTests.eq(k.exact.n, 355n); XTests.eq(k.exact.d, 113n);
+});
+
+XTests.test('every enclosure actually contains its value', () => {
+  // The bug this pins: a fixed 10^-60 width with only 59 stored fractional digits puts the
+  // true value ABOVE hi, which lets the expansion certify terms it has not earned.
+  // Each reference is itself a TRUNCATED lower bound, so it must be computed to more
+  // digits than the constant it certifies - otherwise lo > ref merely because lo is the
+  // better approximation, and the test fails for the wrong reason.
+  const D = 110;
+  const slack = CF.Rat.make(1n, 10n ** BigInt(D));
+  const refs = {
+    sqrt2: CF.ratSqrt(2n, D), sqrt3: CF.ratSqrt(3n, D), sqrt5: CF.ratSqrt(5n, D),
+    phi: CF.Rat.div(CF.Rat.add(CF.Rat.fromInt(1), CF.ratSqrt(5n, D)), CF.Rat.fromInt(2)),
+    cbrt2: CF.ratCbrt(2n, D), e: CF.ratExp1(D), ln2: CF.ratLn2(D), pi: CF.ratPiMachin(D),
+  };
+  for (const [key, ref] of Object.entries(refs)) {
+    const k = CF.constant(key);
+    // true value v satisfies ref <= v < ref + 10^-D, so [lo, hi) contains v when
+    // lo <= ref and ref + 10^-D <= hi.
+    XTests.ok(CF.Rat.cmp(k.lo, ref) <= 0, `${key}: lo is above the true value`);
+    XTests.ok(CF.Rat.cmp(CF.Rat.add(ref, slack), k.hi) <= 0,
+              `${key}: the true value can reach or exceed hi`);
+  }
+  // The rational one is exact, so its enclosure must contain it too.
+  const r = CF.constant('r355_113');
+  XTests.ok(CF.Rat.cmp(r.lo, r.exact) <= 0 && CF.Rat.cmp(r.exact, r.hi) < 0, 'r355_113');
+});
+
+XTests.test('the interval width matches the digits actually stored', () => {
+  for (const c of CF.CONSTANTS) {
+    const k = CF.constant(c.key);
+    const want = CF.Rat.make(1n, 10n ** BigInt(CF.fracDigits(c.digits)));
+    XTests.eq(CF.Rat.cmp(CF.Rat.sub(k.hi, k.lo), want), 0, `${c.key} width`);
+    XTests.eq(CF.Rat.cmp(k.eps, want), 0, `${c.key} eps`);
+  }
+});
+
+XTests.test('sqrt5 stays periodic, and nearest mode stops instead of guessing', () => {
+  // The symptom of the bad enclosure was a 5 among the 4s of [2;4,4,4,...]: an uncertified
+  // term presented as fact. sqrt5 is [2;4,4,4,...] in floor mode (exact periodic generator)
+  // and in nearest mode, where rounding down IS rounding to nearest for a quotient of 4.236.
+  for (const mode of ['floor', 'nearest']) {
+    const { rows, stopReason } = CF.convergentRowsFor('sqrt5', 60, mode);
+    for (const r of rows.slice(1)) {
+      XTests.eq(r.a, 4n, `sqrt5/${mode} term ${r.n} broke the period`);
+    }
+    if (mode === 'nearest') {
+      // It must run out of certainty rather than invent a term.
+      XTests.eq(stopReason, 'precision-exhausted');
+      XTests.ok(rows.length < 60, `expected nearest mode to stop early, got ${rows.length}`);
+    }
+  }
+  // alt alternates floor and ceiling, so its terms legitimately alternate; assert only
+  // that it stays within the small set those two roundings can produce.
+  for (const r of CF.convergentRowsFor('sqrt5', 30, 'alt').rows.slice(1)) {
+    XTests.ok(r.a === 1n || r.a === 4n || r.a === 5n, `sqrt5/alt produced ${r.a}`);
+  }
 });
 
 XTests.test('rational expansion terminates', () => {
