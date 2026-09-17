@@ -90,7 +90,16 @@
       <canvas id="gen-plot" width="420" height="260"></canvas>
     </div>
   </div>
-  <div class="panel" id="panel-geometry"></div>
+  <div class="panel" id="panel-geometry">
+    <div class="chips" id="geo-chips"></div>
+    <div class="controls">
+      <label>generations <input type="range" id="geo-depth" min="1" max="12" value="4"></label>
+      <label>zoom to generation <input type="range" id="geo-zoom" min="0" max="8" value="0"></label>
+      <span class="muted" id="geo-labels"></span>
+    </div>
+    <canvas id="geo-canvas" width="900" height="420"></canvas>
+    <p class="status" id="geo-status"></p>
+  </div>
 </div>
 
 <script id="shared-code">
@@ -1149,6 +1158,84 @@ XTests.test('every square lies inside the starting rectangle', () => {
   el('gen-negate').addEventListener('change', e => { state.general.negate = e.target.checked; renderGeneral(); });
   el('gen-terms').addEventListener('input', e => { state.general.terms = Number(e.target.value); renderGeneral(); });
   renderGeneral();
+
+  // ---------- Geometry tab ----------
+  state.geometry = { key: 'pi', depth: 4, zoom: 0 };
+
+  const GEN_COLORS = ['#1a5fb4', '#c64600', '#2d7d46', '#7a4fbf', '#b5830c',
+                      '#0b6e7a', '#a0355f', '#4a5568', '#8b5a2b', '#3b7d3b',
+                      '#6d28d9', '#166534'];
+
+  function renderGeometry() {
+    const g = state.geometry;
+    el('geo-chips').innerHTML = CF.CONSTANTS
+      .map(c => `<button class="chip ${c.key === g.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
+      .join('');
+    el('geo-chips').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      g.key = b.dataset.key; g.zoom = 0; el('geo-zoom').value = '0'; renderGeometry();
+    }));
+
+    const e = CF.expand(g.key, 20);
+    const d = CF.dissect(e.terms.slice(0, g.depth), 400);
+    const zoom = Math.min(g.zoom, Math.max(0, d.generations.length - 1));
+    el('geo-zoom').max = String(Math.max(0, d.generations.length - 1));
+
+    const W = 900, H = 420, pad = 20;
+    const ctx = fitCanvas(el('geo-canvas'), W, H);
+    ctx.clearRect(0, 0, W, H);
+
+    // The view is the pre-cut rectangle of the zoom generation, in continued-fraction coordinates.
+    const view = d.generations[zoom].rect;
+    const vx = CF.Rat.toNumber(view.x), vy = CF.Rat.toNumber(view.y);
+    const vw = CF.Rat.toNumber(view.w), vh = CF.Rat.toNumber(view.h);
+    const scale = Math.min((W - 2 * pad) / vw, (H - 2 * pad) / vh);
+    const ox = pad + ((W - 2 * pad) - vw * scale) / 2;
+    const oy = pad + ((H - 2 * pad) - vh * scale) / 2;
+    const PX = (x) => ox + (x - vx) * scale;
+    const PY = (y) => oy + (y - vy) * scale;
+
+    for (const gen of d.generations) {
+      const color = GEN_COLORS[gen.index % GEN_COLORS.length];
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color + '22';
+      ctx.lineWidth = 1;
+      for (const sq of gen.squares) {
+        const x = PX(CF.Rat.toNumber(sq.x)), y = PY(CF.Rat.toNumber(sq.y));
+        const side = CF.Rat.toNumber(sq.side) * scale;
+        if (side < 0.4) continue;                  // below a pixel: nothing honest to draw
+        ctx.fillRect(x, y, side, side);
+        ctx.strokeRect(x, y, side, side);
+      }
+      // Label a generation inside its first square only when the text actually fits there;
+      // the colour-matched legend above the canvas carries the rest.
+      const first = gen.squares[0];
+      if (first) {
+        const side = CF.Rat.toNumber(first.side) * scale;
+        const text = `a${gen.index} = ${gen.count}`;
+        ctx.font = '13px sans-serif';
+        if (side > 26 && ctx.measureText(text).width < side - 10) {
+          ctx.fillStyle = color;
+          ctx.fillText(text, PX(CF.Rat.toNumber(first.x)) + 6, PY(CF.Rat.toNumber(first.y)) + 18);
+        }
+      }
+    }
+
+    el('geo-labels').innerHTML = d.generations.map(x =>
+      `<span style="color:${GEN_COLORS[x.index % GEN_COLORS.length]}">a${x.index}=${x.count}</span>`
+    ).join('&nbsp; ');
+    const terminates = e.stopReason === 'exact';
+    el('geo-status').textContent =
+      `Rectangle of ratio ${CF.constant(g.key).label} : 1. Each generation fills what is left with ` +
+      'the largest square that fits — and the counts are exactly the continued-fraction terms. ' +
+      (terminates
+        ? 'This ratio is rational, so the process ends on an exact square and the picture is finite.'
+        : 'This ratio is irrational, so a remainder always survives — drag "zoom to generation" to fall into it.') +
+      (d.truncated ? ' (Square budget reached; later generations are clipped.)' : '');
+  }
+
+  el('geo-depth').addEventListener('input', e => { state.geometry.depth = Number(e.target.value); renderGeometry(); });
+  el('geo-zoom').addEventListener('input', e => { state.geometry.zoom = Number(e.target.value); renderGeometry(); });
+  renderGeometry();
 
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
