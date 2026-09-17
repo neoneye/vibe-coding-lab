@@ -71,7 +71,7 @@
 <body>
 <div class="app">
   <h1>Continued Fractions</h1>
-  <p class="sub">Ways a constant gets built out of the integers: continued fractions, and a product over the primes alone.</p>
+  <p class="sub">Ways a constant gets built out of the integers — dividing, adding, multiplying — on the real line and in the complex plane.</p>
   <div class="tabs">
     <button class="tab active" data-panel="simple">Simple</button>
     <button class="tab" data-panel="general">Generalized</button>
@@ -79,6 +79,7 @@
     <button class="tab" data-panel="euler">Euler product</button>
     <button class="tab" data-panel="unit">Unit fractions</button>
     <button class="tab" data-panel="complex">Complex</button>
+    <button class="tab" data-panel="mobius">Möbius</button>
   </div>
   <div class="panel active" id="panel-simple">
     <div class="chips" id="simple-mode"></div>
@@ -154,6 +155,13 @@
     <div class="tablewrap"><table id="cx-table"></table></div>
     <canvas id="cx-canvas" width="420" height="420"></canvas>
     <p class="status" id="cx-caption"></p>
+  </div>
+  <div class="panel" id="panel-mobius">
+    <div class="chips" id="mb-chips"></div>
+    <p class="status" id="mb-intro"></p>
+    <canvas id="mb-canvas" width="900" height="240"></canvas>
+    <p class="status" id="mb-caption"></p>
+    <div class="tablewrap"><table id="mb-table"></table></div>
   </div>
 </div>
 
@@ -670,6 +678,48 @@ const CF = (() => {
     return { ...r, source: 'interval' };
   };
 
+  // ---- Mobius disks: the LFT picture of a real continued fraction ----
+  //
+  // T_n(z) = (A_n z + A_{n-1}) / (B_n z + B_{n-1}) has real coefficients and sends
+  // 0 -> A_{n-1}/B_{n-1} and infinity -> A_n/B_n. It therefore maps the imaginary axis to
+  // a circle through those two points, and the closed right half-plane to the DISK whose
+  // diameter runs between consecutive convergents.
+  //
+  // Note the region matters: the image of the UNIT disk contains the target but successive
+  // ones do NOT nest. The half-plane is the region each map sends inside itself, and its
+  // images nest, shrink, and keep the target - all three asserted by tests.
+  // Regular (floor) mode only. The half-plane-into-itself argument needs every numerator
+  // to be +1 with positive terms; in the nearest, alternating and ceiling modes consecutive
+  // convergents can land on the same side of the target, and the disk between them then
+  // does not contain it at all. A test pins that failure so the restriction is not folklore.
+  const mobiusDisks = (key, maxLevels) => {
+    const mode = 'floor';
+    const k = constant(key);
+    const x = k.exact || k.lo;
+    const { rows, stopReason } = convergentRowsFor(key, maxLevels + 2, mode);
+    const two = Rat.fromInt(2);
+    const disks = [];
+    for (let n = 1; n < rows.length && disks.length < maxLevels; n++) {
+      const a = Rat.make(rows[n - 1].p, rows[n - 1].q), b = Rat.make(rows[n].p, rows[n].q);
+      const centre = Rat.div(Rat.add(a, b), two);
+      const diff = Rat.sub(b, a);
+      const radius = Rat.div(diff.n < 0n ? Rat.neg(diff) : diff, two);
+      if (Rat.isZero(radius)) break;
+      const off = Rat.sub(x, centre);
+      const prev = disks.length ? disks[disks.length - 1] : null;
+      disks.push({
+        n, centre, radius,
+        radiusStr: sci(radius, 4),
+        shrink: prev ? Rat.div(radius, prev.radius) : null,
+        shrinkStr: prev ? sci(Rat.div(radius, prev.radius), 3) : '—',
+        containsTarget: Rat.cmp(off.n < 0n ? Rat.neg(off) : off, radius) <= 0,
+        loLabel: `${rows[n - 1].p}/${rows[n - 1].q}`,
+        hiLabel: `${rows[n].p}/${rows[n].q}`,
+      });
+    }
+    return { disks, stopReason };
+  };
+
   // ---- telescoping bracket cascade ----
 
   const cascadeRows = (key, mode, maxRows) => {
@@ -1114,7 +1164,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows, raceKind, unitFractions, unitFractionRows,
+           cascadeRows, raceKind, mobiusDisks, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            SEMI_MODES, ratRound, pickInteger, semiregularTerms, semiregularConvergents };
@@ -1736,6 +1786,75 @@ XTests.test('cascade survives brackets narrower than a double can subtract', () 
   XTests.ok(CF.Rat.cmp(last.width, CF.Rat.make(1n, 10n ** 5n)) < 0, 'expected a narrow last row');
   XTests.ok(Number.isFinite(last.targetPos) && last.targetPos > 0 && last.targetPos < 1,
             `target position collapsed to ${last.targetPos}`);
+});
+
+XTests.test('Mobius disks contain the target, nest, and shrink', () => {
+  for (const c of CF.CONSTANTS) {
+    const { disks } = CF.mobiusDisks(c.key, 9);
+    if (disks.length < 2) continue;
+    let prev = null;
+    for (const d of disks) {
+      XTests.ok(d.containsTarget, `${c.key} level ${d.n} lost the target`);
+      if (prev) {
+        const off = CF.Rat.sub(d.centre, prev.centre);
+        const aoff = off.n < 0n ? CF.Rat.neg(off) : off;
+        XTests.ok(CF.Rat.cmp(CF.Rat.add(aoff, d.radius), prev.radius) <= 0,
+                  `${c.key} level ${d.n} escaped its parent`);
+        XTests.ok(CF.Rat.cmp(d.radius, prev.radius) < 0,
+                  `${c.key} level ${d.n} did not shrink`);
+      }
+      prev = d;
+    }
+  }
+});
+
+XTests.test('the diameter construction fails outside regular mode - why it is restricted', () => {
+  // In nearest mode consecutive convergents of pi can sit on the SAME side of pi, so the
+  // disk spanning them misses the target entirely. That is why mobiusDisks is floor-only.
+  const rows = CF.convergentRowsFor('pi', 6, 'nearest').rows;
+  const x = CF.constant('pi').lo;
+  let sawMiss = false;
+  for (let n = 1; n < rows.length; n++) {
+    const a = CF.Rat.make(rows[n - 1].p, rows[n - 1].q), b = CF.Rat.make(rows[n].p, rows[n].q);
+    const centre = CF.Rat.div(CF.Rat.add(a, b), CF.Rat.fromInt(2));
+    const diff = CF.Rat.sub(b, a);
+    const radius = CF.Rat.div(diff.n < 0n ? CF.Rat.neg(diff) : diff, CF.Rat.fromInt(2));
+    const off = CF.Rat.sub(x, centre);
+    if (CF.Rat.cmp(off.n < 0n ? CF.Rat.neg(off) : off, radius) > 0) sawMiss = true;
+  }
+  XTests.ok(sawMiss, 'expected at least one nearest-mode disk to miss the target');
+});
+
+XTests.test('a disk diameter runs between consecutive convergents', () => {
+  const rows = CF.convergentRowsFor('pi', 9, 'floor').rows;
+  const { disks } = CF.mobiusDisks('pi', 8);
+  for (const d of disks) {
+    const a = CF.Rat.make(rows[d.n - 1].p, rows[d.n - 1].q);
+    const b = CF.Rat.make(rows[d.n].p, rows[d.n].q);
+    const mid = CF.Rat.div(CF.Rat.add(a, b), CF.Rat.fromInt(2));
+    XTests.eq(CF.Rat.cmp(d.centre, mid), 0, `level ${d.n} centre`);
+    const diff = CF.Rat.sub(b, a);
+    const half = CF.Rat.div(diff.n < 0n ? CF.Rat.neg(diff) : diff, CF.Rat.fromInt(2));
+    XTests.eq(CF.Rat.cmp(d.radius, half), 0, `level ${d.n} radius`);
+  }
+});
+
+XTests.test('the unit-disk construction does NOT nest - regression guard', () => {
+  // Kept so the wrong geometry cannot quietly return: the image of the UNIT disk under
+  // T_n has radius 1/||B_{n-1}|^2 - |B_n|^2| and contains the target, but successive
+  // ones are not nested. The half-plane image, used above, is the construction that works.
+  const rows = CF.convergentRowsFor('pi', 9, 'floor').rows;
+  let Am1 = 1n, Bm1 = 0n, prev = null, nested = true;
+  for (const r of rows) {
+    const den = Bm1 * Bm1 - r.q * r.q;
+    if (den !== 0n) {
+      const c = Number(Am1 * Bm1 - r.p * r.q) / Number(den), rad = 1 / Math.abs(Number(den));
+      if (prev && Math.abs(c - prev.c) + rad > prev.rad * (1 + 1e-12)) nested = false;
+      prev = { c, rad };
+    }
+    Am1 = r.p; Bm1 = r.q;
+  }
+  XTests.ok(!nested, 'the unit-disk images unexpectedly nested - re-check the geometry');
 });
 
 XTests.test('ratRound rounds to nearest, halves up', () => {
@@ -2850,6 +2969,90 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   }
 
   renderComplex();
+
+  // ---------- Mobius tab ----------
+  state.mobius = { key: 'pi' };
+  const MB_LEVELS = 8;
+
+  function renderMobius() {
+    const s = state.mobius;
+    el('mb-chips').innerHTML = CF.CONSTANTS
+      .map(c => `<button class="chip ${c.key === s.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
+      .join('');
+    el('mb-chips').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.key = b.dataset.key; renderMobius();
+    }));
+
+    const label = CF.constant(s.key).label;
+    const { disks } = CF.mobiusDisks(s.key, MB_LEVELS);
+
+    el('mb-intro').innerHTML =
+      `Each level's map Tₙ(z) = (Aₙz + Aₙ₋₁)/(Bₙz + Bₙ₋₁) sends the whole right half-plane ` +
+      `onto a disk whose diameter runs between consecutive convergents of ${label}. ` +
+      'Every disk contains the target and lies inside the one before it, so the sequence ' +
+      'squeezes the plane onto the value. <em>Regular mode only</em>: with ±1 numerators the ' +
+      'convergents can land on the same side and the disk then misses the target entirely.';
+
+    el('mb-table').innerHTML =
+      '<tr><th>n</th><th>diameter ends</th><th>centre</th><th>radius</th>' +
+      '<th>shrink</th><th>holds target</th></tr>' +
+      disks.map(d => `<tr><td>${d.n}</td>` +
+        `<td class="mono">${d.loLabel} ↔ ${d.hiLabel}</td>` +
+        `<td class="mono">${CF.Rat.toDecimalString(d.centre, 14)}</td>` +
+        `<td class="mono">${d.radiusStr}</td><td class="mono">${d.shrinkStr}</td>` +
+        `<td>${d.containsTarget ? 'yes' : 'NO'}</td></tr>`).join('');
+
+    drawMobius(disks);
+  }
+
+  // A zoom strip: panel k frames disk k and draws disk k+1 inside it at its true relative
+  // position and size. Drawn in one frame the later disks are far below a pixel, so each
+  // panel re-zooms - the nesting is shown rather than asserted.
+  function drawMobius(disks) {
+    const cols = 4, rows = 2, gap = 10;
+    const W = 900, panelW = (W - gap * (cols - 1)) / cols, panelH = 110;
+    const H = rows * panelH + gap * (rows - 1);
+    const ctx = fitCanvas(el('mb-canvas'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    const pairs = [];
+    for (let i = 0; i + 1 < disks.length && pairs.length < cols * rows; i++) pairs.push([disks[i], disks[i + 1]]);
+    if (!pairs.length) { el('mb-caption').textContent = ''; return; }
+
+    pairs.forEach(([outer, inner], idx) => {
+      const cxp = (idx % cols) * (panelW + gap), cyp = Math.floor(idx / cols) * (panelH + gap);
+      const cx = cxp + panelW / 2, cy = cyp + panelH / 2;
+      const R = Math.min(panelW, panelH) / 2 - 14;
+      ctx.strokeStyle = '#eee'; ctx.strokeRect(cxp + 0.5, cyp + 0.5, panelW - 1, panelH - 1);
+
+      // outer disk fills the panel
+      ctx.strokeStyle = '#1a5fb4'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+
+      // inner disk, positioned and scaled relative to the outer one
+      const scale = R / CF.Rat.toNumber(outer.radius);
+      const dx = CF.Rat.toNumber(CF.Rat.sub(inner.centre, outer.centre)) * scale;
+      const rIn = Math.max(1, CF.Rat.toNumber(inner.radius) * scale);
+      ctx.strokeStyle = '#c64600'; ctx.fillStyle = '#c6460022'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(cx + dx, cy, rIn, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+      ctx.fillStyle = '#111'; ctx.font = '10px sans-serif';
+      ctx.fillText(`n=${outer.n} ⊃ n=${inner.n}`, cxp + 6, cyp + 13);
+      ctx.fillStyle = '#666';
+      ctx.fillText(`×${inner.shrinkStr}`, cxp + 6, cyp + panelH - 6);
+      if (CF.Rat.toNumber(inner.radius) * scale < 1) {
+        ctx.fillStyle = '#c64600';
+        ctx.fillText('drawn at 1px floor', cxp + 60, cyp + panelH - 6);
+      }
+    });
+
+    el('mb-caption').textContent =
+      'Each panel re-zooms so the outer disk fills it; the filled disk inside is the next ' +
+      'level, at its true relative position and size. The shrink factor is printed below. ' +
+      'Where the inner disk would be smaller than a pixel it is drawn at a 1px floor and ' +
+      'labelled, so a visible dot is never mistaken for a measured size.';
+  }
+
+  renderMobius();
 
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
