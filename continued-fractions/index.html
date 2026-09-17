@@ -411,6 +411,93 @@ const CF = (() => {
     return Rat.make(isqrt((m.n * s * s) / m.d), s);
   };
 
+  // ---- Hurwitz continued fractions over the Gaussian integers ----
+
+  const COMPLEX_CONSTANTS = [
+    { key: 'pi_e_i',     label: 'π + e·i' },
+    { key: 'rot8',       label: '(1+i)/√2' },
+    { key: 'quad7',      label: '(1 + i√7)/2' },
+    { key: 'g45',        label: '(3+4i)/5' },
+    { key: 'gamma_phi',  label: 'γ + φ·i' },
+    { key: 'ln2_sqrt3',  label: 'ln 2 + √3·i' },
+  ];
+
+  const COMPLEX_DELTA = Rat.make(1n, 10n ** 48n);
+
+  const complexConstant = (key) => {
+    const meta = COMPLEX_CONSTANTS.find(c => c.key === key);
+    if (!meta) throw new Error('unknown complex constant ' + key);
+    const c = (k) => trunc(constant(k).lo, 50);
+    const half = Rat.make(1n, 2n);
+    let centre, delta = COMPLEX_DELTA;
+    if (key === 'pi_e_i') centre = cOf(c('pi'), c('e'));
+    else if (key === 'rot8') { const h = Rat.mul(c('sqrt2'), half); centre = cOf(h, h); }
+    else if (key === 'quad7') centre = cOf(half, Rat.mul(trunc(ratSqrt(7n, 50), 50), half));
+    else if (key === 'g45') { centre = cOf(Rat.make(3n, 5n), Rat.make(4n, 5n)); delta = Rat.fromInt(0); }
+    else if (key === 'gamma_phi') centre = cOf(c('gamma'), c('phi'));
+    else centre = cOf(c('ln2'), c('sqrt3'));
+    return { key, label: meta.label, centre, delta };
+  };
+
+  const hurwitzTerms = (centre, delta, maxTerms) => {
+    const terms = [];
+    const half = Rat.make(1n, 2n);
+    const absR = (r) => (r.n < 0n ? Rat.neg(r) : r);
+    let z = centre, d = delta;
+    for (let i = 0; i < maxTerms; i++) {
+      const a = cNearestGaussian(z);
+      // With d = 0 the value is exact and the rounding is certain by definition. The
+      // strict test below would wrongly reject a part sitting exactly on 1/2, which
+      // ratRound resolves deterministically (halves up).
+      if (!Rat.isZero(d)) {
+        const dr = absR(Rat.sub(z.re, a.re)), di = absR(Rat.sub(z.im, a.im));
+        if (Rat.cmp(Rat.add(dr, d), half) >= 0 || Rat.cmp(Rat.add(di, d), half) >= 0) {
+          return { terms, stopReason: 'precision-exhausted' };
+        }
+      }
+      terms.push(a);
+      const r = cSub(z, a);
+      if (cIsZero(r)) return { terms, stopReason: 'exact' };
+      if (!Rat.isZero(d)) {
+        const L = ratSqrtLower(cNormSq(r), 40);          // L <= |r|
+        if (Rat.cmp(d, L) >= 0) return { terms, stopReason: 'precision-exhausted' };
+        d = Rat.div(d, Rat.mul(L, Rat.sub(L, d)));       // |1/r - 1/r_hat| bound
+      }
+      z = cInv(r);
+    }
+    return { terms, stopReason: 'max-terms' };
+  };
+
+  // A_k = a_k A_{k-1} + A_{k-2}; no sign choice - nearest-Gaussian rounding already
+  // minimises the remainder in both coordinates, so every numerator is +1.
+  const hurwitzConvergents = (terms) => {
+    let Am2 = cOf(Rat.fromInt(0), Rat.fromInt(0)), Am1 = cOf(Rat.fromInt(1), Rat.fromInt(0));
+    let Bm2 = cOf(Rat.fromInt(1), Rat.fromInt(0)), Bm1 = cOf(Rat.fromInt(0), Rat.fromInt(0));
+    const out = [];
+    for (const a of terms) {
+      const A = cAdd(cMul(a, Am1), Am2), B = cAdd(cMul(a, Bm1), Bm2);
+      out.push({ A, B });
+      Am2 = Am1; Am1 = A; Bm2 = Bm1; Bm1 = B;
+    }
+    return out;
+  };
+
+  const hurwitzRows = (key, maxTerms) => {
+    const k = complexConstant(key);
+    const e = hurwitzTerms(k.centre, k.delta, maxTerms);
+    const cs = hurwitzConvergents(e.terms);
+    const rows = cs.map((c, i) => {
+      const value = cIsZero(c.B) ? cOf(Rat.fromInt(0), Rat.fromInt(0)) : cMul(c.A, cInv(c.B));
+      const errSq = cNormSq(cSub(k.centre, value));
+      return {
+        k: i, term: e.terms[i], A: c.A, B: c.B, value,
+        valueStr: cStr(value, 12),
+        errSq, errStr: sci(ratSqrtLower(errSq, 30), 4),
+      };
+    });
+    return { rows, stopReason: e.stopReason };
+  };
+
   // ---- greedy unit fractions (the Egyptian-fraction algorithm) ----
   //
   // Take the largest unit fraction that still fits under the remainder, repeatedly:
@@ -978,6 +1065,7 @@ const CF = (() => {
            ratCeil,
            cascadeRows, raceKind, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
+           COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            SEMI_MODES, ratRound, pickInteger, semiregularTerms, semiregularConvergents };
 })();
 
@@ -1838,6 +1926,69 @@ XTests.test('ratSqrtLower never overestimates', () => {
     XTests.ok(R.cmp(R.mul(up, up), m) > 0, `L was far too small for ${n}/${d}`);
   }
   XTests.eq(R.toDecimalString(CF.ratSqrtLower(R.fromInt(0), 10), 4), '0.0000');
+});
+
+XTests.test('Hurwitz expansion of pi + e i', () => {
+  const k = CF.complexConstant('pi_e_i');
+  const r = CF.hurwitzTerms(k.centre, k.delta, 4);
+  XTests.eq(r.terms.map(t => CF.cStr(t, 0)).join(' '), '3+3i 1+3i 2+1i 1+5i');
+});
+
+XTests.test('a Gaussian rational terminates exactly', () => {
+  const k = CF.complexConstant('g45');
+  XTests.eq(CF.Rat.isZero(k.delta), true, 'g45 must ship exactly');
+  const r = CF.hurwitzTerms(k.centre, k.delta, 20);
+  XTests.eq(r.stopReason, 'exact');
+  XTests.eq(r.terms.map(t => CF.cStr(t, 0)).join(' '), '1+1i -2+1i');
+  const cs = CF.hurwitzConvergents(r.terms);
+  const last = cs[cs.length - 1];
+  const v = CF.cMul(last.A, CF.cInv(last.B));
+  XTests.eq(CF.Rat.cmp(v.re, k.centre.re), 0);
+  XTests.eq(CF.Rat.cmp(v.im, k.centre.im), 0);
+});
+
+XTests.test('(1+i)/sqrt2 is periodic from the second term', () => {
+  const k = CF.complexConstant('rot8');
+  const r = CF.hurwitzTerms(k.centre, k.delta, 9);
+  XTests.eq(r.terms.map(t => CF.cStr(t, 0)).join(' '),
+            '1+1i -2+2i 2+2i -2+2i 2+2i -2+2i 2+2i -2+2i 2+2i');
+});
+
+XTests.test('every remainder obeys the |r|^2 <= 1/2 bound', () => {
+  // Coordinate-wise rounding puts the remainder in a square of half-width 1/2,
+  // so |r|^2 <= 1/4 + 1/4. Checked exactly, not in floating point.
+  for (const c of CF.COMPLEX_CONSTANTS) {
+    const k = CF.complexConstant(c.key);
+    const r = CF.hurwitzTerms(k.centre, k.delta, 8);
+    let z = k.centre;
+    for (const t of r.terms) {
+      const rem = CF.cSub(z, t);
+      XTests.ok(CF.Rat.cmp(CF.cNormSq(rem), CF.Rat.make(1n, 2n)) <= 0,
+                `${c.key}: |r|^2 exceeded 1/2`);
+      if (CF.cIsZero(rem)) break;
+      z = CF.cInv(rem);
+    }
+  }
+});
+
+XTests.test('convergent error strictly decreases', () => {
+  for (const c of CF.COMPLEX_CONSTANTS) {
+    const { rows } = CF.hurwitzRows(c.key, 8);
+    for (let i = 1; i < rows.length; i++) {
+      if (CF.Rat.isZero(rows[i - 1].errSq)) break;   // a terminating expansion is exact
+      XTests.ok(CF.Rat.cmp(rows[i].errSq, rows[i - 1].errSq) < 0,
+                `${c.key}: error did not shrink at row ${i}`);
+    }
+  }
+});
+
+XTests.test('a fat disk withholds terms', () => {
+  const k = CF.complexConstant('pi_e_i');
+  const tight = CF.hurwitzTerms(k.centre, k.delta, 12);
+  const fat = CF.hurwitzTerms(k.centre, CF.Rat.make(1n, 1000n), 12);
+  XTests.eq(fat.stopReason, 'precision-exhausted');
+  XTests.ok(fat.terms.length < tight.terms.length,
+            `fat disk gave ${fat.terms.length} terms, tight gave ${tight.terms.length}`);
 });
 
 </script>
