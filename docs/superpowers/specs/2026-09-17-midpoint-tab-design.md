@@ -1,5 +1,9 @@
 # Continued Fractions — Midpoint tab
 
+Renamed later the same day: the **Bounds** tab is now **Balanced pair** (modes
+*parity split* and *balanced*), and the **Midpoint** tab is now **Consecutive
+pair**. The text below keeps the original names.
+
 Date: 2026-09-17
 Directory: `continued-fractions/`
 
