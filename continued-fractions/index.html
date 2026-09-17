@@ -282,9 +282,54 @@ const CF = (() => {
     return { ...termsFromInterval(k.lo, k.hi, maxTerms), source: 'interval' };
   };
 
+  // ---- convergents ----
+
+  const convergents = (terms) => {
+    let pm1 = 1n, pm2 = 0n, qm1 = 0n, qm2 = 1n;
+    const out = [];
+    for (const a of terms) {
+      const p = a * pm1 + pm2, q = a * qm1 + qm2;
+      out.push({ p, q });
+      pm2 = pm1; pm1 = p; qm2 = qm1; qm1 = q;
+    }
+    return out;
+  };
+
+  const sci = (r, sig) => {
+    if (Rat.isZero(r)) return '0';
+    const neg = r.n < 0n;
+    let a = neg ? Rat.neg(r) : r;
+    let exp = 0;
+    const ten = Rat.fromInt(10), one = Rat.fromInt(1);
+    while (Rat.cmp(a, ten) >= 0) { a = Rat.div(a, ten); exp++; }
+    while (Rat.cmp(a, one) < 0) { a = Rat.mul(a, ten); exp--; }
+    const mant = Rat.toDecimalString(a, sig - 1);
+    return `${neg ? '-' : ''}${mant}e${exp < 0 ? '-' : '+'}${Math.abs(exp)}`;
+  };
+
+  const convergentRows = (key, maxTerms) => {
+    const k = constant(key);
+    const x = k.exact || k.lo;
+    const e = expand(key, maxTerms);
+    const cs = convergents(e.terms);
+    const rows = cs.map((c, i) => {
+      const val = Rat.make(c.p, c.q);
+      const error = Rat.sub(x, val);
+      const abs = error.n < 0n ? Rat.neg(error) : error;
+      return {
+        n: i, a: e.terms[i], p: c.p, q: c.q,
+        decimal: Rat.toDecimalString(val, 20),
+        error, errorStr: sci(error, 5),
+        errQ2: Rat.toDecimalString(Rat.mul(abs, Rat.fromInt(c.q * c.q)), 6),
+      };
+    });
+    return { rows, stopReason: e.stopReason, source: e.source };
+  };
+
   return { bgcd, isqrt, Rat, trunc, ratSqrt, ratCbrt, ratExp1, ratLn2, ratArctanInv, ratPiMachin,
            CONSTANTS, constant, EPS,
-           termsExact, termsFromInterval, quadraticTerms, expand };
+           termsExact, termsFromInterval, quadraticTerms, expand,
+           convergents, sci, convergentRows };
 })();
 
 XTests.test('Rat reduces and normalizes sign', () => {
@@ -423,6 +468,46 @@ XTests.test('interval expansion of pi runs deep then stops honestly', () => {
   const r = CF.termsFromInterval(k.lo, k.hi, 200);
   XTests.eq(r.stopReason, 'precision-exhausted');
   XTests.ok(r.terms.length >= 30, `expected 30+ certain terms, got ${r.terms.length}`);
+});
+
+XTests.test('convergents of pi include 22/7 and 355/113', () => {
+  const c = CF.convergents(CF.expand('pi', 4).terms);
+  XTests.eq(c.map(x => `${x.p}/${x.q}`).join(' '), '3/1 22/7 333/106 355/113');
+});
+
+XTests.test('convergents of phi are Fibonacci ratios', () => {
+  const c = CF.convergents(CF.expand('phi', 7).terms);
+  XTests.eq(c.map(x => `${x.p}/${x.q}`).join(' '), '1/1 2/1 3/2 5/3 8/5 13/8 21/13');
+});
+
+XTests.test('every convergent satisfies |x - p/q| q^2 < 1', () => {
+  for (const key of ['pi', 'e', 'sqrt2', 'sqrt3', 'phi', 'ln2', 'gamma', 'cbrt2']) {
+    const { rows } = CF.convergentRows(key, 20);
+    for (const row of rows) {
+      const abs = row.error.n < 0n ? CF.Rat.neg(row.error) : row.error;
+      const v = CF.Rat.mul(abs, CF.Rat.fromInt(row.q * row.q));   // |x - p/q| * q^2
+      XTests.ok(CF.Rat.cmp(v, CF.Rat.fromInt(1)) < 0, `${key} n=${row.n} errQ2=${row.errQ2}`);
+    }
+  }
+});
+
+XTests.test('errors alternate in sign', () => {
+  const { rows } = CF.convergentRows('pi', 10);
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1].error.n, b = rows[i].error.n;
+    XTests.ok((a > 0n) !== (b > 0n), `signs did not alternate at n=${i}`);
+  }
+});
+
+XTests.test('355/113 error matches the known value', () => {
+  const { rows } = CF.convergentRows('pi', 4);
+  XTests.eq(rows[3].errorStr.slice(0, 7), '-2.6676');
+});
+
+XTests.test('sci formats rationals', () => {
+  XTests.eq(CF.sci(CF.Rat.fromDecimalString('0.000123456'), 4), '1.234e-4');
+  XTests.eq(CF.sci(CF.Rat.fromDecimalString('-12.5'), 3), '-1.25e+1');
+  XTests.eq(CF.sci(CF.Rat.fromInt(0), 3), '0');
 });
 
 </script>
