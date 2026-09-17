@@ -307,6 +307,37 @@ const CF = (() => {
     return `${neg ? '-' : ''}${mant}e${exp < 0 ? '-' : '+'}${Math.abs(exp)}`;
   };
 
+  // ---- best rational approximation, checked by exhaustive search ----
+
+  const MAX_RACE_Q = 200000;
+
+  const bestApproximations = (key, Q, count) => {
+    if (Q > MAX_RACE_Q) throw new Error(`denominator ${Q} exceeds the searchable limit ${MAX_RACE_Q}`);
+    const k = constant(key);
+    const x = k.exact || k.lo;
+    const xd = Rat.toNumber(x);
+    // Stage 1: scan in doubles. The errors being compared are of order 1/q^2 >= 2.5e-11 at
+    // Q = 2e5, five orders of magnitude above double rounding noise, so the shortlist is safe.
+    const shortlist = [];
+    let worst = Infinity;
+    for (let q = 1; q <= Q; q++) {
+      const p = Math.round(xd * q);
+      const err = Math.abs(xd - p / q);
+      if (shortlist.length < 50 || err < worst) {
+        shortlist.push({ p: BigInt(p), q: BigInt(q), err });
+        shortlist.sort((a, b) => a.err - b.err);
+        if (shortlist.length > 50) shortlist.pop();
+        worst = shortlist[shortlist.length - 1].err;
+      }
+    }
+    // Stage 2: re-rank the shortlist in exact arithmetic.
+    return shortlist.map(c => {
+      const error = Rat.sub(x, Rat.make(c.p, c.q));
+      const abs = error.n < 0n ? Rat.neg(error) : error;
+      return { p: c.p, q: c.q, error, abs, errorStr: sci(error, 5) };
+    }).sort((a, b) => Rat.cmp(a.abs, b.abs)).slice(0, count);
+  };
+
   const convergentRows = (key, maxTerms) => {
     const k = constant(key);
     const x = k.exact || k.lo;
@@ -329,7 +360,8 @@ const CF = (() => {
   return { bgcd, isqrt, Rat, trunc, ratSqrt, ratCbrt, ratExp1, ratLn2, ratArctanInv, ratPiMachin,
            CONSTANTS, constant, EPS,
            termsExact, termsFromInterval, quadraticTerms, expand,
-           convergents, sci, convergentRows };
+           convergents, sci, convergentRows,
+           MAX_RACE_Q, bestApproximations };
 })();
 
 XTests.test('Rat reduces and normalizes sign', () => {
@@ -508,6 +540,32 @@ XTests.test('sci formats rationals', () => {
   XTests.eq(CF.sci(CF.Rat.fromDecimalString('0.000123456'), 4), '1.234e-4');
   XTests.eq(CF.sci(CF.Rat.fromDecimalString('-12.5'), 3), '-1.25e+1');
   XTests.eq(CF.sci(CF.Rat.fromInt(0), 3), '0');
+});
+
+XTests.test('best approximations of pi with q<=113 are led by 355/113', () => {
+  const best = CF.bestApproximations('pi', 113, 3);
+  XTests.eq(`${best[0].p}/${best[0].q}`, '355/113');
+  XTests.eq(`${best[1].p}/${best[1].q}`, '333/106');
+});
+
+XTests.test('every convergent of pi wins its own denominator race', () => {
+  const { rows } = CF.convergentRows('pi', 12);
+  for (const row of rows) {
+    if (row.q > BigInt(CF.MAX_RACE_Q) || row.q < 2n) continue;
+    const best = CF.bestApproximations('pi', Number(row.q), 1)[0];
+    XTests.eq(`${best.p}/${best.q}`, `${row.p}/${row.q}`, `n=${row.n}`);
+  }
+});
+
+XTests.test('the race refuses denominators it cannot search', () => {
+  let threw = false;
+  try { CF.bestApproximations('pi', CF.MAX_RACE_Q + 1, 1); } catch (e) { threw = true; }
+  XTests.ok(threw, 'expected a throw for an oversized Q');
+});
+
+XTests.test('best approximations of phi are Fibonacci ratios', () => {
+  const best = CF.bestApproximations('phi', 89, 2);
+  XTests.eq(`${best[0].p}/${best[0].q}`, '144/89');
 });
 
 </script>
