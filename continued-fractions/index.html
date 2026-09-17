@@ -69,6 +69,7 @@
   .legend .k-prod::before { background:#c8dcf5; }
   .legend .k-none::before { background:#f2f2f2; }
   #euler-race td:first-child, #euler-race th:first-child { text-align:left; color:var(--muted); }
+  #mp-table tr.even td { background:#f4f9f5; }
 </style>
 </head>
 <body>
@@ -84,6 +85,7 @@
     <button class="tab" data-panel="complex">Complex</button>
     <button class="tab" data-panel="mobius">Möbius</button>
     <button class="tab" data-panel="bounds">Bounds</button>
+    <button class="tab" data-panel="midpoint">Midpoint</button>
   </div>
   <div class="panel active" id="panel-simple">
     <div class="chips" id="simple-mode"></div>
@@ -179,6 +181,14 @@
     <div class="tablewrap"><table id="bd-table"></table></div>
     <canvas id="bd-plot" width="900" height="300"></canvas>
     <p class="status" id="bd-verdict"></p>
+  </div>
+  <div class="panel" id="panel-midpoint">
+    <div class="chips" id="mp-chips"></div>
+    <p class="status" id="mp-intro"></p>
+    <div class="tablewrap"><table id="mp-table"></table></div>
+    <canvas id="mp-plot" width="900" height="300"></canvas>
+    <p class="status" id="mp-caption"></p>
+    <p class="status" id="mp-verdict"></p>
   </div>
 </div>
 
@@ -862,6 +872,61 @@ const CF = (() => {
     return { rows: out, stopReason };
   };
 
+  // ---- the midpoint of two CONSECUTIVE convergents ----
+  //
+  // f(x, n) = [a0; a1, ..., an] = p_n/q_n, the n-deep regular expansion. Consecutive
+  // convergents sit on opposite sides of x and each is closer than the last, so
+  // M(n) = (f(n) + f(n+1))/2 has error (|e_n| - |e_n+1|)/2. It beats f(n+1) itself exactly
+  // when |e_n| < 3|e_n+1|, and consecutive errors shrink by roughly q_n+2/q_n, so that only
+  // happens where the neighbouring partial quotients are all 1 - the phi-like stretches.
+  //
+  // At even n this is the Bounds tab's independent pair (B_k, A_k) with k = n/2, so the
+  // even levels here ARE that tab's midpoint C; the odd levels are the pairs it skips.
+  // Each row also carries the Bounds tab's balanced pair under the same denominator
+  // budget q_n+1, for a like-for-like comparison. That pair can never be worse: (f(n),
+  // f(n+1)) is itself in the pool the balanced search chooses from.
+  //
+  const midpointRows = (key, maxLevels) => {
+    const k = constant(key);
+    const x = k.exact || k.lo;
+    const { rows, stopReason } = convergentRowsFor(key, maxLevels + 2, 'floor');
+    const two = Rat.fromInt(2);
+    const absR = (r) => (r.n < 0n ? Rat.neg(r) : r);
+    const out = [];
+    for (let n = 0; n + 1 < rows.length && out.length < maxLevels; n++) {
+      const F = rows[n], G = rows[n + 1];
+      if (F.resolved === false || G.resolved === false) break;   // past the reference's precision
+      const f = Rat.make(F.p, F.q), g = Rat.make(G.p, G.q);
+      const mid = Rat.div(Rat.add(f, g), two);
+      const eF = absR(Rat.sub(x, f)), eG = absR(Rat.sub(x, g)), eMid = absR(Rat.sub(x, mid));
+      const ratio = Rat.isZero(eG) ? null : Rat.div(eF, eG);
+      const beatsNext = Rat.cmp(eMid, eG) < 0;
+
+      const bp = balancedPair(key, G.q, [F, G]);
+      let bal = null;
+      if (bp) {
+        const bmid = Rat.div(Rat.add(bp.lower.v, bp.upper.v), two);
+        const eBal = absR(Rat.sub(x, bmid));
+        bal = { eBal, lowerP: bp.lower.p, lowerQ: bp.lower.q, upperP: bp.upper.p, upperQ: bp.upper.q,
+                q: bp.lower.q > bp.upper.q ? bp.lower.q : bp.upper.q };
+      }
+      out.push({
+        n,
+        fP: F.p, fQ: F.q, gP: G.p, gQ: G.q, f, g, mid,
+        eF, eG, eMid, eFStr: sci(eF, 4), eGStr: sci(eG, 4), eMidStr: sci(eMid, 4),
+        ratio, ratioStr: ratio === null ? '∞' : Rat.toDecimalString(ratio, 2),
+        beatsNext,
+        eBal: bal ? bal.eBal : null, eBalStr: bal ? sci(bal.eBal, 4) : '—',
+        balLowerP: bal ? bal.lowerP : null, balLowerQ: bal ? bal.lowerQ : null,
+        balUpperP: bal ? bal.upperP : null, balUpperQ: bal ? bal.upperQ : null,
+        balQ: bal ? bal.q : null,
+        balBeatsMid: bal ? Rat.cmp(bal.eBal, eMid) < 0 : false,
+      });
+      if (Rat.isZero(eG)) break;                                   // f(n+1) is x itself
+    }
+    return { rows: out, stopReason };
+  };
+
   // ---- Mobius disks: the LFT picture of a real continued fraction ----
   //
   // T_n(z) = (A_n z + A_{n-1}) / (B_n z + B_{n-1}) has real coefficients and sends
@@ -1378,7 +1443,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows, raceKind, mobiusDisks, boundRows, semiconvergents, balancedPair, unitFractions, unitFractionRows,
+           cascadeRows, raceKind, mobiusDisks, boundRows, midpointRows, semiconvergents, balancedPair, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            imaginaryWake,
@@ -2782,6 +2847,96 @@ XTests.test('balanced is never worse than independent, at depth too', () => {
   }
 });
 
+XTests.test('consecutive midpoints at even n are the Bounds tab\'s independent midpoints', () => {
+  // M(2k) averages p_2k/q_2k and p_2k+1/q_2k+1 - exactly the pair the independent split
+  // calls B_k and A_k. So the Midpoint tab is the Bounds tab plus the odd pairs in between.
+  for (const c of CF.CONSTANTS) {
+    const mid = CF.midpointRows(c.key, 12).rows;
+    const ind = CF.boundRows(c.key, 6, 'independent').rows;
+    for (const r of mid) {
+      if (r.n % 2 !== 0 || !ind[r.n / 2]) continue;
+      XTests.eq(CF.Rat.cmp(r.mid, ind[r.n / 2].mid), 0, `${c.key} n=${r.n} midpoint differs from Bounds C`);
+      XTests.eq(CF.Rat.cmp(r.eMid, ind[r.n / 2].eMid), 0, `${c.key} n=${r.n} error differs from Bounds C`);
+    }
+  }
+});
+
+XTests.test('the consecutive midpoint error is half the difference of the two convergent errors', () => {
+  // Consecutive convergents sit on opposite sides, so (f(n)+f(n+1))/2 - x = (e_n' + e_n+1')/2
+  // with opposite signs: |M - x| = (|e_n| - |e_n+1|) / 2.
+  for (const c of CF.CONSTANTS) {
+    for (const r of CF.midpointRows(c.key, 12).rows) {
+      const half = CF.Rat.div(CF.Rat.sub(r.eF, r.eG), CF.Rat.fromInt(2));
+      XTests.eq(CF.Rat.cmp(r.eMid, half), 0, `${c.key} n=${r.n}`);
+      XTests.ok(CF.Rat.cmp(r.eG, r.eF) < 0, `${c.key} n=${r.n} later convergent should be closer`);
+    }
+  }
+});
+
+XTests.test('the midpoint beats the later convergent exactly when the error ratio is under 3', () => {
+  // (|e_n| - |e_n+1|)/2 < |e_n+1|  <=>  |e_n| < 3 |e_n+1|. The flag must agree with the ratio.
+  let wins = 0, total = 0;
+  for (const c of CF.CONSTANTS) {
+    for (const r of CF.midpointRows(c.key, 12).rows) {
+      total++;
+      if (r.ratio === null) { XTests.ok(!r.beatsNext, `${c.key} n=${r.n} exact hit cannot be beaten`); continue; }
+      const under3 = CF.Rat.cmp(r.ratio, CF.Rat.fromInt(3)) < 0;
+      XTests.eq(r.beatsNext, under3, `${c.key} n=${r.n} ratio ${r.ratioStr}`);
+      if (r.beatsNext) wins++;
+    }
+  }
+  XTests.ok(total >= 60, `expected a decent sample, got ${total}`);
+  XTests.ok(wins > 0 && wins < total / 2, `midpoint won ${wins} of ${total} - expected a minority`);
+});
+
+XTests.test('the Bounds tab\'s balanced pair under the same budget is never worse than the consecutive midpoint', () => {
+  // The pair (f(n), f(n+1)) is itself in the semiconvergent pool with budget q_n+1, so the
+  // balanced search can only match or beat it. Equality is allowed and common.
+  let strict = 0;
+  for (const c of CF.CONSTANTS) {
+    for (const r of CF.midpointRows(c.key, 12).rows) {
+      XTests.ok(r.eBal !== null, `${c.key} n=${r.n} no balanced pair`);
+      XTests.ok(CF.Rat.cmp(r.eBal, r.eMid) <= 0,
+                `${c.key} n=${r.n}: balanced ${r.eBalStr} lost to midpoint ${r.eMidStr}`);
+      XTests.eq(r.balBeatsMid, CF.Rat.cmp(r.eBal, r.eMid) < 0, `${c.key} n=${r.n} flag`);
+      XTests.ok(r.balQ <= r.gQ, `${c.key} n=${r.n} balanced pair exceeded the budget q_n+1`);
+      if (r.balBeatsMid) strict++;
+    }
+  }
+  XTests.ok(strict > 0, 'balancing should strictly win somewhere');
+});
+
+XTests.test('phi is the friendliest constant for the consecutive midpoint and sqrt5 the harshest', () => {
+  // phi: every partial quotient is 1, consecutive errors shrink by about phi^2 = 2.618 < 3,
+  // so from n=2 on the midpoint always beats the later convergent (n=1 is still 3.23).
+  const phi = CF.midpointRows('phi', 12).rows;
+  XTests.ok(phi.length >= 10, `expected at least 10 phi levels, got ${phi.length}`);
+  for (const r of phi) if (r.n >= 2) XTests.ok(r.beatsNext, `phi n=${r.n} should beat f(n+1)`);
+  XTests.ok(!phi[1].beatsNext, 'phi n=1 ratio is above 3');
+  // sqrt5: every partial quotient is 4, errors shrink by about 18 - the midpoint never wins.
+  const s5 = CF.midpointRows('sqrt5', 12).rows;
+  XTests.ok(s5.length >= 10, `expected at least 10 sqrt5 levels, got ${s5.length}`);
+  for (const r of s5) XTests.ok(!r.beatsNext, `sqrt5 n=${r.n} should not beat f(n+1)`);
+  // pi: only the two 1-1-1 stretch levels after 103993/33102.
+  const pi = CF.midpointRows('pi', 12).rows;
+  XTests.eq(pi.filter(r => r.beatsNext).map(r => r.n).join(','), '4,5');
+  XTests.eq(`${pi[5].fP}/${pi[5].fQ}`, '104348/33215', 'f(pi, 5) is the five-deep convergent');
+});
+
+XTests.test('the consecutive midpoint stops at the last resolved row and at an exact hit', () => {
+  for (const c of CF.CONSTANTS) {
+    const rows = CF.convergentRowsFor(c.key, 60, 'floor').rows;
+    const lastResolved = rows.filter(r => r.resolved).length - 1;
+    for (const r of CF.midpointRows(c.key, 40).rows) {
+      XTests.ok(r.n + 1 <= lastResolved, `${c.key} row ${r.n} needs f(n+1) past the resolved depth`);
+    }
+  }
+  const rat = CF.midpointRows('r355_113', 12).rows;
+  XTests.eq(rat.length, 2, '355/113 has three convergents, so two consecutive pairs');
+  XTests.eq(rat[1].ratio, null, 'f(n+1) hits exactly, so the ratio is undefined');
+  XTests.ok(CF.Rat.isZero(rat[1].eG));
+});
+
 XTests.test('the strict-upper search finds candidates for a rational target', () => {
   // Exact hits used to fill the 50-item shortlist and were removed only afterwards, so the
   // search returned nothing for 355/113 even though 22/7 is plainly above it.
@@ -3833,6 +3988,162 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   }
 
   renderBounds();
+
+  // ---------- Midpoint tab ----------
+  state.midpoint = { key: 'pi' };
+  const MP_LEVELS = 12;
+
+  function renderMidpoint() {
+    const s = state.midpoint;
+    el('mp-chips').innerHTML = CF.CONSTANTS
+      .map(c => `<button class="chip ${c.key === s.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
+      .join('');
+    el('mp-chips').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.key = b.dataset.key; renderMidpoint();
+    }));
+
+    const label = CF.constant(s.key).label;
+    const { rows } = CF.midpointRows(s.key, MP_LEVELS);
+    const ind = CF.boundRows(s.key, Math.ceil(MP_LEVELS / 2), 'independent').rows;
+
+    el('mp-intro').innerHTML =
+      `Let <strong>f(${label}, n)</strong> be the expansion cut at <em>n</em> nested fractions, ` +
+      `the convergent p<sub>n</sub>/q<sub>n</sub>. Consecutive convergents straddle ${label} and ` +
+      'each is closer than the last, so the midpoint ' +
+      '<strong>M(n) = (f(n) + f(n+1)) / 2</strong> has error ' +
+      '(|e<sub>n</sub>| − |e<sub>n+1</sub>|) / 2. It beats f(n+1) itself only when ' +
+      '|e<sub>n</sub>| / |e<sub>n+1</sub>| is under <strong>3</strong>, and that ratio is ' +
+      'roughly q<sub>n+2</sub>/q<sub>n</sub> — small only where the neighbouring partial ' +
+      'quotients are all 1. At even n this pair is exactly the Bounds tab’s ' +
+      '<em>independent</em> pair, so those levels reproduce its C; the last column is that ' +
+      'tab’s <em>balanced</em> pair under the same denominator budget q<sub>n+1</sub>.';
+
+    el('mp-table').innerHTML =
+      '<tr><th>n</th><th>f(n)</th><th>|err f(n)|</th><th>|err f(n+1)|</th>' +
+      '<th>ratio</th><th>M(n)</th><th>|err M|</th><th>M beats f(n+1)</th>' +
+      '<th>Bounds balanced, q ≤ q<sub>n+1</sub></th><th>|err balanced|</th><th>best</th></tr>' +
+      rows.map(r => {
+        const f = (n, d) => `${elide(String(n), 12)}/${elide(String(d), 12)}`;
+        const cands = [['f(n+1)', r.eG], ['M', r.eMid]];
+        if (r.eBal) cands.push(['balanced', r.eBal]);
+        let best = cands[0];
+        for (const c of cands) if (CF.Rat.cmp(c[1], best[1]) < 0) best = c;
+        const balPair = r.eBal
+          ? `${f(r.balLowerP, r.balLowerQ)} , ${f(r.balUpperP, r.balUpperQ)}` : '—';
+        return `<tr class="${r.n % 2 === 0 ? 'even' : ''}"><td>${r.n}</td>` +
+          `<td class="mono">${f(r.fP, r.fQ)}</td><td class="mono">${r.eFStr}</td>` +
+          `<td class="mono">${r.eGStr}</td><td class="mono">${r.ratioStr}</td>` +
+          `<td class="mono">${CF.Rat.toDecimalString(r.mid, 12)}</td>` +
+          `<td class="mono">${r.eMidStr}</td><td>${r.beatsNext ? '<strong>yes</strong>' : 'no'}</td>` +
+          `<td class="mono">${balPair}</td><td class="mono">${r.eBalStr}</td>` +
+          `<td><strong>${best[0]}</strong></td></tr>`;
+      }).join('');
+
+    drawMidpoint(rows, ind);
+
+    el('mp-caption').textContent =
+      'Hollow squares are the Bounds tab’s independent C at level k = n/2; they land ' +
+      'exactly on M(n) at every even n. The dashed line is that tab’s balanced C given ' +
+      'the same denominator budget as f(n+1).';
+
+    const wins = rows.filter(r => r.beatsNext).length;
+    const balWins = rows.filter(r => r.balBeatsMid).length;
+    let bestGain = null, bestAt = -1;
+    for (const r of rows) {
+      if (!r.eBal || !r.balBeatsMid || CF.Rat.isZero(r.eBal)) continue;
+      const ratio = CF.Rat.div(r.eMid, r.eBal);
+      if (!bestGain || CF.Rat.cmp(ratio, bestGain) > 0) { bestGain = ratio; bestAt = r.n; }
+    }
+    const verdictVsNext = wins === 0
+      ? `Over these ${rows.length} levels M(n) never beat f(n+1): every error ratio is above 3, so ` +
+        'averaging in the older, worse convergent only drags the newer one back.'
+      : `Over these ${rows.length} levels M(n) beat f(n+1) ${wins} time${wins === 1 ? '' : 's'}` +
+        (wins === rows.filter(r => r.n >= 2).length && rows.length > 3
+          ? ' — every level from n = 2 on, because consecutive errors here shrink by only about φ² ≈ 2.618.'
+          : ', exactly at the levels whose ratio is under 3.');
+    const verdictVsBounds = balWins === 0
+      ? ' The Bounds tab’s balanced pair ties M(n) at every level: there is no better pair ' +
+        'in the same budget, so the two tabs are equally accurate here.'
+      : ` Against the Bounds tab it is never more accurate: the balanced pair matches M(n) at ` +
+        `${rows.length - balWins} level${rows.length - balWins === 1 ? '' : 's'} and strictly beats it at ` +
+        `${balWins}, by up to a factor of ${CF.sci(bestGain, 3)} at n = ${bestAt}.`;
+    el('mp-verdict').textContent = verdictVsNext + verdictVsBounds;
+  }
+
+  function drawMidpoint(rows, ind) {
+    const W = 900, H = 300, padL = 52, padB = 34, padT = 16, padR = 150;
+    const ctx = fitCanvas(el('mp-plot'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    if (rows.length < 2) return;
+    const series = [
+      { name: 'f(n) convergent', color: '#1a5fb4', get: (r) => r.eF },
+      { name: 'M(n) midpoint', color: '#2d7d46', get: (r) => r.eMid },
+      { name: 'Bounds balanced', color: '#c64600', dash: [5, 4], get: (r) => r.eBal },
+    ];
+    // Exact-rational log10: these errors fall far below what toNumber can carry.
+    const logs = [];
+    for (const s2 of series) for (const r of rows) {
+      const v = s2.get(r);
+      if (!v) continue;
+      const L = CF.Rat.log10(v);
+      if (Number.isFinite(L)) logs.push(L);
+    }
+    if (!logs.length) return;
+    const hi = Math.max(...logs), lo = Math.min(...logs);
+    const span = Math.max(1, hi - lo);
+    const X = (n) => padL + n / Math.max(1, rows.length - 1) * (W - padL - padR);
+    const Y = (L) => (H - padB) - (L - lo) / span * (H - padB - padT);
+
+    ctx.strokeStyle = '#eee'; ctx.setLineDash([]);
+    for (let d = Math.floor(lo); d <= Math.ceil(hi); d++) {
+      const y = Y(d);
+      if (y < padT || y > H - padB) continue;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      ctx.fillStyle = '#bbb'; ctx.font = '9px sans-serif';
+      ctx.fillText(`1e${d}`, 6, y + 3);
+    }
+    series.forEach((s2, si) => {
+      ctx.strokeStyle = s2.color; ctx.lineWidth = 1.5; ctx.setLineDash(s2.dash || []);
+      ctx.beginPath();
+      let started = false;
+      rows.forEach((r) => {
+        const v = s2.get(r);
+        if (!v) return;
+        const L = CF.Rat.log10(v);
+        if (!Number.isFinite(L)) return;
+        started ? ctx.lineTo(X(r.n), Y(L)) : ctx.moveTo(X(r.n), Y(L));
+        started = true;
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = s2.color;
+      rows.forEach((r) => {
+        const v = s2.get(r);
+        if (!v) return;
+        const L = CF.Rat.log10(v);
+        if (Number.isFinite(L)) ctx.fillRect(X(r.n) - 2, Y(L) - 2, 4, 4);
+      });
+      ctx.font = '11px sans-serif';
+      ctx.fillText(s2.name, W - padR + 6, padT + 14 + si * 15);
+    });
+    // The Bounds tab's independent C_k, drawn hollow at n = 2k: it should sit on M(n).
+    ctx.strokeStyle = '#2d7d46'; ctx.lineWidth = 1;
+    ind.forEach((b) => {
+      const n = 2 * b.k;
+      if (n > rows[rows.length - 1].n) return;
+      const L = CF.Rat.log10(b.eMid);
+      if (Number.isFinite(L)) ctx.strokeRect(X(n) - 4.5, Y(L) - 4.5, 9, 9);
+    });
+    ctx.strokeRect(W - padR + 6, padT + 14 + 3 * 15 - 8, 9, 9);
+    ctx.fillStyle = '#2d7d46';
+    ctx.fillText('Bounds independent', W - padR + 20, padT + 14 + 3 * 15);
+    ctx.fillStyle = '#666'; ctx.font = '11px sans-serif';
+    ctx.fillText('n nested fractions', (W - padR) / 2 - 30, H - 8);
+    ctx.fillStyle = '#666';
+    rows.forEach((r) => { if (r.n % 2 === 0) ctx.fillText(String(r.n), X(r.n) - 3, H - padB + 12); });
+  }
+
+  renderMidpoint();
 
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
