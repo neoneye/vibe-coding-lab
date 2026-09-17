@@ -184,10 +184,20 @@
     <p class="status" id="br-intro"></p>
     <div class="tablewrap"><table id="br-terms"></table></div>
     <p class="status" id="br-terms-caption"></p>
+    <div class="controls">
+      <label>weight t <input type="range" id="br-weight" min="0" max="1000" value="500"></label>
+      <span class="muted" id="br-weight-label"></span>
+      <button class="chip" id="br-weight-half">midpoint ½</button>
+      <button class="chip" id="br-weight-best">minimax fixed weight</button>
+      <button class="chip" id="br-weight-deep">deepest t*</button>
+    </div>
     <h2 class="sectionhead">Every depth</h2>
     <div class="tablewrap"><table id="br-table"></table></div>
     <canvas id="br-plot" width="900" height="300"></canvas>
     <p class="status" id="br-verdict"></p>
+    <h2 class="sectionhead">Where the optimum sits</h2>
+    <canvas id="br-weights" width="900" height="240"></canvas>
+    <p class="status" id="br-weights-verdict"></p>
   </div>
   <div class="panel" id="panel-bounds">
     <div class="chips" id="bd-mode"></div>
@@ -1011,31 +1021,32 @@ const CF = (() => {
   // objective is a maximum of V-shaped functions, so its minimum sits at a kink: one of
   // the t*_n themselves or a crossing of two of the V's. Checking every kink is exact.
   // Levels where f(n+1) is x itself (t* = 1) are skipped: nothing is relative to zero.
-  const worstRatio = (rows, t) => {
+  const relToNext = (r) => Rat.sub(Rat.fromInt(1), r.tStar);
+  const worstRatio = (rows, t, relTo = relToNext) => {
     let worst = Rat.fromInt(0);
     for (const r of rows) {
-      if (Rat.isZero(r.eG)) continue;
+      if (r.eG !== undefined && Rat.isZero(r.eG)) continue;
       const d = Rat.sub(t, r.tStar);
-      const ratio = Rat.div(d.n < 0n ? Rat.neg(d) : d, Rat.sub(Rat.fromInt(1), r.tStar));
+      const ratio = Rat.div(d.n < 0n ? Rat.neg(d) : d, relTo(r));
       if (Rat.cmp(ratio, worst) > 0) worst = ratio;
     }
     return worst;
   };
-  const bestFixedWeight = (rows) => {
-    const one = Rat.fromInt(1);
-    const ts = rows.filter(r => !Rat.isZero(r.eG)).map(r => r.tStar);
-    if (!ts.length) return null;
-    const cands = ts.slice();
-    for (let i = 0; i < ts.length; i++) for (let j = i + 1; j < ts.length; j++) {
-      const a = Rat.cmp(ts[i], ts[j]) < 0 ? ts[i] : ts[j], b = Rat.cmp(ts[i], ts[j]) < 0 ? ts[j] : ts[i];
+  const bestFixedWeight = (rows, relTo = relToNext) => {
+    const live = rows.filter(r => !(r.eG !== undefined && Rat.isZero(r.eG)));
+    if (!live.length) return null;
+    const cands = live.map(r => r.tStar);
+    for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) {
+      const lo = Rat.cmp(live[i].tStar, live[j].tStar) < 0 ? live[i] : live[j];
+      const hi = lo === live[i] ? live[j] : live[i];
+      const a = lo.tStar, b = hi.tStar, da = relTo(lo), db = relTo(hi);
       if (Rat.cmp(a, b) === 0) continue;
-      // (t - a)/(1 - a) = (b - t)/(1 - b)  =>  t = (a(1-b) + b(1-a)) / ((1-b) + (1-a))
-      const num = Rat.add(Rat.mul(a, Rat.sub(one, b)), Rat.mul(b, Rat.sub(one, a)));
-      cands.push(Rat.div(num, Rat.add(Rat.sub(one, b), Rat.sub(one, a))));
+      // (t - a)/da = (b - t)/db  =>  t = (a db + b da) / (da + db)
+      cands.push(Rat.div(Rat.add(Rat.mul(a, db), Rat.mul(b, da)), Rat.add(da, db)));
     }
     let best = null;
     for (const t of cands) {
-      const worst = worstRatio(rows, t);
+      const worst = worstRatio(rows, t, relTo);
       if (!best || Rat.cmp(worst, best.worst) < 0) best = { t, worst };
     }
     return best;
@@ -1078,9 +1089,24 @@ const CF = (() => {
         n, termsA, termsB, termsC, A, B, C, eA, eB, eC,
         eAStr: sci(eA, 4), eBStr: sci(eB, 4), eCStr: sci(eC, 4),
         midBeatsBoth: Rat.cmp(eC, bestEnd) < 0,
+        // where x sits inside the bracket, measured from B (t = 0) to A (t = 1)
+        tStar: Rat.div(eB, Rat.add(eA, eB)),
       });
     }
     return { rows: out, stopReason: e.stopReason };
+  };
+
+  // V(t) = B + t (A - B): its value, its error |t - t*| (A - B), and its own expansion.
+  const bracketWeightedAt = (row, t) => {
+    const value = Rat.add(row.B, Rat.mul(t, Rat.sub(row.A, row.B)));
+    const d = Rat.sub(t, row.tStar);
+    const error = Rat.mul(d.n < 0n ? Rat.neg(d) : d, Rat.sub(row.A, row.B));
+    return { value, error, terms: semiregularTerms(value, value, 'floor', 200).terms };
+  };
+  // The better endpoint's error as a fraction of the bracket width: min(t*, 1 - t*).
+  const bracketRelTo = (row) => {
+    const other = Rat.sub(Rat.fromInt(1), row.tStar);
+    return Rat.cmp(row.tStar, other) < 0 ? row.tStar : other;
   };
 
   // ---- Mobius disks: the LFT picture of a real continued fraction ----
@@ -1599,7 +1625,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows, raceKind, mobiusDisks, bracketRows, boundRows, midpointRows, weightedAt, worstRatio, bestFixedWeight, semiconvergents, balancedTrace, balancedPair, unitFractions, unitFractionRows,
+           cascadeRows, raceKind, mobiusDisks, bracketRows, bracketWeightedAt, bracketRelTo, boundRows, midpointRows, weightedAt, worstRatio, bestFixedWeight, semiconvergents, balancedTrace, balancedPair, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            imaginaryWake,
@@ -3321,6 +3347,51 @@ XTests.test('bracket: rows stop before any error falls below the reference preci
   XTests.eq(CF.bracketRows('r355_113', 10).rows.length, 2);
 });
 
+XTests.test('bracket: the optimal weight is where x sits inside the bracket, and V(t) recovers B, C, A', () => {
+  const R = CF.Rat;
+  for (const c of CF.CONSTANTS) {
+    const x = CF.constant(c.key).exact || CF.constant(c.key).lo;
+    for (const r of CF.bracketRows(c.key, 12).rows) {
+      XTests.eq(R.cmp(r.tStar, R.div(r.eB, R.add(r.eA, r.eB))), 0, `${c.key} n=${r.n} t*`);
+      XTests.ok(R.cmp(r.tStar, R.fromInt(0)) > 0 && R.cmp(r.tStar, R.fromInt(1)) < 0, `${c.key} n=${r.n} t* outside (0,1)`);
+      XTests.eq(R.cmp(CF.bracketWeightedAt(r, r.tStar).value, x), 0, `${c.key} n=${r.n} V(t*) is x`);
+      XTests.eq(R.cmp(CF.bracketWeightedAt(r, R.fromInt(0)).value, r.B), 0, `${c.key} n=${r.n} V(0)`);
+      XTests.eq(R.cmp(CF.bracketWeightedAt(r, R.make(1n, 2n)).value, r.C), 0, `${c.key} n=${r.n} V(1/2)`);
+      XTests.eq(R.cmp(CF.bracketWeightedAt(r, R.fromInt(1)).value, r.A), 0, `${c.key} n=${r.n} V(1)`);
+      const t = R.make(3n, 10n);
+      const w = CF.bracketWeightedAt(r, t);
+      const d = R.sub(t, r.tStar), ad = d.n < 0n ? R.neg(d) : d;
+      XTests.eq(R.cmp(w.error, R.mul(ad, R.sub(r.A, r.B))), 0, `${c.key} n=${r.n} error identity`);
+      // strictly inside the bracket, so V(t)'s expansion starts with the shared terms
+      for (let i = 0; i <= r.n; i++) XTests.eq(w.terms[i], r.termsB[i] === r.termsA[i] ? r.termsB[i] : w.terms[i], `${c.key} n=${r.n} prefix`);
+      for (let i = 0; i < r.n; i++) XTests.eq(w.terms[i], r.termsB[i], `${c.key} n=${r.n} shared term ${i}`);
+      const v = CF.convergents(w.terms).pop();
+      XTests.eq(R.cmp(R.make(v.p, v.q), w.value), 0, `${c.key} n=${r.n} terms rebuild V(t)`);
+    }
+  }
+});
+
+XTests.test('bracket: the minimax fixed weight is measured against the better endpoint and is truly minimax', () => {
+  const R = CF.Rat;
+  for (const key of ['pi', 'sqrt2', 'phi']) {
+    const rows = CF.bracketRows(key, 12).rows;
+    const rel = CF.bracketRelTo;
+    const b = CF.bestFixedWeight(rows, rel);
+    XTests.ok(b && R.cmp(b.t, R.fromInt(0)) > 0 && R.cmp(b.t, R.fromInt(1)) < 0, `${key} best t out of range`);
+    for (let g = 1; g < 1000; g++) {
+      XTests.ok(R.cmp(CF.worstRatio(rows, R.make(BigInt(g), 1000n), rel), b.worst) >= 0, `${key}: t=${g}/1000 beats the claimed minimax`);
+    }
+    // at t*, the relative error is zero; at an endpoint it is 1 for that level
+    for (const r of rows) {
+      const better = R.cmp(r.eA, r.eB) < 0 ? r.eA : r.eB;
+      XTests.eq(R.cmp(R.mul(rel(r), R.sub(r.A, r.B)), better), 0, `${key} n=${r.n} rel is the better endpoint's error over the width`);
+    }
+  }
+  // the old two-argument form still measures against f(n+1): at t = 1 every level is f(n+1) itself
+  const mrows = CF.midpointRows('pi', 6).rows;
+  XTests.eq(R.cmp(CF.worstRatio(mrows, R.fromInt(1)), R.fromInt(1)), 0, 't = 1 is f(n+1) itself');
+});
+
 XTests.test('the strict-upper search finds candidates for a rational target', () => {
   // Exact hits used to fill the 50-item shortlist and were removed only afterwards, so the
   // search returned nothing for 355/113 even though 22/7 is plainly above it.
@@ -4230,12 +4301,27 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   renderMobius();
 
   // ---------- Bracket tab ----------
-  state.bracket = { key: 'pi', depth: 3 };
+  state.bracket = { key: 'pi', depth: 3, t: CF.Rat.make(1n, 2n) };
   const BR_LEVELS = 14;
 
   el('br-depth').addEventListener('input', (e) => {
     state.bracket.depth = Number(e.target.value);
     renderBracket();
+  });
+  el('br-weight').addEventListener('input', () => {
+    state.bracket.t = CF.Rat.make(BigInt(el('br-weight').value), 1000n);
+    renderBracket();
+  });
+  el('br-weight-half').addEventListener('click', () => {
+    state.bracket.t = CF.Rat.make(1n, 2n); renderBracket();
+  });
+  el('br-weight-best').addEventListener('click', () => {
+    const best = CF.bestFixedWeight(CF.bracketRows(state.bracket.key, BR_LEVELS).rows, CF.bracketRelTo);
+    if (best) { state.bracket.t = best.t; renderBracket(); }
+  });
+  el('br-weight-deep').addEventListener('click', () => {
+    const rows = CF.bracketRows(state.bracket.key, BR_LEVELS).rows;
+    if (rows.length) { state.bracket.t = rows[rows.length - 1].tStar; renderBracket(); }
   });
 
   function renderBracket() {
@@ -4267,7 +4353,10 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       '<strong>C = (A + B) / 2</strong> is rational, and its own continued fraction is the middle row: ' +
       'it starts with the same terms and then goes on.';
 
-    const width = r.termsC.length;
+    const tStr = CF.Rat.toDecimalString(s.t, 4);
+    const wr = CF.bracketWeightedAt(r, s.t);
+    const BR_COLS = 16;
+    const width = Math.min(BR_COLS, Math.max(r.termsC.length, wr.terms.length));
     const cell = (v) => `<td class="mono">${v}</td>`;
     const rowHtml = (name, terms, value, err, cls) => {
       const cells = [];
@@ -4276,17 +4365,19 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
         const isLast = i === r.n && terms.length === r.n + 1;
         cells.push(t === undefined ? '<td></td>' : `<td class="mono"${isLast ? ' style="font-weight:600"' : ''}>${t}</td>`);
       }
+      cells.push(terms.length > width ? `<td class="mono">… ${terms.length - width} more</td>` : '<td></td>');
       return `<tr class="${cls}"><td><strong>${name}</strong></td>${cells.join('')}` +
         cell(`${elide(String(value.n), 12)}/${elide(String(value.d), 12)}`) +
         cell(CF.Rat.toDecimalString(value, 14)) + cell(err) + '</tr>';
     };
     const head = ['<th></th>'];
     for (let i = 0; i < width; i++) head.push(`<th>a<sub>${i}</sub></th>`);
-    head.push('<th>p/q</th><th>value</th><th>|error|</th>');
+    head.push('<th></th><th>p/q</th><th>value</th><th>|error|</th>');
     el('br-terms').innerHTML =
       `<tr>${head.join('')}</tr>` +
       rowHtml('A upper', r.termsA, r.A, r.eAStr, '') +
       rowHtml('C = (A+B)/2', r.termsC, r.C, r.eCStr, 'even') +
+      rowHtml(`V(t), t = ${tStr}`, wr.terms, wr.value, CF.sci(wr.error, 4), '') +
       rowHtml('B lower', r.termsB, r.B, r.eBStr, '');
 
     const extra = r.termsC.length - (r.n + 1);
@@ -4310,16 +4401,93 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
           `<td><strong>${best}</strong></td></tr>`;
       }).join('');
 
-    drawBracket(rows);
+    const weighted = rows.map(z => CF.bracketWeightedAt(z, s.t).error);
+    const better = (z) => (CF.Rat.cmp(z.eA, z.eB) < 0 ? z.eA : z.eB);
+    const wBeatsBoth = rows.filter((z, i) => CF.Rat.cmp(weighted[i], better(z)) < 0).length;
+    const wBeatsC = rows.filter((z, i) => CF.Rat.cmp(weighted[i], z.eC) < 0).length;
+    el('br-weight').value = String(Math.round(CF.Rat.toNumber(s.t) * 1000));
+    el('br-weight-label').textContent =
+      `V(t) = B + t·(A − B) at t = ${tStr} — beats both A and B at ${wBeatsBoth} of ${rows.length} depths, beats C at ${wBeatsC}`;
+
+    const best = CF.bestFixedWeight(rows, CF.bracketRelTo);
+    drawBracket(rows, weighted, tStr);
+    drawBracketWeights(rows, s.t, best);
     const wins = rows.filter(z => z.midBeatsBoth).length;
     el('br-verdict').textContent =
       `Over these ${rows.length} depths C beat both A and B ${wins} time${wins === 1 ? '' : 's'}. ` +
       'A and B are one convergent and the semiconvergent next to it, so the bracket narrows by about ' +
-      'one term per depth; C gains only when the two errors happen to be nearly equal.';
+      'one term per depth; C gains only when the two errors happen to be nearly equal. The purple line is V(t) at the slider’s weight.';
+
+    const ts = rows.map(z => CF.Rat.toNumber(z.tStar));
+    const tMin = Math.min(...ts), tMax = Math.max(...ts);
+    const quad = CF.constant(s.key).quad;
+    let text = `t* = |err B| / (|err A| + |err B|) is where ${label} sits inside the bracket, from B at 0 to A at 1. ` +
+      `Here it ranges from ${tMin.toFixed(3)} to ${tMax.toFixed(3)}; it lies on either side of ½, since the tail ` +
+      `that was cut off can be anything above 1. At t* the combination is ${label} itself, so knowing t* is knowing the value.`;
+    if (best && rows.length > 1) {
+      const w = CF.Rat.toNumber(best.worst);
+      const wHalf = CF.Rat.toNumber(CF.worstRatio(rows, CF.Rat.make(1n, 2n), CF.bracketRelTo));
+      text += ` The minimax fixed weight t = ${CF.Rat.toDecimalString(best.t, 4)} is the one whose worst depth is least bad ` +
+        `relative to the better of A and B: there it is ` +
+        (w < 1 ? `still ${(1 / w).toFixed(w < 0.1 ? 1 : 2)}× better` : `${w.toFixed(2)}× worse`) +
+        `, where the midpoint’s worst depth is ` +
+        (wHalf < 1 ? `${(1 / wHalf).toFixed(wHalf < 0.1 ? 1 : 2)}× better.` : `${wHalf.toFixed(2)}× worse.`);
+    }
+    text += quad
+      ? ' The expansion is periodic, so the cut-off tail repeats and t* settles — with the sides swapping each depth, it may settle to two values, one per parity. The deepest t* chip holds that value; its zero error at the deepest depth is circular.'
+      : ' The partial quotients keep changing, so t* jumps from depth to depth and no single weight fits.';
+    el('br-weights-verdict').textContent = text;
   }
 
-  function drawBracket(rows) {
-    const W = 900, H = 300, padL = 52, padB = 34, padT = 16, padR = 90;
+  function drawBracketWeights(rows, t, best) {
+    const W = 900, H = 240, padL = 52, padB = 34, padT = 16, padR = 150;
+    const ctx = fitCanvas(el('br-weights'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    if (rows.length < 1) return;
+    const X = (n) => padL + n / Math.max(1, rows.length - 1) * (W - padL - padR);
+    const Y = (v) => (H - padB) - v * (H - padB - padT);
+    const R = CF.Rat;
+    ctx.font = '9px sans-serif';
+    for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+      ctx.strokeStyle = v === 0.5 ? '#999' : '#eee';
+      ctx.setLineDash(v === 0.5 ? [4, 4] : []);
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(padL, Y(v)); ctx.lineTo(W - padR, Y(v)); ctx.stroke();
+      ctx.fillStyle = '#bbb';
+      ctx.fillText(v === 0 ? 'B' : v === 1 ? 'A' : String(v), 6, Y(v) + 3);
+    }
+    ctx.setLineDash([]);
+    const hline = (v, color) => {
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(padL, Y(v)); ctx.lineTo(W - padR, Y(v)); ctx.stroke();
+    };
+    hline(R.toNumber(t), '#7a3e9d');
+    if (best) hline(R.toNumber(best.t), '#c64600');
+    ctx.strokeStyle = '#2d7d46'; ctx.lineWidth = 1.5; ctx.beginPath();
+    rows.forEach((r, i) => {
+      const v = R.toNumber(r.tStar);
+      i ? ctx.lineTo(X(r.n), Y(v)) : ctx.moveTo(X(r.n), Y(v));
+    });
+    ctx.stroke();
+    ctx.fillStyle = '#2d7d46';
+    rows.forEach((r) => {
+      ctx.beginPath(); ctx.arc(X(r.n), Y(R.toNumber(r.tStar)), 3.5, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.font = '11px sans-serif';
+    const leg = [
+      ['t* optimal weight', '#2d7d46'],
+      [`slider t = ${R.toDecimalString(t, 3)}`, '#7a3e9d'],
+      best ? [`minimax fixed ${R.toDecimalString(best.t, 3)}`, '#c64600'] : null,
+      ['midpoint ½', '#999'],
+    ].filter(Boolean);
+    leg.forEach(([name, color], i) => { ctx.fillStyle = color; ctx.fillText(name, W - padR + 6, padT + 14 + i * 15); });
+    ctx.fillStyle = '#666';
+    ctx.fillText('depth n', (W - padR) / 2, H - 8);
+    rows.forEach((r) => { if (r.n % 2 === 0) ctx.fillText(String(r.n), X(r.n) - 3, H - padB + 12); });
+  }
+
+  function drawBracket(rows, weighted, tStr) {
+    const W = 900, H = 300, padL = 52, padB = 34, padT = 16, padR = 120;
     const ctx = fitCanvas(el('br-plot'), W, H);
     ctx.clearRect(0, 0, W, H);
     if (rows.length < 2) return;
@@ -4327,12 +4495,13 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       { name: 'A upper', color: '#c64600', get: (r) => r.eA },
       { name: 'B lower', color: '#1a5fb4', get: (r) => r.eB },
       { name: 'C midpoint', color: '#2d7d46', get: (r) => r.eC },
+      { name: `V(t), t = ${tStr}`, color: '#7a3e9d', get: (r, i) => weighted[i] },
     ];
     const logs = [];
-    for (const s2 of series) for (const r of rows) {
-      const L = CF.Rat.log10(s2.get(r));
+    for (const s2 of series) rows.forEach((r, i) => {
+      const L = CF.Rat.log10(s2.get(r, i));
       if (Number.isFinite(L)) logs.push(L);
-    }
+    });
     if (!logs.length) return;
     const hi = Math.max(...logs), lo = Math.min(...logs);
     const span = Math.max(1, hi - lo);
@@ -4349,16 +4518,16 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     series.forEach((s2, si) => {
       ctx.strokeStyle = s2.color; ctx.lineWidth = 1.5; ctx.beginPath();
       let started = false;
-      rows.forEach((r) => {
-        const L = CF.Rat.log10(s2.get(r));
+      rows.forEach((r, i) => {
+        const L = CF.Rat.log10(s2.get(r, i));
         if (!Number.isFinite(L)) return;
         started ? ctx.lineTo(X(r.n), Y(L)) : ctx.moveTo(X(r.n), Y(L));
         started = true;
       });
       ctx.stroke();
       ctx.fillStyle = s2.color;
-      rows.forEach((r) => {
-        const L = CF.Rat.log10(s2.get(r));
+      rows.forEach((r, i) => {
+        const L = CF.Rat.log10(s2.get(r, i));
         if (Number.isFinite(L)) ctx.fillRect(X(r.n) - 2, Y(L) - 2, 4, 4);
       });
       ctx.font = '11px sans-serif';
