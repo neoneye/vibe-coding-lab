@@ -114,7 +114,107 @@ const CF = (() => {
     toNumber(a) { return Number(Rat.toDecimalString(a, 20)); },
   };
 
-  return { bgcd, isqrt, Rat };
+  // ---- series helpers, used to pin the transcribed digit strings in the tests ----
+
+  // Truncate a rational to `digits` decimals, keeping the terms small between iterations.
+  const trunc = (r, digits) => {
+    const s = 10n ** BigInt(digits);
+    return Rat.make((r.n * s) / r.d, s);
+  };
+
+  const ratSqrt = (n, digits) => {
+    let x = Rat.fromInt(isqrt(n * 10n ** 40n) / 10n ** 20n + 1n);
+    const N = Rat.fromInt(n), two = Rat.fromInt(2);
+    for (let i = 0; i < 300; i++) {
+      const next = trunc(Rat.div(Rat.add(x, Rat.div(N, x)), two), digits + 10);
+      if (Rat.cmp(next, x) === 0) break;
+      x = next;
+    }
+    return trunc(x, digits);
+  };
+
+  const ratCbrt = (n, digits) => {
+    let x = Rat.fromInt(2);
+    const N = Rat.fromInt(n), two = Rat.fromInt(2), three = Rat.fromInt(3);
+    for (let i = 0; i < 400; i++) {
+      const next = trunc(Rat.div(Rat.add(Rat.mul(two, x), Rat.div(N, Rat.mul(x, x))), three), digits + 10);
+      if (Rat.cmp(next, x) === 0) break;
+      x = next;
+    }
+    return trunc(x, digits);
+  };
+
+  const ratExp1 = (digits) => {
+    let sum = Rat.fromInt(0), term = Rat.fromInt(1);
+    const tiny = Rat.make(1n, 10n ** BigInt(digits + 10));
+    for (let k = 1; k <= 400; k++) {
+      sum = Rat.add(sum, term);
+      term = Rat.div(term, Rat.fromInt(k));
+      if (Rat.cmp(term, tiny) < 0) { sum = Rat.add(sum, term); break; }
+    }
+    return trunc(sum, digits);
+  };
+
+  // ln 2 = 2 * atanh(1/3) = 2 * sum_{k>=0} (1/3)^(2k+1) / (2k+1)
+  const ratLn2 = (digits) => {
+    let sum = Rat.fromInt(0), pow = Rat.make(1n, 3n);
+    const ninth = Rat.make(1n, 9n);
+    for (let k = 0; k < 600; k++) {
+      sum = Rat.add(sum, Rat.div(pow, Rat.fromInt(2 * k + 1)));
+      pow = trunc(Rat.mul(pow, ninth), digits + 20);
+      if (Rat.isZero(pow)) break;
+    }
+    return trunc(Rat.mul(Rat.fromInt(2), sum), digits);
+  };
+
+  // arctan(1/m) = sum_{k>=0} (-1)^k / ((2k+1) m^(2k+1))
+  const ratArctanInv = (m, digits) => {
+    let sum = Rat.fromInt(0), pow = Rat.make(1n, BigInt(m));
+    const sq = Rat.make(1n, BigInt(m) * BigInt(m));
+    for (let k = 0; k < 2000; k++) {
+      const t = Rat.div(pow, Rat.fromInt(2 * k + 1));
+      sum = k % 2 === 0 ? Rat.add(sum, t) : Rat.sub(sum, t);
+      pow = trunc(Rat.mul(pow, sq), digits + 20);
+      if (Rat.isZero(pow)) break;
+    }
+    return sum;
+  };
+
+  // pi = 16 arctan(1/5) - 4 arctan(1/239)
+  const ratPiMachin = (digits) => trunc(Rat.sub(
+    Rat.mul(Rat.fromInt(16), ratArctanInv(5, digits + 10)),
+    Rat.mul(Rat.fromInt(4), ratArctanInv(239, digits + 10))), digits);
+
+  // ---- the constants ----
+  // Every string below is TRUNCATED, never rounded up, so [lo, lo + 10^-60] really does
+  // bracket the value. The tests above check each one against the series here; gamma has
+  // no cheap series and is cross-checked against OEIS A002852 in the term tests instead.
+  const CONSTANTS = [
+    { key: 'pi',       label: 'π',   digits: '3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117067' },
+    { key: 'e',        label: 'e',        digits: '2.718281828459045235360287471352662497757247093699959574966967627724076630353547594571382178525166427' },
+    { key: 'sqrt2',    label: '√2',  digits: '1.41421356237309504880168872420969807856967187537694807317667', quad: { P: 0n, Q: 1n, D: 2n } },
+    { key: 'sqrt3',    label: '√3',  digits: '1.73205080756887729352744634150587236694280525381038062805580', quad: { P: 0n, Q: 1n, D: 3n } },
+    { key: 'sqrt5',    label: '√5',  digits: '2.23606797749978969640917366873127623544061835961152572427089', quad: { P: 0n, Q: 1n, D: 5n } },
+    { key: 'phi',      label: 'φ',   digits: '1.61803398874989484820458683436563811772030917980576286213544', quad: { P: 1n, Q: 2n, D: 5n } },
+    { key: 'ln2',      label: 'ln 2',     digits: '0.693147180559945309417232121458176568075500134360255254120680' },
+    { key: 'gamma',    label: 'γ',   digits: '0.577215664901532860606512090082402431042159335939923598805767' },
+    { key: 'cbrt2',    label: '∛2',  digits: '1.25992104989487316476721060727822835057025146470150798008197' },
+    { key: 'r355_113', label: '355/113',  digits: '3.14159292035398230088495575221238938053097345132743362831858',
+      exactNum: 355n, exactDen: 113n },
+  ];
+
+  const EPS = Rat.make(1n, 10n ** 60n);
+
+  const constant = (key) => {
+    const c = CONSTANTS.find(x => x.key === key);
+    if (!c) throw new Error('unknown constant ' + key);
+    const lo = Rat.fromDecimalString(c.digits);
+    const exact = c.exactNum !== undefined ? Rat.make(c.exactNum, c.exactDen) : null;
+    return { key: c.key, label: c.label, lo, hi: Rat.add(lo, EPS), exact, quad: c.quad || null };
+  };
+
+  return { bgcd, isqrt, Rat, trunc, ratSqrt, ratCbrt, ratExp1, ratLn2, ratArctanInv, ratPiMachin,
+           CONSTANTS, constant, EPS };
 })();
 
 XTests.test('Rat reduces and normalizes sign', () => {
@@ -152,6 +252,59 @@ XTests.test('isqrt floors integer square roots', () => {
   XTests.eq(CF.isqrt(16n), 4n);
   XTests.eq(CF.isqrt(10n ** 40n), 10n ** 20n);
 });
+
+XTests.test('every constant carries at least 60 significant digits', () => {
+  for (const c of CF.CONSTANTS) {
+    const sig = c.digits.replace('-', '').replace('.', '').replace(/^0+/, '');
+    XTests.ok(sig.length >= 60, `${c.key} has only ${sig.length} significant digits`);
+  }
+});
+
+XTests.test('enclosure brackets the value', () => {
+  for (const c of CF.CONSTANTS) {
+    const k = CF.constant(c.key);
+    XTests.eq(CF.Rat.cmp(k.lo, k.hi), -1, `${c.key} lo<hi`);
+  }
+});
+
+XTests.test('sqrt digits agree with Newton iteration', () => {
+  for (const [key, n] of [['sqrt2', 2n], ['sqrt3', 3n], ['sqrt5', 5n]]) {
+    const ref = CF.ratSqrt(n, 70);
+    XTests.eq(CF.Rat.toDecimalString(ref, 55), CF.Rat.toDecimalString(CF.constant(key).lo, 55), key);
+  }
+});
+
+XTests.test('phi digits agree with (1+sqrt5)/2', () => {
+  const ref = CF.Rat.div(CF.Rat.add(CF.Rat.fromInt(1), CF.ratSqrt(5n, 70)), CF.Rat.fromInt(2));
+  XTests.eq(CF.Rat.toDecimalString(ref, 55), CF.Rat.toDecimalString(CF.constant('phi').lo, 55));
+});
+
+XTests.test('cbrt2 digits agree with Newton iteration', () => {
+  XTests.eq(CF.Rat.toDecimalString(CF.ratCbrt(2n, 70), 55),
+            CF.Rat.toDecimalString(CF.constant('cbrt2').lo, 55));
+});
+
+XTests.test('e digits agree with the series', () => {
+  XTests.eq(CF.Rat.toDecimalString(CF.ratExp1(70), 55),
+            CF.Rat.toDecimalString(CF.constant('e').lo, 55));
+});
+
+XTests.test('ln2 digits agree with the atanh series', () => {
+  XTests.eq(CF.Rat.toDecimalString(CF.ratLn2(70), 55),
+            CF.Rat.toDecimalString(CF.constant('ln2').lo, 55));
+});
+
+XTests.test('pi digits agree with Machin', () => {
+  XTests.eq(CF.Rat.toDecimalString(CF.ratPiMachin(70), 55),
+            CF.Rat.toDecimalString(CF.constant('pi').lo, 55));
+});
+
+XTests.test('355/113 is stored exactly', () => {
+  const k = CF.constant('r355_113');
+  XTests.ok(k.exact !== null, 'exact rational present');
+  XTests.eq(k.exact.n, 355n); XTests.eq(k.exact.d, 113n);
+});
+
 </script>
 
 <script>
