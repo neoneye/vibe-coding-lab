@@ -53,6 +53,9 @@
   #simple-mode .chip { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
   #simple-cascade { display:block; margin:10px 0 4px 0; }
   #cx-canvas { display:block; margin:14px 0 4px 0; }
+  #bd-table { font-size:12px; }
+  #bd-table th, #bd-table td { padding:4px 7px; }
+  #bd-plot { display:block; margin:12px 0 4px 0; }
   .sectionhead { font-size:14px; font-weight:600; margin:22px 0 8px 0; }
   .numgrid { display:grid; grid-template-columns:repeat(24, 1fr); gap:2px; max-width:720px; }
   .numgrid div { font-size:9px; text-align:center; padding:2px 0; border-radius:2px;
@@ -80,6 +83,7 @@
     <button class="tab" data-panel="unit">Unit fractions</button>
     <button class="tab" data-panel="complex">Complex</button>
     <button class="tab" data-panel="mobius">Möbius</button>
+    <button class="tab" data-panel="bounds">Bounds</button>
   </div>
   <div class="panel active" id="panel-simple">
     <div class="chips" id="simple-mode"></div>
@@ -167,6 +171,13 @@
     <canvas id="mb-canvas" width="900" height="240"></canvas>
     <p class="status" id="mb-caption"></p>
     <div class="tablewrap"><table id="mb-table"></table></div>
+  </div>
+  <div class="panel" id="panel-bounds">
+    <div class="chips" id="bd-chips"></div>
+    <p class="status" id="bd-intro"></p>
+    <div class="tablewrap"><table id="bd-table"></table></div>
+    <canvas id="bd-plot" width="900" height="300"></canvas>
+    <p class="status" id="bd-verdict"></p>
   </div>
 </div>
 
@@ -708,6 +719,51 @@ const CF = (() => {
     return { ...r, source: 'interval' };
   };
 
+  // ---- two bounding continued fractions and their midpoint ----
+  //
+  // A regular expansion's convergents alternate: the even-indexed ones rise toward the
+  // value from below, the odd-indexed ones fall toward it from above. Split them and you
+  // have two monotone bound sequences. Level k pairs B_k = p_2k/q_2k with A_k = p_2k+1/q_2k+1.
+  //
+  // The midpoint (A+B)/2 has a tidy error identity: mid - x = ((B-x) + (A-x))/2, so
+  // |mid - x| = |errA - errB| / 2. It therefore only beats both endpoints when the two
+  // errors are close in size, which is why it wins less than half the time.
+  //
+  // The MEDIANT (pA+pB)/(qA+qB) is the classical way to combine two bounds - it is the next
+  // semiconvergent - and it beats the midpoint far more often, with a much smaller
+  // denominator. It is reported alongside rather than instead, so the comparison is visible.
+  const boundRows = (key, maxLevels) => {
+    const k = constant(key);
+    const x = k.exact || k.lo;
+    const { rows, stopReason } = convergentRowsFor(key, maxLevels * 2 + 2, 'floor');
+    const two = Rat.fromInt(2);
+    const absR = (r) => (r.n < 0n ? Rat.neg(r) : r);
+    const out = [];
+    for (let i = 0; 2 * i + 1 < rows.length && out.length < maxLevels; i++) {
+      const B = rows[2 * i], A = rows[2 * i + 1];
+      const lower = Rat.make(B.p, B.q), upper = Rat.make(A.p, A.q);
+      const mid = Rat.div(Rat.add(lower, upper), two);
+      const mediant = Rat.make(B.p + A.p, B.q + A.q);
+      const eLower = absR(Rat.sub(x, lower)), eUpper = absR(Rat.sub(x, upper));
+      const eMid = absR(Rat.sub(x, mid)), eMediant = absR(Rat.sub(x, mediant));
+      const width = Rat.sub(upper, lower);
+      const bestEnd = Rat.cmp(eLower, eUpper) < 0 ? eLower : eUpper;
+      out.push({
+        k: i,
+        lowerP: B.p, lowerQ: B.q, upperP: A.p, upperQ: A.q,
+        lower, upper, mid, mediant,
+        mediantP: B.p + A.p, mediantQ: B.q + A.q,
+        eLower, eUpper, eMid, eMediant,
+        eLowerStr: sci(eLower, 4), eUpperStr: sci(eUpper, 4),
+        eMidStr: sci(eMid, 4), eMediantStr: sci(eMediant, 4),
+        width, widthStr: sci(width, 4),
+        midBeatsBoth: Rat.cmp(eMid, bestEnd) < 0,
+        mediantBeatsMid: Rat.cmp(eMediant, eMid) < 0,
+      });
+    }
+    return { rows: out, stopReason };
+  };
+
   // ---- Mobius disks: the LFT picture of a real continued fraction ----
   //
   // T_n(z) = (A_n z + A_{n-1}) / (B_n z + B_{n-1}) has real coefficients and sends
@@ -1207,7 +1263,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows, raceKind, mobiusDisks, unitFractions, unitFractionRows,
+           cascadeRows, raceKind, mobiusDisks, boundRows, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            imaginaryWake,
@@ -2350,6 +2406,56 @@ XTests.test('Mobius offsets sit inside their disk', () => {
   }
 });
 
+XTests.test('the two bound sequences are monotone and stay on their own side', () => {
+  for (const c of CF.CONSTANTS) {
+    const x = CF.constant(c.key).exact || CF.constant(c.key).lo;
+    const { rows } = CF.boundRows(c.key, 6);
+    let prevLo = null, prevUp = null;
+    for (const r of rows) {
+      XTests.ok(CF.Rat.cmp(r.lower, x) < 0, `${c.key} k=${r.k} lower bound was not below`);
+      XTests.ok(CF.Rat.cmp(r.upper, x) > 0, `${c.key} k=${r.k} upper bound was not above`);
+      if (prevLo) XTests.ok(CF.Rat.cmp(r.lower, prevLo) > 0, `${c.key} k=${r.k} lower did not rise`);
+      if (prevUp) XTests.ok(CF.Rat.cmp(r.upper, prevUp) < 0, `${c.key} k=${r.k} upper did not fall`);
+      prevLo = r.lower; prevUp = r.upper;
+    }
+  }
+});
+
+XTests.test('the midpoint error is exactly half the difference of the two errors', () => {
+  // mid - x = ((lower - x) + (upper - x))/2, so |mid - x| = |errUpper - errLower| / 2.
+  for (const c of CF.CONSTANTS) {
+    for (const r of CF.boundRows(c.key, 6).rows) {
+      const d = CF.Rat.sub(r.eUpper, r.eLower);
+      const half = CF.Rat.div(d.n < 0n ? CF.Rat.neg(d) : d, CF.Rat.fromInt(2));
+      XTests.eq(CF.Rat.cmp(r.eMid, half), 0, `${c.key} k=${r.k}`);
+    }
+  }
+});
+
+XTests.test('the mediant lies strictly between the bounds and has the summed denominator', () => {
+  for (const c of CF.CONSTANTS) {
+    for (const r of CF.boundRows(c.key, 6).rows) {
+      XTests.ok(CF.Rat.cmp(r.lower, r.mediant) < 0 && CF.Rat.cmp(r.mediant, r.upper) < 0,
+                `${c.key} k=${r.k} mediant escaped the bracket`);
+      XTests.eq(r.mediantQ, r.lowerQ + r.upperQ, `${c.key} k=${r.k} mediant denominator`);
+    }
+  }
+});
+
+XTests.test('the midpoint is not uniformly better, and the mediant usually beats it', () => {
+  // Recorded rather than asserted as a bound: the midpoint only wins when the two errors
+  // are close in size, so it beats both endpoints well under half the time.
+  let mid = 0, med = 0, n = 0;
+  for (const c of CF.CONSTANTS) {
+    for (const r of CF.boundRows(c.key, 6).rows) {
+      n++; if (r.midBeatsBoth) mid++; if (r.mediantBeatsMid) med++;
+    }
+  }
+  XTests.ok(n >= 20, `expected a decent sample, got ${n}`);
+  XTests.ok(mid > 0 && mid < n, `midpoint won ${mid} of ${n} - expected a mix`);
+  XTests.ok(med > n / 2, `mediant beat the midpoint only ${med} of ${n}`);
+});
+
 XTests.test('real constants run through the complex algorithm too', () => {
   for (const c of CF.CONSTANTS) {
     const k = CF.complexConstant(c.key);
@@ -3237,6 +3343,112 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   }
 
   renderMobius();
+
+  // ---------- Bounds tab ----------
+  state.bounds = { key: 'pi' };
+  const BD_LEVELS = 8;
+
+  function renderBounds() {
+    const s = state.bounds;
+    el('bd-chips').innerHTML = CF.CONSTANTS
+      .map(c => `<button class="chip ${c.key === s.key ? 'active' : ''}" data-key="${c.key}">${c.label}</button>`)
+      .join('');
+    el('bd-chips').querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+      s.key = b.dataset.key; renderBounds();
+    }));
+
+    const label = CF.constant(s.key).label;
+    const { rows } = CF.boundRows(s.key, BD_LEVELS);
+
+    el('bd-intro').innerHTML =
+      `A regular expansion's convergents alternate sides, so splitting them by parity gives ` +
+      `<strong>two</strong> bounding sequences: the even-indexed ones rise toward ${label} from ` +
+      'below, the odd-indexed ones fall toward it from above. <strong>C</strong> is their ' +
+      'midpoint (A+B)/2. Its error is exactly <em>half the difference of the two errors</em>, ' +
+      'so it beats both bounds only when they are comparably wrong. The <strong>mediant</strong> ' +
+      '(pᴬ+pᴮ)/(qᴬ+qᴮ) is shown beside it — the classical way to combine two bounds, and ' +
+      'the one that usually wins, with a far smaller denominator.';
+
+    el('bd-table').innerHTML =
+      '<tr><th>k</th><th>B lower</th><th>|err B|</th><th>A upper</th><th>|err A|</th>' +
+      '<th>C = (A+B)/2</th><th>|err C|</th><th>mediant</th><th>|err med|</th>' +
+      '<th>best</th></tr>' +
+      rows.map(r => {
+        const best = r.midBeatsBoth ? 'C'
+          : (CF.Rat.cmp(r.eLower, r.eUpper) < 0 ? 'B' : 'A');
+        const f = (n, d) => `${elide(String(n), 12)}/${elide(String(d), 12)}`;
+        return `<tr><td>${r.k}</td>` +
+          `<td class="mono">${f(r.lowerP, r.lowerQ)}</td><td class="mono">${r.eLowerStr}</td>` +
+          `<td class="mono">${f(r.upperP, r.upperQ)}</td><td class="mono">${r.eUpperStr}</td>` +
+          `<td class="mono">${CF.Rat.toDecimalString(r.mid, 12)}</td>` +
+          `<td class="mono">${r.eMidStr}</td>` +
+          `<td class="mono">${f(r.mediantP, r.mediantQ)}</td>` +
+          `<td class="mono">${r.eMediantStr}</td><td><strong>${best}</strong></td></tr>`;
+      }).join('');
+
+    drawBounds(rows);
+
+    const midWins = rows.filter(r => r.midBeatsBoth).length;
+    const medWins = rows.filter(r => r.mediantBeatsMid).length;
+    el('bd-verdict').textContent =
+      `Over these ${rows.length} levels the midpoint beat both bounds ${midWins} time` +
+      `${midWins === 1 ? '' : 's'}, and the mediant beat the midpoint ${medWins} time` +
+      `${medWins === 1 ? '' : 's'}. The midpoint wins exactly when the two bounds are about ` +
+      'equally wrong; when one is far better, averaging it with a poor partner throws accuracy away.';
+  }
+
+  function drawBounds(rows) {
+    const W = 900, H = 300, padL = 52, padB = 34, padT = 16, padR = 90;
+    const ctx = fitCanvas(el('bd-plot'), W, H);
+    ctx.clearRect(0, 0, W, H);
+    if (rows.length < 2) return;
+    const series = [
+      { name: 'B lower', color: '#1a5fb4', get: (r) => r.eLower },
+      { name: 'A upper', color: '#c64600', get: (r) => r.eUpper },
+      { name: 'C midpoint', color: '#2d7d46', get: (r) => r.eMid },
+      { name: 'mediant', color: '#7a4fbf', get: (r) => r.eMediant },
+    ];
+    const logs = [];
+    for (const s2 of series) for (const r of rows) {
+      const v = CF.Rat.toNumber(s2.get(r));
+      if (v > 0) logs.push(Math.log10(v));
+    }
+    const hi = Math.max(...logs), lo = Math.min(...logs);
+    const span = Math.max(1, hi - lo);
+    const X = (k) => padL + k / Math.max(1, rows.length - 1) * (W - padL - padR);
+    const Y = (v) => (H - padB) - (Math.log10(v) - lo) / span * (H - padB - padT);
+
+    ctx.strokeStyle = '#eee';
+    for (let d = Math.floor(lo); d <= Math.ceil(hi); d++) {
+      const y = Y(Math.pow(10, d));
+      if (y < padT || y > H - padB) continue;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      ctx.fillStyle = '#bbb'; ctx.font = '9px sans-serif';
+      ctx.fillText(`1e${d}`, 6, y + 3);
+    }
+    series.forEach((s2, si) => {
+      ctx.strokeStyle = s2.color; ctx.lineWidth = 1.5; ctx.beginPath();
+      let started = false;
+      rows.forEach((r, k) => {
+        const v = CF.Rat.toNumber(s2.get(r));
+        if (!(v > 0)) return;
+        started ? ctx.lineTo(X(k), Y(v)) : ctx.moveTo(X(k), Y(v));
+        started = true;
+      });
+      ctx.stroke();
+      ctx.fillStyle = s2.color;
+      rows.forEach((r, k) => {
+        const v = CF.Rat.toNumber(s2.get(r));
+        if (v > 0) ctx.fillRect(X(k) - 2, Y(v) - 2, 4, 4);
+      });
+      ctx.font = '11px sans-serif';
+      ctx.fillText(s2.name, W - padR + 6, padT + 14 + si * 15);
+    });
+    ctx.fillStyle = '#666'; ctx.font = '11px sans-serif';
+    ctx.fillText('level k', (W - padR) / 2, H - 8);
+  }
+
+  renderBounds();
 
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
