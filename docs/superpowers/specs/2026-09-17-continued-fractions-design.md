@@ -15,8 +15,9 @@ the pure maths in Node, per repo convention. Three tabs across the top:
 **Simple**, **Generalized**, **Geometry**. Visual style follows `packing/`:
 light background, system font, 14px, thin borders, no framework.
 
-Pure logic lives in `<script id="shared-code">` exposing a `CF` namespace and a
-`CF.tests` runner; `test.mjs` extracts the block by regex and runs it.
+Pure logic lives in `<script id="shared-code">` exposing a `CF` namespace and an
+`XTests` runner (the name `test.mjs` already looks for in this repo); `test.mjs`
+extracts the block by regex and runs it.
 
 ## 1. Math engine (`CF`, shared-code)
 
@@ -86,10 +87,11 @@ B_n = b_n·B_{n-1} + a_n·B_{n-2},   B_{-1} = 0, B_0 = 1
 ```
 
 `a_n` and `b_n` are `Rat`s, so the whole recurrence stays exact. When a sequence
-is irrational (π, e, √2) its 60-digit `lo` endpoint is used and the result is
-labelled "computed from π to 60 digits" — exact for that approximation, not for
-the constant. Terms are capped at 40 and a digit guard stops the recurrence if
-a numerator exceeds 20000 digits.
+is irrational (π, e, √2) its enclosure truncated to 30 decimals is used and the
+result is labelled as computed from that approximation — exact for it, not for
+the constant. Levels are capped at 150 when both sequences are integer-valued
+and at 60 when either is irrational, which keeps the exact recurrence fast
+enough to redraw on a slider drag.
 
 ## 2. Simple tab
 
