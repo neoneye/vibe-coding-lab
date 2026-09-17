@@ -1060,15 +1060,13 @@ const CF = (() => {
   // [a0; ..., an] (t = infinity, the convergent) and [a0; ..., an + 1] (t = 1). Which is
   // above depends on the parity of n. These are the closest continued fractions of that
   // length on either side; every real whose expansion starts a0..an lies between them.
-  // C = (A + B)/2 is rational and interior, so its own expansion starts a0..an too.
   //
-  const bracketRows = (key, maxDepth) => {
+  const bracketRows = (key, maxDepth, w = Rat.make(1n, 2n)) => {
     const k = constant(key);
     const x = k.exact || k.lo;
     const eps = k.exact ? Rat.fromInt(0) : k.eps;
     const e = expandMode(key, 'floor', maxDepth + 1);
     const cs = convergents(e.terms);
-    const two = Rat.fromInt(2);
     const absR = (r) => (r.n < 0n ? Rat.neg(r) : r);
     const out = [];
     for (let n = 0; n < e.terms.length && n < maxDepth; n++) {
@@ -1081,22 +1079,22 @@ const CF = (() => {
       if (Rat.cmp(vCut, x) === 0 || Rat.cmp(vBumped, x) === 0) break;   // a bound on the value itself
       const termsA = cutBelow ? bumped : cut, termsB = cutBelow ? cut : bumped;
       const A = cutBelow ? vBumped : vCut, B = cutBelow ? vCut : vBumped;
-      const C = Rat.div(Rat.add(A, B), two);
-      const eA = absR(Rat.sub(A, x)), eB = absR(Rat.sub(x, B)), eC = absR(Rat.sub(C, x));
-      if (!Rat.isZero(eps) && [eA, eB, eC].some(v => Rat.cmp(v, eps) <= 0)) break;
-      const termsC = semiregularTerms(C, C, 'floor', 200).terms;
-      const bestEnd = Rat.cmp(eA, eB) < 0 ? eA : eB;
-      // the remainder that makes [a0; ..., a_n + w] equal x: solve (p_n + w p_n-1)/(q_n + w q_n-1) = x
+      const eA = absR(Rat.sub(A, x)), eB = absR(Rat.sub(x, B));
+      if (!Rat.isZero(eps) && [eA, eB].some(v => Rat.cmp(v, eps) <= 0)) break;
+      // C = [a0; ..., a_n + w], the known terms with the remainder the visitor chose. The
+      // true remainder w* = x_n - a_n solves (p_n + w p_n-1)/(q_n + w q_n-1) = x.
       const pCut = Rat.fromInt(cs[n].p), qCut = Rat.fromInt(cs[n].q);
       const pPrev = Rat.fromInt(n > 0 ? cs[n - 1].p : 1n), qPrev = Rat.fromInt(n > 0 ? cs[n - 1].q : 0n);
       const wStar = Rat.div(Rat.sub(Rat.mul(x, qCut), pCut), Rat.sub(pPrev, Rat.mul(x, qPrev)));
-      out.push({
-        n, termsA, termsB, termsC, A, B, C, eA, eB, eC,
-        eAStr: sci(eA, 4), eBStr: sci(eB, 4), eCStr: sci(eC, 4),
-        midBeatsBoth: Rat.cmp(eC, bestEnd) < 0,
+      const row = {
+        n, termsA, termsB, A, B, eA, eB, eAStr: sci(eA, 4), eBStr: sci(eB, 4),
         x, pCut, qCut, pPrev, qPrev, aCut: e.terms[n], cutBelow,
         wStar, wStarStr: Rat.toDecimalString(wStar, 4),
-      });
+      };
+      const c = bracketWeightedAt(row, w);
+      row.w = w; row.C = c.value; row.eC = c.error; row.eCStr = sci(c.error, 4);
+      row.cBeatsBoth = Rat.cmp(c.error, Rat.cmp(eA, eB) < 0 ? eA : eB) < 0;
+      out.push(row);
     }
     return { rows: out, stopReason: e.stopReason };
   };
@@ -3296,46 +3294,41 @@ XTests.test('bracket: the two continued fractions share every term but the last,
   }
 });
 
-XTests.test('bracket: A is above the whole enclosure and B below it, at every depth shown', () => {
+XTests.test('bracket: A is above the whole enclosure and B below it, and C = [a0; ..., a_n + w] sits between', () => {
+  const R = CF.Rat;
   for (const c of CF.CONSTANTS) {
     const k = CF.constant(c.key);
     const lo = k.exact || k.lo, hi = k.exact || k.hi;
-    const { rows } = CF.bracketRows(c.key, 12);
-    XTests.ok(rows.length >= 2, `${c.key} expected at least two depths, got ${rows.length}`);
-    for (const r of rows) {
-      XTests.ok(CF.Rat.cmp(r.A, hi) > 0, `${c.key} n=${r.n} A not above`);
-      XTests.ok(CF.Rat.cmp(r.B, lo) < 0, `${c.key} n=${r.n} B not below`);
-      XTests.ok(CF.Rat.cmp(r.B, r.C) < 0 && CF.Rat.cmp(r.C, r.A) < 0, `${c.key} n=${r.n} C not between`);
-      XTests.eq(CF.Rat.cmp(r.C, CF.Rat.div(CF.Rat.add(r.A, r.B), CF.Rat.fromInt(2))), 0, `${c.key} n=${r.n} C is (A+B)/2`);
-      const d = CF.Rat.sub(r.eA, r.eB), half = CF.Rat.div(d.n < 0n ? CF.Rat.neg(d) : d, CF.Rat.fromInt(2));
-      XTests.eq(CF.Rat.cmp(r.eC, half), 0, `${c.key} n=${r.n} |err C| = |err A - err B| / 2`);
+    for (const w of [R.make(1n, 10n), R.make(1n, 2n), R.make(9n, 10n)]) {
+      const { rows } = CF.bracketRows(c.key, 12, w);
+      XTests.ok(rows.length >= 2, `${c.key} expected at least two depths, got ${rows.length}`);
+      for (const r of rows) {
+        XTests.ok(R.cmp(r.A, hi) > 0, `${c.key} n=${r.n} A not above`);
+        XTests.ok(R.cmp(r.B, lo) < 0, `${c.key} n=${r.n} B not below`);
+        XTests.ok(R.cmp(r.B, r.C) < 0 && R.cmp(r.C, r.A) < 0, `${c.key} n=${r.n} C not between`);
+        XTests.eq(R.cmp(r.C, CF.bracketWeightedAt(r, w).value), 0, `${c.key} n=${r.n} C is V(w)`);
+        const d = R.sub(r.C, lo);
+        XTests.eq(R.cmp(r.eC, d.n < 0n ? R.neg(d) : d), 0, `${c.key} n=${r.n} |err C|`);
+      }
     }
   }
 });
 
-XTests.test('bracket: the midpoint\'s own continued fraction begins with the shared terms', () => {
-  // C lies strictly inside the set of reals whose expansion starts a_0..a_n, so its
-  // expansion starts the same way and then goes on.
-  for (const c of CF.CONSTANTS) {
-    const terms = CF.expandMode(c.key, 'floor', 40).terms;
-    for (const r of CF.bracketRows(c.key, 12).rows) {
-      XTests.ok(r.termsC.length > r.n + 1, `${c.key} n=${r.n} C's expansion should be longer than the bracket`);
-      for (let i = 0; i <= r.n; i++) XTests.eq(r.termsC[i], terms[i], `${c.key} n=${r.n} C term ${i}`);
-      const v = CF.convergents(r.termsC).pop();
-      XTests.eq(CF.Rat.cmp(CF.Rat.make(v.p, v.q), r.C), 0, `${c.key} n=${r.n} C's terms do not rebuild C`);
-    }
-  }
-});
-
-XTests.test('bracket: pi at depth 1 is 22/7 above, 25/8 below, midpoint 351/112 = [3; 7, 2, 7]', () => {
-  const r = CF.bracketRows('pi', 4).rows[1];
+XTests.test('bracket: pi at depth 1 is 22/7 above, 25/8 below, and C at w = 1/2 is [3; 7.5] = 47/15', () => {
+  const rows = CF.bracketRows('pi', 4, CF.Rat.make(1n, 2n)).rows;
+  const r = rows[1];
   XTests.eq(r.termsA.join(','), '3,7'); XTests.eq(`${r.A.n}/${r.A.d}`, '22/7');
   XTests.eq(r.termsB.join(','), '3,8'); XTests.eq(`${r.B.n}/${r.B.d}`, '25/8');
-  XTests.eq(`${r.C.n}/${r.C.d}`, '351/112');
-  XTests.eq(r.termsC.join(','), '3,7,2,7');
-  XTests.ok(!r.midBeatsBoth, '351/112 is worse than 22/7');
-  const r0 = CF.bracketRows('pi', 4).rows[0];
+  XTests.eq(`${r.C.n}/${r.C.d}`, '47/15');
+  XTests.ok(!r.cBeatsBoth, '47/15 is worse than 22/7');
+  const r0 = rows[0];
   XTests.eq(r0.termsA.join(','), '4'); XTests.eq(r0.termsB.join(','), '3');
+  XTests.eq(`${r0.C.n}/${r0.C.d}`, '7/2', '[3.5]');
+  // at the true remainder C is pi itself, at every depth
+  for (const z of rows) {
+    const exact = CF.bracketRows('pi', 4, z.wStar).rows[z.n];
+    XTests.ok(CF.Rat.isZero(exact.eC), `pi n=${z.n} C at w* should be exact`);
+  }
 });
 
 XTests.test('bracket: rows stop before any error falls below the reference precision', () => {
@@ -3343,7 +3336,7 @@ XTests.test('bracket: rows stop before any error falls below the reference preci
     const k = CF.constant(c.key);
     for (const r of CF.bracketRows(c.key, 60).rows) {
       if (k.exact) continue;
-      for (const e of [r.eA, r.eB, r.eC]) XTests.ok(CF.Rat.cmp(e, k.eps) > 0, `${c.key} n=${r.n} unresolved error shown`);
+      for (const e of [r.eA, r.eB]) XTests.ok(CF.Rat.cmp(e, k.eps) > 0, `${c.key} n=${r.n} unresolved error shown`);
     }
   }
   // 355/113 = [3; 7, 16]: depth 2 would put a bound ON the value, so only depths 0 and 1 exist
@@ -4337,7 +4330,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     }));
 
     const label = CF.constant(s.key).label;
-    const { rows } = CF.bracketRows(s.key, BR_LEVELS);
+    const { rows } = CF.bracketRows(s.key, BR_LEVELS, s.t);
     if (!rows.length) { el('br-intro').textContent = 'Nothing to show.'; return; }
     const maxN = rows[rows.length - 1].n;
     if (s.depth > maxN) s.depth = maxN;
@@ -4353,10 +4346,10 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       'expansion cut off (t = ∞), the other has its last term raised by 1 (t = 1). Which is above ' +
       'alternates with n. Every real number whose expansion starts a<sub>0</sub>…a<sub>n</sub> lies ' +
       'between them, so they are the closest continued fractions of that length on either side. ' +
-      'The middle row keeps those terms and gives the last one a remainder w.';
+      '<strong>C</strong> keeps those terms and gives the last one a remainder <strong>w</strong> of your choosing: ' +
+      'C = [a<sub>0</sub>; …, a<sub>n</sub> + w].';
 
     const tStr = CF.Rat.toDecimalString(s.t, 4);
-    const wr = CF.bracketWeightedAt(r, s.t);
     const width = r.n + 1;
     const cell = (v) => `<td class="mono">${v}</td>`;
     const rowHtml = (name, terms, value, err, cls, lastText) => {
@@ -4377,45 +4370,40 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     el('br-terms').innerHTML =
       `<tr>${head.join('')}</tr>` +
       rowHtml('A upper', r.termsA, r.A, r.eAStr, '') +
-      rowHtml(`V(w), w = ${tStr}`, r.cutBelow ? r.termsB : r.termsA, wr.value, CF.sci(wr.error, 4), 'even',
+      rowHtml(`C, w = ${tStr}`, r.cutBelow ? r.termsB : r.termsA, r.C, r.eCStr, 'even',
               `${r.aCut} + ${tStr}`) +
       rowHtml('B lower', r.termsB, r.B, r.eBStr, '');
 
     el('br-terms-caption').textContent =
       (r.n > 0 ? `A and B agree on a₀…a${r.n - 1} and differ only in the bold last term. ` : 'A and B differ only in their single term. ') +
-      `V(w) keeps the ${r.n + 1} known terms and gives the last one a remainder w: [a₀; …, a${r.n} + w]. ` +
+      `C keeps the ${r.n + 1} known terms and gives the last one the remainder w: [a₀; …, a${r.n} + w]. ` +
       `The true remainder here is w* = ${r.wStarStr}, the fractional part of the complete quotient x${r.n}; ` +
       `the next term would be ⌊1/w*⌋ = ${CF.Rat.floor(CF.Rat.div(CF.Rat.fromInt(1), r.wStar))}.`;
 
     el('br-table').innerHTML =
       '<tr><th>n</th><th>A upper</th><th>|err A|</th><th>B lower</th><th>|err B|</th>' +
-      '<th>C</th><th>|err C|</th><th>C continues with</th><th>best</th></tr>' +
+      `<th>C, w = ${tStr}</th><th>|err C|</th><th>best</th></tr>` +
       rows.map(z => {
-        const best = z.midBeatsBoth ? 'C' : (CF.Rat.cmp(z.eA, z.eB) < 0 ? 'A' : 'B');
+        const best = z.cBeatsBoth ? 'C' : (CF.Rat.cmp(z.eA, z.eB) < 0 ? 'A' : 'B');
         const cf = (t) => (t.length === 1 ? `[${t[0]}]` : `[${t[0]}; ${t.slice(1).join(', ')}]`);
         return `<tr class="${z.n === s.depth ? 'even' : ''}"><td>${z.n}</td>` +
           `<td class="mono">${cf(z.termsA)}</td><td class="mono">${z.eAStr}</td>` +
           `<td class="mono">${cf(z.termsB)}</td><td class="mono">${z.eBStr}</td>` +
           `<td class="mono">${CF.Rat.toDecimalString(z.C, 12)}</td><td class="mono">${z.eCStr}</td>` +
-          `<td class="mono">…, ${z.termsC.slice(z.n + 1, z.n + 9).join(', ')}${z.termsC.length > z.n + 9 ? ', …' : ''}</td>` +
           `<td><strong>${best}</strong></td></tr>`;
       }).join('');
 
-    const weighted = rows.map(z => CF.bracketWeightedAt(z, s.t).error);
-    const better = (z) => (CF.Rat.cmp(z.eA, z.eB) < 0 ? z.eA : z.eB);
-    const wBeatsBoth = rows.filter((z, i) => CF.Rat.cmp(weighted[i], better(z)) < 0).length;
-    const wBeatsC = rows.filter((z, i) => CF.Rat.cmp(weighted[i], z.eC) < 0).length;
+    const wins = rows.filter(z => z.cBeatsBoth).length;
     el('br-weight').value = String(Math.round(CF.Rat.toNumber(s.t) * 1000));
     el('br-weight-label').textContent =
-      `V(w) = [a₀; …, aₙ + w] at w = ${tStr} — beats both A and B at ${wBeatsBoth} of ${rows.length} depths, beats C at ${wBeatsC}`;
+      `C = [a₀; …, aₙ + w] at w = ${tStr} — beats both A and B at ${wins} of ${rows.length} depths`;
 
-    drawBracket(rows, weighted, tStr);
+    drawBracket(rows, tStr);
     drawBracketWeights(rows, s.t);
-    const wins = rows.filter(z => z.midBeatsBoth).length;
     el('br-verdict').textContent =
       `Over these ${rows.length} depths C beat both A and B ${wins} time${wins === 1 ? '' : 's'}. ` +
       'A and B are one convergent and the semiconvergent next to it, so the bracket narrows by about ' +
-      'one term per depth; C gains only when the two errors happen to be nearly equal. The purple line is V(w) at the slider’s remainder.';
+      'one term per depth. C wins wherever its remainder w is closer to the true remainder w* than 0 or 1 is.';
 
     const ws = rows.map(z => CF.Rat.toNumber(z.wStar));
     const wMin = Math.min(...ws), wMax = Math.max(...ws);
@@ -4423,7 +4411,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     const wDeep = rows[rows.length - 1].wStar;
     let text = `The true remainder w* = x\u2099 \u2212 a\u2099 is what the expansion carries on to the next term: ` +
       `a\u2099\u208A\u2081 = \u230a1/w*\u230b, and the digits after that are the rest of the expansion. Here it ranges from ` +
-      `${wMin.toFixed(4)} to ${wMax.toFixed(4)}. Give the last term exactly w* and V(w) is ${label}; give it 0 or 1 and ` +
+      `${wMin.toFixed(4)} to ${wMax.toFixed(4)}. Give the last term exactly w* and C is ${label}; give it 0 or 1 and ` +
       'you have the two bounds.';
     if (quad) {
       const deep6 = CF.Rat.toDecimalString(wDeep, 6);
@@ -4447,14 +4435,11 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     const R = CF.Rat;
     ctx.font = '9px sans-serif';
     for (const v of [0, 0.25, 0.5, 0.75, 1]) {
-      ctx.strokeStyle = v === 0.5 ? '#999' : '#eee';
-      ctx.setLineDash(v === 0.5 ? [4, 4] : []);
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#eee'; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(padL, Y(v)); ctx.lineTo(W - padR, Y(v)); ctx.stroke();
       ctx.fillStyle = '#bbb';
       ctx.fillText(v === 0 ? 'cut off' : v === 1 ? 'raised' : String(v), 6, Y(v) + 3);
     }
-    ctx.setLineDash([]);
     const hline = (v, color) => {
       ctx.strokeStyle = color; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(padL, Y(v)); ctx.lineTo(W - padR, Y(v)); ctx.stroke();
@@ -4473,8 +4458,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     ctx.font = '11px sans-serif';
     const leg = [
       ['w* true remainder', '#2d7d46'],
-      [`slider w = ${R.toDecimalString(t, 3)}`, '#7a3e9d'],
-      ['w = ½', '#999'],
+      [`C's w = ${R.toDecimalString(t, 3)}`, '#7a3e9d'],
     ];
     leg.forEach(([name, color], i) => { ctx.fillStyle = color; ctx.fillText(name, W - padR + 6, padT + 14 + i * 15); });
     ctx.fillStyle = '#666';
@@ -4482,7 +4466,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     rows.forEach((r) => { if (r.n % 2 === 0) ctx.fillText(String(r.n), X(r.n) - 3, H - padB + 12); });
   }
 
-  function drawBracket(rows, weighted, tStr) {
+  function drawBracket(rows, tStr) {
     const W = 900, H = 300, padL = 52, padB = 34, padT = 16, padR = 120;
     const ctx = fitCanvas(el('br-plot'), W, H);
     ctx.clearRect(0, 0, W, H);
@@ -4490,8 +4474,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     const series = [
       { name: 'A upper', color: '#c64600', get: (r) => r.eA },
       { name: 'B lower', color: '#1a5fb4', get: (r) => r.eB },
-      { name: 'C midpoint', color: '#2d7d46', get: (r) => r.eC },
-      { name: `V(w), w = ${tStr}`, color: '#7a3e9d', get: (r, i) => weighted[i] },
+      { name: `C, w = ${tStr}`, color: '#7a3e9d', get: (r) => r.eC },
     ];
     const logs = [];
     for (const s2 of series) rows.forEach((r, i) => {

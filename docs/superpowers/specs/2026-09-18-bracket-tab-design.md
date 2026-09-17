@@ -22,15 +22,15 @@ term but the last, which differ by exactly one. Every real whose expansion
 starts a0…a_n lies between them, so they are the closest continued fractions
 of that length on either side.
 
-**C = (A + B) / 2** is rational and strictly inside the bracket, so its own
-expansion starts with the same n+1 terms and then continues. |C − x| is
-exactly half the difference of A's and B's errors.
+**C** is the visitor's own continued fraction: the same n+1 terms with a
+remainder w of their choosing on the last one, C = [a0; …, a_n + w]. There
+is no fixed midpoint anywhere on the tab; w = ½ is only one of the presets.
 
 ## Engine
 
-`CF.bracketRows(key, maxDepth)`: for n = 0, 1, … returns termsA, termsB,
-termsC (BigInt arrays), the three values, the three absolute errors, and
-`midBeatsBoth`. Rows stop before any error falls to the reference's
+`CF.bracketRows(key, maxDepth, w)`: for n = 0, 1, … returns termsA, termsB
+(BigInt arrays), A, B, C = [a0; …, a_n + w], the three absolute errors,
+`cBeatsBoth`, and the true remainder `wStar`. Rows stop before any error falls to the reference's
 precision, and before a bound would land on the value itself (355/113 has
 two depths).
 
@@ -54,8 +54,9 @@ term is ⌊1/w*⌋. For a periodic expansion w* is the same number at every
 depth of the period (√2 − 1 for √2 from depth 1, φ − 1 for φ), up to the
 reference's precision.
 
-The terms table gets a fourth row "V(w)" showing the known terms and
-"a_n + w"; nothing after it is recomputed. A slider with chips "cut off,
+The terms table's middle row is C, showing the known terms and "a_n + w";
+nothing after it is recomputed. The per-depth table and the error plot use
+the same C. A slider with chips "cut off,
 w = 0", "w = ½", "raised by one, w = 1" and "true remainder of the deepest
 depth"; V(w) on the error plot; a plot of w* per depth; a verdict with the
 range of w* and the periodic case.
