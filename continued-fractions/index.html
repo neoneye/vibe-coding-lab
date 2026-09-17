@@ -380,6 +380,37 @@ const CF = (() => {
 
   const raceKind = (mode) => (mode === 'ceil' ? 'above' : 'any');
 
+  // ---- Gaussian rationals: complex numbers with exact rational parts ----
+
+  const cOf = (re, im) => ({ re, im });
+  const cAdd = (a, b) => cOf(Rat.add(a.re, b.re), Rat.add(a.im, b.im));
+  const cSub = (a, b) => cOf(Rat.sub(a.re, b.re), Rat.sub(a.im, b.im));
+  const cMul = (a, b) => cOf(
+    Rat.sub(Rat.mul(a.re, b.re), Rat.mul(a.im, b.im)),
+    Rat.add(Rat.mul(a.re, b.im), Rat.mul(a.im, b.re)));
+  const cNormSq = (z) => Rat.add(Rat.mul(z.re, z.re), Rat.mul(z.im, z.im));
+  const cIsZero = (z) => Rat.isZero(z.re) && Rat.isZero(z.im);
+  const cInv = (z) => {
+    if (cIsZero(z)) throw new Error('complex division by zero');
+    const n = cNormSq(z);
+    return cOf(Rat.div(z.re, n), Rat.div(Rat.neg(z.im), n));   // conj(z)/|z|^2
+  };
+  const cNearestGaussian = (z) => cOf(Rat.fromInt(ratRound(z.re)), Rat.fromInt(ratRound(z.im)));
+  const cStr = (z, digits) => {
+    const re = Rat.toDecimalString(z.re, digits);
+    const imAbs = Rat.toDecimalString(z.im.n < 0n ? Rat.neg(z.im) : z.im, digits);
+    return `${re}${z.im.n < 0n ? '-' : '+'}${imAbs}i`;
+  };
+
+  // A rational L >= 0 with L^2 <= m. Used wherever |r| is needed: substituting a LOWER
+  // bound for a magnitude can only enlarge an error radius, never shrink it, so the
+  // enclosure stays valid. floor(sqrt(n*s^2/d))/s satisfies (L/s)^2 <= n/d by construction.
+  const ratSqrtLower = (m, digits) => {
+    if (m.n <= 0n) return Rat.fromInt(0);
+    const s = 10n ** BigInt(digits);
+    return Rat.make(isqrt((m.n * s * s) / m.d), s);
+  };
+
   // ---- greedy unit fractions (the Egyptian-fraction algorithm) ----
   //
   // Take the largest unit fraction that still fits under the remainder, repeatedly:
@@ -946,6 +977,7 @@ const CF = (() => {
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
            cascadeRows, raceKind, unitFractions, unitFractionRows,
+           cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            SEMI_MODES, ratRound, pickInteger, semiregularTerms, semiregularConvergents };
 })();
 
@@ -1768,6 +1800,44 @@ XTests.test('unitFractionRows reports digits and shrinking error', () => {
     const a = rows[i - 1].error, b = rows[i].error;
     XTests.ok(CF.Rat.cmp(b, a) < 0, `error did not shrink at row ${i}`);
   }
+});
+
+XTests.test('Gaussian rational arithmetic is exact', () => {
+  const R = CF.Rat, i = (n) => R.fromInt(n);
+  const a = CF.cOf(i(3), i(4)), b = CF.cOf(i(1), i(-2));
+  XTests.eq(CF.cStr(CF.cAdd(a, b), 0), '4+2i');
+  XTests.eq(CF.cStr(CF.cSub(a, b), 0), '2+6i');
+  XTests.eq(CF.cStr(CF.cMul(a, b), 0), '11-2i');      // (3+4i)(1-2i) = 11 - 2i
+  XTests.eq(R.toDecimalString(CF.cNormSq(a), 0), '25');
+});
+
+XTests.test('complex inversion round-trips exactly', () => {
+  const R = CF.Rat;
+  const z = CF.cOf(R.make(3n, 7n), R.make(-2n, 5n));
+  const back = CF.cInv(CF.cInv(z));
+  XTests.eq(R.cmp(back.re, z.re), 0);
+  XTests.eq(R.cmp(back.im, z.im), 0);
+  const one = CF.cMul(z, CF.cInv(z));
+  XTests.eq(R.toDecimalString(one.re, 6), '1.000000');
+  XTests.eq(R.toDecimalString(one.im, 6), '0.000000');
+});
+
+XTests.test('nearest Gaussian integer rounds each part', () => {
+  const R = CF.Rat;
+  XTests.eq(CF.cStr(CF.cNearestGaussian(CF.cOf(R.make(7n, 2n), R.make(-7n, 2n))), 0), '4-3i');
+  XTests.eq(CF.cStr(CF.cNearestGaussian(CF.cOf(R.make(1n, 3n), R.make(5n, 3n))), 0), '0+2i');
+});
+
+XTests.test('ratSqrtLower never overestimates', () => {
+  const R = CF.Rat;
+  for (const [n, d] of [[2n, 1n], [1n, 2n], [7n, 3n], [1n, 1000000n], [123456n, 7n]]) {
+    const m = R.make(n, d);
+    const L = CF.ratSqrtLower(m, 30);
+    XTests.ok(R.cmp(R.mul(L, L), m) <= 0, `L^2 exceeded m for ${n}/${d}`);
+    const up = R.add(L, R.make(1n, 10n ** 30n));
+    XTests.ok(R.cmp(R.mul(up, up), m) > 0, `L was far too small for ${n}/${d}`);
+  }
+  XTests.eq(R.toDecimalString(CF.ratSqrtLower(R.fromInt(0), 10), 4), '0.0000');
 });
 
 </script>
