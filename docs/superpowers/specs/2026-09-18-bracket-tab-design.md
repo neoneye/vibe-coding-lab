@@ -43,15 +43,22 @@ it, a table over every depth with A and B written as [a0; a1, …], their
 errors, C and its error, the terms C continues with, and the best of the
 three. A log-error plot per depth and a one-line verdict.
 
-## Weight
+## Remainder
 
-As on the Consecutive-pair tab: V(t) = B + t·(A − B), so t = 0 is B, ½ is C,
-1 is A. Each depth's optimal weight t* = |err B| / (|err A| + |err B|) is
-where x sits inside the bracket; it can be on either side of ½. The terms
-table gets a fourth row with V(t)'s own expansion. A slider and the chips
-"midpoint ½", "minimax fixed weight" (least-bad depth relative to the better
-of A and B) and "deepest t*"; V(t) on the error plot; a plot of t* per depth.
-For √2 t* settles at ½, so C itself is nearly optimal.
+The weight is the remainder of the last term, not a mix of the two bounds:
+V(w) = [a0; …, a_n + w] with w in [0, 1]. Algebraically V(w) =
+(p_n + w·p_n−1) / (q_n + w·q_n−1), so w = 0 is the cut-off convergent and
+w = 1 the raised-by-one bound. The true remainder is w* = x_n − a_n, the
+fractional part of the complete quotient: V(w*) is x exactly, and the next
+term is ⌊1/w*⌋. For a periodic expansion w* is the same number at every
+depth of the period (√2 − 1 for √2 from depth 1, φ − 1 for φ), up to the
+reference's precision.
+
+The terms table gets a fourth row "V(w)" showing the known terms and
+"a_n + w"; nothing after it is recomputed. A slider with chips "cut off,
+w = 0", "w = ½", "raised by one, w = 1" and "true remainder of the deepest
+depth"; V(w) on the error plot; a plot of w* per depth; a verdict with the
+range of w* and the periodic case.
 
 ## Tests
 
