@@ -2743,16 +2743,18 @@ const FP = (() => {
       const x0 = d.x, y0 = d.y, x1 = d.x + along[0] * d.len, y1 = d.y + along[1] * d.len;
       const height = d.kind === "hatch" ? 1.85 : d.kind === "elevator" ? 2.15 : 2.05;
       const color = d.kind === "elevator" ? C3.metal : d.kind === "blast" ? C3.dark : d.kind === "cell" ? C3.metal : d.kind === "hatch" ? C3.metal : C3.wood;
-      if (d.kind === "elevator") { leaves.push({ x: (x0 + x1) / 2 - along[0] * d.len / 4, y: (y0 + y1) / 2 - along[1] * d.len / 4, len: d.len / 2 - 0.02, thick: 0.05, h: height, angle: d.dir === "h" ? 0 : 90, color }); leaves.push({ x: (x0 + x1) / 2 + along[0] * d.len / 4, y: (y0 + y1) / 2 + along[1] * d.len / 4, len: d.len / 2 - 0.02, thick: 0.05, h: height, angle: d.dir === "h" ? 0 : 90, color }); continue; }
-      if (d.kind === "sliding") { const hx = d.hinge ? x1 : x0, hy = d.hinge ? y1 : y0, dir = d.hinge ? -1 : 1; const off = 0.06; leaves.push({ x: hx + normal[0] * off, y: hy + normal[1] * off, len: d.len, thick: 0.05, h: height, angle: d.dir === "h" ? 0 : 90, color, anchor: [hx + normal[0] * off, hy + normal[1] * off], anchorDir: -dir }); continue; }
-      if (d.kind === "cell") { for (let k = 0.1; k < d.len; k += 0.15) leaves.push({ x: x0 + along[0] * k, y: y0 + along[1] * k, len: 0.04, thick: 0.04, h: height, angle: 0, color: C3.metal }); continue; }
+      // Leaves are segments from hinge (ax, ay) to tip (bx, by); the renderer builds a thin box along them.
+      const leaf = (ax, ay, bx, by, thick, extra) => leaves.push(Object.assign({ ax, ay, bx, by, thick, h: height, color }, extra || {}));
+      if (d.kind === "elevator") { const mx = (x0 + x1) / 2, my = (y0 + y1) / 2; leaf(x0, y0, mx - along[0] * 0.02, my - along[1] * 0.02, 0.05); leaf(x1, y1, mx + along[0] * 0.02, my + along[1] * 0.02, 0.05); continue; }
+      if (d.kind === "sliding") { const hx = d.hinge ? x1 : x0, hy = d.hinge ? y1 : y0, dir = d.hinge ? -1 : 1; const off = 0.06; leaf(hx + normal[0] * off - along[0] * dir * d.len / 2, hy + normal[1] * off - along[1] * dir * d.len / 2, hx + normal[0] * off + along[0] * dir * d.len / 2, hy + normal[1] * off + along[1] * dir * d.len / 2, 0.05, { sliding: true }); continue; }
+      if (d.kind === "cell") { for (let k = 0.1; k < d.len; k += 0.15) leaf(x0 + along[0] * k, y0 + along[1] * k, x0 + along[0] * k + normal[0] * 0.04, y0 + along[1] * k + normal[1] * 0.04, 0.04, { color: C3.metal }); continue; }
       const parts = (d.kind === "double" || d.kind === "sally") ? [[x0, y0, 1], [x1, y1, -1]] : d.hinge ? [[x1, y1, -1]] : [[x0, y0, 1]];
       const leafLen = parts.length === 2 ? d.len / 2 : d.len; const openDeg = 70;
       for (const [hx, hy, sgn] of parts) {
-        // leaf direction: from hinge, rotated openDeg from the wall toward the swing side
+        // tip = hinge + leafLen along a direction rotated openDeg from the wall toward the swing side
         const ax = along[0] * sgn, ay = along[1] * sgn; const rad = openDeg * Math.PI / 180;
         const dx = ax * Math.cos(rad) + normal[0] * Math.sin(rad), dy = ay * Math.cos(rad) + normal[1] * Math.sin(rad);
-        leaves.push({ x: hx + dx * leafLen / 2, y: hy + dy * leafLen / 2, len: leafLen, thick: d.kind === "blast" ? 0.22 : 0.05, h: height, angle: Math.atan2(dy, dx) * 180 / Math.PI, color });
+        leaf(hx, hy, hx + dx * leafLen, hy + dy * leafLen, d.kind === "blast" ? 0.22 : 0.05, { swing: true, hinge: [hx, hy] });
       }
     }
     // floors
@@ -2933,6 +2935,15 @@ const FloorPlanTests = {
       assert(b.start && Number.isFinite(b.start.x) && Number.isFinite(b.start.angle), "start pose");
       assert(m.fp.isSolid(Math.floor(b.start.x / m.cell), Math.floor(b.start.y / m.cell)), "start inside building");
       assert(b.leaves.length > 0, "door leaves"); assert(b.glass.length > 0, "glass panes (windows or mirrors)");
+      // every swing leaf is hinged on a jamb of its door and its tip is one leaf-length away, off the wall line
+      const swings = b.leaves.filter(l => l.swing); assert(swings.length > 0, "swing leaves");
+      for (const l of swings) {
+        const onJamb = m.doors.some(d => { const jambs = [[d.x, d.y], [d.x + (d.dir === "h" ? d.len : 0), d.y + (d.dir === "h" ? 0 : d.len)]]; return jambs.some(([jx, jy]) => Math.abs(jx - l.ax) < 1e-6 && Math.abs(jy - l.ay) < 1e-6); });
+        assert(onJamb, `leaf hinge ${l.ax},${l.ay} not on a jamb`);
+        const len = Math.hypot(l.bx - l.ax, l.by - l.ay); assert(len > 0.3 && len <= 2.5, "leaf length");
+      }
+      // the renderer's box convention: a box centred between the endpoints, rotated by atan2 in 2D, has its ends on the endpoints
+      for (const l of swings.slice(0, 5)) { const a = Math.atan2(l.by - l.ay, l.bx - l.ax), len = Math.hypot(l.bx - l.ax, l.by - l.ay), cx = (l.ax + l.bx) / 2, cy = (l.ay + l.by) / 2; assert(Math.abs(cx - Math.cos(a) * len / 2 - l.ax) < 1e-9 && Math.abs(cy - Math.sin(a) * len / 2 - l.ay) < 1e-9, "endpoint math"); }
       assert(b.labels.length === m.rooms.filter(r => r.label).length, "labels");
       assert(b.people.length === p.people3d, "people count");
       eq(JSON.stringify(FP.build3D(FP.generate(p), p)), JSON.stringify(b), "deterministic");
@@ -3255,7 +3266,7 @@ const FP3D = (() => {
     for (const w of d.walls) boxAt(w.x + w.w / 2, w.y + w.d / 2, w.w, w.d, w.z0, w.z1, w.exterior ? "#d9d6cd" : "#efece4");
     for (const c of d.caps) boxAt(c.x + c.w / 2, c.y + c.d / 2, c.w, c.d, H, H + 0.07, "#3b3f46");
     for (const g of d.glass) boxAt(g.x + g.w / 2, g.y + g.d / 2, g.w, g.d, g.z0, g.z1, g.mirror ? "#33506a" : "#9ec9e8", { opacity: g.mirror ? 0.85 : 0.35 });
-    for (const l of d.leaves) boxAt(l.x, l.y, l.len, l.thick, 0.02, l.h, l.color, null, -l.angle);
+    for (const l of d.leaves) { const len = Math.hypot(l.bx - l.ax, l.by - l.ay); if (len < 1e-4) continue; boxAt((l.ax + l.bx) / 2, (l.ay + l.by) / 2, len, l.thick, 0.02, l.h, l.color, null, Math.atan2(l.by - l.ay, l.bx - l.ax) * 180 / Math.PI); }
     for (const pp of d.pipes) { const g = new THREE.CylinderGeometry(pp.r, pp.r, pp.len, 10); const m = new THREE.Matrix4(); if (pp.dir === "h") { m.makeRotationZ(Math.PI / 2); m.setPosition(pp.x + pp.len / 2, pp.z, pp.y); } else { m.makeRotationX(Math.PI / 2); m.setPosition(pp.x, pp.z, pp.y + pp.len / 2); } g.applyMatrix4(m); add(g, pp.r > 0.06 ? "#8b9098" : "#b23a2f"); }
     // furniture
     const wires = [];
