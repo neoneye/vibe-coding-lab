@@ -233,6 +233,30 @@ fieldset and a "Reset all" button.
 Inline SVG scaled to fit the viewport. Buttons: Download SVG, Download PNG
 (rasterised at 2× through a canvas), Copy link (URL with hash), Reset.
 
+### 3D views (added 2026-09-19)
+
+Two extra views beside the 2D drawing, switched from the toolbar or with keys
+1/2/3, remembered in the URL hash as `view=iso|walk`:
+
+- **build3D** (in `shared-code`, pure, tested in Node) turns the plan model
+  into plain geometry: wall pieces split around door, window and mirror
+  openings (with sills and lintels), dark wall caps, floor slabs coloured by
+  region, glass panes, door leaves (swing doors 70° open, pocket doors half
+  open, centre-opening lift doors, cell bars, thick blast leaves), pipes in the
+  service passages, furniture as boxes, cylinders, spheres, tori, wire boxes
+  and an extruded ellipse for the Oval Office, floating labels, little people
+  and a start pose just inside the entry.
+- **Three.js module** (r170 from jsdelivr via an import map, so the 3D views
+  need network while the 2D plan works offline) merges the geometry per
+  material, lights it with a hemisphere light and a shadow-casting sun, and
+  renders with two cameras: an overhead perspective (or orthographic) camera
+  with OrbitControls preset to the reference's oblique angle, and a
+  first-person camera with pointer lock, WASD/arrows, Shift to run, and
+  circle-versus-wall collision that slides along walls and passes through
+  doorways. Roofs are off in both views; a "3D view" parameter group holds
+  wall height, floating labels, shadows, an optional ceiling for walk mode,
+  the orthographic toggle and the number of people.
+
 ## Tests
 
 `FloorPlanTests.run()` in `shared-code`, run by `test.mjs` in Node:
