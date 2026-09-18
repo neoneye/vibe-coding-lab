@@ -6,8 +6,9 @@ Directory: `2d-floor-plan-generator/`
 A standalone page that draws architectural floor plans of absurd buildings:
 evil villain mansions, supermax prisons, datacenters, power plants, malls,
 bunkers, police stations, the White House, fire stations, motels, robot
-factories, office buildings, cartel compounds, launch control centers and R&D
-facilities. Nothing is drawn or dragged by hand. Every plan is a pure function of
+factories, office buildings, cartel compounds, launch control centers, R&D
+facilities, hospitals, clothing factories, royal palaces and junior cadet
+training bases. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -232,6 +233,25 @@ fieldset and a "Reset all" button.
 
 Inline SVG scaled to fit the viewport. Buttons: Download SVG, Download PNG
 (rasterised at 2× through a canvas), Copy link (URL with hash), Reset.
+
+### Hospital, clothing factory, royal palace, cadet base (added 2026-09-19)
+
+- **Hospital**: emergency with curtain bays, operating theatre with lights,
+  lettered wards of beds with IV stands, ICU with monitors, radiology with a
+  ring scanner, pharmacy, nurse station, waiting room, morgue drawers,
+  maternity, consultation and isolation rooms, a helipad.
+- **Clothing factory**: sewing floor of tightly pitched machines, cutting room
+  with fabric rolls, fabric store, pressing with ironing boards, showroom and
+  design studio with mannequins, dye room tanks, pattern and QC rooms.
+- **Royal palace**: throne room, ballroom with chandeliers and columns, royal
+  bedchamber with a four-poster, banquet hall, audience chamber, royal
+  kitchens, treasury, corgi quarters, portrait gallery, music room with a
+  piano, courtiers, ladies-in-waiting, stables and the Royal Water Closet.
+  Gets one hidden room bonus.
+- **Junior cadet training base**: drill hall with floor lines and a flagpole,
+  lettered barracks of bunks, mess, classrooms, paintball armory, obstacle
+  course, quartermaster, sick bay, latrines, guard house, motor pool, parade
+  ground.
 
 ### 3D views (added 2026-09-19)
 
