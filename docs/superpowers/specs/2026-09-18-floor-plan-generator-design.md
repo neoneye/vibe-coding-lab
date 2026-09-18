@@ -6,7 +6,8 @@ Directory: `2d-floor-plan-generator/`
 A standalone page that draws architectural floor plans of absurd buildings:
 evil villain mansions, supermax prisons, datacenters, power plants, malls,
 bunkers, police stations, the White House, fire stations, motels, robot
-factories, office buildings, cartel compounds and launch control centers. Nothing is drawn or dragged by hand. Every plan is a pure function of
+factories, office buildings, cartel compounds, launch control centers and R&D
+facilities. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -155,6 +156,24 @@ subdivided and kept as their own region type:
   and filled with back-to-back desk pairs; meeting rooms are named after
   corporate phrases. Cartel compound and launch control center palettes as in
   the code.
+
+### R&D facility (added 2026-09-19)
+
+Twenty lab kinds, each with its own oversized equipment symbol: wet lab
+(benches, fume hoods), chemistry lab (fume hoods on two walls, glovebox),
+laser lab (optical tables with a dashed beam path and mirrors), cryogenics
+(cryostat with legs, dewars along a wall), BSL-3 (biosafety cabinets,
+incubators, autoclave, centrifuge), electron microscope (column on a base),
+NMR (magnet with rings and a dashed exclusion circle), wind tunnel (duct with
+contraction, test section, flow arrows and fan), test accelerator (ring with
+sixteen magnets and a tangent beamline), anechoic chamber (wedge zigzag on
+every wall, pedestal), high-bay test hall (crane rails, crossed test rigs),
+materials lab (presses), robotics lab (arms), gas cylinder store (cylinder
+racks), sample archive (freezers), vibration lab (shaker table with arrows),
+dark room, coffee lab, chemical store, patent office. A "big equipment scale"
+slider in the Furniture group multiplies the large machines, clamped to the
+room, so the accelerator ring, wind tunnel and magnets can be pushed to absurd
+sizes.
 
 ### Restroom island walls
 
