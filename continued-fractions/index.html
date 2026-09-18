@@ -3483,6 +3483,14 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     while (i < vs.length && i < xs.length && vs[i] === xs[i]) i++;
     return `<span class="digits-ok">${vs.slice(0, i)}</span>${vs.slice(i)}`;
   };
+  // The same for a Gaussian rational, part by part, in cStr's layout: re±|im|i.
+  const shadeComplex = (z, target, digits) => {
+    const imAbs = z.im.n < 0n ? CF.Rat.neg(z.im) : z.im;
+    const tImAbs = target.im.n < 0n ? CF.Rat.neg(target.im) : target.im;
+    const sign = (z.im.n < 0n) === (target.im.n < 0n) || CF.Rat.isZero(z.im) && CF.Rat.isZero(target.im)
+      ? `<span class="digits-ok">${z.im.n < 0n ? '-' : '+'}</span>` : (z.im.n < 0n ? '-' : '+');
+    return `${shadeDigits(z.re, target.re, digits)}${sign}${shadeDigits(imAbs, tImAbs, digits)}i`;
+  };
 
   // a0 + 1/(a1 + 1/(a2 + ...)), with each level's operator taken from that level's sign.
   function towerHTML(terms, depth, signs) {
@@ -3559,6 +3567,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
   }
 
   function renderSimpleTable(rows) {
+    const xRef = CF.constant(state.simple.key).exact || CF.constant(state.simple.key).lo;
     const head = '<tr><th>n</th><th>aₙ</th><th>discarded |x − aₙ|</th>' +
                  '<th>pₙ / qₙ</th><th>decimal</th>' +
                  '<th>x − pₙ/qₙ</th><th>|error| · qₙ²</th></tr>';
@@ -3567,7 +3576,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       const sel = state.simple.selected === r.n ? ' selected' : '';
       return `<tr class="clickable${sel}" data-n="${r.n}"><td>${r.n}</td><td>${r.a}</td>` +
              `<td class="mono">${r.remStr}</td>` +
-             `<td class="mono">${frac}</td><td class="mono">${r.decimal.slice(0, 16)}</td>` +
+             `<td class="mono">${frac}</td><td class="mono">${shadeDigits(CF.Rat.make(r.p, r.q), xRef, 14)}</td>` +
              `<td class="mono">${r.errorStr}</td><td class="mono">${r.errQ2}</td></tr>`;
     }).join('');
     el('simple-table').innerHTML = head + body;
@@ -3746,15 +3755,20 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       `${cap === CF.MAX_GEN_TERMS_IRRATIONAL ? ', lowered because a sequence is irrational' : ''})`;
     el('gen-tower').innerHTML = genTowerHTML(g, seqs, Math.min(4, Math.max(1, values.length)));
 
+    // No limit is known in general, so the digits in grey are those that agree with the
+    // deepest level shown - the digits that have stopped moving, not digits proven correct.
+    const deepest = values[values.length - 1];
+    const shadeOf = (v) => (deepest === null || v === null) ? showOf(v, 14)
+      : (v.re !== undefined) ? shadeComplex(v, deepest, 14) : shadeDigits(v, deepest, 14);
     const rows = values.map((v, i) => {
       const prev = i > 0 ? values[i - 1] : null;
       const abs = (v !== null && prev !== null) ? magOf(diffOf(v, prev)) : null;
       return { n: i + 1,
-               decimal: v === null ? '∞  (zero denominator)' : showOf(v, 14),
+               decimal: v === null ? '∞  (zero denominator)' : shadeOf(v),
                step: abs ? CF.sci(abs, 4) : '—', absRat: abs };
     });
     el('gen-table').innerHTML =
-      '<tr><th>level</th><th>value</th><th>|xₙ − xₙ₋₁|</th></tr>' +
+      '<tr><th>level</th><th>value <span class="muted">(grey: agrees with the deepest level)</span></th><th>|xₙ − xₙ₋₁|</th></tr>' +
       rows.map(r => `<tr><td>${r.n}</td><td class="mono">${r.decimal}</td>` +
                     `<td class="mono">${r.step}</td></tr>`).join('');
 
@@ -3940,8 +3954,8 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       '<tr><th></th><th>over every integer</th><th>over the primes only</th></tr>' +
       `<tr><td>expression</td><td class="mono">Σ<sub>n≤${e.N}</sub> 1/n<sup>${e.s}</sup></td>` +
       `<td class="mono">∏<sub>p≤${e.N}</sub> (1 − p<sup>−${e.s}</sup>)<sup>−1</sup></td></tr>` +
-      `<tr><td>value</td><td class="mono">${CF.Rat.toDecimalString(sum, 16)}</td>` +
-      `<td class="mono">${CF.Rat.toDecimalString(prod, 16)}</td></tr>` +
+      `<tr><td>value</td><td class="mono">${shadeDigits(sum, z.rat, 16)}</td>` +
+      `<td class="mono">${shadeDigits(prod, z.rat, 16)}</td></tr>` +
       `<tr><td>still short by</td><td class="mono">${CF.sci(errSum, 5)}</td>` +
       `<td class="mono">${CF.sci(errProd, 5)}</td></tr>` +
       `<tr><td>work done</td><td>${e.N} terms</td><td>${nPrimes} factors</td></tr>`;
@@ -4035,13 +4049,14 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     el('uf-expansion').textContent = `${k.label} = ${whole}` +
       rows.map(r => ` + 1/${r.den}`).join('') + (continues ? ' + …' : '');
 
+    const xRef = CF.constant(s.key).exact || CF.constant(s.key).lo;
     el('uf-table').innerHTML =
       '<tr><th>k</th><th>nₖ</th><th>digits</th><th>partial sum</th><th>error</th></tr>' +
       rows.map(r => {
         const d = String(r.den);
         const shown = d.length <= 18 ? d : d.slice(0, 8) + '…' + d.slice(-8);
         return `<tr><td>${r.k}</td><td class="mono" title="${d}">${shown}</td>` +
-               `<td>${r.digits}</td><td class="mono">${r.partialStr.slice(0, 18)}</td>` +
+               `<td>${r.digits}</td><td class="mono">${shadeDigits(r.partial, xRef, 16)}</td>` +
                `<td class="mono">${r.errorStr}</td></tr>`;
       }).join('');
 
@@ -4107,6 +4122,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     el('cx-nudge-label').textContent = nudging ? `\u03b5 = 1e-${46 - s.nudge}` : '\u03b5 = 0 (exactly real)';
 
     const { rows, stopReason } = nudging ? hurwitzRowsNudged(s.key, eps) : CF.hurwitzRows(s.key, CX_MAX_TERMS);
+    const zRef = nudging ? CF.cOf(k.centre.re, eps) : k.centre;
     const continues = stopReason !== 'exact';
 
     if (!k.real) {
@@ -4138,7 +4154,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       rows.map(r => `<tr><td>${r.k}</td><td class="mono">${CF.cStr(r.term, 0)}</td>` +
         `<td class="mono">${r.remStr}</td>` +
         `<td class="mono">${CF.cStr(r.A, 0)} / ${CF.cStr(r.B, 0)}</td>` +
-        `<td class="mono">${r.valueStr}</td><td class="mono">${r.errStr}</td></tr>`).join('');
+        `<td class="mono">${shadeComplex(r.value, zRef, 12)}</td><td class="mono">${r.errStr}</td></tr>`).join('');
 
     el('cx-status').textContent = `${rows.length} terms — ` +
       (stopReason === 'exact'
@@ -4274,6 +4290,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     }));
 
     const label = CF.constant(s.key).label;
+    const xRef = CF.constant(s.key).exact || CF.constant(s.key).lo;
     const { disks } = CF.mobiusDisks(s.key, MB_LEVELS);
 
     el('mb-intro').innerHTML =
@@ -4288,7 +4305,7 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       '<th>shrink</th><th>target offset</th><th>of radius</th></tr>' +
       disks.map(d => `<tr><td>${d.n}</td>` +
         `<td class="mono">${d.loLabel} ↔ ${d.hiLabel}</td>` +
-        `<td class="mono">${CF.Rat.toDecimalString(d.centre, 14)}</td>` +
+        `<td class="mono">${shadeDigits(d.centre, xRef, 14)}</td>` +
         `<td class="mono">${d.radiusStr}</td><td class="mono">${d.shrinkStr}</td>` +
         `<td class="mono">${d.offsetStr}</td>` +
         `<td class="mono">${d.containsTarget ? d.offsetFracStr : 'OUTSIDE'}</td></tr>`).join('');
