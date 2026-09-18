@@ -7,8 +7,8 @@ A standalone page that draws architectural floor plans of absurd buildings:
 evil villain mansions, supermax prisons, datacenters, power plants, malls,
 bunkers, police stations, the White House, fire stations, motels, robot
 factories, office buildings, cartel compounds, launch control centers, R&D
-facilities, hospitals, clothing factories, royal palaces and junior cadet
-training bases. Nothing is drawn or dragged by hand. Every plan is a pure function of
+facilities, hospitals, clothing factories, royal palaces, junior cadet
+training bases, casinos, schools and zoos. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -252,6 +252,37 @@ Inline SVG scaled to fit the viewport. Buttons: Download SVG, Download PNG
   lettered barracks of bunks, mess, classrooms, paintball armory, obstacle
   course, quartermaster, sick bay, latrines, guard house, motor pool, parade
   ground.
+
+### Casino, school, zoo and the entrance lobby (added 2026-09-19)
+
+- **Casino**: gaming floor of slot machines with a band of blackjack and
+  roulette tables along the long axis, poker room, the cage with a glass
+  counter, vault, sportsbook, buffet, high-limit room, "Eye in the Sky"
+  surveillance, bars with stools. No windows, one bonus hidden room.
+- **School**: numbered classrooms with a board, teacher desk and rows of
+  small desks facing it, gymnasium with court lines, cafeteria, library,
+  principal, staff room, science lab, art room, nurse, detention, computer
+  lab, auditorium, playground, locker halls.
+- **Zoo**: enclosures with fence, moat, rocks, trees and animals, penguin and
+  otter pools, reptile house, aquarium and insectarium with terrariums,
+  aviary, monkey, elephant and giraffe houses, petting zoo, café, vet clinic,
+  gift shop, ticket booth.
+
+**Entrance group.** The lobby zone is measured by marching over the cells of
+the region just inside the entry door: depth along the inward direction up
+to the lobby-depth slider, width across to the nearest side walls. The entry
+room's own furniture is clipped to the part beyond the lobby. Styles:
+
+- plain: nothing but the bollards outside;
+- reception: a desk facing the door, plants, unarmed guards, a few cameras;
+- matrix: two rows of marble columns, metal detectors, turnstiles, a guard
+  desk and armed guards (rifle drawn in 2D, carried in 3D), cameras at both
+  ends;
+- cyberdyne: a glass guard booth to one side, badge gates across, metal
+  detectors, armed guards, cameras everywhere and a lit sign.
+
+Sliders: guards, metal detectors, turnstiles, cameras, bollards, lobby depth.
+Rooms hosting a matrix or cyberdyne lobby get a sublabel.
 
 ### 3D views (added 2026-09-19)
 
