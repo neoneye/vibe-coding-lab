@@ -409,6 +409,7 @@ const CF = (() => {
     { key: 'sqrt3',    label: '√3',  digits: '1.73205080756887729352744634150587236694280525381038062805580', quad: { P: 0n, Q: 1n, D: 3n } },
     { key: 'sqrt5',    label: '√5',  digits: '2.23606797749978969640917366873127623544061835961152572427089', quad: { P: 0n, Q: 1n, D: 5n } },
     { key: 'phi',      label: 'φ',   digits: '1.61803398874989484820458683436563811772030917980576286213544', quad: { P: 1n, Q: 2n, D: 5n } },
+    { key: 'sqrt7',    label: '√7',  digits: '2.645751311064590590501615753639260425710259183082450180368334', quad: { P: 0n, Q: 1n, D: 7n } },
     { key: 'ln2',      label: 'ln 2',     digits: '0.693147180559945309417232121458176568075500134360255254120680' },
     { key: 'gamma',    label: 'γ',   digits: '0.577215664901532860606512090082402431042159335939923598805767' },
     { key: 'cbrt2',    label: '∛2',  digits: '1.25992104989487316476721060727822835057025146470150798008197' },
@@ -944,6 +945,33 @@ const CF = (() => {
     return { rows: out, stopReason };
   };
 
+  // For x = sqrt(D) the balanced search pairs p/q with D q/p: reflecting across the value
+  // nearly preserves the error, so the two cancel. The midpoint (p/q + D/(p/q))/2 is then one
+  // Newton step for x^2 = D, and it lands exactly on a later convergent - the doubling of
+  // correct digits IS Newton's quadratic convergence. Filaseta (1986) studied this.
+  const newtonLevels = (key, rows) => {
+    const k = constant(key);
+    if (!k.quad || k.quad.P !== 0n || k.quad.Q !== 1n) return [];
+    const conv = convergentRowsFor(key, 120, 'floor').rows;
+    const out = [];
+    for (const r of rows) {
+      if (Rat.cmp(Rat.mul(r.lower, r.upper), Rat.fromInt(k.quad.D)) !== 0) continue;
+      const index = conv.findIndex(c => Rat.cmp(Rat.make(c.p, c.q), r.mid) === 0);
+      out.push({ k: r.k, index });
+    }
+    return out;
+  };
+
+  // Distinct values among a list of rationals, two counting as the same when within tol.
+  // Used to tell a weight that has settled (one cluster) from a repeating schedule.
+  const clusterValues = (vals, tol) => {
+    const out = [];
+    for (const v of vals) {
+      if (!out.some(u => { const d = Rat.sub(u, v); return Rat.cmp(d.n < 0n ? Rat.neg(d) : d, tol) < 0; })) out.push(v);
+    }
+    return out;
+  };
+
   // ---- the midpoint of two CONSECUTIVE convergents ----
   //
   // f(x, n) = [a0; a1, ..., an] = p_n/q_n, the n-deep regular expansion. Consecutive
@@ -1024,39 +1052,35 @@ const CF = (() => {
   };
 
   // For a fixed weight t, the error relative to just taking f(n+1) is |t - t*_n| / (1 - t*_n)
-  // at each level. worstRatio is the largest of these; bestFixedWeight minimises it. That
-  // objective is a maximum of V-shaped functions, so its minimum sits at a kink: one of
-  // the t*_n themselves or a crossing of two of the V's. Checking every kink is exact.
+  // at each level. worstRatio is the largest of these; bestFixedWeight minimises it. Only the
+  // smallest and largest t* matter: with a = min t*, b = max t* the two extreme V-shapes
+  // cross at t = (a + b - 2ab) / (2 - a - b), where the worst ratio is (b - a) / (2 - a - b)
+  // - and every level in between is closer to t than one of the extremes, relative to its
+  // own 1 - t*, so it cannot be the worst. (Found by Codex; the grid test below checks it.)
+  // That ratio is below 1 whenever b < 1, so a fixed weight that beats f(n+1) at every
+  // sampled level always exists; periodicity decides how much it beats it by.
   // Levels where f(n+1) is x itself (t* = 1) are skipped: nothing is relative to zero.
-  const relToNext = (r) => Rat.sub(Rat.fromInt(1), r.tStar);
-  const worstRatio = (rows, t, relTo = relToNext) => {
+  const worstRatio = (rows, t) => {
     let worst = Rat.fromInt(0);
     for (const r of rows) {
       if (r.eG !== undefined && Rat.isZero(r.eG)) continue;
       const d = Rat.sub(t, r.tStar);
-      const ratio = Rat.div(d.n < 0n ? Rat.neg(d) : d, relTo(r));
+      const ratio = Rat.div(d.n < 0n ? Rat.neg(d) : d, Rat.sub(Rat.fromInt(1), r.tStar));
       if (Rat.cmp(ratio, worst) > 0) worst = ratio;
     }
     return worst;
   };
-  const bestFixedWeight = (rows, relTo = relToNext) => {
+  const bestFixedWeight = (rows) => {
     const live = rows.filter(r => !(r.eG !== undefined && Rat.isZero(r.eG)));
     if (!live.length) return null;
-    const cands = live.map(r => r.tStar);
-    for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) {
-      const lo = Rat.cmp(live[i].tStar, live[j].tStar) < 0 ? live[i] : live[j];
-      const hi = lo === live[i] ? live[j] : live[i];
-      const a = lo.tStar, b = hi.tStar, da = relTo(lo), db = relTo(hi);
-      if (Rat.cmp(a, b) === 0) continue;
-      // (t - a)/da = (b - t)/db  =>  t = (a db + b da) / (da + db)
-      cands.push(Rat.div(Rat.add(Rat.mul(a, db), Rat.mul(b, da)), Rat.add(da, db)));
+    let a = live[0].tStar, b = live[0].tStar;
+    for (const r of live) {
+      if (Rat.cmp(r.tStar, a) < 0) a = r.tStar;
+      if (Rat.cmp(r.tStar, b) > 0) b = r.tStar;
     }
-    let best = null;
-    for (const t of cands) {
-      const worst = worstRatio(rows, t, relTo);
-      if (!best || Rat.cmp(worst, best.worst) < 0) best = { t, worst };
-    }
-    return best;
+    const two = Rat.fromInt(2), denom = Rat.sub(two, Rat.add(a, b));
+    const t = Rat.div(Rat.sub(Rat.add(a, b), Rat.mul(two, Rat.mul(a, b))), denom);
+    return { t, worst: Rat.div(Rat.sub(b, a), denom) };
   };
 
   // ---- two continued fractions that bracket x, sharing every term but the last ----
@@ -1632,7 +1656,7 @@ const CF = (() => {
            ZETA_S, MAX_ZETA_N, primesUpTo, zetaPartialSum, eulerPartialProduct, smoothNumbers,
            primeFactorRows, binomial, apery, zetaValue,
            ratCeil,
-           cascadeRows, raceKind, mobiusDisks, bracketRows, bracketWeightedAt, boundRows, midpointRows, weightedAt, worstRatio, bestFixedWeight, semiconvergents, balancedTrace, balancedPair, unitFractions, unitFractionRows,
+           cascadeRows, raceKind, mobiusDisks, bracketRows, bracketWeightedAt, boundRows, newtonLevels, clusterValues, midpointRows, weightedAt, worstRatio, bestFixedWeight, semiconvergents, balancedTrace, balancedPair, unitFractions, unitFractionRows,
            cOf, cAdd, cSub, cMul, cNormSq, cInv, cIsZero, cNearestGaussian, cStr, ratSqrtLower,
            COMPLEX_CONSTANTS, complexConstant, hurwitzTerms, hurwitzConvergents, hurwitzRows,
            imaginaryWake,
@@ -1765,7 +1789,7 @@ XTests.test('every enclosure actually contains its value', () => {
   const D = 110;
   const slack = CF.Rat.make(1n, 10n ** BigInt(D));
   const refs = {
-    sqrt2: CF.ratSqrt(2n, D), sqrt3: CF.ratSqrt(3n, D), sqrt5: CF.ratSqrt(5n, D),
+    sqrt2: CF.ratSqrt(2n, D), sqrt3: CF.ratSqrt(3n, D), sqrt5: CF.ratSqrt(5n, D), sqrt7: CF.ratSqrt(7n, D),
     phi: CF.Rat.div(CF.Rat.add(CF.Rat.fromInt(1), CF.ratSqrt(5n, D)), CF.Rat.fromInt(2)),
     cbrt2: CF.ratCbrt(2n, D), e: CF.ratExp1(D), ln2: CF.ratLn2(D), pi: CF.ratPiMachin(D),
   };
@@ -3230,32 +3254,78 @@ XTests.test('the best fixed weight is minimax against f(n+1), and pays off only 
   XTests.ok(R.isZero(one.worst));
 });
 
-XTests.test('for a periodic expansion, one fixed weight beats the balanced Bounds pair at every level', () => {
-  // t* = xi q_n+1 / (xi q_n+1 + q_n) settles to a constant when the expansion is periodic.
-  // Holding t at the deepest level's t* then beats even the Balanced-pair tab's balanced pair at
-  // every earlier level: a weighted combination is not confined to the semiconvergent pool,
-  // which is why it works for phi too, where balancing has nothing to choose between.
-  // (The deepest level itself is circular - its t* was computed from the value - so it is
-  // excluded.) Non-periodic expansions get no such weight: pi's deepest t* loses somewhere.
+XTests.test('a periodic expansion repeats its weights; one weight beats balancing everywhere only when they collapse', () => {
+  // t* = xi q_n+1 / (xi q_n+1 + q_n) is eventually periodic when the expansion is. For sqrt2,
+  // sqrt3, sqrt5 and phi it collapses to ONE value, and holding the deepest t* then beats
+  // even the balanced pair at every earlier level - a weighted combination is not confined
+  // to the semiconvergent pool, which is why it works for phi too. sqrt7 = [2; 1,1,1,4,...]
+  // does not collapse: its t* alternates 0.6889, 0.6889, 0.8779, 0.8779, so the deepest t*
+  // serves only its own phase. (Codex caught the over-generalisation.) The deepest level
+  // itself is circular - its t* was computed from the value - so it is excluded.
   const R = CF.Rat;
+  const seen = { one: 0, many: 0 };
   for (const c of CF.CONSTANTS.filter(c => c.quad)) {
-    const rows = CF.midpointRows(c.key, 12).rows;
-    const tDeep = rows[rows.length - 1].tStar;
-    for (const r of rows.slice(0, -1)) {
-      const e = CF.weightedAt(r, tDeep).error;
-      XTests.ok(R.cmp(e, r.eBal) < 0, `${c.key} n=${r.n}: V(t_deep) ${CF.sci(e, 3)} did not beat balanced ${r.eBalStr}`);
-      XTests.ok(R.cmp(e, r.eG) < 0, `${c.key} n=${r.n}: V(t_deep) did not beat f(n+1)`);
-    }
-    // and the settling is real: the last four t* lie within 1e-3 of the deepest
-    for (const r of rows.slice(-4)) {
-      const d = R.sub(r.tStar, tDeep), ad = d.n < 0n ? R.neg(d) : d;
-      XTests.ok(R.cmp(ad, R.make(1n, 1000n)) < 0, `${c.key} n=${r.n} t* ${r.tStarStr} has not settled`);
+    const rows = CF.midpointRows(c.key, 14).rows;
+    const deep = rows[rows.length - 1];
+    const settled = rows.filter(r => r.n >= 4 && r.n < deep.n);
+    const tol = R.make(1n, 200n);
+    const near = (a, b) => { const d = R.sub(a, b); return R.cmp(d.n < 0n ? R.neg(d) : d, tol) < 0; };
+    const schedule = CF.clusterValues(settled.map(r => r.tStar), tol);
+    if (schedule.length === 1) {
+      seen.one++;
+      for (const r of rows.slice(0, -1)) {
+        const e = CF.weightedAt(r, deep.tStar).error;
+        XTests.ok(R.cmp(e, r.eBal) < 0, `${c.key} n=${r.n}: V(t_deep) ${CF.sci(e, 3)} did not beat balanced ${r.eBalStr}`);
+        XTests.ok(R.cmp(e, r.eG) < 0, `${c.key} n=${r.n}: V(t_deep) did not beat f(n+1)`);
+      }
+    } else {
+      seen.many++;
+      let wins = 0, losses = 0;
+      for (const r of settled) {
+        const e = CF.weightedAt(r, deep.tStar).error;
+        if (near(r.tStar, deep.tStar)) { XTests.ok(R.cmp(e, r.eBal) < 0, `${c.key} n=${r.n} same phase should win`); wins++; }
+        else if (R.cmp(e, r.eBal) > 0) losses++;
+      }
+      XTests.ok(wins > 0 && losses > 0, `${c.key}: expected wins in phase and losses out of phase, got ${wins}/${losses}`);
     }
   }
+  XTests.eq(seen.one, 4, 'sqrt2, sqrt3, sqrt5, phi collapse to one weight');
+  XTests.eq(seen.many, 1, 'sqrt7 repeats a schedule');
+  XTests.eq(CF.clusterValues(CF.midpointRows('sqrt7', 14).rows.filter(r => r.n >= 4).map(r => r.tStar), R.make(1n, 200n)).length, 2);
   const pi = CF.midpointRows('pi', 12).rows;
   const tDeep = pi[pi.length - 1].tStar;
   XTests.ok(pi.slice(0, -1).some(r => R.cmp(CF.weightedAt(r, tDeep).error, r.eBal) > 0),
             'pi should have no fixed weight that beats balancing everywhere');
+});
+
+XTests.test('for a square root the balanced pair is p/q with Dq/p: a Newton step that lands on a later convergent', () => {
+  // C = (p/q + D/(p/q))/2 is one Newton iteration for x^2 = D, which is why balancing doubles
+  // the correct digits - and the result is itself a convergent further down the expansion.
+  const R = CF.Rat;
+  for (const key of ['sqrt2', 'sqrt3', 'sqrt5', 'sqrt7']) {
+    const D = CF.constant(key).quad.D;
+    const rows = CF.boundRows(key, 8, 'balanced').rows;
+    const nw = CF.newtonLevels(key, rows);
+    // once the pool is rich enough every level is a Newton step: nw is a suffix of the levels
+    XTests.ok(nw.length >= rows.length - 2, `${key}: expected a Newton step at nearly every level, got ${nw.length} of ${rows.length}`);
+    for (let i = 0; i < nw.length; i++) XTests.eq(nw[i].k, rows.length - nw.length + i, `${key}: Newton levels should be a suffix`);
+    for (const z of nw) {
+      const r = rows[z.k];
+      XTests.eq(R.cmp(R.mul(r.lower, r.upper), R.fromInt(D)), 0, `${key} k=${z.k} lower*upper`);
+      XTests.ok(z.index >= 2 * z.k + 1, `${key} k=${z.k}: C should be a convergent at or beyond the pair's own depth, got index ${z.index}`);
+    }
+    // successive distinct landings are a constant number of convergents apart, a multiple of
+    // 4: four for period 1 or 2 (sqrt2, sqrt3, sqrt5), eight for sqrt7 whose period is 4 and
+    // whose balanced pair therefore repeats for two levels at a time.
+    const idx = [...new Set(nw.map(z => z.index))];
+    XTests.ok(idx.length >= 3, `${key}: too few distinct landings`);
+    const step = idx[1] - idx[0];
+    XTests.ok(step % 4 === 0 && step > 0, `${key}: step ${step} is not a positive multiple of 4`);
+    for (let i = 2; i < idx.length; i++) XTests.eq(idx[i] - idx[i - 1], step, `${key}: uneven step at ${i}`);
+  }
+  const s2 = CF.newtonLevels('sqrt2', CF.boundRows('sqrt2', 8, 'balanced').rows);
+  XTests.eq(s2.map(z => z.index).join(','), '1,5,9,13,17,21,25,29', 'sqrt2 lands on index 4k+1');
+  XTests.eq(CF.newtonLevels('pi', CF.boundRows('pi', 4, 'balanced').rows).length, 0, 'not a square root');
 });
 
 XTests.test('the balanced trace shows the same search and lands on the same pair', () => {
@@ -4695,9 +4765,20 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
     } else {
       gain = ' Balancing happens to change nothing at these levels.';
     }
+    let newton = '';
+    const q = CF.constant(s.key).quad;
+    if (s.mode === 'balanced' && q && q.P === 0n && q.Q === 1n) {
+      const nw = CF.newtonLevels(s.key, rows);
+      if (nw.length) {
+        newton = ` For √${q.D} the search pairs p/q with ${q.D}q/p at every level from k = ${nw[0].k}, ` +
+          `so C = (p/q + ${q.D}/(p/q))/2 is one Newton step for x² = ${q.D} — which is why it gains ` +
+          'so much, and why it lands exactly on a later convergent: level ' +
+          nw.map(z => `${z.k} → index ${z.index}`).join(', ') + '.';
+      }
+    }
     el('bd-verdict').textContent =
       `Over these ${rows.length} levels the midpoint beat both bounds ${midWins} time` +
-      `${midWins === 1 ? '' : 's'}.` + gain;
+      `${midWins === 1 ? '' : 's'}.` + gain + newton;
   }
 
   function drawBounds(rows) {
@@ -4866,20 +4947,33 @@ XTests.test('a real Hurwitz expansion is the nearest-integer one in all-plus-one
       fixed = ` The minimax fixed weight t = ${bStr} is the one whose worst level is least bad: there it is ` +
         (w < 1 ? `still ${(1 / w).toFixed(w < 0.1 ? 1 : 2)}× better than f(n+1)`
                : `${w.toFixed(2)}× worse than f(n+1)`) +
-        `, where the midpoint’s worst level is ${wHalf.toFixed(2)}× worse.`;
+        `, where the midpoint’s worst level is ${wHalf.toFixed(2)}× worse. Some such weight always exists: ` +
+        'only the smallest and largest t* matter, and the worst ratio (b − a)/(2 − a − b) is below 1 whenever b is.';
     }
-    if (quad && rows.length > 2) {
+    if (quad && rows.length > 6) {
       const tDeep = rows[rows.length - 1].tStar;
-      const gains = rows.slice(0, -1).map(r => CF.Rat.div(r.eBal, CF.weightedAt(r, tDeep).error));
-      let minGain = gains[0];
-      for (const g of gains) if (CF.Rat.cmp(g, minGain) < 0) minGain = g;
-      fixed += ` The expansion is periodic, so ξ repeats and t* settles at ` +
-        `${CF.Rat.toDecimalString(tDeep, 4)}. Hold t there (the deepest t* chip) and V(t) beats ` +
-        `even the balanced pair at every level below the last, by at least ` +
-        `${CF.sci(minGain, 2)}× — a weighted combination is not confined to the semiconvergent pool, ` +
-        'so this works for φ too, where balancing has nothing to choose between. The minimax weight ' +
-        'above sits lower because the first levels have not settled yet. The deepest level itself ' +
-        'is circular: its t* was computed from the value.';
+      const settled = rows.filter(r => r.n >= 4);
+      const tol = CF.Rat.make(1n, 200n);
+      const schedule = CF.clusterValues(settled.map(r => r.tStar), tol).map(v => CF.Rat.toDecimalString(v, 4));
+      const near = (a, b) => { const d = CF.Rat.sub(a, b); return CF.Rat.cmp(d.n < 0n ? CF.Rat.neg(d) : d, tol) < 0; };
+      if (schedule.length === 1) {
+        const gains = rows.slice(0, -1).map(r => CF.Rat.div(r.eBal, CF.weightedAt(r, tDeep).error));
+        let minGain = gains[0];
+        for (const g of gains) if (CF.Rat.cmp(g, minGain) < 0) minGain = g;
+        fixed += ` The expansion is periodic, so ξ repeats and t* settles at ` +
+          `${CF.Rat.toDecimalString(tDeep, 4)}. Hold t there (the deepest t* chip) and V(t) beats ` +
+          `even the balanced pair at every level below the last, by at least ` +
+          `${CF.sci(minGain, 2)}× — a weighted combination is not confined to the semiconvergent pool, ` +
+          'so this works for φ too, where balancing has nothing to choose between. The minimax weight ' +
+          'above sits lower because the first levels have not settled yet.';
+      } else {
+        const phase = settled.filter(r => near(r.tStar, tDeep)).length;
+        fixed += ` The expansion is periodic, but a period this long does not collapse t* to one number: ` +
+          `it settles into a repeating schedule of ${schedule.length} values, ${schedule.join(', ')}. ` +
+          `The deepest t* chip therefore fits only its own phase, ${phase} of the ${settled.length} settled levels, ` +
+          'and loses to the balanced pair at the others; one weight per phase would serve every level.';
+      }
+      fixed += ' The deepest level itself is circular: its t* was computed from the value.';
     } else {
       fixed += ' The partial quotients keep changing, so t* jumps and no single weight fits; the ' +
         'deepest t* chip shows how badly one level’s optimum serves the others.';

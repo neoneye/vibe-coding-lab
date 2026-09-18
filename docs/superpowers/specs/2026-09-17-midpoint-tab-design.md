@@ -79,6 +79,30 @@ and `tStar`, `tLo`, `tHi` on each midpoint row. UI: a weight slider with
 the error plot, a t* column, and a second plot of t* per level with the
 next-term bracket, the midpoint, the slider and the minimax weight as lines.
 
+## Review notes (2026-09-18, from Codex)
+
+Three findings were verified against the code and folded in:
+
+- **The √D gain is Newton's method.** The balanced search pairs p/q with
+  D·q/p at every level once the pool is rich enough, so C = (p/q + D/(p/q))/2
+  is one Newton step for x² = D, and it lands exactly on a later convergent
+  (√2: index 4k+1). `newtonLevels` reports this and the Balanced-pair verdict
+  states it. Filaseta (1986) studied the connection.
+- **The minimax fixed weight has a closed form.** Only the smallest and
+  largest t* matter: t = (a + b − 2ab)/(2 − a − b) with worst ratio
+  (b − a)/(2 − a − b). This replaced the kink search; the grid test still
+  checks it. The ratio is below 1 whenever b < 1, so such a weight always
+  exists; periodicity decides how much it gains.
+- **Periodic expansions need not collapse to one weight.** √7 = [2; 1,1,1,4,…]
+  was added as a constant: its t* settles into a repeating schedule
+  0.6889, 0.6889, 0.8779, 0.8779, so the deepest t* serves only its own
+  phase. The verdict and the test now distinguish a collapsed weight
+  (√2, √3, √5, φ) from a schedule.
+
+Not taken up: a prediction experiment estimating a weight from early
+convergents and scoring it on later ones. The page already states that t*
+and the Bracket remainder are computed from the value and are circular.
+
 ## Non-goals
 
 No weighted or Richardson-style combinations; the question was the plain
