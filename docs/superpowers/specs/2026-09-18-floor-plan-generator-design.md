@@ -4,8 +4,9 @@ Date: 2026-09-18
 Directory: `2d-floor-plan-generator/`
 
 A standalone page that draws architectural floor plans of absurd buildings:
-evil villain mansions, supermax prisons, datacenters, power plants, malls and
-bunkers. Nothing is drawn or dragged by hand. Every plan is a pure function of
+evil villain mansions, supermax prisons, datacenters, power plants, malls,
+bunkers, police stations, the White House, fire stations, motels and robot
+factories. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -95,6 +96,33 @@ multiplies by the scale parameter.
 10. **Annotations**: overall dimension strings on top and right, a north
     arrow, scale bar, title block with sheet name, building type, seed,
     gross area and a "FOR ___ ONLY" subtitle.
+
+### Building extras (added 2026-09-19)
+
+- **One-way mirrors**: rooms of kind interrogation or lineup turn a small
+  neighbour into an observation room and get a mirror opening in the shared
+  wall, drawn as an interior window with glass ticks on the observation side
+  and a tiny "ONE-WAY MIRROR" label. Count capped by the mirrors slider.
+- **Vehicle bay doors**: garages, patrol garages, apparatus bays, loading
+  docks and shipping rooms get 4 m sectional doors on their exterior walls,
+  drawn as a heavy dashed line with dashed tracks into the room.
+- Motel guest rooms are numbered from the storey (ROOM 101, 102, …). The
+  Oval Office draws an elliptical inner wall inside its rectangle.
+
+### Restroom island walls
+
+Restrooms can hold free-standing partition walls with fixtures on both
+sides, filling the room depth. Three selects in the Pissoirs group:
+
+- **Perimeter walls**: pissoirs / pissoir-toilet alternating / toilet stalls.
+- **Island walls**: auto (pissoir halls and high mania only) / off / on.
+- **Island fixtures**: pissoirs / toilet stalls / alternating.
+
+An island is a 0.12 m partition running the room length minus 1.2 m at each
+end, with a fixture run on each face. Islands repeat across the depth at a
+pitch of two fixture depths plus the wall plus a 1.0 m aisle, leaving room for
+the perimeter fixtures and an aisle at both outer walls. Labels of rooms with
+islands report pissoir and stall counts.
 
 ### Backrooms sliders
 
