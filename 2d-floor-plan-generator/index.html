@@ -129,6 +129,15 @@ const FP = (() => {
     { id: "corridorWidth", group: "Corridors", label: "Width (m)", type: "range", min: 1, max: 6, step: 0.5, def: 2 },
     { id: "branches", group: "Corridors", label: "Branches", type: "range", min: 0, max: 8, step: 1, def: 2 },
 
+    { id: "servicePassages", group: "Services", label: "Service passages", type: "select", def: "perimeter",
+      options: [["none", "None"], ["perimeter", "Perimeter (three sides)"], ["ring", "Full ring"], ["interstitial", "Interstitial strips"], ["both", "Ring + interstitial"]] },
+    { id: "serviceWidth", group: "Services", label: "Passage width (m)", type: "range", min: 0.5, max: 2, step: 0.25, def: 1 },
+    { id: "serviceHatches", group: "Services", label: "Extra access hatches", type: "range", min: 0, max: 100, step: 1, def: 35 },
+    { id: "ventShafts", group: "Services", label: "Ventilation shafts", type: "range", min: 0, max: 16, step: 1, def: 4 },
+    { id: "shaftSize", group: "Services", label: "Shaft size (m)", type: "range", min: 1, max: 3, step: 0.5, def: 1.5 },
+    { id: "showPipes", group: "Services", label: "Draw piping and wires", type: "check", def: true },
+    { id: "pipeRuns", group: "Services", label: "Pipe / wire runs", type: "range", min: 1, max: 5, step: 1, def: 3 },
+
     { id: "minArea", group: "Rooms", label: "Min room area (m²)", type: "range", min: 4, max: 60, step: 1, def: 12 },
     { id: "maxArea", group: "Rooms", label: "Max room area (m²)", type: "range", min: 20, max: 600, step: 5, def: 90 },
     { id: "splitBias", group: "Rooms", label: "Split bias", type: "range", min: 0, max: 100, step: 1, def: 50 },
@@ -337,9 +346,51 @@ const FP = (() => {
         }
       }
     }
+    // Service passages (-3): narrow walkways for engineers along the outside walls and/or behind the room rows.
+    const sw = Math.max(1, Math.round(p.serviceWidth / cell));
+    const svc = p.servicePassages;
+    if (svc === "perimeter" || svc === "ring" || svc === "both") {
+      const outsideWithin = (x, y, dx, dy) => { for (let k = 1; k <= sw; k++) if (at(x + dx * k, y + dy * k) === 0) return true; return false; };
+      for (let y = 0; y < D; y++) for (let x = 0; x < W; x++) {
+        if (at(x, y) !== -2) continue;
+        const near = outsideWithin(x, y, 0, -1) || outsideWithin(x, y, -1, 0) || outsideWithin(x, y, 1, 0) || (svc !== "perimeter" && outsideWithin(x, y, 0, 1));
+        if (near) set(x, y, -3);
+      }
+    }
+    if (svc === "interstitial" || svc === "both") {
+      const strips = horizontal ? [Math.round(D * 0.25), Math.round(D * 0.75) - sw] : [Math.round(W * 0.25), Math.round(W * 0.75) - sw];
+      for (const pos of strips) {
+        if (horizontal) { for (let y = pos; y < pos + sw; y++) for (let x = 0; x < W; x++) if (at(x, y) === -2) set(x, y, -3); }
+        else { for (let x = pos; x < pos + sw; x++) for (let y = 0; y < D; y++) if (at(x, y) === -2) set(x, y, -3); }
+      }
+    }
+    // Ventilation shafts (-4): square voids butted against a corridor or service passage.
+    const shafts = []; const ss = Math.max(1, Math.round(p.shaftSize / cell));
+    if (p.ventShafts > 0) {
+      const cands = [];
+      for (let y = 0; y + ss <= D; y++) for (let x = 0; x + ss <= W; x++) {
+        let free = true;
+        for (let j = 0; j < ss && free; j++) for (let i = 0; i < ss; i++) if (at(x + i, y + j) !== -2) { free = false; break; }
+        if (!free) continue;
+        let touch = false;
+        for (let i = 0; i < ss && !touch; i++) touch = [at(x + i, y - 1), at(x + i, y + ss), at(x - 1, y + i), at(x + ss, y + i)].some(v => v === -1 || v === -3);
+        if (touch) cands.push([x, y]);
+      }
+      rng.shuffle(cands);
+      for (const [x, y] of cands) {
+        if (shafts.length >= p.ventShafts) break;
+        let ok = true;
+        for (let j = -1; j <= ss && ok; j++) for (let i = -1; i <= ss; i++) if (at(x + i, y + j) === -4) { ok = false; break; }
+        if (!ok) continue;
+        for (let j = 0; j < ss; j++) for (let i = 0; i < ss; i++) if (at(x + i, y + j) !== -2) ok = false;
+        if (!ok) continue;
+        for (let j = 0; j < ss; j++) for (let i = 0; i < ss; i++) set(x + i, y + j, -4);
+        shafts.push({ x, y, w: ss, h: ss, id: shafts.length });
+      }
+    }
     // Dead ends (backrooms): stubs off a corridor into free space that stop before reaching anything.
     const deadEnds = Math.round(Math.max(p.deadEnds, p.liminality / 10));
-    let deadEndsMade = 0;
+    let deadEndsMade = 0; const deadCells = new Set();
     for (let attempt = 0; attempt < deadEnds * 30 && deadEndsMade < deadEnds; attempt++) {
       let cx, cy, dir;
       if (layoutKind === "none" || !corridorRects.length) {
@@ -372,17 +423,24 @@ const FP = (() => {
         if (ok < 0) break;
       }
       if (ok < 0 || cells.length < 2) continue;
-      for (const [x, y] of cells) set(x, y, -1);
+      for (const [x, y] of cells) { set(x, y, -1); deadCells.add(y * W + x); }
       const xs = cells.map(c => c[0]), ys = cells.map(c => c[1]);
       corridorRects.push({ x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs) + 1, h: Math.max(...ys) - Math.min(...ys) + 1, deadEnd: true });
       deadEndsMade++;
     }
     // Free regions -> wings (greedy rectangles) -> rooms (BSP)
     // Slivers too thin to be rooms become corridor; the rest are wings.
-    const minDim = Math.max(2, Math.ceil(1.5 / cell));
+    // Slivers become part of an adjacent service passage when they touch one, otherwise corridor.
+    const minDim = Math.max(2, Math.ceil(2.0 / cell));
     for (let pass = 0; pass < 3; pass++) {
       let changed = false;
-      for (const w of greedyRects(W, D, (x, y) => at(x, y) === -2)) if (w.w < minDim || w.h < minDim) { for (let j = w.y; j < w.y + w.h; j++) for (let i = w.x; i < w.x + w.w; i++) set(i, j, -1); changed = true; }
+      for (const w of greedyRects(W, D, (x, y) => at(x, y) === -2)) {
+        if (w.w >= minDim && w.h >= minDim) continue;
+        let touchesService = false;
+        for (let j = w.y; j < w.y + w.h && !touchesService; j++) for (let i = w.x; i < w.x + w.w; i++) if ([at(i - 1, j), at(i + 1, j), at(i, j - 1), at(i, j + 1)].includes(-3)) { touchesService = true; break; }
+        for (let j = w.y; j < w.y + w.h; j++) for (let i = w.x; i < w.x + w.w; i++) set(i, j, touchesService ? -3 : -1);
+        changed = true;
+      }
       if (!changed) break;
     }
     const wings = greedyRects(W, D, (x, y) => at(x, y) === -2);
@@ -461,14 +519,32 @@ const FP = (() => {
       }
       nComp++;
     }
-    const corridors = greedyRects(W, D, (x, y) => at(x, y) === -2 ? false : at(x, y) === -1);
-    for (const c of corridors) {
-      c.deadEnd = corridorRects.some(r => r.deadEnd && c.x >= r.x && c.y >= r.y && c.x + c.w <= r.x + r.w && c.y + c.h <= r.y + r.h);
-      c.comp = corrComp[c.y * W + c.x];
+    const svcComp = new Int32Array(W * D).fill(-1); let nSvc = 0;
+    for (let y = 0; y < D; y++) for (let x = 0; x < W; x++) {
+      if (reg[y * W + x] !== -3 || svcComp[y * W + x] >= 0) continue;
+      const stack = [[x, y]]; svcComp[y * W + x] = nSvc;
+      while (stack.length) {
+        const [cx, cy] = stack.pop();
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = cx + dx, ny = cy + dy; if (at(nx, ny) === -3 && svcComp[ny * W + nx] < 0) { svcComp[ny * W + nx] = nSvc; stack.push([nx, ny]); } }
+      }
+      nSvc++;
+    }
+    const services = greedyRects(W, D, (x, y) => at(x, y) === -3);
+    for (const sv of services) sv.comp = svcComp[sv.y * W + sv.x];
+    const shaftIndex = new Int32Array(W * D).fill(-1);
+    for (const sh of shafts) for (let j = sh.y; j < sh.y + sh.h; j++) for (let i = sh.x; i < sh.x + sh.w; i++) shaftIndex[j * W + i] = sh.id;
+    const corridors = greedyRects(W, D, (x, y) => at(x, y) === -1 && !deadCells.has(y * W + x));
+    for (const c of corridors) c.deadEnd = false;
+    for (const c of greedyRects(W, D, (x, y) => at(x, y) === -1 && deadCells.has(y * W + x))) { c.deadEnd = true; corridors.push(c); }
+    for (const c of corridors) c.comp = corrComp[c.y * W + c.x];
+    for (const room of rooms) {
+      room.exterior = false;
+      for (let x = room.x; x < room.x + room.w && !room.exterior; x++) if (at(x, room.y - 1) === 0 || at(x, room.y + room.h) === 0) room.exterior = true;
+      for (let y = room.y; y < room.y + room.h && !room.exterior; y++) if (at(room.x - 1, y) === 0 || at(room.x + room.w, y) === 0) room.exterior = true;
     }
     // Any free cell left (none expected) becomes corridor to keep the grid closed.
     for (let i = 0; i < W * D; i++) if (reg[i] === -2) reg[i] = -1;
-    return { W, D, cell, reg, at, rooms, byId, corridors, corrComp, nCorridorComps: nComp, deadEndsMade };
+    return { W, D, cell, reg, at, rooms, byId, corridors, corrComp, nCorridorComps: nComp, deadEndsMade, services, svcComp, nServiceComps: nSvc, shafts, shaftIndex };
   }
   // Greedy decomposition of a cell predicate into maximal-row rectangles.
   function greedyRects(W, D, pred) {
@@ -793,7 +869,7 @@ const FP = (() => {
       const want = classIndex(KINDS[kind].size);
       let best = null, bestScore = Infinity;
       for (const id of unassigned) {
-        const r = byId.get(id); const score = Math.abs(classIndex(r.sizeClass) - want) * 10 + (r.rep ? 50 : 0) + rng.next();
+        const r = byId.get(id); const score = Math.abs(classIndex(r.sizeClass) - want) * 10 + (r.rep ? 50 : 0) + (KINDS[kind].bayDoors && !r.exterior ? 40 : 0) + rng.next();
         if (score < bestScore) { bestScore = score; best = r; }
       }
       if (!best) break;
@@ -857,6 +933,8 @@ const FP = (() => {
     const v = model.at(x, y);
     if (v === 0) return "out";
     if (v === -1) return "c" + model.corrComp[y * model.W + x];
+    if (v === -3) return "s" + model.svcComp[y * model.W + x];
+    if (v === -4) return "v" + model.shaftIndex[y * model.W + x];
     return "r" + v;
   }
   // Every straight wall run between two different regions: {node, other, side, x, y, len} in cells.
@@ -898,7 +976,9 @@ const FP = (() => {
   }
   function placeDoor(p, rng, model, seg, kind, opts) {
     const cell = model.cell; const L = segLine(seg, cell);
-    let dw = p.doorWidth * (kind === "double" || kind === "sally" ? 2 : kind === "blast" ? 1.3 : 1);
+    const service = seg.node[0] === "s" || seg.other[0] === "s";
+    if (service) kind = "hatch";
+    let dw = kind === "hatch" ? Math.min(p.doorWidth, 0.8) : p.doorWidth * (kind === "double" || kind === "sally" ? 2 : kind === "blast" ? 1.3 : 1);
     const margin = (seg.other === "out" ? p.extWall : p.intWall) + 0.15;
     let avail = L.len - 2 * margin;
     if (avail < dw) { dw = Math.min(dw, L.len - 0.2); if (dw < 0.6) return null; avail = L.len - 0.2; }
@@ -907,7 +987,9 @@ const FP = (() => {
     if (opts && opts.center) pos = (L.len - dw) / 2;
     pos = Math.round(pos * 20) / 20;
     // swing into the node's room (away from other) unless told otherwise
-    const swing = opts && opts.swingOut ? L.normal : -L.normal;
+    // swing into the node's room (away from other); hatches always swing out of the narrow passage
+    let swing = opts && opts.swingOut ? L.normal : -L.normal;
+    if (seg.node[0] === "s" && seg.other !== "out") swing = L.normal;
     const door = { kind, dir: L.dir, len: dw, x: L.dir === "h" ? L.x + pos : L.x, y: L.dir === "h" ? L.y : L.y + pos, swing, hinge: rng.int(0, 1), a: seg.node, b: seg.other, seg };
     seg.doors.push(door); model.doors.push(door);
     return door;
@@ -922,6 +1004,7 @@ const FP = (() => {
   function allNodes(model) {
     const nodes = model.rooms.map(r => "r" + r.id);
     for (let c = 0; c < model.nCorridorComps; c++) nodes.push("c" + c);
+    for (let c = 0; c < (model.nServiceComps || 0); c++) nodes.push("s" + c);
     return nodes;
   }
   function doorGraphConnected(model) {
@@ -935,9 +1018,10 @@ const FP = (() => {
     const segsOf = (node) => byNode.get(node) || [];
     // Entry: bottom exterior wall, corridors first, then lobby-ish rooms, then anything.
     const lobbyKinds = new Set(["grandHall", "atrium", "sallyPort", "blastLock", "loadingDock", "intake", "security", "foodCourt"]);
-    const ext = segs.filter(s => s.other === "out" && s.len * cell >= p.doorWidth * 2 + 2 * p.extWall + 0.4);
+    const ext = segs.filter(s => s.other === "out" && s.node[0] !== "v" && s.len * cell >= p.doorWidth * 2 + 2 * p.extWall + 0.4);
     const score = (s) => {
       let sc = s.side === "bottom" ? 0 : s.side === "top" ? 20 : 40;
+      if (s.node[0] === "s") sc += 30;
       if (s.node[0] === "c") sc -= 10; else { const r = model.byId.get(Number(s.node.slice(1))); if (r && lobbyKinds.has(r.kind)) sc -= 5; if (r && r.parent) sc += 100; }
       const mid = (s.side === "top" || s.side === "bottom") ? (s.x + s.len / 2) / model.W : (s.y + s.len / 2) / model.D;
       return sc + Math.abs(mid - 0.5) * 8 + rng.next() * 2;
@@ -945,7 +1029,7 @@ const FP = (() => {
     ext.sort((a, b) => score(a) - score(b));
     let entry = null;
     for (const s of ext) { entry = placeDoor(p, rng, model, s, B.entry, { center: true }); if (entry) break; }
-    if (!entry) for (const s of segs.filter(s => s.other === "out")) { entry = placeDoor(p, rng, model, s, "single", { center: true }); if (entry) break; }
+    if (!entry) for (const s of segs.filter(s => s.other === "out" && s.node[0] !== "v")) { entry = placeDoor(p, rng, model, s, "single", { center: true }); if (entry) break; }
     if (entry) { entry.entry = true; model.entry = entry; }
     // Pass 1: nested rooms open onto their parent; other rooms onto a corridor when they touch one.
     for (const r of model.rooms) {
@@ -962,7 +1046,7 @@ const FP = (() => {
       if (!missing.length) break;
       let progress = false;
       for (const n of rng.shuffle(missing)) {
-        const cands = segsOf(n).filter(s => seen.has(s.other) && s.other !== "out").sort((a, b) => b.len - a.len);
+        const cands = segsOf(n).filter(s => seen.has(s.other) && s.other !== "out" && s.other[0] !== "v").sort((a, b) => b.len - a.len);
         for (const s of cands) if (placeDoor(p, rng, model, s, "single")) { progress = true; break; }
         if (progress) break;
       }
@@ -977,8 +1061,16 @@ const FP = (() => {
     const density = p.doorDensity / 100;
     for (const r of model.rooms) {
       if (!rng.chance(density)) continue;
-      const cands = segsOf("r" + r.id).filter(s => s.other !== "out" && s.doors.length === 0);
+      const cands = segsOf("r" + r.id).filter(s => s.other !== "out" && s.other[0] !== "v" && s.other[0] !== "s" && s.doors.length === 0);
       if (cands.length) placeDoor(p, rng, model, rng.pick(cands), "single");
+    }
+    // Extra access hatches from service passages into the rooms and corridors they run behind.
+    const hatchP = p.serviceHatches / 100;
+    for (let c = 0; c < (model.nServiceComps || 0); c++) {
+      for (const s of segsOf("s" + c)) {
+        if (s.other === "out" || s.other[0] === "v" || s.other[0] === "s" || s.doors.length || s.len * cell < 1.4) continue;
+        if (rng.chance(hatchP * (s.other[0] === "c" ? 1.5 : 1))) placeDoor(p, rng, model, s, "hatch");
+      }
     }
     // Secret passages: dashed openings between two rooms that share a wall with no door.
     const roomRoom = segs.filter(s => s.node[0] === "r" && s.other[0] === "r" && s.doors.length === 0 && s.len * cell >= 1.2);
@@ -1882,6 +1974,41 @@ const FP = (() => {
       }
     }
     out.push("</g>");
+    // ---- service passages: pipes, cable trays, valves and a small label
+    if (model.services && model.services.length) {
+      out.push(`<g stroke-width="${n3(u)}">`);
+      for (const sv of model.services) {
+        const x = sv.x * cell, y = sv.y * cell, w = sv.w * cell, h = sv.h * cell;
+        const horizontal = w >= h; const len = horizontal ? w : h, across = horizontal ? h : w;
+        if (p.showPipes && across >= 0.45 && len >= 0.8) {
+          const runs = Math.max(1, Math.min(p.pipeRuns, Math.floor((across - 0.2) / 0.16)));
+          for (let k = 0; k < runs; k++) {
+            const off = 0.14 + (across - 0.28) * (runs === 1 ? 0.5 : k / (runs - 1));
+            const wire = k % 2 === 1;
+            const extra = wire ? ` stroke-dasharray="${n3(0.22)} ${n3(0.1)}"` : "";
+            const sw2 = wire ? u * 0.8 : u * 1.7;
+            if (horizontal) out.push(line(x + 0.1, y + off, x + w - 0.1, y + off, sw2, extra)); else out.push(line(x + off, y + 0.1, x + off, y + h - 0.1, sw2, extra));
+            if (!wire && det >= 2) for (let t = 2.0; t < len - 0.5; t += 4.0) { const cx = horizontal ? x + t : x + off, cy = horizontal ? y + off : y + t; out.push(circle(cx, cy, 0.09, u)); if (det >= 3) out.push(line(cx - 0.09, cy - 0.09, cx + 0.09, cy + 0.09, u * 0.8)); }
+          }
+        }
+        if (p.showLabels && len >= 3.2 && across >= 0.7) {
+          const cx = x + w / 2, cy = y + h / 2; const fsz = Math.min(ufs * 0.55, across * 0.5);
+          out.push(`<text transform="translate(${n3(cx)} ${n3(cy)}) rotate(${horizontal ? 0 : -90})" font-size="${n3(fsz)}" fill="#000" stroke="#fff" stroke-width="${n3(2.5 / s)}" paint-order="stroke" text-anchor="middle" dominant-baseline="middle" letter-spacing="${n3(fsz * 0.15)}">SERVICE PASSAGE</text>`);
+        }
+      }
+      out.push("</g>");
+    }
+    // ---- ventilation shafts: crossed square with a label
+    if (model.shafts && model.shafts.length) {
+      out.push(`<g stroke-width="${n3(u)}">`);
+      for (const sh of model.shafts) {
+        const x = sh.x * cell, y = sh.y * cell, w = sh.w * cell, h = sh.h * cell;
+        out.push(line(x, y, x + w, y + h, u) + line(x + w, y, x, y + h, u));
+        if (det >= 3) out.push(rect(x + w * 0.35, y + h * 0.35, w * 0.3, h * 0.3, u * 0.8, ` fill="#fff"`));
+        if (p.showLabels) out.push(text(x + w / 2, y + h / 2 + ufs * 0.2, w >= 1.4 ? "V.S." : "VS", Math.min(ufs * 0.6, w * 0.4), ` fill="#000" stroke="#fff" stroke-width="${n3(2.5 / s)}" paint-order="stroke" text-anchor="middle" font-weight="bold"`));
+      }
+      out.push("</g>");
+    }
     // ---- furniture
     out.push(`<g stroke-width="${n3(u)}">`);
     for (const it of model.furniture) out.push(`<g transform="translate(${n3(it.cx)} ${n3(it.cy)})${it.rot ? ` rotate(${it.rot})` : ""}">${symbol(it, u, det)}</g>`);
@@ -2120,6 +2247,27 @@ const FloorPlanTests = {
       }
       for (let seed = 1; seed <= 12; seed++) { const p = P({ seed, liminality: 100, mania: 100, nesting: 100, deadEnds: 12, branches: 8, width: 120, depth: 80, cell: 0.25 }); assert(FP.render(p, FP.generate(p)).length > 1000, "extreme " + seed); }
       const tiny = P({ width: 12, depth: 8, minArea: 60, maxArea: 600, cell: 1, corridorWidth: 6 }); assert(FP.render(tiny, FP.generate(tiny)).includes("</svg>"), "tiny");
+    });
+    test("services: passages, hatches, shafts, connectivity", () => {
+      for (const svc of ["perimeter", "ring", "interstitial", "both"]) for (const seed of [1, 2]) {
+        const p = P({ seed, servicePassages: svc, ventShafts: 5, shape: seed === 1 ? "rect" : "L" }); const m = FP.generate(p);
+        assert(m.services.length > 0, svc + " has passages");
+        assert(FP.doorGraphConnected(m), svc + " connected incl. service comps " + seed);
+        assert(m.doors.some(d => d.kind === "hatch"), svc + " has hatches");
+        for (const sv of m.services) for (let y = sv.y; y < sv.y + sv.h; y++) for (let x = sv.x; x < sv.x + sv.w; x++) assert(m.fp.isSolid(x, y) && m.reg[y * m.W + x] === -3, "service cell");
+        eq(m.shafts.length, 5, svc + " shafts " + seed);
+        for (const sh of m.shafts) { eq(sh.w, Math.round(p.shaftSize / p.cell), "shaft size"); for (let y = sh.y; y < sh.y + sh.h; y++) for (let x = sh.x; x < sh.x + sh.w; x++) eq(m.reg[y * m.W + x], -4, "shaft cell"); }
+        for (const r of m.rooms) for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) assert(m.reg[y * m.W + x] !== -3 && m.reg[y * m.W + x] !== -4, "room over service/shaft");
+        const svg = FP.render(p, m); assert(svg.includes("V.S.") || svg.includes(">VS<"), "shaft label"); assert(svg.includes("SERVICE PASSAGE"), "passage label");
+        assert(!m.doors.some(d => d.a[0] === "v" || d.b[0] === "v"), "no doors into shafts");
+      }
+      const per = FP.generate(P({ servicePassages: "perimeter", shape: "rect" }));
+      eq(per.reg[(per.D - 1) * per.W + Math.floor(per.W / 2)] === -3, false, "front face stays open");
+      assert(per.reg[Math.floor(per.W / 2)] === -3, "back face is a passage");
+      const ring = FP.generate(P({ servicePassages: "ring", shape: "rect" }));
+      assert(ring.reg[(ring.D - 1) * ring.W + Math.floor(ring.W / 2)] === -3, "ring closes the front");
+      const none = FP.generate(P({ servicePassages: "none", ventShafts: 0 })); eq(none.services.length, 0, "no passages"); eq(none.shafts.length, 0, "no shafts");
+      assert(!none.doors.some(d => d.kind === "hatch"), "no hatches without passages");
     });
     test("new buildings: mirrors, observation rooms, bay doors, motel numbering, islands", () => {
       const m = FP.generate(P({ building: "police", seed: 2, width: 70, depth: 40 }));

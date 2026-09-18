@@ -109,6 +109,29 @@ multiplies by the scale parameter.
 - Motel guest rooms are numbered from the storey (ROOM 101, 102, …). The
   Oval Office draws an elliptical inner wall inside its rectangle.
 
+### Service passages and ventilation shafts (added 2026-09-19)
+
+Narrow walkways for engineers, carved on the grid before the rooms are
+subdivided and kept as their own region type:
+
+- **Service passages** select: none / perimeter (a strip inside the back and
+  side exterior walls, leaving the front face open for the entry and windows)
+  / full ring / interstitial (two strips running parallel to the spine behind
+  the room rows) / ring + interstitial. Width from a slider (0.5–2 m).
+- Each connected passage is a node in the door graph, so the connectivity
+  pass gives it at least one 0.8 m access hatch. An "extra access hatches"
+  slider adds more hatches into the rooms and corridors it runs behind.
+  Hatches swing out of the passage.
+- **Piping and wires**: parallel runs along each passage rectangle, solid
+  heavy lines for pipes with valve circles every 4 m, dashed thin lines for
+  cable trays; count from a slider. A small "SERVICE PASSAGE" label sits in
+  passages long enough to hold it.
+- **Ventilation shafts**: square voids (1–3 m) butted against a corridor or
+  passage, drawn as a crossed square labelled "V.S.". Shafts get walls but
+  never doors, and are excluded from the connectivity check.
+- Free slivers thinner than 2 m left over after carving join an adjacent
+  passage, or become corridor.
+
 ### Restroom island walls
 
 Restrooms can hold free-standing partition walls with fixtures on both
