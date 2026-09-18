@@ -5,8 +5,8 @@ Directory: `2d-floor-plan-generator/`
 
 A standalone page that draws architectural floor plans of absurd buildings:
 evil villain mansions, supermax prisons, datacenters, power plants, malls,
-bunkers, police stations, the White House, fire stations, motels and robot
-factories. Nothing is drawn or dragged by hand. Every plan is a pure function of
+bunkers, police stations, the White House, fire stations, motels, robot
+factories, office buildings, cartel compounds and launch control centers. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -131,6 +131,30 @@ subdivided and kept as their own region type:
   never doors, and are excluded from the connectivity check.
 - Free slivers thinner than 2 m left over after carving join an adjacent
   passage, or become corridor.
+
+### Elevators, hidden rooms, sliding doors, vending machines (added 2026-09-19)
+
+- **Elevator shafts**: count and size sliders in the Services group. Carved
+  as voids against a corridor with the same routine as the vent shafts, drawn
+  as a crossed square with a car outline and "LIFT", and given a centre-opening
+  sliding door onto the corridor. Never part of the connectivity check.
+- **Hidden rooms**: a slider in the Rooms group, plus a per-building bonus
+  (mansion 1, cartel 2). Small non-mandatory rooms lose every ordinary door and
+  keep one secret passage to a non-hidden neighbour. A hidden room can not be
+  the anchor of another hidden room. Drawn with a dashed inner outline and a
+  sublabel such as "(NOT ON THE OFFICIAL DRAWINGS)". The connectivity repair
+  runs again afterwards with hidden rooms excluded as targets, so neighbours
+  that were only reachable through a hidden room get a door elsewhere.
+- **Sliding doors**: a share slider in the Openings group converts ordinary
+  room doors to pocket doors, drawn as a leaf half across the opening and half
+  in the pocket with a small arrow.
+- **Vending machines**: a count slider in the Furniture group places machines
+  along corridor walls away from doors. Break rooms, kitchenettes and the
+  motel vending closet also get them.
+- Office building: the first open office is labelled "OPEN OFFICE HELLSCAPE"
+  and filled with back-to-back desk pairs; meeting rooms are named after
+  corporate phrases. Cartel compound and launch control center palettes as in
+  the code.
 
 ### Restroom island walls
 
