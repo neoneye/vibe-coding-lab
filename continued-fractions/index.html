@@ -719,6 +719,8 @@ const CF = (() => {
     { key: 'nearest', label: 'nearest',                                   note: null },
     { key: 'alt',     label: '⌊x⌋ ⌈x⌉ alternating',
       note: 'a construction, not a classical expansion' },
+    { key: 'altc',    label: '⌈x⌉ ⌊x⌋ alternating',
+      note: 'a construction, not a classical expansion' },
     { key: 'ceil',    label: '⌈x⌉ always',                      note: null },
   ];
 
@@ -728,12 +730,16 @@ const CF = (() => {
     return Rat.cmp(frac, Rat.make(1n, 2n)) >= 0 ? f + 1n : f;   // halves round up
   };
 
-  // level is 0-based; alt starts with floor so its first sign is +1.
+  // level is 0-based; alt starts with floor so its first sign is +1, altc starts with the
+  // ceiling so its first sign is -1. The two are the same construction in opposite phase:
+  // for e = 2.718 the floor-first version spends two levels reaching the 3 that
+  // ceiling-first has at level 0.
   const pickInteger = (x, mode, level) => {
     if (mode === 'floor') return Rat.floor(x);
     if (mode === 'ceil') return ratCeil(x);
     if (mode === 'nearest') return ratRound(x);
     if (mode === 'alt') return level % 2 === 0 ? Rat.floor(x) : ratCeil(x);
+    if (mode === 'altc') return level % 2 === 0 ? ratCeil(x) : Rat.floor(x);
     throw new Error('unknown mode ' + mode);
   };
 
@@ -2571,17 +2577,39 @@ XTests.test('a rational terminates in every mode', () => {
   }
 });
 
-XTests.test('alt is labelled as a construction', () => {
-  const alt = CF.SEMI_MODES.find(m => m.key === 'alt');
-  XTests.ok(alt.note && alt.note.length > 0, 'alt must carry a note');
+XTests.test('both alternating modes are labelled as constructions', () => {
+  for (const key of ['alt', 'altc']) {
+    const m = CF.SEMI_MODES.find(z => z.key === key);
+    XTests.ok(m.note && m.note.length > 0, `${key} must carry a note`);
+  }
   for (const m of CF.SEMI_MODES) {
-    if (m.key !== 'alt') XTests.ok(m.note === null, `${m.key} should have no note`);
+    if (m.key !== 'alt' && m.key !== 'altc') XTests.ok(m.note === null, `${m.key} should have no note`);
   }
 });
 
 XTests.test('raceKind restricts only the ceiling mode', () => {
   XTests.eq(CF.raceKind('ceil'), 'above');
-  for (const m of ['floor', 'nearest', 'alt']) XTests.eq(CF.raceKind(m), 'any');
+  for (const m of ['floor', 'nearest', 'alt', 'altc']) XTests.eq(CF.raceKind(m), 'any');
+});
+
+XTests.test('ceiling-first alternation is floor-first in opposite phase, and reaches 3 for e at once', () => {
+  // floor-first on e: [2; 2, 1, ...] with 3/1 only at n = 2. Ceiling-first starts at 3.
+  const ff = CF.convergentRowsFor('e', 6, 'alt').rows;
+  const cf = CF.convergentRowsFor('e', 6, 'altc').rows;
+  XTests.eq(`${ff[2].p}/${ff[2].q}`, '3/1', 'floor-first needs three levels to reach 3');
+  XTests.eq(`${cf[0].p}/${cf[0].q}`, '3/1', 'ceiling-first has 3 at level 0');
+  XTests.eq(cf[0].a, 3n); XTests.eq(cf[0].sign, 1);
+  XTests.eq(cf[1].sign, -1, 'the first numerator after a ceiling is -1');
+  // the roundings alternate: every term picks ceil at even levels and floor at odd ones
+  const k = CF.constant('e');
+  const r = CF.semiregularTerms(k.lo, k.hi, 'altc', 8);
+  for (let i = 0; i + 1 < r.signs.length; i++) XTests.ok(r.signs[i] !== r.signs[i + 1], `signs should alternate at ${i}`);
+  XTests.eq(r.signs[0], -1);
+  // and it converges like the others
+  const cs = CF.semiregularConvergents(r.terms, r.signs);
+  const last = cs[cs.length - 1];
+  const d = CF.Rat.sub(k.lo, CF.Rat.make(last.p, last.q));
+  XTests.ok(CF.Rat.cmp(d.n < 0n ? CF.Rat.neg(d) : d, CF.Rat.fromDecimalString('0.001')) < 0, 'altc converges');
 });
 
 XTests.test('cascade rows in a mixed mode switch shape partway down', () => {
@@ -2597,7 +2625,7 @@ XTests.test('cascade still brackets throughout in floor mode and never in ceil m
   for (const r of CF.cascadeRows('pi', 'ceil', 8)) XTests.ok(!r.brackets, `ceil row ${r.n}`);
 });
 
-XTests.test('cascade rows stay nested and drawable in all four modes', () => {
+XTests.test('cascade rows stay nested and drawable in every mode', () => {
   for (const m of CF.SEMI_MODES) {
     for (const key of ['pi', 'e', 'phi']) {
       const rows = CF.cascadeRows(key, m.key, 10);
