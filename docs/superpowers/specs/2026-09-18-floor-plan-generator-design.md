@@ -11,7 +11,9 @@ facilities, hospitals, clothing factories, royal palaces, junior cadet
 training bases, casinos, schools, zoos, fertility clinics, escape room
 centers, night clubs, museums, chemical plants, recording studios, farms,
 e-waste plants, spas, sports centers, bicycle repair shops, abattoirs,
-anatomy institutes, parliaments, sushi restaurants and airport baggage halls. Nothing is drawn or dragged by hand. Every plan is a pure function of
+anatomy institutes, parliaments, sushi restaurants, airport baggage halls,
+cryosleep labs, nuclear waste repositories, call centers, courthouses and
+dental clinics. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -391,6 +393,47 @@ overrides and humour lines, and always carries a tag line
   of ULD containers; odd-size, lost and found (suitcases everywhere), early
   bag store, reclaim carousel, customs benches with a scanner and bollards,
   tug parking, dispatch, and a suspect bag room with a blast bin.
+
+### Cryosleep lab, nuclear waste repository, call center, courthouse, dental clinic (added 2026-09-20)
+
+- **Cryosleep R&D facility**: a cryosleep bay of glass-capsule pods (a face
+  visible in each, a green status light that is always green), long-term pod
+  storage stacked two high, dewar hall, revival suite of monitored beds,
+  perfusion room, LN2 plant, vitrification lab, animal trials, pod
+  monitoring, backup generator, member lounge, contract signing, wake-up
+  room, future orientation. The bays get clear "VIEWING GLASS" into a viewing
+  gallery.
+- **Nuclear waste repository**: cask hall of trefoil-marked casks under a
+  crane rail, overpack room, hot cell with manipulator arms behind clear
+  "LEAD GLASS" into an operator gallery, decontamination showers, drum
+  store, radiation monitoring, dosimetry with portal monitors and lockers,
+  shaft head, tunnel portal with trucks, waste assay lab, warning marker
+  studio ("THIS IS NOT A PLACE OF HONOR"), HEPA filter bank, Geiger store,
+  regulator's office.
+- **Call center**: call floor and night-shift floor of back-to-back cubicle
+  rows (partitions, desk, monitor, chair) under a KPI screen and a team-lead
+  desk; quality monitoring behind a one-way mirror onto the floor; crying
+  room, headset store, script room, training room, team lead pods, wall of
+  KPIs, HR, motivation room, escalations, phone booths.
+- **Courthouse**: numbered courtrooms with a raised judge's bench and chair,
+  witness and clerk boxes, a two-row jury box, counsel tables, flagpoles and
+  rows of public benches; jury rooms, judge's chambers, holding cells,
+  attorney interview rooms, clerk of court, law library, bail bonds, public
+  waiting, court reporter, probation, mediation, jury assembly, evidence,
+  records, sally port, press room.
+- **Dental clinic** (excessive surgery): an extraction hall of dental chairs
+  (reclined chair, lamp arm, spit bowl, instrument tray) taking the largest
+  room; oral surgery suites and implant theatres with operating tables; root
+  canal, hygiene and orthodontics rooms with single chairs; panoramic X-ray;
+  treatment plan consult; sedation room; recovery lounge of loungers;
+  sterilization with autoclaves; crown and bridge lab; extracted teeth
+  archive of jars; financing desk; nitrous oxide store; waiting room.
+- **Rotated grid fills fixed**: `gridFillRot` places a `w × d` footprint
+  grid with each item rotated 90° and its local dims swapped, so trucks,
+  turbines, racks, bowling lanes and kitchen counters keep their natural
+  orientation in tall rooms (the old code passed swapped dims, which the 3D
+  truck exposed as negative box sizes). The robustness test now builds the
+  3D model for every building and checks every primitive.
 
 ### 3D views (added 2026-09-19)
 
