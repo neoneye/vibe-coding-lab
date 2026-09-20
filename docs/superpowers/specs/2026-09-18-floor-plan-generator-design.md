@@ -9,7 +9,8 @@ bunkers, police stations, the White House, fire stations, motels, robot
 factories, office buildings, cartel compounds, launch control centers, R&D
 facilities, hospitals, clothing factories, royal palaces, junior cadet
 training bases, casinos, schools, zoos, fertility clinics, escape room
-centers, night clubs and museums. Nothing is drawn or dragged by hand. Every plan is a pure function of
+centers, night clubs, museums, chemical plants, recording studios, farms and
+e-waste plants. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -306,6 +307,28 @@ Rooms hosting a matrix or cyberdyne lobby get a sublabel.
   modern art (a chair on a plinth), planetarium dome with ring seating,
   antiquities, sculpture hall, café, conservation lab, archive, ticketing,
   coatroom, gift shop.
+
+### Chemical plant, recording studio, farm, e-waste plant (added 2026-09-20)
+
+- **Chemical plant**: reactor hall with legged reaction vessels and spill
+  puddles, tank farm, mixing room, packaging line with drums and pallets, QC
+  lab, control room, drum and solvent stores, a vacant safety office and an
+  out-of-order safety shower. Subtitle "(OSHA HAS NOT BEEN INFORMED)".
+- **Recording studio**: jam and live rooms with drum kit, amps, mic stands,
+  acoustic panels and a piano, mix rooms and mastering suite with a mixing
+  desk, monitors, sofa and racks, vocal and isolation booths, reverb chamber,
+  amp store, tape library, machine room, artist lounge. The one-way mirror
+  mechanism is generalised per building: `mirrorKinds`, `mirrorAccept`,
+  `mirrorPartner`, `mirrorLabel`, `mirrorClear`. Studios use it as clear
+  "STUDIO GLASS" between mix rooms and jam, live or booth rooms.
+- **Farm**: machine shed with tractors, trailers and a combine, cow barn with
+  stalls and hay bales, hay store, grain silo, milking parlour, feed store of
+  sacks, chicken coop with nest boxes, pig pen, tool shed with wheelbarrows,
+  farmhouse kitchen and the indoor outhouse.
+- **E-waste plant**: receiving hall of pallets and heaps, sorting line with
+  bins, shredder with hopper, dismantling benches, battery quarantine, CRT
+  graveyard of stacked monitors, data destruction, precious metals, cable
+  mountain, weighbridge.
 
 ### 3D views (added 2026-09-19)
 
