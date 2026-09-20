@@ -8,7 +8,8 @@ evil villain mansions, supermax prisons, datacenters, power plants, malls,
 bunkers, police stations, the White House, fire stations, motels, robot
 factories, office buildings, cartel compounds, launch control centers, R&D
 facilities, hospitals, clothing factories, royal palaces, junior cadet
-training bases, casinos, schools and zoos. Nothing is drawn or dragged by hand. Every plan is a pure function of
+training bases, casinos, schools, zoos, fertility clinics, escape room
+centers, night clubs and museums. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -283,6 +284,28 @@ room's own furniture is clipped to the part beyond the lobby. Styles:
 
 Sliders: guards, metal detectors, turnstiles, cameras, bollards, lobby depth.
 Rooms hosting a matrix or cyberdyne lobby get a sublabel.
+
+### Fertility clinic, escape rooms, night club, museum (added 2026-09-20)
+
+- **Fertility clinic**: reception, waiting room, consultations, IVF and
+  andrology labs with benches, incubators and microscopes, cryo storage full
+  of dewars, the collection room (sofa, screen, magazine rack, sink),
+  ultrasound bay, procedure room, counselling, recovery.
+- **Escape room center**: lobby, briefing, escape rooms named after themes
+  ("THE PHARAOH'S TOMB", "BANK HEIST", …) with a puzzle table, shelves,
+  padlocked chests, a countdown display and a camera, game master control
+  room, debrief lounge, victory photo wall, prop storage and workshop. Two
+  bonus hidden rooms.
+- **Night club**: dance floor of lit tiles with a disco ball, stage,
+  speakers and dance poles ringed by dashed tip zones, pole stage with
+  stools and sofas, DJ booth, bars, VIP lounge behind a velvet rope,
+  cloakroom, smoking terrace with ashtrays, green room, booze store. No
+  windows.
+- **Museum**: grand gallery of vitrines and paintings, dinosaur hall with a
+  skeleton behind a rope, Egyptian gallery with a sarcophagus and plinths,
+  modern art (a chair on a plinth), planetarium dome with ring seating,
+  antiquities, sculpture hall, café, conservation lab, archive, ticketing,
+  coatroom, gift shop.
 
 ### 3D views (added 2026-09-19)
 
