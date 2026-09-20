@@ -336,10 +336,15 @@ A "Rooms from other building types" slider in the Rooms group. Mandatory
 rooms always belong to the selected building. Every other room has a chance
 of slider ÷ 200 of drawing its kind from another building type: 0% keeps the
 plan pure, 50% makes about a quarter of the rooms foreign, 100% about half.
-The source building is picked uniformly, its palette and mandatory kinds
-weighted by size affinity as usual, restrooms excluded. A foreign room keeps
-its own furniture and uses the source building's label overrides and humour
-lines; with no line of its own it may get "(FROM THE <SOURCE TITLE>)".
+A "Source building type" select picks the source: any other type (uniform
+per room) or one specific type, so a zoo can be seeded with police rooms.
+Within the source, kinds found in four or more building types (admin,
+storage, kitchen, lockers, security, …) are skipped because they would look
+native, kinds the home building already has are skipped too, and the source's
+mandatory (signature) kinds get a heavy bonus, weighted by size affinity as
+usual. A foreign room keeps its own furniture, uses the source's label
+overrides and humour lines, and always carries a tag line
+"« FROM THE <SOURCE TITLE> »" in 2D and the same text in its 3D label.
 
 ### Spa, sports center, bicycle repair shop, abattoir (added 2026-09-20)
 

@@ -179,6 +179,8 @@ const FP = (() => {
     { id: "aspectMax", group: "Rooms", label: "Max aspect ratio", type: "range", min: 1.2, max: 5, step: 0.1, def: 2.5 },
     { id: "hallShare", group: "Rooms", label: "Big hall share", type: "range", min: 0, max: 100, step: 1, def: 25 },
     { id: "foreignRooms", group: "Rooms", label: "Rooms from other building types", type: "range", min: 0, max: 100, step: 1, def: 0 },
+    { id: "foreignSource", group: "Rooms", label: "Source building type", type: "select", def: "any",
+      options: [["any", "Any other type"]].concat([["mansion", "Evil villain mansion"], ["prison", "Supermax prison"], ["datacenter", "Datacenter"], ["powerplant", "Power plant"], ["mall", "Shopping mall"], ["bunker", "Bunker"], ["police", "Police station"], ["whitehouse", "White House"], ["firestation", "Fire department"], ["motel", "Motel"], ["robotfactory", "Robot factory"], ["office", "Office building"], ["cartel", "Cartel compound"], ["rocket", "Launch control center"], ["rnd", "R&D facility"], ["hospital", "Hospital"], ["clothing", "Clothing factory"], ["palace", "Royal palace"], ["cadets", "Junior cadet training base"], ["casino", "Casino"], ["school", "School"], ["zoo", "Zoo"], ["fertility", "Fertility clinic"], ["escaperoom", "Escape room center"], ["nightclub", "Night club"], ["museum", "Museum"], ["chemplant", "Chemical plant"], ["musicstudio", "Recording studio"], ["farm", "Farm"], ["ewaste", "E-waste processing"], ["spa", "Spa & wellness"], ["sports", "Sports center"], ["bikeshop", "Bicycle repair shop"], ["abattoir", "Abattoir"]]) },
     { id: "hiddenRooms", group: "Rooms", label: "Hidden rooms", type: "range", min: 0, max: 10, step: 1, def: 1 },
     { id: "restroomShare", group: "Rooms", label: "Restroom share", type: "range", min: 0, max: 100, step: 1, def: 20 },
 
@@ -1495,8 +1497,17 @@ const FP = (() => {
     const maniaHalls = Math.max(0, p.mania - 30) / 70 * 0.5; // share of remaining rooms turned into pissoir halls
     // Foreign rooms: slider/200 of the non-mandatory rooms take a kind from another building type's palette.
     const foreign = p.foreignRooms / 200;
-    const otherBuildings = BUILDING_IDS.filter(id => id !== p.building && BUILDINGS[id]);
-    const foreignPalette = (bid) => { const O = BUILDINGS[bid]; const seen = new Map(); for (const [k, w] of O.palette) seen.set(k, (seen.get(k) || 0) + w); for (const k of O.mandatory) seen.set(k, (seen.get(k) || 0) + 2); seen.delete("restroom"); seen.delete("pissoirHall"); return Array.from(seen.entries()); };
+    const otherBuildings = (p.foreignSource && p.foreignSource !== "any" && p.foreignSource !== p.building && BUILDINGS[p.foreignSource]) ? [p.foreignSource] : BUILDING_IDS.filter(id => id !== p.building && BUILDINGS[id]);
+    // Generic kinds (found in four or more building types) would look native, so foreign picks skip them and favour the source's signature rooms.
+    const kindCount = new Map(); for (const O of Object.values(BUILDINGS)) for (const k of new Set(O.palette.map(x => x[0]).concat(O.mandatory))) kindCount.set(k, (kindCount.get(k) || 0) + 1);
+    const homeKinds = new Set(B.palette.map(x => x[0]).concat(B.mandatory));
+    const foreignPalette = (bid) => {
+      const O = BUILDINGS[bid]; const seen = new Map();
+      for (const [k, w] of O.palette) seen.set(k, (seen.get(k) || 0) + w);
+      for (const k of O.mandatory) seen.set(k, (seen.get(k) || 0) + 6);
+      for (const k of Array.from(seen.keys())) if (k === "restroom" || k === "pissoirHall" || kindCount.get(k) >= 4 || homeKinds.has(k)) seen.delete(k);
+      return seen.size ? Array.from(seen.entries()) : O.mandatory.filter(k => k !== "restroom").map(k => [k, 1]);
+    };
     const repKind = new Map();
     for (const id of Array.from(unassigned)) {
       const r = byId.get(id);
@@ -1539,7 +1550,7 @@ const FP = (() => {
       r.sublabel = "";
       const funny = home.funny[r.kind] || B.funny[r.kind];
       if (funny && rng.chance(humour * (r.sizeClass === "closet" ? 0.3 : 0.7))) r.sublabel = rng.pick(funny);
-      if (r.foreignFrom && !r.sublabel && rng.chance(humour * 0.5)) r.sublabel = `(FROM THE ${home.title})`;
+      if (r.foreignFrom) r.tag = `FROM THE ${home.title}`;
       if (r.kind === "pissoirHall") r.sublabel = ""; // set from the urinal count later
       if (r.rep) { r.label = KINDS[r.kind].label + " " + (r.rep % 9 + 1); r.sublabel = ""; }
       if (glitch > 0 && rng.chance(glitch)) {
@@ -3847,6 +3858,7 @@ const FP = (() => {
         if (r.label) lines.push({ t: r.label, size: ufs, bold: true });
         lines.push({ t: `${f2(wM)} × ${f2(hM)}`, size: ufs * 0.8, bold: false });
         if (r.sublabel) lines.push({ t: r.sublabel, size: ufs * 0.7, bold: false });
+        if (r.tag) lines.push({ t: "« " + r.tag + " »", size: ufs * 0.65, bold: false });
         if (p.showAreas) lines.push({ t: `${(wM * hM).toFixed(1)} m²`, size: ufs * 0.7, bold: false });
         if (p.showNumbers && r.number) lines.unshift({ t: r.number, size: ufs * 0.7, bold: false });
         // shrink to fit width, break the name on a space if needed, then drop lines to fit height
@@ -4191,7 +4203,7 @@ const FP = (() => {
     // furniture -> items
     const items = model.furniture.map(it => ({ kind: it.kind, x: it.cx, y: it.cy, rot: it.rot || 0, prims: prims3D(it, H) }));
     // labels
-    for (const r of model.rooms) if (r.label) { const R = roomRectM(r, cell); labels.push({ x: R.x + R.w / 2, y: R.y + R.h / 2, text: r.label, sub: `${f2(r.w * cell)} × ${f2(r.h * cell)}`, z: H + 0.5, hidden: !!r.hidden, roomW: Math.min(R.w, R.h) }); }
+    for (const r of model.rooms) if (r.label) { const R = roomRectM(r, cell); labels.push({ x: R.x + R.w / 2, y: R.y + R.h / 2, text: r.label, sub: r.tag ? r.tag : `${f2(r.w * cell)} × ${f2(r.h * cell)}`, z: H + 0.5, hidden: !!r.hidden, roomW: Math.min(R.w, R.h) }); }
     // little people: deterministic positions in corridors and rooms
     const people = []; const prng = makeRng((p.seed ^ 0x51ed) >>> 0);
     const spots = model.corridors.filter(c => c.w >= 2 && c.h >= 2).concat(model.rooms.filter(r => r.free.w * cell >= 2.5 && r.free.h * cell >= 2.5).map(r => r.free));
@@ -4415,6 +4427,15 @@ const FloorPlanTests = {
       let t50 = 0, f50 = 0; for (const seed of [1, 2, 3, 4]) { const m = FP.generate(P({ building: "farm", seed, width: 90, depth: 50, foreignRooms: 50, restroomShare: 0, mania: 0 })); const c = m.rooms.filter(r => !r.parent); t50 += c.length; f50 += c.filter(r => r.foreignFrom).length; }
       const s50 = f50 / t50; assert(s50 > 0.12 && s50 < 0.38, "about a quarter foreign at 50%, got " + s50.toFixed(2));
       const studioOnFarm = [1, 2, 3, 4, 5, 6].map(seed => FP.generate(P({ building: "farm", seed, foreignRooms: 100 }))).some(m => m.rooms.some(r => r.foreignFrom === "musicstudio")); assert(studioOnFarm, "a studio room shows up on some farm");
+      // a chosen source: every foreign room comes from it, is tagged, and is not a generic kind
+      const zp = FP.generate(P({ building: "zoo", seed: 1, foreignRooms: 100, foreignSource: "police" })); const zf = zp.rooms.filter(r => r.foreignFrom);
+      assert(zf.length >= 4, "police rooms in the zoo: " + zf.length); assert(zf.every(r => r.foreignFrom === "police"), "all from police");
+      const policeSig = new Set(["interrogation", "lineup", "holding", "evidence", "briefing", "dispatch", "frontDesk", "booking", "kennel", "captain", "records", "patrolGarage", "observation"]);
+      assert(zf.some(r => policeSig.has(r.kind)), "signature police kinds appear: " + zf.map(r => r.kind).join(","));
+      assert(!zf.some(r => ["admin", "storage", "kitchen", "lockers", "security", "breakRoom"].includes(r.kind)), "no generic kinds picked");
+      assert(zf.every(r => r.tag === "FROM THE POLICE STATION"), "tagged");
+      const zsvg = FP.render(zp.params, zp); assert(zsvg.includes("FROM THE POLICE STATION"), "tag drawn");
+      const zb = FP.build3D(zp, zp.params); assert(zb.labels.some(l => l.sub === "FROM THE POLICE STATION"), "tag in 3D label");
     });
     test("R&D facility: labs, big equipment, equipment scale", () => {
       const p = P({ building: "rnd", seed: 1, width: 80, depth: 44 }); const m = FP.generate(p);
