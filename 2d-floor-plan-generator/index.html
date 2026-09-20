@@ -1508,6 +1508,13 @@ const FP = (() => {
       for (const k of Array.from(seen.keys())) if (k === "restroom" || k === "pissoirHall" || kindCount.get(k) >= 4 || homeKinds.has(k)) seen.delete(k);
       return seen.size ? Array.from(seen.entries()) : O.mandatory.filter(k => k !== "restroom").map(k => [k, 1]);
     };
+    // Exact count of foreign rooms: share of the non-mandatory rooms, at least one when the slider is above zero.
+    const foreignSet = new Set();
+    if (foreign > 0 && otherBuildings.length) {
+      const pool = rng.shuffle(Array.from(unassigned).filter(id => !byId.get(id).rep));
+      const k = Math.min(pool.length, Math.max(1, Math.round(foreign * unassigned.size)));
+      for (let i = 0; i < k; i++) foreignSet.add(pool[i]);
+    }
     const repKind = new Map();
     for (const id of Array.from(unassigned)) {
       const r = byId.get(id);
@@ -1515,9 +1522,9 @@ const FP = (() => {
       let kind;
       const rc = classIndex(r.sizeClass);
       const bySize = ([k, w]) => { const dd = Math.abs(classIndex(KINDS[k].size) - rc); return w / (1 + 5 * dd * dd); };
-      if (rng.chance(maniaHalls)) kind = "pissoirHall";
+      if (foreignSet.has(id)) { const bid = rng.pick(otherBuildings); kind = rng.weighted(foreignPalette(bid), bySize)[0]; r.foreignFrom = bid; }
+      else if (rng.chance(maniaHalls)) kind = "pissoirHall";
       else if (rng.chance(restroomShare)) kind = "restroom";
-      else if (foreign > 0 && otherBuildings.length && rng.chance(foreign)) { const bid = rng.pick(otherBuildings); kind = rng.weighted(foreignPalette(bid), bySize)[0]; r.foreignFrom = bid; }
       else kind = rng.weighted(B.palette, bySize)[0];
       r.kind = kind; if (r.rep) repKind.set(r.rep, kind);
     }
@@ -4424,6 +4431,8 @@ const FloorPlanTests = {
         for (const r of m.rooms.filter(r => r.foreignFrom)) { assert(FP.KINDS[r.kind], "foreign kind exists"); assert(r.foreignFrom !== "farm" && FP.BUILDINGS[r.foreignFrom], "foreign source is another building"); assert(r.kind !== "restroom", "restrooms stay home"); }
         assert(FP.doorGraphConnected(m), "connected"); FP.render(m.params, m); FP.build3D(m, m.params); }
       const share = foreign / total; assert(share > 0.3 && share < 0.6, "about half foreign at 100%, got " + share.toFixed(2));
+      for (const seed of [1, 2, 3, 4, 5, 6]) { const m = FP.generate(P({ building: "zoo", seed, foreignRooms: 10 })); assert(m.rooms.some(r => r.foreignFrom), "10% always yields at least one foreign room, seed " + seed); const mand = new Set(FP.BUILDINGS.zoo.mandatory); const nonMand = m.rooms.filter(r => !r.parent && !mand.has(r.kind) || r.foreignFrom).length; assert(m.rooms.filter(r => r.foreignFrom).length <= Math.max(1, Math.round(0.05 * nonMand) + 1), "10% stays small"); }
+      const exact = FP.generate(P({ building: "zoo", seed: 3, foreignRooms: 100, restroomShare: 0, mania: 0 })); const top = exact.rooms.filter(r => !r.parent && !r.rep); const nf = top.filter(r => r.foreignFrom).length; const nonMand = top.length - FP.BUILDINGS.zoo.mandatory.length; assert(Math.abs(nf - Math.round(0.5 * nonMand)) <= 1, `exact half at 100%: ${nf} of ${nonMand}`);
       let t50 = 0, f50 = 0; for (const seed of [1, 2, 3, 4]) { const m = FP.generate(P({ building: "farm", seed, width: 90, depth: 50, foreignRooms: 50, restroomShare: 0, mania: 0 })); const c = m.rooms.filter(r => !r.parent); t50 += c.length; f50 += c.filter(r => r.foreignFrom).length; }
       const s50 = f50 / t50; assert(s50 > 0.12 && s50 < 0.38, "about a quarter foreign at 50%, got " + s50.toFixed(2));
       const studioOnFarm = [1, 2, 3, 4, 5, 6].map(seed => FP.generate(P({ building: "farm", seed, foreignRooms: 100 }))).some(m => m.rooms.some(r => r.foreignFrom === "musicstudio")); assert(studioOnFarm, "a studio room shows up on some farm");

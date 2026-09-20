@@ -333,9 +333,10 @@ Rooms hosting a matrix or cyberdyne lobby get a sublabel.
 ### Foreign rooms (added 2026-09-20)
 
 A "Rooms from other building types" slider in the Rooms group. Mandatory
-rooms always belong to the selected building. Every other room has a chance
-of slider ÷ 200 of drawing its kind from another building type: 0% keeps the
-plan pure, 50% makes about a quarter of the rooms foreign, 100% about half.
+rooms always belong to the selected building. An exact count of the other
+rooms, slider ÷ 200 of them rounded and at least one whenever the slider is
+above zero, draws its kind from another building type: 0% keeps the plan
+pure, 50% makes a quarter of the non-mandatory rooms foreign, 100% half.
 A "Source building type" select picks the source: any other type (uniform
 per room) or one specific type, so a zoo can be seeded with police rooms.
 Within the source, kinds found in four or more building types (admin,
