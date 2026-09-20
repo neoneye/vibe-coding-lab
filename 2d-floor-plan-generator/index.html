@@ -178,6 +178,7 @@ const FP = (() => {
     { id: "splitBias", group: "Rooms", label: "Split bias", type: "range", min: 0, max: 100, step: 1, def: 50 },
     { id: "aspectMax", group: "Rooms", label: "Max aspect ratio", type: "range", min: 1.2, max: 5, step: 0.1, def: 2.5 },
     { id: "hallShare", group: "Rooms", label: "Big hall share", type: "range", min: 0, max: 100, step: 1, def: 25 },
+    { id: "foreignRooms", group: "Rooms", label: "Rooms from other building types", type: "range", min: 0, max: 100, step: 1, def: 0 },
     { id: "hiddenRooms", group: "Rooms", label: "Hidden rooms", type: "range", min: 0, max: 10, step: 1, def: 1 },
     { id: "restroomShare", group: "Rooms", label: "Restroom share", type: "range", min: 0, max: 100, step: 1, def: 20 },
 
@@ -1398,17 +1399,21 @@ const FP = (() => {
     // Restroom share, then weighted palette by size affinity.
     const restroomShare = p.restroomShare / 100;
     const maniaHalls = Math.max(0, p.mania - 30) / 70 * 0.5; // share of remaining rooms turned into pissoir halls
+    // Foreign rooms: slider/200 of the non-mandatory rooms take a kind from another building type's palette.
+    const foreign = p.foreignRooms / 200;
+    const otherBuildings = BUILDING_IDS.filter(id => id !== p.building && BUILDINGS[id]);
+    const foreignPalette = (bid) => { const O = BUILDINGS[bid]; const seen = new Map(); for (const [k, w] of O.palette) seen.set(k, (seen.get(k) || 0) + w); for (const k of O.mandatory) seen.set(k, (seen.get(k) || 0) + 2); seen.delete("restroom"); seen.delete("pissoirHall"); return Array.from(seen.entries()); };
     const repKind = new Map();
     for (const id of Array.from(unassigned)) {
       const r = byId.get(id);
       if (r.rep && repKind.has(r.rep)) { r.kind = repKind.get(r.rep); continue; }
       let kind;
+      const rc = classIndex(r.sizeClass);
+      const bySize = ([k, w]) => { const dd = Math.abs(classIndex(KINDS[k].size) - rc); return w / (1 + 5 * dd * dd); };
       if (rng.chance(maniaHalls)) kind = "pissoirHall";
       else if (rng.chance(restroomShare)) kind = "restroom";
-      else {
-        const rc = classIndex(r.sizeClass);
-        kind = rng.weighted(B.palette, ([k, w]) => { const dd = Math.abs(classIndex(KINDS[k].size) - rc); return w / (1 + 5 * dd * dd); })[0];
-      }
+      else if (foreign > 0 && otherBuildings.length && rng.chance(foreign)) { const bid = rng.pick(otherBuildings); kind = rng.weighted(foreignPalette(bid), bySize)[0]; r.foreignFrom = bid; }
+      else kind = rng.weighted(B.palette, bySize)[0];
       r.kind = kind; if (r.rep) repKind.set(r.rep, kind);
     }
     for (const r of rooms) if (r.parent) { r.kind = rng.chance(0.5) ? "storage" : rng.pick(["restroom", "bath", "security", "unknown", "solitary"]); if (!KINDS[r.kind]) r.kind = "storage"; }
@@ -1422,7 +1427,8 @@ const FP = (() => {
     let prevLabel = "";
     for (const r of ordered) {
       const K = KINDS[r.kind] || KINDS.unknown;
-      let label = (B.labels && B.labels[r.kind]) || K.label;
+      const home = r.foreignFrom ? BUILDINGS[r.foreignFrom] : B;
+      let label = (home.labels && home.labels[r.kind]) || K.label;
       if (r.kind === "shop" || r.kind === "cellBlock" || r.kind === "serverHall" || r.kind === "solitary" || r.kind === "dorm" || r.kind === "anchorStore") {
         counters[r.kind] = (counters[r.kind] || 0) + 1;
         if (counters[r.kind] > 1 || r.kind === "shop" || r.kind === "cellBlock" || r.kind === "anchorStore") label += " " + (r.kind === "cellBlock" ? String.fromCharCode(64 + counters[r.kind]) : counters[r.kind]);
@@ -1437,8 +1443,9 @@ const FP = (() => {
       r.number = numFor();
       r.label = label;
       r.sublabel = "";
-      const funny = B.funny[r.kind];
+      const funny = home.funny[r.kind] || B.funny[r.kind];
       if (funny && rng.chance(humour * (r.sizeClass === "closet" ? 0.3 : 0.7))) r.sublabel = rng.pick(funny);
+      if (r.foreignFrom && !r.sublabel && rng.chance(humour * 0.5)) r.sublabel = `(FROM THE ${home.title})`;
       if (r.kind === "pissoirHall") r.sublabel = ""; // set from the urinal count later
       if (r.rep) { r.label = KINDS[r.kind].label + " " + (r.rep % 9 + 1); r.sublabel = ""; }
       if (glitch > 0 && rng.chance(glitch)) {
@@ -4147,6 +4154,17 @@ const FloorPlanTests = {
       assert(rc.furniture.some(f => f.kind === "counter" && f.entrance), "reception desk"); assert(rc.furniture.filter(f => f.kind === "guard").every(f => !f.armed), "reception guards unarmed");
       const b = FP.build3D(mx, mx.params); for (const it of b.items) for (const q of it.prims) assert(q.h > 0 && q.w > 0 && q.d > 0, "3D prim " + it.kind);
       const svg = FP.render(mx.params, mx); assert(svg.includes("SECURITY LOBBY") || !mx.entryRoomId, "lobby sublabel when the entry opens into a room");
+    });
+    test("foreign rooms: slider/2 percent of non-mandatory rooms come from other building types", () => {
+      const none = FP.generate(P({ building: "farm", seed: 3, width: 90, depth: 50 })); assert(!none.rooms.some(r => r.foreignFrom), "0% => no foreign rooms");
+      let total = 0, foreign = 0;
+      for (const seed of [1, 2, 3, 4]) { const m = FP.generate(P({ building: "farm", seed, width: 90, depth: 50, foreignRooms: 100, restroomShare: 0, mania: 0 })); const mand = new Set(FP.BUILDINGS.farm.mandatory); const cands = m.rooms.filter(r => !r.parent); total += cands.length; foreign += cands.filter(r => r.foreignFrom).length;
+        for (const r of m.rooms.filter(r => r.foreignFrom)) { assert(FP.KINDS[r.kind], "foreign kind exists"); assert(r.foreignFrom !== "farm" && FP.BUILDINGS[r.foreignFrom], "foreign source is another building"); assert(r.kind !== "restroom", "restrooms stay home"); }
+        assert(FP.doorGraphConnected(m), "connected"); FP.render(m.params, m); FP.build3D(m, m.params); }
+      const share = foreign / total; assert(share > 0.3 && share < 0.6, "about half foreign at 100%, got " + share.toFixed(2));
+      let t50 = 0, f50 = 0; for (const seed of [1, 2, 3, 4]) { const m = FP.generate(P({ building: "farm", seed, width: 90, depth: 50, foreignRooms: 50, restroomShare: 0, mania: 0 })); const c = m.rooms.filter(r => !r.parent); t50 += c.length; f50 += c.filter(r => r.foreignFrom).length; }
+      const s50 = f50 / t50; assert(s50 > 0.12 && s50 < 0.38, "about a quarter foreign at 50%, got " + s50.toFixed(2));
+      const studioOnFarm = [1, 2, 3, 4, 5, 6].map(seed => FP.generate(P({ building: "farm", seed, foreignRooms: 100 }))).some(m => m.rooms.some(r => r.foreignFrom === "musicstudio")); assert(studioOnFarm, "a studio room shows up on some farm");
     });
     test("R&D facility: labs, big equipment, equipment scale", () => {
       const p = P({ building: "rnd", seed: 1, width: 80, depth: 44 }); const m = FP.generate(p);

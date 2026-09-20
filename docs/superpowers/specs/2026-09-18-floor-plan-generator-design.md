@@ -330,6 +330,17 @@ Rooms hosting a matrix or cyberdyne lobby get a sublabel.
   graveyard of stacked monitors, data destruction, precious metals, cable
   mountain, weighbridge.
 
+### Foreign rooms (added 2026-09-20)
+
+A "Rooms from other building types" slider in the Rooms group. Mandatory
+rooms always belong to the selected building. Every other room has a chance
+of slider ÷ 200 of drawing its kind from another building type: 0% keeps the
+plan pure, 50% makes about a quarter of the rooms foreign, 100% about half.
+The source building is picked uniformly, its palette and mandatory kinds
+weighted by size affinity as usual, restrooms excluded. A foreign room keeps
+its own furniture and uses the source building's label overrides and humour
+lines; with no line of its own it may get "(FROM THE <SOURCE TITLE>)".
+
 ### 3D views (added 2026-09-19)
 
 Two extra views beside the 2D drawing, switched from the toolbar or with keys
