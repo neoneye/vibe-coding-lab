@@ -10,7 +10,8 @@ factories, office buildings, cartel compounds, launch control centers, R&D
 facilities, hospitals, clothing factories, royal palaces, junior cadet
 training bases, casinos, schools, zoos, fertility clinics, escape room
 centers, night clubs, museums, chemical plants, recording studios, farms,
-e-waste plants, spas, sports centers, bicycle repair shops and abattoirs. Nothing is drawn or dragged by hand. Every plan is a pure function of
+e-waste plants, spas, sports centers, bicycle repair shops, abattoirs,
+anatomy institutes, parliaments, sushi restaurants and airport baggage halls. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -366,6 +367,30 @@ overrides and humour lines, and always carries a tag line
   with an overhead rail, hooks, drains, steel benches and band saws, chill
   room of hook rails, cutting room, cold store, offal room, hide store,
   rendering tanks, packing line, vet inspector, wash-down, hygiene lock.
+
+### Anatomy institute, parliament, sushi restaurant, baggage handling (added 2026-09-20)
+
+- **Anatomy institute**: dissection hall of steel tables with sinks, a
+  screen and a teaching skeleton, body store drawers, surgical skills lab of
+  operating tables, embalming room, specimen museum of jar shelves and
+  vitrines, lecture theatre, osteology, scrub room, body donation office,
+  histology, simulation suite, student lounge. Dissection and skills labs get
+  clear "VIEWING GLASS" into a viewing gallery via the mirror mechanism.
+- **Parliament**: the chamber with semicircular tiered seating, a speaker's
+  chair, dispatch boxes and a voting board; numbered committee rooms, press
+  briefing room, division lobby with teller desks, members' lobby, speaker's
+  and ministers' offices, whips, Hansard, translation booths, tea room,
+  Strangers' Bar, public gallery, archives, mail room. One bonus hidden room.
+- **Sushi restaurant**: a main kitchen larger than the dining room, with rows
+  of counters, rice cookers, fridges and sinks; sushi bar with an endless
+  conveyor belt ringed by stools; dining room; tatami rooms with low tables
+  and mats; fish cold store with ice tables; rice room; knife room; sake
+  cellar; dish pit; fish prep; host stand; tea corner.
+- **Baggage handling**: sort hall with conveyor rows, alternating chutes and
+  carts; X-ray and CT screening tunnels with operator consoles; make-up area
+  of ULD containers; odd-size, lost and found (suitcases everywhere), early
+  bag store, reclaim carousel, customs benches with a scanner and bollards,
+  tug parking, dispatch, and a suspect bag room with a blast bin.
 
 ### 3D views (added 2026-09-19)
 
