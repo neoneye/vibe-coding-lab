@@ -9,8 +9,8 @@ bunkers, police stations, the White House, fire stations, motels, robot
 factories, office buildings, cartel compounds, launch control centers, R&D
 facilities, hospitals, clothing factories, royal palaces, junior cadet
 training bases, casinos, schools, zoos, fertility clinics, escape room
-centers, night clubs, museums, chemical plants, recording studios, farms and
-e-waste plants. Nothing is drawn or dragged by hand. Every plan is a pure function of
+centers, night clubs, museums, chemical plants, recording studios, farms,
+e-waste plants, spas, sports centers, bicycle repair shops and abattoirs. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -340,6 +340,26 @@ The source building is picked uniformly, its palette and mandatory kinds
 weighted by size affinity as usual, restrooms excluded. A foreign room keeps
 its own furniture and uses the source building's label overrides and humour
 lines; with no line of its own it may get "(FROM THE <SOURCE TITLE>)".
+
+### Spa, sports center, bicycle repair shop, abattoir (added 2026-09-20)
+
+- **Spa & wellness**: reception, saunas with tiered benches and a stove,
+  steam room, plunge pool (drawn cold), relaxation lounge of loungers and
+  plants, treatment rooms with massage tables, hot tub, thermal pool with
+  loungers and a footbath, ice room, changing rooms, yoga and meditation with
+  mats, juice bar, salt cave.
+- **Sports center**: climbing hall with hold-studded walls and crash mats,
+  boulder cave, badminton hall with courts and nets, cricket nets with lanes,
+  pitch strips and stumps, physio, changing, showers, equipment store, shop,
+  umpires' room, spectator stand of bleachers, café.
+- **Bicycle repair shop**: workshop with bike stands, benches, tool wall and
+  tyres, sales floor of display bikes, wheel-truing room, parts store of
+  bins and shelves, tyre store, bike-fit room, wash bay, customer bike racks,
+  counter.
+- **Abattoir**: lairage pens with animals, stunning bay, processing hall
+  with an overhead rail, hooks, drains, steel benches and band saws, chill
+  room of hook rails, cutting room, cold store, offal room, hide store,
+  rendering tanks, packing line, vet inspector, wash-down, hygiene lock.
 
 ### 3D views (added 2026-09-19)
 
