@@ -335,7 +335,36 @@ const Dismount = (() => {
     },
   };
 
-  return { DEG, box, cyl, wedge, wedgeVertices, aabb, aabbOverlap, topAt, covers, supportHeight, stairs, ragdoll, score };
+  // --- sound decisions -----------------------------------------------------
+  // Pure: decide what to play. The audio module in the page decides how.
+  const sfx = {
+    thresholds: { thud: score.threshold, grunt: 1200, loud: 4000 },
+    cooldown: 0.08,           // s between sounds from the same body part
+    // 0 at the thud threshold, sqrt-shaped up to 1 at `loud`, clamped.
+    impactGain(force) {
+      const { thud, loud } = sfx.thresholds;
+      if (force <= thud) return 0;
+      return Math.min(1, Math.sqrt((force - thud) / (loud - thud)));
+    },
+    // Extra layer on top of the body thud: 'bonk' for the head, 'grunt' for
+    // hard hits elsewhere, 'thud' alone for light ones.
+    impactKind(partName, force) {
+      if (force < sfx.thresholds.thud) return 'none';
+      if (partName === 'head') return 'bonk';
+      return force >= sfx.thresholds.grunt ? 'grunt' : 'thud';
+    },
+    // Per-part rate limit; `last` maps part name → last allowed time and is
+    // mutated when the sound is allowed. Head hits are never dropped.
+    allow(last, partName, t) {
+      if (partName !== 'head' && last[partName] !== undefined && t - last[partName] < sfx.cooldown) return false;
+      last[partName] = t;
+      return true;
+    },
+    screamRate(slowmo) { return Math.max(0.25, slowmo); },
+    pushGain(percent) { return Math.min(1, 0.35 + 0.65 * Math.max(0, percent) / 100); },
+  };
+
+  return { DEG, box, cyl, wedge, wedgeVertices, aabb, aabbOverlap, topAt, covers, supportHeight, stairs, ragdoll, score, sfx };
 })();
 
 // ---------------------------------------------------------------------------
@@ -483,9 +512,29 @@ const DismountTests = (() => {
     check('score: bruise colour darkens', c0[0] > c1[0] && c1[0] > c2[0] && c2.every(v => v >= 0 && v <= 1));
   }
 
+  function testSfx() {
+    const X = Dismount.sfx;
+    check('sfx: thud threshold matches score threshold', X.thresholds.thud === Dismount.score.threshold);
+    check('sfx: gain zero at threshold', X.impactGain(400) === 0 && X.impactGain(100) === 0);
+    check('sfx: gain monotonic', X.impactGain(600) < X.impactGain(1200) && X.impactGain(1200) < X.impactGain(3000));
+    check('sfx: gain one at loud and above', near(X.impactGain(4000), 1, 1e-12) && X.impactGain(10000) === 1);
+    check('sfx: kinds', X.impactKind('foot', 300) === 'none' && X.impactKind('foot', 500) === 'thud'
+      && X.impactKind('foot', 1500) === 'grunt' && X.impactKind('head', 500) === 'bonk' && X.impactKind('head', 300) === 'none');
+    let last = {};
+    check('sfx: cooldown blocks a repeat', X.allow(last, 'foot', 1.00) && !X.allow(last, 'foot', 1.02));
+    last = {};
+    check('sfx: cooldown expires', X.allow(last, 'foot', 1.00) && X.allow(last, 'foot', 1.10));
+    last = {};
+    check('sfx: cooldown is per part', X.allow(last, 'foot', 1.00) && X.allow(last, 'hand', 1.00));
+    last = {};
+    check('sfx: head exempt from cooldown', X.allow(last, 'head', 1.00) && X.allow(last, 'head', 1.02));
+    check('sfx: scream rate', X.screamRate(1) === 1 && X.screamRate(0.1) === 0.25 && X.screamRate(0.5) === 0.5);
+    check('sfx: push gain endpoints', near(X.pushGain(0), 0.35, 1e-12) && near(X.pushGain(100), 1, 1e-12) && X.pushGain(150) === 1);
+  }
+
   function run() {
     results.length = 0;
-    for (const t of [testStairs, testRagdoll, testScore]) {
+    for (const t of [testStairs, testRagdoll, testScore, testSfx]) {
       try { t(); } catch (e) { results.push({ name: t.name + ' threw', ok: false, detail: String(e && e.stack || e) }); }
     }
     const failed = results.filter(r => !r.ok);
