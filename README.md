@@ -44,7 +44,7 @@ Swing a crane-hung wrecking ball into a stone castle, a Mesoamerican pyramid, a 
 
 ### 3D Stair Dismount
 
-A homage to Porrasturvat's Stair Dismount. A ragdoll stands on top of a straight flight, a dogleg, a spiral or a long walled staircase. Click a spot on the body, aim the arrow, choose the force and push; every impact on the way down scores, head hits most. Retry replays the exact push. Three.js + Rapier.
+A homage to Porrasturvat's Stair Dismount. A ragdoll stands on top of a straight flight, a dogleg, a spiral or a long walled staircase. Click a spot on the body, aim the arrow, choose the force and push; every impact on the way down scores, head hits most. Retry replays the exact push. Synthesized screams, thuds and grunts, M to mute. Three.js + Rapier.
 
 ![3d-stair-dismount](3d-stair-dismount/screenshot1.jpg)
 
