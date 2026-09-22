@@ -58,6 +58,7 @@
     <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
     <button id="apply">Go</button>
     <button id="reset">Reset</button>
+    <button id="animate" title="Animate Divisors → Divisors offset over 5 seconds: every divisor dot slides from (n, d) to (centre ± d, n). Plays in the panels showing either mode, else in the top panel. The scroll position is kept.">Animate</button>
     <label title="k for the a²+kb² mode">k <input id="kval" type="number" min="1" step="1" value="2" style="width:56px"></label>
     <span id="hint">scroll to zoom · drag to pan · hover a number</span>
   </div>
@@ -386,7 +387,13 @@ const PrimeLab = (() => {
     return decades.filter((_, i) => i % every === 0);
   }
 
-  return { MAX_N, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
+  // Smooth 0..1 -> 0..1 easing for the Divisors -> Divisors offset animation (clamped at the ends).
+  function easeInOut(t) {
+    t = Math.min(1, Math.max(0, t));
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+
+  return { MAX_N, easeInOut, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
            zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow, rowToValue, logTicks, yRangeAt, LOG_ORIGIN, primeFactors, properDivisors, multiplesInRange, goldbachPairs, goldbachTriples, threePrimeSum,
            consecutiveRuns, squareDifferences, twoSquares, twoTriangulars, remainderSet, aliquotSum,
            primePlusSquare, gcd, coprimeSplits, weightedSquares, binomialReps };
@@ -441,6 +448,7 @@ const XTests = {
     eq(P.properDivisors(16), [2,4,8], 'proper divisors of a prime power');
     eq(P.properDivisors(97), [], 'a prime has no proper divisors above 1');
     eq(P.properDivisors(4), [2], 'proper divisors of 4');
+    eq([P.easeInOut(-1), P.easeInOut(0), P.easeInOut(0.5), P.easeInOut(1), P.easeInOut(2)], [0, 0, 0.5, 1, 1], 'easing is clamped and symmetric');
     eq(P.goldbachPairs(s, 36), [[5,31],[7,29],[13,23],[17,19]], 'goldbach pairs of 36');
     eq(P.goldbachPairs(s, 4), [[2,2]], 'goldbach pairs of 4');
     eq(P.goldbachPairs(s, 9), [[2,7]], 'odd: 9 = 2 + 7');
@@ -599,6 +607,9 @@ const XTests = {
   let view = { x0: 0.5, ppn: 1 };
   let sieveLimit = 0, S = null, C = null;
   let hoverN = -1;
+  // Divisors -> Divisors offset animation: { start, panels: Set of panel objects, t: eased 0..1 }
+  const ANIM_MS = 5000;
+  let anim = null;
 
   function ensureSieve(limit) {
     limit = Math.min(P.MAX_N, Math.max(1000, limit));
@@ -710,6 +721,7 @@ const XTests = {
     s += ({ linear: '   ·   y = n', log: '   ·   y = n (log)', stretched: '   ·   y = n, axis 0..N per column',
             logstretched: '   ·   n on the top edge, log axis 2..N/2 per column' })[panel.yScale];
     const zoomNote = EXACT_ONLY.has(panel.mode) && view.ppn < 2 ? ' (zoom in to see the dots)' : '';
+    if (anim && anim.panels.has(panel)) return s + `, animating Divisors → Divisors offset: divisor d of n slides from (n, d) to (${offsetBase().toLocaleString()} ± d, n)` + (view.ppn < 2 ? ' (zoom in to see the dots)' : '');
     if (panel.mode === 'goldbach3') return s + ', dots at every prime in some triple p + q + r = n of primes' + (view.ppn >= 2 && Math.floor(view.x0 + W / view.ppn) > TRIPLE_MAX ? ' (shown for n ≤ 5,000)' : zoomNote);
     if (panel.mode === 'divoffset') return s.replace('   (gaps are the ' + (prime ? 'non-primes' : 'primes') + ')', '') + `, a row for every n ≤ ${Math.min(Math.floor(view.x0 + W / view.ppn), sieveLimit).toLocaleString()} at y = n, dots at x = from + count/2 ± d (= ${offsetBase().toLocaleString()} ± d) for every proper divisor d` + (view.ppn >= 2 && Math.floor(view.x0 + W / view.ppn) > DIVOFFSET_ROWS ? ` (rows for the last ${DIVOFFSET_ROWS.toLocaleString()} numbers)` : zoomNote);
     if (panel.mode === 'primesq') return s + ', dots at p (teal) and a (amber) for every n = p + a²' + zoomNote;
@@ -873,6 +885,8 @@ const XTests = {
 
   function renderChart(panel, top, half, nLeft, nRight, colors) {
     const { mode, yScale } = panel;
+    // animating from Divisors (t = 0) to Divisors offset (t = 1)
+    const tAnim = anim && anim.panels.has(panel) ? anim.t : -1;
     const dots = ({ factors: 'primes', divisors: 'all', goldbach: 'goldbach' })[mode] || (EXACT_ONLY.has(mode) ? mode : null);
     const colorKey = { prime: colors.prime, composite: colors.composite, unit: colors.unit, white: '#ffffff' };
     const span = W / view.ppn;
@@ -888,19 +902,40 @@ const XTests = {
       const dotW = Math.max(t, Math.round(ppnD - Math.min(2 * t, ppnD * 0.25)));
       // Divisors offset places dots by n's value on the y-axis, not by its x-position, so every
       // number from 1 up to the largest visible one has a row on screen; scan them all
-      const nFirst = mode === 'divoffset' ? Math.max(1, nRight - DIVOFFSET_ROWS) : Math.max(1, nLeft);
+      // (while animating, the rows of the end state are needed too)
+      const nFirst = mode === 'divoffset' || tAnim >= 0 ? Math.max(1, nRight - DIVOFFSET_ROWS) : Math.max(1, nLeft);
+      const cAnim = tAnim >= 0 ? offsetBase() : 0;
       for (let n = nFirst; n <= Math.min(nRight, sieveLimit); n++) {
         if (!inClass(panel, n)) continue;
         const hot = n === hoverN;
-        if (n >= nLeft && mode !== 'divoffset') {          // divisors offset: rows only, no diagonal
+        if (n >= nLeft && mode !== 'divoffset' && tAnim < 1) {   // divisors offset: rows only, no diagonal
           const xa = (n - 0.5 - view.x0) * ppnD, xb = (n + 0.5 - view.x0) * ppnD;
           // per-column axes put n at its own top, so the diagonal is flat there
           const ya = perColumn ? topD : rowOf(n - 0.5, n - 0.5);
           const yb = perColumn ? ya : rowOf(n + 0.5, n + 0.5);
           ctx.fillStyle = hot ? '#ffffff' : colorOf(panel, n, colors);
+          if (tAnim > 0) ctx.globalAlpha = 1 - tAnim;       // the diagonal fades out during the animation
           P.plotSegment(xa, ya, xb, yb, plotAt);
+          ctx.globalAlpha = 1;
         }
-        if (dots && n > 1) {
+        if (tAnim >= 0 && n > 1) {
+          // each divisor d moves from (n, d) to both (c - d, n) and (c + d, n), interpolated in device px
+          const lo = topD, hiRow = topD + halfD - t;
+          const rowEnd = rowOf(n, n);
+          ctx.fillStyle = hot ? '#ffffff' : null;
+          for (const d of P.properDivisors(n)) {
+            const rowStart = rowOf(d, n);
+            const r = Math.floor(rowStart + (rowEnd - rowStart) * tAnim);
+            if (r + t < lo || r > hiRow) continue;
+            if (!hot) ctx.fillStyle = S[d] ? colors.prime : colors.composite;
+            for (const sgn of [-1, 1]) {
+              const xc = n + (cAnim + sgn * d - n) * tAnim;
+              const x = Math.round((xc - view.x0) * ppnD - dotW / 2);
+              if (x + dotW < 0 || x > WD) continue;
+              ctx.fillRect(x, Math.max(r, lo), dotW, Math.min(r, hiRow) - Math.max(r, lo) + t);
+            }
+          }
+        } else if (dots && n > 1) {
           const xn = Math.round((n - view.x0) * ppnD - dotW / 2);
           const lo = topD, hiRow = topD + halfD - t;
           for (const m of marksFor(mode, n)) {
@@ -1141,11 +1176,38 @@ const XTests = {
     }
   }
   function setPanel(i, patch) {
+    if (anim && patch.mode) stopAnimation();              // a manual mode choice cancels the animation
     Object.assign(panels[i], patch);
     try { localStorage.setItem('prime-lab1.panels', JSON.stringify(panels)); } catch (_) {}
     syncControls(); render();
   }
   syncControls();
+
+  // ---- Animate: Divisors -> Divisors offset in ANIM_MS, keeping the view (scroll position) as it is ----
+  function stopAnimation() { anim = null; }
+  function startAnimation() {
+    let targets = panels.filter((p) => p.mode === 'divisors' || p.mode === 'divoffset');
+    if (!targets.length) targets = [panels[0]];
+    for (const p of targets) p.mode = 'divisors';       // start state; setPanel would cancel the animation
+    syncControls();
+    const a = { start: performance.now(), panels: new Set(targets), t: 0 };
+    anim = a;
+    const step = (now) => {
+      if (anim !== a) return;                           // cancelled or restarted
+      const f = (now - a.start) / ANIM_MS;
+      if (f >= 1) {
+        anim = null;
+        for (const p of targets) setPanel(panels.indexOf(p), { mode: 'divoffset' });
+        return;
+      }
+      a.t = P.easeInOut(f);
+      render();
+      requestAnimationFrame(step);
+    };
+    render();
+    requestAnimationFrame(step);
+  }
+  document.getElementById('animate').addEventListener('click', startAnimation);
 
   const kEl = document.getElementById('kval');
   kEl.value = weightK;
@@ -1173,7 +1235,7 @@ const XTests = {
   W = r.width; H = r.height;
   { const r0 = loadRange(); setRange(r0.start, r0.count); }
   resize();
-  window.__primeLab = { get view() { return view; }, panels, layout, hitTest, setRange, setPanel, render, setK(k) { kEl.value = k; kEl.dispatchEvent(new Event('change')); } };
+  window.__primeLab = { get view() { return view; }, panels, layout, hitTest, get anim() { return anim; }, startAnimation, setRange, setPanel, render, setK(k) { kEl.value = k; kEl.dispatchEvent(new Event('change')); } };
 })();
 </script>
 </body>
