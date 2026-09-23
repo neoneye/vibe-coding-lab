@@ -59,7 +59,7 @@
     <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
     <button id="apply">Go</button>
     <button id="reset">Reset</button>
-    <button id="animate" title="Divisors offset only: every row y = n slides sideways by an offset T that grows from 0 to n over 5 seconds. y never changes. The scroll position is kept.">Animate</button>
+    <button id="animate" title="Divisors offset only: every row y = n slides sideways by an offset T that grows from 0 to n over 5 seconds; click again to animate back to the start. y never changes. The scroll position is kept.">Animate</button>
     <label title="k for the a²+kb² mode">k <input id="kval" type="number" min="1" step="1" value="2" style="width:56px"></label>
     <span id="hint">scroll to zoom · drag to pan · hover a number</span>
   </div>
@@ -609,8 +609,9 @@ const XTests = {
   let view = { x0: 0.5, ppn: 1 };
   let sieveLimit = 0, S = null, C = null;
   let hoverN = -1;
-  // Divisors offset animation: { start, panels: Set of panel objects, t: eased 0..1 }. Row y = n is
-  // shifted right by T = t·n, so T is 0 for every row when it starts and n (the row's x-position) at the end.
+  // Divisors offset animation: { panels: Set of panel objects, f: linear progress 0..1, dir: +1 forward,
+  // -1 back, t: eased f }. Row y = n is shifted right by T = t·n: 0 for every row at the start state,
+  // n (the row's x-position) at the end state. Clicking Animate again plays it back to the start.
   const ANIM_MS = 5000;
   let anim = null;
   const rowShift = (panel, n) => anim && anim.panels.has(panel) ? anim.t * n : 0;
@@ -1170,14 +1171,21 @@ const XTests = {
   function startAnimation() {
     const targets = panels.filter((p) => p.mode === 'divoffset');
     if (!targets.length) return;
-    const a = { start: performance.now(), panels: new Set(targets), t: 0 };
+    // forward from the start state, or back when the last click went forward (also mid-way)
+    const back = !!anim && anim.dir === 1;
+    const a = back ? { panels: anim.panels, f: anim.f, dir: -1, t: anim.t }
+                   : { panels: new Set(targets), f: anim ? anim.f : 0, dir: 1, t: anim ? anim.t : 0 };
     anim = a;
+    let last = performance.now();
     const step = (now) => {
-      if (anim !== a) return;                           // cancelled or restarted
-      const f = Math.min(1, (now - a.start) / ANIM_MS);
-      a.t = P.easeInOut(f);
+      if (anim !== a) return;                           // cancelled or reversed
+      a.f = Math.min(1, Math.max(0, a.f + a.dir * (now - last) / ANIM_MS));
+      last = now;
+      a.t = P.easeInOut(a.f);
+      const done = a.dir === 1 ? a.f >= 1 : a.f <= 0;
+      if (done && a.dir === -1) anim = null;            // back at the start state
       render();
-      if (f < 1) requestAnimationFrame(step);           // the end state (T = n) stays until a mode change
+      if (!done) requestAnimationFrame(step);           // the end state (T = n) stays until clicked again
     };
     render();
     requestAnimationFrame(step);
