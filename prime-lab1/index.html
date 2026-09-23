@@ -412,7 +412,20 @@ const PrimeLab = (() => {
     return s * g * count;
   }
 
-  return { MAX_N, easeInOut, rowDisplacement, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
+  // visualization1: divisor d of n in 2D at x = (n/d)·√n, y = d·√n. The partner n/d lands on the
+  // mirror image (y, x), √n on the diagonal (n, n), and every divisor of n on the hyperbola x·y = n².
+  function vis1Point(n, d) { const r = Math.sqrt(n); return [n / d * r, d * r]; }
+
+  // The guide for k (the dots d = k of the multiples of k) is x = t³/k, y = k·t with t = √n >= k;
+  // its mirror (d = n/k) swaps x and y. Returns the t interval of the branch inside the box
+  // [x0, x1] × [y0, y1], or null when it misses the box.
+  function vis1GuideRange(k, x0, x1, y0, y1) {
+    const cbrt = (v) => Math.cbrt(Math.max(0, v));
+    const lo = Math.max(k, cbrt(k * x0), y0 / k), hi = Math.min(cbrt(k * x1), y1 / k);
+    return hi >= lo ? [lo, hi] : null;
+  }
+
+  return { MAX_N, easeInOut, rowDisplacement, vis1Point, vis1GuideRange, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
            zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow, rowToValue, logTicks, yRangeAt, LOG_ORIGIN, primeFactors, properDivisors, multiplesInRange, goldbachPairs, goldbachTriples, threePrimeSum,
            consecutiveRuns, squareDifferences, twoSquares, twoTriangulars, remainderSet, aliquotSum,
            primePlusSquare, gcd, coprimeSplits, weightedSquares, binomialReps };
@@ -475,6 +488,18 @@ const XTests = {
     }
     eq(Math.abs(P.rowDisplacement(50, 0, 100, 1, 1, 'log') - Math.log10(5.5)) < 1e-12, true, 'log curve at mid-height');
     eq(Math.abs(P.rowDisplacement(50, 0, 100, 1, 1, 'exp') - (Math.sqrt(10) - 1) / 9) < 1e-12, true, 'exp curve at mid-height');
+    {
+      // visualization1: a divisor and its partner mirror across the diagonal; √n sits on it
+      const [x, y] = P.vis1Point(36, 4), [xm, ym] = P.vis1Point(36, 9);
+      eq([Math.abs(x - ym) < 1e-9, Math.abs(y - xm) < 1e-9], [true, true], 'vis1: d and n/d mirror across the diagonal');
+      eq(P.vis1Point(49, 7), [49, 49], 'vis1: √n on the diagonal');
+      eq(Math.abs(x * y - 36 * 36) < 1e-9, true, 'vis1: divisors of n on x·y = n²');
+      // guide k = 3 through the dot d = 3 of n = 27: t = √27, (t³/3, 3t) = vis1Point(27, 3)
+      const t = Math.sqrt(27), [gx, gy] = P.vis1Point(27, 3);
+      eq([Math.abs(t ** 3 / 3 - gx) < 1e-9, Math.abs(3 * t - gy) < 1e-9], [true, true], 'vis1: guide passes through its dots');
+      eq(P.vis1GuideRange(3, 0, 100, 0, 100), [3, Math.cbrt(300)], 'vis1: guide range starts at t = k, ends leaving the box');
+      eq(P.vis1GuideRange(3, 0, 5, 0, 5), null, 'vis1: guide starting outside the box');
+    }
     eq([P.easeInOut(-1), P.easeInOut(0), P.easeInOut(0.5), P.easeInOut(1), P.easeInOut(2)], [0, 0, 0.5, 1, 1], 'easing is clamped and symmetric');
     eq(P.goldbachPairs(s, 36), [[5,31],[7,29],[13,23],[17,19]], 'goldbach pairs of 36');
     eq(P.goldbachPairs(s, 4), [[2,2]], 'goldbach pairs of 4');
@@ -725,6 +750,7 @@ const XTests = {
     // Divisors offset with a negative offset pulls numbers up to |offset| · count right of the view onto it
     const pull = Math.max(0, ...panels.map((p) => p.mode === 'divoffset' ? -p.offset : 0));
     ensureSieve(Math.ceil(nRight + pull * span) + 1);
+    if (vis1) ensureSieve(Math.ceil(Math.sqrt(Math.max(0, view.x0 + span) * Math.max(0, vy0 + H / view.ppn))) + 1);
 
     const colors = { composite: css('--composite'), prime: css('--prime'), unit: css('--unit'), plain: css('--fg') };
 
@@ -737,7 +763,7 @@ const XTests = {
       ctx.beginPath(); ctx.moveTo(0, plotTop + plotH + 0.5); ctx.lineTo(W, plotTop + plotH + 0.5); ctx.stroke();
       drawXLabels(plotTop + plotH + axisH / 2, nLeft, nRight);
       ctx.font = '12px ' + FONT; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillStyle = colors.plain; ctx.fillText('visualization1   ·   n at (n, n), divisor d of n at (n, d·√n) (teal = prime d), guides: y = k·√x and y = x^1.5/k from (k², k²)' + (view.ppn < 2 ? ' (zoom in to see the dots)' : ''), 12, 10);
+      ctx.fillStyle = colors.plain; ctx.fillText('visualization1   ·   n at (n, n), divisor d of n at ((n/d)·√n, d·√n) (teal = prime d), mirror-symmetric about the diagonal; guides (t³/k, k·t) and mirror from (k², k²)' + (view.ppn < 2 ? ' (zoom in to see the dots)' : ''), 12, 10);
       drawStatus(span, 10, 'top');
       return;
     }
@@ -886,7 +912,10 @@ const XTests = {
     switch (mode) {
       case 'factors': return P.primeFactors(n).filter((q) => q !== n).map(byPrimality((q) => `prime factor ${q} of ${n}`));
       // visualization1: divisor d of n in 2D at (n, d·√n), so d = √n lands on the diagonal y = n
-      case 'vis1': { const r = Math.sqrt(n); return P.properDivisors(n).map((d) => ({ v: d * r, c: S[d] ? 'prime' : 'composite', what: `divisor ${d} of ${n} at y = ${d}·√${n}` })); }
+      case 'vis1': return P.properDivisors(n).map((d) => {
+        const [x, y] = P.vis1Point(n, d);
+        return { x, v: y, c: S[d] ? 'prime' : 'composite', what: `divisor ${d} of ${n} at ((${n}/${d})·√${n}, ${d}·√${n})` };
+      });
       case 'divisors': case 'divoffset': return P.properDivisors(n).map(byPrimality((q) => `divisor ${q} of ${n}`));
       case 'accident1': {
         const c = accident1Centre();
@@ -942,6 +971,20 @@ const XTests = {
       }
       n = hit ? hit.n : Math.round(xn - shift(myD));                // else: the number whose column lands here
       return { cursor: { x: xn, y: m.valueAt(myD, n >= 1 ? n : 1) }, hit, n };
+    }
+    if (panel.mode === 'vis1') {
+      // every divisor of n sits on x·y = n², so the dots near the cursor belong to n ≈ √(x·y)
+      const yc = m.valueAt(myD, 0), h = (dotW / 2 + m.t + 1) / ppnD;
+      const nLo = Math.max(2, Math.floor(Math.sqrt(Math.max(0, (xn - h) * (yc - h))))), nHi = Math.min(sieveLimit, Math.ceil(Math.sqrt(Math.max(0, (xn + h) * (yc + h)))));
+      let hit = null;
+      for (let nn = nLo; nn <= nHi && !hit; nn++) {
+        for (const mk of marksFor('vis1', nn)) {
+          const xpx = Math.round((mk.x - view.x0) * ppnD - dotW / 2), r = Math.floor(m.rowOf(mk.v, nn));
+          if (mx * dpr >= xpx && mx * dpr <= xpx + dotW && myD >= r - 1 && myD <= r + m.t + 1) { hit = { x: mk.x, y: mk.v, what: mk.what, n: nn }; break; }
+        }
+      }
+      n = hit ? hit.n : Math.round(xn);
+      return { cursor: { x: xn, y: yc }, hit, n };
     }
     if (panel.mode === 'accident1') {
       // rows are y = n; the x-axis does not identify n, so read n off the row instead
@@ -1027,27 +1070,27 @@ const XTests = {
     }
 
     if (mode === 'vis1') {
-      // visualization1 guides: the dots d = k (y = k·√x, below the diagonal) and d = x/k (y = x^1.5 / k,
-      // above) of the multiples of k meet on the diagonal at (k², k²). Sampled every t device columns,
-      // one vertical span per sample, clipped to the plot, one path fill.
-      const path = new Path2D(), lo = topD, hiRow = topD + halfD - t;
-      const span2 = (x, r0, r1) => {
-        const a = Math.max(lo, Math.min(r0, r1)), b = Math.min(hiRow, Math.max(r0, r1));
-        if (b >= a) path.rect(Math.round(x), a, t, b - a + t);
-      };
-      const nMax = view.x0 + span;
-      for (let k = 2; k <= GUIDES_MAX_K && k * k <= nMax; k++) {
-        const start = k * k >= view.x0;
-        const pxStart = Math.max(0, Math.ceil((k * k - view.x0) * ppnD));
-        let prev = null;
-        for (let px = pxStart; px <= WD; px += t) {
-          const n = px === pxStart && start ? k * k : view.x0 + px / ppnD;
-          const x = px === pxStart && start ? (k * k - view.x0) * ppnD : px;
-          const rn = Math.sqrt(n);
-          const up = Math.floor(rowOf(n * rn / k, n)), down = Math.floor(rowOf(k * rn, n));
-          if (prev) { if (Math.max(prev.up, up) >= lo) span2(x, prev.up, up); span2(x, prev.down, down); }
-          else { span2(x, up, up); span2(x, down, down); }
-          prev = { x, up, down };
+      // visualization1 guides: for k = 2..GUIDES_MAX_K the dots d = k of the multiples of k lie on
+      // (t³/k, k·t), t = √n >= k, below the diagonal, and their partners d = n/k on the mirror image
+      // above it; both start at (k², k²). Each branch is sampled only where it crosses the plot, about
+      // every 2 device px, drawn crisp and filled as one path (clipped to the plot).
+      const path = new Path2D(), plotGuide = (x, y) => path.rect(x, y, t, t);
+      const X0 = view.x0 - 1, X1 = view.x0 + span + 1, Y0 = vis1Range.lo - 1, Y1 = vis1Range.hi + 1;
+      const toPx = (x) => (x - view.x0) * ppnD;
+      for (let k = 2; k <= GUIDES_MAX_K; k++) {
+        for (const mirror of [false, true]) {
+          const range = mirror ? P.vis1GuideRange(k, Y0, Y1, X0, X1) : P.vis1GuideRange(k, X0, X1, Y0, Y1);
+          if (!range) continue;
+          let prev = null;
+          for (let tt = range[0]; ; ) {
+            const a = tt ** 3 / k, b = k * tt, x = mirror ? b : a, y = mirror ? a : b;
+            const cur = [toPx(x), rowOf(y, 0)];
+            if (prev) P.plotSegment(prev[0], prev[1], cur[0], cur[1], plotGuide);
+            prev = cur;
+            if (tt >= range[1]) break;
+            const speed = ppnD * Math.hypot(3 * tt * tt / k, k);             // device px per unit of t
+            tt = Math.min(range[1], tt + 2 / speed);
+          }
         }
       }
       ctx.fillStyle = GUIDE_COLOR;
@@ -1084,11 +1127,17 @@ const XTests = {
       const dotW = Math.max(t, Math.round(ppnD - Math.min(2 * t, ppnD * 0.25)));
       // Divisors accident1 places dots by n's value on the y-axis, not by its x-position, so every
       // number from 1 up to the largest visible one has a row on screen; scan them all
-      const nFirst = mode === 'accident1' ? Math.max(1, nRight - ACCIDENT1_ROWS) : Math.max(1, nLeft);
-      for (let n = nFirst; n <= Math.min(nRight, sieveLimit); n++) {
+      // visualization1 puts the divisors of n on the hyperbola x·y = n², so the numbers with a dot in
+      // the plot are √(x0·y0) .. √(x1·y1) of its corners
+      const vx0 = Math.max(0, view.x0), vyl = vis1Range ? Math.max(0, vis1Range.lo) : 0;
+      const nFirst = mode === 'accident1' ? Math.max(1, nRight - ACCIDENT1_ROWS)
+                   : vis1Range ? Math.max(1, Math.min(nLeft, Math.floor(Math.sqrt(vx0 * vyl))))
+                   : Math.max(1, nLeft);
+      const nLast = vis1Range ? Math.max(nRight, Math.ceil(Math.sqrt((view.x0 + span) * vis1Range.hi))) : nRight;
+      for (let n = nFirst; n <= Math.min(nLast, sieveLimit); n++) {
         if (!inClass(panel, n)) continue;
         const hot = n === hoverN;
-        if (n >= nLeft && mode !== 'accident1') {          // accident1: rows only, no diagonal
+        if (n >= nLeft && n <= nRight && mode !== 'accident1') {          // accident1: rows only, no diagonal
           const xa = (n - 0.5 - view.x0) * ppnD, xb = (n + 0.5 - view.x0) * ppnD;
           // per-column axes put n at its own top, so the diagonal is flat there
           const ya = perColumn ? topD : rowOf(n - 0.5, n - 0.5);
