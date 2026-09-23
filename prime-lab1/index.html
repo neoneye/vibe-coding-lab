@@ -650,6 +650,9 @@ const XTests = {
 
   let W = 0, H = 0, dpr = 1;
   let view = { x0: 0.5, ppn: 1 };
+  // visualization1 scrolls in y too: vy0 is the value at the bottom edge of its plot. Both axes use
+  // view.ppn, so one unit is as many pixels up as across (1:1 aspect ratio, whatever the window shape).
+  let vy0 = 0.5;
   let sieveLimit = 0, S = null, C = null;
   let hoverN = -1;
   // Divisors accident1 animation per panel: panel -> { f: linear progress 0..1, dir: +1 forward, -1 back,
@@ -698,6 +701,7 @@ const XTests = {
     count = Math.max(10, Math.floor(count));
     start = Math.max(-Math.floor(count / 2), Math.floor(start));
     view = P.clampView({ x0: start - 0.5, ppn: W / count }, W);
+    vy0 = view.x0;                                     // visualization1: diagonal from the bottom-left corner
     render();
   }
 
@@ -976,11 +980,12 @@ const XTests = {
     const perColumn = yScale === 'stretched' || yScale === 'logstretched';
     // logstretched maps 2..n/2 into the panel; n itself sits above it on the top edge, so leave headroom
     const pad = yScale === 'logstretched' ? 2 * t : 0;
-    const range = (n) => P.yRangeAt(yScale, hi, n);
+    const vis1Range = panel.mode === 'vis1' ? { lo: vy0, hi: vy0 + (half - t / dpr) / view.ppn, scale: 'linear' } : null;
+    const range = vis1Range ? () => vis1Range : (n) => P.yRangeAt(yScale, hi, n);
     // row (device px) of value v for the column of number n, and its inverse
     const rowOf = (v, n) => { const r = range(n); return P.valueToRow(v, r.lo, r.hi, topD + pad, halfD - t - pad, r.scale); };
     const valueAt = (row, n) => { const r = range(n); return P.rowToValue(row, r.lo, r.hi, topD + pad, halfD - t - pad, r.scale); };
-    return { hi, t, halfD, topD, pad, perColumn, rowOf, valueAt };
+    return { hi, t, halfD, topD, pad, perColumn, rowOf, valueAt, vis1Range };
   }
 
   function renderChart(panel, top, half, nLeft, nRight, colors) {
@@ -990,11 +995,12 @@ const XTests = {
     const span = W / view.ppn;
     const ppnD = view.ppn * dpr;                       // device px per number
     const WD = W * dpr;
-    const { hi, t, halfD, topD, pad, perColumn, rowOf } = mapper(panel, top, half);
+    const { hi, t, halfD, topD, pad, perColumn, rowOf, vis1Range } = mapper(panel, top, half);
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const plotAt = (x, y) => ctx.fillRect(x, y, t, t);
+    if (vis1Range) { ctx.beginPath(); ctx.rect(0, topD, WD, halfD); ctx.clip(); }   // y scrolls: keep marks in the plot
 
     if (mode === 'divisors' && panel.guides && yScale === 'logstretched' && panel.cls !== 'prime') {
       // Guides: on Log stretched the divisor dots line up along curves. For every k >= 3 the dots
@@ -1199,7 +1205,12 @@ const XTests = {
       ticks = [0, 0.5, 1];
       label = (f) => ({ 0: '2', 0.5: '√N', 1: 'N/2' })[f];
     } else if (yScale === 'log') ticks = P.logTicks(P.LOG_ORIGIN, hi, Math.max(2, Math.floor(half / 28)));
-    else {
+    else if (vis1Range) {
+      // same spacing as the x labels, since the axes share one scale
+      const ystep = P.tickStep(view.ppn, 64);
+      ticks = [];
+      for (let v = Math.ceil(vis1Range.lo / ystep) * ystep; v <= vis1Range.hi; v += ystep) ticks.push(v);
+    } else {
       ticks = [0];
       const ystep = P.tickStep(half / hi, 28);
       for (let v = ystep; v <= hi; v += ystep) ticks.push(v);
@@ -1208,6 +1219,7 @@ const XTests = {
     for (const v of ticks) {
       const y = perColumn
         ? Math.round(P.valueToRow(v, 0, 1, top + pad / dpr, half - 1 - pad / dpr)) + 0.5
+        : vis1Range ? Math.round(P.valueToRow(v, vis1Range.lo, vis1Range.hi, top, half - t / dpr)) + 0.5
         : Math.round(P.valueToRow(v, yScale === 'log' ? P.LOG_ORIGIN : 0, hi, top, half, yScale)) + 0.5;
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(6, y); ctx.stroke();
       ctx.fillText(label(v), 9, y);
@@ -1223,7 +1235,7 @@ const XTests = {
   // ---- interaction ----
   let drag = null;
   viewEl.addEventListener('pointerdown', (e) => {
-    drag = { px: e.clientX, x0: view.x0, moved: false };
+    drag = { px: e.clientX, py: e.clientY, x0: view.x0, vy0, moved: false };
     viewEl.classList.add('dragging'); viewEl.setPointerCapture(e.pointerId);
   });
   viewEl.addEventListener('pointermove', (e) => {
@@ -1231,6 +1243,7 @@ const XTests = {
       const dx = e.clientX - drag.px;
       if (Math.abs(dx) > 2) drag.moved = true;
       view = P.clampView({ x0: drag.x0 - dx / view.ppn, ppn: view.ppn }, W);
+      if (vis1) setVy0(drag.vy0 + (e.clientY - drag.py) / view.ppn);   // content follows the pointer up/down too
       render();
     }
     updateHover(e);
@@ -1245,9 +1258,19 @@ const XTests = {
     const r = canvas.getBoundingClientRect();
     const px = e.clientX - r.left;
     const factor = Math.exp(-e.deltaY * 0.0015);
-    view = P.zoomAt(view, px, factor, W);
+    zoomAround(px, e.clientY - r.top, factor);
     render(); updateHover(e);
   }, { passive: false });
+
+  // zoom about the point (px, py) in CSS px; in visualization1 the value under it stays put in y too
+  function zoomAround(px, py, factor) {
+    const bottom = layout.vis1Top + layout.vis1H, before = view.ppn;
+    const vAt = vy0 + (bottom - py) / before;
+    view = P.zoomAt(view, px, factor, W);
+    if (vis1) setVy0(vAt - (bottom - py) / view.ppn);
+  }
+  // visualization1 may scroll below 0 by at most half a screen, like the x-axis does
+  function setVy0(v) { vy0 = Math.max(-(layout.vis1H || H) / view.ppn / 2, v); }
 
   function updateHover(e) {
     const r = canvas.getBoundingClientRect();
@@ -1434,6 +1457,7 @@ const XTests = {
     vis1 = on;
     vis1El.setAttribute('aria-pressed', String(on));
     rowsEl.hidden = on;                                   // the plot takes the space of the panel rows
+    if (on) vy0 = view.x0;                                // start with the diagonal from the bottom-left corner
     try { localStorage.setItem('prime-lab1.vis1', on ? '1' : '0'); } catch (_) {}
     resize();
   }
@@ -1457,8 +1481,10 @@ const XTests = {
     const span = W / view.ppn;
     if (e.key === 'ArrowLeft') { view = P.clampView({ x0: view.x0 - span * 0.1, ppn: view.ppn }, W); render(); }
     if (e.key === 'ArrowRight') { view = P.clampView({ x0: view.x0 + span * 0.1, ppn: view.ppn }, W); render(); }
-    if (e.key === '+' || e.key === '=') { view = P.zoomAt(view, W / 2, 1.25, W); render(); }
-    if (e.key === '-') { view = P.zoomAt(view, W / 2, 0.8, W); render(); }
+    if (e.key === '+' || e.key === '=') { zoomAround(W / 2, layout.vis1Top + layout.vis1H / 2, 1.25); render(); }
+    if (e.key === '-') { zoomAround(W / 2, layout.vis1Top + layout.vis1H / 2, 0.8); render(); }
+    if (vis1 && e.key === 'ArrowUp') { setVy0(vy0 + layout.vis1H / view.ppn * 0.1); render(); }
+    if (vis1 && e.key === 'ArrowDown') { setVy0(vy0 - layout.vis1H / view.ppn * 0.1); render(); }
   });
 
   window.addEventListener('resize', resize);
