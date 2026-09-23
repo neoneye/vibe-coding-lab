@@ -398,21 +398,15 @@ const PrimeLab = (() => {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
   }
 
-  // Divisors offset: the Divisors dot (n, d) for a proper divisor d of n (2 <= d <= n/2) is displaced
-  // to x = n + s*d, y = d. Calls fn(n, d, x) for every dot with xlo <= x <= xhi and n <= maxN.
-  // Enumerated by divisor: n = k*d gives x = d*(k + s), so each d contributes the k in range.
-  function offsetDivisorDots(xlo, xhi, s, maxN, fn) {
-    for (let d = 2; d * (2 + s) <= xhi; d++) {
-      const k0 = Math.max(2, Math.ceil(xlo / d - s - 1e-9)), k1 = Math.floor(xhi / d - s + 1e-9);
-      for (let k = k0; k <= k1; k++) {
-        const n = k * d;
-        if (n > maxN) break;
-        fn(n, d, n + s * d);
-      }
-    }
+  // Divisors offset: horizontal displacement of a point drawn on pixel row `row` of a panel whose
+  // bottom row is `bottomRow` and top row `topRow`. The bottom row is not displaced (minimum), the
+  // top row by `count` (maximum), rows between are interpolated linearly; `s` (0..1) scales it all.
+  function rowDisplacement(row, topRow, bottomRow, count, s) {
+    const f = Math.min(1, Math.max(0, (bottomRow - row) / (bottomRow - topRow)));
+    return s * f * count;
   }
 
-  return { MAX_N, easeInOut, offsetDivisorDots, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
+  return { MAX_N, easeInOut, rowDisplacement, sieve, prefixCount, countInRange, factorize, formatFactors, prevPrime, nextPrime,
            zoomAt, clampView, fitCanvasMetrics, tickStep, plotSegment, valueToRow, rowToValue, logTicks, yRangeAt, LOG_ORIGIN, primeFactors, properDivisors, multiplesInRange, goldbachPairs, goldbachTriples, threePrimeSum,
            consecutiveRuns, squareDifferences, twoSquares, twoTriangulars, remainderSet, aliquotSum,
            primePlusSquare, gcd, coprimeSplits, weightedSquares, binomialReps };
@@ -467,19 +461,9 @@ const XTests = {
     eq(P.properDivisors(16), [2,4,8], 'proper divisors of a prime power');
     eq(P.properDivisors(97), [], 'a prime has no proper divisors above 1');
     eq(P.properDivisors(4), [2], 'proper divisors of 4');
-    {
-      // brute force: every proper divisor d of every n, displaced to n + s*d, kept when inside [lo, hi]
-      const brute = (lo, hi, s, maxN) => {
-        const out = [];
-        for (let n = 2; n <= maxN; n++) for (const d of P.properDivisors(n)) { const x = n + s * d; if (x >= lo && x <= hi) out.push([n, d]); }
-        return out.map(String).sort();
-      };
-      for (const [lo, hi, s] of [[0, 60, 0], [10, 40, 1], [25, 31, 0.5], [7, 7, 0.25]]) {
-        const got = [];
-        P.offsetDivisorDots(lo, hi, s, 60, (n, d) => got.push([n, d]));
-        eq(got.map(String).sort(), brute(lo, hi, s, 60), `offset divisor dots in [${lo}, ${hi}] at s = ${s}`);
-      }
-    }
+    eq([P.rowDisplacement(100, 0, 100, 200, 1), P.rowDisplacement(0, 0, 100, 200, 1), P.rowDisplacement(25, 0, 100, 200, 1),
+        P.rowDisplacement(25, 0, 100, 200, 0.5), P.rowDisplacement(25, 0, 100, 200, 0), P.rowDisplacement(-5, 0, 100, 200, 1)],
+       [0, 200, 150, 75, 0, 200], 'row displacement: 0 at the bottom row, count at the top, linear between, scaled by s');
     eq([P.easeInOut(-1), P.easeInOut(0), P.easeInOut(0.5), P.easeInOut(1), P.easeInOut(2)], [0, 0, 0.5, 1, 1], 'easing is clamped and symmetric');
     eq(P.goldbachPairs(s, 36), [[5,31],[7,29],[13,23],[17,19]], 'goldbach pairs of 36');
     eq(P.goldbachPairs(s, 4), [[2,2]], 'goldbach pairs of 4');
@@ -582,7 +566,7 @@ const XTests = {
     ['chart', 'Chart', 'Each number n plotted at (n, n): the diagonal y = x with holes where the other class lives.'],
     ['factors', 'Factors', 'Chart plus a dot at every distinct prime factor of n.\n36 = 2² × 3² → dots at 2 and 3.'],
     ['divisors', 'Divisors', 'Chart plus a dot at every proper divisor of n above 1. Teal = prime, grey = composite.\n36 → 2, 3, 4, 6, 9, 12, 18.'],
-    ['divoffset', 'Divisors offset', 'Based on Divisors, always on the Log stretched y-axis. Every point is displaced along x by its y value times the offset slider: x = n + offset · y, y unchanged. A divisor dot (n, d) moves to x = n + offset · d; the point for n itself to x = n + offset · n.\nOffset 0 is plain Divisors. Teal = prime, grey = composite.'],
+    ['divoffset', 'Divisors offset', 'Based on Divisors, always on the Log stretched y-axis. Each pixel row is displaced along x: the bottom row not at all (so it scrolls exactly like Divisors), the top row by count (the number of visible numbers), rows between by the linear interpolation. The offset slider scales it: x = n + offset · f · count, f = 0 at the bottom row .. 1 at the top.\nOffset 0 is plain Divisors. Teal = prime, grey = composite.'],
     ['accident1', 'Divisors accident1', 'It\'s the "Divisors" mode, where the x and y axis have been swapped, and things mirrored around the current position. It wasn\'t what I had in mind.'],
     ['goldbach', 'Goldbach', 'Chart plus dots at p and n − p for every way n = p + q with both prime.\n36 = 5+31 = 7+29 = 13+23 = 17+19.\nFor a prime p only 2 + (p − 2) is possible, so its dots mark twin primes.'],
     ['goldbach3', 'Goldbach 3', 'Weak (ternary) Goldbach: a dot at every prime that appears in some triple p ≤ q ≤ r of primes with p + q + r = n.\nEvery odd n > 5 has one (Helfgott 2013). An even n needs p = 2, so 36 = 2+3+31 = 2+5+29 = 2+11+23 = 2+17+17.\nShown for n ≤ 5,000.'],
@@ -778,7 +762,7 @@ const XTests = {
     if (panel.mode === 'remainders') return s + ', dots at n mod k for 2 ≤ k < n (amber = 0)' + (view.ppn >= 2 && Math.floor(view.x0 + W / view.ppn) > REMAINDERS_MAX ? ' (shown for n ≤ 20,000)' : zoomNote);
     if (panel.mode === 'aliquot') return s + ', dot at the sum of proper divisors: grey deficient, amber abundant, white perfect' + zoomNote;
     if (panel.mode === 'factors') s += prime ? '' : ', dots at y = prime factors of n';
-    if (panel.mode === 'divoffset') return s + `, dots at y = divisors of n, every point displaced to x = n + ${panel.offset.toFixed(3)} · y` + zoomNote;
+    if (panel.mode === 'divoffset') return s + `, dots at y = divisors of n, displaced to x = n + ${panel.offset.toFixed(3)} · f · ${Math.round(W / view.ppn).toLocaleString()} (f = 0 bottom row .. 1 top row)` + zoomNote;
     else if (panel.mode === 'divisors') s += prime ? '' : ', dots at y = divisors of n (teal = prime)';
     else if (panel.mode === 'goldbach') {
       s += prime ? ', dots at 2 and p − 2 when both are prime (twin primes)'
@@ -889,16 +873,19 @@ const XTests = {
     const dotW = Math.max(m.t, Math.round(ppnD - Math.min(2 * m.t, ppnD * 0.25)));
     let n, candidates = [];
     if (panel.mode === 'divoffset') {
-      // points are displaced by offset · y, so the column under the cursor does not identify n:
-      // look for a displaced divisor dot under the cursor, else the displaced point for n itself
-      const s = panel.offset, half = (dotW / 2 + 1) / ppnD;
+      // points are displaced by offset · f · count, so the column under the cursor does not identify n:
+      // scan the numbers whose displaced dots can reach the cursor, else report the column itself
+      const s = panel.offset, count = W / view.ppn, half = (dotW / 2 + 1) / ppnD;
+      const bottomRow = m.topD + m.halfD - m.t, shift = (r) => P.rowDisplacement(r, m.topD, bottomRow, count, s);
       let hit = null;
-      P.offsetDivisorDots(xn - half, xn + half, s, sieveLimit, (nn, d, x) => {
-        if (hit || !inClass(panel, nn)) return;
-        const r = Math.floor(m.rowOf(d, nn));
-        if (myD >= r - 1 && myD <= r + m.t + 1) hit = { x, y: d, what: `divisor ${d} of ${nn}, displaced by ${s.toFixed(3)} · ${d}`, n: nn };
-      });
-      n = hit ? hit.n : Math.round(xn / (1 + s));                  // else: the point for n at x = n(1 + s)
+      for (let nn = Math.max(2, Math.floor(xn - s * count - 1)); nn <= Math.min(Math.ceil(xn + 1), sieveLimit) && !hit; nn++) {
+        if (!inClass(panel, nn)) continue;
+        for (const d of P.properDivisors(nn)) {
+          const r = Math.floor(m.rowOf(d, nn)), x = nn + shift(r);
+          if (Math.abs(x - xn) <= half && myD >= r - 1 && myD <= r + m.t + 1) { hit = { x, y: d, what: `divisor ${d} of ${nn}, displaced by ${(x - nn).toFixed(2)}`, n: nn }; break; }
+        }
+      }
+      n = hit ? hit.n : Math.round(xn - shift(myD));                // else: the number whose column lands here
       return { cursor: { x: xn, y: m.valueAt(myD, n >= 1 ? n : 1) }, hit, n };
     }
     if (panel.mode === 'accident1') {
@@ -959,24 +946,31 @@ const XTests = {
     const plotAt = (x, y) => ctx.fillRect(x, y, t, t);
 
     if (view.ppn >= 2 && mode === 'divoffset') {
-      // every point (x, y) is drawn at x + offset · y: the point for n at n(1 + s) on the top edge,
-      // each divisor dot (n, d) at n + s·d on row d of column n's log axis
+      // each pixel row r is displaced by offset · f(r) · count: the bottom row stays (scrolls like
+      // Divisors), the top edge (n itself) moves by the most. Numbers up to offset · count left of the
+      // view can land on screen, so scan them too.
       const dotW = Math.max(t, Math.round(ppnD - Math.min(2 * t, ppnD * 0.25)));
-      const s = panel.offset, lo = topD, hiRow = topD + halfD - t;
-      const xLo = view.x0 - 1, xHi = view.x0 + span + 1;
-      for (let n = Math.max(1, Math.floor(xLo / (1 + s))); n <= Math.min(Math.ceil(xHi / (1 + s)), sieveLimit); n++) {
+      const s = panel.offset, count = span, lo = topD, hiRow = topD + halfD - t;
+      const shift = (r) => P.rowDisplacement(r, lo, hiRow, count, s);
+      const topShift = shift(lo);
+      for (let n = Math.max(1, Math.floor(view.x0 - s * count - 1)); n <= Math.min(nRight + 1, sieveLimit); n++) {
         if (!inClass(panel, n)) continue;
-        const xa = (n - 0.5 + s * n - view.x0) * ppnD, xb = xa + ppnD;
-        ctx.fillStyle = n === hoverN ? '#ffffff' : colorOf(panel, n, colors);
-        P.plotSegment(xa, topD, xb, topD, plotAt);
+        const hot = n === hoverN;
+        const xa = (n - 0.5 + topShift - view.x0) * ppnD;               // n itself, on the top edge
+        if (xa + ppnD >= 0 && xa <= WD) {
+          ctx.fillStyle = hot ? '#ffffff' : colorOf(panel, n, colors);
+          P.plotSegment(xa, topD, xa + ppnD, topD, plotAt);
+        }
+        if (n < 4) continue;
+        for (const d of P.properDivisors(n)) {
+          const r = Math.floor(rowOf(d, n));
+          if (r < lo || r > hiRow) continue;
+          const x = Math.round((n + shift(r) - view.x0) * ppnD - dotW / 2);
+          if (x + dotW < 0 || x > WD) continue;
+          ctx.fillStyle = hot ? '#ffffff' : S[d] ? colors.prime : colors.composite;
+          ctx.fillRect(x, r, dotW, t);
+        }
       }
-      P.offsetDivisorDots(xLo, xHi, s, sieveLimit, (n, d, xc) => {
-        if (!inClass(panel, n)) return;
-        const r = Math.floor(rowOf(d, n));
-        if (r < lo || r > hiRow) return;
-        ctx.fillStyle = n === hoverN ? '#ffffff' : S[d] ? colors.prime : colors.composite;
-        ctx.fillRect(Math.round((xc - view.x0) * ppnD - dotW / 2), r, dotW, t);
-      });
     } else if (view.ppn >= 2) {
       const dotW = Math.max(t, Math.round(ppnD - Math.min(2 * t, ppnD * 0.25)));
       // Divisors accident1 places dots by n's value on the y-axis, not by its x-position, so every
@@ -1243,7 +1237,7 @@ const XTests = {
     const slider = document.createElement('input');
     slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 0.001;
     slider.className = 'offsetui offset'; slider.dataset.panel = i;
-    slider.title = 'Displacement: x = n + offset · y. 0 = no displacement, 1 = every point moved right by its y value.';
+    slider.title = 'Displacement: x = n + offset · f · count, f = 0 at the bottom row .. 1 at the top row. 0 = no displacement; 1 = the top row moved right by count, the bottom row not at all.';
     const oval = document.createElement('span'); oval.className = 'offsetui offsetval'; oval.dataset.panel = i;
     slider.addEventListener('input', () => setPanel(i, { offset: +slider.value }));
     const animBtn = document.createElement('button');
