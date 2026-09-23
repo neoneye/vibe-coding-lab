@@ -35,6 +35,8 @@
     padding: 3px 10px; font: inherit; cursor: pointer; }
   #bar button:hover { border-color: var(--accent); }
   #bar button:disabled { opacity: .4; cursor: default; border-color: var(--axis); }
+  #bar button.animate { margin-left: auto; }
+  #bar button[hidden] { display: none; }
   #hint { margin-left: auto; color: var(--muted); overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
   .seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 5px; overflow: hidden; }
   #bar .seg button { border: 0; border-radius: 0; padding: 4px 9px; background: var(--bg); color: var(--muted); }
@@ -61,7 +63,6 @@
     <label>count <input id="count" type="number" min="10" step="1" value="200"></label>
     <button id="apply">Go</button>
     <button id="reset">Reset</button>
-    <button id="animate" title="Divisors offset only: every row y = n slides sideways by an offset T that grows from 0 to n over 5 seconds; click again to animate back to the start. y never changes. The scroll position is kept.">Animate</button>
     <label title="k for the a²+kb² mode">k <input id="kval" type="number" min="1" step="1" value="2" style="width:56px"></label>
     <span id="hint">scroll to zoom · drag to pan · hover a number</span>
   </div>
@@ -545,7 +546,6 @@ const XTests = {
   const tip = document.getElementById('tip');
   const startEl = document.getElementById('start');
   const countEl = document.getElementById('count');
-  const animateEl = document.getElementById('animate');
 
   // ---- panel settings: the top and bottom halves are configured independently ----
   // [key, label, explanation shown on hover]
@@ -612,12 +612,12 @@ const XTests = {
   let view = { x0: 0.5, ppn: 1 };
   let sieveLimit = 0, S = null, C = null;
   let hoverN = -1;
-  // Divisors offset animation: { panels: Set of panel objects, f: linear progress 0..1, dir: +1 forward,
-  // -1 back, t: eased f }. Row y = n is shifted right by T = t·n: 0 for every row at the start state,
-  // n (the row's x-position) at the end state. Clicking Animate again plays it back to the start.
+  // Divisors offset animation per panel: panel -> { f: linear progress 0..1, dir: +1 forward, -1 back,
+  // t: eased f }. Row y = n is shifted right by T = t·n: 0 for every row at the start state,
+  // n (the row's x-position) at the end state. Clicking the panel's Animate again plays it back.
   const ANIM_MS = 5000;
-  let anim = null;
-  const rowShift = (panel, n) => anim && anim.panels.has(panel) ? anim.t * n : 0;
+  const anims = new Map();
+  const rowShift = (panel, n) => anims.has(panel) ? anims.get(panel).t * n : 0;
 
   function ensureSieve(limit) {
     limit = Math.min(P.MAX_N, Math.max(1000, limit));
@@ -732,7 +732,7 @@ const XTests = {
             logstretched: '   ·   n on the top edge, log axis 2..N/2 per column' })[panel.yScale];
     const zoomNote = EXACT_ONLY.has(panel.mode) && view.ppn < 2 ? ' (zoom in to see the dots)' : '';
     if (panel.mode === 'goldbach3') return s + ', dots at every prime in some triple p + q + r = n of primes' + (view.ppn >= 2 && Math.floor(view.x0 + W / view.ppn) > TRIPLE_MAX ? ' (shown for n ≤ 5,000)' : zoomNote);
-    if (panel.mode === 'divoffset') return s.replace(gaps, '') + `, a row for every n ≤ ${Math.min(Math.floor(view.x0 + W / view.ppn), sieveLimit).toLocaleString()} at y = n, dots at x = from + count/2 ± d (= ${offsetBase().toLocaleString()} ± d) for every proper divisor d` + (anim && anim.panels.has(panel) ? `, each row shifted right by T = ${anim.t.toFixed(2)}·n` : '') + (view.ppn >= 2 && Math.floor(view.x0 + W / view.ppn) > DIVOFFSET_ROWS ? ` (rows for the last ${DIVOFFSET_ROWS.toLocaleString()} numbers)` : zoomNote);
+    if (panel.mode === 'divoffset') return s.replace(gaps, '') + `, a row for every n ≤ ${Math.min(Math.floor(view.x0 + W / view.ppn), sieveLimit).toLocaleString()} at y = n, dots at x = from + count/2 ± d (= ${offsetBase().toLocaleString()} ± d) for every proper divisor d` + (anims.has(panel) ? `, each row shifted right by T = ${anims.get(panel).t.toFixed(2)}·n` : '') + (view.ppn >= 2 && Math.floor(view.x0 + W / view.ppn) > DIVOFFSET_ROWS ? ` (rows for the last ${DIVOFFSET_ROWS.toLocaleString()} numbers)` : zoomNote);
     if (panel.mode === 'primesq') return s + ', dots at p (teal) and a (amber) for every n = p + a²' + zoomNote;
     if (panel.mode === 'coprime') return s + ', a dot at every a ≤ n/2 of n = a + b: teal gcd 1, grey shared factor, amber a | n' + (view.ppn >= 2 && Math.floor(view.x0 + W / view.ppn) > COPRIME_MAX ? ' (shown for n ≤ 20,000)' : zoomNote);
     if (panel.mode === 'exponents') return s + ', a mark at each prime factor p, its height = the exponent of p' + zoomNote;
@@ -1165,13 +1165,17 @@ const XTests = {
     return el;
   }
   panels.forEach((_, i) => {
-    // one line per panel: label, class, mode picker, y-axis
+    // one line per panel: label, class, mode picker, y-axis, and Animate on the right in Divisors offset
     const row = document.createElement('div');
     row.className = 'row';
     const lab = document.createElement('span'); lab.className = 'rowlabel'; lab.textContent = i === 0 ? 'top ↑' : 'bottom ↓';
     const mlab = document.createElement('span'); mlab.className = 'rowlabel narrow'; mlab.textContent = 'mode';
     const ylab = document.createElement('span'); ylab.className = 'rowlabel narrow'; ylab.textContent = 'y-axis';
-    row.append(lab, picker(i, 'cls', CLASSES), mlab, picker(i, 'mode', MODES), ylab, seg(i, 'yScale', SCALES));
+    const animBtn = document.createElement('button');
+    animBtn.className = 'animate'; animBtn.dataset.panel = i; animBtn.textContent = 'Animate';
+    animBtn.title = 'Divisors offset: every row y = n slides sideways by an offset T that grows from 0 to n over 5 seconds; click again to animate back to the start. y never changes. The scroll position is kept.';
+    animBtn.addEventListener('click', () => startAnimation(panels[i]));
+    row.append(lab, picker(i, 'cls', CLASSES), mlab, picker(i, 'mode', MODES), ylab, seg(i, 'yScale', SCALES), animBtn);
     rowsEl.append(row);
   });
   function syncControls() {
@@ -1187,10 +1191,10 @@ const XTests = {
       el.value = value;
       el.title = (el.dataset.key === 'mode' ? MODES : CLASSES).find(([k]) => k === value)[2];
     }
-    animateEl.disabled = !panels.some((p) => p.mode === 'divoffset');
+    for (const el of rowsEl.querySelectorAll('.animate')) el.hidden = panels[+el.dataset.panel].mode !== 'divoffset';
   }
   function setPanel(i, patch) {
-    if (anim && patch.mode) stopAnimation();              // a manual mode choice cancels the animation
+    if (patch.mode) anims.delete(panels[i]);              // a manual mode choice cancels the animation
     Object.assign(panels[i], patch);
     try { localStorage.setItem('prime-lab1.panels', JSON.stringify(panels)); } catch (_) {}
     syncControls(); render();
@@ -1198,30 +1202,26 @@ const XTests = {
   syncControls();
 
   // ---- Animate (Divisors offset only): T goes 0 -> n for every row in ANIM_MS; y and the view stay put ----
-  function stopAnimation() { anim = null; }
-  function startAnimation() {
-    const targets = panels.filter((p) => p.mode === 'divoffset');
-    if (!targets.length) return;
+  function startAnimation(panel) {
+    if (panel.mode !== 'divoffset') return;
     // forward from the start state, or back when the last click went forward (also mid-way)
-    const back = !!anim && anim.dir === 1;
-    const a = back ? { panels: anim.panels, f: anim.f, dir: -1, t: anim.t }
-                   : { panels: new Set(targets), f: anim ? anim.f : 0, dir: 1, t: anim ? anim.t : 0 };
-    anim = a;
+    const prev = anims.get(panel);
+    const a = { f: prev ? prev.f : 0, t: prev ? prev.t : 0, dir: prev && prev.dir === 1 ? -1 : 1 };
+    anims.set(panel, a);
     let last = performance.now();
     const step = (now) => {
-      if (anim !== a) return;                           // cancelled or reversed
+      if (anims.get(panel) !== a) return;               // cancelled or reversed
       a.f = Math.min(1, Math.max(0, a.f + a.dir * (now - last) / ANIM_MS));
       last = now;
       a.t = P.easeInOut(a.f);
       const done = a.dir === 1 ? a.f >= 1 : a.f <= 0;
-      if (done && a.dir === -1) anim = null;            // back at the start state
+      if (done && a.dir === -1) anims.delete(panel);    // back at the start state
       render();
       if (!done) requestAnimationFrame(step);           // the end state (T = n) stays until clicked again
     };
     render();
     requestAnimationFrame(step);
   }
-  animateEl.addEventListener('click', startAnimation);
 
   const kEl = document.getElementById('kval');
   kEl.value = weightK;
@@ -1249,7 +1249,7 @@ const XTests = {
   W = r.width; H = r.height;
   { const r0 = loadRange(); setRange(r0.start, r0.count); }
   resize();
-  window.__primeLab = { get view() { return view; }, panels, layout, hitTest, get anim() { return anim; }, startAnimation, setRange, setPanel, render, setK(k) { kEl.value = k; kEl.dispatchEvent(new Event('change')); } };
+  window.__primeLab = { get view() { return view; }, panels, layout, hitTest, anims, startAnimation, setRange, setPanel, render, setK(k) { kEl.value = k; kEl.dispatchEvent(new Event('change')); } };
 })();
 </script>
 </body>
