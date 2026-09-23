@@ -623,10 +623,12 @@ const XTests = {
   // modes pinned to one y-axis scale; the y-axis control is hidden for them
   const FIXED_Y = { divoffset: 'logstretched' };
   const yScaleOf = (panel) => FIXED_Y[panel.mode] || panel.yScale;
+  const GUIDE_COLOR = 'rgba(214, 69, 65, 0.75)';   // Divisors guides (red, under the dots)
+  const GUIDES_MAX_K = 60;   // guides for k = 3..60; higher k crowd around √N
   const OFFSET_MAX = 5;    // Divisors offset slider range -OFFSET_MAX..OFFSET_MAX: the top row moves by up to 5 × count either way
   const panels = [
-    { mode: 'bars', cls: 'composite', yScale: 'linear', offset: 0, offsetCurve: 'linear' },
-    { mode: 'bars', cls: 'prime', yScale: 'linear', offset: 0, offsetCurve: 'linear' },
+    { mode: 'bars', cls: 'composite', yScale: 'linear', offset: 0, offsetCurve: 'linear', guides: false },
+    { mode: 'bars', cls: 'prime', yScale: 'linear', offset: 0, offsetCurve: 'linear', guides: false },
   ];
   try {
     const saved = JSON.parse(localStorage.getItem('prime-lab1.panels') || 'null');
@@ -636,6 +638,7 @@ const XTests = {
       if (CLASSES.some(([k]) => k === p.cls)) panels[i].cls = p.cls;
       if (SCALES.some(([k]) => k === p.yScale)) panels[i].yScale = p.yScale;
       if (CURVES.some(([k]) => k === p.offsetCurve)) panels[i].offsetCurve = p.offsetCurve;
+      if (typeof p.guides === 'boolean') panels[i].guides = p.guides;
       if (Number.isFinite(p.offset)) panels[i].offset = Math.min(OFFSET_MAX, Math.max(-OFFSET_MAX, p.offset));
     });
   } catch (_) {}
@@ -962,6 +965,30 @@ const XTests = {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const plotAt = (x, y) => ctx.fillRect(x, y, t, t);
 
+    if (mode === 'divisors' && panel.guides && yScale === 'logstretched' && panel.cls !== 'prime') {
+      // Guides: on Log stretched the divisor dots line up along curves. For every k >= 3 the dots
+      // d = k (falling) and d = n/k (rising) of the multiples n of k meet on the √N row at n = k² and
+      // trace one curve pair from there. Drawn under the dots, sampled every t device columns; each
+      // sample is one t-wide vertical span joining it to the previous row (no gaps on steep parts),
+      // all gathered into one path and filled once (per-pixel fillRect is too slow here).
+      const path = new Path2D();
+      const span2 = (x, r0, r1) => path.rect(Math.round(x), Math.min(r0, r1), t, Math.abs(r1 - r0) + t);
+      const nMax = view.x0 + span;
+      for (let k = 3; k <= GUIDES_MAX_K && k * k <= nMax; k++) {
+        const pxStart = Math.max(0, Math.ceil((k * k - view.x0) * ppnD));
+        let prev = null;
+        for (let px = pxStart; px <= WD; px += t) {
+          const n = px === pxStart && k * k >= view.x0 ? k * k : view.x0 + px / ppnD;
+          const x = px === pxStart && k * k >= view.x0 ? (k * k - view.x0) * ppnD : px;
+          const up = Math.floor(rowOf(n / k, n)), down = Math.floor(rowOf(k, n));
+          if (prev) { span2(x, prev.up, up); span2(x, prev.down, down); } else { span2(x, up, up); span2(x, down, down); }
+          prev = { x, up, down };
+        }
+      }
+      ctx.fillStyle = GUIDE_COLOR;
+      ctx.fill(path);
+    }
+
     if (view.ppn >= 2 && mode === 'divoffset') {
       // each pixel row r is displaced by offset · f(r) · count: the bottom row stays (scrolls like
       // Divisors), the top edge (n itself) moves by the most. Numbers up to offset · count left of the
@@ -1257,13 +1284,20 @@ const XTests = {
     slider.title = 'Displacement: x = n + offset · f · count, f = 0 at the bottom row .. 1 at the top row. Range −5..+5: 0 = no displacement; +1 = the top row moved right by count, −1 = left by count; ±5 = by 5 × count. The bottom row never moves.';
     const oval = document.createElement('span'); oval.className = 'offsetui offsetval'; oval.dataset.panel = i;
     slider.addEventListener('input', () => setPanel(i, { offset: +slider.value }));
+    // Divisors: guides checkbox (curves through the dots that share a trajectory, Log stretched only)
+    const guides = document.createElement('label');
+    guides.className = 'guidesui'; guides.dataset.panel = i;
+    guides.title = 'Draw the curves the divisor dots follow on the Log stretched y-axis: for every k ≥ 3, d = n/k rising and d = k falling from where they meet at n = k² on the √N row.';
+    const guidesBox = document.createElement('input'); guidesBox.type = 'checkbox'; guidesBox.dataset.panel = i;
+    guidesBox.addEventListener('change', () => setPanel(i, { guides: guidesBox.checked }));
+    guides.append(guidesBox, 'guides');
     const curveSeg = seg(i, 'offsetCurve', CURVES);
     curveSeg.classList.add('offsetui');
     const animBtn = document.createElement('button');
     animBtn.className = 'animate'; animBtn.dataset.panel = i; animBtn.textContent = 'Animate';
     animBtn.title = 'Divisors accident1: every row y = n slides sideways by an offset T that grows from 0 to n over 5 seconds; click again to animate back to the start. y never changes. The scroll position is kept.';
     animBtn.addEventListener('click', () => startAnimation(panels[i]));
-    row.append(lab, picker(i, 'cls', CLASSES), mlab, picker(i, 'mode', MODES), ylab, seg(i, 'yScale', SCALES), olab, slider, oval, curveSeg, animBtn);
+    row.append(lab, picker(i, 'cls', CLASSES), mlab, picker(i, 'mode', MODES), ylab, seg(i, 'yScale', SCALES), guides, olab, slider, oval, curveSeg, animBtn);
     rowsEl.append(row);
   });
   function syncControls() {
@@ -1281,6 +1315,13 @@ const XTests = {
     }
     for (const el of rowsEl.querySelectorAll('.ylab, .seg[data-key=yScale]')) el.hidden = !!FIXED_Y[panels[+el.dataset.panel].mode];
     for (const el of rowsEl.querySelectorAll('.offsetui')) el.hidden = panels[+el.dataset.panel].mode !== 'divoffset';
+    for (const el of rowsEl.querySelectorAll('.guidesui')) {
+      const p = panels[+el.dataset.panel], box = el.querySelector('input');
+      el.hidden = p.mode !== 'divisors';
+      box.checked = p.guides;
+      box.disabled = p.yScale !== 'logstretched';             // guides follow the Log stretched curves only
+      el.style.opacity = box.disabled ? 0.4 : '';
+    }
     for (const el of rowsEl.querySelectorAll('input.offset')) if (+el.value !== panels[+el.dataset.panel].offset) el.value = panels[+el.dataset.panel].offset;
     for (const el of rowsEl.querySelectorAll('.offsetval')) el.textContent = panels[+el.dataset.panel].offset.toFixed(2);
     for (const el of rowsEl.querySelectorAll('.animate')) el.hidden = panels[+el.dataset.panel].mode !== 'accident1';
