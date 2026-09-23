@@ -582,7 +582,7 @@ const XTests = {
     ['chart', 'Chart', 'Each number n plotted at (n, n): the diagonal y = x with holes where the other class lives.'],
     ['factors', 'Factors', 'Chart plus a dot at every distinct prime factor of n.\n36 = 2² × 3² → dots at 2 and 3.'],
     ['divisors', 'Divisors', 'Chart plus a dot at every proper divisor of n above 1. Teal = prime, grey = composite.\n36 → 2, 3, 4, 6, 9, 12, 18.'],
-    ['divoffset', 'Divisors offset', 'Based on Divisors, always on the Log stretched y-axis. Every point is displaced along x by its y value times the offset slider: x = n + offset · y, y unchanged. A divisor dot (n, d) moves to x = n + offset · d; the point for n itself to x = n + offset · n.\nOffset 0 is plain Divisors. Teal = prime, grey = composite.'],
+    ['divoffset', 'Divisors offset', 'Based on Divisors, always on the Log stretched y-axis. Every point is displaced along x by (its y value + the middle x of the view) times the offset slider: x = n + offset · (y + mid-x), y unchanged. A divisor dot (n, d) moves to x = n + offset · (d + mid-x); the point for n itself to x = n + offset · (n + mid-x).\nOffset 0 is plain Divisors. Teal = prime, grey = composite.'],
     ['accident1', 'Divisors accident1', 'It\'s the "Divisors" mode, where the x and y axis have been swapped, and things mirrored around the current position. It wasn\'t what I had in mind.'],
     ['goldbach', 'Goldbach', 'Chart plus dots at p and n − p for every way n = p + q with both prime.\n36 = 5+31 = 7+29 = 13+23 = 17+19.\nFor a prime p only 2 + (p − 2) is possible, so its dots mark twin primes.'],
     ['goldbach3', 'Goldbach 3', 'Weak (ternary) Goldbach: a dot at every prime that appears in some triple p ≤ q ≤ r of primes with p + q + r = n.\nEvery odd n > 5 has one (Helfgott 2013). An even n needs p = 2, so 36 = 2+3+31 = 2+5+29 = 2+11+23 = 2+17+17.\nShown for n ≤ 5,000.'],
@@ -778,7 +778,7 @@ const XTests = {
     if (panel.mode === 'remainders') return s + ', dots at n mod k for 2 ≤ k < n (amber = 0)' + (view.ppn >= 2 && Math.floor(view.x0 + W / view.ppn) > REMAINDERS_MAX ? ' (shown for n ≤ 20,000)' : zoomNote);
     if (panel.mode === 'aliquot') return s + ', dot at the sum of proper divisors: grey deficient, amber abundant, white perfect' + zoomNote;
     if (panel.mode === 'factors') s += prime ? '' : ', dots at y = prime factors of n';
-    if (panel.mode === 'divoffset') return s + `, dots at y = divisors of n, every point displaced to x = n + ${panel.offset.toFixed(3)} · y` + zoomNote;
+    if (panel.mode === 'divoffset') return s + `, dots at y = divisors of n, every point displaced to x = n + ${panel.offset.toFixed(3)} · (y + ${fmtMid(scrollMidX())})` + zoomNote;
     else if (panel.mode === 'divisors') s += prime ? '' : ', dots at y = divisors of n (teal = prime)';
     else if (panel.mode === 'goldbach') {
       s += prime ? ', dots at 2 and p − 2 when both are prime (twin primes)'
@@ -889,16 +889,16 @@ const XTests = {
     const dotW = Math.max(m.t, Math.round(ppnD - Math.min(2 * m.t, ppnD * 0.25)));
     let n, candidates = [];
     if (panel.mode === 'divoffset') {
-      // points are displaced by offset · y, so the column under the cursor does not identify n:
+      // points are displaced by offset · (y + mid-x), so the column under the cursor does not identify n:
       // look for a displaced divisor dot under the cursor, else the displaced point for n itself
-      const s = panel.offset, half = (dotW / 2 + 1) / ppnD;
+      const s = panel.offset, sc = s * scrollMidX(), half = (dotW / 2 + 1) / ppnD;
       let hit = null;
-      P.offsetDivisorDots(xn - half, xn + half, s, sieveLimit, (nn, d, x) => {
+      P.offsetDivisorDots(xn - sc - half, xn - sc + half, s, sieveLimit, (nn, d, x) => {
         if (hit || !inClass(panel, nn)) return;
         const r = Math.floor(m.rowOf(d, nn));
-        if (myD >= r - 1 && myD <= r + m.t + 1) hit = { x, y: d, what: `divisor ${d} of ${nn}, displaced by ${s.toFixed(3)} · ${d}`, n: nn };
+        if (myD >= r - 1 && myD <= r + m.t + 1) hit = { x: x + sc, y: d, what: `divisor ${d} of ${nn}, displaced by ${s.toFixed(3)} · (${d} + ${fmtMid(scrollMidX())})`, n: nn };
       });
-      n = hit ? hit.n : Math.round(xn / (1 + s));                  // else: the point for n at x = n(1 + s)
+      n = hit ? hit.n : Math.round((xn - sc) / (1 + s));           // else: the point for n at x = n(1 + s) + s·mid-x
       return { cursor: { x: xn, y: m.valueAt(myD, n >= 1 ? n : 1) }, hit, n };
     }
     if (panel.mode === 'accident1') {
@@ -922,6 +922,10 @@ const XTests = {
     }
     return { cursor, hit, n };
   }
+
+  // Divisors offset: the middle x of the scrolled view, in numbers (live, follows panning and zooming)
+  const scrollMidX = () => view.x0 + W / view.ppn / 2;
+  const fmtMid = (v) => Math.abs(v - Math.round(v)) < 0.005 ? Math.round(v).toLocaleString() : v.toFixed(2);
 
   // from + count/2 of the visible range, as the toolbar shows it: the screen centre in numbers
   function accident1Centre() {
@@ -959,14 +963,14 @@ const XTests = {
     const plotAt = (x, y) => ctx.fillRect(x, y, t, t);
 
     if (view.ppn >= 2 && mode === 'divoffset') {
-      // every point (x, y) is drawn at x + offset · y: the point for n at n(1 + s) on the top edge,
-      // each divisor dot (n, d) at n + s·d on row d of column n's log axis
+      // every point (x, y) is drawn at x + offset · (y + mid-x): the point for n at n(1 + s) + s·mid-x
+      // on the top edge, each divisor dot (n, d) at n + s·(d + mid-x) on row d of column n's log axis
       const dotW = Math.max(t, Math.round(ppnD - Math.min(2 * t, ppnD * 0.25)));
-      const s = panel.offset, lo = topD, hiRow = topD + halfD - t;
-      const xLo = view.x0 - 1, xHi = view.x0 + span + 1;
+      const s = panel.offset, sc = s * scrollMidX(), lo = topD, hiRow = topD + halfD - t;
+      const xLo = view.x0 - 1 - sc, xHi = view.x0 + span + 1 - sc;   // the window before the s·mid-x shift
       for (let n = Math.max(1, Math.floor(xLo / (1 + s))); n <= Math.min(Math.ceil(xHi / (1 + s)), sieveLimit); n++) {
         if (!inClass(panel, n)) continue;
-        const xa = (n - 0.5 + s * n - view.x0) * ppnD, xb = xa + ppnD;
+        const xa = (n - 0.5 + s * n + sc - view.x0) * ppnD, xb = xa + ppnD;
         ctx.fillStyle = n === hoverN ? '#ffffff' : colorOf(panel, n, colors);
         P.plotSegment(xa, topD, xb, topD, plotAt);
       }
@@ -975,7 +979,7 @@ const XTests = {
         const r = Math.floor(rowOf(d, n));
         if (r < lo || r > hiRow) return;
         ctx.fillStyle = n === hoverN ? '#ffffff' : S[d] ? colors.prime : colors.composite;
-        ctx.fillRect(Math.round((xc - view.x0) * ppnD - dotW / 2), r, dotW, t);
+        ctx.fillRect(Math.round((xc + sc - view.x0) * ppnD - dotW / 2), r, dotW, t);
       });
     } else if (view.ppn >= 2) {
       const dotW = Math.max(t, Math.round(ppnD - Math.min(2 * t, ppnD * 0.25)));
@@ -1243,7 +1247,7 @@ const XTests = {
     const slider = document.createElement('input');
     slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 0.001;
     slider.className = 'offsetui offset'; slider.dataset.panel = i;
-    slider.title = 'Displacement: x = n + offset · y. 0 = no displacement, 1 = every point moved right by its y value.';
+    slider.title = 'Displacement: x = n + offset · (y + mid-x), mid-x = the middle x of the scrolled view. 0 = no displacement, 1 = every point moved right by its y value plus mid-x.';
     const oval = document.createElement('span'); oval.className = 'offsetui offsetval'; oval.dataset.panel = i;
     slider.addEventListener('input', () => setPanel(i, { offset: +slider.value }));
     const animBtn = document.createElement('button');
