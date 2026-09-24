@@ -2395,7 +2395,16 @@ async function main() {
     setPannerPosition(panner, position);
     const send = ctx.createGain();
     send.gain.value = 0.3 * 14 / (14 + 0.3 * distance);
-    input.connect(air);
+    if (options.drive) {
+      // Soft clipping adds the grit of an overloaded, very loud event.
+      const shaper = ctx.createWaveShaper();
+      const curve = new Float32Array(1024);
+      for (let i = 0; i < curve.length; i++) { const x = i / 511.5 - 1; curve[i] = Math.tanh(options.drive * x) / Math.tanh(options.drive); }
+      shaper.curve = curve;
+      shaper.oversample = "2x";
+      input.connect(shaper);
+      shaper.connect(air);
+    } else input.connect(air);
     air.connect(panner);
     panner.connect(audio.bus);
     air.connect(send);
@@ -2634,49 +2643,66 @@ async function main() {
     s.source.stop(now + 0.15);
   }
   // Impact: a sharp crack, a body thud, the material's ring, then rubble trickling down.
+  // Unpitched pressure punch: too short to be heard as a note, felt as weight.
+  function sfxPunch(e, start, peak) {
+    sfxTone(e, start, { freq: 58, freqEnd: 26, decay: 0.09, peak });
+    sfxNoise(e, start, { type: "lowpass", freq: 160, q: 0.5, rate: 0.35, decay: 0.18, peak: peak * 1.1 });
+  }
+  // Deep, grainy rumble made from slowed-down noise (no fundamental, so no drum note).
+  function sfxRumble(e, start, attack, decay, peak, freq = 140) {
+    sfxNoise(e, start, { type: "lowpass", freq, freqEnd: freq * 0.55, q: 0.4, rate: 0.28, attack, decay, peak });
+    sfxNoise(e, start, { type: "bandpass", freq: freq * 2.2, q: 0.5, rate: 0.5, attack: attack * 0.6, decay: decay * 0.6, peak: peak * 0.45 });
+  }
+  // Impact: crack and fracture crunch, a pressure punch, a long rumble, then rubble.
   function playImpactSound(type, material, energy, position, released = 0) {
-    const e = sfxEmitter(position, { ref: 14 });
+    const s = clamp(Math.sqrt(Math.max(0.05, energy) / 16), 0.25, 1.5);
+    const e = sfxEmitter(position, { ref: 16, drive: 1.6 + s * 1.4 });
     if (!e) return;
     const t = e.t;
-    const s = clamp(Math.sqrt(Math.max(0.05, energy) / 16), 0.25, 1.5);
-    const rubble = Math.min(40, 4 + released * 2);
+    const collapse = clamp(released / 12, 0, 1.5);
+    const rubble = Math.min(55, 6 + released * 2);
     if (material === "air") {
-      sfxTone(e, t, { freq: 140, freqEnd: 50, decay: 0.25, peak: 0.5 });
-      sfxNoise(e, t, { type: "bandpass", freq: 1800, q: 0.8, peak: 0.45, decay: 0.12 });
-      sfxModal(e, t, [[640, 0.3, 1], [1510, 0.2, 0.5], [2730, 0.12, 0.3]], 0.25);
+      sfxNoise(e, t, { type: "highpass", freq: 1200, q: 0.5, peak: 0.6, decay: 0.05 });
+      sfxPunch(e, t, 0.5);
+      sfxRumble(e, t, 0.01, 0.5, 0.35, 220);
+      sfxGrains(e, t + 0.02, 10, 0.3, { low: 2500, high: 7000, q: 2, peak: 0.12, decay: 0.03 });
       return;
     }
     if (type === "firepot") {
-      sfxGrains(e, t, 22, 0.35, { low: 3000, high: 8000, q: 8, peak: 0.35, decay: 0.04 });
-      sfxModal(e, t, [[1130, 0.12, 1], [2380, 0.08, 0.6]], 0.3);
-      sfxNoise(e, t + 0.02, { type: "lowpass", freq: 180, freqEnd: 1200, q: 0.7, attack: 0.09, decay: 1.1, peak: 1.0 });
-      sfxTone(e, t, { freq: 70, freqEnd: 30, decay: 0.7, peak: 0.7 });
+      sfxGrains(e, t, 26, 0.3, { low: 2500, high: 8000, q: 3, peak: 0.35, decay: 0.035 });
+      sfxNoise(e, t + 0.02, { type: "lowpass", freq: 160, freqEnd: 1100, q: 0.5, attack: 0.09, decay: 1.2, peak: 1.0 });
+      sfxPunch(e, t, 0.7);
     } else if (type === "cluster" || type === "clusterChild") {
       const scale = type === "clusterChild" ? 0.6 : 1;
-      sfxNoise(e, t, { type: "highpass", freq: 1500, q: 0.7, peak: 0.6 * scale, decay: 0.05 });
-      sfxNoise(e, t, { type: "lowpass", freq: 500, q: 0.7, peak: 0.9 * scale, decay: 0.55 });
-      sfxTone(e, t, { freq: 85, freqEnd: 28, decay: 0.6, peak: 0.8 * scale });
+      sfxNoise(e, t, { type: "highpass", freq: 1200, q: 0.5, peak: 0.7 * scale, decay: 0.06 });
+      sfxPunch(e, t, 0.9 * scale);
+      sfxRumble(e, t, 0.01, 0.8, 0.6 * scale, 180);
     }
     if (material === "ground") {
-      sfxTone(e, t, { freq: 72, freqEnd: 34, decay: 0.3, peak: 0.55 * s });
-      sfxNoise(e, t, { type: "lowpass", freq: 700, q: 0.6, peak: 0.45 * s, decay: 0.22 });
-      sfxGrains(e, t + 0.03, 6, 0.4, { low: 400, high: 1800, peak: 0.1 * s, decay: 0.05 });
+      sfxPunch(e, t, 0.6 * s);
+      sfxNoise(e, t, { type: "lowpass", freq: 900, q: 0.4, peak: 0.5 * s, decay: 0.2 });
+      sfxRumble(e, t, 0.01, 0.6, 0.3 * s, 120);
+      sfxGrains(e, t + 0.03, 10, 0.5, { low: 300, high: 1600, q: 1.5, peak: 0.12 * s, decay: 0.05 });
       return;
     }
-    if (type === "iron") sfxModal(e, t, [[520, 1.4, 1], [1347, 0.9, 0.55], [2411, 0.6, 0.35], [3712, 0.35, 0.2]], 0.45 * s, 0.01);
+    if (type === "iron") sfxModal(e, t, [[520, 1.0, 1], [1347, 0.7, 0.55], [2411, 0.45, 0.35]], 0.18 * s, 0.01);
+    // Broadband crack: the first few milliseconds, full spectrum.
+    sfxNoise(e, t, { type: "highpass", freq: 900, q: 0.4, peak: 1.2 * s, decay: 0.05 });
+    sfxNoise(e, t, { type: "bandpass", freq: 600, q: 0.3, peak: 1.0 * s, decay: 0.1 });
+    sfxPunch(e, t, 1.0 * s);
     if (material === "wood" || material === "roof") {
-      sfxNoise(e, t, { type: "highpass", freq: 2800, q: 0.7, peak: 0.8 * s, decay: 0.03 });
-      sfxModal(e, t, [[212, 0.28, 1], [347, 0.2, 0.7], [528, 0.14, 0.5], [810, 0.09, 0.3]], 0.7 * s, 0.05);
-      sfxTone(e, t, { freq: 95, freqEnd: 45, decay: 0.25, peak: 0.6 * s });
-      sfxGrains(e, t + 0.01, rubble, 0.45, { low: 2500, high: 6500, q: 6, peak: 0.16 * s, decay: 0.025 });
-      sfxCreak(e, t + 0.05, 0.6, { peak: 0.25 * s, pitch: 1.2, freq: 800 });
+      // Beams snapping and splintering.
+      sfxGrains(e, t, 30, 0.2, { low: 700, high: 5000, q: 1.2, peak: 0.35 * s, decay: 0.03 });
+      sfxGrains(e, t + 0.05, rubble, 0.9, { low: 2000, high: 6000, q: 2, peak: 0.14 * s, decay: 0.03 });
+      sfxRumble(e, t, 0.02, 0.9 + collapse * 0.8, (0.45 + collapse * 0.3) * s, 170);
+      sfxCreak(e, t + 0.08, 0.9, { peak: 0.3 * s, pitch: 0.8, freq: 600 });
     } else {
-      // Masonry (stone, granite, brick, plaster).
-      sfxNoise(e, t, { type: "highpass", freq: 2200, q: 0.7, peak: 1.0 * s, decay: 0.04 });
-      sfxTone(e, t, { freq: 88, freqEnd: 40, decay: 0.4, peak: 0.9 * s });
-      sfxModal(e, t, [[430, 0.12, 1], [790, 0.09, 0.7], [1260, 0.07, 0.5], [1930, 0.05, 0.3]], 0.5 * s, 0.08);
-      sfxNoise(e, t + 0.01, { type: "lowpass", freq: 380, q: 0.6, attack: 0.03, decay: 1.2, peak: 0.35 * s });
-      sfxGrains(e, t + 0.04, rubble, 1.3, { low: 900, high: 4200, q: 4, peak: 0.2 * s, decay: 0.05 });
+      // Masonry fracturing: dense crunch, a heavy boom, then the wall settling and rubble falling.
+      sfxGrains(e, t, 45, 0.18, { low: 250, high: 3000, q: 1.2, peak: 0.45 * s, decay: 0.035 });
+      sfxNoise(e, t + 0.004, { type: "lowpass", freq: 320, freqEnd: 90, q: 0.4, rate: 0.5, decay: 1.0, peak: 1.3 * s });
+      sfxRumble(e, t + 0.03, 0.12, 1.6 + collapse * 1.2, (0.55 + collapse * 0.35) * s, 130);
+      sfxGrains(e, t + 0.12, rubble, 1.8 + collapse, { low: 400, high: 3500, q: 1.8, peak: 0.24 * s, decay: 0.06 });
+      sfxGrains(e, t + 0.4, Math.floor(rubble / 2), 2.2 + collapse, { low: 150, high: 700, q: 1, peak: 0.2 * s, decay: 0.09 });
     }
   }
   // Tumbling blocks knocking into each other or the ground.
