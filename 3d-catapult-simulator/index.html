@@ -391,6 +391,16 @@ async function main() {
   const amberMaterial = new THREE.MeshStandardMaterial({ color: 0xc87c3b, roughness: 0.48, metalness: 0.36 });
   const leatherMaterial = new THREE.MeshStandardMaterial({ color: 0x5b3724, roughness: 0.96, metalness: 0 });
   const ropeMaterial = new THREE.MeshStandardMaterial({ color: 0xd0aa70, roughness: 1, metalness: 0 });
+  const crewMaterials = {
+    skin: new THREE.MeshStandardMaterial({ color: 0xd4a07a, roughness: 0.8, metalness: 0 }),
+    trousers: new THREE.MeshStandardMaterial({ color: 0x3b3128, roughness: 0.95, metalness: 0 }),
+    tunics: [0x8c2f28, 0x2e4f7c, 0x6f6a2c, 0x7a4a6a].map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0 }))
+  };
+  const headGeometry = new THREE.SphereGeometry(0.12, 12, 8);
+  const helmetGeometry = new THREE.SphereGeometry(0.14, 12, 6, 0, TAU, 0, HALF_PI);
+  const brimGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.02, 14);
+  const carryGeometry = new THREE.IcosahedronGeometry(0.16, 1);
+  const sharedGeometries = new Set([unitBox, headGeometry, helmetGeometry, brimGeometry, carryGeometry]);
   const cupMaterial = new THREE.MeshStandardMaterial({ color: 0x6b4428, roughness: 0.85, metalness: 0.02, side: THREE.DoubleSide });
   const tmpV = new THREE.Vector3();
   const tmpV2 = new THREE.Vector3();
@@ -403,7 +413,7 @@ async function main() {
   const yAxis = new THREE.Vector3(0, 1, 0);
   const zAxis = new THREE.Vector3(0, 0, 1);
   const identityRotation = { x: 0, y: 0, z: 0, w: 1 };
-  const audio = { ctx: null, master: null, noise: null, enabled: true, userGesture: false, lastClatter: -1 };
+  const audio = { ctx: null, master: null, bus: null, reverbIn: null, noise: null, creak: null, plucks: null, windGain: null, windFilter: null, enabled: true, userGesture: false, lastClatter: -1, ratchetStep: 0, loadedThunk: false };
   const keys = new Set();
   const cameraState = { az: 0.72, el: 0.36, dist: 68, target: new THREE.Vector3(0, 5, 22) };
   let pointerDown = false;
@@ -1096,6 +1106,7 @@ async function main() {
     const slingB = makeRope(group, 0.03);
     const trigger = makeRope(group, 0.035);
     group.userData = { geom: g, arm, hanger, pouch, slingA, slingB, trigger, pouchRadius };
+    trebuchetCrew(group, g, winchZ);
     return group;
   }
   function poseTrebuchet(model, pose, view) {
@@ -1176,6 +1187,7 @@ async function main() {
     group.add(arm);
     const winchRope = makeRope(group, 0.035);
     group.userData = { geom: g, arm, winchRope, winchZ };
+    mangonelCrew(group, g, winchZ);
     return group;
   }
   function poseMangonel(model, pose, view) {
@@ -1240,6 +1252,7 @@ async function main() {
     const stringL = makeRope(stock, 0.022);
     group.add(stock);
     group.userData = { geom: g, armR, armL, stringR, stringL };
+    ballistaCrew(group, g, s0);
     return group;
   }
   function poseBallista(model, pose) {
@@ -1255,8 +1268,188 @@ async function main() {
     setRope(u.stringL, -tx, g.ballY, ts, 0, g.ballY, s);
     return ballistaToWorld(g, s + g.r, g.ballY);
   }
+  // ---- Crew ------------------------------------------------------------------
+  // Winch men turn the capstans during the reload, a trigger man pulls the
+  // release lanyard, and a loader carries the next shot to the machine.
+  function makeSoldier(tunic) {
+    const root = new THREE.Group();
+    const cloth = crewMaterials.tunics[tunic % crewMaterials.tunics.length];
+    const legs = [-0.1, 0.1].map((x) => {
+      const leg = new THREE.Group();
+      leg.position.set(x, 0.9, 0);
+      makeBox(leg, 0.14, 0.84, 0.16, crewMaterials.trousers, 0, -0.44, 0);
+      makeBox(leg, 0.15, 0.08, 0.26, leatherMaterial, 0, -0.86, 0.04);
+      root.add(leg);
+      return leg;
+    });
+    const torso = new THREE.Group();
+    torso.position.set(0, 0.9, 0);
+    root.add(torso);
+    makeBox(torso, 0.4, 0.58, 0.24, cloth, 0, 0.29, 0);
+    makeBox(torso, 0.42, 0.22, 0.26, cloth, 0, -0.08, 0);
+    makeBox(torso, 0.43, 0.07, 0.27, leatherMaterial, 0, 0.04, 0);
+    const arms = [-0.27, 0.27].map((x) => {
+      const arm = new THREE.Group();
+      arm.position.set(x, 0.54, 0);
+      arm.rotation.z = x < 0 ? -0.07 : 0.07;
+      makeBox(arm, 0.11, 0.56, 0.12, cloth, 0, -0.26, 0);
+      const hand = new THREE.Mesh(headGeometry, crewMaterials.skin);
+      hand.scale.setScalar(0.42);
+      hand.position.y = -0.6;
+      arm.add(hand);
+      arm.userData.hand = hand;
+      torso.add(arm);
+      return arm;
+    });
+    const head = new THREE.Group();
+    head.position.set(0, 0.62, 0);
+    torso.add(head);
+    const face = new THREE.Mesh(headGeometry, crewMaterials.skin);
+    face.position.y = 0.1;
+    const helmet = new THREE.Mesh(helmetGeometry, metalMaterial);
+    helmet.position.y = 0.13;
+    const brim = new THREE.Mesh(brimGeometry, metalMaterial);
+    brim.position.y = 0.13;
+    head.add(face, helmet, brim);
+    const carry = new THREE.Mesh(carryGeometry, payloadMaterials.stone);
+    carry.position.set(0, 0.42, 0.55);
+    carry.visible = false;
+    torso.add(carry);
+    root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    root.userData = { legs, torso, arms, head, carry };
+    return root;
+  }
+  function buildCrew(group, specs, triggerPoint) {
+    const soldiers = specs.map((spec, i) => {
+      const mesh = makeSoldier(i);
+      mesh.position.set(spec.x, 0, spec.z);
+      mesh.rotation.y = Math.atan2(spec.face[0] - spec.x, spec.face[1] - spec.z);
+      mesh.name = "crew-" + spec.role;
+      group.add(mesh);
+      return { mesh, role: spec.role, seed: i * 1.7 };
+    });
+    const lanyard = makeRope(group, 0.018);
+    return { soldiers, lanyard, triggerPoint };
+  }
+  function trebuchetCrew(group, g, winchZ) {
+    const sx = g.sx;
+    const post = [0, 0.62, g.tipZ0 - 0.45];
+    group.userData.crew = buildCrew(group, [
+      { role: "crank", x: -(sx + 0.95), z: winchZ, face: [-(sx + 0.28), winchZ] },
+      { role: "crank", x: sx + 0.95, z: winchZ, face: [sx + 0.28, winchZ] },
+      { role: "trigger", x: -(sx + 0.9), z: g.tipZ0 + 0.9, face: [0, post[2]] },
+      { role: "loader", x: sx + 0.8, z: g.pz0, face: [0, g.pz0] }
+    ], post);
+    group.userData.winchPos = { x: 0, y: 0.75, z: winchZ };
+  }
+  function mangonelCrew(group, g, winchZ) {
+    const sx = g.sx;
+    const cupZ = g.Lc * Math.cos(g.a0) + g.hc * Math.cos(g.a0 - HALF_PI);
+    const loaderZ = Math.max(cupZ + 0.9, winchZ + 1.1);
+    group.userData.crew = buildCrew(group, [
+      { role: "crank", x: -(sx + 0.9), z: winchZ, face: [-(sx + 0.26), winchZ] },
+      { role: "crank", x: sx + 0.9, z: winchZ, face: [sx + 0.26, winchZ] },
+      { role: "trigger", x: -(sx + 0.95), z: winchZ + 1.3, face: [0, winchZ] },
+      { role: "loader", x: sx + 0.8, z: loaderZ, face: [0, cupZ] }
+    ], [0, 1.0, winchZ]);
+    group.userData.winchPos = { x: 0, y: 0.8, z: winchZ };
+  }
+  function ballistaCrew(group, g, s0) {
+    const winch = ballistaToWorld(g, -2.3, 0.36);
+    const seat = ballistaToWorld(g, s0 + g.r, g.ballY);
+    const claw = ballistaToWorld(g, s0 - 0.1, 0.42);
+    group.userData.crew = buildCrew(group, [
+      { role: "crank", x: -0.95, z: winch.z, face: [-0.36, winch.z] },
+      { role: "crank", x: 0.95, z: winch.z, face: [0.36, winch.z] },
+      { role: "trigger", x: -0.95, z: claw.z + 0.75, face: [0, claw.z] },
+      { role: "loader", x: 0.95, z: seat.z + 0.55, face: [0, seat.z] }
+    ], [0, claw.y, claw.z]);
+    group.userData.winchPos = { x: 0, y: winch.y, z: winch.z };
+  }
+  function setSoldierPose(soldier, p) {
+    const u = soldier.mesh.userData;
+    u.torso.rotation.x = p.lean;
+    u.arms[0].rotation.x = p.armL;
+    u.arms[1].rotation.x = p.armR;
+    u.legs[0].rotation.x = p.legL;
+    u.legs[1].rotation.x = p.legR;
+    // Turn the head toward the target downrange, within a natural range.
+    const yaw = -soldier.mesh.rotation.y;
+    u.head.rotation.y = clamp(Math.atan2(Math.sin(yaw), Math.cos(yaw)) * p.look, -1.2, 1.2);
+    u.head.rotation.x = -p.lean * 0.6;
+    u.carry.visible = Boolean(p.carry);
+  }
+  function poseCrew(model) {
+    const crew = model.userData.crew;
+    if (!crew) return;
+    const anim = state.machineAnim;
+    const ft = state.firingTime;
+    const rt = state.reloadTime;
+    const releaseTime = activeShot ? activeShot.releaseTime : 0;
+    const sinceRelease = anim === "firing" ? ft - releaseTime : Infinity;
+    let lanyardHand = null;
+    for (const s of crew.soldiers) {
+      const breath = 0.02 * Math.sin(state.simTime * 1.7 + s.seed);
+      const p = { lean: breath, armL: 0.05, armR: 0.05, legL: 0, legR: 0, look: 0, carry: false };
+      if (s.role === "crank") {
+        const turning = anim === "reloading" && rt < RELOAD_TIME * 0.95;
+        const phase = turning ? rt * 11 + s.seed : s.seed;
+        p.lean = 0.3 + 0.08 * Math.cos(phase);
+        p.armL = -1.25 + 0.45 * Math.sin(phase);
+        p.armR = -1.25 + 0.45 * Math.sin(phase + Math.PI);
+        p.legL = 0.25;
+        p.legR = -0.2;
+        if (sinceRelease >= 0 && sinceRelease < 1.4) {
+          const cheer = Math.sin(clamp(sinceRelease / 1.4, 0, 1) * Math.PI);
+          p.lean = lerp(p.lean, -0.05, cheer);
+          p.armR = lerp(p.armR, -2.9, cheer);
+          p.look = cheer;
+        }
+      } else if (s.role === "trigger") {
+        if (anim === "firing") {
+          const yank = smooth(clamp(ft / 0.2, 0, 1));
+          const relax = smooth(clamp((ft - 0.6) / 0.6, 0, 1));
+          p.lean = lerp(lerp(0.05, -0.3, yank), 0, relax);
+          p.armL = lerp(lerp(-0.5, 0.45, yank), 0.05, relax);
+          p.armR = lerp(lerp(-0.7, 0.55, yank), 0.05, relax);
+          p.legL = lerp(0.3 * yank, 0, relax);
+          p.legR = lerp(-0.25 * yank, 0, relax);
+          p.look = relax;
+          if (ft < 0.25) lanyardHand = s;
+        } else if (anim === "loaded") {
+          p.lean = 0.05 + breath;
+          p.armL = -0.5;
+          p.armR = -0.7;
+          lanyardHand = s;
+        } else {
+          p.look = 1;
+        }
+      } else {
+        const k = anim === "reloading" ? rt / RELOAD_TIME : 1;
+        if (anim === "reloading" && k > 0.2 && k < 0.85) {
+          const bend = smooth(clamp((k - 0.2) / 0.15, 0, 1)) * (1 - smooth(clamp((k - 0.45) / 0.12, 0, 1)));
+          p.lean = 0.12 + 0.75 * bend;
+          p.armL = p.armR = lerp(-1.45, -0.9, bend);
+          p.legL = 0.2 * bend;
+          p.carry = k > 0.45;
+        } else if (anim === "firing") {
+          p.lean = -0.08;
+          p.look = smooth(clamp(ft / 0.4, 0, 1));
+        }
+      }
+      setSoldierPose(s, p);
+    }
+    crew.lanyard.visible = Boolean(lanyardHand);
+    if (lanyardHand) {
+      model.updateMatrixWorld(true);
+      lanyardHand.mesh.userData.arms[1].userData.hand.getWorldPosition(tmpV3);
+      model.worldToLocal(tmpV3);
+      const t = crew.triggerPoint;
+      setRope(crew.lanyard, tmpV3.x, tmpV3.y, tmpV3.z, t[0], t[1], t[2]);
+    }
+  }
   function disposeModel(model) {
-    model.traverse((o) => { if (o.geometry && o.geometry !== unitBox) o.geometry.dispose(); });
+    model.traverse((o) => { if (o.geometry && !sharedGeometries.has(o.geometry)) o.geometry.dispose(); });
   }
   function ensureModel(shot) {
     if (currentModel && modelKey === shot.geom.key) return currentModel;
@@ -1320,6 +1513,7 @@ async function main() {
     const model = ensureModel(view.shot);
     const kind = view.shot.kind;
     const seat = kind === "trebuchet" ? poseTrebuchet(model, view.pose, view) : kind === "mangonel" ? poseMangonel(model, view.pose, view) : poseBallista(model, view.pose, view);
+    poseCrew(model);
     if (!restPayload) return;
     restPayload.position.set(0, seat.y, seat.z);
     restPayload.visible = view.payload;
@@ -1765,6 +1959,7 @@ async function main() {
   }
   function clearProjectiles() {
     for (const p of projectiles) {
+      stopFlightSound(p);
       if (p.mesh) { scene.remove(p.mesh); disposePayload(p.mesh); }
       if (p.light) scene.remove(p.light);
     }
@@ -2015,135 +2210,511 @@ async function main() {
     if (projectile.type === "firepot" || projectile.type === "clusterChild") addParticle(p, new THREE.Vector3((random() - 0.5) * 0.3, -0.2, (random() - 0.5) * 0.3), 0.45, particleMaterials.fire, -0.05, 0.34);
     else if (projectile.type === "cluster") addParticle(p, new THREE.Vector3((random() - 0.5) * 0.25, -0.1, (random() - 0.5) * 0.25), 0.32, particleMaterials.smoke, -0.03, 0.22);
   }
+  // ---- Sound -----------------------------------------------------------------
+  // Everything is synthesised. Each event is placed in 3D and heard from the
+  // camera: it arrives late by distance / 343 m/s, loses highs with distance,
+  // and feeds an outdoor reverb so far-off impacts sound far off.
+  const SPEED_OF_SOUND = 343;
   function ensureAudio() {
     if (!audio.enabled || !audio.userGesture) return null;
     if (!audio.ctx) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) return null;
-      audio.ctx = new AudioContextClass();
-      audio.master = audio.ctx.createGain();
-      audio.master.gain.value = 0.62;
-      audio.master.connect(audio.ctx.destination);
-      const length = Math.floor(audio.ctx.sampleRate * 1.2);
-      audio.noise = audio.ctx.createBuffer(1, length, audio.ctx.sampleRate);
+      const ctx = new AudioContextClass();
+      audio.ctx = ctx;
+      audio.master = ctx.createGain();
+      audio.master.gain.value = 0.95;
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -16;
+      compressor.knee.value = 12;
+      compressor.ratio.value = 4;
+      compressor.attack.value = 0.004;
+      compressor.release.value = 0.25;
+      compressor.connect(audio.master);
+      audio.master.connect(ctx.destination);
+      audio.bus = ctx.createGain();
+      audio.bus.connect(compressor);
+      audio.reverbIn = ctx.createGain();
+      const convolver = ctx.createConvolver();
+      convolver.buffer = makeImpulseResponse(ctx);
+      audio.reverbIn.connect(convolver);
+      convolver.connect(compressor);
+      const length = Math.floor(ctx.sampleRate * 2);
+      audio.noise = ctx.createBuffer(1, length, ctx.sampleRate);
       const data = audio.noise.getChannelData(0);
       for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
+      audio.creak = makeCreakBuffer(ctx);
+      audio.plucks = new Map();
+      startAmbience(ctx);
     }
     if (audio.ctx.state === "suspended") audio.ctx.resume();
     return audio.ctx;
   }
-  function audioPan(position) {
-    if (!position) return 0;
-    tmpV.set(position.x, position.y, position.z).project(camera);
-    return clamp(tmpV.x * 0.72, -0.82, 0.82);
+  // Outdoor space: a ground reflection, then a short, darkening diffuse tail.
+  function makeImpulseResponse(ctx) {
+    const rate = ctx.sampleRate;
+    const length = Math.floor(rate * 1.7);
+    const buffer = ctx.createBuffer(2, length, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buffer.getChannelData(ch);
+      let y = 0;
+      for (let i = 0; i < length; i++) {
+        const t = i / rate;
+        const x = (Math.random() * 2 - 1) * Math.exp(-t * 3.4);
+        y += (x - y) * (0.55 * Math.exp(-t * 1.8) + 0.04);
+        d[i] = y * (t < 0.008 ? t / 0.008 : 1);
+      }
+      d[Math.floor(rate * (0.011 + ch * 0.003))] += 0.5;
+    }
+    return buffer;
   }
-  function audioVoice(pan) {
-    const ctx = ensureAudio();
-    if (!ctx) return null;
-    const gain = ctx.createGain();
-    if (ctx.createStereoPanner) {
-      const panner = ctx.createStereoPanner();
-      panner.pan.value = pan;
-      gain.connect(panner);
-      panner.connect(audio.master);
-    } else gain.connect(audio.master);
-    return gain;
+  // Stick-slip friction: an irregular pulse train ringing a few timber modes.
+  function makeCreakBuffer(ctx) {
+    const rate = ctx.sampleRate;
+    const length = Math.floor(rate * 2.5);
+    const buffer = ctx.createBuffer(1, length, rate);
+    const d = buffer.getChannelData(0);
+    const modes = [[190, 0.9965], [430, 0.995], [870, 0.992], [1560, 0.988]].map(([f, r]) => ({ c: 2 * r * Math.cos(TAU * f / rate), r2: r * r, y1: 0, y2: 0 }));
+    let next = 0;
+    let pulseRate = 40;
+    let peak = 0;
+    for (let i = 0; i < length; i++) {
+      let e = 0;
+      if (i >= next) {
+        pulseRate = clamp(pulseRate + (Math.random() - 0.5) * 18, 14, 95);
+        next = i + rate / pulseRate * (0.7 + Math.random() * 0.6);
+        e = 0.4 + Math.random() * 0.6;
+      }
+      let y = 0;
+      for (const m of modes) {
+        const v = m.c * m.y1 - m.r2 * m.y2 + e;
+        m.y2 = m.y1;
+        m.y1 = v;
+        y += v;
+      }
+      d[i] = y * (0.6 + 0.4 * Math.sin(i / rate * 2.1));
+      peak = Math.max(peak, Math.abs(d[i]));
+    }
+    for (let i = 0; i < length; i++) d[i] /= peak || 1;
+    return buffer;
   }
-  function audioTone(gain, start, frequency, endFrequency, duration, peak, type = "sine") {
-    const ctx = audio.ctx;
-    if (!ctx || !gain) return;
-    const osc = ctx.createOscillator();
-    const env = ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(frequency, start);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(20, endFrequency), start + duration);
-    env.gain.setValueAtTime(peak, start);
-    env.gain.exponentialRampToValueAtTime(0.001, start + duration);
-    osc.connect(env);
-    env.connect(gain);
-    osc.start(start);
-    osc.stop(start + duration + 0.03);
+  // Karplus–Strong plucked string, cached per pitch.
+  function pluckBuffer(ctx, frequency) {
+    const key = Math.round(frequency);
+    if (audio.plucks.has(key)) return audio.plucks.get(key);
+    const rate = ctx.sampleRate;
+    const length = Math.floor(rate * 1.4);
+    const buffer = ctx.createBuffer(1, length, rate);
+    const d = buffer.getChannelData(0);
+    const period = Math.max(2, Math.round(rate / frequency));
+    const ring = new Float32Array(period);
+    for (let i = 0; i < period; i++) ring[i] = Math.random() * 2 - 1;
+    for (let i = 0; i < length; i++) {
+      const k = i % period;
+      const next = ring[(k + 1) % period];
+      d[i] = ring[k];
+      ring[k] = (ring[k] + next) * 0.4985;
+    }
+    audio.plucks.set(key, buffer);
+    return buffer;
   }
-  function audioNoise(gain, start, duration, filterType, frequency, q, peak) {
-    const ctx = audio.ctx;
-    if (!ctx || !gain || !audio.noise) return;
+  function startAmbience(ctx) {
     const source = ctx.createBufferSource();
-    const filter = ctx.createBiquadFilter();
-    const env = ctx.createGain();
     source.buffer = audio.noise;
-    source.playbackRate.value = 0.75 + Math.random() * 0.5;
-    filter.type = filterType;
-    filter.frequency.value = frequency;
-    filter.Q.value = q;
-    env.gain.setValueAtTime(peak, start);
-    env.gain.exponentialRampToValueAtTime(0.001, start + duration);
+    source.loop = true;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 420;
+    filter.Q.value = 0.4;
+    audio.windGain = ctx.createGain();
+    audio.windGain.gain.value = 0;
+    source.connect(filter);
+    filter.connect(audio.windGain);
+    audio.windGain.connect(audio.bus);
+    audio.windFilter = filter;
+    source.start();
+  }
+  function setParam(param, value, time) {
+    if (!param) return;
+    if (time !== undefined && param.setTargetAtTime) param.setTargetAtTime(value, time, 0.03);
+    else param.value = value;
+  }
+  function updateListener() {
+    const ctx = audio.ctx;
+    if (!ctx || !camera) return;
+    const l = ctx.listener;
+    const now = ctx.currentTime;
+    camera.getWorldDirection(tmpV3);
+    if (l.positionX) {
+      setParam(l.positionX, camera.position.x, now);
+      setParam(l.positionY, camera.position.y, now);
+      setParam(l.positionZ, camera.position.z, now);
+      setParam(l.forwardX, tmpV3.x, now);
+      setParam(l.forwardY, tmpV3.y, now);
+      setParam(l.forwardZ, tmpV3.z, now);
+      setParam(l.upX, 0);
+      setParam(l.upY, 1);
+      setParam(l.upZ, 0);
+    } else {
+      l.setPosition(camera.position.x, camera.position.y, camera.position.z);
+      l.setOrientation(tmpV3.x, tmpV3.y, tmpV3.z, 0, 1, 0);
+    }
+    if (audio.windGain) {
+      const gust = 0.6 + 0.4 * Math.sin(state.simTime * 0.37) * Math.sin(state.simTime * 0.11 + 1.3);
+      setParam(audio.windGain.gain, (0.018 + Math.abs(state.wind) * 0.0045) * gust, now);
+      setParam(audio.windFilter.frequency, 300 + Math.abs(state.wind) * 22 + gust * 120, now);
+    }
+  }
+  function setPannerPosition(panner, p, time) {
+    if (panner.positionX) {
+      setParam(panner.positionX, p.x, time);
+      setParam(panner.positionY, p.y, time);
+      setParam(panner.positionZ, p.z, time);
+    } else panner.setPosition(p.x, p.y, p.z);
+  }
+  function makePanner(ctx, ref) {
+    const panner = ctx.createPanner();
+    panner.panningModel = "HRTF";
+    panner.distanceModel = "inverse";
+    panner.refDistance = ref;
+    panner.rolloffFactor = 0.85;
+    panner.maxDistance = 2000;
+    return panner;
+  }
+  // One positioned source for a whole event; its sounds all connect to `input`.
+  function sfxEmitter(position, options = {}) {
+    const ctx = ensureAudio();
+    if (!ctx || !camera) return null;
+    const distance = camera.position.distanceTo(tmpV.set(position.x, position.y, position.z));
+    const input = ctx.createGain();
+    input.gain.value = options.gain ?? 1;
+    const air = ctx.createBiquadFilter();
+    air.type = "lowpass";
+    air.frequency.value = clamp(19000 / (1 + distance / 28), 1400, 19000);
+    const panner = makePanner(ctx, options.ref ?? 12);
+    setPannerPosition(panner, position);
+    const send = ctx.createGain();
+    send.gain.value = 0.3 * 14 / (14 + 0.3 * distance);
+    input.connect(air);
+    air.connect(panner);
+    panner.connect(audio.bus);
+    air.connect(send);
+    send.connect(audio.reverbIn);
+    return { ctx, input, distance, t: ctx.currentTime + 0.01 + distance / SPEED_OF_SOUND };
+  }
+  function envGain(ctx, dest, start, attack, peak, decay) {
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, start);
+    env.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), start + Math.max(0.001, attack));
+    env.gain.exponentialRampToValueAtTime(0.0001, start + attack + decay);
+    env.connect(dest);
+    return env;
+  }
+  function sfxNoise(e, start, o) {
+    const ctx = e.ctx;
+    const source = ctx.createBufferSource();
+    source.buffer = audio.noise;
+    source.playbackRate.value = o.rate ?? (0.8 + Math.random() * 0.4);
+    const filter = ctx.createBiquadFilter();
+    filter.type = o.type || "bandpass";
+    filter.frequency.setValueAtTime(o.freq, start);
+    if (o.freqEnd) filter.frequency.exponentialRampToValueAtTime(o.freqEnd, start + (o.attack || 0) + o.decay);
+    filter.Q.value = o.q ?? 1;
+    source.connect(filter);
+    filter.connect(envGain(ctx, e.input, start, o.attack || 0.002, o.peak, o.decay));
+    source.start(start, Math.random() * Math.max(0, 1.9 - (o.attack || 0) - o.decay));
+    source.stop(start + (o.attack || 0) + o.decay + 0.05);
+  }
+  function sfxTone(e, start, o) {
+    const ctx = e.ctx;
+    const osc = ctx.createOscillator();
+    osc.type = o.wave || "sine";
+    osc.frequency.setValueAtTime(o.freq, start);
+    if (o.freqEnd) osc.frequency.exponentialRampToValueAtTime(o.freqEnd, start + (o.attack || 0) + o.decay);
+    osc.connect(envGain(ctx, e.input, start, o.attack || 0.002, o.peak, o.decay));
+    osc.start(start);
+    osc.stop(start + (o.attack || 0) + o.decay + 0.05);
+  }
+  // Struck body: a click plus decaying inharmonic partials [frequency, decay, level].
+  function sfxModal(e, start, partials, peak, jitter = 0.04) {
+    for (const [f, decay, level] of partials) sfxTone(e, start, { freq: f * (1 + (Math.random() - 0.5) * jitter), decay, peak: peak * level, attack: 0.0015 });
+    sfxNoise(e, start, { type: "highpass", freq: 2500, q: 0.7, peak: peak * 0.5, decay: 0.012 });
+  }
+  // A shower of small hits spread over time: rubble, splinters, shards, crackle.
+  function sfxGrains(e, start, count, spread, o) {
+    for (let i = 0; i < count; i++) {
+      const u = Math.random();
+      const t = start + spread * u * u;
+      const fade = 1 - 0.7 * u;
+      sfxNoise(e, t, { type: "bandpass", freq: o.low + Math.random() * (o.high - o.low), q: o.q ?? 5, peak: o.peak * fade * (0.35 + Math.random() * 0.65), decay: o.decay * (0.6 + Math.random() * 0.8) });
+    }
+  }
+  function sfxCreak(e, start, duration, o) {
+    const ctx = e.ctx;
+    const source = ctx.createBufferSource();
+    source.buffer = audio.creak;
+    source.playbackRate.value = o.pitch ?? 1;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = o.freq ?? 700;
+    filter.Q.value = 0.8;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, start);
+    env.gain.exponentialRampToValueAtTime(o.peak, start + Math.min(0.08, duration * 0.3));
+    env.gain.setValueAtTime(o.peak, start + duration * 0.7);
+    env.gain.exponentialRampToValueAtTime(0.0001, start + duration);
     source.connect(filter);
     filter.connect(env);
-    env.connect(gain);
+    env.connect(e.input);
+    source.start(start, Math.random() * 0.5);
+    source.stop(start + duration + 0.05);
+  }
+  function sfxPluck(e, start, frequency, peak, bright = 4000) {
+    const ctx = e.ctx;
+    const source = ctx.createBufferSource();
+    source.buffer = pluckBuffer(ctx, frequency);
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(bright, start);
+    filter.frequency.exponentialRampToValueAtTime(600, start + 0.5);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(peak, start);
+    env.gain.exponentialRampToValueAtTime(0.0001, start + 1.3);
+    source.connect(filter);
+    filter.connect(env);
+    env.connect(e.input);
     source.start(start);
-    source.stop(start + duration + 0.04);
+  }
+  // Curves that follow the simulated motion: the swoosh is loudest when the arm is fastest.
+  function sweepCurves(shot) {
+    const g = shot.geom;
+    const radius = shot.kind === "trebuchet" ? g.L1 : g.La;
+    const reference = shot.kind === "trebuchet" ? 32 : shot.kind === "mangonel" ? 26 : 16;
+    const hz = 80;
+    const n = Math.max(2, Math.ceil(shot.endTime * hz));
+    const gain = new Float32Array(n);
+    const freq = new Float32Array(n);
+    const dt = 0.008;
+    const slingEnd = (pose) => {
+      const tz = g.L1 * Math.cos(pose[0]), ty = g.L1 * Math.sin(pose[0]);
+      return [tz + g.Ls * Math.cos(pose[2]), ty + g.Ls * Math.sin(pose[2])];
+    };
+    let peakAt = 0;
+    let peakSpeed = 0;
+    for (let i = 0; i < n; i++) {
+      const t = i / hz;
+      const a = samplePose(shot, t);
+      const b = samplePose(shot, t + dt);
+      let speed = Math.abs(b[0] - a[0]) / dt * radius;
+      if (shot.kind === "trebuchet") {
+        const pa = slingEnd(a), pb = slingEnd(b);
+        speed = Math.max(speed, Math.hypot(pb[0] - pa[0], pb[1] - pa[1]) / dt * 0.85);
+      }
+      if (speed > peakSpeed && t < shot.releaseTime + 0.6) { peakSpeed = speed; peakAt = t; }
+      gain[i] = Math.max(0.0001, Math.min(1.1, (speed / reference) ** 2) * 0.55);
+      freq[i] = 160 + speed * 26;
+    }
+    return { gain, freq, duration: (n - 1) / hz, peakAt };
+  }
+  function machineSoundOrigin(shot) {
+    const g = shot.geom;
+    if (shot.kind === "trebuchet") return { x: 0, y: g.H, z: 0 };
+    if (shot.kind === "mangonel") return { x: 0, y: g.Hs + 1, z: -1 };
+    const p = ballistaToWorld(g, g.sp - 0.8, g.ballY);
+    return { x: 0, y: p.y, z: p.z };
   }
   function playMachineSequence(shot) {
-    const ctx = ensureAudio();
-    if (!ctx) return;
-    const gain = audioVoice(0);
-    if (!gain) return;
-    const t = ctx.currentTime;
-    const releaseAt = shot.releaseTime / Math.max(0.05, state.slow);
-    // Trigger pin knocked out, then timber groaning under load until release.
-    audioTone(gain, t, 520, 180, 0.08, 0.12, "square");
-    audioNoise(gain, t, 0.08, "bandpass", 2400, 3, 0.12);
-    audioTone(gain, t + 0.04, 70, 52, releaseAt, 0.08, "sawtooth");
-    audioNoise(gain, t + 0.04, releaseAt, "bandpass", 380, 4, 0.05);
-    if (shot.slamTime !== null) {
-      const slam = t + shot.slamTime / Math.max(0.05, state.slow);
-      audioTone(gain, slam, 120, 38, 0.45, 0.4, "sine");
-      audioNoise(gain, slam, 0.22, "lowpass", 700, 0.8, 0.32);
+    const e = sfxEmitter(machineSoundOrigin(shot), { ref: 14 });
+    if (!e) return;
+    const slow = Math.max(0.05, state.slow);
+    const at = (t) => e.t + t / slow;
+    const release = shot.releaseTime;
+    // Release pin knocked out: iron clack and the trigger rope going slack.
+    sfxModal(e, at(0), [[1850, 0.07, 1], [2960, 0.05, 0.6], [4400, 0.03, 0.4]], 0.35);
+    sfxNoise(e, at(0.01), { type: "bandpass", freq: 900, q: 1.5, peak: 0.12, decay: 0.08 });
+    // The arm (and sling) cutting the air, driven by the simulated speed.
+    const sweep = sweepCurves(shot);
+    const ctx = e.ctx;
+    const source = ctx.createBufferSource();
+    source.buffer = audio.noise;
+    source.loop = true;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.Q.value = 0.9;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.0001;
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(e.input);
+    gain.gain.setValueCurveAtTime(sweep.gain, at(0), sweep.duration / slow);
+    filter.frequency.setValueCurveAtTime(sweep.freq, at(0), sweep.duration / slow);
+    source.start(at(0));
+    source.stop(at(sweep.duration) + 0.05);
+    if (shot.kind === "trebuchet") {
+      // Timber groans as the load comes on, the sling cracks at release,
+      // and the frame shudders as the counterweight swings through.
+      sfxCreak(e, at(0.05), (release + 0.2) / slow, { peak: 0.5, pitch: 0.75, freq: 520 });
+      sfxTone(e, at(0.05), { freq: 48, freqEnd: 40, attack: 0.3, decay: (release + 0.6) / slow, peak: 0.2 });
+      sfxNoise(e, at(release), { type: "highpass", freq: 3200, q: 0.8, peak: 0.55, decay: 0.03 });
+      sfxNoise(e, at(release + 0.01), { type: "bandpass", freq: 1400, q: 2, peak: 0.25, decay: 0.12 });
+      const shudder = at(Math.max(sweep.peakAt, 0.2));
+      sfxTone(e, shudder, { freq: 62, freqEnd: 34, decay: 0.7, peak: 0.55 });
+      sfxModal(e, shudder, [[118, 0.5, 1], [205, 0.35, 0.6], [340, 0.22, 0.35]], 0.35, 0.02);
+      sfxModal(e, shudder + 0.05, [[980, 0.18, 1], [1630, 0.12, 0.5]], 0.14);
+      sfxCreak(e, at(release + 0.3), 2.2 / slow, { peak: 0.28, pitch: 0.6, freq: 420 });
+    } else if (shot.kind === "mangonel") {
+      // Twisted skein groaning, then the arm slamming into the padded crossbar.
+      sfxCreak(e, at(0), (release + 0.05) / slow, { peak: 0.45, pitch: 1.3, freq: 900 });
+      const slam = at(shot.slamTime);
+      sfxTone(e, slam, { freq: 78, freqEnd: 32, decay: 0.8, peak: 1.0 });
+      sfxModal(e, slam, [[96, 0.9, 1], [171, 0.6, 0.7], [262, 0.45, 0.5], [415, 0.3, 0.35], [630, 0.18, 0.25]], 0.6, 0.02);
+      sfxNoise(e, slam, { type: "lowpass", freq: 900, q: 0.7, peak: 0.7, decay: 0.28 });
+      sfxGrains(e, slam + 0.03, 12, 0.5, { low: 500, high: 2200, peak: 0.12, decay: 0.05 });
+      sfxCreak(e, slam + 0.2, 1.2 / slow, { peak: 0.2, pitch: 0.7, freq: 500 });
     } else {
-      audioTone(gain, t + releaseAt, 900, 400, 0.05, 0.08, "triangle");
+      // Bowstring twang, the ball rumbling down the slider, arms hitting their pads.
+      sfxCreak(e, at(0), (release + 0.02) / slow, { peak: 0.3, pitch: 1.6, freq: 1200 });
+      sfxNoise(e, at(0), { type: "lowpass", freq: 260, q: 0.8, attack: release / slow * 0.8, decay: 0.05, peak: 0.25 });
+      const twang = at(release);
+      sfxPluck(e, twang, 88, 0.55);
+      sfxPluck(e, twang + 0.004, 131, 0.3, 3000);
+      sfxModal(e, twang, [[140, 0.3, 1], [260, 0.2, 0.6], [470, 0.12, 0.35]], 0.55, 0.02);
+      sfxModal(e, twang + 0.006, [[152, 0.28, 1], [290, 0.18, 0.5]], 0.45, 0.02);
+      sfxNoise(e, twang, { type: "bandpass", freq: 700, q: 1, peak: 0.45, decay: 0.09 });
     }
   }
-  function playWhoosh() {
+  function startFlightSound(projectile) {
     const ctx = ensureAudio();
-    if (!ctx) return;
-    const gain = audioVoice(0);
-    if (!gain) return;
-    const t = ctx.currentTime;
-    audioNoise(gain, t, 0.8, "bandpass", 420, 1.1, 0.19);
-    audioTone(gain, t, 88, 42, 0.7, 0.05, "sine");
+    if (!ctx) return null;
+    const source = ctx.createBufferSource();
+    source.buffer = audio.noise;
+    source.loop = true;
+    source.playbackRate.value = 0.9 + Math.random() * 0.2;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.Q.value = 1.1;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const panner = makePanner(ctx, 5);
+    setPannerPosition(panner, projectile.mesh.position);
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(panner);
+    panner.connect(audio.bus);
+    source.start(ctx.currentTime, Math.random());
+    return { source, filter, gain, panner, phase: 0 };
   }
-  function playImpactSound(type, material, energy, position) {
-    const ctx = ensureAudio();
-    if (!ctx) return;
-    const gain = audioVoice(audioPan(position));
-    if (!gain) return;
-    const t = ctx.currentTime;
-    const strength = clamp(Math.sqrt(Math.max(1, energy)) / 55, 0.18, 1);
-    if (type === "firepot" || type === "cluster" || type === "clusterChild") {
-      audioTone(gain, t, 92, 32, 0.6, 0.42 * strength, "sine");
-      audioNoise(gain, t, 0.7, "lowpass", 420, 0.7, 0.55 * strength);
-      audioNoise(gain, t + 0.025, 0.3, "highpass", 2300, 0.8, 0.22 * strength);
-    } else if (type === "iron") {
-      audioTone(gain, t, 210, 68, 0.28, 0.34 * strength, "triangle");
-      audioNoise(gain, t, 0.16, "bandpass", 2600, 3.4, 0.28 * strength);
-    } else if (material === "wood" || material === "roof") {
-      audioTone(gain, t, 145, 52, 0.18, 0.3 * strength, "triangle");
-      audioNoise(gain, t, 0.13, "bandpass", 720, 2.2, 0.3 * strength);
+  function updateFlightSound(projectile, dt) {
+    const s = projectile.sound;
+    if (!s || !audio.ctx) return;
+    const now = audio.ctx.currentTime;
+    const v = projectile.body.linvel();
+    const w = projectile.body.angvel();
+    const speed = Math.hypot(v.x, v.y, v.z);
+    const p = projectile.mesh.position;
+    tmpV.subVectors(camera.position, p);
+    const d = Math.max(0.5, tmpV.length());
+    // Doppler shift from the closing speed; the tumble makes the whoosh throb.
+    const closing = (v.x * tmpV.x + v.y * tmpV.y + v.z * tmpV.z) / d;
+    const doppler = SPEED_OF_SOUND / (SPEED_OF_SOUND - clamp(closing, -200, 200));
+    s.phase += Math.hypot(w.x, w.y, w.z) * dt;
+    const throb = 0.65 + 0.35 * Math.abs(Math.sin(s.phase));
+    const size = clamp(projectile.radius / 0.18, 0.4, 1.6);
+    setPannerPosition(s.panner, p, now);
+    setParam(s.gain.gain, Math.min(1.2, (speed / 30) ** 2) * 0.32 * size * throb, now);
+    setParam(s.filter.frequency, clamp((260 + speed * 16) * doppler / Math.sqrt(size), 120, 6000), now);
+  }
+  function stopFlightSound(projectile) {
+    const s = projectile.sound;
+    if (!s || !audio.ctx) return;
+    projectile.sound = null;
+    const now = audio.ctx.currentTime;
+    s.gain.gain.cancelScheduledValues(now);
+    s.gain.gain.setTargetAtTime(0, now, 0.02);
+    s.source.stop(now + 0.15);
+  }
+  // Impact: a sharp crack, a body thud, the material's ring, then rubble trickling down.
+  function playImpactSound(type, material, energy, position, released = 0) {
+    const e = sfxEmitter(position, { ref: 14 });
+    if (!e) return;
+    const t = e.t;
+    const s = clamp(Math.sqrt(Math.max(0.05, energy) / 16), 0.25, 1.5);
+    const rubble = Math.min(40, 4 + released * 2);
+    if (material === "air") {
+      sfxTone(e, t, { freq: 140, freqEnd: 50, decay: 0.25, peak: 0.5 });
+      sfxNoise(e, t, { type: "bandpass", freq: 1800, q: 0.8, peak: 0.45, decay: 0.12 });
+      sfxModal(e, t, [[640, 0.3, 1], [1510, 0.2, 0.5], [2730, 0.12, 0.3]], 0.25);
+      return;
+    }
+    if (type === "firepot") {
+      sfxGrains(e, t, 22, 0.35, { low: 3000, high: 8000, q: 8, peak: 0.35, decay: 0.04 });
+      sfxModal(e, t, [[1130, 0.12, 1], [2380, 0.08, 0.6]], 0.3);
+      sfxNoise(e, t + 0.02, { type: "lowpass", freq: 180, freqEnd: 1200, q: 0.7, attack: 0.09, decay: 1.1, peak: 1.0 });
+      sfxTone(e, t, { freq: 70, freqEnd: 30, decay: 0.7, peak: 0.7 });
+    } else if (type === "cluster" || type === "clusterChild") {
+      const scale = type === "clusterChild" ? 0.6 : 1;
+      sfxNoise(e, t, { type: "highpass", freq: 1500, q: 0.7, peak: 0.6 * scale, decay: 0.05 });
+      sfxNoise(e, t, { type: "lowpass", freq: 500, q: 0.7, peak: 0.9 * scale, decay: 0.55 });
+      sfxTone(e, t, { freq: 85, freqEnd: 28, decay: 0.6, peak: 0.8 * scale });
+    }
+    if (material === "ground") {
+      sfxTone(e, t, { freq: 72, freqEnd: 34, decay: 0.3, peak: 0.55 * s });
+      sfxNoise(e, t, { type: "lowpass", freq: 700, q: 0.6, peak: 0.45 * s, decay: 0.22 });
+      sfxGrains(e, t + 0.03, 6, 0.4, { low: 400, high: 1800, peak: 0.1 * s, decay: 0.05 });
+      return;
+    }
+    if (type === "iron") sfxModal(e, t, [[520, 1.4, 1], [1347, 0.9, 0.55], [2411, 0.6, 0.35], [3712, 0.35, 0.2]], 0.45 * s, 0.01);
+    if (material === "wood" || material === "roof") {
+      sfxNoise(e, t, { type: "highpass", freq: 2800, q: 0.7, peak: 0.8 * s, decay: 0.03 });
+      sfxModal(e, t, [[212, 0.28, 1], [347, 0.2, 0.7], [528, 0.14, 0.5], [810, 0.09, 0.3]], 0.7 * s, 0.05);
+      sfxTone(e, t, { freq: 95, freqEnd: 45, decay: 0.25, peak: 0.6 * s });
+      sfxGrains(e, t + 0.01, rubble, 0.45, { low: 2500, high: 6500, q: 6, peak: 0.16 * s, decay: 0.025 });
+      sfxCreak(e, t + 0.05, 0.6, { peak: 0.25 * s, pitch: 1.2, freq: 800 });
     } else {
-      audioTone(gain, t, 110, 38, 0.3, 0.38 * strength, "sine");
-      audioNoise(gain, t, 0.24, "lowpass", 950, 0.8, 0.38 * strength);
+      // Masonry (stone, granite, brick, plaster).
+      sfxNoise(e, t, { type: "highpass", freq: 2200, q: 0.7, peak: 1.0 * s, decay: 0.04 });
+      sfxTone(e, t, { freq: 88, freqEnd: 40, decay: 0.4, peak: 0.9 * s });
+      sfxModal(e, t, [[430, 0.12, 1], [790, 0.09, 0.7], [1260, 0.07, 0.5], [1930, 0.05, 0.3]], 0.5 * s, 0.08);
+      sfxNoise(e, t + 0.01, { type: "lowpass", freq: 380, q: 0.6, attack: 0.03, decay: 1.2, peak: 0.35 * s });
+      sfxGrains(e, t + 0.04, rubble, 1.3, { low: 900, high: 4200, q: 4, peak: 0.2 * s, decay: 0.05 });
     }
   }
-  function playDebrisSound(material, energy, position) {
-    const ctx = ensureAudio();
-    if (!ctx) return;
-    if (state.simTime - audio.lastClatter < 0.055) return;
+  // Tumbling blocks knocking into each other or the ground.
+  function playDebrisSound(material, speed, position) {
+    const ctx = audio.ctx;
+    if (!ctx || !audio.enabled) return;
+    if (state.simTime - audio.lastClatter < 0.03) return;
     audio.lastClatter = state.simTime;
-    const gain = audioVoice(audioPan(position));
-    if (!gain) return;
-    const t = ctx.currentTime;
-    const strength = clamp(Math.sqrt(Math.max(1, energy)) / 100, 0.04, 0.3);
-    audioNoise(gain, t, material === "wood" || material === "roof" ? 0.09 : 0.06, "bandpass", material === "wood" || material === "roof" ? 950 : 1800, 3, strength);
+    const e = sfxEmitter(position, { ref: 10 });
+    if (!e) return;
+    const s = clamp(speed / 7, 0.08, 1);
+    if (material === "wood" || material === "roof") {
+      sfxModal(e, e.t, [[240 + Math.random() * 120, 0.16, 1], [560 + Math.random() * 200, 0.1, 0.5]], 0.4 * s, 0.1);
+    } else {
+      sfxNoise(e, e.t, { type: "bandpass", freq: 900 + Math.random() * 1600, q: 2, peak: 0.55 * s, decay: 0.06 });
+      sfxTone(e, e.t, { freq: 110, freqEnd: 55, decay: 0.12, peak: 0.35 * s });
+      sfxGrains(e, e.t + 0.02, 3, 0.25, { low: 1500, high: 4500, peak: 0.12 * s, decay: 0.03 });
+    }
+  }
+  function playFireCrackle(fire) {
+    const e = sfxEmitter(fire.position, { ref: 8 });
+    if (!e) return;
+    const s = clamp(fire.life / 5.5, 0.2, 1);
+    sfxGrains(e, e.t, 4 + Math.floor(Math.random() * 5), 0.28, { low: 1800, high: 7000, q: 7, peak: 0.22 * s, decay: 0.012 });
+    sfxNoise(e, e.t, { type: "lowpass", freq: 300, q: 0.5, attack: 0.1, decay: 0.3, peak: 0.12 * s });
+  }
+  // Winch pawl clicking over the ratchet as the crew turns the capstans.
+  function playRatchet(position) {
+    const e = sfxEmitter(position, { ref: 8 });
+    if (!e) return;
+    sfxModal(e, e.t, [[2150, 0.035, 1], [3380, 0.025, 0.5]], 0.22, 0.03);
+    sfxModal(e, e.t + 0.012, [[380, 0.05, 1]], 0.12, 0.05);
+  }
+  function playLoadThunk(position) {
+    const e = sfxEmitter(position, { ref: 8 });
+    if (!e) return;
+    sfxTone(e, e.t, { freq: 130, freqEnd: 70, decay: 0.12, peak: 0.35 });
+    sfxNoise(e, e.t, { type: "bandpass", freq: 500, q: 1.2, peak: 0.2, decay: 0.07 });
   }
   function createProjectile(type, position, velocity, mass, radius, child = false) {
     const mesh = makePayloadMesh(type, radius);
@@ -2165,11 +2736,13 @@ async function main() {
     }
     colliderToProjectile.set(collider.handle, projectile);
     projectiles.push(projectile);
+    projectile.sound = startFlightSound(projectile);
     return projectile;
   }
   function removeProjectile(projectile, preserveFlight = false) {
     if (!projectile || projectile.dead) return;
     projectile.dead = true;
+    stopFlightSound(projectile);
     scene.remove(projectile.mesh);
     disposePayload(projectile.mesh);
     if (projectile.light) scene.remove(projectile.light);
@@ -2227,7 +2800,7 @@ async function main() {
       const childVelocity = { x: velocity.x + spread.x, y: velocity.y + spread.y, z: velocity.z + spread.z };
       createProjectile("clusterChild", position.clone().add(offset), childVelocity, projectile.mass * 0.16, payloadRadius("clusterChild", projectile.mass * 0.16), true);
     }
-    playImpactSound("cluster", "iron", Math.max(80, projectile.lastSpeed * projectile.mass * 0.08), position);
+    playImpactSound("cluster", "air", 1, position);
   }
   function handleProjectileImpact(projectile, blockIndex, contactForce) {
     if (!projectile || projectile.dead || state.simTime - projectile.lastImpact < 0.075) return;
@@ -2261,7 +2834,7 @@ async function main() {
     state.flightEnded = true;
     state.flightTime = Math.max(0, state.simTime - state.flightStartTime);
     spawnImpactEffects(position, projectile.type, blockMaterial, energy, explosive);
-    playImpactSound(projectile.type, blockMaterial, energy, position);
+    playImpactSound(projectile.type, blockMaterial, energy, position, released.length);
     if (explosive) {
       removeProjectile(projectile);
     } else {
@@ -2284,7 +2857,7 @@ async function main() {
       if (projectile.type === "firepot") addFireSource(position, energy, PAYLOADS[projectile.type].blast);
     }
     spawnImpactEffects(position, projectile.type, "stone", energy, PAYLOADS[projectile.type].blast > 0);
-    playImpactSound(projectile.type, "stone", energy, position);
+    playImpactSound(projectile.type, "ground", energy, position);
     state.hasImpact = state.hasImpact || false;
     state.flightTime = Math.max(0, state.simTime - state.flightStartTime);
     removeProjectile(projectile);
@@ -2313,11 +2886,25 @@ async function main() {
     eventQueue.drainCollisionEvents((c1, c2, started) => {
       if (!started) return;
       const p = colliderToProjectile.get(c1) || colliderToProjectile.get(c2);
-      if (!p || p.dead) return;
+      if (!p) { blockClatter(c1, c2); return; }
+      if (p.dead) return;
       const other = p === colliderToProjectile.get(c1) ? c2 : c1;
       const blockIndex = colliderToBlock.get(other);
       if (blockIndex !== undefined) handleProjectileImpact(p, blockIndex, 0);
     });
+  }
+  function blockClatter(c1, c2) {
+    let loudest = null;
+    for (const handle of [c1, c2]) {
+      const i = colliderToBlock.get(handle);
+      if (i === undefined || !structure || !structure.released[i] || !targetBodies[i]) continue;
+      const v = targetBodies[i].linvel();
+      const speed = Math.hypot(v.x, v.y, v.z);
+      if (!loudest || speed > loudest.speed) loudest = { i, speed };
+    }
+    if (!loudest || loudest.speed < 1.2) return;
+    telemetry.clatters++;
+    playDebrisSound(targetBlocks[loudest.i].mat, loudest.speed, targetBodies[loudest.i].translation());
   }
   function updateFireSources(dt) {
     for (let i = fires.length - 1; i >= 0; i--) {
@@ -2326,6 +2913,7 @@ async function main() {
       fire.tick -= dt;
       if (fire.tick <= 0) {
         fire.tick = 0.28;
+        playFireCrackle(fire);
         const hit = areaDamage(fire.position, fire.radius, 24 + fire.energy * 0.2, { x: 0, y: 1.2, z: 0 }, true);
         if (hit.length) state.status = "impact";
         if (random() > 0.2) {
@@ -2355,6 +2943,7 @@ async function main() {
       projectile.mesh.quaternion.set(r.x, r.y, r.z, r.w);
       if (projectile.light) projectile.light.position.copy(projectile.mesh.position);
       projectile.lastSpeed = Math.hypot(projectile.body.linvel().x, projectile.body.linvel().y, projectile.body.linvel().z);
+      updateFlightSound(projectile, dt);
       if (projectile.type === "cluster" && !projectile.split && projectile.age > 0.48 + state.range * 0.002) splitCluster(projectile);
       spawnTrail(projectile);
       if (projectile.age > 0.12 && t.y <= projectile.radius + 0.08) handleGroundImpact(projectile);
@@ -2387,6 +2976,7 @@ async function main() {
       if (state.firingTime >= activeShot.endTime) { state.machineAnim = "reloading"; state.reloadTime = 0; }
     } else if (state.machineAnim === "reloading") {
       state.reloadTime += DT;
+      reloadSounds();
       if (state.reloadTime >= RELOAD_TIME) state.machineAnim = "loaded";
     }
     world.timestep = DT * state.slow;
@@ -2435,7 +3025,6 @@ async function main() {
     state.status = "in flight";
     telemetry.launchVelocity = solution.speed;
     telemetry.kineticEnergy = solution.kineticEnergy;
-    playWhoosh();
     updateTelemetry();
     return true;
   }
@@ -2748,6 +3337,15 @@ async function main() {
       if (targetFill) targetFill.position.set(16, 11, Math.max(2, state.range - 19));
     }
   }
+  function reloadSounds() {
+    const u = currentModel && currentModel.userData;
+    if (!u || !u.winchPos) return;
+    if (state.reloadTime <= DT * 1.5) { audio.ratchetStep = 0; audio.loadedThunk = false; }
+    // One pawl click per quarter turn of the capstans (matches the crew's cranking).
+    const step = Math.floor(state.reloadTime * 11 / (Math.PI / 2));
+    if (step > audio.ratchetStep && state.reloadTime < RELOAD_TIME * 0.95) { audio.ratchetStep = step; playRatchet(u.winchPos); }
+    if (!audio.loadedThunk && state.reloadTime >= RELOAD_TIME * 0.85 && restPayload) { audio.loadedThunk = true; playLoadThunk(restPayload.position); }
+  }
   function syncVisuals() {
     updateMachineVisual();
     for (const projectile of projectiles) {
@@ -2761,6 +3359,7 @@ async function main() {
     }
     screenShake = Math.max(0, screenShake - 0.018);
     updateCamera();
+    updateListener();
   }
   function frame(now) {
     requestAnimationFrame(frame);
@@ -2858,6 +3457,7 @@ async function main() {
       smokeCheck() { const smoke = rendererSmoke(); return { ...smoke, api: true, prediction: plainPrediction(), stats: statsSnapshot() }; },
       get state() { return { ...state }; },
       get predictionData() { return plainPrediction(); },
+      get audio() { return audio; },
       get world() { return world; },
       get structure() { return structure; },
       get projectiles() { return projectiles; },
