@@ -1945,6 +1945,8 @@ async function main() {
     const asset = generateTarget(state.targetType, state.range);
     targetBlocks = asset.blocks;
     structure = new Structure(targetBlocks, state.strength);
+    structure.range = state.range;
+    structure.strength = state.strength;
     makeBlockMesh();
     makeBlockBodies();
     buildTargetDecor(asset);
@@ -2020,10 +2022,35 @@ async function main() {
     updatePrediction();
     updateTelemetry();
   }
-  function scheduleRebuild() {
-    if (rebuildTimer) clearTimeout(rebuildTimer);
-    rebuildTimer = setTimeout(() => { rebuildTimer = 0; rebuildPhysics(); }, 120);
+  // Range and strength edit the standing (possibly damaged) target in place;
+  // only a full reset or choosing another target rebuilds it.
+  function moveTarget(range) {
+    if (!structure || structure.range === undefined) return;
+    const dz = range - structure.range;
+    if (!dz) return;
+    structure.range = range;
+    for (let i = 0; i < targetBlocks.length; i++) {
+      targetBlocks[i].p[2] += dz;
+      structure.aabbs[i].min[2] += dz;
+      structure.aabbs[i].max[2] += dz;
+      const body = targetBodies[i];
+      if (!body) continue;
+      const t = body.translation();
+      body.setTranslation({ x: t.x, y: t.y, z: t.z + dz }, true);
+      writeBlockMatrix(i, body.translation(), body.rotation());
+    }
+    if (targetMesh) targetMesh.instanceMatrix.needsUpdate = true;
+    if (targetDecor) targetDecor.position.z += dz;
+    for (const fire of fires) fire.position.z += dz;
   }
+  function setTargetStrength(strength) {
+    if (!structure || !structure.strength) return;
+    const k = strength / structure.strength;
+    structure.strength = strength;
+    for (let i = 0; i < structure.n; i++) { structure.hp[i] *= k; setBlockColor(i); }
+    if (targetMesh && targetMesh.instanceColor) targetMesh.instanceColor.needsUpdate = true;
+  }
+
   function calculatePrediction(shot = getShot()) {
     const o = machineToWorld(shot.releasePos);
     const origin = new THREE.Vector3(o.x, o.y, o.z);
@@ -3261,13 +3288,6 @@ async function main() {
       updateMachineVisual();
       updatePrediction();
     });
-    input.addEventListener("change", () => {
-      if (key === "range" || key === "strength") {
-        if (rebuildTimer) { clearTimeout(rebuildTimer); rebuildTimer = 0; }
-        rebuildPhysics();
-        updatePrediction();
-      }
-    });
   }
   function bindUi() {
     $("machine").addEventListener("change", () => {
@@ -3304,8 +3324,8 @@ async function main() {
     bindRange("wind", "wind");
     bindRange("gravity", "gravity", () => { if (world) setGravity(); });
     bindRange("slow", "slow", () => { if (world) world.timestep = DT * state.slow; });
-    bindRange("range", "range", () => { updateTargetControls(); scheduleRebuild(); });
-    bindRange("strength", "strength", () => { scheduleRebuild(); });
+    bindRange("range", "range", () => { moveTarget(state.range); updateTargetControls(); });
+    bindRange("strength", "strength", () => setTargetStrength(state.strength));
     $("sound").addEventListener("change", () => {
       audio.enabled = $("sound").checked;
       audio.userGesture = true;
@@ -3433,8 +3453,8 @@ async function main() {
     else if (group === "payload" && PAYLOADS[value] && value !== "clusterChild") { state.payload = value; applyPayloadDefaults(); rebuildRestPayload(); readyNextShot(); }
     else if (group === "target" && TARGETS[value]) { state.targetType = value; rebuildPhysics(); }
     else if (group === "targetType" && TARGETS[value]) { state.targetType = value; rebuildPhysics(); }
-    else if (group === "range") { state.range = clamp(Number(value), 20, 140); rebuildPhysics(); }
-    else if (group === "strength") { state.strength = clamp(Number(value), 0.45, 2); rebuildPhysics(); }
+    else if (group === "range") { state.range = clamp(Number(value), 20, 140); moveTarget(state.range); updateTargetControls(); }
+    else if (group === "strength") { state.strength = clamp(Number(value), 0.45, 2); setTargetStrength(state.strength); }
     else if (group === "power") state.power = clamp(Number(value), 20, 100);
     else if (group === "draw") state.draw = clamp(Number(value), 10, 100);
     else if (group === "angle") state.angle = clamp(Number(value), limits.angle[0], limits.angle[1]);
