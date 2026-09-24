@@ -159,8 +159,12 @@ button.secondary:hover { background: rgba(255,255,255,.1); color: var(--text); }
     <summary>Range & environment</summary>
     <div class="card-body">
       <div class="grid2">
-        <div class="field"><label for="targetType">Target</label><select id="targetType"><option value="keep">Stone keep</option><option value="gatehouse">Gatehouse</option><option value="village">Village</option></select></div>
+        <div class="field"><label for="targetType">Target</label><select id="targetType"><option value="keep">Stone keep</option><option value="castle">Castle</option><option value="tower">Round tower</option><option value="gatehouse">Gatehouse</option><option value="town">Walled town</option><option value="fort">Timber fort</option><option value="village">Village</option></select></div>
         <div class="field"><div class="label-row"><label for="range">Target range</label><output id="vRange">60 m</output></div><input id="range" type="range" min="20" max="140" step="1" value="60"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="water">Water</label><select id="water"><option value="none">None</option><option value="moat">Moat</option><option value="channel">Channel</option><option value="both">Moat + channel</option></select></div>
+        <div class="field"><label for="outworks">Outworks</label><select id="outworks"><option value="none">None</option><option value="palisade">Palisade</option><option value="curtain">Curtain wall</option><option value="rampart">Earth rampart</option></select></div>
       </div>
       <div class="field"><div class="label-row"><label for="strength">Target strength</label><output id="vStrength">1.00×</output></div><input id="strength" type="range" min="0.45" max="2" step="0.05" value="1"></div>
       <div class="grid2">
@@ -276,7 +280,11 @@ async function main() {
   const TARGETS = {
     keep: { label: "Stone keep", note: "Layered masonry, corner towers, and a bonded gatehouse core.", radius: 10, height: 10 },
     gatehouse: { label: "Gatehouse", note: "Timber lintels, stone piers, and a deliberately vulnerable roofline.", radius: 10, height: 9 },
-    village: { label: "Village", note: "A small mixed-material settlement with roofs, chimneys, and yard walls.", radius: 12, height: 8 }
+    village: { label: "Village", note: "A small mixed-material settlement with roofs, chimneys, and yard walls.", radius: 12, height: 8 },
+    tower: { label: "Round tower", note: "A tall granite donjon with timber floors and a conical roof. Narrow and hard to hit.", radius: 6, height: 17 },
+    castle: { label: "Castle", note: "Curtain walls with corner towers, a twin-towered gate and a tall inner keep.", radius: 13, height: 12 },
+    town: { label: "Walled town", note: "A town wall with a gate and flanking towers; houses and a church with a bell tower behind.", radius: 15, height: 13 },
+    fort: { label: "Timber fort", note: "A palisade of sharpened stakes, corner watchtowers and a timber hall. Burns well.", radius: 11, height: 9 }
   };
   const MATERIALS = {
     stone: { color: 0x9a9d96, density: 1900, strength: 32, reach: 1.35, sound: "stone" },
@@ -284,12 +292,15 @@ async function main() {
     brick: { color: 0xb96c50, density: 1500, strength: 24, reach: 1.1, sound: "brick" },
     wood: { color: 0xa06a3c, density: 650, strength: 18, reach: 0.72, sound: "wood" },
     roof: { color: 0x527780, density: 850, strength: 16, reach: 0.8, sound: "wood" },
-    plaster: { color: 0xd7c394, density: 950, strength: 14, reach: 0.65, sound: "brick" }
+    plaster: { color: 0xd7c394, density: 950, strength: 14, reach: 0.65, sound: "brick" },
+    earth: { color: 0x6e5a3c, density: 1700, strength: 26, reach: 0.9, sound: "earth" }
   };
   const state = {
     machine: "trebuchet",
     payload: "stone",
     targetType: "keep",
+    water: "none",
+    outworks: "none",
     power: 80,
     draw: 60,
     angle: 45,
@@ -343,7 +354,10 @@ async function main() {
   let targetLabelTexture;
   let world;
   let eventQueue;
-  let groundCollider;
+  let groundBody = null;
+  let groundHandles = new Set();
+  let waterHoles = [];
+  const waterGroup = new THREE.Group();
   let structure;
   let targetBlocks = [];
   let targetBodies = [];
@@ -382,7 +396,10 @@ async function main() {
   const particleGeometry = new THREE.IcosahedronGeometry(0.13, 0);
   const sparkGeometry = new THREE.SphereGeometry(0.065, 6, 4);
   const ringGeometry = new THREE.RingGeometry(0.72, 0.84, 32);
+  const waterMaterial = new THREE.MeshStandardMaterial({ color: 0x2a4a52, roughness: 0.08, metalness: 0.35, transparent: true, opacity: 0.9 });
+  const mudMaterial = new THREE.MeshStandardMaterial({ color: 0x3b3326, roughness: 1, metalness: 0 });
   const particleMaterials = {
+    splash: new THREE.MeshBasicMaterial({ color: 0xd8eef3, transparent: true, opacity: 0.8 }),
     dust: new THREE.MeshStandardMaterial({ color: 0x9b927d, roughness: 1, transparent: true, opacity: 0.72 }),
     smoke: new THREE.MeshStandardMaterial({ color: 0x303a3e, roughness: 1, transparent: true, opacity: 0.46 }),
     spark: new THREE.MeshBasicMaterial({ color: 0xffc36b, transparent: true, opacity: 0.95 }),
@@ -423,7 +440,7 @@ async function main() {
   const yAxis = new THREE.Vector3(0, 1, 0);
   const zAxis = new THREE.Vector3(0, 0, 1);
   const identityRotation = { x: 0, y: 0, z: 0, w: 1 };
-  const audio = { ctx: null, master: null, bus: null, reverbIn: null, noise: null, creak: null, plucks: null, windGain: null, windFilter: null, enabled: true, userGesture: false, lastClatter: -1, ratchetStep: 0, loadedThunk: false };
+  const audio = { ctx: null, master: null, bus: null, reverbIn: null, noise: null, creak: null, plucks: null, windGain: null, windFilter: null, enabled: true, userGesture: false, lastClatter: -1, lastSplash: -1, ratchetStep: 0, loadedThunk: false };
   const keys = new Set();
   const cameraState = { az: 0.72, el: 0.36, dist: 68, target: new THREE.Vector3(0, 5, 22) };
   let pointerDown = false;
@@ -539,7 +556,8 @@ async function main() {
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i);
       const y = pos.getY(i);
-      const ridge = Math.sin(x * 0.045) * 0.35 + Math.cos(y * 0.037) * 0.28 + Math.sin((x + y) * 0.021) * 0.22;
+      const lane = Math.max(Math.abs(x) - 70, y - 40, -y - 230, 0);
+      const ridge = (Math.sin(x * 0.045) * 0.35 + Math.cos(y * 0.037) * 0.28 + Math.sin((x + y) * 0.021) * 0.22) * smooth(clamp(lane / 60, 0, 1));
       pos.setZ(i, ridge);
       const c = low.clone().lerp(high, clamp(0.46 + ridge * 0.13, 0, 1));
       colors.push(c.r, c.g, c.b);
@@ -1996,9 +2014,198 @@ async function main() {
     makeBlock(blocks, [9.2, 0.65, range + 4.2], [0.18, 1.3, 0.18], "wood");
     return { blocks, radius: 12, height: 8.5 };
   }
+  // Round donjon: rings of wedge-set stones, staggered course to course.
+  function roundTowerBlocks(blocks, cx, cz, radius, height, material, options = {}) {
+    const segments = options.segments || 14;
+    const courseH = 0.64;
+    const rows = Math.ceil(height / courseH);
+    const arc = TAU * radius / segments;
+    for (let row = 0; row < rows; row++) {
+      const y = (row + 0.5) * courseH;
+      const offset = row % 2 ? Math.PI / segments : 0;
+      for (let i = 0; i < segments; i++) {
+        const theta = offset + i * TAU / segments;
+        // Leave a doorway facing the machines (−z).
+        if (options.door && y < 2.6 && Math.abs(Math.atan2(Math.sin(theta + HALF_PI), Math.cos(theta + HALF_PI))) < TAU / segments * 0.75) continue;
+        makeBlock(blocks, [cx + radius * Math.cos(theta), y, cz + radius * Math.sin(theta)], [arc * 1.02, courseH * 0.96, options.thickness || 1.1], material, qYaw(-theta - HALF_PI));
+      }
+    }
+    const top = rows * courseH;
+    for (let i = 0; i < segments; i += 2) {
+      const theta = i * TAU / segments;
+      makeBlock(blocks, [cx + radius * Math.cos(theta), top + 0.32, cz + radius * Math.sin(theta)], [arc * 0.55, 0.64, 1.0], material, qYaw(-theta - HALF_PI));
+    }
+    return top;
+  }
+  function conicalRoof(blocks, cx, cz, radius, baseY, material) {
+    for (let ring = 0; ring < 5; ring++) {
+      const r = radius * (1 - ring * 0.19);
+      const segments = Math.max(4, Math.round(10 - ring * 1.5));
+      for (let i = 0; i < segments; i++) {
+        const theta = i * TAU / segments + ring * 0.3;
+        makeBlock(blocks, [cx + r * 0.72 * Math.cos(theta), baseY + 0.25 + ring * 0.48, cz + r * 0.72 * Math.sin(theta)], [TAU * r / segments * 1.05, 0.46, Math.max(0.5, r * 0.6)], material, qYaw(-theta - HALF_PI));
+      }
+    }
+  }
+  // A line of sharpened timber stakes with a rail behind; optional gate gap.
+  function palisadeBlocks(blocks, axis, fixed, start, length, height, gate = null, baseY = 0) {
+    for (let u = start + 0.16; u < start + length; u += 0.34) {
+      if (gate && u > gate[0] && u < gate[1]) continue;
+      const h = height * (0.92 + ((u * 7.3) % 1) * 0.16);
+      if (axis === "x") makeBlock(blocks, [u, baseY + h / 2, fixed], [0.3, h, 0.3], "wood");
+      else makeBlock(blocks, [fixed, baseY + h / 2, u], [0.3, h, 0.3], "wood");
+    }
+    const railY = baseY + height * 0.62;
+    const pieces = gate ? [[start, gate[0]], [gate[1], start + length]] : [[start, start + length]];
+    for (const [a, b] of pieces) {
+      if (b - a < 0.5) continue;
+      if (axis === "x") makeBlock(blocks, [(a + b) / 2, railY, fixed + 0.26], [b - a, 0.2, 0.18], "wood");
+      else makeBlock(blocks, [fixed + 0.26, railY, (a + b) / 2], [0.18, 0.2, b - a], "wood");
+    }
+  }
+  function watchtowerBlocks(blocks, x, z, height) {
+    for (const dx of [-1.05, 1.05]) for (const dz of [-1.05, 1.05]) makeBlock(blocks, [x + dx, height / 2, z + dz], [0.3, height, 0.3], "wood");
+    makeBlock(blocks, [x, height + 0.12, z], [2.7, 0.24, 2.7], "wood", identityRotation, { tough: 1.3 });
+    for (const [dx, dz, sx, sz] of [[0, -1.3, 2.7, 0.12], [0, 1.3, 2.7, 0.12], [-1.3, 0, 0.12, 2.7], [1.3, 0, 0.12, 2.7]]) makeBlock(blocks, [x + dx, height + 0.7, z + dz], [sx, 0.9, sz], "wood");
+    for (const dx of [-1.05, 1.05]) for (const dz of [-1.05, 1.05]) makeBlock(blocks, [x + dx, height + 1.75, z + dz], [0.2, 1.2, 0.2], "wood");
+    roofBlocks(blocks, x, z, 3.0, 3.0, height + 2.2, "roof");
+  }
+  function makeRoundTower(range) {
+    const blocks = [];
+    const top = roundTowerBlocks(blocks, 0, range, 3.3, 13.5, "granite", { door: true, segments: 16 });
+    for (const y of [4.5, 9]) for (let i = -2; i <= 2; i++) makeBlock(blocks, [i * 1.05, y, range], [1.0, 0.28, 4.6], "wood");
+    conicalRoof(blocks, 0, range, 4.0, top + 0.64, "roof");
+    return { blocks, radius: 6, height: top + 3.5 };
+  }
+  function makeCastle(range) {
+    const blocks = [];
+    const hx = 11, z0 = range - 8, z1 = range + 8, wallH = 5.8;
+    const opt = { thickness: 1.25, unit: 1.12 };
+    wallBlocks(blocks, "x", z0, -hx, hx * 2, wallH, "stone", { ...opt, opening: { x0: -1.5, x1: 1.5, y0: 0, y1: 3.4 } });
+    wallBlocks(blocks, "x", z1, -hx, hx * 2, wallH, "stone", opt);
+    wallBlocks(blocks, "z", -hx, z0, z1 - z0, wallH, "stone", opt);
+    wallBlocks(blocks, "z", hx, z0, z1 - z0, wallH, "stone", opt);
+    battlementBlocks(blocks, "x", z0, -hx, hx * 2, wallH, "stone");
+    battlementBlocks(blocks, "x", z1, -hx, hx * 2, wallH, "stone");
+    battlementBlocks(blocks, "z", -hx, z0, z1 - z0, wallH, "stone");
+    battlementBlocks(blocks, "z", hx, z0, z1 - z0, wallH, "stone");
+    for (const x of [-hx, hx]) for (const z of [z0, z1]) towerBlocks(blocks, x, z, 1.7, 8.3, "granite");
+    for (const x of [-2.9, 2.9]) towerBlocks(blocks, x, z0, 1.25, 7.4, "granite");
+    makeBlock(blocks, [0, 1.6, z0 + 0.2], [3.0, 3.2, 0.3], "wood", identityRotation, { tough: 2.2 });
+    // Inner keep.
+    const kz = range + 2.5;
+    wallBlocks(blocks, "x", kz - 3, -3, 6, 10.2, "granite", { thickness: 1.1, unit: 1.05, opening: { x0: -0.7, x1: 0.7, y0: 0, y1: 2.4 } });
+    wallBlocks(blocks, "x", kz + 3, -3, 6, 10.2, "granite", { thickness: 1.1, unit: 1.05 });
+    wallBlocks(blocks, "z", -3, kz - 3, 6, 10.2, "granite", { thickness: 1.1, unit: 1.05 });
+    wallBlocks(blocks, "z", 3, kz - 3, 6, 10.2, "granite", { thickness: 1.1, unit: 1.05 });
+    for (const [axis, fixed] of [["x", kz - 3], ["x", kz + 3], ["z", -3], ["z", 3]]) battlementBlocks(blocks, axis, fixed, axis === "x" ? -3 : kz - 3, 6, 10.2, "granite", 1.05);
+    for (let i = -2; i <= 2; i++) makeBlock(blocks, [i * 1.05, 6.1, kz], [1.0, 0.28, 5.2], "wood");
+    return { blocks, radius: 13, height: 12 };
+  }
+  function makeTown(range) {
+    const blocks = [];
+    const zw = range - 6, hx = 14;
+    wallBlocks(blocks, "x", zw, -hx, hx * 2, 5.2, "stone", { thickness: 1.15, unit: 1.12, opening: { x0: -1.6, x1: 1.6, y0: 0, y1: 3.4 } });
+    battlementBlocks(blocks, "x", zw, -hx, hx * 2, 5.2, "stone");
+    for (const x of [-2.9, 2.9]) towerBlocks(blocks, x, zw, 1.3, 7.2, "stone");
+    for (const x of [-hx, hx]) towerBlocks(blocks, x, zw, 1.5, 7.0, "granite");
+    for (const x of [-hx, hx]) wallBlocks(blocks, "z", x, zw, 10, 4.4, "stone", { thickness: 1.0, unit: 1.12 });
+    houseBlocks(blocks, -8.5, range - 0.5, 4.2, 4.2, 3.6, "plaster", "roof");
+    houseBlocks(blocks, -3.2, range + 1.2, 4.4, 4.4, 4.0, "brick", "roof");
+    houseBlocks(blocks, 8.4, range - 0.2, 4.0, 4.3, 3.4, "wood", "roof");
+    // Church with a square bell tower.
+    wallBlocks(blocks, "x", range + 0.2, 2.2, 4.6, 5.6, "stone", { thickness: 0.8, unit: 1.0, opening: { x0: 3.9, x1: 4.9, y0: 0, y1: 2.4 } });
+    wallBlocks(blocks, "x", range + 6.2, 2.2, 4.6, 5.6, "stone", { thickness: 0.8, unit: 1.0 });
+    wallBlocks(blocks, "z", 2.2, range + 0.2, 6, 5.6, "stone", { thickness: 0.8, unit: 1.0 });
+    wallBlocks(blocks, "z", 6.8, range + 0.2, 6, 5.6, "stone", { thickness: 0.8, unit: 1.0 });
+    roofBlocks(blocks, 4.5, range + 3.2, 5.2, 6.6, 5.6, "roof");
+    towerBlocks(blocks, 4.5, range - 1.2, 1.1, 11.5, "stone");
+    return { blocks, radius: 15, height: 13 };
+  }
+  function makeTimberFort(range) {
+    const blocks = [];
+    const hx = 9, z0 = range - 7, z1 = range + 7;
+    palisadeBlocks(blocks, "x", z0, -hx, hx * 2, 3.6, [-1.4, 1.4]);
+    palisadeBlocks(blocks, "x", z1, -hx, hx * 2, 3.6);
+    palisadeBlocks(blocks, "z", -hx, z0 + 0.34, z1 - z0 - 0.68, 3.6);
+    palisadeBlocks(blocks, "z", hx, z0 + 0.34, z1 - z0 - 0.68, 3.6);
+    for (const x of [-hx + 1.4, hx - 1.4]) for (const z of [z0 + 1.4, z1 - 1.4]) watchtowerBlocks(blocks, x, z, 4.6);
+    houseBlocks(blocks, 0, range + 2.5, 7.5, 4.6, 3.2, "wood", "roof");
+    return { blocks, radius: 11, height: 9 };
+  }
+  // ---- Outworks built in front of the target (toward the machines) ----------
+  function outworksBlocks(blocks, type, x0, x1, zc) {
+    const length = x1 - x0;
+    if (type === "palisade") {
+      palisadeBlocks(blocks, "x", zc, x0, length, 3.4, [-1.4, 1.4]);
+      for (const x of [x0 - 1.6, x1 + 1.6]) watchtowerBlocks(blocks, x, zc + 0.4, 4.4);
+      return 3;
+    }
+    if (type === "curtain") {
+      wallBlocks(blocks, "x", zc, x0, length, 5.2, "stone", { thickness: 1.3, unit: 1.12, opening: { x0: -1.4, x1: 1.4, y0: 0, y1: 3.2 } });
+      battlementBlocks(blocks, "x", zc, x0, length, 5.2, "stone");
+      for (const x of [-2.7, 2.7]) towerBlocks(blocks, x, zc - 0.5, 1.25, 7.0, "granite");
+      for (const x of [x0, x1]) towerBlocks(blocks, x, zc, 1.5, 7.2, "granite");
+      return 4;
+    }
+    if (type === "rampart") {
+      // Earth bank in three stepped layers, a timber breastwork on top, stakes in front.
+      const layers = [[4.4, 0.4], [3.1, 1.2], [1.8, 2.0]];
+      for (const [depth, y] of layers) for (let x = x0; x < x1 - 0.2; x += 1.6) makeBlock(blocks, [Math.min(x + 0.8, x1 - 0.8), y, zc], [1.6, 0.8, depth], "earth");
+      palisadeBlocks(blocks, "x", zc - 0.2, x0 + 0.3, length - 0.6, 1.6, null, 2.4);
+      for (let x = x0; x < x1; x += 1.3) makeBlock(blocks, [x, 0.55, zc - 3.3], [0.16, 1.4, 0.16], "wood", qTilt(-0.6));
+      return 3.5;
+    }
+    return 0;
+  }
+  // Moats, channels and outworks laid out outward from the target's front face.
+  function planSurroundings(blocks, range) {
+    let fx0 = Infinity, fx1 = -Infinity, fz0 = Infinity, fz1 = -Infinity;
+    for (const b of blocks) {
+      const a = boxAabb(b);
+      fx0 = Math.min(fx0, a.min[0]); fx1 = Math.max(fx1, a.max[0]);
+      fz0 = Math.min(fz0, a.min[2]); fz1 = Math.max(fz1, a.max[2]);
+    }
+    const holes = [];
+    const clear = 9;
+    let front = fz0;
+    if (state.water === "moat" || state.water === "both") {
+      const m = 2.5, w = 4.5, d = 2.2;
+      const ring = [
+        { x0: fx0 - m - w, x1: fx1 + m + w, z0: fz0 - m - w, z1: fz0 - m },
+        { x0: fx0 - m - w, x1: fx1 + m + w, z0: fz1 + m, z1: fz1 + m + w },
+        { x0: fx0 - m - w, x1: fx0 - m, z0: fz0 - m, z1: fz1 + m },
+        { x0: fx1 + m, x1: fx1 + m + w, z0: fz0 - m, z1: fz1 + m }
+      ];
+      if (ring[0].z0 > clear) {
+        for (const r of ring) holes.push({ ...r, depth: d, kind: "moat" });
+        // Timber bridge across the front moat to the gate.
+        for (let i = -2; i <= 2; i++) makeBlock(blocks, [i * 0.56, 0.12, fz0 - m - w / 2], [0.52, 0.24, w + 1.4], "wood");
+        front = fz0 - m - w - 1.5;
+      }
+    }
+    if (state.outworks !== "none") {
+      const zc = front - 3.4;
+      if (zc - 4 > clear) {
+        const x0 = fx0 - 2, x1 = fx1 + 2;
+        const depth = outworksBlocks(blocks, state.outworks, x0, x1, zc);
+        front = zc - depth;
+      }
+    }
+    if (state.water === "channel" || state.water === "both") {
+      const w = 6.5;
+      const z1 = front - 2.5;
+      if (z1 - w > clear) holes.push({ x0: -90, x1: 90, z0: z1 - w, z1, depth: 2.6, kind: "channel" });
+    }
+    return holes;
+  }
   function generateTarget(type, range) {
     if (type === "gatehouse") return makeGatehouse(range);
     if (type === "village") return makeVillage(range);
+    if (type === "tower") return makeRoundTower(range);
+    if (type === "castle") return makeCastle(range);
+    if (type === "town") return makeTown(range);
+    if (type === "fort") return makeTimberFort(range);
     return makeKeep(range);
   }
   function boxAabb(block) {
@@ -2138,12 +2345,126 @@ async function main() {
     if (typeof world.gravity.set === "function") world.gravity.set(0, -state.gravity, 0);
     else world.gravity.y = -state.gravity;
   }
+  // ---- Terrain: ground with trenches for moats and channels, and water ----------
+  function waterAt(x, z) {
+    for (const h of waterHoles) if (x > h.x0 && x < h.x1 && z > h.z0 && z < h.z1) return h;
+    return null;
+  }
+  // The ground is tiled around the trenches, so water features are real depressions
+  // with a bed at their depth.
+  function buildGround(holes) {
+    if (!world) return;
+    if (groundBody) { try { world.removeRigidBody(groundBody); } catch (e) {} }
+    groundHandles = new Set();
+    groundBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    const L = 250;
+    const cut = (v) => clamp(v, -L, L);
+    const xs = [...new Set([-L, L, ...holes.flatMap((h) => [cut(h.x0), cut(h.x1)])])].sort((a, b) => a - b);
+    const zs = [...new Set([-L, L, ...holes.flatMap((h) => [cut(h.z0), cut(h.z1)])])].sort((a, b) => a - b);
+    const add = (hx, hy, hz, x, y, z) => {
+      const collider = world.createCollider(RAPIER.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, y, z).setFriction(0.88), groundBody);
+      groundHandles.add(collider.handle);
+    };
+    const covered = (x, z) => holes.some((h) => x > h.x0 && x < h.x1 && z > h.z0 && z < h.z1);
+    for (let j = 0; j + 1 < zs.length; j++) {
+      const cz = (zs[j] + zs[j + 1]) / 2;
+      const hz = (zs[j + 1] - zs[j]) / 2;
+      let runStart = null;
+      for (let i = 0; i + 1 < xs.length; i++) {
+        const open = !covered((xs[i] + xs[i + 1]) / 2, cz);
+        if (open && runStart === null) runStart = xs[i];
+        if ((!open || i + 2 === xs.length) && runStart !== null) {
+          const runEnd = open ? xs[i + 1] : xs[i];
+          add((runEnd - runStart) / 2, 3, hz, (runStart + runEnd) / 2, -3, cz);
+          runStart = null;
+        }
+      }
+    }
+    for (const h of holes) add((h.x1 - h.x0) / 2, 0.5, (h.z1 - h.z0) / 2, (h.x0 + h.x1) / 2, -h.depth - 0.5, (h.z0 + h.z1) / 2);
+  }
+  function makeWaterNormalMap() {
+    const size = 128;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    const img = ctx.createImageData(size, size);
+    // Tileable height field from integer-frequency waves.
+    const waves = [[3, 1, 0.5, 0.3], [1, 4, 0.4, 1.7], [5, 3, 0.25, 2.9], [7, -2, 0.18, 0.6], [2, -6, 0.2, 4.1]];
+    const height = (x, y) => waves.reduce((sum, [kx, ky, a, p]) => sum + a * Math.sin(TAU * (kx * x + ky * y) / size + p), 0);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const dx = height(x + 1, y) - height(x - 1, y);
+      const dy = height(x, y + 1) - height(x, y - 1);
+      const n = new THREE.Vector3(-dx * 3, -dy * 3, 1).normalize();
+      const k = (y * size + x) * 4;
+      img.data[k] = (n.x * 0.5 + 0.5) * 255;
+      img.data[k + 1] = (n.y * 0.5 + 0.5) * 255;
+      img.data[k + 2] = (n.z * 0.5 + 0.5) * 255;
+      img.data[k + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    return texture;
+  }
+  function buildWater(holes) {
+    for (const child of [...waterGroup.children]) { waterGroup.remove(child); child.geometry.dispose(); }
+    for (const h of holes) {
+      const w = h.x1 - h.x0, d = h.z1 - h.z0;
+      const cx = (h.x0 + h.x1) / 2, cz = (h.z0 + h.z1) / 2;
+      const mud = new THREE.Mesh(new THREE.PlaneGeometry(w + 1.2, d + 1.2), mudMaterial);
+      mud.rotation.x = -HALF_PI;
+      mud.position.set(cx, 0.015, cz);
+      mud.receiveShadow = true;
+      const geometry = new THREE.PlaneGeometry(w, d);
+      const uv = geometry.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * w / 7, uv.getY(i) * d / 7);
+      const water = new THREE.Mesh(geometry, waterMaterial);
+      water.rotation.x = -HALF_PI;
+      water.position.set(cx, 0.05, cz);
+      water.receiveShadow = true;
+      water.name = "water-" + h.kind;
+      waterGroup.add(mud, water);
+    }
+  }
+  function splashEffects(position, energy) {
+    const p = new THREE.Vector3(position.x, 0.08, position.z);
+    const scale = clamp(Math.sqrt(Math.max(0.05, energy) / 10), 0.3, 1.6);
+    const amount = Math.round(clamp(8 + scale * 22, 8, 40));
+    for (let i = 0; i < amount; i++) {
+      const a = random() * TAU;
+      const out = (0.6 + random() * 2.4) * scale;
+      const up = (3 + random() * 6) * scale;
+      addParticle(p, new THREE.Vector3(Math.cos(a) * out, up, Math.sin(a) * out), 0.8 + random() * 0.7, particleMaterials.splash, 1, (0.5 + random() * 0.7) * scale);
+    }
+    addRing(p, 0xcfe8ef, 2 + scale * 3, 1.2);
+    addRing(p, 0x9cc4cf, 1 + scale * 1.5, 0.8);
+  }
+  function enterWater(projectile) {
+    if (projectile.wet) return;
+    projectile.wet = true;
+    projectile.wetAt = state.simTime;
+    const position = projectile.mesh.position.clone();
+    const velocity = impactVelocity(projectile);
+    const energy = 0.5 * projectile.mass * (Math.hypot(velocity.x, velocity.y, velocity.z) ** 2) / 1000;
+    telemetry.impacts++;
+    splashEffects(position, energy);
+    playSplashSound(energy, position);
+    stopFlightSound(projectile);
+    if (projectile.light) projectile.light.intensity = 0;
+    // Water swallows the shot: heavy drag, then it settles on the bed.
+    projectile.body.setLinearDamping(3.5);
+    projectile.body.setAngularDamping(3);
+    state.flightTime = Math.max(0, state.simTime - state.flightStartTime);
+    if (!state.hasImpact && !state.flightEnded) { state.flightEnded = true; state.status = "miss"; }
+    updateTelemetry();
+  }
   function createWorld() {
     world = new RAPIER.World({ x: 0, y: -state.gravity, z: 0 });
     world.timestep = DT * state.slow;
     world.integrationParameters.numSolverIterations = 8;
     eventQueue = new RAPIER.EventQueue(true);
-    groundCollider = world.createCollider(RAPIER.ColliderDesc.cuboid(250, 1, 250).setTranslation(0, -1, 0).setFriction(0.88), world.createRigidBody(RAPIER.RigidBodyDesc.fixed()));
+    groundBody = null;
+    buildGround([]);
   }
   function makeBlockMesh() {
     if (targetMesh) { scene.remove(targetMesh); targetMesh.dispose(); targetMesh = null; }
@@ -2226,10 +2547,16 @@ async function main() {
   }
   function buildTarget() {
     const asset = generateTarget(state.targetType, state.range);
+    const holes = planSurroundings(asset.blocks, state.range);
     targetBlocks = asset.blocks;
     structure = new Structure(targetBlocks, state.strength);
     structure.range = state.range;
     structure.strength = state.strength;
+    structure.holes = holes;
+    structure.wet = new Uint8Array(targetBlocks.length);
+    waterHoles = holes;
+    buildGround(holes);
+    buildWater(holes);
     makeBlockMesh();
     makeBlockBodies();
     buildTargetDecor(asset);
@@ -2271,7 +2598,8 @@ async function main() {
     colliderToBlock = new Map();
     if (eventQueue) { try { eventQueue.free(); } catch (e) {} eventQueue = null; }
     if (world) { try { world.free(); } catch (e) {} world = null; }
-    groundCollider = null;
+    groundBody = null;
+    groundHandles = new Set();
     structure = null;
     targetBlocks = [];
   }
@@ -2325,6 +2653,10 @@ async function main() {
     if (targetMesh) targetMesh.instanceMatrix.needsUpdate = true;
     if (targetDecor) targetDecor.position.z += dz;
     for (const fire of fires) fire.position.z += dz;
+    for (const h of structure.holes || []) { h.z0 += dz; h.z1 += dz; }
+    waterHoles = structure.holes || [];
+    buildGround(waterHoles);
+    buildWater(waterHoles);
   }
   function setTargetStrength(strength) {
     if (!structure || !structure.strength) return;
@@ -3073,6 +3405,20 @@ async function main() {
     sfxModal(e, e.t, [[2150, 0.035, 1], [3380, 0.025, 0.5]], 0.22, 0.03);
     sfxModal(e, e.t + 0.012, [[380, 0.05, 1]], 0.12, 0.05);
   }
+  // Big body into water: a hollow plunge, a sheet of spray, droplets raining back, bubbles.
+  function playSplashSound(energy, position) {
+    const e = sfxEmitter(position, { ref: 12 });
+    if (!e) return;
+    const t = e.t;
+    const s = clamp(Math.sqrt(Math.max(0.05, energy) / 10), 0.2, 1.4);
+    sfxNoise(e, t, { type: "lowpass", freq: 260, freqEnd: 1400, q: 0.9, attack: 0.012, decay: 0.3, peak: 0.9 * s });
+    sfxNoise(e, t + 0.02, { type: "highpass", freq: 2200, q: 0.5, attack: 0.04, decay: 0.7 * Math.max(0.5, s), peak: 0.45 * s });
+    sfxGrains(e, t + 0.25, Math.round(10 + 18 * s), 0.9 + s * 0.5, { low: 1400, high: 5200, q: 5, peak: 0.12 * s, decay: 0.03 });
+    for (let i = 0; i < 5; i++) {
+      const bt = t + 0.08 + Math.random() * 0.5;
+      sfxTone(e, bt, { freq: 380 + Math.random() * 500, freqEnd: 900 + Math.random() * 700, decay: 0.045, peak: 0.06 * s });
+    }
+  }
   function playLoadThunk(position) {
     const e = sfxEmitter(position, { ref: 8 });
     if (!e) return;
@@ -3209,8 +3555,9 @@ async function main() {
     updateTelemetry();
   }
   function handleGroundImpact(projectile) {
-    if (!projectile || projectile.dead || state.simTime - projectile.lastImpact < 0.12) return;
+    if (!projectile || projectile.dead || projectile.wet || state.simTime - projectile.lastImpact < 0.12) return;
     const position = projectile.mesh.position.clone();
+    if (waterAt(position.x, position.z)) { enterWater(projectile); return; }
     const velocity = impactVelocity(projectile);
     const energy = 0.5 * projectile.mass * (projectile.lastSpeed || Math.hypot(velocity.x, velocity.y, velocity.z)) ** 2 / 1000;
     projectile.lastImpact = state.simTime;
@@ -3244,7 +3591,7 @@ async function main() {
       const other = p === colliderToProjectile.get(c1) ? c2 : c1;
       const blockIndex = colliderToBlock.get(other);
       if (blockIndex !== undefined) handleProjectileImpact(p, blockIndex, event.totalForceMagnitude());
-      else if (other === groundCollider.handle) handleGroundImpact(p);
+      else if (groundHandles.has(other)) handleGroundImpact(p);
     });
     eventQueue.drainCollisionEvents((c1, c2, started) => {
       if (!started) return;
@@ -3307,7 +3654,8 @@ async function main() {
       if (projectile.light) projectile.light.position.copy(projectile.mesh.position);
       projectile.lastSpeed = Math.hypot(projectile.body.linvel().x, projectile.body.linvel().y, projectile.body.linvel().z);
       updateFlightSound(projectile, dt);
-      if (projectile.type === "cluster" && !projectile.split && projectile.age > 0.48 + state.range * 0.002) splitCluster(projectile);
+      if (projectile.wet && state.simTime - projectile.wetAt > 2.5) { removeProjectile(projectile); continue; }
+      if (projectile.type === "cluster" && !projectile.split && !projectile.wet && projectile.age > 0.48 + state.range * 0.002) splitCluster(projectile);
       spawnTrail(projectile);
       if (projectile.age > 0.12 && t.y <= projectile.radius + 0.08) handleGroundImpact(projectile);
       if (t.y < -18 || Math.abs(t.x) > 180 || t.z > 260 || t.z < -40) removeProjectile(projectile);
@@ -3316,6 +3664,14 @@ async function main() {
       const body = targetBodies[i];
       if (!body || !structure || !structure.released[i]) continue;
       const t = body.translation();
+      if (structure.wet && !structure.wet[i] && t.y < 0.25 && waterAt(t.x, t.z)) {
+        structure.wet[i] = 1;
+        body.setLinearDamping(2.5);
+        body.setAngularDamping(2);
+        const v = body.linvel();
+        const energy = 0.5 * body.mass() * (v.x * v.x + v.y * v.y + v.z * v.z) / 1000;
+        if (state.simTime - audio.lastSplash > 0.12) { audio.lastSplash = state.simTime; splashEffects(t, Math.min(energy, 8)); playSplashSound(Math.min(energy, 8), t); }
+      }
       if (t.y < -16 || Math.abs(t.x) > 160 || Math.abs(t.z) > 180) {
         try { world.removeRigidBody(body); } catch (e) {}
         targetBodies[i] = null;
@@ -3488,6 +3844,8 @@ async function main() {
     $("machine").value = state.machine;
     $("payload").value = state.payload;
     $("targetType").value = state.targetType;
+    $("water").value = state.water;
+    $("outworks").value = state.outworks;
     $("power").value = state.power;
     $("draw").value = state.draw;
     $("angle").value = state.angle;
@@ -3607,6 +3965,11 @@ async function main() {
       updateControls();
       readyNextShot();
       showToast(PAYLOADS[state.payload].label + " loaded · target preserved");
+    });
+    for (const id of ["water", "outworks"]) $(id).addEventListener("change", () => {
+      state[id] = $(id).value;
+      rebuildPhysics();
+      showToast($(id).selectedOptions[0].textContent + " · target rebuilt");
     });
     $("targetType").addEventListener("change", () => {
       state.targetType = $("targetType").value;
@@ -3733,6 +4096,7 @@ async function main() {
     while (!paused && accumulator >= DT && steps < 4) { physicsStep(); accumulator -= DT; steps++; }
     if (accumulator > DT * 4) accumulator = 0;
     syncVisuals();
+    if (waterMaterial.normalMap) waterMaterial.normalMap.offset.set(now * 0.000018, now * 0.000011);
     renderer.render(scene, camera);
     fpsTime += real;
     fpsFrames++;
@@ -3755,6 +4119,8 @@ async function main() {
     else if (group === "payload" && PAYLOADS[value] && value !== "clusterChild") { state.payload = value; applyPayloadDefaults(); rebuildRestPayload(); readyNextShot(); }
     else if (group === "target" && TARGETS[value]) { state.targetType = value; rebuildPhysics(); }
     else if (group === "targetType" && TARGETS[value]) { state.targetType = value; rebuildPhysics(); }
+    else if (group === "water" && ["none", "moat", "channel", "both"].includes(value)) { state.water = value; rebuildPhysics(); }
+    else if (group === "outworks" && ["none", "palisade", "curtain", "rampart"].includes(value)) { state.outworks = value; rebuildPhysics(); }
     else if (group === "range") { state.range = clamp(Number(value), 20, 140); moveTarget(state.range); updateTargetControls(); }
     else if (group === "strength") { state.strength = clamp(Number(value), 0.45, 2); setTargetStrength(state.strength); }
     else if (group === "power") state.power = clamp(Number(value), 20, 100);
@@ -3855,6 +4221,10 @@ async function main() {
     buildMachines();
     buildPayloads();
     scene.add(effectsGroup);
+    waterMaterial.normalMap = makeWaterNormalMap();
+    waterMaterial.normalScale = new THREE.Vector2(0.5, 0.5);
+    waterMaterial.needsUpdate = true;
+    scene.add(waterGroup);
     bindUi();
     resetSimulation();
     resize();
