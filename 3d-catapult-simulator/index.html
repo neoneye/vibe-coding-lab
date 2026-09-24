@@ -171,8 +171,8 @@ button.secondary:hover { background: rgba(255,255,255,.1); color: var(--text); }
   <details class="card" open>
     <summary>Telemetry</summary>
     <div class="card-body">
-      <div class="action-row"><button class="action" id="fire" type="button" aria-label="Fire or launch projectile">Fire / Launch</button><button class="secondary" id="reset" type="button" aria-label="Reset the range">Reset</button></div>
-      <p class="hint"><b>Space</b> launch · <b>R</b> reset · drag the scene to orbit · wheel to zoom</p>
+      <div class="action-row"><button class="action" id="fire" type="button" aria-label="Fire or launch projectile">Fire / Launch</button><button class="secondary" id="reset" type="button" aria-label="Reset the device and rebuild the target">Full Reset</button></div>
+      <p class="hint"><b>Space</b> fire again without repairing the target · <b>R</b> full reset · drag to orbit · wheel to zoom</p>
     </div>
   </details>
 </div>
@@ -190,7 +190,7 @@ button.secondary:hover { background: rgba(255,255,255,.1); color: var(--text); }
       <div class="metric"><span class="k">Miss distance</span><span class="v" id="vMiss">0.0 m</span></div>
       <div class="metric"><span class="k">Kinetic energy</span><span class="v" id="vEnergy">0.0 kJ</span></div>
       <div class="metric"><span class="k">Payload mass</span><span class="v" id="vPayloadMass">0.0 t</span></div>
-      <div class="metric"><span class="k">Hit blocks</span><span class="v" id="vHits">0</span></div>
+      <div class="metric"><span class="k">Hit blocks total</span><span class="v" id="vHits">0</span></div>
       <div class="metric"><span class="k">Flight time</span><span class="v" id="vFlight">0.00 s</span></div>
       <div class="metric"><span class="k">Gravity</span><span class="v" id="vTelemetryGravity">9.81</span></div>
       <div class="metric"><span class="k">Wind / FPS</span><span class="v" id="vWindFps">0.0 / 60</span></div>
@@ -285,6 +285,7 @@ async function main() {
     flightEnded: false,
     flightTime: 0,
     hitBlocks: 0,
+    shotCount: 0,
     hasImpact: false,
     idleTime: 0,
     simTime: 0,
@@ -1254,6 +1255,7 @@ async function main() {
     state.flightEnded = false;
     state.flightTime = 0;
     state.hitBlocks = 0;
+    state.shotCount = 0;
     state.hasImpact = false;
     state.clusterSplit = false;
     state.simTime = 0;
@@ -1339,6 +1341,7 @@ async function main() {
     predictionRing.material.color.set(currentPrediction.missDistance < 2 ? 0x71d6d0 : 0xe3a458);
     predictionRing.material.opacity = 0.38;
     targetMarkerGroup.position.z = state.range;
+    telemetry.launchVelocity = currentPrediction.speed;
     telemetry.kineticEnergy = currentPrediction.kineticEnergy;
     const windScale = clamp(Math.abs(state.wind) / 8, 0.08, 2.4);
     windArrow.scale.x = state.wind < 0 ? -windScale : windScale;
@@ -1886,12 +1889,11 @@ async function main() {
     const solution = calculatePrediction();
     const velocity = solution.launchVelocity;
     const payload = PAYLOADS[state.payload];
-    const projectile = createProjectile(state.payload, solution.origin, velocity, state.mass * 1000, payload.radius, false);
+    createProjectile(state.payload, solution.origin, velocity, state.mass * 1000, payload.radius, false);
     state.flightStarted = true;
     state.flightStartTime = state.simTime;
     state.flightEnded = false;
     state.hasImpact = false;
-    state.hitBlocks = 0;
     state.flightTime = 0;
     state.status = "in flight";
     telemetry.launchVelocity = solution.speed;
@@ -1901,11 +1903,33 @@ async function main() {
     updateTelemetry();
     return true;
   }
+  function readyNextShot() {
+    if (!world || !restPayload) return false;
+    clearProjectiles();
+    state.status = "ready";
+    state.firing = false;
+    state.firingTime = 0;
+    state.releaseCommitted = false;
+    state.flightStarted = false;
+    state.flightStartTime = 0;
+    state.flightEnded = false;
+    state.flightTime = 0;
+    state.hasImpact = false;
+    state.clusterSplit = false;
+    telemetry.maxForce = 0;
+    telemetry.impacts = 0;
+    telemetry.clusterCount = 0;
+    restPayload.visible = true;
+    updateMachineVisual();
+    updatePrediction();
+    updateTelemetry();
+    return true;
+  }
   function launch(options = {}) {
-    if (state.firing || state.flightStarted) {
-      if (!options.force) return { ok: false, reason: "busy", status: state.status };
-      resetSimulation();
-    }
+    const shotInProgress = state.firing || (state.flightStarted && !state.flightEnded);
+    if (shotInProgress && !options.force) return { ok: false, reason: "busy", status: state.status };
+    if (options.force || state.flightStarted || state.flightEnded || state.hasImpact || state.status === "miss" || projectiles.length) readyNextShot();
+    state.shotCount++;
     state.firing = true;
     state.firingTime = 0;
     state.releaseCommitted = false;
@@ -1914,7 +1938,6 @@ async function main() {
     state.flightStartTime = 0;
     state.flightEnded = false;
     state.flightTime = 0;
-    state.hitBlocks = 0;
     state.hasImpact = false;
     playMachineSequence();
     updateTelemetry();
@@ -1923,7 +1946,7 @@ async function main() {
       state.releaseCommitted = true;
       launchPayload();
     }
-    return { ok: true, status: state.status, prediction: currentPrediction };
+    return { ok: true, status: state.status, prediction: currentPrediction, shot: state.shotCount };
   }
   function resetSimulation() {
     if (rebuildTimer) { clearTimeout(rebuildTimer); rebuildTimer = 0; }
@@ -2005,11 +2028,11 @@ async function main() {
     if (status === "impact") pill.classList.add("impact");
     if (status === "miss") pill.classList.add("miss");
     const descriptions = {
-      ready: "Machine locked. Tune the draw and choose a target.",
-      firing: "Tension is loading. The release sequence is armed.",
+      ready: state.hitBlocks ? `${state.hitBlocks} blocks moved. Target damage is preserved; tune and fire again.` : "Machine locked. Tune the draw and choose a target.",
+      firing: `Shot ${state.shotCount} is loading. The release sequence is armed.`,
       "in flight": "Projectile is airborne. Wind and gravity are active.",
-      impact: "Impact registered. Watch the support network unload.",
-      miss: "No target contact. Reset and retune the solution."
+      impact: `${state.hitBlocks} blocks moved after shot ${state.shotCount}. Fire again to keep the damage.`,
+      miss: "No target contact. Retune and fire again; the target is unchanged."
     };
     $("statusText").textContent = descriptions[status] || descriptions.ready;
   }
@@ -2029,8 +2052,11 @@ async function main() {
     $("vTelemetryGravity").textContent = fmt(state.gravity, 2);
     $("vWindFps").textContent = fmt(state.wind, 1) + " / " + Math.round(telemetry.fps);
     setStatus(state.status);
-    $("fire").disabled = state.firing || state.flightStarted;
-    $("fire").style.opacity = state.firing || state.flightStarted ? "0.58" : "1";
+    const shotInProgress = state.firing || (state.flightStarted && !state.flightEnded);
+    $("fire").disabled = shotInProgress;
+    $("fire").style.opacity = shotInProgress ? "0.58" : "1";
+    $("fire").textContent = shotInProgress ? (state.firing ? "Loading…" : "In Flight…") : state.shotCount ? "Fire Again" : "Fire / Launch";
+    $("fire").setAttribute("aria-label", state.shotCount ? "Fire another projectile without resetting the target" : "Fire or launch projectile");
   }
   function showToast(message) {
     $("toast").textContent = message;
@@ -2069,16 +2095,16 @@ async function main() {
       applyMachineDefaults();
       updateControls();
       updateMachineVisual();
-      rebuildPhysics();
-      showToast(MACHINE_DEFAULTS[state.machine] ? state.machine + " configuration loaded" : "Machine changed");
+      readyNextShot();
+      showToast(MACHINE_DEFAULTS[state.machine] ? state.machine + " loaded · target preserved" : "Machine changed");
     });
     $("payload").addEventListener("change", () => {
       state.payload = $("payload").value;
       applyPayloadDefaults();
       rebuildRestPayload();
       updateControls();
-      rebuildPhysics();
-      showToast(PAYLOADS[state.payload].label + " loaded");
+      readyNextShot();
+      showToast(PAYLOADS[state.payload].label + " loaded · target preserved");
     });
     $("targetType").addEventListener("change", () => {
       state.targetType = $("targetType").value;
@@ -2205,11 +2231,11 @@ async function main() {
     let dynamicBodies = 0;
     if (structure) for (const value of structure.released) released += value;
     for (let i = 0; i < targetBodies.length; i++) if (targetBodies[i] && structure && structure.released[i]) dynamicBodies++;
-    return { ok: true, status: state.status, machine: state.machine, payload: state.payload, target: state.targetType, range: state.range, strength: state.strength, wind: state.wind, gravity: state.gravity, slow: state.slow, launchVelocity: telemetry.launchVelocity, predictedRange: currentPrediction ? currentPrediction.range : 0, apex: currentPrediction ? currentPrediction.apex : 0, missDistance: currentPrediction ? currentPrediction.missDistance : 0, kineticEnergy: telemetry.kineticEnergy, hitBlocks: state.hitBlocks, flightTime: state.flightTime, fps: telemetry.fps, clusterSplit: state.clusterSplit, clusterCount: telemetry.clusterCount, blocks: targetBlocks.length, released, dynamicBodies, bodies: targetBodies.filter(Boolean).length, projectiles: projectiles.length, fires: fires.length, effects: effects.length, maxForceKN: telemetry.maxForce, impacts: telemetry.impacts };
+    return { ok: true, status: state.status, machine: state.machine, payload: state.payload, target: state.targetType, range: state.range, strength: state.strength, wind: state.wind, gravity: state.gravity, slow: state.slow, launchVelocity: telemetry.launchVelocity, predictedRange: currentPrediction ? currentPrediction.range : 0, apex: currentPrediction ? currentPrediction.apex : 0, missDistance: currentPrediction ? currentPrediction.missDistance : 0, kineticEnergy: telemetry.kineticEnergy, hitBlocks: state.hitBlocks, shotCount: state.shotCount, flightTime: state.flightTime, fps: telemetry.fps, clusterSplit: state.clusterSplit, clusterCount: telemetry.clusterCount, blocks: targetBlocks.length, released, dynamicBodies, bodies: targetBodies.filter(Boolean).length, projectiles: projectiles.length, fires: fires.length, effects: effects.length, maxForceKN: telemetry.maxForce, impacts: telemetry.impacts };
   }
   function selectValue(group, value) {
-    if (group === "machine" && MACHINE_DEFAULTS[value]) { state.machine = value; applyMachineDefaults(); updateMachineVisual(); rebuildPhysics(); }
-    else if (group === "payload" && PAYLOADS[value]) { state.payload = value; applyPayloadDefaults(); rebuildRestPayload(); rebuildPhysics(); }
+    if (group === "machine" && MACHINE_DEFAULTS[value]) { state.machine = value; applyMachineDefaults(); updateMachineVisual(); readyNextShot(); }
+    else if (group === "payload" && PAYLOADS[value]) { state.payload = value; applyPayloadDefaults(); rebuildRestPayload(); readyNextShot(); }
     else if (group === "target" && TARGETS[value]) { state.targetType = value; rebuildPhysics(); }
     else if (group === "targetType" && TARGETS[value]) { state.targetType = value; rebuildPhysics(); }
     else if (group === "range") { state.range = clamp(Number(value), 18, 90); rebuildPhysics(); }
