@@ -149,6 +149,7 @@ button.secondary:hover { background: rgba(255,255,255,.1); color: var(--text); }
         <div class="field hidden" data-machine="trebuchet"><div class="label-row"><label for="counterweight">Counterweight</label><output id="vCounterweight">1.5 t</output></div><input id="counterweight" type="range" min="0.3" max="5" step="0.1" value="1.5"></div>
         <div class="field hidden" data-machine="trebuchet"><div class="label-row"><label for="sling">Sling length</label><output id="vSling">5.4 m</output></div><input id="sling" type="range" min="0.5" max="1.2" step="0.01" value="0.85"></div>
       </div>
+      <div class="field"><div class="label-row"><label for="aim">Aim (traverse)</label><output id="vAim">0°</output></div><input id="aim" type="range" min="-30" max="30" step="0.5" value="0"></div>
       <div class="field"><div class="label-row"><label for="mass">Payload mass</label><output id="vMass">60 kg</output></div><input id="mass" type="range" min="10" max="150" step="1" value="60"></div>
       <p class="hint" id="machineNote"></p>
     </div>
@@ -288,6 +289,7 @@ async function main() {
     arm: 8,
     counterweight: 1.5,
     sling: 0.85,
+    aim: 0,
     mass: 60,
     range: 60,
     strength: 1,
@@ -1507,8 +1509,17 @@ async function main() {
     }
     return { shot, pose: shot.loadedPose, payload: true, ropes: true };
   }
+  // Traverse: positive aim turns the machine to its right (toward −x).
+  function machineYaw() { return -state.aim * DEG; }
+  function machineToWorld(p) {
+    const yaw = machineYaw();
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const x = p.x || 0;
+    return { x: x * c + p.z * s, y: p.y, z: -x * s + p.z * c };
+  }
   function updateMachineVisual() {
     if (!machineGroup) return;
+    machineGroup.rotation.y = machineYaw();
     const view = displayState();
     const model = ensureModel(view.shot);
     const kind = view.shot.kind;
@@ -1525,14 +1536,14 @@ async function main() {
   function buildPayloads() {
     rebuildRestPayload();
     payloadLight = new THREE.PointLight(0xff6c31, 0, 7, 2);
-    scene.add(payloadLight);
+    machineGroup.add(payloadLight);
   }
   function rebuildRestPayload() {
     if (restPayload) { if (restPayload.parent) restPayload.parent.remove(restPayload); disposePayload(restPayload); }
     restPayload = makePayloadMesh(state.payload, payloadRadius(state.payload, state.mass));
     restPayload.name = "rest-payload";
     restPayload.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-    scene.add(restPayload);
+    machineGroup.add(restPayload);
     updateMachineVisual();
   }
   function qAxis(x, y, z, angle) {
@@ -2014,9 +2025,10 @@ async function main() {
     rebuildTimer = setTimeout(() => { rebuildTimer = 0; rebuildPhysics(); }, 120);
   }
   function calculatePrediction(shot = getShot()) {
-    const origin = new THREE.Vector3(0, shot.releasePos.y, shot.releasePos.z);
-    const launchVelocity = { x: 0, y: shot.releaseVel.y, z: shot.releaseVel.z };
-    let vx = 0;
+    const o = machineToWorld(shot.releasePos);
+    const origin = new THREE.Vector3(o.x, o.y, o.z);
+    const launchVelocity = machineToWorld(shot.releaseVel);
+    let vx = launchVelocity.x;
     let vy = launchVelocity.y;
     const vz = launchVelocity.z;
     const points = [origin.clone()];
@@ -2040,8 +2052,8 @@ async function main() {
     points.push(new THREE.Vector3(x, y, z));
     const impact = new THREE.Vector3(x, Math.max(0, shot.radius), z);
     const miss = Math.hypot(impact.x, impact.z - state.range);
-    const range = Math.max(0, impact.z - origin.z);
-    return { origin, velocity: { x: vx, y: vy, z: vz }, launchVelocity, speed: shot.speed, range, apex, impact, missDistance: miss, flightTime: t, kineticEnergy: shot.kineticEnergy / 1000, storedEnergy: shot.storedEnergy / 1000, efficiency: shot.efficiency, releaseTime: shot.releaseTime, angle: Math.atan2(launchVelocity.y, launchVelocity.z) / DEG, points, target: { x: 0, z: state.range } };
+    const range = Math.hypot(impact.x - origin.x, impact.z - origin.z);
+    return { origin, velocity: { x: vx, y: vy, z: vz }, launchVelocity, speed: shot.speed, range, apex, impact, missDistance: miss, flightTime: t, kineticEnergy: shot.kineticEnergy / 1000, storedEnergy: shot.storedEnergy / 1000, efficiency: shot.efficiency, releaseTime: shot.releaseTime, angle: Math.atan2(launchVelocity.y, Math.hypot(launchVelocity.x, launchVelocity.z)) / DEG, points, target: { x: 0, z: state.range } };
   }
   function updatePrediction() {
     currentPrediction = calculatePrediction();
@@ -2533,7 +2545,7 @@ async function main() {
     return { x: 0, y: p.y, z: p.z };
   }
   function playMachineSequence(shot) {
-    const e = sfxEmitter(machineSoundOrigin(shot), { ref: 14 });
+    const e = sfxEmitter(machineToWorld(machineSoundOrigin(shot)), { ref: 14 });
     if (!e) return;
     const slow = Math.max(0.05, state.slow);
     const at = (t) => e.t + t / slow;
@@ -3156,6 +3168,8 @@ async function main() {
     $("arm").value = state.arm;
     $("counterweight").value = state.counterweight;
     $("sling").value = state.sling;
+    $("aim").value = state.aim;
+    $("vAim").textContent = Math.abs(state.aim) < 0.25 ? "0°" : fmt(Math.abs(state.aim), 1) + "° " + (state.aim > 0 ? "right" : "left");
     $("mass").value = state.mass;
     $("range").value = state.range;
     $("strength").value = state.strength;
@@ -3285,6 +3299,7 @@ async function main() {
     bindRange("arm", "arm");
     bindRange("counterweight", "counterweight");
     bindRange("sling", "sling");
+    bindRange("aim", "aim");
     bindRange("mass", "mass", () => rebuildRestPayload());
     bindRange("wind", "wind");
     bindRange("gravity", "gravity", () => { if (world) setGravity(); });
@@ -3369,8 +3384,8 @@ async function main() {
     if (state.reloadTime <= DT * 1.5) { audio.ratchetStep = 0; audio.loadedThunk = false; }
     // One pawl click per quarter turn of the capstans (matches the crew's cranking).
     const step = Math.floor(state.reloadTime * 11 / (Math.PI / 2));
-    if (step > audio.ratchetStep && state.reloadTime < RELOAD_TIME * 0.95) { audio.ratchetStep = step; playRatchet(u.winchPos); }
-    if (!audio.loadedThunk && state.reloadTime >= RELOAD_TIME * 0.85 && restPayload) { audio.loadedThunk = true; playLoadThunk(restPayload.position); }
+    if (step > audio.ratchetStep && state.reloadTime < RELOAD_TIME * 0.95) { audio.ratchetStep = step; playRatchet(machineToWorld(u.winchPos)); }
+    if (!audio.loadedThunk && state.reloadTime >= RELOAD_TIME * 0.85 && restPayload) { audio.loadedThunk = true; playLoadThunk(restPayload.getWorldPosition(new THREE.Vector3())); }
   }
   function syncVisuals() {
     updateMachineVisual();
@@ -3426,6 +3441,7 @@ async function main() {
     else if (group === "arm") state.arm = clamp(Number(value), limits.arm[0], limits.arm[1]);
     else if (group === "counterweight") state.counterweight = clamp(Number(value), 0.3, 5);
     else if (group === "sling") state.sling = clamp(Number(value), 0.5, 1.2);
+    else if (group === "aim") state.aim = clamp(Number(value), -30, 30);
     else if (group === "mass") { state.mass = clamp(Number(value), limits.mass[0], limits.mass[1]); rebuildRestPayload(); }
     else if (group === "wind") state.wind = clamp(Number(value), -20, 20);
     else if (group === "gravity") { state.gravity = clamp(Number(value), 1.62, 20); if (world) setGravity(); }
