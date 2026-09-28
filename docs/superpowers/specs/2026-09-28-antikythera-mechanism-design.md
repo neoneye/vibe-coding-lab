@@ -89,9 +89,10 @@ The pin-and-slot devices give the variable outputs by geometry:
 
 ### Calibration
 
-At the page's epoch, 23 December 178 BC, the page sets every output to the
-real sky. That is the calibration date Voulgaris et al. (2022) proposed;
-others have argued for dates near 205 BC.
+By default the page sets every output to the real sky at the new moon of
+28 April 205 BC, near the Saros start date proposed by Carman & Evans (2014).
+The page also offers 23 December 178 BC, the date proposed by Voulgaris et
+al. (2022).
 
 ### The real sky
 
