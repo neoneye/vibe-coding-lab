@@ -186,8 +186,9 @@ and labels it as the page's own:
 | `(catch k body…)` | GET-CONTROL-POINT(set-k . body) |
 | `(gc)` | the non-pointer type MARK |
 
-Also `cond`, `let` (as a lambda application), `and`, `not`, `null?`, `pair?`
-(primitive-not-atom), `zerop`, `1+`, `-1+`, `eq?`, `type?`, `type!`,
+Also `cond`, `let` (as a lambda application), `and`, `not`, `null?`, `pointer?`
+(primitive-not-atom — true of symbols too, since a symbol is a pointer to its
+value cell), `zerop`, `1+`, `-1+`, `eq?`, `type?`, `type!`,
 `rplaca`, `rplacd`, `write-char`, `print-number`, and quoted data.
 
 Consequences of the hardware that the page shows rather than hides: NIL is the
