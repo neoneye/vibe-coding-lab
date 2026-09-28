@@ -40,6 +40,9 @@ apart.
 
 The page labels each of these.
 
+- **The start:** noise of ±0.1 around (0, 0). The paper starts from values in
+  [0, 1], and in the prototype that blew up for 1 seed in 16 on a 100² grid.
+  The centred start never did, and it grows the same rosettes.
 - **Periodic boundaries,** where the paper used zero flux. This makes the
   pattern tile seamlessly.
 - **A 9-point isotropic Laplacian.** The 5-point one turns spots into squares
@@ -124,8 +127,11 @@ irregularity and seed. It is pure JS, and it is tested.
 - **The simulation:** stage 1 on a 100² grid gives spots, with a component
   count close to (100/25)² × 1.15, where 1.15 is the hexagonal-packing
   factor, and no holes.
-- **The leopard schedule** gives rings: at least a third of the pigment
-  components enclose a hole at the adult t.
+- **The leopard schedule** gives rings. At the adult t, at least 30% of the
+  pigment components are hollow: their centre of mass lies outside their own
+  pigment, which counts both rings and broken C-shaped arcs. None are hollow
+  at stage 1. For the jaguar the threshold is 40%, plus some closed rings.
+- **No blow-ups:** seeds 1–8 stay finite through the whole schedule.
 - **The 9-point Laplacian** is exact on a quadratic, and the simulation keeps
   periodic wrap-around.
 - **Fast mode** tiles: the field at x = 0 equals the field at x = W, and the
