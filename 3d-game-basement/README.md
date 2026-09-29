@@ -1,8 +1,9 @@
 # BASEMENT — Sublevel K, Tape #7
 
 A standalone Wolfenstein-style raycaster in a single HTML file. No backend,
-no build step, no external assets — every texture, sprite, and sound is
-generated in code at boot. Works straight from `file://`.
+no build step — every texture, sprite, and sound effect is generated in code
+at boot; the only asset is the soundtrack in `assets/music.mp3`. Works
+straight from `file://`.
 
 **Play:** open `index.html` in a browser, click to insert the tape.
 
@@ -29,6 +30,7 @@ marble. You live in the mold. Tonight you take the pipe and go upstairs.
 | Shift | sneak (guards spot you later, aim worse) |
 | Tab (hold) | map |
 | F | fullscreen (Esc leaves) |
+| M | music on/off (title, pause, dead, win screens) |
 
 ## Progression
 
@@ -52,8 +54,9 @@ wing side chamber) → the throne hall.
   gas-masked billboard mirrored across the glass plane and clipped, column by
   column, to the screen columns that actually hit mirror glass — grime
   streaks and panel frames cut into it.
-- WebAudio-synthesized sound (hum, shots, alarm, stings). A sequenced
-  chiptune march for the menu screens lives in the code but ships muted
-  pending a better tune.
+- WebAudio-synthesized sound effects (hum, shots, alarm, stings). The
+  title/pause/dead/win screens play a looped soundtrack made with Suno
+  (<https://suno.com/s/FiVEPSfE1Fn9ixyW>) through a plain `<audio>` element
+  so it works from `file://`; gameplay itself stays music-free.
 - URL params: `?auto` skips the title screen; `?debug` exposes
   `window.__dbg` (player/enemies/doors) for scripted testing.

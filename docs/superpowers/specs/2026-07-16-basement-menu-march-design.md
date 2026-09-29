@@ -2,9 +2,10 @@
 
 Date: 2026-07-16
 Project: `3d-game-basement/`
-Status: shipped, but muted by default (owner call 2026-07-16 — neither
-composition passed the listen gate; engine and both tunes' history stay in
-git, M is an undocumented toggle for auditioning future retunes)
+Status: superseded 2026-09-29 — the chiptune march engine was removed and
+replaced by the owner's Suno track (`3d-game-basement/assets/music.mp3`),
+played on the same screens with the same 1s death/win hold and M toggle.
+The march engine and both compositions remain in git history.
 
 ## Goal
 
