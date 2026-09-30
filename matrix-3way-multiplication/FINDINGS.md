@@ -80,7 +80,16 @@ The same homogeneous model, matched coefficient by coefficient as formal polynom
 Finite fields have no border phenomena, so SAT/UNSAT is exact for GF(2).
 
 * (7,7): SAT in 26 min. The solver independently found the A·(BC) chain.
-* 13 splits (6,7), (7,6), (5,8), (8,5): running (see below).
+* (8,5): **UNSAT** (48 min), so no exact 13-mult scheme with that split exists over GF(2).
+* (6,7), (7,6), (5,8): still running at the time of writing.
+
+## 4. EML (exp-minus-log) trees — see `eml/README.md`
+
+Direct EML search does compress `x·y·z`: 25 tokens against 33 for composing `mul`, and in general
+8n+1 against 16(n−1)+1. The reason is that EML multiplies in log space
+(`exp(ln x + ln y + ln z)`), so the saving is the removed exp/ln round-trip, not fewer
+multiplications. The tree contains no `*` at all. Under EML's cost model addition is the
+expensive operation, so it does not inform the 13-vs-14 multiplication question.
 
 ## Not ruled out
 
