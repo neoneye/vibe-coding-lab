@@ -39,3 +39,12 @@ General arithmetic circuits (more levels, mixed-degree intermediates) are not co
 homogenisation does not obviously preserve the multiplication count. A sharper
 search would be a SAT/SMT or gradient search over 3-level circuits for N=2 with ≤ 13
 binary multiplications. That is the only remaining avenue for a positive result.
+
+## Lean certificates
+
+`lean/Chain.lean` (core Lean 4.34, no Mathlib — the Mathlib fetch fails here on a Lake/git
+partial-clone error; verify with `lean lean/Chain.lean`):
+`strassen_chain` (Strassen∘Strassen = A·B·C, 14 mults), `mul_assoc'`, and
+`flatten_injective` (the injectivity core of the N⁴ bound, for all N). The step
+"injective 0/1 flattening ⇒ rank N⁴ ⇒ tensor rank ≥ N⁴" is linear algebra that is
+only checked numerically (`search/flattenings.py`), not in Lean.
