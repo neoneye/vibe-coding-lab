@@ -71,3 +71,62 @@ by √(7 / number of valid neighbours) gives each cell the same expected input (
 | standard transformer, same size | **3.023** |
 
 A tie on quality. The normalised seeds agree more closely (spread 0.015 vs 0.072), possibly steadier training, but two seeds can't establish that.
+
+## The triangle: weights swept at 0°, 60° and 120°
+
+`tiny.py` (single layer in the tiny model), `tri_props.py` (its properties), and the `tri*` kinds in
+`shapellm.py` (triangle feed-forwards inside the same hexagonal pyramid, same bottlenecks, same 48-dim attention
+as `hex2`; triangle sides 50 / 65 / 85).
+
+Triangle layer: h = A·x (n units), weights W on cells (i, j, k), three sweeps
+y0[i] = Σ W·h_j·h_k, y1[j] = Σ W·h_i·h_k, y2[k] = Σ W·h_i·h_j, then B·[y0, y1, y2].
+- **no wrap:** i + j + k = n − 1, so the line at index i holds n − i weights. Long lines are the triangle's "centre" and short lines its edge.
+- **wrap:** i + j + k ≡ n − 1 (mod n), n² weights on a torus; every line holds n.
+- **centre lowered (S):** each output × (products it collects)^−½, so long lines are turned down and length-1 lines keep weight 1. With wrap all lines are equal, so this is just a constant.
+- **centre lowered, average kept at 1 (SN):** the same, renormalised so only the balance between lines changes, not the overall size.
+
+The training text has grown since the earlier runs, so everything below was re-run together at 1,000 steps (2 seeds each, validation bits/char).
+
+### Full model (hexagonal pyramid, radius 12 → 6 → 3)
+
+| feed-forward | val bits/char |
+|---|---|
+| standard transformer (no pyramid) | **3.384** (3.372, 3.396) |
+| **triangle, no wrap, unscaled** | **3.407** (3.421, 3.392) |
+| triangle, wrap, unscaled | 3.441 (3.463, 3.419) |
+| triangle, no wrap, centre lowered, average kept at 1 | 3.465 (3.472, 3.458) |
+| triangle, wrap, scaled (constant) | 3.514 (3.492, 3.536) |
+| triangle, no wrap, centre lowered | 3.554 (3.528, 3.580) |
+| hexagonal local feed-forward (`hex2`) | 3.587 (3.541, 3.634) |
+
+* **The triangle feed-forward rescues the pyramid.** It is 0.18 bits/char better than the hexagonal local feed-forward and within 0.02 of a standard transformer, about the seed spread.
+* So the pyramid and its 3 → 1 bottlenecks were not what held the hexagonal model back. The local 7-neighbour mixing was.
+
+### Single layer (tiny model)
+
+| triangle layer | unscaled | centre lowered | centre lowered, average 1 |
+|---|---|---|---|
+| no wrap | 3.538 | 3.619 | 3.550 |
+| wrap | **3.510** | 3.604 (constant) | — |
+
+### Wrap or not
+
+Mixed: wrap is slightly better in the single layer (3.510 vs 3.538), and slightly worse in the full model (3.441 vs 3.407). Both differences are close to seed noise.
+
+### Lowering the centre
+
+Lowering the centre never helps the triangle:
+* Plain scaling hurts mostly because it shrinks the whole output: wrap + scaling is just a constant 0.10, and still costs about 0.09.
+* With the average kept at 1, the redistribution alone is close to neutral in the single layer (3.550 vs 3.538). It still costs 0.06 in the full model.
+
+### What the trained triangle layer does (`tri_props.py`, seed 0)
+
+| triangle layer | drop 20% of outputs: longest lines first / shortest first / random | activation by line length (1–10 → 81+) | output weights by line length |
+|---|---|---|---|
+| no wrap, unscaled | **+0.16** / +0.05 / +0.10 | 0.29 → 1.05 | 0.81 → 0.73 |
+| no wrap, centre lowered | +0.13 / +0.06 / +0.05 | 0.32 → 0.36 (equalised) | **0.80 → 1.01** |
+| wrap | equal (every line has 94 weights) | flat | flat |
+
+* **The long lines carry the important features.** Dropping them first costs the most.
+* **Unlike the hexagon, training does not compensate the weak short lines.**
+* **When the long lines are turned down, training grows their output weights back.** The triangle's "centre" is signal the model wants, not noise. That is the opposite of the hexagon, where turning the centre down was neutral.

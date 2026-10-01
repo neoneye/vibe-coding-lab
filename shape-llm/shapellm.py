@@ -19,6 +19,9 @@ torch.set_num_threads(2)
 kind, seed, steps = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 NORM = kind == "hex2n"
 if NORM: kind = "hex2"                                             # same model as hex2, plus neighbour-count normalisation
+TRI = kind in ("tri", "triS", "triSN", "triW", "triWS")            # triangle feed-forwards inside the same hexagonal pyramid
+TRI_WRAP, TRI_SCALED, TRI_RENORM = kind in ("triW", "triWS"), kind in ("triS", "triSN", "triWS"), kind == "triSN"
+TRI_N = [50, 65, 85]                                               # triangle side per level (≈ the hex2 feed-forward budget)
 torch.manual_seed(seed)
 CTX, BATCH, LR = 64, 16, 1e-3
 
@@ -64,9 +67,29 @@ class HexFFN(nn.Module):
         else: u, v = torch.einsum("btnk,nkh->btnh", g, s.Wup).chunk(2, -1); y = torch.einsum("btnh,nhc->btnc", F.silu(u) * v, s.Wdown)
         return (y + s.bias).reshape(B, T, -1)
 
+class TriFFN(nn.Module):
+    """triangle-shaped weights swept at 0°, 60° and 120° (see tiny.py): h = A x (n units), three sweeps, then B.
+    wrap: i + j + k ≡ n − 1 (mod n), every line holds n weights; no wrap: line i holds n − i weights.
+    scaled: each output × (products it collects)^−½ (long "centre" lines turned down, length-1 lines at weight 1)."""
+    def __init__(s, D, n, wrap, scaled):
+        super().__init__()
+        cells = [(i, j, (n - 1 - i - j) % n) for i in range(n) for j in range(n)] if wrap else \
+                [(i, j, n - 1 - i - j) for i in range(n) for j in range(n - i)]
+        I, J, K = (torch.tensor(c) for c in zip(*cells))
+        s.register_buffer("I", I); s.register_buffer("J", J); s.register_buffer("K", K)
+        fan = torch.stack([torch.bincount(t, minlength=n).float() for t in (I, J, K)]).flatten()
+        sc = fan.clamp(min=1) ** -0.5 if scaled else torch.ones(3 * n)
+        if TRI_RENORM: sc = sc / sc.mean()                                 # triSN: redistribute only, average weight 1
+        s.register_buffer("scale", sc)
+        s.W = nn.Parameter(torch.randn(len(cells)) / n); s.a = nn.Linear(D, n, bias=False); s.b = nn.Linear(3 * n, D, bias=False)
+    def forward(s, x):
+        h = s.a(x); hi, hj, hk = h[..., s.I], h[..., s.J], h[..., s.K]
+        y = torch.cat([torch.zeros_like(h).index_add_(-1, t, s.W * p) for t, p in [(s.I, hj * hk), (s.J, hi * hk), (s.K, hi * hj)]], -1)
+        return s.b(y * s.scale)
+
 class Block(nn.Module):
     def __init__(s, D, ffn):
-        A = 48 if kind == "hex2" else 128
+        A = 48 if (kind == "hex2" or TRI) else 128
         super().__init__(); s.n1 = nn.LayerNorm(D); s.att = Attention(D, A); s.n2 = nn.LayerNorm(D); s.ffn = ffn
     def forward(s, x):
         x = x + s.att(s.n1(x)); return x + s.ffn(s.n2(x))
@@ -93,8 +116,11 @@ class HexLM(nn.Module):
         for li, (R, c) in enumerate(s.LEVELS):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
-            mult, shared = (HEX2_MULT[li], False) if kind == "hex2" else (4, True)
-            layers += [Block(D, HexFFN(R, c, mult, shared)), Block(D, HexFFN(R, c, mult, shared))]
+            if TRI:
+                layers += [Block(D, TriFFN(D, TRI_N[li], TRI_WRAP, TRI_SCALED)) for _ in range(2)]
+            else:
+                mult, shared = (HEX2_MULT[li], False) if kind == "hex2" else (4, True)
+                layers += [Block(D, HexFFN(R, c, mult, shared)), Block(D, HexFFN(R, c, mult, shared))]
         s.body = nn.Sequential(*layers); Dl = len(cells(3)) * 16
         s.norm = nn.LayerNorm(Dl); s.out = nn.Linear(Dl, V, bias=False)
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
@@ -109,7 +135,7 @@ class BaseLM(nn.Module):
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
 
 count = lambda m: sum(p.numel() for p in m.parameters())
-if kind in ("hex", "hex2"): model = HexLM()
+if kind in ("hex", "hex2") or TRI: model = HexLM()
 else:                                                               # match the hex model's parameter count
     if kind == "base2": kind = "hex2"; target = count(HexLM()); kind = "base2"   # match the locally connected version
     else: target = count(HexLM())
