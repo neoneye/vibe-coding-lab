@@ -139,3 +139,19 @@ The model compensates for weak edge activations by growing the edge weights; the
 Next steps:
 - train with random outer-ring dropout (Matryoshka-style) to sharpen the ordering;
 - use the ordering for early exit or elastic width.
+
+## Turning the centre down: fan-in normalisation (`hexn_sqrt`, `hexn_mean`)
+
+Idea: centre outputs add up many products (91 at the centre against 1 at a corner), so they may carry more noise.
+Give them lower weight and keep full weight at the edges, scaling each output by fan-in^(−½) or fan-in^(−1).
+
+| no-wrap hexagonal layer | val bits/char (2 seeds) | importance order (82% of cells kept: outer rings first / random) | output weights by ring |
+|---|---|---|---|
+| unscaled | **3.324** | centre-first: +0.08 / +0.23 | grow towards the edge (training compensates) |
+| × fan-in^(−½) | 3.330 | **none**: +0.18 / +0.17 | flat (0.70–0.76) |
+| × fan-in^(−1) | 3.392 | **inverted**: +0.32 / +0.13 | lower at the centre |
+
+* The 1/√ scaling does what the idea predicts. After scaling, centre and edge outputs contribute about equally (raw activations are still 5× larger at the centre: 8.1 vs 1.6, scaled to 0.85 vs 0.95). Training no longer has to grow the edge weights, and the centre-first ordering disappears.
+* It does not improve quality: 3.330 against 3.324, a tie. There is no sign that the centre's extra sum was harmful noise.
+* 1/fan-in over-corrects. The edges become the most important cells and quality drops (3.392).
+* So it's a choice: a balanced layer (1/√), or a centre-first layer (unscaled) whose outer rings can be trimmed gracefully.

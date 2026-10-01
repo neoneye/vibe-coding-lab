@@ -54,3 +54,16 @@ Zeroing cells of the residual stream at the end of each level, outer rings first
 * At radius 12 and 6, part of this is built in: the cropped bottleneck never reads the outermost band, so zeroing it is nearly free by construction.
 * At radius 3 the output head reads every cell, yet the outer ring is still about 40% cheaper to drop than random cells, and its activations are about 35% weaker (1.14 vs 1.8).
 * The centre-first importance order seen in the single-layer experiments reappears in a full model.
+
+### Neighbour-count normalisation (`hex2n`)
+
+Cells at the hexagon's edge have only 3–4 neighbours, so their input is weaker. Scaling every cell's neighbourhood
+by √(7 / number of valid neighbours) gives each cell the same expected input (interior cells keep weight 1).
+
+| hex-llm v2 | val bits/char (2 seeds) |
+|---|---|
+| without normalisation | 3.259 (3.223, 3.295) |
+| with normalisation | 3.254 (3.246, 3.261) |
+| standard transformer, same size | **3.023** |
+
+A tie on quality. The normalised seeds agree more closely (spread 0.015 vs 0.072), possibly steadier training, but two seeds can't establish that.

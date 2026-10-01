@@ -81,18 +81,24 @@ class Bilinear(nn.Module):
 class Hex(nn.Module):
     """hidden units on a hexagon; C·((A x) ∗ (B x)) with hexagonal convolution, wrapped (uniform fan-in)
     or not (output hexagon of twice the radius, centre-heavy fan-in)."""
-    def __init__(s, R, wrap):
+    def __init__(s, R, wrap, norm=None):
         super().__init__(); s.conv = HexConv(R, wrap)
         s.a = nn.Linear(D, s.conv.n_in, bias=False); s.g = nn.Linear(D, s.conv.n_in, bias=False); s.b = nn.Linear(s.conv.n_out, D, bias=False)
         s.keep = None                       # optional mask over output cells (for ablation experiments)
+        # fan-in of each output cell = number of products landing on it; norm scales outputs so the edges keep
+        # full weight and the centre is turned down: 'sqrt' → (1/fan-in)^½, 'mean' → 1/fan-in
+        ones = torch.zeros(1, s.conv.n_in); ones[:] = 1
+        fanin = s.conv(ones, ones)[0].round()
+        s.register_buffer("scale", torch.ones(s.conv.n_out) if norm is None else fanin.clamp(min=1) ** (-0.5 if norm == "sqrt" else -1.0))
     def forward(s, x):
-        z = s.conv(s.a(x), s.g(x))
+        z = s.conv(s.a(x), s.g(x)) * s.scale
         if s.keep is not None: z = z * s.keep
         return s.b(z)
 def make_ffn():
     return {"mlp": MLP, "glu": GLU, "tri1": lambda: Triangle(158, 1), "tri3": lambda: Triangle(106, 3),
             "cube3": lambda: Cube(29), "tet4": lambda: Tetra(46), "bil": Bilinear,
-            "hexn": lambda: Hex(5, False), "hexw": lambda: Hex(7, True), "hexw5": lambda: Hex(5, True)}[variant]()
+            "hexn": lambda: Hex(5, False), "hexw": lambda: Hex(7, True), "hexw5": lambda: Hex(5, True),
+            "hexn_sqrt": lambda: Hex(5, False, "sqrt"), "hexn_mean": lambda: Hex(5, False, "mean")}[variant]()
 ACCUM = 4 if variant == "tet4" else 1          # micro-batches (same effective batch) to bound memory
 
 class Block(nn.Module):

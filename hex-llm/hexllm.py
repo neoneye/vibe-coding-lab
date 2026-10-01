@@ -15,6 +15,8 @@ from hexgrid import cells, neighbours, bottleneck
 torch.set_num_threads(2)
 
 kind, seed, steps = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+NORM = kind == "hex2n"
+if NORM: kind = "hex2"                                             # same model as hex2, plus neighbour-count normalisation
 torch.manual_seed(seed)
 CTX, BATCH, LR = 64, 16, 1e-3
 
@@ -50,9 +52,12 @@ class HexFFN(nn.Module):
         else:
             s.Wup = nn.Parameter(torch.randn(n, 7 * c, 2 * h) / math.sqrt(7 * c)); s.Wdown = nn.Parameter(torch.randn(n, h, c) / math.sqrt(h))
         s.bias = nn.Parameter(torch.zeros(n, c))
+        # neighbour-count normalisation (hex2n): cells with fewer valid neighbours get their input scaled up by
+        # sqrt(7 / #valid), so every cell's input has the same expected size (interior cells keep weight 1)
+        s.register_buffer("nscale", (7.0 / s.valid.sum(1)).sqrt() if NORM else torch.ones(n))
     def forward(s, x):
         B, T, _ = x.shape; h = x.view(B, T, -1, s.c)
-        g = (h[:, :, s.nb, :] * s.valid[..., None]).flatten(-2)      # (B, T, cells, 7c), zero outside the hexagon
+        g = (h[:, :, s.nb, :] * s.valid[..., None] * s.nscale[:, None, None]).flatten(-2)  # (B, T, cells, 7c), zero outside
         if s.shared: u, v = s.up(g).chunk(2, -1); y = s.down(F.silu(u) * v)
         else: u, v = torch.einsum("btnk,nkh->btnh", g, s.Wup).chunk(2, -1); y = torch.einsum("btnh,nhc->btnc", F.silu(u) * v, s.Wdown)
         return (y + s.bias).reshape(B, T, -1)
@@ -124,5 +129,5 @@ for step in range(1, steps + 1):
     x, y = batch(train, g); loss = F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1))
     opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
     if step % (steps // 5) == 0:
-        print(f"{kind} seed={seed} step={step} val_bpc={evaluate():.4f} sec/step={(time.time()-t0)/step:.3f}", flush=True)
-torch.save(model.state_dict(), f"ckpt_{kind}_{seed}_{steps}.pt")
+        print(f"{kind}{'n' if NORM else ''} seed={seed} step={step} val_bpc={evaluate():.4f} sec/step={(time.time()-t0)/step:.3f}", flush=True)
+torch.save(model.state_dict(), f"ckpt_{kind}{'n' if NORM else ''}_{seed}_{steps}.pt")
