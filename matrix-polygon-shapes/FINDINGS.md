@@ -76,6 +76,12 @@ In a tiny character-level LM, at equal feed-forward parameters, validation bits/
 So the triangle beats the MLP but not SwiGLU, and three sweeps are no better than one per parameter. The open question is weight reuse for memory-bound decoding, which needs a GPU kernel.
 Related: AlphaFold triangle updates; 2-simplicial attention.
 
+3D shapes, at the same parameter count:
+- **cube** (full 3-way array, 3 sweeps, 6 multiplications per weight read): 3.350 at 1,500 steps, second only to SwiGLU and better than its diagonal slice, the triangle;
+- **tetrahedron** (4 sweeps, quartic, 12 multiplications per weight read): ties everything at 500 steps, but is too slow on CPU to train longer.
+
+General d-simplex: d+1 sweeps, d(d+1) multiplications per weight read.
+
 ## Takeaways
 
 **The rectangle is the attractor.**

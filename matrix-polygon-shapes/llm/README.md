@@ -31,3 +31,26 @@ feed-forward parameters.
 Related, with the triangle over tokens or pairs rather than weights:
 - AlphaFold's triangle multiplicative updates (pair (i,j) updated from both other edges of each triangle, swept "outgoing" and "incoming");
 - 2-simplicial attention (Roy et al. 2025, *Fast and Simplex*), a trilinear attention over triangles of tokens that improves token efficiency on maths, code and reasoning.
+
+## 3D shapes: cube and tetrahedron
+
+* **Cube** W[i,j,k]: a full 3-way weight array (n³ weights). It has 3 sweep directions (its axes) with 2 inputs multiplied per sweep, so 6 multiplications per weight read. The triangle is its diagonal slice i + j + k = n − 1.
+* **Tetrahedron**: cells (i,j,k,l) with i + j + k + l = n − 1 (≈ n³/6 weights). Its 4 sweep directions are the face directions; each collapses a triangular slice and multiplies 3 inputs, so **12 multiplications per weight read**. Together the sweeps are the gradient of a quartic energy.
+* General d-simplex: d + 1 sweeps, d(d+1) multiplications per weight read, n^d/d! weights.
+
+Same tiny LM, ≈65.5k feed-forward parameters (cube n = 29, tetrahedron n = 46), validation bits/char:
+
+| feed-forward | 500 steps (2 seeds) | 1,500 steps |
+|---|---|---|
+| MLP | 3.972 (3.956, 3.987) | 3.389 |
+| triangle, 3 sweeps | 3.965 (3.953, 3.978) | 3.374 |
+| tetrahedron, 4 sweeps | 3.966 (3.951, 3.981) | — (3.6 s/step on CPU) |
+| cube, 3 sweeps | 3.963 (3.943, 3.983) | **3.350** (3.348, 3.353) |
+| SwiGLU | 3.971 (3.972, 3.970) | **3.325** |
+
+* At 500 steps all five are within seed noise (spread ±0.02): too early to separate.
+* At 1,500 steps:
+  - the cube is second best, behind SwiGLU and ahead of the three-sweep triangle and the MLP;
+  - the full 3-way array (cube) beats its diagonal slice (triangle) at equal parameters;
+  - the cube computes as fast dense einsums, 0.11 s/step vs 0.89 for the triangle in this implementation.
+* The tetrahedron (quartic interactions, 12× weight reuse) could not be trained long enough on CPU (3.6 s/step) to tell; at 500 steps it ties.

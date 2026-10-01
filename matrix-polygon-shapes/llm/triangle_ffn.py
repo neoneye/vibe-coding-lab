@@ -22,8 +22,8 @@ chars = sorted(set(text)); common = [c for c in chars if text.count(c) > 200] if
 stoi = {c: i for i, c in enumerate(common)}; UNK = len(common); V = UNK + 1
 data = torch.tensor([stoi.get(c, UNK) for c in text], dtype=torch.long)
 n_val = len(data) // 10; train, val = data[:-n_val], data[-n_val:]
-def batch(src, g):
-    ix = torch.randint(len(src) - CTX - 1, (BATCH,), generator=g)
+def batch(src, g, size=BATCH):
+    ix = torch.randint(len(src) - CTX - 1, (size,), generator=g)
     return torch.stack([src[i:i + CTX] for i in ix]), torch.stack([src[i + 1:i + CTX + 1] for i in ix])
 
 # ---------------- feed-forward variants ----------------
@@ -47,8 +47,36 @@ class Triangle(nn.Module):
         for target, p in [(s.I, hj * hk), (s.J, hi * hk), (s.K, hi * hj)][: s.sweeps]:
             outs.append(torch.zeros_like(h).index_add_(-1, target, s.W * p))
         return s.b(torch.cat(outs, -1))
+class Cube(nn.Module):
+    """full 3-way weight array W[i,j,k] (n³ weights), swept along its 3 axes: gradient of a cubic energy."""
+    def __init__(s, n):
+        super().__init__(); s.W = nn.Parameter(torch.randn(n, n, n) / n ** 1.5)
+        s.a = nn.Linear(D, n, bias=False); s.b = nn.Linear(3 * n, D, bias=False)
+    def forward(s, x):
+        h = s.a(x)
+        y0 = torch.einsum("ijk,...j,...k->...i", s.W, h, h)
+        y1 = torch.einsum("ijk,...i,...k->...j", s.W, h, h)
+        y2 = torch.einsum("ijk,...i,...j->...k", s.W, h, h)
+        return s.b(torch.cat([y0, y1, y2], -1))
+class Tetra(nn.Module):
+    """weights on a tetrahedral lattice, cells (i,j,k,l) with i+j+k+l = n−1 (≈ n³/6 weights), swept along its
+    4 face directions: y_a[m] = Σ_{cells with coordinate a = m} W · (product of the other three h's).
+    Together: the gradient of a quartic energy. Each weight feeds 4 sweeps × 3 multiplications."""
+    def __init__(s, n):
+        super().__init__(); s.n = n
+        cells = [(i, j, k, n - 1 - i - j - k) for i in range(n) for j in range(n - i) for k in range(n - i - j)]
+        for name, col in zip("IJKL", zip(*cells)): s.register_buffer(name, torch.tensor(col))
+        s.W = nn.Parameter(torch.randn(len(cells)) / n ** 2)
+        s.a = nn.Linear(D, n, bias=False); s.b = nn.Linear(4 * n, D, bias=False)
+    def forward(s, x):
+        h = s.a(x); hi, hj, hk, hl = h[..., s.I], h[..., s.J], h[..., s.K], h[..., s.L]
+        ij, kl = hi * hj, hk * hl
+        outs = [torch.zeros_like(h).index_add_(-1, t, s.W * p) for t, p in [(s.I, hj * kl), (s.J, hi * kl), (s.K, ij * hl), (s.L, ij * hk)]]
+        return s.b(torch.cat(outs, -1))
 def make_ffn():
-    return {"mlp": MLP, "glu": GLU, "tri1": lambda: Triangle(158, 1), "tri3": lambda: Triangle(106, 3)}[variant]()
+    return {"mlp": MLP, "glu": GLU, "tri1": lambda: Triangle(158, 1), "tri3": lambda: Triangle(106, 3),
+            "cube3": lambda: Cube(29), "tet4": lambda: Tetra(46)}[variant]()
+ACCUM = 4 if variant == "tet4" else 1          # micro-batches (same effective batch) to bound memory
 
 class Block(nn.Module):
     def __init__(s):
@@ -71,12 +99,15 @@ g = torch.Generator().manual_seed(seed); gv = torch.Generator().manual_seed(1234
 def evaluate(n=40):
     model.eval(); tot = 0.0
     for _ in range(n):
-        x, y = batch(val, gv); tot += F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1)).item()
+        x, y = batch(val, gv)
+        tot += sum(F.cross_entropy(model(xm).reshape(-1, V), ym.reshape(-1)).item() for xm, ym in zip(x.chunk(ACCUM), y.chunk(ACCUM))) / ACCUM
     model.train(); return tot / n / math.log(2)
 t0 = time.time()
 for step in range(1, steps + 1):
     x, y = batch(train, g)
-    loss = F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1))
-    opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
+    opt.zero_grad()
+    for xm, ym in zip(x.chunk(ACCUM), y.chunk(ACCUM)):
+        (F.cross_entropy(model(xm).reshape(-1, V), ym.reshape(-1)) / ACCUM).backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
     if step % (steps // 5) == 0 or step == steps:
         print(f"{variant} seed={seed} step={step} val_bpc={evaluate():.4f} ffn_params={ffn_params} sec/step={(time.time()-t0)/step:.3f}", flush=True)
