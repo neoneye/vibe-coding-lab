@@ -34,7 +34,7 @@ p, ul, ol { max-width: 760px; } li { margin: 4px 0; }
 code, .mono { font-family: var(--mono); font-size: 0.88em; }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; }
 a { color: var(--accent2); text-underline-offset: 2px; }
-.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 28px 0 8px; }
+.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 12px; margin: 28px 0 8px; }
 .card { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 15px 16px; }
 .card .label { font: 600 12px/1.3 var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .card .big { font: 600 22px/1.15 var(--serif); margin: 6px 0 4px; }
@@ -90,6 +90,8 @@ footer { margin-top: 64px; font-size: 13px; color: var(--muted); border-top: 1px
     <p>Shapes add (Minkowski sum). Cost is exactly 4|P| − B − 3. Triangles and hexagons are as natural as squares; pentagons cost slightly more.</p></div>
   <div class="card"><div class="label">Shape = ring of matrices</div><div class="big meh">Odd beats even</div>
     <p>Even rings (square, hexagon) admit no shortcut: rank 2^k. Odd rings (triangle, pentagon) do. The pentagon's exact cost (25 to 31) is an open problem.</p></div>
+  <div class="card"><div class="label">Triangle weights in a language model</div><div class="big meh">Works, not best</div>
+    <p>Swept at 0°, 60° and 120°, a triangle of weights beats a plain MLP but not SwiGLU. Its promise is reuse: 6 multiplications per weight read.</p></div>
 </div>
 <p class="cap" style="font-size:14px">The common thread: the rectangle is what multiplication converges to, and other shapes earn their place only with a different multiplication. See <a href="#takeaways">Takeaways</a>.</p>
 
@@ -200,6 +202,41 @@ The tensor rank is the number of products a fused algorithm needs. For 2×2 matr
 </table></div>
 
 <!-- ======================================================================================= -->
+<h2>4 · Triangle-shaped weights, swept three ways</h2>
+<p>Store weights on a triangular lattice: cells (i, j, k) with i + j + k = n − 1, about n²/2 of them. Each cell lies on <b>three</b> lines, at 0°, 60° and 120°. A matrix entry lies on only two: its row and its column.
+Sweeping each direction multiplies the two other coordinates' inputs and sums along the line. So one set of weights gives three outputs:</p>
+<p style="text-align:center"><code>y₀[i] = Σ W·h<sub>j</sub>·h<sub>k</sub> &nbsp; y₁[j] = Σ W·h<sub>i</sub>·h<sub>k</sub> &nbsp; y₂[k] = Σ W·h<sub>i</sub>·h<sub>j</sub></code></p>
+<p>Together the three sweeps are exactly the gradient of the cubic energy E(h) = Σ W<sub>ijk</sub>·h<sub>i</sub>·h<sub>j</sub>·h<sub>k</sub>. That makes it a multiplicative layer, in the same family as the gated layers (GLU, SwiGLU) that modern language models use.</p>
+<div class="panel">
+  <div class="row">
+    <svg id="tSvg" viewBox="0 0 360 320" width="100%" style="max-width:420px" role="img" aria-label="triangular lattice of weights; click a cell to see its three sweep lines"></svg>
+    <div style="flex:1;min-width:240px">
+      <div class="stat" id="tCell"></div>
+      <div class="cap" id="tCheck" style="margin-top:8px"></div>
+      <div class="controls" style="margin-top:10px"><button id="tNew">New random weights and input</button></div>
+    </div>
+  </div>
+  <div class="cap">Click any cell (n = 8, 36 weights). Blue: the 0° line (output y₀[i]). Orange: the 60° line (y₁[j]). Green: the 120° line (y₂[k]). The check computes all three sweeps and compares their sum with a finite-difference gradient of E.</div>
+</div>
+<h3>Does it help a language model?</h3>
+<p>A 2-layer, width-64 character-level transformer was trained on this repository's markdown (2.8 MB, 1,500 steps, CPU). Only the feed-forward block differed, and every variant had about 65.5k feed-forward weights. Lower is better:</p>
+<div class="panel">
+  <svg id="tBars" viewBox="0 0 560 170" width="100%" role="img" aria-label="validation bits per character for four feed-forward blocks"></svg>
+  <div class="cap">Validation bits per character. Two seeds each, except the one-sweep triangle (one seed). Script: <code>llm/triangle_ffn.py</code>.</div>
+</div>
+<ul>
+  <li><b>It works:</b> both triangle layers beat the standard MLP at the same number of weights.</li>
+  <li><b>It isn't the best:</b> the standard gated layer, SwiGLU, wins.</li>
+  <li><b>Three sweeps don't help quality per weight.</b> Each extra direction needs its own output weights, so at a fixed budget the three-sweep triangle must be smaller (n = 106 against 158 for one sweep).</li>
+  <li><b>What three sweeps buy is reuse:</b> each triangle weight feeds 6 multiplications per read, against 1 for an ordinary matrix weight.
+    Generating text one token at a time is limited by memory bandwidth, so that is where this could pay off. Testing it needs a fused GPU kernel; this CPU version runs about 25× slower per step than the MLP, an implementation artefact.</li>
+  <li><b>Triangles already work elsewhere in big models</b>, over tokens or pairs rather than weights.
+    <a href="https://elanapearl.github.io/blog/2024/the-illustrated-alphafold/">AlphaFold's triangle updates</a> refresh each residue pair from the other two edges of every triangle containing it, swept in two directions.
+    <a href="https://arxiv.org/abs/2507.02754">2-simplicial attention</a> (Meta, 2025) attends over triangles of tokens and improves token efficiency on maths, code and reasoning.</li>
+  <li><b>Caveat:</b> tiny model, short run, CPU. This is a smoke test, not a scaling result.</li>
+</ul>
+
+<!-- ======================================================================================= -->
 <h2 id="takeaways">Takeaways</h2>
 <p><b>The common thread: the rectangle is the attractor.</b> A matrix is a rectangle because a linear map pairs every input with every output.
 Shapes drawn inside that rectangle drift back towards rectangles when you multiply. Every centred shape becomes its bounding box within 2–3 products.
@@ -224,6 +261,8 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>Storage formats that stay closed:</b> triangles, trapezoids and the triangle-in-a-window pentagon can be multiplied without the result leaving the format. Bands and centred shapes need re-allocation after every product.</li>
   <li><b>Choosing an array shape for convolution data:</b> hexagons for round, isotropic data (images, sensors, game maps; 13.4% fewer samples); triangles for polynomials of bounded total degree. The cost formula 4|P| − B − 3 lets you budget the work exactly.</li>
   <li><b>Tensor networks with loops:</b> an even loop can't be shortcut by any fused algorithm, so the order of pairwise contractions is all that matters. Odd loops leave room for Strassen-like tricks.</li>
+  <li><b>Triangle weights in a language model</b> train fine and beat a plain MLP, but not SwiGLU. Their selling point would be 6 multiplications per weight read for memory-bound inference, which is untested without a GPU kernel.
+    The triangles that already pay off in large models live over tokens (2-simplicial attention) or residue pairs (AlphaFold).</li>
 </ul>
 <h3>How new is this?</h3>
 <p>Most of it is known in some field: triangular matrices, receptive fields, Newton polytopes and Minkowski sums, Pick's theorem, hexagonal sampling, and Christandl–Zuiddam's cycle tensors.
@@ -236,7 +275,8 @@ What this page adds is the side-by-side view, the classification of stable matri
   <tr><td>Triangle</td>
       <td><b>+</b> closed, N³/6 per product, the basis of LU/Cholesky and triangular solves. <b>−</b> upper × lower is dense; only half the linear maps.</td>
       <td><b>+</b> natural for total-degree polynomials (Taylor series), lattice-regular, cheapest per coefficient at equal size (rank/|P| 3.60). <b>−</b> an FFT on a box wastes about half the space.</td>
-      <td><b>+</b> this is ordinary matrix multiplication; Strassen's 7. <b>−</b> the exact rank for N ≥ 3 is a famous open problem.</td></tr>
+      <td><b>+</b> this is ordinary matrix multiplication; Strassen's 7. <b>−</b> the exact rank for N ≥ 3 is a famous open problem.
+        <br><b>As weights swept three ways:</b> + 6× weight reuse; beats an MLP. − behind SwiGLU; three sweeps no better than one per weight.</td></tr>
   <tr><td>Square</td>
       <td><b>+</b> all linear maps; closed. <b>−</b> nothing to exploit.</td>
       <td><b>+</b> separable, FFT-native, all the tooling. <b>−</b> anisotropic: corners waste coefficients for round problems.</td>
@@ -272,10 +312,12 @@ What this page adds is the side-by-side view, the classification of stable matri
   <tr><td>Even rings have rank 2^k; odd rings ≤ 2^k − 1 (Christandl–Zuiddam), rebuilt and verified here</td><td><span class="chip proven">proof + tests</span></td></tr>
   <tr><td>Pentagon ring of 2×2 matrices needs 31 products</td><td><span class="chip open">open (25–31)</span></td></tr>
   <tr><td>Pentagon ring border rank ≤ 30 (rotation-symmetric fit, error falling as coefficients grow)</td><td><span class="chip numeric">unconfirmed hint</span></td></tr>
+  <tr><td>Three sweeps of a triangle of weights equal the gradient of the cubic energy Σ W·h<sub>i</sub>h<sub>j</sub>h<sub>k</sub></td><td><span class="chip proven">proof + tests</span></td></tr>
+  <tr><td>Triangle feed-forward beats an MLP, trails SwiGLU (tiny LM, 1,500 steps)</td><td><span class="chip numeric">measured, small</span></td></tr>
 </table></div>
 
 <footer>
-Code: <code>sparsity/</code> (exact composition of shapes), <code>convolution/</code> (lattice shapes, Pick formula, normality), <code>rings/</code> (ring tensors, tensor surgery, rank search, GF(2) SAT); write-up in <code>FINDINGS.md</code>.
+Code: <code>sparsity/</code> (exact composition of shapes), <code>convolution/</code> (lattice shapes, Pick formula, normality), <code>rings/</code> (ring tensors, tensor surgery, rank search, GF(2) SAT), <code>llm/</code> (triangle-weight language-model experiment); write-up in <code>FINDINGS.md</code>.
 References: M. Christandl, J. Zuiddam, <a href="https://arxiv.org/abs/1606.04085"><i>Tensor surgery and tensor rank</i></a>;
 H. Buhrman et al., <a href="https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ITCS.2017.24"><i>Nondeterministic quantum communication complexity: the cyclic equality game and iterated matrix multiplication</i></a>;
 <a href="https://en.wikipedia.org/wiki/Pick%27s_theorem">Pick's theorem</a>; <a href="https://en.wikipedia.org/wiki/Crystallographic_restriction_theorem">crystallographic restriction</a>;
@@ -427,7 +469,17 @@ const MP = (() => {
       for (let i = 0; i < n; i++) if (i !== rk && M[i][c]) { const f = M[i][c] / M[rk][c]; for (let j = c; j < m; j++) M[i][j] -= f * M[rk][j]; } rk++; }
     return rk;
   }
-  return { regularPolygon, pattern, boolMul, density, subset, cost, triangle, square, hexagon, latticePolygon, minkowski, hull,
+  // ---------- 4. triangle-shaped weights swept three ways ----------
+  function triCells(n) { const c = []; for (let i = 0; i < n; i++) for (let j = 0; j < n - i; j++) c.push([i, j, n - 1 - i - j]); return c; }
+  function triSweeps(n, W, h) {           // y0[i] = Σ W h_j h_k, y1[j] = Σ W h_i h_k, y2[k] = Σ W h_i h_j; counts multiplications
+    const cells = triCells(n), y = [new Array(n).fill(0), new Array(n).fill(0), new Array(n).fill(0)]; let mults = 0;
+    cells.forEach(([i, j, k], c) => { y[0][i] += W[c] * h[j] * h[k]; y[1][j] += W[c] * h[i] * h[k]; y[2][k] += W[c] * h[i] * h[j]; mults += 6; });
+    return { y, mults, weights: cells.length };
+  }
+  function cubicEnergy(n, W, h) { return triCells(n).reduce((s, [i, j, k], c) => s + W[c] * h[i] * h[j] * h[k], 0); }
+
+  const mulberryLike = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  return { mulberryLike, triCells, triSweeps, cubicEnergy, regularPolygon, pattern, boolMul, density, subset, cost, triangle, square, hexagon, latticePolygon, minkowski, hull,
            boundaryCount, latticePointsOf, shapeArray, ringEntries, strassenTriangle, surgery, verifyRing, flatteningRank, set, key };
 })();
 
@@ -470,6 +522,13 @@ const MPTests = {
     t("square ring: alternating flattening rank 16 = 2^4", MP.flatteningRank(4, [0, 2]) === 16);
     t("pentagon ring: best flattening rank 16 = 2^(k−1)", MP.flatteningRank(5, [0, 2]) === 16);
     t("hexagon ring: alternating flattening rank 64 = 2^6", MP.flatteningRank(6, [0, 2, 4]) === 64);
+
+    // 4. triangle sweeps = gradient of the cubic energy; 6 multiplications per weight
+    { const n = 7, rnd = MP.mulberryLike(5), W = MP.triCells(n).map(() => rnd() * 2 - 1), h = Array.from({ length: n }, () => rnd() * 2 - 1);
+      const { y, mults, weights } = MP.triSweeps(n, W, h), g = y[0].map((v, m) => v + y[1][m] + y[2][m]);
+      const fd = h.map((_, m) => { const e = 1e-6, hp = h.slice(), hm = h.slice(); hp[m] += e; hm[m] -= e; return (MP.cubicEnergy(n, W, hp) - MP.cubicEnergy(n, W, hm)) / (2 * e); });
+      t("sweeps sum to the gradient of the cubic energy", g.every((v, m) => Math.abs(v - fd[m]) < 1e-6));
+      t("each triangle weight feeds 6 multiplications", mults === 6 * weights && weights === n * (n + 1) / 2); }
     const failed = res.filter(x => !x[1]);
     if (typeof console !== "undefined") console.log(`MPTests: ${res.length - failed.length}/${res.length} passed` + (failed.length ? "\nFAILED: " + failed.map(x => x[0]).join(", ") : ""));
     return failed.length === 0;
@@ -533,6 +592,44 @@ function convTable() {
       return `<tr><td>${n}</td><td class="num">${P.length}</td><td class="num">${B}</td><td class="num">${S}</td><td class="num">${4 * P.length - B - 3}</td><td class="num">${(P.length ** 2).toLocaleString()}</td><td class="num">${(S / P.length).toFixed(2)}</td></tr>`; }).join("");
 }
 
+let triState = { n: 8, seed: 1, sel: [2, 3, 2] };
+function triDemo() {
+  const { n } = triState, rnd = MP.mulberryLike(triState.seed), cells = MP.triCells(n);
+  const W = cells.map(() => Math.round((rnd() * 2 - 1) * 100) / 100), h = Array.from({ length: n }, () => Math.round((rnd() * 2 - 1) * 100) / 100);
+  const S = 36, ox = 30, oy = 290, P = ([i, j, k]) => [ox + S * (j + 0.5 * i), oy - S * i * Math.sqrt(3) / 2];   // i up, j right, k = rest
+  const [si, sj, sk] = triState.sel, col = [css("--accent2"), css("--accent"), css("--good")];
+  const onLine = ([i, j, k]) => [i === si, j === sj, k === sk];
+  let g = "";
+  cells.forEach((c, idx) => {
+    const [x, y] = P(c), on = onLine(c), isSel = c[0] === si && c[1] === sj;
+    const fill = isSel ? css("--ink") : on[0] ? col[0] : on[1] ? col[1] : on[2] ? col[2] : css("--code");
+    g += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isSel ? 13 : 11}" fill="${fill}" stroke="${css("--rule")}" data-c="${c.join(",")}" style="cursor:pointer"/>`;
+    g += `<text x="${x.toFixed(1)}" y="${(y + 3.5).toFixed(1)}" text-anchor="middle" style="font-size:9px;pointer-events:none;fill:${on.some(Boolean) || isSel ? "var(--bg)" : "var(--muted)"}">${W[idx].toFixed(1)}</text>`;
+  });
+  $("tSvg").innerHTML = g;
+  $("tSvg").querySelectorAll("circle").forEach(el => el.onclick = () => { triState.sel = el.dataset.c.split(",").map(Number); triDemo(); });
+  const { y, mults, weights } = MP.triSweeps(n, W, h);
+  const grad = y[0].map((v, m) => v + y[1][m] + y[2][m]);
+  const fd = h.map((_, m) => { const e = 1e-6, hp = h.slice(), hm = h.slice(); hp[m] += e; hm[m] -= e; return (MP.cubicEnergy(n, W, hp) - MP.cubicEnergy(n, W, hm)) / (2 * e); });
+  const err = Math.max(...grad.map((v, m) => Math.abs(v - fd[m])));
+  $("tCell").innerHTML = `cell (i, j, k) = (${si}, ${sj}, ${sk}) sits on <span style="color:${col[0]}">row i = ${si}</span>, <span style="color:${col[1]}">line j = ${sj}</span> and <span style="color:${col[2]}">line k = ${sk}</span>.<br>
+    Its weight feeds y₀[${si}] (with h${sj}·h${sk}), y₁[${sj}] (with h${si}·h${sk}) and y₂[${sk}] (with h${si}·h${sj}).`;
+  $("tCheck").innerHTML = `${weights} weights, ${mults} multiplications for the three sweeps: <b>${mults / weights} per weight read</b> (a matrix–vector product: 1).<br>
+    y₀ + y₁ + y₂ vs finite-difference ∇E: max difference ${err.toExponential(1)} ${err < 1e-5 ? '<span class="ok">✓</span>' : '<span class="fail">✗</span>'}`;
+}
+function triBars() {
+  const rows = [["MLP (GELU)", 3.389, [3.394, 3.383]], ["triangle, 3 sweeps", 3.374, [3.374, 3.373]], ["triangle, 1 sweep", 3.344, [3.344]], ["SwiGLU", 3.325, [3.323, 3.327]]];
+  const L = 150, R = 60, W = 560, lo = 3.30, hi = 3.40, X = v => L + (v - lo) / (hi - lo) * (W - L - R);
+  let g = "";
+  rows.forEach(([name, v, seeds], i) => { const y = 14 + i * 36;
+    g += `<text x="${L - 8}" y="${y + 15}" text-anchor="end">${name}</text>`;
+    g += `<rect x="${L}" y="${y}" width="${X(v) - L}" height="22" rx="3" fill="${name.startsWith("triangle") ? css("--accent") : css("--muted")}" opacity="${name.startsWith("triangle") ? 1 : 0.55}"/>`;
+    seeds.forEach(sv => g += `<circle cx="${X(sv)}" cy="${y + 11}" r="3" fill="${css("--ink")}"/>`);
+    g += `<text x="${X(Math.max(v, ...seeds)) + 10}" y="${y + 15}">${v.toFixed(3)}</text>`; });
+  for (const v of [3.30, 3.35, 3.40]) g += `<text x="${X(v)}" y="166" text-anchor="middle">${v.toFixed(2)}</text>`;
+  $("tBars").innerHTML = g;
+}
+
 function ringDiagram() {
   let g = ""; const ks = [3, 4, 5, 6, 7, 8], w = 640 / ks.length;
   ks.forEach((k, idx) => {
@@ -556,10 +653,11 @@ function ringBuild() {
 
 $("pShape").oninput = patternDemo; $("pN").oninput = patternDemo;
 $("cShape").oninput = convDemo; $("cSize").oninput = convDemo; $("ringBuild").onclick = ringBuild;
+$("tNew").onclick = () => { triState.seed++; triDemo(); };
 document.querySelectorAll(".pc").forEach(tb => { const heads = [...tb.rows[0].cells].map(c => c.textContent);
   [...tb.rows].slice(1).forEach(r => [...r.cells].forEach((c, i) => c.dataset.label = heads[i])); });
-patternDemo(); convDemo(); convTable(); ringDiagram();
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { patternDemo(); convDemo(); ringDiagram(); });
+patternDemo(); convDemo(); convTable(); ringDiagram(); triDemo(); triBars();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { patternDemo(); convDemo(); ringDiagram(); triDemo(); triBars(); });
 </script>
 </body>
 </html>

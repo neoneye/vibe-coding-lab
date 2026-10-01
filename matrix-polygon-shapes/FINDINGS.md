@@ -62,6 +62,20 @@ The k-gon tensor network. For 2×2 matrices (Christandl–Zuiddam, *Tensor surge
     - all other splits stay at √(32 − R)-type plateaus.
   - That R = 30 trajectory is the signature of a *border* (approximate) decomposition, which would beat the best known border bound of 31. It is **not confirmed**: extrapolating, error 10⁻⁶ would need coefficients near 3,000, beyond what double precision can resolve. Confirming it needs an explicit ε-family, or exact arithmetic.
 
+## 4. Triangle-shaped weights swept three ways (`llm/`)
+
+Weights on a triangular lattice lie on three lines each (0°, 60°, 120°). The three sweeps sum to the gradient of the
+cubic energy Σ W·h_i h_j h_k, and each weight feeds 6 multiplications per read.
+
+In a tiny character-level LM, at equal feed-forward parameters, validation bits/char were:
+- MLP 3.389
+- triangle, three sweeps 3.374
+- triangle, one sweep 3.344
+- SwiGLU 3.325
+
+So the triangle beats the MLP but not SwiGLU, and three sweeps are no better than one per parameter. The open question is weight reuse for memory-bound decoding, which needs a GPU kernel.
+Related: AlphaFold triangle updates; 2-simplicial attention.
+
 ## Takeaways
 
 **The rectangle is the attractor.**
