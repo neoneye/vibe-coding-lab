@@ -114,7 +114,7 @@ Quantisation:
   Competitive, no clear win.
 - **Natural importance ordering from non-uniform fan-in:** in the no-wrap layer, trimming the outer output rings hurts 2–3× less than dropping random cells (82% kept: +0.08 vs +0.23). The wrapped layer has no ordering.
 - **Precision by ring:** no gain; uniform bits beat centre-heavy or edge-heavy allocations.
-- **Training partly compensates:** edge activations are 5× weaker, so the edge output weights grow and move about 65% more from initialisation. The centre still contributes about 3× more.
+- **Training partly compensates:** edge activations are 5× weaker, so the edge output weights grow and move about 70% more from initialisation. The centre still contributes about 3× more.
 
 ## Takeaways
 

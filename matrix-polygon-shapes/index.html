@@ -338,6 +338,38 @@ Both factors were trained (y = a ∗ b, random targets, 12 seeds, hexagons of ra
 </ul>
 <div class="panel tablewrap"><table id="isoTable"></table>
 <div class="cap">Max/min over directions of the 4th moment E[(x·u)⁴] after repeated blurring, computed live. 1.000 means perfectly round up to 4th order.</div></div>
+<h3>In a language model: does the non-uniformity help?</h3>
+<p>Arrange the hidden units of the feed-forward block on a hexagon and let the block convolve two projections of the input across it: <code>y = C·((A·x) ∗ (B·x))</code>.
+Without wrap-around the output hexagon has twice the radius and is centre-heavy; with wrap-around every output gets the same number of products.
+This is computed exactly with an FFT, because a hexagon of radius R on a torus is the cyclic group Z<sub>N</sub>, N = 3R² + 3R + 1, via φ(q, r) = ((R+1)·q − R·r) mod N.
+The question is not whether it saves operations, but whether the shape gives the model a <i>property</i> it can use.</p>
+<div class="panel tablewrap">
+<table>
+  <tr><th>feed-forward block (≈ 65k weights)</th><th class="num">val bits/char</th></tr>
+  <tr><td>plain MLP</td><td class="num">3.389</td></tr>
+  <tr><td>gated (SwiGLU-style)</td><td class="num">3.325</td></tr>
+  <tr><td>hexagon, no wrap (centre-heavy)</td><td class="num">3.324</td></tr>
+  <tr><td>element-wise bilinear, C·((A·x) ⊙ (B·x))</td><td class="num">3.301</td></tr>
+  <tr><td>hexagon, wrap (uniform)</td><td class="num">3.289 (seeds 3.312, 3.265)</td></tr>
+</table>
+<div class="cap">Tiny character-level model, 1,500 steps, 2 seeds. Competitive, but not a clear win.</div>
+</div>
+<div class="panel">
+  <svg id="ordChart" viewBox="0 0 560 250" width="100%" role="img" aria-label="loss increase when trimming outer rings versus random cells"></svg>
+  <div class="cap">Increase in validation bits/char when output cells of the trained layer are zeroed, against the fraction of cells kept (mean of 2 seeds).
+    Solid: trim the outer rings first. Dashed: drop the same number of random cells. Orange: no wrap-around (centre-heavy). Blue: wrap-around (uniform).</div>
+</div>
+<div class="panel">
+  <svg id="ringStats" viewBox="0 0 560 230" width="100%" role="img" aria-label="activation size and output-weight size by ring after training"></svg>
+  <div class="cap">The trained no-wrap layer, by ring of the output hexagon (0 = centre). Orange: average activation size. Blue: size of the output weights attached to the cell. Dashed blue: how far those weights moved from their initial values. Each series is scaled to its own maximum. With wrap-around all three are flat.</div>
+</div>
+<ul>
+  <li><b>The centre-heavy layer learns an importance order on its own.</b> Trimming the outer rings hurts 2–3× less than dropping random cells (82% of cells kept: +0.08 against +0.23).
+    The uniform, wrapped layer has no such order: outer and random drops cost the same. That gives a ready-made dial for trimming compute at inference, outer rings first. It isn't free (trimming a third costs +0.23), but it's much gentler than trimming at random.</li>
+  <li><b>More precision at the centre does not help.</b> With the output weights at a 3-bit average: uniform +0.18, more bits at the centre +0.34, more bits at the edge +0.49. Squeezing any ring down to 2 bits costs more than the others gain.</li>
+  <li><b>Training pushes back against the non-uniformity.</b> Edge activations are about 5× weaker than the centre's, so the edge output weights grow larger and move about 70% further during training. The compensation is partial: the centre still contributes about 3× more, which is why the outer rings are cheaper to trim.</li>
+  <li><b>Next:</b> train with random outer-ring dropout (Matryoshka-style) to sharpen the order, and use it for elastic width or early exit.</li>
+</ul>
 <p>Where this matters: hexagonal grids are standard in geospatial indexing (<a href="https://h3geo.org/docs/">Uber's H3</a>), board and strategy game maps, telescope and detector arrays, and hexagonal CNNs (<a href="https://arxiv.org/abs/1903.01814">HexagDLy</a>).
 A hexagonal local + skip + random mask is a natural sparse attention for such data. Choosing wrap-around or not decides whether the border learns as fast as the middle.</p>
 
@@ -360,6 +392,7 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>The three-way weights tolerate coarse rounding, the projections don't.</b> The cube's 49k three-way weights at 2 bits hurt less than one 33k MLP matrix at 2 bits. The sensitive part is the input projection, whose errors are multiplied together.</li>
   <li><b>Without wrap-around, a hexagon's centre learns about 30× faster than its corners</b>, because more products land there. Wrap-around makes learning uniform.</li>
   <li><b>Hexagonal blurs are exactly round up to 4th order</b> at every step; square blurs only become round slowly.</li>
+  <li><b>A centre-heavy hexagonal layer learns an importance order without being asked.</b> In a language model, trimming its outer rings hurts 2–3× less than trimming at random. Meanwhile training partly fights the non-uniformity, growing the edge weights to make up for weaker edge activations.</li>
   <li><b>Exact search hits a wall quickly.</b> A SAT solver settles the triangle instantly. But it couldn't prove within 15 minutes that the square ring needs more than 15 products, a fact that a one-line flattening argument proves.</li>
 </ol>
 <h3>Where this is useful</h3>
@@ -371,6 +404,7 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>Mixed-precision storage of shaped layers:</b> keep the small input projection precise and store the three-way weights at 3 bits. In the tiny model the cube then beat the gated block at the same storage (3.530 vs 3.602 bits/char at about 200k bits).</li>
   <li><b>Hexagonal data (geospatial H3 cells, game maps, detector arrays):</b> a ring-1 + skip + random sparse mask connects a radius-8 map in 5 layers at 9.5 links per cell, against 16 layers for neighbours only.
     Wrap-around or not is a design choice: uniform learning, or a centre-first curriculum.</li>
+  <li><b>Elastic width for free-ish:</b> a non-wrapped hexagonal feed-forward layer orders its own outputs by importance, so outer rings can be trimmed at inference when compute is short, at a fraction of the cost of trimming at random.</li>
   <li><b>Tensor networks with loops:</b> an even loop can't be shortcut by any fused algorithm, so the order of pairwise contractions is all that matters. Odd loops leave room for Strassen-like tricks.</li>
   <li><b>Shaped weights in a language model</b> (triangle, cube; the tetrahedron was too slow to judge) train fine and beat a plain MLP, but not SwiGLU. The cube did best. Their selling point would be 6 multiplications per weight read for memory-bound inference, which is untested without a GPU kernel.
     The triangles that already pay off in large models live over tokens (2-simplicial attention) or residue pairs (AlphaFold).</li>
@@ -378,7 +412,7 @@ And when the polygon describes how matrices are wired together (a ring), what ma
 <h3>How new is this?</h3>
 <p>Most of it is known in some field: triangular matrices, receptive fields, Newton polytopes and Minkowski sums, Pick's theorem, hexagonal sampling, and Christandl–Zuiddam's cycle tensors.
 What this page adds is the side-by-side view, the classification of stable matrix shapes (at most 5 corners), the closed cost formula 4|P| − B − 3 for shaped convolution, and the unconfirmed hint that the pentagon ring might be approximated with 30 terms.
-Also new are the small experiments: shaped weight layers swept three or four ways; the finding that their three-way weights are robust to low precision while the input projection is not; and the hexagonal wrap / no-wrap learning-speed contrast.
+Also new are the small experiments: shaped weight layers swept three or four ways; the finding that their three-way weights are robust to low precision while the input projection is not; the hexagonal wrap / no-wrap learning-speed contrast; and the emergent importance order of a centre-heavy hexagonal layer.
 The isotropy of hexagonal blurs and the power of random long-range links (BigBird, small-world graphs) are known.</p>
 
 <!-- ======================================================================================= -->
@@ -433,6 +467,8 @@ The isotropy of hexagonal blurs and the power of random long-range links (BigBir
   <tr><td>Without wrap-around the centre outputs learn faster (NTK diagonal 41 vs 2 at radius 4)</td><td><span class="chip proven">tests</span></td></tr>
   <tr><td>Hexagonal blur exactly isotropic in 4th moments; square blur not</td><td><span class="chip proven">symmetry + tests</span></td></tr>
   <tr><td>Ring 1 + random far links connect a radius-8 hex map in 5 layers (one random draw)</td><td><span class="chip numeric">measured</span></td></tr>
+  <tr><td>A hexagon of radius R on a torus is the cyclic group Z<sub>3R²+3R+1</sub> (hexagonal convolution = 1-D FFT)</td><td><span class="chip proven">proof + tests</span></td></tr>
+  <tr><td>Hexagonal feed-forward layers are competitive with gated and bilinear blocks; the centre-heavy one orders its outputs by importance; ring-wise precision gives no gain</td><td><span class="chip numeric">measured, small</span></td></tr>
 </table></div>
 
 <footer>
@@ -698,7 +734,12 @@ const MP = (() => {
       lo = Math.min(lo, m4); hi = Math.max(hi, m4); lo2 = Math.min(lo2, m2); hi2 = Math.max(hi2, m2); }
     return { fourth: hi / lo, second: hi2 / lo2 };
   }
-  return { HEX_DIRS, hexDist, hexCells, hexWrapper, hexProductCounts, hexLearningSpeed, hexMask, layersToCover, blurAnisotropy,
+
+  function hexPhi(R) {                     // hexagon of radius R on a torus ≅ Z_N, N = 3R²+3R+1, via φ(q,r) = ((R+1)q − Rr) mod N
+    const N = 3 * R * R + 3 * R + 1, phi = (q, r) => ((((R + 1) * q - R * r) % N) + N) % N;
+    return { N, phi };
+  }
+  return { hexPhi, HEX_DIRS, hexDist, hexCells, hexWrapper, hexProductCounts, hexLearningSpeed, hexMask, layersToCover, blurAnisotropy,
            tetCells, tetSweeps, quarticEnergy, cubeSweeps, cubeEnergy, gradCheck, mulberryLike, triCells, triSweeps, cubicEnergy, regularPolygon, pattern, boolMul, density, subset, cost, triangle, square, hexagon, latticePolygon, minkowski, hull,
            boundaryCount, latticePointsOf, shapeArray, ringEntries, strassenTriangle, surgery, verifyRing, flatteningRank, set, key };
 })();
@@ -774,6 +815,12 @@ const MPTests = {
       t("ring 1 + random far links: fewer layers than dense ring 1+2, with fewer links", L("ring1+random") < L("ring1+2") && links("ring1+random") < links("ring1+2")); }
     t("hex blur is exactly isotropic in 4th moments", MP.blurAnisotropy("hex", 5).fourth < 1.0001);
     t("square blurs are not (4-neighbour, 5 steps)", MP.blurAnisotropy("square4", 5).fourth > 1.05);
+
+    for (const R of [2, 3, 5, 7]) {
+      const { N, phi } = MP.hexPhi(R), img = new Set(MP.hexCells(R).map(([q, r]) => phi(q, r)));
+      t(`hex torus R=${R} ≅ Z_${N}: φ is a bijection and kills both tiling translations`,
+        img.size === N && phi(2 * R + 1, -R) === 0 && phi(R, R + 1) === 0);
+    }
     const failed = res.filter(x => !x[1]);
     if (typeof console !== "undefined") console.log(`MPTests: ${res.length - failed.length}/${res.length} passed` + (failed.length ? "\nFAILED: " + failed.map(x => x[0]).join(", ") : ""));
     return failed.length === 0;
@@ -949,6 +996,41 @@ function isoTable() {
     kinds.map(([k, name]) => `<tr><td>${name}</td>${steps.map(t => { const v = MP.blurAnisotropy(k, t).fourth; return `<td class="num"${v < 1.0005 ? ' style="color:var(--good);font-weight:600"' : ""}>${v.toFixed(3)}</td>`; }).join("")}</tr>`).join("");
 }
 
+function ordChart() {
+  // mean of 2 seeds, from llm/hex_props.py
+  const nw = { kept: [1, 0.819, 0.656, 0.511, 0.384, 0.275, 0.184], ring: [0, 0.080, 0.228, 0.430, 0.730, 1.129, 1.600], rand: [0, 0.230, 0.443, 0.690, 1.158, 1.397, 1.783] };
+  const w = { kept: [1, 0.751, 0.538, 0.361, 0.219, 0.112, 0.041], ring: [0, 0.387, 0.911, 1.476, 2.165, 2.775, 3.199], rand: [0, 0.357, 0.910, 1.536, 2.372, 3.241, 3.720] };
+  const W = 560, H = 250, L = 46, R = 175, T = 12, B = 36, X = f => L + (1 - f) / 1 * (W - L - R), Y = v => T + (1 - v / 4) * (H - T - B);
+  const clip = v => v;
+  let g = "";
+  for (const v of [0, 1, 2, 3, 4]) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css("--rule")}"/><text x="${L - 8}" y="${Y(v) + 4}" text-anchor="end">+${v}</text>`;
+  for (const f of [1, 0.75, 0.5, 0.25, 0]) g += `<text x="${X(f)}" y="${H - B + 16}" text-anchor="middle">${Math.round(f * 100)}%</text>`;
+  g += `<text x="${(L + W - R) / 2}" y="${H - 2}" text-anchor="middle">fraction of output cells kept</text>`;
+  const line = (xs, ys, col, dash) => `<polyline fill="none" stroke="${col}" stroke-width="2.5"${dash ? ' stroke-dasharray="6 4"' : ""} points="${xs.map((k, i) => X(k) + "," + Y(clip(ys[i]))).join(" ")}"/>`;
+  g += line(nw.kept, nw.ring, css("--accent"), false) + line(nw.kept, nw.rand, css("--accent"), true) + line(w.kept, w.ring, css("--accent2"), false) + line(w.kept, w.rand, css("--accent2"), true);
+  const lx = W - R + 14; let ly = T + 12;
+  for (const [txt, col, dash] of [["no wrap, outer rings", css("--accent"), false], ["no wrap, random", css("--accent"), true], ["wrap, outer rings", css("--accent2"), false], ["wrap, random", css("--accent2"), true]]) {
+    g += `<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" stroke="${col}" stroke-width="2.5"${dash ? ' stroke-dasharray="6 4"' : ""}/><text x="${lx + 28}" y="${ly + 4}">${txt}</text>`; ly += 20; }
+  $("ordChart").innerHTML = g;
+}
+function ringStatsChart() {
+  // trained no-wrap layer, mean of 2 seeds, from llm/hex_rings.py
+  const act = [3.730, 3.303, 2.979, 2.767, 2.513, 2.313, 2.005, 1.753, 1.464, 1.130, 0.744];
+  const wcol = [0.443, 0.453, 0.468, 0.485, 0.503, 0.522, 0.546, 0.573, 0.611, 0.659, 0.730];
+  const moved = [0.401, 0.414, 0.432, 0.440, 0.452, 0.473, 0.503, 0.530, 0.565, 0.616, 0.692];
+  const W = 560, H = 230, L = 40, R = 150, T = 12, B = 36, X = i => L + i / 10 * (W - L - R), Y = v => T + (1 - v) * (H - T - B);
+  let g = "";
+  for (const v of [0, 0.5, 1]) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css("--rule")}"/><text x="${L - 8}" y="${Y(v) + 4}" text-anchor="end">${v}</text>`;
+  for (let i = 0; i <= 10; i += 2) g += `<text x="${X(i)}" y="${H - B + 16}" text-anchor="middle">${i}</text>`;
+  g += `<text x="${(L + W - R) / 2}" y="${H - 2}" text-anchor="middle">ring of the output hexagon (0 = centre)</text>`;
+  const series = (vals, col, dash) => { const m = Math.max(...vals); return `<polyline fill="none" stroke="${col}" stroke-width="2.5"${dash ? ' stroke-dasharray="6 4"' : ""} points="${vals.map((v, i) => X(i) + "," + Y(v / m)).join(" ")}"/>`; };
+  g += series(act, css("--accent"), false) + series(wcol, css("--accent2"), false) + series(moved, css("--accent2"), true);
+  const lx = W - R + 14; let ly = T + 12;
+  for (const [txt, col, dash] of [["activation size", css("--accent"), false], ["output-weight size", css("--accent2"), false], ["moved in training", css("--accent2"), true]]) {
+    g += `<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" stroke="${col}" stroke-width="2.5"${dash ? ' stroke-dasharray="6 4"' : ""}/><text x="${lx + 28}" y="${ly + 4}">${txt}</text>`; ly += 20; }
+  $("ringStats").innerHTML = g;
+}
+
 function ringDiagram() {
   let g = ""; const ks = [3, 4, 5, 6, 7, 8], w = 640 / ks.length;
   ks.forEach((k, idx) => {
@@ -976,8 +1058,8 @@ $("tNew").onclick = () => { triState.seed++; triDemo(); };
 $("hWrap").oninput = hexDemo; $("hR").oninput = hexDemo; $("mKind").oninput = maskDemo; $("mL").oninput = maskDemo;
 document.querySelectorAll(".pc").forEach(tb => { const heads = [...tb.rows[0].cells].map(c => c.textContent);
   [...tb.rows].slice(1).forEach(r => [...r.cells].forEach((c, i) => c.dataset.label = heads[i])); });
-patternDemo(); convDemo(); convTable(); ringDiagram(); triDemo(); triBars(); sweepTable(); hexDemo(); maskDemo(); isoTable(); setTimeout(hexSpeedChart, 60);
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { patternDemo(); convDemo(); ringDiagram(); triDemo(); triBars(); hexDemo(); maskDemo(); hexSpeedChart(); });
+patternDemo(); convDemo(); convTable(); ringDiagram(); triDemo(); triBars(); sweepTable(); hexDemo(); maskDemo(); isoTable(); ordChart(); ringStatsChart(); setTimeout(hexSpeedChart, 60);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { patternDemo(); convDemo(); ringDiagram(); triDemo(); triBars(); hexDemo(); maskDemo(); hexSpeedChart(); ordChart(); ringStatsChart(); });
 </script>
 </body>
 </html>

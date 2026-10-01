@@ -130,11 +130,11 @@ Competitive, but not a clear win over the plain bilinear block.
 Starving any ring down to 2 bits costs more than it saves.
 
 **What training does with the non-uniformity** (no wrap, per ring from centre to corner):
-- activation size: 3.9 → 0.8;
-- output-weight size: 0.46 → 0.74;
-- distance the output weights moved from initialisation: 0.42 → 0.70.
+- activation size: 3.7 → 0.7;
+- output-weight size: 0.44 → 0.73;
+- distance the output weights moved from initialisation: 0.40 → 0.69 (mean of 2 seeds).
 
-The model compensates for weak edge activations by growing the edge weights; the edges move about 65% more. The compensation is partial: the centre still contributes about 3× more. With wrap-around every row is flat.
+The model compensates for weak edge activations by growing the edge weights; the edges move about 70% more. The compensation is partial: the centre still contributes about 3× more. With wrap-around every row is flat.
 
 Next steps:
 - train with random outer-ring dropout (Matryoshka-style) to sharpen the ordering;
