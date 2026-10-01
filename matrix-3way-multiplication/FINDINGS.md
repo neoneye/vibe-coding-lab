@@ -120,6 +120,14 @@ With only k distinct values, scalar products recur. Measured multiplications on 
 * The three-way effect: a fused triple table needs at most k² + k³ multiplications, independent of N. It pays with N⁴ additions instead of ≈ N³, so it wins on multiplications only when k < N.
 * Prior art for two factors: Four Russians, the Mailman algorithm, LUT-GEMM, T-MAC.
 
+## 7. Activation-aware A·B·C — see `activation/README.md`
+
+Compute f(A·B·C + β). A low-precision pass plus a rigorous error bound decides every output where f is
+flat over the uncertainty interval; only the rest is recomputed at full precision.
+- Run over the whole chain it costs *more* than exact (107–181 %). Refining one entry needs a row of A·B or a column of B·C (≈ N²), and the bound compounds through B·C. Refinement lines were chosen by a König minimum vertex cover.
+- Computing B·C exactly and cascading only on A·(B·C) saves up to 48 % with zero wrong decisions (sign 52 %, hardtanh 60 %, ReLU 65–81 % of the exact cost at N = 32, 8 bits).
+- Prior work for one product: SnaPEA, SeerNet, Precision Gating, ComPreEND.
+
 ## Prior work and comparison
 
 | topic | published | here | verdict |
