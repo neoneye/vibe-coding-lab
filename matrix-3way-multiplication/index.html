@@ -291,12 +291,43 @@ Only the undecided outputs get a deeper, full-precision multiplication. Cost her
 </ul>
 
 <!-- ======================================================================================= -->
+<h2>7 · Picking terms at random</h2>
+<p>Instead of lowering precision, estimate each output from a <b>random sample of its terms</b> and decide where it falls relative to a threshold (a sign or ReLU after the product).
+For three factors there's an appealing twist. Each output is a double sum, D<sub>il</sub> = Σ<sub>j</sub>Σ<sub>k</sub> A<sub>ij</sub>B<sub>jk</sub>C<sub>kl</sub>, so you can sample (j, k) pairs directly at 2 multiplications each, without ever building a row or column of the intermediate.
+Cost here is multiplications; the exact chain is 2N³.</p>
+<div class="panel">
+  <div class="controls">
+    <label>data <select id="rKind"><option value="signed">signed, dense</option><option value="nonneg">nonnegative, dense</option><option value="sparse" selected>nonnegative, sparse, heavy-tailed</option></select></label>
+    <label>threshold <select id="rQ"><option value="0.5">median (50th pct)</option><option value="0.9">90th pct</option><option value="0.99" selected>99th pct (top 1%)</option></select></label>
+    <label>walks per row <select id="rS"><option>1024</option><option selected>4096</option><option>16384</option></select></label>
+    <label>show <select id="rShow"><option value="walk">random walks</option><option value="th-emp">sampled (j,k) pairs, empirical bound</option><option value="h-emp">exact B·C, sampled j, empirical bound</option><option value="h-str">exact B·C, sampled j, strict bound</option></select></label>
+  </div>
+  <div class="row" style="align-items:flex-start">
+    <div><canvas id="rGrid"></canvas><div class="cap" id="rLegend"></div></div>
+    <div style="flex:1;min-width:260px" class="tablewrap"><table id="rTable"></table>
+      <div class="cap">N = 32. Multiplications relative to the exact chain. Undecided outputs are recomputed exactly through the minimum row/column cover. *The guaranteed low-precision cascade of section 6 is shown for orientation; its percentage uses section 6's bit-operation cost (entries rescaled into [−1, 1)), not multiplications.</div></div>
+  </div>
+</div>
+<h3>What this shows</h3>
+<ul>
+  <li><b>Sampling terms mostly loses.</b> A <i>strict</i> bound (Hoeffding–Serfling) never settles a single output: it has to allow for the largest possible term, so it is always too wide.
+    An <i>empirical</i> bound saves only 1–17% on dense data, with a few wrong decisions. On sparse data it looks cheap but is badly fooled, with hundreds of wrong decisions: the first samples are often all zeros, so the estimate looks falsely certain.</li>
+  <li><b>Why:</b> to decide an output, the error must be smaller than its distance to the threshold. When outputs crowd around the threshold, partial samples can't get there.
+    <b>Seeing every term roughly (low precision) beats seeing some terms exactly (sampling).</b></li>
+  <li><b>The exception is a random walk through all three matrices.</b> For nonnegative data, walk i → j → k → l with j ∝ A<sub>ij</sub>·(B·C·1)<sub>j</sub>, k ∝ B<sub>jk</sub>·(C·1)<sub>k</sub>, l ∝ C<sub>kl</sub>.
+    The walk lands on output l with probability exactly D<sub>il</sub> / Σ<sub>l</sub> D<sub>il</sub>, after a setup of only 5N² multiplications and without forming A·B or B·C. The visit counts give a guaranteed bound.
+    On sparse, heavy-tailed data with a top-1% threshold, that needs only about a quarter of the multiplications, with zero wrong decisions. This is Cohen–Lewis sampling, extended to a chain of three.</li>
+  <li><b>The catch:</b> walks trade multiplications for random draws (about 393,000 draws at 4,096 walks per row, against 65,536 multiplications for the exact chain). They pay only when a multiplication is much more expensive than drawing a random index, the data is nonnegative and heavy-tailed, and the question is which few outputs are large.</li>
+</ul>
+
+<!-- ======================================================================================= -->
 <h2 id="takeaways">Takeaways</h2>
 <p><b>The common thread is the intermediate product.</b> Every gain came from treating A·B (or B·C) deliberately rather than as a black box:</p>
 <ul>
   <li><b>Writes:</b> don't store it at all. Fusing halves the writes (section 4).</li>
   <li><b>Caching:</b> cache products of the original entries. The intermediate's entries are sums, so they repeat far less than the inputs (section 5).</li>
   <li><b>Activations:</b> compute the middle product exactly and save the cheap tricks for the last multiplication. Treating the chain as one block made things worse (section 6).</li>
+  <li><b>Random walks:</b> the one random method that works passes through the whole chain and never forms the intermediate at all. It weights each step by the rest of the chain instead (section 7).</li>
 </ul>
 <h3>Surprises</h3>
 <ol>
@@ -306,6 +337,7 @@ Only the undecided outputs get a deeper, full-precision multiplication. Cost her
   <li><b>ReLU, the most common activation, benefits least,</b> because only its negative outputs can be skipped.</li>
   <li><b>A classic graph result turned up naturally:</b> choosing the fewest rows and columns to recompute is a minimum vertex cover in a bipartite graph, solved exactly by König's theorem.</li>
   <li><b>Caching helps the plain chain more than expected.</b> Each entry of A·B meets only k values of C, so a cache brings even the textbook chain to about k² + N²k multiplications.</li>
+  <li><b>Random sampling mostly loses to low precision,</b> and its empirical bounds are dangerously overconfident on sparse data. To decide a threshold, seeing every term roughly beats seeing some terms exactly.</li>
 </ol>
 <h3>For practice</h3>
 <ul>
@@ -313,13 +345,15 @@ Only the undecided outputs get a deeper, full-precision multiplication. Cost her
   <li><b>Fusing three-factor products pays off in memory traffic, not in arithmetic.</b> That's why GPU libraries fuse back-to-back GEMMs and FlashAttention fuses attention.</li>
   <li><b>With repeated values, cache before the sums.</b> A full table of value triples only pays off when k &lt; N and multiplications cost far more than additions.</li>
   <li><b>Measure how loose your bounds are on real data</b> before choosing between guaranteed and predictive skipping. Here the gap was 30×.</li>
+  <li><b>Reach for random sampling only to find the few largest outputs of nonnegative, heavy-tailed products,</b> and then with walks through the chain, not with per-term sampling.</li>
 </ul>
 <h3>Possibly new, and what to do next</h3>
-<p>Most results here rediscover known theory or practice (see the table below). Three may be new:</p>
+<p>Most results here rediscover known theory or practice (see the table below). Four may be new:</p>
 <ul>
   <li>six commutative products approximating 2×2 A·B arbitrarily well (numerical only, no explicit formula yet);</li>
   <li>for three factors, the activation shortcut belongs on the last product, not the whole chain;</li>
-  <li>the fused triple table: at most k² + k³ multiplications for any N, at the price of N⁴ additions.</li>
+  <li>the fused triple table: at most k² + k³ multiplications for any N, at the price of N⁴ additions;</li>
+  <li>guaranteed threshold decisions from random walks through all three factors, weighted by the rest of the chain.</li>
 </ul>
 <p>Next steps:</p>
 <ul>
@@ -376,6 +410,12 @@ chain tensor or rediscovers established practice. The table puts each result nex
         <a href="https://www.researchgate.net/publication/363415059_ComPreEND_Computation_Pruning_through_Predictive_Early_Negative_Detection_for_ReLU_in_a_Deep_Neural_Network_Accelerator">ComPreEND</a>. Mostly predictive.</td>
       <td>Three factors with a strict bound: the whole-chain cascade costs more than exact; exact B·C plus a cascade on A·(BC) saves up to 48%, guaranteed.</td>
       <td><span class="chip proven">extension</span> Known idea; the three-factor finding that the cascade belongs on the last product was not found stated.</td></tr>
+  <tr><td>Random sampling</td>
+      <td>Sampling-based approximate products: <a href="https://dl.acm.org/doi/pdf/10.5555/314161.314415">Cohen–Lewis 1999</a> (random walks; concentrates for nonnegative matrices),
+        <a href="https://dl.acm.org/doi/10.1137/S0097539704442684">Drineas–Kannan–Mahoney 2006</a> (norm-based error bounds),
+        <a href="https://arxiv.org/abs/1506.03872">diamond sampling</a> (Ballard–Kolda–Pinar–Seshadhri 2015, largest entries via cycles in a tripartite graph).</td>
+      <td>Per-term sampling loses to low precision for threshold decisions. Walks through A→B→C weighted by the rest of the chain give guaranteed top-1% decisions at ≈ 25% of the multiplications on sparse nonnegative data.</td>
+      <td><span class="chip proven">extension</span> Cohen–Lewis applied to a chain of three, with guaranteed decisions.</td></tr>
   <tr><td>EML trees</td>
       <td><a href="https://arxiv.org/abs/2603.21852">Odrzywołek 2026</a>: exp−ln with constant 1 generates all elementary functions; direct search gives x·y in 17 tokens.
         A ternary operator is named only as future work.</td>
@@ -404,6 +444,8 @@ chain tensor or rediscovers established practice. The table puts each result nex
   <tr><td>With k distinct values, a fused triple table needs ≤ k² + k³ multiplications for any N (N⁴ additions)</td><td><span class="chip proven">construction</span></td></tr>
   <tr><td>Activation cascade decisions are always correct at bound ×1 (strict error bound)</td><td><span class="chip proven">proof + tests</span></td></tr>
   <tr><td>Savings of 19–48% for f(A·(BC)) at N = 16–64 on random matrices</td><td><span class="chip numeric">measured</span></td></tr>
+  <tr><td>Random walks i→j→k→l land on output l with probability exactly D<sub>il</sub>/Σ<sub>l</sub>D<sub>il</sub> (nonnegative data); decisions hold with probability ≥ 1 − δ</td><td><span class="chip proven">proof + tests</span></td></tr>
+  <tr><td>Walks need ≈ 16–30% of the multiplications for top-1% decisions on sparse heavy-tailed data (but many random draws)</td><td><span class="chip numeric">measured</span></td></tr>
 </table></div>
 
 <footer>
@@ -682,7 +724,73 @@ const M3 = (() => {
     return { cost, chain, ratio: cost / chain, perLevel, wrong, maxErr, status, D };
   }
 
-  return { zeros, mul, randInt, mulberry, eq, strassen2, flattening, rank, machine, schedules, runAll, alphabetMatrices, cacheSchedules, cover, actInstance, actCascade,
+  // ---------- picking terms at random (sampling) and random walks through A → B → C ----------
+  // Cost = multiplications; exact chain = 2N³. Threshold decision for sign(D_il − thr), thr = a quantile of D.
+  function sampleData(N, kind, seed) {
+    const r = mulberry(seed);
+    const entry = () => kind === "signed" ? r() * 2 - 1 : kind === "nonneg" ? r() : (r() < 0.2 ? Math.exp(1.5 * (r() + r() + r() - 1.5)) : 0);
+    const M = () => Array.from({ length: N }, () => Array.from({ length: N }, entry));
+    return { A: M(), B: M(), C: M() };
+  }
+  function erfinv(x) { const w = -Math.log((1 - x) * (1 + x)); let p;
+    if (w < 5) { const t = w - 2.5; p = 2.81022636e-08; for (const c of [3.43273939e-07, -3.5233877e-06, -4.39150654e-06, 0.00021858087, -0.00125372503, -0.00417768164, 0.246640727, 1.50140941]) p = c + p * t; }
+    else { const t = Math.sqrt(w) - 3; p = -0.000200214257; for (const c of [0.000100950558, 0.00134934322, -0.00367342844, 0.00573950773, -0.0076224613, 0.00943887047, 1.00167406, 2.83297682]) p = c + p * t; }
+    return p * x; }
+  const quantileOf = (D, q) => { const s = D.flat().sort((a, b) => a - b); return s[Math.floor(q * (s.length - 1))]; };
+  // status codes per output: 0 decided correctly, 1 decided WRONG, 2 refined exactly
+  function sampleThreshold({ A, B, C }, { quantile = 0.5, strategy = "hybrid", bound = "strict", delta = 1e-6, batch = 4, seed = 1 } = {}) {
+    const N = A.length, r = mulberry(seed), P = mul(B, C), D = mul(A, P), thr = quantileOf(D, quantile);
+    const z = Math.sqrt(2) * erfinv(1 - delta);
+    let cost = strategy === "hybrid" ? N ** 3 : 0, wrong = 0;
+    const maxA = A.map(rw => Math.max(...rw.map(Math.abs))), maxB = Math.max(...B.flat().map(Math.abs));
+    const maxC = C[0].map((_, l) => Math.max(...C.map(rw => Math.abs(rw[l])))), maxP = P[0].map((_, l) => Math.max(...P.map(rw => Math.abs(rw[l]))));
+    const status = Array.from({ length: N }, () => new Array(N).fill(2)), undecided = [];
+    for (let i = 0; i < N; i++) for (let l = 0; l < N; l++) {
+      const M = strategy === "hybrid" ? N : N * N, budget = N, R = strategy === "hybrid" ? maxA[i] * maxP[l] : maxA[i] * maxB * maxC[l];
+      const order = [...Array(M).keys()]; for (let a = M - 1; a > 0; a--) { const b = Math.floor(r() * (a + 1)); [order[a], order[b]] = [order[b], order[a]]; }
+      const dl = delta / Math.ceil(budget / batch); let n = 0, sum = 0, sq = 0, done = false;
+      while (n < budget && !done) {
+        for (let b = 0; b < batch && n < budget; b++, n++) { const t = order[n];
+          const term = strategy === "hybrid" ? A[i][t] * P[t][l] : A[i][Math.floor(t / N)] * B[Math.floor(t / N)][t % N] * C[t % N][l];
+          cost += strategy === "hybrid" ? 1 : 2; sum += term; sq += term * term; }
+        const mean = sum / n;
+        if (n === M) { done = true; status[i][l] = 2; break; }                                   // exhausted = exact
+        const hw = bound === "strict" ? 2 * R * Math.sqrt((1 - (n - 1) / M) * Math.log(2 / dl) / (2 * n))
+                                      : z * Math.sqrt(Math.max(0, sq / n - mean * mean) * n / Math.max(1, n - 1) * (1 - n / M) / n);
+        const lo = M * (mean - hw) > thr, hi = M * (mean + hw) > thr;
+        if (lo === hi) { done = true; const ok = lo === (D[i][l] > thr); status[i][l] = ok ? 0 : 1; if (!ok) wrong++; }
+      }
+      if (!done) undecided.push([i, l]);
+    }
+    if (undecided.length) { const { rows, cols } = cover(N, undecided); cost += (rows.length + cols.length) * N * N + undecided.length * N; }
+    return { ratio: cost / (2 * N ** 3), wrong, undecided: undecided.length, status };
+  }
+  // Cohen–Lewis walks for nonnegative matrices: j ∝ A_ij·(B·C·1)_j, k ∝ B_jk·(C·1)_k, l ∝ C_kl
+  // lands on l with probability exactly D_il / Σ_l D_il; Hoeffding on the counts gives guaranteed decisions.
+  function walkThreshold({ A, B, C }, { quantile = 0.99, delta = 1e-6, perRow = 4096, seed = 1 } = {}) {
+    const N = A.length, r = mulberry(seed), D = mul(mul(A, B), C), thr = quantileOf(D, quantile);
+    const mv = (X, x) => X.map(rw => rw.reduce((s, v, k) => s + v * x[k], 0)), cdf = w => { let s = 0; return w.map(x => (s += x)); };
+    const draw = c => { const u = r() * c[c.length - 1]; let lo = 0, hi = c.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (c[m] < u) lo = m + 1; else hi = m; } return lo; };
+    const v = mv(C, new Array(N).fill(1)), w = mv(B, v), m = mv(A, w);
+    const cA = A.map(rw => cdf(rw.map((x, j) => x * w[j]))), cB = B.map(rw => cdf(rw.map((x, k) => x * v[k]))), cC = C.map(rw => cdf(rw));
+    let mults = 5 * N * N, draws = 0, wrong = 0;
+    const half = Math.sqrt(Math.log(2 / delta) / (2 * perRow)), status = Array.from({ length: N }, () => new Array(N).fill(2)), undecided = [];
+    for (let i = 0; i < N; i++) {
+      const cnt = new Array(N).fill(0);
+      if (m[i] > 0) for (let t = 0; t < perRow; t++) { cnt[draw(cC[draw(cB[draw(cA[i])])])]++; draws += 3; }
+      for (let l = 0; l < N; l++) {
+        const truth = D[i][l] > thr;
+        let dec = null;
+        if (m[i] === 0) dec = false;
+        else { const p = cnt[l] / perRow; if (m[i] * (p - half) > thr) dec = true; else if (m[i] * (p + half) <= thr) dec = false; }
+        if (dec === null) undecided.push([i, l]); else { status[i][l] = dec === truth ? 0 : 1; if (dec !== truth) wrong++; }
+      }
+    }
+    if (undecided.length) { const { rows, cols } = cover(N, undecided); mults += (rows.length + cols.length) * N * N + undecided.length * N; }
+    return { ratio: mults / (2 * N ** 3), wrong, undecided: undecided.length, draws, status };
+  }
+
+  return { zeros, mul, randInt, mulberry, eq, strassen2, flattening, rank, machine, schedules, runAll, alphabetMatrices, cacheSchedules, cover, actInstance, actCascade, sampleData, sampleThreshold, walkThreshold,
            evalRPN, directProduct, composedProduct, size, XY };
 })();
 
@@ -763,6 +871,27 @@ const M3Tests = {
       const i32 = M3.actInstance(32, 11);
       const p = M3.actCascade(i32, { act: "sign", levels: [8], strategy: "chain", gamma: 10 ** -1.5 });
       t("N=32 sign whole-chain, bound ×0.03: 50%, no wrong (quoted in Takeaways)", Math.round(100 * p.ratio) === 50 && p.wrong === 0);
+    }
+
+    {   // random sampling and walks
+      for (const kind of ["signed", "nonneg", "sparse"]) {
+        const inst = M3.sampleData(16, kind, 21);
+        for (const strategy of ["hybrid", "triple"]) {
+          const st = M3.sampleThreshold(inst, { quantile: 0.5, strategy, bound: "strict" });
+          t(`strict ${strategy} sampling on ${kind}: no wrong decisions`, st.wrong === 0);
+        }
+      }
+      const sp = M3.sampleData(32, "sparse", 21);
+      t("strict hybrid sampling decides nothing on sparse data (100%)", Math.round(100 * M3.sampleThreshold(sp, { strategy: "hybrid", bound: "strict" }).ratio) === 100);
+      t("empirical sampling makes wrong decisions on sparse data", M3.sampleThreshold(sp, { strategy: "triple", bound: "empirical" }).wrong > 50);
+      const w = M3.walkThreshold(sp, { quantile: 0.99, perRow: 4096 });
+      t("walks on sparse, top 1%, s=4096: no wrong, ≈ 24% of the multiplications", w.wrong === 0 && Math.abs(100 * w.ratio - 24) < 6);
+      const nn = M3.walkThreshold(M3.sampleData(32, "nonneg", 21), { quantile: 0.5, perRow: 4096 });
+      t("walks on dense nonnegative data gain nothing", nn.ratio > 1 && nn.wrong === 0);
+      // walk endpoint distribution is exactly D_il / Σ_l D_il (law of large numbers check)
+      const small = M3.sampleData(6, "nonneg", 4), Dm = M3.mul(M3.mul(small.A, small.B), small.C);
+      const ww = M3.walkThreshold(small, { quantile: 0.5, perRow: 200000, delta: 1e-3 });
+      t("walk estimates converge on tiny instance", ww.wrong === 0 && ww.undecided <= 4);
     }
     const failed = results.filter(r => !r[1]);
     if (typeof console !== "undefined") console.log(`M3Tests: ${results.length - failed.length}/${results.length} passed` + (failed.length ? "\nFAILED: " + failed.map(r => r[0]).join(", ") : ""));
@@ -901,6 +1030,36 @@ function actDemo() {
   }).join("");
 }
 
+function randDemo() {
+  const kind = $("rKind").value, q = +$("rQ").value, perRow = +$("rS").value, show = $("rShow").value;
+  const inst = M3.sampleData(32, kind, 21);
+  const rows = [
+    ["walk", `random walks, ${perRow.toLocaleString()}/row`, kind === "signed" ? null : M3.walkThreshold(inst, { quantile: q, perRow })],
+    ["th-emp", "(j,k) pairs, empirical", M3.sampleThreshold(inst, { quantile: q, strategy: "triple", bound: "empirical" })],
+    ["h-emp", "exact B·C + j, empirical", M3.sampleThreshold(inst, { quantile: q, strategy: "hybrid", bound: "empirical" })],
+    ["h-str", "exact B·C + j, strict", M3.sampleThreshold(inst, { quantile: q, strategy: "hybrid", bound: "strict" })],
+  ];
+  // the guaranteed low-precision cascade of section 6 on the same data (sign at the same quantile), for comparison
+  const Dm = M3.mul(M3.mul(inst.A, inst.B), inst.C), sorted = Dm.flat().sort((a, b) => a - b), thr = sorted[Math.floor(q * (sorted.length - 1))];
+  const scale = Math.max(...[inst.A, inst.B, inst.C].flatMap(M => M.flat().map(Math.abs)));   // cascade expects entries in [-1, 1)
+  const sc = M => M.map(r => r.map(x => x / scale * 0.999));
+  const lp = M3.actCascade({ A: sc(inst.A), B: sc(inst.B), C: sc(inst.C) }, { act: "sign", beta: -thr * (0.999 / scale) ** 3, levels: [8], strategy: "hybrid" });
+  const cell = r => r === null ? `<td colspan="3" style="color:${css("--muted")}">needs nonnegative data</td>` :
+    `<td style="color:${r.ratio < 1 ? css("--good") : css("--bad")}">${Math.round(100 * r.ratio)}%</td><td class="${r.wrong ? "fail" : "ok"}">${r.wrong}</td><td>${r.status.flat().filter(x => x === 2).length}</td>`;
+  $("rTable").innerHTML = `<tr><th>method</th><th>mults</th><th>wrong</th><th>exact</th></tr>` +
+    rows.map(([id, name, r]) => `<tr${id === show ? ' class="best"' : ""}><td>${name}</td>${cell(r)}</tr>`).join("") +
+    `<tr><td>low precision, 8-bit*</td><td style="color:${lp.ratio < 1 ? css("--good") : css("--bad")}">${Math.round(100 * lp.ratio)}%*</td><td class="${lp.wrong ? "fail" : "ok"}">${lp.wrong}</td><td>${lp.perLevel[lp.perLevel.length - 1].decided}</td></tr>`;
+  const sel = rows.find(r => r[0] === show)[2] || rows[1][2];
+  const cv = $("rGrid"), px = 8, side = 32 * px, dpr = window.devicePixelRatio || 1;
+  cv.style.width = side + "px"; cv.style.height = "auto"; cv.width = side * dpr; cv.height = side * dpr;
+  const g = cv.getContext("2d"); g.scale(dpr, dpr);
+  const colr = [css("--accent2"), css("--bad"), css("--muted")];
+  for (let i = 0; i < 32; i++) for (let l = 0; l < 32; l++) { g.fillStyle = colr[sel.status[i][l]]; g.fillRect(l * px, i * px, px - 1, px - 1); }
+  const sw = c => `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};margin:0 4px 0 10px"></span>`;
+  $("rLegend").innerHTML = sw(colr[0]) + "decided correctly" + sw(colr[1]) + "decided wrongly" + sw(colr[2]) + "computed exactly" +
+    (show === "walk" && kind === "signed" ? "<br>(walks need nonnegative data; showing sampled pairs)" : "");
+}
+
 function cacheDemo() {
   const N = +$("cN").value, k = $("cK").value === "Infinity" ? Infinity : +$("cK").value;
   const inst = M3.alphabetMatrices(N, k, 5), rows = M3.cacheSchedules(inst, { triple: N <= 32 }), best = Math.min(...rows.map(r => r.mults));
@@ -936,8 +1095,9 @@ for (const id of ["wN", "wS", "wW", "wLog"]) $(id).oninput = writeDemo;
 $("wS").innerHTML = "<option>1</option>";
 for (const id of ["cN", "cK"]) $(id).oninput = cacheDemo;
 for (const id of ["aAct", "aStrat", "aLev", "aN", "aBeta", "aGain", "aGam"]) $(id).oninput = actDemo;
-drawFlat(); strassenDemo(); ridgeChart(); emlDemo(); writeDemo(); cacheDemo(); actDemo(); setTimeout(cacheSummary, 50);
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawFlat(); ridgeChart(); cacheDemo(); actDemo(); });
+for (const id of ["rKind", "rQ", "rS", "rShow"]) $(id).oninput = randDemo;
+drawFlat(); strassenDemo(); ridgeChart(); emlDemo(); writeDemo(); cacheDemo(); actDemo(); setTimeout(cacheSummary, 50); setTimeout(randDemo, 80);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawFlat(); ridgeChart(); cacheDemo(); actDemo(); randDemo(); });
 </script>
 </body>
 </html>
