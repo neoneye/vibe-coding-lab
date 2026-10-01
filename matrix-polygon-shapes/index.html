@@ -87,7 +87,7 @@ footer { margin-top: 64px; font-size: 13px; color: var(--muted); border-top: 1px
   <div class="card"><div class="label">Shape = nonzero pattern of a matrix</div><div class="big meh">Up to 5 corners</div>
     <p>Rectangles, triangles, trapezoids and certain pentagons survive multiplication. Hexagons and larger shapes cannot stay stable: products square them up.</p></div>
   <div class="card"><div class="label">Shape = array, multiplied by convolution</div><div class="big yes">Any polygon works</div>
-    <p>Shapes add (Minkowski sum). Cost is exactly 4|P| − B − 3. Triangles and hexagons are as natural as squares; pentagons cost slightly more.</p></div>
+    <p>Shapes add (Minkowski sum). Cost is exactly 4|P| − B − 3. Triangles and hexagons are as natural as squares. Without wrap-around the centre of a hexagon learns 30× faster than its corners.</p></div>
   <div class="card"><div class="label">Shape = ring of matrices</div><div class="big meh">Odd beats even</div>
     <p>Even rings (square, hexagon) admit no shortcut: rank 2^k. Odd rings (triangle, pentagon) do. The pentagon's exact cost (25 to 31) is an open problem.</p></div>
   <div class="card"><div class="label">Shaped weights in a language model</div><div class="big meh">Works, not best</div>
@@ -260,6 +260,86 @@ In general a d-dimensional simplex has d + 1 sweeps and d(d + 1) multiplications
     It also runs as plain dense array operations, so it was 8× faster per step than the triangle here.</li>
   <li><b>The tetrahedron has the most reuse</b> (12 multiplications per weight read) but was too slow on this CPU to train long enough to judge. At 500 steps it ties everything.</li>
 </ul>
+<h3>Fewer bits?</h3>
+<p>Does a shaped weight array, used three ways, keep its quality with fewer bits per weight? The trained models' feed-forward weights were rounded to b bits after training
+(symmetric, per tensor, round to nearest) and the language model re-evaluated. "Gated" is the SwiGLU-style feed-forward block: Swish-gated linear unit, then a projection.</p>
+<div class="panel tablewrap">
+<table>
+  <tr><th>weights rounded (one group at a time)</th><th class="num">weights</th><th class="num">3 bits</th><th class="num">2 bits</th></tr>
+  <tr><td>cube's three-way weights</td><td class="num">48.8k</td><td class="num"><b>+0.082</b></td><td class="num"><b>+1.07</b></td></tr>
+  <tr><td>triangle's weights</td><td class="num">11.3k</td><td class="num">+0.065</td><td class="num">+0.95</td></tr>
+  <tr><td>MLP output matrix</td><td class="num">32.8k</td><td class="num">+0.115</td><td class="num">+1.77</td></tr>
+  <tr><td>MLP input matrix</td><td class="num">32.8k</td><td class="num">+0.170</td><td class="num">+1.49</td></tr>
+  <tr><td>triangle's input projection</td><td class="num">13.6k</td><td class="num">+0.197</td><td class="num">+1.85</td></tr>
+</table>
+<div class="cap">Increase in validation bits per character, mean of 2 seeds.</div>
+</div>
+<div class="panel tablewrap">
+<table>
+  <tr><th>total feed-forward storage</th><th class="num">MLP</th><th class="num">gated</th><th class="num">cube, mixed precision</th></tr>
+  <tr><td>≈ 262k bits (4 bits per weight)</td><td class="num">3.416</td><td class="num"><b>3.380</b></td><td class="num">—</td></tr>
+  <tr><td>≈ 221–241k bits</td><td class="num">3.521</td><td class="num">3.462</td><td class="num"><b>3.460</b> (with 8% less storage)</td></tr>
+  <tr><td>≈ 200k bits</td><td class="num">3.670</td><td class="num">3.602</td><td class="num"><b>3.530</b></td></tr>
+</table>
+<div class="cap">Absolute validation bits per character after rounding. The cube stores its three-way weights at 3 bits and its small input projection at 6–8 bits.</div>
+</div>
+<ul>
+  <li><b>Rounding everything to the same bit width gives no bonus.</b> At 3–4 bits the triangle and cube degrade slightly faster than the MLP and the gated block.</li>
+  <li><b>But the three-way weights themselves are robust:</b> the cube's 49k three-way weights at 2 bits cost less than a single 33k MLP matrix at 2 bits.</li>
+  <li><b>The weak point is the input projection.</b> Its rounding errors get multiplied together inside the products.</li>
+  <li><b>So mixed precision wins.</b> With the three-way weights at 3 bits and the input projection kept precise, the cube needs fewer bits for the same quality, beating the gated block by 0.07 bits/char at about 200k stored bits. The triangle doesn't gain: its wide output projection dominates the storage.</li>
+</ul>
+
+<!-- ======================================================================================= -->
+<h2>5 · Hexagons: wrap around or not, and hexagonal attention</h2>
+<p>Multiply two hexagonal arrays by convolution. <b>With wrap-around</b> (hexagons tiling a torus) every output cell receives exactly the same number of multiplications, |P|, just like an ordinary cyclic product.
+<b>Without wrap-around</b> the count is the overlap of two hexagons: |P| at the centre, falling to 1 at the corners.</p>
+<div class="panel">
+  <div class="controls">
+    <label><input type="checkbox" id="hWrap"> wrap around</label>
+    <label>radius <input type="range" id="hR" min="2" max="5" value="3"><span id="hRv" class="mono"></span></label>
+  </div>
+  <svg id="hSvg" viewBox="0 0 520 300" width="100%" style="max-width:600px" role="img" aria-label="number of multiplications landing on each output cell"></svg>
+  <div class="stat" id="hStats"></div>
+  <div class="cap">Darker means more multiplications land on that output cell. Wrapped, the doubled hexagon folds back onto the original one and every cell gets the same count.</div>
+</div>
+<h3>Does the centre learn faster?</h3>
+<p>Yes. Under gradient descent an output's learning speed is its neural-tangent-kernel diagonal, Σ<sub>p</sub> b²<sub>s−p</sub> + a²<sub>p</sub>, which grows with the number of products landing on it.
+Both factors were trained (y = a ∗ b, random targets, 12 seeds, hexagons of radius 4):</p>
+<div class="panel">
+  <svg id="hSpeed" viewBox="0 0 560 220" width="100%" role="img" aria-label="learning speed by ring, with and without wrap-around"></svg>
+  <div class="cap">Average error removed per output in the first 3 gradient steps, by ring (0 = centre). Orange: no wrap-around. Blue: wrap-around (only rings 0–4 exist after folding).</div>
+</div>
+<ul>
+  <li><b>Without wrap-around the centre learns about 30× faster than the corners</b> (learning speed 41 against 2; error removed 9.4 against 0.29). The edges are under-trained, a built-in curriculum from the inside out.</li>
+  <li><b>With wrap-around every output learns at the same speed</b>, like an ordinary dense or cyclic product.</li>
+  <li>The input cells, by contrast, are uniform either way: each one meets |P| outputs. Only the outputs differ.</li>
+</ul>
+<h3>A hexagonal attention or convolution mask</h3>
+<p>The idea: let each cell attend strongly to its 6 neighbours, skip the next ring, and attend to a few random far cells. That is a hexagonal cousin of <a href="https://arxiv.org/abs/2007.14062">BigBird</a>'s local + random sparse attention.</p>
+<div class="panel">
+  <div class="controls">
+    <label>mask <select id="mKind">
+      <option value="ring1">ring 1 only</option><option value="ring1+2">ring 1 + ring 2 (dense)</option><option value="ring1+3">ring 1 + ring 3 (skip ring 2)</option>
+      <option value="ring1+random" selected>ring 1 + 3 random far cells</option><option value="ring1+3+random">ring 1 + ring 3 + random</option></select></label>
+    <label>layers <input type="range" id="mL" min="0" max="8" value="1"><span id="mLv" class="mono"></span></label>
+  </div>
+  <div class="row">
+    <svg id="mSvg" viewBox="0 0 420 380" width="100%" style="max-width:460px" role="img" aria-label="hexagonal mask and its receptive field after several layers"></svg>
+    <div style="flex:1;min-width:240px" class="tablewrap"><table id="mTable"></table></div>
+  </div>
+  <div class="cap">Hexagonal map of radius 8 (217 cells). Dark: the centre cell. Blue: what it attends to directly. Shaded: what has reached it after the chosen number of layers. The table gives links per cell (cost) and layers until every cell has heard from every other.</div>
+</div>
+<ul>
+  <li><b>Random far links are cheap and powerful.</b> Ring 1 alone needs 16 layers to connect a radius-8 map. Adding 3 random far cells per cell needs only 5, with 9.5 links per cell against 16.7 for a dense two-ring mask that still needs 8. It's the small-world effect.</li>
+  <li><b>Skipping ring 2 works like a dilated kernel:</b> ring 1 + ring 3 connects the map in 6 layers.</li>
+  <li><b>Hexagonal blurs are rounder.</b> Repeating a 7-cell hexagonal blur gives a spread that is exactly isotropic in its 4th moments (max/min over directions 1.000 at every step).
+    Square blurs are only isotropic in their 2nd moments: their 4th-moment ratio is 1.29 after 2 steps (4 neighbours) and still 1.04 after 10. Six-fold symmetry cancels the 4-fold term that squares keep.</li>
+</ul>
+<div class="panel tablewrap"><table id="isoTable"></table>
+<div class="cap">Max/min over directions of the 4th moment E[(x·u)⁴] after repeated blurring, computed live. 1.000 means perfectly round up to 4th order.</div></div>
+<p>Where this matters: hexagonal grids are standard in geospatial indexing (<a href="https://h3geo.org/docs/">Uber's H3</a>), board and strategy game maps, telescope and detector arrays, and hexagonal CNNs (<a href="https://arxiv.org/abs/1903.01814">HexagDLy</a>).
+A hexagonal local + skip + random mask is a natural sparse attention for such data. Choosing wrap-around or not decides whether the border learns as fast as the middle.</p>
 
 <!-- ======================================================================================= -->
 <h2 id="takeaways">Takeaways</h2>
@@ -277,6 +357,9 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>Hexagons are made of triangles:</b> a triangular array correlated with its mirror image gives a hexagonal array.</li>
   <li><b>2D is special.</b> A doubled lattice polygon never has gaps in 2D, but a doubled tetrahedron can (Reeve), so 3D shaped arrays are less tidy.</li>
   <li><b>The natural symmetric generalisation of Strassen doesn't simply appear for the pentagon.</b> A rotation-symmetric 31-term fit froze at error 0.0003. The only lead below 31 is an unconfirmed 30-term approximate decomposition.</li>
+  <li><b>The three-way weights tolerate coarse rounding, the projections don't.</b> The cube's 49k three-way weights at 2 bits hurt less than one 33k MLP matrix at 2 bits. The sensitive part is the input projection, whose errors are multiplied together.</li>
+  <li><b>Without wrap-around, a hexagon's centre learns about 30× faster than its corners</b>, because more products land there. Wrap-around makes learning uniform.</li>
+  <li><b>Hexagonal blurs are exactly round up to 4th order</b> at every step; square blurs only become round slowly.</li>
   <li><b>Exact search hits a wall quickly.</b> A SAT solver settles the triangle instantly. But it couldn't prove within 15 minutes that the square ring needs more than 15 products, a fact that a one-line flattening argument proves.</li>
 </ol>
 <h3>Where this is useful</h3>
@@ -285,13 +368,18 @@ And when the polygon describes how matrices are wired together (a ring), what ma
     That widening is exactly how a stack of sliding-window layers gets a receptive field of about (layers × window). Pick these two masks in section 1 to see it.</li>
   <li><b>Storage formats that stay closed:</b> triangles, trapezoids and the triangle-in-a-window pentagon can be multiplied without the result leaving the format. Bands and centred shapes need re-allocation after every product.</li>
   <li><b>Choosing an array shape for convolution data:</b> hexagons for round, isotropic data (images, sensors, game maps; 13.4% fewer samples); triangles for polynomials of bounded total degree. The cost formula 4|P| − B − 3 lets you budget the work exactly.</li>
+  <li><b>Mixed-precision storage of shaped layers:</b> keep the small input projection precise and store the three-way weights at 3 bits. In the tiny model the cube then beat the gated block at the same storage (3.530 vs 3.602 bits/char at about 200k bits).</li>
+  <li><b>Hexagonal data (geospatial H3 cells, game maps, detector arrays):</b> a ring-1 + skip + random sparse mask connects a radius-8 map in 5 layers at 9.5 links per cell, against 16 layers for neighbours only.
+    Wrap-around or not is a design choice: uniform learning, or a centre-first curriculum.</li>
   <li><b>Tensor networks with loops:</b> an even loop can't be shortcut by any fused algorithm, so the order of pairwise contractions is all that matters. Odd loops leave room for Strassen-like tricks.</li>
   <li><b>Shaped weights in a language model</b> (triangle, cube; the tetrahedron was too slow to judge) train fine and beat a plain MLP, but not SwiGLU. The cube did best. Their selling point would be 6 multiplications per weight read for memory-bound inference, which is untested without a GPU kernel.
     The triangles that already pay off in large models live over tokens (2-simplicial attention) or residue pairs (AlphaFold).</li>
 </ul>
 <h3>How new is this?</h3>
 <p>Most of it is known in some field: triangular matrices, receptive fields, Newton polytopes and Minkowski sums, Pick's theorem, hexagonal sampling, and Christandl–Zuiddam's cycle tensors.
-What this page adds is the side-by-side view, the classification of stable matrix shapes (at most 5 corners), the closed cost formula 4|P| − B − 3 for shaped convolution, and the unconfirmed hint that the pentagon ring might be approximated with 30 terms.</p>
+What this page adds is the side-by-side view, the classification of stable matrix shapes (at most 5 corners), the closed cost formula 4|P| − B − 3 for shaped convolution, and the unconfirmed hint that the pentagon ring might be approximated with 30 terms.
+Also new are the small experiments: shaped weight layers swept three or four ways; the finding that their three-way weights are robust to low precision while the input projection is not; and the hexagonal wrap / no-wrap learning-speed contrast.
+The isotropy of hexagonal blurs and the power of random long-range links (BigBird, small-world graphs) are known.</p>
 
 <!-- ======================================================================================= -->
 <h2>Pros and cons by shape</h2>
@@ -340,6 +428,11 @@ What this page adds is the side-by-side view, the classification of stable matri
   <tr><td>Three sweeps of a triangle of weights equal the gradient of the cubic energy Σ W·h<sub>i</sub>h<sub>j</sub>h<sub>k</sub></td><td><span class="chip proven">proof + tests</span></td></tr>
   <tr><td>Triangle and cube feed-forward beat an MLP, trail SwiGLU (tiny LM, 1,500 steps); tetrahedron undecided</td><td><span class="chip numeric">measured, small</span></td></tr>
   <tr><td>Cube and tetrahedron sweeps equal the gradients of cubic and quartic energies; 6 and 12 multiplications per weight read</td><td><span class="chip proven">proof + tests</span></td></tr>
+  <tr><td>Three-way weights robust to 2–3-bit rounding, input projection sensitive; mixed-precision cube beats the gated block at ≈ 200k stored bits</td><td><span class="chip numeric">measured, small</span></td></tr>
+  <tr><td>Hexagon product: wrap-around gives every output |P| multiplications; without it the centre gets |P| and corners 1</td><td><span class="chip proven">proof + tests</span></td></tr>
+  <tr><td>Without wrap-around the centre outputs learn faster (NTK diagonal 41 vs 2 at radius 4)</td><td><span class="chip proven">tests</span></td></tr>
+  <tr><td>Hexagonal blur exactly isotropic in 4th moments; square blur not</td><td><span class="chip proven">symmetry + tests</span></td></tr>
+  <tr><td>Ring 1 + random far links connect a radius-8 hex map in 5 layers (one random draw)</td><td><span class="chip numeric">measured</span></td></tr>
 </table></div>
 
 <footer>
@@ -349,7 +442,8 @@ H. Buhrman et al., <a href="https://drops.dagstuhl.de/entities/document/10.4230/
 <a href="https://en.wikipedia.org/wiki/Pick%27s_theorem">Pick's theorem</a>; <a href="https://en.wikipedia.org/wiki/Crystallographic_restriction_theorem">crystallographic restriction</a>;
 <a href="https://en.wikipedia.org/wiki/Hexagonal_sampling">hexagonal sampling</a> (Petersen–Middleton; Mersereau 1979);
 <a href="https://en.wikipedia.org/wiki/Newton_polygon">Newton polytopes</a> (supports add under multiplication);
-<a href="https://en.wikipedia.org/wiki/Incidence_algebra">incidence algebras</a> (closed sparsity patterns = transitive relations).
+<a href="https://en.wikipedia.org/wiki/Incidence_algebra">incidence algebras</a> (closed sparsity patterns = transitive relations);
+<a href="https://arxiv.org/abs/2007.14062">BigBird</a> (local + random sparse attention); <a href="https://arxiv.org/abs/1903.01814">HexagDLy</a> (hexagonal CNNs); <a href="https://h3geo.org/docs/">Uber H3</a> (hexagonal geospatial grid).
 Run the self-tests with <code>node test.mjs</code>.
 </footer>
 </main>
@@ -525,7 +619,87 @@ const MP = (() => {
   }
 
   const mulberryLike = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
-  return { tetCells, tetSweeps, quarticEnergy, cubeSweeps, cubeEnergy, gradCheck, mulberryLike, triCells, triSweeps, cubicEnergy, regularPolygon, pattern, boolMul, density, subset, cost, triangle, square, hexagon, latticePolygon, minkowski, hull,
+
+  // ---------- 5. hexagons: wrap-around or not, learning speed, hex attention masks, isotropy ----------
+  const HEX_DIRS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
+  const hexDist = (a, b) => (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[0] + a[1] - b[0] - b[1])) / 2;
+  function hexCells(R) { const c = []; for (let q = -R; q <= R; q++) for (let r = -R; r <= R; r++) if (Math.abs(q + r) <= R) c.push([q, r]); return c; }
+  function hexWrapper(R) {                 // hexagons of radius R tile the plane with translations T1 = (2R+1, −R), T2 = (R, R+1); det = 3R²+3R+1 = #cells
+    const T1 = [2 * R + 1, -R], T2 = [R, R + 1];
+    return ([q, r]) => {
+      for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) {
+        const p = [q - a * T1[0] - b * T2[0], r - a * T1[1] - b * T2[1]];
+        if (Math.abs(p[0]) <= R && Math.abs(p[1]) <= R && Math.abs(p[0] + p[1]) <= R) return p;
+      }
+      return null;
+    };
+  }
+  function hexProductCounts(R, wrap) {     // multiplications landing on each output cell of hexagon(R) ∗ hexagon(R)
+    const P = hexCells(R), W = hexWrapper(R), cnt = new Map();
+    for (const p of P) for (const q of P) { let s = [p[0] + q[0], p[1] + q[1]]; if (wrap) s = W(s); const k = s.join(","); cnt.set(k, (cnt.get(k) || 0) + 1); }
+    return cnt;
+  }
+  function hexLearningSpeed(R, wrap, seeds = 12, steps = 3, lr = 0.01) {
+    // bilinear y = a ∗ b on hexagon(R), both learnable, random targets. Per output: the NTK diagonal at initialisation
+    // (its learning speed under gradient descent) and the fraction of its error removed by the first `steps` steps,
+    // averaged over seeds and over each ring (distance from the centre of the output region).
+    const P = hexCells(R), W = hexWrapper(R), outKey = s => (wrap ? W(s) : s).join(",");
+    const outs = [...new Set(P.flatMap(p => P.map(q => outKey([p[0] + q[0], p[1] + q[1]]))))], oi = new Map(outs.map((k, i) => [k, i]));
+    const pairs = []; P.forEach((p, i) => P.forEach((q, j) => pairs.push([i, j, oi.get(outKey([p[0] + q[0], p[1] + q[1]]))])));
+    const ring = outs.map(k => hexDist(k.split(",").map(Number), [0, 0])), maxRing = Math.max(...ring);
+    const acc = Array.from({ length: maxRing + 1 }, () => ({ ntk: 0, gain: 0, n: 0 }));
+    for (let sd = 1; sd <= seeds; sd++) {
+      const rnd = mulberryLike(sd), a = P.map(() => rnd() * 2 - 1), b = P.map(() => rnd() * 2 - 1), target = outs.map(() => rnd() * 2 - 1);
+      const fwd = () => { const y = new Array(outs.length).fill(0); for (const [i, j, o] of pairs) y[o] += a[i] * b[j]; return y; };
+      const ntk = new Array(outs.length).fill(0); for (const [i, j, o] of pairs) ntk[o] += b[j] * b[j] + a[i] * a[i];
+      const e0 = fwd().map((v, o) => (v - target[o]) ** 2);
+      for (let t = 0; t < steps; t++) {
+        const y = fwd(), ga = new Array(P.length).fill(0), gb = new Array(P.length).fill(0);
+        for (const [i, j, o] of pairs) { const g = y[o] - target[o]; ga[i] += g * b[j]; gb[j] += g * a[i]; }
+        for (let i = 0; i < P.length; i++) { a[i] -= lr * ga[i]; b[i] -= lr * gb[i]; }
+      }
+      const e1 = fwd().map((v, o) => (v - target[o]) ** 2);
+      outs.forEach((_, o) => { const r = acc[ring[o]]; r.ntk += ntk[o]; r.gain += e0[o] - e1[o]; r.n++; });
+    }
+    return acc.map(r => ({ ntk: r.ntk / r.n, gain: r.gain / r.n, n: r.n / seeds }));
+  }
+  function hexMask(R, kind, seed = 1, nRandom = 3) {   // neighbour lists for attention/convolution masks on hexagon(R)
+    const P = hexCells(R), rnd = mulberryLike(seed);
+    return P.map(c => {
+      const near = P.map((p, j) => [j, hexDist(p, c)]);
+      let keep = near.filter(([, d]) => d === 0 || d === 1 || (kind === "ring1+2" && d === 2) || (kind === "ring1+3" && d === 3)).map(([j]) => j);
+      if (kind === "ring1+random" || kind === "ring1+3+random") {
+        if (kind === "ring1+3+random") keep = keep.concat(near.filter(([, d]) => d === 3).map(([j]) => j));
+        const far = near.filter(([, d]) => d >= 3).map(([j]) => j);
+        for (let t = 0; t < nRandom && far.length; t++) keep.push(far.splice(Math.floor(rnd() * far.length), 1)[0]);
+      }
+      return [...new Set(keep)];
+    });
+  }
+  function layersToCover(mask) {           // layers until every cell has heard from every other (graph eccentricity, max over sources)
+    let worst = 0;
+    for (let s = 0; s < mask.length; s++) {
+      const seen = new Set([s]); let frontier = [s], L = 0;
+      while (seen.size < mask.length && frontier.length) { const nf = []; for (const u of frontier) for (const v of mask[u]) if (!seen.has(v)) { seen.add(v); nf.push(v); } frontier = nf; L++; }
+      worst = Math.max(worst, seen.size < mask.length ? Infinity : L);
+    }
+    return worst;
+  }
+  function blurAnisotropy(kind, steps) {   // repeated blur with a uniform kernel: max/min over directions of E[(x·u)^4]
+    const K = kind === "hex" ? [[0, 0], ...HEX_DIRS].map(([q, r]) => [q + r / 2, r * Math.sqrt(3) / 2])
+            : kind === "square4" ? [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]] : [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+    let dist = new Map([["0,0", [0, 0, 1]]]);
+    for (let t = 0; t < steps; t++) { const nd = new Map();
+      for (const [x, y, w] of dist.values()) for (const [dx, dy] of K) { const k = (x + dx).toFixed(6) + "," + (y + dy).toFixed(6); const e = nd.get(k); if (e) e[2] += w / K.length; else nd.set(k, [x + dx, y + dy, w / K.length]); }
+      dist = nd; }
+    let lo = Infinity, hi = 0, lo2 = Infinity, hi2 = 0;
+    for (let a = 0; a < 180; a += 1) { const u = [Math.cos(a * Math.PI / 180), Math.sin(a * Math.PI / 180)]; let m2 = 0, m4 = 0;
+      for (const [x, y, w] of dist.values()) { const d = x * u[0] + y * u[1]; m2 += w * d * d; m4 += w * d ** 4; }
+      lo = Math.min(lo, m4); hi = Math.max(hi, m4); lo2 = Math.min(lo2, m2); hi2 = Math.max(hi2, m2); }
+    return { fourth: hi / lo, second: hi2 / lo2 };
+  }
+  return { HEX_DIRS, hexDist, hexCells, hexWrapper, hexProductCounts, hexLearningSpeed, hexMask, layersToCover, blurAnisotropy,
+           tetCells, tetSweeps, quarticEnergy, cubeSweeps, cubeEnergy, gradCheck, mulberryLike, triCells, triSweeps, cubicEnergy, regularPolygon, pattern, boolMul, density, subset, cost, triangle, square, hexagon, latticePolygon, minkowski, hull,
            boundaryCount, latticePointsOf, shapeArray, ringEntries, strassenTriangle, surgery, verifyRing, flatteningRank, set, key };
 })();
 
@@ -582,6 +756,24 @@ const MPTests = {
       t("tetrahedron: 12 multiplications per weight, n(n+1)(n+2)/6 weights", (r => r.mults === 12 * r.weights && r.weights === n * (n + 1) * (n + 2) / 6)(MP.tetSweeps(n, Wt, h)));
       t("cube: 3 sweeps = gradient of the cubic energy", MP.gradCheck(MP.cubeSweeps, MP.cubeEnergy, n, Wc, h) < 1e-6);
       t("cube: 6 multiplications per weight", (r => r.mults === 6 * r.weights)(MP.cubeSweeps(n, Wc, h))); }
+
+    // 5. hexagons: wrap-around, learning speed, masks, isotropy
+    for (const R of [2, 3, 4]) {
+      const n = MP.hexCells(R).length, w = [...MP.hexProductCounts(R, true).values()], nw = MP.hexProductCounts(R, false);
+      t(`hex R=${R}: wrap-around gives every output exactly |P| multiplications`, w.length === n && w.every(v => v === n));
+      t(`hex R=${R}: without wrap the centre gets |P|, a corner gets 1`, nw.get("0,0") === n && nw.get(`${2 * R},0`) === 1);
+      const W = MP.hexWrapper(R); let ok = true;
+      for (const p of MP.hexCells(2 * R)) if (!W(p)) ok = false;
+      t(`hex R=${R}: the tiling wraps every point of the doubled hexagon`, ok);
+    }
+    { const nw = MP.hexLearningSpeed(3, false, 4), w = MP.hexLearningSpeed(3, true, 4);
+      t("no wrap: centre outputs learn > 10× faster than corners (NTK)", nw[0].ntk > 10 * nw[nw.length - 1].ntk);
+      t("wrap: every output learns at the same speed (NTK uniform)", Math.max(...w.map(r => r.ntk)) / Math.min(...w.map(r => r.ntk)) < 1.0001); }
+    { const R = 6, L = k => MP.layersToCover(MP.hexMask(R, k)), links = k => { const m = MP.hexMask(R, k); return m.reduce((a, x) => a + x.length, 0) / m.length; };
+      t("ring-1 mask needs 2R layers to reach every cell", L("ring1") === 2 * R);
+      t("ring 1 + random far links: fewer layers than dense ring 1+2, with fewer links", L("ring1+random") < L("ring1+2") && links("ring1+random") < links("ring1+2")); }
+    t("hex blur is exactly isotropic in 4th moments", MP.blurAnisotropy("hex", 5).fourth < 1.0001);
+    t("square blurs are not (4-neighbour, 5 steps)", MP.blurAnisotropy("square4", 5).fourth > 1.05);
     const failed = res.filter(x => !x[1]);
     if (typeof console !== "undefined") console.log(`MPTests: ${res.length - failed.length}/${res.length} passed` + (failed.length ? "\nFAILED: " + failed.map(x => x[0]).join(", ") : ""));
     return failed.length === 0;
@@ -705,6 +897,58 @@ function sweepTable() {
       return `<tr><td>${name}</td><td class="num">${dirs}</td><td class="num">${per}</td><td class="num"><b>${m}</b></td><td class="num">${weights}</td><td>${chk}</td></tr>`; }).join("");
 }
 
+function hexPath(cx, cy, r) { return Array.from({ length: 6 }, (_, k) => { const a = Math.PI / 180 * (60 * k + 30); return `${(cx + r * Math.cos(a)).toFixed(1)},${(cy + r * Math.sin(a)).toFixed(1)}`; }).join(" "); }
+function hexDemo() {
+  const R = +$("hR").value, wrap = $("hWrap").checked; $("hRv").textContent = R;
+  const cnt = MP.hexProductCounts(R, wrap), n = MP.hexCells(R).length, cells = [...cnt.entries()].map(([k, v]) => [k.split(",").map(Number), v]);
+  const ext = wrap ? R : 2 * R, size = Math.min(260 / ((2 * ext + 1) * 0.866 * 2) * 1.0, 280 / ((ext * 1.5 + 1) * 2));
+  const X = ([q, r]) => 260 + size * Math.sqrt(3) * (q + r / 2), Y = ([q, r]) => 150 + size * 1.5 * r;
+  let g = "";
+  for (const [c, v] of cells) g += `<polygon points="${hexPath(X(c), Y(c), size * 0.97)}" fill="${css("--accent")}" fill-opacity="${(0.08 + 0.92 * v / n).toFixed(3)}" stroke="${css("--rule")}"/>`;
+  $("hSvg").innerHTML = g;
+  const vals = cells.map(c => c[1]);
+  $("hStats").innerHTML = `${cells.length} output cells · multiplications per output: min ${Math.min(...vals)}, max ${Math.max(...vals)} · total ${n * n} = |P|² · ${wrap ? '<span class="ok">uniform</span>' : "centre-heavy"}`;
+}
+function hexSpeedChart() {
+  const nw = MP.hexLearningSpeed(4, false), w = MP.hexLearningSpeed(4, true);
+  const W = 560, H = 220, L = 46, R = 20, T = 14, B = 36, maxG = Math.max(...nw.map(r => r.gain), ...w.map(r => r.gain));
+  const X = i => L + i / 8 * (W - L - R), Y = v => T + (1 - v / maxG) * (H - T - B);
+  let g = "";
+  for (const v of [0, 2, 4, 6, 8]) g += `<text x="${L - 8}" y="${Y(v) + 4}" text-anchor="end">${v}</text><line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css("--rule")}"/>`;
+  for (let i = 0; i <= 8; i++) g += `<text x="${X(i)}" y="${H - B + 16}" text-anchor="middle">${i}</text>`;
+  g += `<text x="${(L + W - R) / 2}" y="${H - 2}" text-anchor="middle">ring of the output (0 = centre)</text>`;
+  const line = (rows, col) => `<polyline fill="none" stroke="${col}" stroke-width="2.5" points="${rows.map((r, i) => X(i) + "," + Y(r.gain)).join(" ")}"/>` + rows.map((r, i) => `<circle cx="${X(i)}" cy="${Y(r.gain)}" r="4" fill="${col}"/>`).join("");
+  g += line(nw, css("--accent")) + line(w, css("--accent2"));
+  g += `<circle cx="${W - 150}" cy="${T + 10}" r="5" fill="${css("--accent")}"/><text x="${W - 140}" y="${T + 14}">no wrap-around</text>`;
+  g += `<circle cx="${W - 150}" cy="${T + 30}" r="5" fill="${css("--accent2")}"/><text x="${W - 140}" y="${T + 34}">wrap-around</text>`;
+  $("hSpeed").innerHTML = g;
+}
+let maskCache = {};
+function maskDemo() {
+  const kind = $("mKind").value, layers = +$("mL").value; $("mLv").textContent = layers;
+  const R = 8, P = MP.hexCells(R), mask = maskCache[kind] || (maskCache[kind] = MP.hexMask(R, kind)), c0 = P.findIndex(p => p[0] === 0 && p[1] === 0);
+  // receptive field after `layers` layers: cells whose information has reached the centre (follow mask edges backwards = forwards, symmetric enough to show)
+  let field = new Set([c0]); for (let l = 0; l < layers; l++) { const nf = new Set(field); for (const u of field) for (const v of mask[u]) nf.add(v); field = nf; }
+  const direct = new Set(mask[c0]), size = 12.5, X = ([q, r]) => 210 + size * Math.sqrt(3) * (q + r / 2), Y = ([q, r]) => 190 + size * 1.5 * r;
+  let g = "";
+  P.forEach((p, i) => {
+    const fill = i === c0 ? css("--ink") : direct.has(i) ? css("--accent2") : field.has(i) ? css("--accent") : css("--code");
+    const op = i === c0 || direct.has(i) ? 1 : field.has(i) ? 0.45 : 1;
+    g += `<polygon points="${hexPath(X(p), Y(p), size * 0.95)}" fill="${fill}" fill-opacity="${op}" stroke="${css("--rule")}"/>`;
+  });
+  $("mSvg").innerHTML = g;
+  const kinds = [["ring1", "ring 1"], ["ring1+2", "ring 1 + 2"], ["ring1+3", "ring 1 + 3"], ["ring1+random", "ring 1 + random"], ["ring1+3+random", "ring 1 + 3 + random"]];
+  $("mTable").innerHTML = `<tr><th>mask</th><th class="num">links / cell</th><th class="num">layers to connect</th></tr>` + kinds.map(([k, name]) => {
+    const m = maskCache[k] || (maskCache[k] = MP.hexMask(R, k)), links = m.reduce((a, x) => a + x.length, 0) / m.length;
+    return `<tr${k === kind ? ' style="background:color-mix(in srgb, var(--good) 12%, transparent)"' : ""}><td>${name}</td><td class="num">${links.toFixed(1)}</td><td class="num">${MP.layersToCover(m)}</td></tr>`; }).join("") +
+    `<tr><td colspan="3" class="cap">selected: ${field.size} of ${P.length} cells reached after ${layers} layer${layers === 1 ? "" : "s"}</td></tr>`;
+}
+function isoTable() {
+  const kinds = [["square4", "square, 4 neighbours"], ["square8", "square, 8 neighbours"], ["hex", "hexagon, 6 neighbours"]], steps = [1, 2, 5, 10];
+  $("isoTable").innerHTML = `<tr><th>blur kernel</th>${steps.map(t => `<th class="num">${t} step${t > 1 ? "s" : ""}</th>`).join("")}</tr>` +
+    kinds.map(([k, name]) => `<tr><td>${name}</td>${steps.map(t => { const v = MP.blurAnisotropy(k, t).fourth; return `<td class="num"${v < 1.0005 ? ' style="color:var(--good);font-weight:600"' : ""}>${v.toFixed(3)}</td>`; }).join("")}</tr>`).join("");
+}
+
 function ringDiagram() {
   let g = ""; const ks = [3, 4, 5, 6, 7, 8], w = 640 / ks.length;
   ks.forEach((k, idx) => {
@@ -729,10 +973,11 @@ function ringBuild() {
 $("pShape").oninput = patternDemo; $("pN").oninput = patternDemo;
 $("cShape").oninput = convDemo; $("cSize").oninput = convDemo; $("ringBuild").onclick = ringBuild;
 $("tNew").onclick = () => { triState.seed++; triDemo(); };
+$("hWrap").oninput = hexDemo; $("hR").oninput = hexDemo; $("mKind").oninput = maskDemo; $("mL").oninput = maskDemo;
 document.querySelectorAll(".pc").forEach(tb => { const heads = [...tb.rows[0].cells].map(c => c.textContent);
   [...tb.rows].slice(1).forEach(r => [...r.cells].forEach((c, i) => c.dataset.label = heads[i])); });
-patternDemo(); convDemo(); convTable(); ringDiagram(); triDemo(); triBars(); sweepTable();
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { patternDemo(); convDemo(); ringDiagram(); triDemo(); triBars(); });
+patternDemo(); convDemo(); convTable(); ringDiagram(); triDemo(); triBars(); sweepTable(); hexDemo(); maskDemo(); isoTable(); setTimeout(hexSpeedChart, 60);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { patternDemo(); convDemo(); ringDiagram(); triDemo(); triBars(); hexDemo(); maskDemo(); hexSpeedChart(); });
 </script>
 </body>
 </html>

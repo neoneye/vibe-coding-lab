@@ -89,6 +89,19 @@ Quantisation:
 - With mixed precision (three-way weights at 3 bits, input projection at 6–8 bits), the cube reaches 3.530 bits/char at 202k stored bits, against 3.602 for the gated block and 3.670 for the MLP at 197k. So it needs fewer bits for the same quality.
 - The triangle doesn't gain, because its 3n-wide output projection dominates storage.
 
+## 5. Hexagons: wrap-around or not, hexagonal attention, isotropy
+
+- **Wrap-around** (hexagons of radius R tile a torus with translations (2R+1, −R) and (R, R+1)): every output of a hex ∗ hex product gets exactly |P| multiplications. **Without it**: |P| at the centre, 1 at the corners.
+- **Learning speed** of an output = its NTK diagonal. Without wrap-around the centre learns about 30× faster than the corners (radius 4: NTK 41 vs 2; error removed in 3 steps 9.4 vs 0.29). With wrap-around it is uniform.
+- **Hexagonal masks** on a radius-8 map (217 cells), links per cell / layers to connect everything:
+  - ring 1: 6.5 / 16
+  - ring 1 + 2: 16.7 / 8
+  - ring 1 + 3 (skip ring 2): 20.4 / 6
+  - **ring 1 + 3 random far cells: 9.5 / 5**
+  - ring 1 + 3 + random: 23.2 / 4
+- **Isotropy:** a repeated hexagonal blur is exactly isotropic in its 4th moments; square blurs are not (4-neighbour 1.29 after 2 steps, 1.04 after 10).
+- Related: BigBird (local + random attention), HexagDLy (hexagonal CNNs), Uber H3 (hexagonal geospatial grid).
+
 ## Takeaways
 
 **The rectangle is the attractor.**
