@@ -124,6 +124,14 @@ Quantisation:
 - In shape-llm, normalising by neighbour count is a tie on quality (3.254 vs 3.259), with closer seeds.
 - No evidence that the centre's larger sums were harmful noise.
 
+## 8. A whole model in a shape (`../shape-llm/`)
+
+A pyramid of hexagonal feature cells (radius 12 → 6 → 3) with 3 → 1 triangle bottlenecks. The up-triangles on q − r ≡ 0 (mod 3) tile the grid exactly and form an aperture-3 hexagonal hierarchy.
+- With a hexagonal (6-neighbour) feed-forward it trails a parameter-matched transformer by 0.2–0.35 bits/char.
+- With the triangle feed-forward it comes within 0.02 (3.407 vs 3.384, 1,000 steps), so the local mixing was the problem, not the pyramid.
+- In the triangle, the long lines ("centre") are signal: lowering them hurts, raising them is free or slightly helpful (best mean 3.391 for the reversed, average-1 version). That is within seed noise at 1,000 steps.
+- Loss curves (page section 6, `../shape-llm/loss_curves.png`): the transformer learns fastest early, the triangles catch up, and everything is still falling at step 1,000.
+
 ## Takeaways
 
 **The rectangle is the attractor.**

@@ -90,8 +90,8 @@ footer { margin-top: 64px; font-size: 13px; color: var(--muted); border-top: 1px
     <p>Shapes add (Minkowski sum). Cost is exactly 4|P| − B − 3. Triangles and hexagons are as natural as squares. Without wrap-around the centre of a hexagon learns 30× faster than its corners.</p></div>
   <div class="card"><div class="label">Shape = ring of matrices</div><div class="big meh">Odd beats even</div>
     <p>Even rings (square, hexagon) admit no shortcut: rank 2^k. Odd rings (triangle, pentagon) do. The pentagon's exact cost (25 to 31) is an open problem.</p></div>
-  <div class="card"><div class="label">Shaped weights in a language model</div><div class="big meh">Works, not best</div>
-    <p>Triangles and cubes of weights, swept along their lines, beat a plain MLP but not SwiGLU. Their promise is reuse: 6 to 12 multiplications per weight read.</p></div>
+  <div class="card"><div class="label">Shaped weights in a language model</div><div class="big meh">Close, not better</div>
+    <p>Triangles and cubes of weights beat a plain MLP but not SwiGLU. A whole hexagon-pyramid model with triangle layers comes within 0.02 bits/char of a standard transformer.</p></div>
 </div>
 <p class="cap" style="font-size:14px">The common thread: the rectangle is what multiplication converges to, and other shapes earn their place only with a different multiplication. See <a href="#takeaways">Takeaways</a>.</p>
 
@@ -374,6 +374,72 @@ The question is not whether it saves operations, but whether the shape gives the
 A hexagonal local + skip + random mask is a natural sparse attention for such data. Choosing wrap-around or not decides whether the border learns as fast as the middle.</p>
 
 <!-- ======================================================================================= -->
+<h2>6 · A whole language model in a shape</h2>
+<p>The experiments above swap one layer. <a href="../shape-llm/">shape-llm</a> builds a whole small character-level model around a shape.
+Every token's hidden state is a <b>hexagon of feature cells</b>, shrinking through the network like an image pyramid.</p>
+<div class="panel tablewrap"><table>
+  <tr><th>blocks</th><th class="num">hexagon radius</th><th class="num">cells</th><th class="num">channels per cell</th><th class="num">features</th></tr>
+  <tr><td>1–2</td><td class="num">12</td><td class="num">469</td><td class="num">2</td><td class="num">938</td></tr>
+  <tr><td>3–4</td><td class="num">6</td><td class="num">127</td><td class="num">6</td><td class="num">762</td></tr>
+  <tr><td>5–6</td><td class="num">3</td><td class="num">37</td><td class="num">16</td><td class="num">592</td></tr>
+</table></div>
+<ul>
+  <li><b>Each block</b> has attention across tokens, then a feed-forward that is either <i>hexagonal</i> (each cell mixes with its 6 neighbours) or the <i>triangle</i> layer of section 4.</li>
+  <li><b>Between levels, 3 neighbouring cells become 1.</b> The small triangles {(q, r), (q+1, r), (q, r+1)}, one per point with q − r divisible by 3, tile the grid exactly. Their positions form a coarser hexagonal grid, rotated 30° and scaled √3. Cropping to radius 6 and 3 drops the outer band of cells.</li>
+  <li><b>The baseline</b> is an ordinary transformer with the same depth and parameter count.</li>
+</ul>
+<h3>Hexagonal feed-forward: clearly worse</h3>
+<div class="panel tablewrap"><table>
+  <tr><th>model (2,000 steps, 2 seeds)</th><th class="num">parameters</th><th class="num">val bits/char</th></tr>
+  <tr><td>standard transformer</td><td class="num">2.59M</td><td class="num"><b>2.992</b></td></tr>
+  <tr><td>hexagonal, one shared 7-tap kernel (attention holds 89% of the parameters)</td><td class="num">2.63M</td><td class="num">3.342</td></tr>
+  <tr><td>standard transformer</td><td class="num">2.25M</td><td class="num"><b>3.023</b></td></tr>
+  <tr><td>hexagonal, each cell its own neighbour weights</td><td class="num">2.33M</td><td class="num">3.259</td></tr>
+  <tr><td>… plus neighbour-count normalisation (edge cells boosted)</td><td class="num">2.33M</td><td class="num">3.254</td></tr>
+</table></div>
+<ul>
+  <li><b>It learns the centre-first importance order again.</b> At the radius-3 level, which the output reads in full, trimming the outer ring first costs +0.18 against +0.32 for random cells, and the edge activations are about 35% weaker. At the larger levels the crop builds part of that order in.</li>
+</ul>
+<h3>Turning the centre down</h3>
+<p>Centre outputs collect many more products, so perhaps more noise. The non-wrapped hexagonal layer of section 5 was scaled so the corners keep weight 1 and the centre gets less:</p>
+<div class="panel tablewrap"><table>
+  <tr><th>hexagonal layer, no wrap (tiny model, 1,500 steps)</th><th class="num">val bits/char</th><th>effect</th></tr>
+  <tr><td>unscaled (centre 91 products, corners 1)</td><td class="num"><b>3.324</b></td><td>centre-first order; training grows the edge weights to compensate</td></tr>
+  <tr><td>centre × 1/√fan-in</td><td class="num">3.330</td><td>balanced: centre and edges contribute equally, no order, no compensation</td></tr>
+  <tr><td>centre × 1/fan-in</td><td class="num">3.392</td><td>over-corrected: the edges become most important</td></tr>
+</table></div>
+<p>No sign that the centre's larger sums were harmful noise: 1/√ balances the layer at no cost, and 1/fan-in overshoots.</p>
+<h3>Triangle feed-forward: almost a standard transformer</h3>
+<p>Same pyramid and bottlenecks, but every block uses the triangle layer, swept at 0°, 60° and 120°.
+<b>Without wrap-around</b> the line at index i holds n − i weights, so long lines are the triangle's "centre". <b>With wrap-around</b> the triangle closes into a torus and every line is equally long.
+"Centre lowered" scales each output by (products)^−½; "reversed" by (products ÷ max)^½; "average 1" renormalises so only the balance changes, not the overall size.</p>
+<div class="panel tablewrap"><table>
+  <tr><th>full pyramid model (1,000 steps, 2 seeds)</th><th class="num">val bits/char</th></tr>
+  <tr><td>standard transformer</td><td class="num"><b>3.384</b></td></tr>
+  <tr><td>triangle, no wrap, unscaled</td><td class="num"><b>3.407</b></td></tr>
+  <tr><td>triangle, wrap</td><td class="num">3.441</td></tr>
+  <tr><td>triangle, centre lowered, average 1</td><td class="num">3.465</td></tr>
+  <tr><td>triangle, centre lowered</td><td class="num">3.554</td></tr>
+  <tr><td>hexagonal feed-forward</td><td class="num">3.587</td></tr>
+</table>
+<div class="cap">One batch, same training text. A later batch (below and in the chart) re-ran the unscaled triangle and the transformer next to the reversed variants: transformer 3.404, triangle 3.423, reversed 3.420, reversed with average 1 <b>3.391</b>.</div></div>
+<div class="panel">
+  <div class="row" style="justify-content:space-between">
+    <svg id="lcFull" viewBox="0 0 440 300" width="100%" style="max-width:450px;flex:1;min-width:280px" role="img" aria-label="loss curves of the full pyramid model"></svg>
+    <svg id="lcTiny" viewBox="0 0 440 300" width="100%" style="max-width:450px;flex:1;min-width:280px" role="img" aria-label="loss curves of the single triangle layer"></svg>
+  </div>
+  <div class="stat" id="lcTip" style="min-height:1.4em"></div>
+  <div class="cap">Validation bits per character against training step, logged every 200 steps. First panel: the full pyramid model. Second: the single triangle layer in the tiny model. "rev." = reversed, "centre low." = centre lowered. Thin lines are seeds, bold lines the 2-seed mean; the two panels have their own y-scales. Hover a point for its value.</div>
+</div>
+<ul>
+  <li><b>The triangle rescues the pyramid.</b> It is 0.18 bits/char better than the hexagonal feed-forward and within 0.02 of a standard transformer. So the pyramid and its 3 → 1 bottlenecks were not the problem; the hexagon's local 6-neighbour mixing was.</li>
+  <li><b>In the triangle, the centre is signal.</b> Its long lines carry the important features: dropping 20% of outputs costs +0.16 longest-first, +0.10 random, +0.05 shortest-first. Turning them down hurts, and training grows their output weights back. Turning them up (reversed) is free or slightly helpful. The asymmetry is the opposite of the hexagon, where lowering the centre was neutral.</li>
+  <li><b>Wrap or not is a wash</b>: slightly better in the single layer, slightly worse in the full model, both within seed noise.</li>
+  <li><b>The curves:</b> the transformer learns fastest early (3.79 at step 400 against 3.87–3.90 for the triangles), and the triangles catch up by step 1,000.
+    Every curve is still falling about 0.03–0.04 per 200 steps, and the seeds of the best variant end 0.19 apart. Longer runs with more seeds are needed before any 0.02–0.03 difference means anything.</li>
+</ul>
+
+<!-- ======================================================================================= -->
 <h2 id="takeaways">Takeaways</h2>
 <p><b>The common thread: the rectangle is the attractor.</b> A matrix is a rectangle because a linear map pairs every input with every output.
 Shapes drawn inside that rectangle drift back towards rectangles when you multiply. Every centred shape becomes its bounding box within 2–3 products.
@@ -392,6 +458,8 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>The three-way weights tolerate coarse rounding, the projections don't.</b> The cube's 49k three-way weights at 2 bits hurt less than one 33k MLP matrix at 2 bits. The sensitive part is the input projection, whose errors are multiplied together.</li>
   <li><b>Without wrap-around, a hexagon's centre learns about 30× faster than its corners</b>, because more products land there. Wrap-around makes learning uniform.</li>
   <li><b>Hexagonal blurs are exactly round up to 4th order</b> at every step; square blurs only become round slowly.</li>
+  <li><b>In a whole model, the triangle beats the hexagon by a wide margin.</b> A pyramid built on hexagonal feature cells with 3 → 1 bottlenecks came within 0.02 bits/char of a standard transformer once its feed-forward was the triangle layer, and stayed 0.2 behind with the hexagon's local mixing. The pyramid was never the problem.</li>
+  <li><b>The "centre" means different things in the two shapes.</b> In the triangle the long lines are signal (lowering them hurts, raising them is free); in the hexagon the centre-heavy sums were neither harmful nor needed (1/√ balancing changes nothing).</li>
   <li><b>A centre-heavy hexagonal layer learns an importance order without being asked.</b> In a language model, trimming its outer rings hurts 2–3× less than trimming at random. Meanwhile training partly fights the non-uniformity, growing the edge weights to make up for weaker edge activations.</li>
   <li><b>Exact search hits a wall quickly.</b> A SAT solver settles the triangle instantly. But it couldn't prove within 15 minutes that the square ring needs more than 15 products, a fact that a one-line flattening argument proves.</li>
 </ol>
@@ -469,10 +537,13 @@ The isotropy of hexagonal blurs and the power of random long-range links (BigBir
   <tr><td>Ring 1 + random far links connect a radius-8 hex map in 5 layers (one random draw)</td><td><span class="chip numeric">measured</span></td></tr>
   <tr><td>A hexagon of radius R on a torus is the cyclic group Z<sub>3R²+3R+1</sub> (hexagonal convolution = 1-D FFT)</td><td><span class="chip proven">proof + tests</span></td></tr>
   <tr><td>Hexagonal feed-forward layers are competitive with gated and bilinear blocks; the centre-heavy one orders its outputs by importance; ring-wise precision gives no gain</td><td><span class="chip numeric">measured, small</span></td></tr>
+  <tr><td>The up-triangles on q − r ≡ 0 (mod 3) tile the hexagonal grid exactly and their base points form a coarser hexagonal grid</td><td><span class="chip proven">proof + tests</span></td></tr>
+  <tr><td>Hexagon-pyramid model: hexagonal feed-forward 0.2–0.35 bits/char behind a standard transformer; triangle feed-forward within 0.02</td><td><span class="chip numeric">measured, small</span></td></tr>
+  <tr><td>Lowering the centre: neutral at 1/√ for the hexagon, harmful for the triangle; raising it (triangle) free or slightly helpful (differences ≤ 0.03, within seed noise)</td><td><span class="chip numeric">measured, noisy</span></td></tr>
 </table></div>
 
 <footer>
-Code: <code>sparsity/</code> (exact composition of shapes), <code>convolution/</code> (lattice shapes, Pick formula, normality), <code>rings/</code> (ring tensors, tensor surgery, rank search, GF(2) SAT), <code>llm/</code> (triangle-weight language-model experiment); write-up in <code>FINDINGS.md</code>.
+Code: <code>sparsity/</code> (exact composition of shapes), <code>convolution/</code> (lattice shapes, Pick formula, normality), <code>rings/</code> (ring tensors, tensor surgery, rank search, GF(2) SAT), <code>llm/</code> (triangle-weight language-model experiment), and the whole-model experiments in <a href="../shape-llm/"><code>../shape-llm/</code></a>; write-up in <code>FINDINGS.md</code>.
 References: M. Christandl, J. Zuiddam, <a href="https://arxiv.org/abs/1606.04085"><i>Tensor surgery and tensor rank</i></a>;
 H. Buhrman et al., <a href="https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ITCS.2017.24"><i>Nondeterministic quantum communication complexity: the cyclic equality game and iterated matrix multiplication</i></a>;
 <a href="https://en.wikipedia.org/wiki/Pick%27s_theorem">Pick's theorem</a>; <a href="https://en.wikipedia.org/wiki/Crystallographic_restriction_theorem">crystallographic restriction</a>;
@@ -739,7 +810,20 @@ const MP = (() => {
     const N = 3 * R * R + 3 * R + 1, phi = (q, r) => ((((R + 1) * q - R * r) % N) + N) % N;
     return { N, phi };
   }
-  return { hexPhi, HEX_DIRS, hexDist, hexCells, hexWrapper, hexProductCounts, hexLearningSpeed, hexMask, layersToCover, blurAnisotropy,
+
+  // ---------- 6. shape-llm: the "3 neighbours → 1 cell" bottleneck ----------
+  // Up-triangles {b, b+(1,0), b+(0,1)} with base points on q − r ≡ 0 (mod 3) tile the hexagonal grid exactly; the base
+  // points form a coarser hexagonal grid (aperture 3): base (q, r) with c = (q − r)/3 → coarse cell (r + 2c, −c).
+  function coarseOf([q, r]) { const c = (q - r) / 3; return [r + 2 * c, -c]; }
+  function triangleTiling(R) {             // how many triangles cover each cell of the hexagon of radius R
+    const cover = new Map();
+    for (let q = -R - 3; q <= R + 3; q++) for (let r = -R - 3; r <= R + 3; r++) {
+      if (((q - r) % 3 + 3) % 3) continue;
+      for (const [dq, dr] of [[0, 0], [1, 0], [0, 1]]) { const k = (q + dq) + "," + (r + dr); cover.set(k, (cover.get(k) || 0) + 1); }
+    }
+    return hexCells(R).map(([q, r]) => cover.get(q + "," + r) || 0);
+  }
+  return { coarseOf, triangleTiling, hexPhi, HEX_DIRS, hexDist, hexCells, hexWrapper, hexProductCounts, hexLearningSpeed, hexMask, layersToCover, blurAnisotropy,
            tetCells, tetSweeps, quarticEnergy, cubeSweeps, cubeEnergy, gradCheck, mulberryLike, triCells, triSweeps, cubicEnergy, regularPolygon, pattern, boolMul, density, subset, cost, triangle, square, hexagon, latticePolygon, minkowski, hull,
            boundaryCount, latticePointsOf, shapeArray, ringEntries, strassenTriangle, surgery, verifyRing, flatteningRank, set, key };
 })();
@@ -821,6 +905,10 @@ const MPTests = {
       t(`hex torus R=${R} ≅ Z_${N}: φ is a bijection and kills both tiling translations`,
         img.size === N && phi(2 * R + 1, -R) === 0 && phi(R, R + 1) === 0);
     }
+
+    t("shape-llm bottleneck: up-triangles on q − r ≡ 0 (mod 3) cover every cell exactly once", MP.triangleTiling(12).every(c => c === 1));
+    t("shape-llm bottleneck: the base points form a hexagonal grid (6 nearest map to the 6 directions)",
+      [[1, 1], [2, -1], [-1, 2], [-1, -1], [-2, 1], [1, -2]].map(MP.coarseOf).map(c => c.join(",")).sort().join(" ") === MP.HEX_DIRS.map(c => c.join(",")).sort().join(" "));
     const failed = res.filter(x => !x[1]);
     if (typeof console !== "undefined") console.log(`MPTests: ${res.length - failed.length}/${res.length} passed` + (failed.length ? "\nFAILED: " + failed.map(x => x[0]).join(", ") : ""));
     return failed.length === 0;
@@ -1031,6 +1119,35 @@ function ringStatsChart() {
   $("ringStats").innerHTML = g;
 }
 
+const LC = {"full": {"base2|0": [[200, 4.145], [400, 3.7661], [600, 3.5504], [800, 3.4112], [1000, 3.3821]], "base2|1": [[200, 4.1695], [400, 3.8155], [600, 3.5835], [800, 3.4534], [1000, 3.4267]], "triR|1": [[200, 4.1545], [400, 3.9153], [600, 3.6587], [800, 3.5089], [1000, 3.477]], "triR|0": [[200, 4.1346], [400, 3.8819], [600, 3.5828], [800, 3.405], [1000, 3.3625]], "triRN|1": [[200, 4.1757], [400, 3.9], [600, 3.6802], [800, 3.5263], [1000, 3.4876]], "triRN|0": [[200, 4.146], [400, 3.8358], [600, 3.5165], [800, 3.3384], [1000, 3.2941]], "tri|1": [[200, 4.1628], [400, 3.9143], [600, 3.686], [800, 3.5242], [1000, 3.4797]], "tri|0": [[200, 4.1361], [400, 3.8885], [600, 3.5838], [800, 3.4038], [1000, 3.3664]]}, "tiny": {"triRN|1": [[200, 4.1421], [400, 3.8971], [600, 3.6638], [800, 3.5781], [1000, 3.5427]], "triRN|0": [[200, 4.1651], [400, 3.8358], [600, 3.6802], [800, 3.5783], [1000, 3.5313]], "tri|0": [[200, 4.1608], [400, 3.8426], [600, 3.6838], [800, 3.5754], [1000, 3.5329]], "tri|1": [[200, 4.1406], [400, 3.9014], [600, 3.6719], [800, 3.5769], [1000, 3.5423]], "triW|1": [[200, 4.1659], [400, 3.8754], [600, 3.6495], [800, 3.5375], [1000, 3.5037]], "triW|0": [[200, 4.154], [400, 3.8262], [600, 3.6691], [800, 3.5556], [1000, 3.5157]], "triSN|0": [[200, 4.1593], [400, 3.8576], [600, 3.6965], [800, 3.5925], [1000, 3.5514]], "triSN|1": [[200, 4.1405], [400, 3.9114], [600, 3.6843], [800, 3.5772], [1000, 3.5482]]}};
+function lossCurves() {
+  const panels = [["lcFull", LC.full, "Full pyramid model", [["base2", "transformer", "#2a78d6"], ["tri", "triangle", "#eb6834"], ["triR", "reversed", "#1baf7a"], ["triRN", "rev., avg 1", "#eda100"]]],
+                  ["lcTiny", LC.tiny, "Single triangle layer", [["tri", "unscaled", "#eb6834"], ["triSN", "centre low., avg 1", "#e87ba4"], ["triRN", "rev., avg 1", "#eda100"], ["triW", "wrap", "#008300"]]]];
+  for (const [id, data, title, series] of panels) {
+    const W = 440, H = 300, L = 44, R = 150, T = 26, B = 34, all = Object.values(data).flat().map(p => p[1]);
+    const lo = Math.floor(Math.min(...all) * 10) / 10, hi = Math.ceil(Math.max(...all) * 10) / 10;
+    const X = s => L + (s - 200) / 800 * (W - L - R), Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+    let g = `<text x="${L}" y="14" style="font-size:13px;fill:var(--ink)">${title}</text>`;
+    for (let v = lo; v <= hi + 1e-9; v += 0.2) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css("--rule")}"/>` + (v > lo + 1e-9 ? `<text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${v.toFixed(1)}</text>` : "");
+    for (const st of [200, 400, 600, 800, 1000]) g += `<text x="${X(st)}" y="${H - B + 15}" text-anchor="middle">${st}</text>`;
+    g += `<text x="${(L + W - R) / 2}" y="${H - 4}" text-anchor="middle">training step</text>`;
+    const ends = [];
+    for (const [k, name, col] of series) {
+      const runs = [0, 1].map(sd => data[k + "|" + sd]).filter(Boolean);
+      for (const r of runs) g += `<polyline fill="none" stroke="${col}" stroke-opacity="0.35" stroke-width="1" points="${r.map(([st, v]) => X(st) + "," + Y(v)).join(" ")}"/>`;
+      const mean = runs[0].map(([st], i) => [st, runs.reduce((a, r) => a + r[i][1], 0) / runs.length]);
+      g += `<polyline fill="none" stroke="${col}" stroke-width="2.4" points="${mean.map(([st, v]) => X(st) + "," + Y(v)).join(" ")}"/>`;
+      g += mean.map(([st, v]) => `<circle cx="${X(st)}" cy="${Y(v)}" r="7" fill="transparent" data-tip="${name}, step ${st}: ${v.toFixed(3)} (seeds ${runs.map(r => r.find(p => p[0] === st)[1].toFixed(3)).join(", ")})"/><circle cx="${X(st)}" cy="${Y(v)}" r="3.2" fill="${col}" pointer-events="none"/>`).join("");
+      ends.push([Y(mean[mean.length - 1][1]), name, col, mean[mean.length - 1][1]]);
+    }
+    ends.sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < ends.length; i++) if (ends[i][0] - ends[i - 1][0] < 15) ends[i][0] = ends[i - 1][0] + 15;
+    for (const [y, name, col, v] of ends) g += `<rect x="${W - R + 8}" y="${y - 2}" width="12" height="4" rx="2" fill="${col}"/><text x="${W - R + 24}" y="${y + 4}" style="font-size:11px">${name} ${v.toFixed(3)}</text>`;
+    $(id).innerHTML = g;
+    $(id).querySelectorAll("[data-tip]").forEach(el => { el.onmouseenter = () => $("lcTip").textContent = el.dataset.tip; });
+  }
+}
+
 function ringDiagram() {
   let g = ""; const ks = [3, 4, 5, 6, 7, 8], w = 640 / ks.length;
   ks.forEach((k, idx) => {
@@ -1058,8 +1175,8 @@ $("tNew").onclick = () => { triState.seed++; triDemo(); };
 $("hWrap").oninput = hexDemo; $("hR").oninput = hexDemo; $("mKind").oninput = maskDemo; $("mL").oninput = maskDemo;
 document.querySelectorAll(".pc").forEach(tb => { const heads = [...tb.rows[0].cells].map(c => c.textContent);
   [...tb.rows].slice(1).forEach(r => [...r.cells].forEach((c, i) => c.dataset.label = heads[i])); });
-patternDemo(); convDemo(); convTable(); ringDiagram(); triDemo(); triBars(); sweepTable(); hexDemo(); maskDemo(); isoTable(); ordChart(); ringStatsChart(); setTimeout(hexSpeedChart, 60);
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { patternDemo(); convDemo(); ringDiagram(); triDemo(); triBars(); hexDemo(); maskDemo(); hexSpeedChart(); ordChart(); ringStatsChart(); });
+patternDemo(); convDemo(); convTable(); ringDiagram(); triDemo(); triBars(); sweepTable(); hexDemo(); maskDemo(); isoTable(); ordChart(); ringStatsChart(); lossCurves(); setTimeout(hexSpeedChart, 60);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { patternDemo(); convDemo(); ringDiagram(); triDemo(); triBars(); hexDemo(); maskDemo(); hexSpeedChart(); ordChart(); ringStatsChart(); lossCurves(); });
 </script>
 </body>
 </html>
