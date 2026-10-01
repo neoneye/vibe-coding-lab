@@ -19,13 +19,14 @@ torch.set_num_threads(2)
 kind, seed, steps = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 NORM = kind == "hex2n"
 if NORM: kind = "hex2"                                             # same model as hex2, plus neighbour-count normalisation
-TRI = kind in ("tri", "triS", "triSN", "triW", "triWS")            # triangle feed-forwards inside the same hexagonal pyramid
-TRI_WRAP, TRI_SCALED, TRI_RENORM = kind in ("triW", "triWS"), kind in ("triS", "triSN", "triWS"), kind == "triSN"
+TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN")   # triangle feed-forwards inside the hexagonal pyramid
+TRI_WRAP, TRI_SCALED = kind in ("triW", "triWS"), kind in ("triS", "triSN", "triWS")
+TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 TRI_N = [50, 65, 85]                                               # triangle side per level (≈ the hex2 feed-forward budget)
 torch.manual_seed(seed)
 CTX, BATCH, LR = 64, 16, 1e-3
 
-paths = sorted(glob.glob("../**/*.md", recursive=True))
+paths = [p for p in sorted(glob.glob("../**/*.md", recursive=True)) if "/shape-llm/" not in p]   # not our own write-ups
 text = "".join(open(p, encoding="utf-8", errors="ignore").read() for p in paths)
 common = [c for c in sorted(set(text)) if text.count(c) > 200]
 stoi = {c: i for i, c in enumerate(common)}; V = len(common) + 1
@@ -79,7 +80,8 @@ class TriFFN(nn.Module):
         s.register_buffer("I", I); s.register_buffer("J", J); s.register_buffer("K", K)
         fan = torch.stack([torch.bincount(t, minlength=n).float() for t in (I, J, K)]).flatten()
         sc = fan.clamp(min=1) ** -0.5 if scaled else torch.ones(3 * n)
-        if TRI_RENORM: sc = sc / sc.mean()                                 # triSN: redistribute only, average weight 1
+        if TRI_REVERSE: sc = (fan.clamp(min=1) / fan.max()) ** 0.5         # triR: long "centre" lines at 1, edges lower
+        if TRI_RENORM: sc = sc / sc.mean()                                 # triSN / triRN: redistribute only, average weight 1
         s.register_buffer("scale", sc)
         s.W = nn.Parameter(torch.randn(len(cells)) / n); s.a = nn.Linear(D, n, bias=False); s.b = nn.Linear(3 * n, D, bias=False)
     def forward(s, x):

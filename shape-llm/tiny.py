@@ -10,6 +10,8 @@ Triangle layer: h = A·x (n units); weights W on cells (i, j, k), swept at 0°, 
   scaled:  every output is multiplied by (products it collects)^−½, so long-line outputs are turned down and the
            length-1 lines keep full weight. With wrap all lines are equal, so scaling is a constant there.
   triSN:   scaled, then renormalised to average 1, so only the balance between lines changes (not the overall size).
+  triR:    reversed: × (products / max products)^½, long "centre" lines at full weight, short edge lines lower.
+  triRN:   reversed and renormalised to average 1.
 Usage: python tiny.py tri|triS|triSN|triW|triWS seed steps [save]"""
 import sys, glob, math, time, torch, torch.nn as nn, torch.nn.functional as F
 torch.set_num_threads(1)
@@ -28,7 +30,7 @@ def batch(src, g):
     return torch.stack([src[i:i + CTX] for i in ix]), torch.stack([src[i + 1:i + CTX + 1] for i in ix])
 
 class Triangle(nn.Module):
-    def __init__(s, n, wrap, scaled, renorm=False):
+    def __init__(s, n, wrap, scaled, renorm=False, reverse=False):
         super().__init__(); s.n = n
         cells = [(i, j, (n - 1 - i - j) % n) for i in range(n) for j in range(n)] if wrap else \
                 [(i, j, n - 1 - i - j) for i in range(n) for j in range(n - i)]
@@ -37,6 +39,7 @@ class Triangle(nn.Module):
         fan = torch.stack([torch.bincount(t, minlength=n).float() for t in (I, J, K)])   # products per output, per sweep
         s.register_buffer("fanin", fan.flatten())
         sc = fan.flatten().clamp(min=1) ** -0.5 if scaled else torch.ones(3 * n)
+        if reverse: sc = (fan.flatten().clamp(min=1) / fan.max()) ** 0.5            # centre (long lines) at 1, edges lower
         if renorm: sc = sc / sc.mean()                                      # redistribute only: average weight stays 1
         s.register_buffer("scale", sc)
         s.W = nn.Parameter(torch.randn(len(cells)) / n)
@@ -51,7 +54,9 @@ class Triangle(nn.Module):
 def make_ffn():
     return {"tri": lambda: Triangle(106, False, False), "triS": lambda: Triangle(106, False, True),
             "triW": lambda: Triangle(94, True, False), "triWS": lambda: Triangle(94, True, True),
-            "triSN": lambda: Triangle(106, False, True, renorm=True)}[variant]()
+            "triSN": lambda: Triangle(106, False, True, renorm=True),
+            "triR": lambda: Triangle(106, False, False, reverse=True),
+            "triRN": lambda: Triangle(106, False, False, renorm=True, reverse=True)}[variant]()
 
 class Block(nn.Module):
     def __init__(s):

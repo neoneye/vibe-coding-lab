@@ -130,3 +130,33 @@ Lowering the centre never helps the triangle:
 * **The long lines carry the important features.** Dropping them first costs the most.
 * **Unlike the hexagon, training does not compensate the weak short lines.**
 * **When the long lines are turned down, training grows their output weights back.** The triangle's "centre" is signal the model wants, not noise. That is the opposite of the hexagon, where turning the centre down was neutral.
+
+### Reversed: centre at full weight, edges turned down (`triR`, `triRN`)
+
+Since the long lines carry signal, reverse the scaling. Each output is multiplied by (products / max products)^½: the longest lines keep weight 1 and length-1 lines get 0.10.
+- `triR`: exactly that; the average weight drops to 0.67.
+- `triRN`: the same balance, renormalised to an average of 1 (1.49 at the longest lines, 0.15 at length 1).
+
+Single layer (tiny model, 1,000 steps, 2 seeds):
+
+| scaling | val bits/char |
+|---|---|
+| unscaled | 3.538 |
+| **reversed, average 1** | **3.537** |
+| reversed, centre at 1 | 3.554 |
+| centre lowered, average 1 | 3.550 |
+| centre lowered | 3.619 |
+
+Full pyramid model, re-run together with the corpus fixed (`shapellm.py` no longer trains on this directory's own write-ups):
+
+| feed-forward | seed 0 | seed 1 | mean |
+|---|---|---|---|
+| standard transformer | 3.382 | 3.427 | 3.404 |
+| triangle, unscaled | 3.366 | 3.480 | 3.423 |
+| triangle, reversed | 3.363 | 3.477 | 3.420 |
+| triangle, reversed, average 1 | **3.294** | 3.488 | **3.391** |
+
+* Reversing is neutral-to-slightly-positive. It ties unscaled in the single layer, and in the full model it has the best mean and the best single run so far (3.294).
+* The seeds differ by up to 0.19 at 1,000 steps, so the full-model differences (≤ 0.03 in the mean) are within noise.
+* **The pattern is asymmetric:** turning the long "centre" lines down hurts, turning them up is free or slightly helpful. This is consistent with the centre carrying signal.
+* Settling the small differences needs more seeds and longer runs (e.g. 4 seeds × 2,000 steps).
