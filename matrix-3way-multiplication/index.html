@@ -33,10 +33,10 @@ h3 { font-size: 18px; margin: 24px 0 6px; }
 p { max-width: 760px; }
 code, .mono { font-family: var(--mono); font-size: 0.88em; }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; }
-.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 28px 0 8px; }
+.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 12px; margin: 28px 0 8px; }
 .card { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; }
 .card .label { font: 600 12px/1.3 var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-.card .big { font: 600 30px/1.1 var(--serif); margin: 6px 0 4px; }
+.card .big { font: 600 25px/1.15 var(--serif); margin: 6px 0 4px; }
 .card .big.no { color: var(--bad); } .card .big.yes { color: var(--good); } .card .big.meh { color: var(--warn); }
 .card p { margin: 6px 0 0; font-size: 14px; color: var(--muted); }
 .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; margin: 16px 0; }
@@ -99,6 +99,8 @@ The answer depends on what you count as the cost.</p>
     <p>x·y·z is much shorter as one exp−ln tree, but that tree contains no multiplications at all. It is the log-table trick.</p></div>
   <div class="card"><div class="label">Writes expensive, reads free</div><div class="big yes">Yes: N² vs 2N²</div>
     <p>Fusing the chain writes only the outputs, with no extra arithmetic if one column of B·C fits in registers.</p></div>
+  <div class="card"><div class="label">Repeated values, cache products</div><div class="big yes">Yes: ≤ k² + k³</div>
+    <p>With k distinct values, a fused triple table makes the multiplication count independent of N, at the price of N⁴ additions.</p></div>
 </div>
 
 <!-- ======================================================================================= -->
@@ -209,6 +211,32 @@ the intermediate A·B never has to be stored. Every schedule below runs in your 
 </ul>
 
 <!-- ======================================================================================= -->
+<h2>5 · Repeated values: caching products</h2>
+<p>If the matrices contain only k distinct values, the same scalar products recur and can be cached. Quantised neural-network weights (4-bit means k = 16) and ternary weights are examples. A cache keyed by value pair is
+the same thing as grouping by the distributive law: <code>D<sub>il</sub> = Σ<sub>a</sub> a · (Σ<sub>j : A<sub>ij</sub>=a</sub> (BC)<sub>jl</sub>)</code> needs one multiplication per distinct value in the row.
+Four schedules, each instrumented and checked against the exact product:</p>
+<ul>
+  <li><b>chain, no cache:</b> 2N³ multiplications.</li>
+  <li><b>chain + product cache:</b> memoise a·b, then t·c. The intermediate A·B has many distinct values, but each one meets only k values of C, so the second stage costs about N²k. In effect the cache performs the grouping automatically.</li>
+  <li><b>pair cache + grouping, A·(BC):</b> at most k² products for B·C, then one multiplication per distinct value in each row of A. That is ≈ k² + N²k with a table of only k² entries.</li>
+  <li><b>fused triple table:</b> cache each value triple a·b·c once. The output is then pure additions, and the multiplications number at most k² + k³ <i>whatever N is</i>. This is the genuinely three-way effect, but it costs N⁴ additions instead of ≈ N³.</li>
+</ul>
+<div class="panel">
+  <div class="controls">
+    <label>N <select id="cN"><option>4</option><option selected>16</option><option>32</option></select></label>
+    <label>distinct values k <select id="cK"><option>2</option><option>3</option><option selected>4</option><option>8</option><option>16</option><option value="Infinity">all distinct</option></select></label>
+  </div>
+  <div class="tablewrap"><table id="cTable"></table></div>
+  <svg id="cChart" viewBox="0 0 640 280" width="100%" role="img" aria-label="multiplications versus N for each caching schedule" style="margin-top:12px"></svg>
+  <div class="cap">Multiplications against N (log–log) at the chosen k, from runs on random matrices. The fused triple table flattens out once all k³ triples have appeared. With all-distinct values, caching gains nothing and the triple table is the worst option.</div>
+</div>
+<p>This idea is well established for two-matrix products: the <a href="https://en.wikipedia.org/wiki/Method_of_Four_Russians">Four Russians</a> method for Boolean matrices,
+the <a href="https://www.cs.yale.edu/homes/el327/papers/matrixVectorApp.pdf">Mailman algorithm</a> for small alphabets,
+and lookup-table kernels for quantised LLMs (<a href="https://proceedings.iclr.cc/paper_files/paper/2024/file/a4f98ce85f440ee269b0df57b4368719-Paper-Conference.pdf">LUT-GEMM</a>,
+<a href="https://arxiv.org/abs/2407.00088">T-MAC</a>). In the write-expensive model of section 4, a cache is itself a set of writes unless it fits in scratch.
+The k² pair table usually fits; the k³ triple table may not.</p>
+
+<!-- ======================================================================================= -->
 <h2>Prior work, and how these results compare</h2>
 <p>Three-way matrix products have been studied from several directions. Most of what this page finds either restates known theory for the
 chain tensor or rediscovers established practice. The table puts each result next to the closest published one.</p>
@@ -242,6 +270,12 @@ chain tensor or rediscovers established practice. The table puts each result nex
         <a href="https://research.colfax-intl.com/wp-content/uploads/2023/12/colfax-flashattention.pdf">FlashAttention</a>, which fuses softmax(QKᵀ)·V without writing the intermediate.</td>
       <td>Fused A·B·C writes N² words (the optimum) at 2N³ multiplications with N registers, or N³ + N⁴/S with S registers. Strassen with spilled temporaries writes about 25× more.</td>
       <td><span class="chip proven">rediscovery</span> Same conclusion as the theory and the GPU practice.</td></tr>
+  <tr><td>Repeated values</td>
+      <td>Products over small alphabets are cached or grouped: <a href="https://en.wikipedia.org/wiki/Method_of_Four_Russians">Four Russians</a> (Boolean),
+        <a href="https://www.cs.yale.edu/homes/el327/papers/matrixVectorApp.pdf">Mailman</a> (O(n²/log n) matrix–vector),
+        <a href="https://proceedings.iclr.cc/paper_files/paper/2024/file/a4f98ce85f440ee269b0df57b4368719-Paper-Conference.pdf">LUT-GEMM</a> and <a href="https://arxiv.org/abs/2407.00088">T-MAC</a> for quantised weights.</td>
+      <td>For A·B·C: caching the chain already gives ≈ k² + N²k multiplications. A fused triple table gives ≤ k² + k³, independent of N, but needs N⁴ additions.</td>
+      <td><span class="chip proven">extension</span> Known technique; the triple-table trade-off for three factors was not found stated.</td></tr>
   <tr><td>EML trees</td>
       <td><a href="https://arxiv.org/abs/2603.21852">Odrzywołek 2026</a>: exp−ln with constant 1 generates all elementary functions; direct search gives x·y in 17 tokens.
         A ternary operator is named only as future work.</td>
@@ -267,6 +301,7 @@ chain tensor or rediscovers established practice. The table puts each result nex
   <tr><td>x·y·z in 25 EML tokens (8n+1 for n factors)</td><td><span class="chip proven">verified</span></td></tr>
   <tr><td>No x·y·z EML tree shorter than 25</td><td><span class="chip open">open</span></td></tr>
   <tr><td>Fused A·B·C attains the write lower bound N² at 2N³ multiplications with N registers</td><td><span class="chip proven">construction</span></td></tr>
+  <tr><td>With k distinct values, a fused triple table needs ≤ k² + k³ multiplications for any N (N⁴ additions)</td><td><span class="chip proven">construction</span></td></tr>
 </table></div>
 
 <footer>
@@ -398,7 +433,74 @@ const M3 = (() => {
     for (const v of vs.slice(2)) r = XY.replace("y", v).replace("x", r); return r; }
   const size = rpn => rpn.split(" ").length;
 
-  return { zeros, mul, randInt, mulberry, eq, strassen2, flattening, rank, machine, schedules, runAll,
+
+  // ---------- duplicate values: caching / grouping products ----------
+  // Matrices are given as value ids into `vals`; equal ids = equal values.
+  function alphabetMatrices(N, k, seed) {
+    const rnd = mulberry(seed), vals = [];
+    const make = () => Array.from({ length: N }, () => Array.from({ length: N }, () => {
+      if (k === Infinity) { vals.push(rnd() * 4 - 2); return vals.length - 1; }
+      return Math.floor(rnd() * k);
+    }));
+    if (k !== Infinity) for (let i = 0; i < k; i++) vals.push(Math.round((rnd() * 4 - 2) * 1000) / 1000 || 0.5);
+    const A = make(), B = make(), C = make();
+    const real = M => M.map(r => r.map(id => vals[id]));
+    return { A, B, C, vals, ref: mul(mul(real(A), real(B)), real(C)) };
+  }
+  function cacheSchedules({ A, B, C, vals }, { triple = true } = {}) {
+    const n = A.length, out = [];
+    const V = id => vals[id];
+    {   // 1. chain, no caching
+      let mults = 0, adds = 0; const T = zeros(n), D = zeros(n);
+      for (let i = 0; i < n; i++) for (let l = 0; l < n; l++) { let s = 0; for (let j = 0; j < n; j++) { s += V(A[i][j]) * V(B[j][l]); mults++; } adds += n - 1; T[i][l] = s; }
+      for (let i = 0; i < n; i++) for (let l = 0; l < n; l++) { let s = 0; for (let k = 0; k < n; k++) { s += T[i][k] * V(C[k][l]); mults++; } adds += n - 1; D[i][l] = s; }
+      out.push({ name: "chain, no cache", mults, adds, table: 0, D });
+    }
+    {   // 2. chain, memoise each scalar product by value pair (separate cache per stage)
+      let mults = 0, adds = 0, table = 0; const T = zeros(n), D = zeros(n);
+      const c1 = new Map();
+      for (let i = 0; i < n; i++) for (let l = 0; l < n; l++) { let s = 0;
+        for (let j = 0; j < n; j++) { const key = A[i][j] * 1e6 + B[j][l]; let p = c1.get(key);
+          if (p === undefined) { p = V(A[i][j]) * V(B[j][l]); mults++; c1.set(key, p); } s += p; }
+        adds += n - 1; T[i][l] = s; }
+      const c2 = new Map();
+      for (let i = 0; i < n; i++) for (let l = 0; l < n; l++) { let s = 0;
+        for (let k = 0; k < n; k++) { const key = T[i][k] + "|" + C[k][l]; let p = c2.get(key);
+          if (p === undefined) { p = T[i][k] * V(C[k][l]); mults++; c2.set(key, p); } s += p; }
+        adds += n - 1; D[i][l] = s; }
+      table = c1.size + c2.size;
+      out.push({ name: "chain + product cache", mults, adds, table, D });
+    }
+    {   // 3. A·(BC): cache b·c by value pair, then group each row of A by value (distributive law)
+      let mults = 0, adds = 0; const D = zeros(n), pc = new Map(), BC = zeros(n);
+      for (let j = 0; j < n; j++) for (let l = 0; l < n; l++) { let s = 0;
+        for (let k = 0; k < n; k++) { const key = B[j][k] * 1e6 + C[k][l]; let p = pc.get(key);
+          if (p === undefined) { p = V(B[j][k]) * V(C[k][l]); mults++; pc.set(key, p); } s += p; }
+        adds += n - 1; BC[j][l] = s; }
+      for (let i = 0; i < n; i++) for (let l = 0; l < n; l++) {
+        const groups = new Map();                 // value id of A[i][j] -> sum of BC[j][l]
+        for (let j = 0; j < n; j++) { const g = A[i][j]; if (groups.has(g)) { groups.set(g, groups.get(g) + BC[j][l]); adds++; } else groups.set(g, BC[j][l]); }
+        let s = 0, first = true;
+        for (const [g, sum] of groups) { s += V(g) * sum; mults++; if (!first) adds++; first = false; }
+        D[i][l] = s; }
+      out.push({ name: "pair cache + grouping, A·(BC)", mults, adds, table: pc.size, D });
+    }
+    if (triple) {   // 4. fused: one table entry per distinct value triple (a,b,c); D is pure additions
+      let mults = 0, adds = 0; const D = zeros(n), pc = new Map(), tc = new Map();
+      for (let i = 0; i < n; i++) for (let l = 0; l < n; l++) { let s = 0, first = true;
+        for (let j = 0; j < n; j++) for (let k = 0; k < n; k++) {
+          const pk = A[i][j] * 1e6 + B[j][k], tk = pk * 4096 + C[k][l];
+          let t = tc.get(tk);
+          if (t === undefined) { let p = pc.get(pk); if (p === undefined) { p = V(A[i][j]) * V(B[j][k]); mults++; pc.set(pk, p); }
+            t = p * V(C[k][l]); mults++; tc.set(tk, t); }
+          s += t; if (!first) adds++; first = false; }
+        D[i][l] = s; }
+      out.push({ name: "fused triple table", mults, adds, table: pc.size + tc.size, D });
+    }
+    return out;
+  }
+
+  return { zeros, mul, randInt, mulberry, eq, strassen2, flattening, rank, machine, schedules, runAll, alphabetMatrices, cacheSchedules,
            evalRPN, directProduct, composedProduct, size, XY };
 })();
 
@@ -434,6 +536,18 @@ const M3Tests = {
         const d = M3.evalRPN(M3.directProduct(vs), v), c = M3.evalRPN(M3.composedProduct(vs), v);
         t(`eml direct n=${n} at ${p}`, Math.abs(d.re - want) < 1e-8 && Math.abs(d.im) < 1e-8 && M3.size(M3.directProduct(vs)) === 8 * n + 1);
         t(`eml composed n=${n} at ${p}`, Math.abs(c.re - want) < 1e-8 && Math.abs(c.im) < 1e-8 && M3.size(M3.composedProduct(vs)) === 16 * (n - 1) + 1);
+      }
+    }
+
+    for (const [N, k] of [[4, 2], [8, 4], [8, 16], [16, 3], [8, Infinity]]) {
+      const inst = M3.alphabetMatrices(N, k, 11), rows = M3.cacheSchedules(inst), by = n => rows.find(r => r.name.startsWith(n));
+      t(`cache N=${N} k=${k} all correct`, rows.every(r => M3.eq(r.D, inst.ref, 1e-8)));
+      t(`cache N=${N} k=${k} naive = 2N^3`, by("chain, no").mults === 2 * N ** 3);
+      if (k !== Infinity) {
+        t(`cache N=${N} k=${k} triple <= k^2 + k^3`, by("fused triple").mults <= k * k + k ** 3);
+        t(`cache N=${N} k=${k} grouping <= k^2 + N^2 k`, by("pair cache").mults <= k * k + N * N * Math.min(k, N));
+      } else {
+        t(`cache N=${N} continuous: caching gives nothing`, by("chain + product").mults === 2 * N ** 3 && by("fused triple").mults === N ** 3 + N ** 4);
       }
     }
     const failed = results.filter(r => !r[1]);
@@ -525,6 +639,32 @@ function writeDemo() {
   $("memViz").innerHTML = grid("chain (T = A·B is stored)", r4[0], ["T", "D"]) + grid("fused column", r4[1], ["T", "D"]);
 }
 
+
+function cacheDemo() {
+  const N = +$("cN").value, k = $("cK").value === "Infinity" ? Infinity : +$("cK").value;
+  const inst = M3.alphabetMatrices(N, k, 5), rows = M3.cacheSchedules(inst, { triple: N <= 32 }), best = Math.min(...rows.map(r => r.mults));
+  $("cTable").innerHTML = `<tr><th>schedule</th><th>mults</th><th>adds</th><th>cache entries</th><th>check</th></tr>` +
+    rows.map(r => `<tr class="${r.mults === best ? "best" : ""}"><td>${r.name}</td><td>${r.mults.toLocaleString()}</td><td>${r.adds.toLocaleString()}</td><td>${r.table.toLocaleString()}</td><td>${M3.eq(r.D, inst.ref, 1e-8) ? '<span class="ok">✓</span>' : '<span class="fail">✗</span>'}</td></tr>`).join("");
+  // chart: mults vs N
+  const Ns = [2, 4, 8, 16, 32], series = {};
+  for (const n of Ns) for (const r of M3.cacheSchedules(M3.alphabetMatrices(n, k, 5))) (series[r.name] ||= []).push([n, r.mults]);
+  const svg = $("cChart"), W = 640, H = 280, L = 58, R = 210, T = 14, B = 36;
+  const all = Object.values(series).flat().map(p => p[1]), ymax = Math.max(...all), ymin = Math.max(1, Math.min(...all));
+  const y0 = Math.floor(Math.log10(ymin)), y1 = Math.ceil(Math.log10(ymax));
+  const X = n => L + (Math.log2(n) - 1) / 4 * (W - L - R), Y = v => T + (y1 - Math.log10(v)) / (y1 - y0) * (H - T - B);
+  let g = "";
+  for (let e = y0; e <= y1; e++) g += `<line x1="${L}" x2="${W - R}" y1="${Y(10 ** e)}" y2="${Y(10 ** e)}" stroke="${css("--rule")}"/><text x="${L - 8}" y="${Y(10 ** e) + 4}" text-anchor="end">${e <= 3 ? 10 ** e : "1e" + e}</text>`;
+  for (const n of Ns) g += `<text x="${X(n)}" y="${H - B + 16}" text-anchor="middle">${n}</text>`;
+  g += `<text x="${(L + W - R) / 2}" y="${H - 2}" text-anchor="middle">N</text><text transform="translate(14 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">multiplications</text>`;
+  const cols = [css("--muted"), css("--warn"), css("--accent2"), css("--accent")];
+  Object.entries(series).forEach(([name, pts], i) => {
+    const dash = i === 1 ? ' stroke-dasharray="7 5"' : "";   // chain+cache coincides with grouping: dash it so both stay visible
+    g += `<polyline fill="none" stroke="${cols[i]}" stroke-width="${i === 1 ? 3.5 : 2.5}"${dash} points="${pts.map(p => X(p[0]) + "," + Y(p[1])).join(" ")}"/>` +
+      pts.map(p => `<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="3.5" fill="${cols[i]}"/>`).join("") +
+      `<circle cx="${W - R + 16}" cy="${T + 14 + i * 22}" r="5" fill="${cols[i]}"/><text x="${W - R + 26}" y="${T + 18 + i * 22}">${name}</text>`;
+  });
+  svg.innerHTML = g;
+}
 document.querySelectorAll(".cmp").forEach(t => {        // labels for the stacked phone layout
   const heads = [...t.rows[0].cells].map(c => c.textContent);
   [...t.rows].slice(1).forEach(r => [...r.cells].forEach((c, i) => c.dataset.label = heads[i]));
@@ -533,8 +673,9 @@ $("flatN").onchange = drawFlat; $("strNew").onclick = strassenDemo;
 for (const id of ["ex", "ey", "ez"]) $(id).oninput = emlDemo;
 for (const id of ["wN", "wS", "wW", "wLog"]) $(id).oninput = writeDemo;
 $("wS").innerHTML = "<option>1</option>";
-drawFlat(); strassenDemo(); ridgeChart(); emlDemo(); writeDemo();
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawFlat(); ridgeChart(); });
+for (const id of ["cN", "cK"]) $(id).oninput = cacheDemo;
+drawFlat(); strassenDemo(); ridgeChart(); emlDemo(); writeDemo(); cacheDemo();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawFlat(); ridgeChart(); cacheDemo(); });
 </script>
 </body>
 </html>

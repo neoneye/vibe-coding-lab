@@ -105,6 +105,21 @@ Here the 3-way view pays off.
 Circuits whose intermediates exceed degree 3 and cancel later. Over ℝ/ℂ, the
 homogeneous-model question for 13 has numerical evidence only. It is not proven.
 
+## 6. Repeated values: caching products (page section 5)
+
+With only k distinct values, scalar products recur. Measured multiplications on random matrices (N = 32):
+
+| k | chain | chain + product cache | pair cache + grouping, A·(BC) | fused triple table |
+|---|---|---|---|---|
+| 2 | 65,536 | 608 | 2,052 | **12** |
+| 4 | 65,536 | 4,112 | 4,112 | **80** |
+| 16 | 65,536 | 14,432 | 14,688 | **4,352** |
+| all distinct | 65,536 | 65,536 | 65,536 | 1,081,344 |
+
+* Caching by value pair is exactly distributive grouping. Even the plain chain benefits (≈ k² + N²k), because each entry of A·B meets only k values of C.
+* The three-way effect: a fused triple table needs at most k² + k³ multiplications, independent of N. It pays with N⁴ additions instead of ≈ N³, so it wins on multiplications only when k < N.
+* Prior art for two factors: Four Russians, the Mailman algorithm, LUT-GEMM, T-MAC.
+
 ## Prior work and comparison
 
 | topic | published | here | verdict |
@@ -114,6 +129,7 @@ homogeneous-model question for 13 has numerical evidence only. It is not proven.
 | Border algorithms | border multiplicative complexity ≥ border rank / 2 ([Landsberg survey](https://people.tamu.edu/~jml/msurvey0407.pdf)), so commutative 2×2 needs ≥ 4 approximately, 7 exactly | numerical border 6 for commutative 2×2 A·B | open: inside the known window, no explicit construction |
 | Exact search | SAT / flip graphs ([Heule–Kauers–Seidl](https://arxiv.org/abs/1903.11391), [Kauers–Moosbauer](https://arxiv.org/abs/2212.01175)) | GF(2): 7+7 SAT, 8+5 UNSAT, others unresolved | partial |
 | Write-avoiding | Strassen-like algorithms can't be write-avoiding ([Carson, Demmel et al.](https://harsha-simhadri.org/pubs/EECS-2015-163.pdf), [asymmetric memories](https://link.springer.com/article/10.1007/s11390-023-3489-y)); GEMM fusion ([Bolt](https://arxiv.org/abs/2110.15238)), [FlashAttention](https://research.colfax-intl.com/wp-content/uploads/2023/12/colfax-flashattention.pdf) | fused A·B·C: N² writes at 2N³ mults with N registers | rediscovery |
+| Repeated values | [Four Russians](https://en.wikipedia.org/wiki/Method_of_Four_Russians), [Mailman](https://www.cs.yale.edu/homes/el327/papers/matrixVectorApp.pdf), [LUT-GEMM](https://proceedings.iclr.cc/paper_files/paper/2024/file/a4f98ce85f440ee269b0df57b4368719-Paper-Conference.pdf), [T-MAC](https://arxiv.org/abs/2407.00088) | fused triple table: ≤ k² + k³ mults for any N, N⁴ adds | extension of a known technique |
 | EML | [Odrzywołek 2026](https://arxiv.org/abs/2603.21852): x·y in 17; ternary operator only future work | x·y·z in 25 vs 33 composed | new but minor (log-table trick) |
 | Ternary products | Bhattacharya–Mesner product of 3-D hypermatrices ([AMS Notices](https://www.ams.org/journals/notices/202110/noti2366/noti2366.html), [arXiv:2301.07494](https://arxiv.org/abs/2301.07494)) | not studied | different object |
 
