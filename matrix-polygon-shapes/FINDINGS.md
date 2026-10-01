@@ -48,9 +48,9 @@ P + Q (Minkowski sum).
 
 The k-gon tensor network. For 2×2 matrices (Christandl–Zuiddam, *Tensor surgery and tensor rank*):
 * even k: rank exactly 2^k, so no fused algorithm beats the naive one (our four-way N⁴ result is k = 4);
-* odd k: 2^(k−1) ≤ R ≤ 2^k − 1.
+* odd k: 2^k − 2^(k−2) + 1 ≤ R ≤ 2^k − 1 (Young-flattening lower bound by Buhrman et al.; the upper bound is the surgery).
 * Reproduced here: the flattening ranks (2^k even, 2^(k−1) odd), Strassen's 7 for the triangle by search, and the exact 31-term pentagon / 127-term heptagon decompositions built by tensor surgery.
-* **Open problem attacked:** the pentagon rank (24 ≤ R ≤ 31).
+* **Open problem attacked:** the pentagon rank (25 ≤ R ≤ 31).
   - Random Levenberg–Marquardt starts stall even at R = 31.
   - Drop-one restarts from the exact 31-term decomposition stall at error exactly 1.
   - Border-rank (ridge continuation) probes at R = 30: running.
