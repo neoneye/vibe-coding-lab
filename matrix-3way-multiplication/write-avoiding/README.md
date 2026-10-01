@@ -32,7 +32,7 @@ Full table: `results.txt`.
 2. **Scratch vs arithmetic trade-off.** With S < N registers, `BC` entries are recomputed:
    - multiplications = **N³ + N⁴/S** at W = N², which runs from 2N³ at S = N up to N⁴ + N³ at S = 1;
    - so with S registers the fused schedule beats the chain whenever the write cost ω satisfies ω > N²/S − N.
-3. **Fast algorithms and writes do not mix at scale.** Strassen with temporaries in memory writes far more (42 vs 8 at N=2, 3290 vs 128 at N=8). This matches the theorem that Strassen-like algorithms cannot be write-avoiding (Carson, Demmel et al., *Write-Avoiding Algorithms*, 2015). They only reach W = N² when all temporaries fit in scratch. Without register reuse that is 38 registers at N=2 and 3226 at N=8, so the requirement grows faster than N².
+3. **Fast algorithms and writes do not mix at scale.** Strassen with temporaries in memory writes far more (42 vs 8 at N=2, 3290 vs 128 at N=8). This matches the theorem that Strassen-like algorithms cannot be write-avoiding (Carson, Demmel et al., *Write-Avoiding Algorithms*, 2015). They only reach W = N² when all temporaries fit in scratch. Without register reuse that is 38 registers at N=2 and 3226 at N=8, a no-reuse count that grows faster than N².
 4. **e/ln decomposition.**
    - In log space a product of any number of factors is one `exp` of a sum of logs. That is the same compression as the EML trees in `../eml/`.
    - So the fully fused triple-sum costs **N⁴ exps** (not 2N⁴ multiplications) with a single register and W = N².
