@@ -33,12 +33,13 @@ h3 { font-size: 18px; margin: 24px 0 6px; }
 p { max-width: 760px; }
 code, .mono { font-family: var(--mono); font-size: 0.88em; }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; }
-.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 12px; margin: 28px 0 8px; }
+.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); gap: 12px; margin: 28px 0 8px; }
 .card { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; }
 .card .label { font: 600 12px/1.3 var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-.card .big { font: 600 25px/1.15 var(--serif); margin: 6px 0 4px; }
+.card .big { font: 600 21px/1.15 var(--serif); white-space: nowrap; margin: 6px 0 4px; }
 .card .big.no { color: var(--bad); } .card .big.yes { color: var(--good); } .card .big.meh { color: var(--warn); }
-.card p { margin: 6px 0 0; font-size: 14px; color: var(--muted); }
+.card p { margin: 6px 0 0; font-size: 13.5px; color: var(--muted); }
+.card { padding: 14px 15px; }
 .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; margin: 16px 0; }
 .row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
 .controls { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; margin-bottom: 12px; font-size: 14px; }
@@ -94,14 +95,16 @@ that costs 7 + 7 = 14 scalar multiplications for 2×2 matrices. Can an algorithm
 The answer depends on what you count as the cost.</p>
 
 <div class="verdicts">
-  <div class="card"><div class="label">Count scalar multiplications</div><div class="big no">No (14 stands)</div>
+  <div class="card"><div class="label">Count scalar multiplications</div><div class="big no">No: 14 stays</div>
     <p>A fused 3-way decomposition needs N⁴ products. Two-level schemes need 2·R(N). A search for 13 found only approximate (border) schemes.</p></div>
-  <div class="card"><div class="label">Count EML tree size</div><div class="big meh">Yes, 25 vs 33</div>
+  <div class="card"><div class="label">Count EML tree size</div><div class="big meh">Yes: 25 vs 33</div>
     <p>x·y·z is much shorter as one exp−ln tree, but that tree contains no multiplications at all. It is the log-table trick.</p></div>
-  <div class="card"><div class="label">Writes expensive, reads free</div><div class="big yes">Yes: N² vs 2N²</div>
-    <p>Fusing the chain writes only the outputs, with no extra arithmetic if one column of B·C fits in registers.</p></div>
-  <div class="card"><div class="label">Repeated values, cache products</div><div class="big yes">Yes: ≤ k² + k³</div>
+  <div class="card"><div class="label">Writes expensive, reads free</div><div class="big yes">Yes: ½ writes</div>
+    <p>Fusing the chain writes only the N² outputs instead of 2N², with no extra arithmetic if one column of B·C fits in registers.</p></div>
+  <div class="card"><div class="label">Repeated values, cache products</div><div class="big yes">Yes: ≤ k²+k³</div>
     <p>With k distinct values, a fused triple table makes the multiplication count independent of N, at the price of N⁴ additions.</p></div>
+  <div class="card"><div class="label">Activation after the product</div><div class="big yes">Yes: −48%</div>
+    <p>Up to 48% saved: settle saturated outputs from a guaranteed low-precision estimate, but only on the last product. The whole-chain cascade costs more than exact.</p></div>
 </div>
 
 <!-- ======================================================================================= -->
@@ -251,6 +254,42 @@ and lookup-table kernels for quantised LLMs (<a href="https://proceedings.iclr.c
 <a href="https://arxiv.org/abs/2407.00088">T-MAC</a>). The triple-table trade-off for three factors was not found written up anywhere.</p>
 
 <!-- ======================================================================================= -->
+<h2>6 · An activation after the product: skip the saturated outputs</h2>
+<p>Neural networks rarely use A·B·C bare; they apply an activation: <code>Y = f(A·B·C + β)</code>. Where f is flat, the exact value doesn't matter.
+For a <b>sign</b> only the side of 0 counts. A <b>ReLU</b> gives 0 for every negative input. A <b>hardtanh</b> or <b>sigmoid</b> is saturated far from 0.
+So the plan is to compute everything cheaply at b bits, attach a <b>strict error bound</b> that turns each output into an interval, and settle every output where f is flat across its interval.
+Only the undecided outputs get a deeper, full-precision multiplication. Cost here counts bit operations: a p-bit × q-bit multiply costs p·q, and full precision is 16 bits.</p>
+<div class="panel">
+  <div class="controls">
+    <label>activation <select id="aAct"><option value="sign">sign</option><option value="relu">ReLU</option><option value="hardtanh">hardtanh</option><option value="sigmoid">sigmoid (ε = 0.01)</option></select></label>
+    <label>strategy <select id="aStrat"><option value="hybrid">exact B·C, cascade on A·(BC)</option><option value="chain">cascade over the whole chain</option></select></label>
+    <label>coarse pass <select id="aLev"><option value="4">4 bits</option><option value="6">6 bits</option><option value="8" selected>8 bits</option><option value="10">10 bits</option><option value="4,8">4 → 8 bits</option></select></label>
+    <label>N <select id="aN"><option>16</option><option selected>32</option></select></label>
+    <label>bias β <input type="range" id="aBeta" min="-8" max="8" step="1" value="0"><span id="aBetaV" class="mono"></span></label>
+    <label>gain <input type="range" id="aGain" min="-2" max="2" step="1" value="0"><span id="aGainV" class="mono"></span></label>
+    <label>bound <input type="range" id="aGam" min="0" max="4" step="1" value="0"><span id="aGamV" class="mono"></span></label>
+  </div>
+  <div class="row" style="align-items:flex-start">
+    <div><canvas id="aGrid"></canvas><div class="cap" id="aLegend"></div></div>
+    <div style="flex:1;min-width:240px">
+      <div id="aStats"></div>
+      <svg id="aBar" viewBox="0 0 400 54" width="100%" style="margin-top:8px"></svg>
+    </div>
+  </div>
+  <div class="tablewrap" style="margin-top:12px"><table id="aTable"></table></div>
+  <div class="cap">"bound" scales the strict error bound. At ×1 every decision is guaranteed correct. Smaller factors are a SeerNet-style <i>prediction</i>, with wrong decisions counted against the exact result.</div>
+</div>
+<h3>What this shows</h3>
+<ul>
+  <li><b>Across the whole chain the cascade costs <i>more</i> than computing exactly</b> (≈ 107–181% at N = 32). Refining one output of A·B·C needs a whole row of A·B or column of B·C, about N² work rather than one dot product. The undecided outputs land in almost every row and column.
+    (The fewest such rows and columns are picked exactly, as a minimum vertex cover via König's theorem.) The strict bound also piles up error through B·C and is about 30× too cautious on this data.</li>
+  <li><b>Compute B·C exactly once and run the cascade on A·(B·C):</b> a refined output is then one dot product, and the bound stops compounding.
+    At N = 32 with one 8-bit pass: sign 52%, hardtanh and saturated sigmoid 60%, ReLU with bias −4 65%, plain ReLU 81% of the exact cost. Every decision is guaranteed correct. The floor is 33%, the exact B·C.</li>
+  <li><b>ReLU saves least:</b> only negative outputs can be skipped, because positive ones need their exact value.</li>
+  <li><b>One well-chosen level beats several:</b> a 4-bit pass decides almost nothing and only adds cost. Precision has to grow with N: 8 bits is best at N = 16–32, 10 bits at N = 64.</li>
+</ul>
+
+<!-- ======================================================================================= -->
 <h2>Prior work, and how these results compare</h2>
 <p>Three-way matrix products have been studied from several directions. Most of what this page finds either restates known theory for the
 chain tensor or rediscovers established practice. The table puts each result next to the closest published one.</p>
@@ -290,6 +329,13 @@ chain tensor or rediscovers established practice. The table puts each result nex
         <a href="https://proceedings.iclr.cc/paper_files/paper/2024/file/a4f98ce85f440ee269b0df57b4368719-Paper-Conference.pdf">LUT-GEMM</a> and <a href="https://arxiv.org/abs/2407.00088">T-MAC</a> for quantised weights.</td>
       <td>For A·B·C: caching the chain already gives ≈ k² + N²k multiplications. A fused triple table gives ≤ k² + k³, independent of N, but needs N⁴ additions.</td>
       <td><span class="chip proven">extension</span> Known technique; the triple-table trade-off for three factors was not found stated.</td></tr>
+  <tr><td>Activation-aware skipping</td>
+      <td>For a single product: <a href="https://cseweb.ucsd.edu/~vakhlagh/ISCA18-SnaPEA.pdf">SnaPEA</a> (early exit for ReLU),
+        <a href="https://openaccess.thecvf.com/content_CVPR_2019/papers/Cao_SeerNet_Predicting_Convolutional_Neural_Network_Feature-Map_Sparsity_Through_Low-Bit_Quantization_CVPR_2019_paper.pdf">SeerNet</a> (low-bit prediction of ReLU zeros),
+        <a href="https://www.csl.cornell.edu/~zhiruz/pdfs/pg-iclr2020.pdf">Precision Gating</a> (low precision first, high precision where needed),
+        <a href="https://www.researchgate.net/publication/363415059_ComPreEND_Computation_Pruning_through_Predictive_Early_Negative_Detection_for_ReLU_in_a_Deep_Neural_Network_Accelerator">ComPreEND</a>. Mostly predictive.</td>
+      <td>Three factors with a strict bound: the whole-chain cascade costs more than exact; exact B·C plus a cascade on A·(BC) saves up to 48%, guaranteed.</td>
+      <td><span class="chip proven">extension</span> Known idea; the three-factor finding that the cascade belongs on the last product was not found stated.</td></tr>
   <tr><td>EML trees</td>
       <td><a href="https://arxiv.org/abs/2603.21852">Odrzywołek 2026</a>: exp−ln with constant 1 generates all elementary functions; direct search gives x·y in 17 tokens.
         A ternary operator is named only as future work.</td>
@@ -316,11 +362,13 @@ chain tensor or rediscovers established practice. The table puts each result nex
   <tr><td>No x·y·z EML tree shorter than 25</td><td><span class="chip open">open</span></td></tr>
   <tr><td>Fused A·B·C attains the write lower bound N² at 2N³ multiplications with N registers</td><td><span class="chip proven">construction</span></td></tr>
   <tr><td>With k distinct values, a fused triple table needs ≤ k² + k³ multiplications for any N (N⁴ additions)</td><td><span class="chip proven">construction</span></td></tr>
+  <tr><td>Activation cascade decisions are always correct at bound ×1 (strict error bound)</td><td><span class="chip proven">proof + tests</span></td></tr>
+  <tr><td>Savings of 19–48% for f(A·(BC)) at N = 16–64 on random matrices</td><td><span class="chip numeric">measured</span></td></tr>
 </table></div>
 
 <footer>
 Code and write-ups live next to this page: <code>FINDINGS.md</code>, <code>search/</code> (tensor and circuit searches, GF(2) SAT),
-<code>lean/Chain.lean</code>, <code>eml/</code> (EML enumerator), <code>write-avoiding/</code> (cost-model simulator).
+<code>lean/Chain.lean</code>, <code>eml/</code> (EML enumerator), <code>write-avoiding/</code> (cost-model simulator), <code>activation/</code> (precision cascade).
 Key references: A. Odrzywołek, <a href="https://arxiv.org/abs/2603.21852"><i>All elementary functions from a single binary operator</i></a>;
 E. Carson, J. Demmel et al., <a href="https://harsha-simhadri.org/pubs/EECS-2015-163.pdf"><i>Write-Avoiding Algorithms</i></a>;
 J. M. Landsberg, <a href="https://arxiv.org/abs/math/0407224"><i>The border rank of the multiplication of 2×2 matrices is seven</i></a>;
@@ -514,7 +562,87 @@ const M3 = (() => {
     return out;
   }
 
-  return { zeros, mul, randInt, mulberry, eq, strassen2, flattening, rank, machine, schedules, runAll, alphabetMatrices, cacheSchedules,
+  // ---------- activation-aware cascade: f(A·B·C + beta) ----------
+  // Cost: a p-bit × q-bit multiply costs p·q bit-operations; inputs are 16-bit fixed point; exact chain = 3·N³·16².
+  const FULL = 16;
+  const fixedq = (x, b) => { const st = 2 ** (1 - b); return Math.max(-1, Math.min(1 - st, Math.round(x / st) * st)); };
+  const quant = (M, b) => M.map(r => r.map(x => fixedq(x, b)));
+  const maxDiff = (X, Y) => Math.max(...X.flatMap((r, i) => r.map((v, j) => Math.abs(v - Y[i][j]))));
+  const ACT = { relu: x => Math.max(0, x), sign: x => (x > 0 ? 1 : x < 0 ? -1 : 0),
+                hardtanh: x => Math.max(-1, Math.min(1, x)), sigmoid: x => 1 / (1 + Math.exp(-x)) };
+  function actInstance(N, seed) {
+    const r = mulberry(seed), M = () => Array.from({ length: N }, () => Array.from({ length: N }, () => fixedq(r() * 2 - 1, FULL)));
+    return { A: M(), B: M(), C: M() };
+  }
+  // minimum vertex cover of a bipartite edge set (rows × cols): Kuhn matching + König's construction
+  function cover(N, edges) {
+    const adj = Array.from({ length: N }, () => []); for (const [i, l] of edges) adj[i].push(l);
+    const mC = new Array(N).fill(-1), mR = new Array(N).fill(-1);
+    const aug = (i, seen) => { for (const l of adj[i]) { if (seen[l]) continue; seen[l] = true;
+      if (mC[l] < 0 || aug(mC[l], seen)) { mC[l] = i; mR[i] = l; return true; } } return false; };
+    for (let i = 0; i < N; i++) if (adj[i].length) aug(i, new Array(N).fill(false));
+    const vR = new Array(N).fill(false), vC = new Array(N).fill(false), st = [];
+    for (let i = 0; i < N; i++) if (adj[i].length && mR[i] < 0) { vR[i] = true; st.push(i); }
+    while (st.length) { const i = st.pop(); for (const l of adj[i]) if (!vC[l]) { vC[l] = true; const i2 = mC[l]; if (i2 >= 0 && !vR[i2]) { vR[i2] = true; st.push(i2); } } }
+    const rows = [], cols = []; for (let i = 0; i < N; i++) if (adj[i].length && !vR[i]) rows.push(i); for (let l = 0; l < N; l++) if (vC[l]) cols.push(l);
+    return { rows, cols };
+  }
+  // strategy "chain": cascade over the whole chain; strategy "hybrid": exact P = B·C, cascade on A·P.
+  // Returns status[i][l] = index of the level that decided the entry, or levels.length for "computed exactly".
+  function actCascade({ A, B, C }, { act = "sign", beta = 0, gain = 1, eps = 0, levels = [8], strategy = "hybrid", gamma = 1 } = {}) {
+    const N = A.length, f = x => ACT[act](gain * (x + beta)), absM = M => M.map(r => r.map(Math.abs));
+    const P = mul(B, C), D = mul(A, P);
+    const status = Array.from({ length: N }, () => new Array(N).fill(levels.length));
+    let U = []; for (let i = 0; i < N; i++) for (let l = 0; l < N; l++) U.push([i, l]);
+    let cost = 0, wrong = 0, maxErr = 0; const perLevel = [];
+    const decide = (i, l, Dq, E, li, keep) => {
+      if (strategy !== "strict" && gamma !== 1) E *= gamma;
+      const lo = f(Dq - E), hi = f(Dq + E);
+      if (Math.abs(hi - lo) <= 2 * eps) { const err = Math.abs((lo + hi) / 2 - f(D[i][l])); maxErr = Math.max(maxErr, err); if (err > eps + 1e-12) wrong++; status[i][l] = li; }
+      else keep.push([i, l]);
+    };
+    if (strategy === "chain") {
+      const aA = absM(A).map(r => r.reduce((s, v) => s + v, 0)), cC = C[0].map((_, l) => C.reduce((s, r) => s + Math.abs(r[l]), 0));
+      const colB = B[0].map((_, k) => B.reduce((s, r) => s + Math.abs(r[k]), 0)), rowB = B.map(r => r.reduce((s, v) => s + Math.abs(v), 0));
+      const rr = cC.map((_, l) => colB.reduce((s, v, k) => s + v * Math.abs(C[k][l]), 0)), ss = aA.map((_, i) => rowB.reduce((s, v, j) => s + Math.abs(A[i][j]) * v, 0));
+      const nB = rowB.reduce((s, v) => s + v, 0);
+      cost += 2 * N * N * FULL * FULL;
+      levels.forEach((b, li) => { if (!U.length) return;
+        const Aq = quant(A, b), Bq = quant(B, b), Cq = quant(C, b), dA = maxDiff(A, Aq), dB = maxDiff(B, Bq), dC = maxDiff(C, Cq);
+        const { rows, cols } = cover(N, U);
+        cost += (rows.length + cols.length) * N * N * b * b + U.length * (2 * N * b * b + 12 * FULL * FULL);
+        const ABr = {}, BCc = {};
+        for (const i of rows) ABr[i] = Bq[0].map((_, k) => Aq[i].reduce((s, v, j) => s + v * Bq[j][k], 0));
+        for (const l of cols) BCc[l] = Bq.map(r => r.reduce((s, v, k) => s + v * Cq[k][l], 0));
+        const keep = [];
+        for (const [i, l] of U) {
+          const Dq = ABr[i] ? ABr[i].reduce((s, v, k) => s + v * Cq[k][l], 0) : Aq[i].reduce((s, v, j) => s + v * BCc[l][j], 0);
+          const E = (dA * rr[l] + dB * aA[i] * cC[l] + dC * ss[i] + dA * dB * N * cC[l] + dA * dC * nB + dB * dC * N * aA[i] + dA * dB * dC * N * N) * (1 + 1e-9) + 1e-12;
+          decide(i, l, Dq, E, li, keep);
+        }
+        perLevel.push({ b, decided: U.length - keep.length }); U = keep; });
+      if (U.length) { const { rows, cols } = cover(N, U); cost += (rows.length + cols.length) * N * N * FULL * FULL + U.length * 2 * N * FULL * FULL; }
+    } else {
+      cost += N ** 3 * FULL * FULL;                                   // exact P = B·C
+      const sP = Math.max(...P.flat().map(Math.abs)) || 1;
+      const colP = P[0].map((_, l) => P.reduce((s, r) => s + Math.abs(r[l]), 0)), rowA = A.map(r => r.reduce((s, v) => s + Math.abs(v), 0));
+      levels.forEach((b, li) => { if (!U.length) return;
+        const Aq = quant(A, b), Pq = P.map(r => r.map(x => sP * fixedq(x / sP, b))), dA = maxDiff(A, Aq), dP = maxDiff(P, Pq);
+        cost += U.length * (N * b * b + 4 * FULL * FULL);
+        const keep = [];
+        for (const [i, l] of U) {
+          const Dq = Aq[i].reduce((s, v, j) => s + v * Pq[j][l], 0);
+          decide(i, l, Dq, (dA * colP[l] + dP * rowA[i] + dA * dP * N) * (1 + 1e-9) + 1e-12, li, keep);
+        }
+        perLevel.push({ b, decided: U.length - keep.length }); U = keep; });
+      if (U.length) cost += U.length * N * 2 * FULL * FULL;
+    }
+    perLevel.push({ b: FULL, decided: U.length });
+    const chain = 3 * N ** 3 * FULL * FULL;
+    return { cost, chain, ratio: cost / chain, perLevel, wrong, maxErr, status, D };
+  }
+
+  return { zeros, mul, randInt, mulberry, eq, strassen2, flattening, rank, machine, schedules, runAll, alphabetMatrices, cacheSchedules, cover, actInstance, actCascade,
            evalRPN, directProduct, composedProduct, size, XY };
 })();
 
@@ -569,6 +697,26 @@ const M3Tests = {
       const at = k => M3.cacheSchedules(M3.alphabetMatrices(32, k, 5)).map(r => r.mults);
       const k4 = at(4);
       t("N=32 k=4 numbers quoted on the page", k4[0] === 65536 && k4[3] === 80);
+    }
+
+    {   // activation cascade
+      const r = M3.mulberry(3);
+      for (let tt = 0; tt < 30; tt++) { const N = 7, E = []; for (let i = 0; i < N; i++) for (let l = 0; l < N; l++) if (r() < 0.25) E.push([i, l]);
+        const { rows, cols } = M3.cover(N, E), R = new Set(rows), Cs = new Set(cols);
+        let best = 99; for (let m = 0; m < 1 << (2 * N); m++) { let pc = 0, x = m; while (x) { pc += x & 1; x >>= 1; } if (pc >= best) continue;
+          if (E.every(([i, l]) => (m >> i & 1) || (m >> (N + l) & 1))) best = pc; }
+        t(`König cover #${tt} valid and minimum`, E.every(([i, l]) => R.has(i) || Cs.has(l)) && rows.length + cols.length === best);
+      }
+      const inst = M3.actInstance(16, 7);
+      for (const strategy of ["chain", "hybrid"]) for (const act of ["sign", "relu", "hardtanh"]) for (const beta of [-3, 0, 2]) {
+        const res = M3.actCascade(inst, { act, beta, strategy, levels: [4, 8] });
+        t(`strict ${strategy} ${act} β=${beta}: no wrong decisions`, res.wrong === 0 && res.maxErr === 0);
+      }
+      t("sigmoid within ε", M3.actCascade(inst, { act: "sigmoid", eps: 1e-3, levels: [8] }).maxErr <= 1e-3 + 1e-12);
+      const i32 = M3.actInstance(32, 11);
+      const h = M3.actCascade(i32, { act: "sign", levels: [8], strategy: "hybrid" }), c = M3.actCascade(i32, { act: "sign", levels: [8], strategy: "chain" });
+      t("N=32 sign hybrid ≈ 52% (quoted on page)", Math.round(100 * h.ratio) === 52);
+      t("N=32 sign whole-chain cascade > 100% (quoted on page)", c.ratio > 1);
     }
     const failed = results.filter(r => !r[1]);
     if (typeof console !== "undefined") console.log(`M3Tests: ${results.length - failed.length}/${results.length} passed` + (failed.length ? "\nFAILED: " + failed.map(r => r[0]).join(", ") : ""));
@@ -670,6 +818,43 @@ function cacheSummary() {   // N = 32 across alphabets; runs after first paint (
       return `<tr><td>${k === Infinity ? "all distinct" : k}</td>${r.map(x => `<td${x.mults === best ? ' style="background:color-mix(in srgb, var(--good) 14%, transparent);font-weight:600"' : ""}>${x.mults.toLocaleString()}</td>`).join("")}</tr>`; }).join("");
 }
 
+function actDemo() {
+  const act = $("aAct").value, strategy = $("aStrat").value, levels = $("aLev").value.split(",").map(Number), N = +$("aN").value;
+  const beta = +$("aBeta").value, gain = 2 ** +$("aGain").value, gamma = 10 ** (-0.5 * +$("aGam").value), eps = act === "sigmoid" ? 0.01 : 0;
+  $("aBetaV").textContent = beta; $("aGainV").textContent = "×" + gain; $("aGamV").textContent = gamma === 1 ? "×1 strict" : "×" + gamma.toPrecision(2);
+  const inst = M3.actInstance(N, 11), opts = { act, beta, gain, eps, levels, strategy, gamma };
+  const res = M3.actCascade(inst, opts);
+  // grid
+  const cv = $("aGrid"), px = N <= 16 ? 14 : 8, side = N * px, dpr = window.devicePixelRatio || 1;
+  cv.style.width = side + "px"; cv.style.height = "auto"; cv.width = side * dpr; cv.height = side * dpr;
+  const g = cv.getContext("2d"); g.scale(dpr, dpr);
+  const cols = [css("--accent2"), css("--good"), css("--accent")];
+  for (let i = 0; i < N; i++) for (let l = 0; l < N; l++) {
+    const st = res.status[i][l]; g.fillStyle = st >= levels.length ? css("--accent") : (levels.length > 1 && st === 0 ? css("--good") : css("--accent2"));
+    g.fillRect(l * px, i * px, px - 1, px - 1);
+  }
+  const sw = c => `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};margin:0 4px 0 10px"></span>`;
+  $("aLegend").innerHTML = (levels.length > 1 ? sw(css("--good")) + `settled at ${levels[0]} bits` : "") + sw(css("--accent2")) + `settled at ${levels[levels.length - 1]} bits` + sw(css("--accent")) + "computed exactly";
+  const pct = Math.round(100 * res.ratio);
+  $("aStats").innerHTML = `<div class="big" style="font:600 30px/1.1 var(--serif);color:${res.ratio < 1 ? css("--good") : css("--bad")}">${pct}% of the exact cost</div>
+    <div class="cap">${res.perLevel.map(p => `${p.b === 16 ? "exact" : p.b + "-bit"}: ${p.decided}`).join(" · ")} of ${N * N} outputs ·
+    wrong decisions: <b class="${res.wrong ? "fail" : "ok"}">${res.wrong}</b></div>`;
+  const W = 400, x = v => 10 + Math.min(v, 2) / 2 * (W - 20);
+  let b = `<rect x="10" y="10" width="${W - 20}" height="16" rx="3" fill="${css("--code")}"/>`;
+  b += `<rect x="10" y="10" width="${x(res.ratio) - 10}" height="16" rx="3" fill="${res.ratio < 1 ? css("--good") : css("--bad")}"/>`;
+  b += `<line x1="${x(1)}" x2="${x(1)}" y1="4" y2="32" stroke="${css("--ink")}" stroke-width="2"/><text x="${x(1)}" y="46" text-anchor="middle">exact chain = 100%</text>`;
+  if (strategy === "hybrid") b += `<line x1="${x(1 / 3)}" x2="${x(1 / 3)}" y1="4" y2="32" stroke="${css("--muted")}" stroke-dasharray="3 3"/><text x="${x(1 / 3)}" y="46" text-anchor="middle">floor 33%</text>`;
+  $("aBar").innerHTML = b;
+  // all activations at these settings
+  const acts = [["sign", "sign"], ["relu", "ReLU"], ["hardtanh", "hardtanh"], ["sigmoid", "sigmoid ε=0.01"]];
+  $("aTable").innerHTML = `<tr><th>activation</th><th>whole-chain cascade</th><th>exact B·C + cascade</th></tr>` + acts.map(([a, nm]) => {
+    const o = { ...opts, act: a, eps: a === "sigmoid" ? 0.01 : 0 };
+    const c = M3.actCascade(inst, { ...o, strategy: "chain" }), h = M3.actCascade(inst, { ...o, strategy: "hybrid" });
+    const cell = r => `<td style="color:${r.ratio < 1 ? css("--good") : css("--bad")}">${Math.round(100 * r.ratio)}%${r.wrong ? ` <span class="fail">(${r.wrong} wrong)</span>` : ""}</td>`;
+    return `<tr${a === act ? ' class="best"' : ""}><td>${nm}</td>${cell(c)}${cell(h)}</tr>`;
+  }).join("");
+}
+
 function cacheDemo() {
   const N = +$("cN").value, k = $("cK").value === "Infinity" ? Infinity : +$("cK").value;
   const inst = M3.alphabetMatrices(N, k, 5), rows = M3.cacheSchedules(inst, { triple: N <= 32 }), best = Math.min(...rows.map(r => r.mults));
@@ -704,8 +889,9 @@ for (const id of ["ex", "ey", "ez"]) $(id).oninput = emlDemo;
 for (const id of ["wN", "wS", "wW", "wLog"]) $(id).oninput = writeDemo;
 $("wS").innerHTML = "<option>1</option>";
 for (const id of ["cN", "cK"]) $(id).oninput = cacheDemo;
-drawFlat(); strassenDemo(); ridgeChart(); emlDemo(); writeDemo(); cacheDemo(); setTimeout(cacheSummary, 50);
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawFlat(); ridgeChart(); cacheDemo(); });
+for (const id of ["aAct", "aStrat", "aLev", "aN", "aBeta", "aGain", "aGam"]) $(id).oninput = actDemo;
+drawFlat(); strassenDemo(); ridgeChart(); emlDemo(); writeDemo(); cacheDemo(); actDemo(); setTimeout(cacheSummary, 50);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawFlat(); ridgeChart(); cacheDemo(); actDemo(); });
 </script>
 </body>
 </html>
