@@ -52,6 +52,12 @@ The k-gon tensor network. For 2×2 matrices (Christandl–Zuiddam, *Tensor surge
 * odd k: 2^k − 2^(k−2) + 1 ≤ R ≤ 2^k − 1 (Young-flattening lower bound by Buhrman et al.; the upper bound is the surgery).
 * Reproduced here: the flattening ranks (2^k even, 2^(k−1) odd), Strassen's 7 for the triangle by search, and the exact 31-term pentagon / 127-term heptagon decompositions built by tensor surgery.
 * **Open problem attacked:** the pentagon rank (25 ≤ R ≤ 31).
-  - Random Levenberg–Marquardt starts stall even at R = 31.
-  - Drop-one restarts from the exact 31-term decomposition stall at error exactly 1.
-  - Border-rank (ridge continuation) probes at R = 30: running.
+  - Random Levenberg–Marquardt starts stall even at R = 31, at error √(32 − R).
+  - Drop-one restarts from the exact 31-term decomposition stall at error exactly 1; ridge-continuation border probes at R = 30 from there show no divergence.
+  - Exact GF(2) SAT (`sat_ring.py`): reproduces triangle 7 / not 6 instantly, but even the certain "square ring, 15" UNSAT did not finish in 15 minutes; pentagon 30 and 31 did not finish (left running).
+  - **Rotation-symmetric search** (`cyclic.py`; orbits of 5 rotated terms plus fixed v⊗v⊗v⊗v⊗v terms, the form of symmetric Strassen, which it finds from 4 of 6 starts):
+    - 31 = 6·5+1 reaches error 3·10⁻⁴, then freezes;
+    - 29 = 5·5+4 freezes at 0.041;
+    - **30 = 5·5+5 keeps descending, error 0.044 → 0.029 while the coefficient norm grows 26 → 32 (error ∝ ‖p‖^−2.2)**;
+    - all other splits stay at √(32 − R)-type plateaus.
+  - That R = 30 trajectory is the signature of a *border* (approximate) decomposition, which would beat the best known border bound of 31. It is **not confirmed**: extrapolating, error 10⁻⁶ would need coefficients near 3,000, beyond what double precision can resolve. Confirming it needs an explicit ε-family, or exact arithmetic.
