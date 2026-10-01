@@ -134,6 +134,13 @@ A pyramid of hexagonal feature cells (radius 12 → 6 → 3) with 3 → 1 triang
   - Wrap beats no wrap (ranges do not overlap), though the wrapped triangle does twice the products per step (n² vs ~n²/2 weights, +0.6% parameters, ~1.5× time).
   - Raising the centre is level with unscaled; lowering it is the only clear loss. The 1,000-step lead of the reversed triangle was noise.
   - Triangle steps cost ~4× (no wrap) to ~6× (wrap) a transformer step on CPU.
+- What the longer runs revealed:
+  - Uniform beats every centre/edge weighting, in both shapes (hexagon single layer: wrap 3.289 vs 3.324; triangle full model: 2.739 vs 2.778).
+  - The 1,000-step, 2-seed runs ranked variants wrongly twice (wrap behind by 0.034; reversed triangle "ahead" of the transformer). Seed spread fell from up to 0.19 to at most 0.045 at 4,000 steps.
+  - Triangles lead at step 400, fall 0.07–0.09 behind by step 1,200, then close in while the learning rate anneals (last 1,600 steps: −0.16–0.17 vs −0.14 for the transformer). Untested guess: three-way products train worse at high learning rate.
+  - The triangle's own weights are 14,150 numbers (0.6% of the model; 27,900 with wrap), yet the wiring change (wrap) moves the loss more than any reweighting.
+  - Centre lowered + average 1 had the tightest seeds (2.787–2.791), without rescaling the widest (2.787–2.832).
+  - Per unit of time the transformer wins easily (triangle steps 4–6× slower on CPU).
 - Loss curves (page section 6, `../shape-llm/loss_curves.png`): the transformer learns fastest early, the triangles catch up, and everything is still falling at step 1,000.
 
 ## Takeaways

@@ -482,6 +482,25 @@ With wrap every line is equally long, so there is no centre: A2 + B1 is the same
   <li><b>Cost.</b> On the CPU a triangle step takes about 4× as long as a transformer step without wrap and about 6× with wrap, because the three sweeps are many small gathers instead of one large matrix multiply.</li>
 </ul>
 
+<h3>What the longer runs revealed</h3>
+<ol>
+  <li><b>Uniform beats every centre/edge weighting.</b> The best triangle is the one with no centre at all (wrapped). Every no-wrap profile ranks below it: full centre, flat or lowered centre.
+    The hexagon said the same thing in section 5: its wrapped single layer also beat the unwrapped one (3.289 against 3.324, seed ranges apart). In both shapes, the version where every output collects the same number of products wins. That is also the property a dense matrix has.</li>
+  <li><b>The 1,000-step runs got the ranking wrong twice.</b> There, wrap finished 0.034 <i>behind</i> no wrap, and the reversed triangle looked ahead of the transformer.
+    In the 4,000-step runs wrap pulls ahead from step 800 and the lead grows (0.009 at step 800, 0.031 at step 1,600, about 0.04 from step 2,400 on). The reversed triangle ends 0.044 behind the transformer.
+    Seed spreads also shrank, from 0.19 at the end of a 1,000-step run to at most 0.045 at the end of a 4,000-step run. Short runs with 2 seeds were not enough to rank variants 0.03 apart.</li>
+  <li><b>The triangles start fast, fall behind, then close in.</b> At step 400 every triangle except the two centre-lowered ones is slightly ahead of the transformer. By step 1,200 they are 0.07–0.09 behind (0.12 with the centre lowered).
+    From there the gap shrinks steadily as the learning rate anneals: the wrapped triangle goes from 0.073 behind to 0.013. In the last 1,600 steps the triangles improve by 0.16–0.17 bits/char against 0.14 for the transformer, while in steps 400–2,000 the transformer improved more (0.99 against 0.87–0.95).
+    A guess, not tested: the three-way products train less well at a high learning rate, so a lower peak rate or a longer schedule could help them.</li>
+  <li><b>The shape is mostly wiring, not weights.</b> The triangle's own weights are only 14,150 numbers, 0.6% of the model (27,900 with wrap). Almost all parameters sit in the projections into and out of the triangle.
+    Yet switching the wiring from "no wrap" to "wrap" moves the loss by 0.04, more than any reweighting of the centre and edges. What matters is which features get multiplied together.</li>
+  <li><b>Renormalising made a bad idea consistent.</b> The centre-lowered triangle rescaled to average 1 had by far the tightest seeds (2.787–2.791), while the same profile without rescaling had the widest (2.787–2.832). Rescaling did not make it good, only predictable. This is one observation on 3 seeds.</li>
+  <li><b>Per unit of time, the transformer wins easily.</b> Matched on parameters (the triangles even have 3–4% more), the triangle is close to the transformer. But each step is about 4–6× slower on a CPU, so at equal training time the transformer is far ahead.
+    The triangle's case would rest on a fused gather–multiply kernel, which is the same open question as in section 4.</li>
+</ol>
+<p><b>If you try triangle layers:</b> wrap them, leave the weights unscaled, compare against a dense baseline at 4,000+ steps with 3 or more seeds, and test the learning rate before reading anything into gaps of 0.02.
+The fair next test of wrap is a smaller wrapped triangle doing the same number of products as the unwrapped one, so that wrap and extra work are separated.</p>
+
 <!-- ======================================================================================= -->
 <h2 id="takeaways">Takeaways</h2>
 <p><b>The common thread: the rectangle is the attractor.</b> A matrix is a rectangle because a linear map pairs every input with every output.
@@ -504,6 +523,8 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>In a whole model, the triangle beats the hexagon by a wide margin.</b> A pyramid built on hexagonal feature cells with 3 → 1 bottlenecks came close to a standard transformer once its feed-forward was the triangle layer (the wrapped triangle is 0.013 bits/char behind at 4,000 steps, within seed noise), and stayed 0.2 behind with the hexagon's local mixing. The pyramid was never the problem.</li>
   <li><b>The "centre" means different things in the two shapes.</b> In the triangle the long lines are signal (lowering them hurts, raising them is free); in the hexagon the centre-heavy sums were neither harmful nor needed (1/√ balancing changes nothing).</li>
   <li><b>A centre-heavy hexagonal layer learns an importance order without being asked.</b> In a language model, trimming its outer rings hurts 2–3× less than trimming at random. Meanwhile training partly fights the non-uniformity, growing the edge weights to make up for weaker edge activations.</li>
+  <li><b>Uniform wins in both shapes.</b> Given the choice between a centre-heavy and a uniform (wrapped) layout, the uniform one won for the hexagonal layer and, in 4,000-step runs, for the triangle feed-forward (2.739 against 2.778 bits/char). No reweighting of the centre and edges beat it.</li>
+  <li><b>The shape's own weights are about 1% of the model,</b> yet changing how they are wired (wrap or not) moved the loss more than any centre/edge weighting. The wiring matters more than the weights.</li>
   <li><b>Exact search hits a wall quickly.</b> A SAT solver settles the triangle instantly. But it couldn't prove within 15 minutes that the square ring needs more than 15 products, a fact that a one-line flattening argument proves.</li>
 </ol>
 <h3>Where this is useful</h3>
@@ -516,6 +537,7 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>Hexagonal data (geospatial H3 cells, game maps, detector arrays):</b> a ring-1 + skip + random sparse mask connects a radius-8 map in 5 layers at 9.5 links per cell, against 16 layers for neighbours only.
     Wrap-around or not is a design choice: uniform learning, or a centre-first curriculum.</li>
   <li><b>Elastic width for free-ish:</b> a non-wrapped hexagonal feed-forward layer orders its own outputs by importance, so outer rings can be trimmed at inference when compute is short, at a fraction of the cost of trimming at random.</li>
+  <li><b>Testing a new layer shape:</b> 1,000-step runs with 2 seeds ranked these variants wrongly twice (seed spread up to 0.19). At 4,000 steps with 3 seeds the spread fell to at most 0.045 and the rankings held. Budget for that before trusting a gap of a few hundredths.</li>
   <li><b>Tensor networks with loops:</b> an even loop can't be shortcut by any fused algorithm, so the order of pairwise contractions is all that matters. Odd loops leave room for Strassen-like tricks.</li>
   <li><b>Shaped weights in a language model</b> (triangle, cube; the tetrahedron was too slow to judge) train fine and beat a plain MLP, but not SwiGLU. The cube did best. Their selling point would be 6 multiplications per weight read for memory-bound inference, which is untested without a GPU kernel.
     The triangles that already pay off in large models live over tokens (2-simplicial attention) or residue pairs (AlphaFold).</li>
@@ -523,7 +545,7 @@ And when the polygon describes how matrices are wired together (a ring), what ma
 <h3>How new is this?</h3>
 <p>Most of it is known in some field: triangular matrices, receptive fields, Newton polytopes and Minkowski sums, Pick's theorem, hexagonal sampling, and Christandl–Zuiddam's cycle tensors.
 What this page adds is the side-by-side view, the classification of stable matrix shapes (at most 5 corners), the closed cost formula 4|P| − B − 3 for shaped convolution, and the unconfirmed hint that the pentagon ring might be approximated with 30 terms.
-Also new are the small experiments: shaped weight layers swept three or four ways; the finding that their three-way weights are robust to low precision while the input projection is not; the hexagonal wrap / no-wrap learning-speed contrast; and the emergent importance order of a centre-heavy hexagonal layer.
+Also new are the small experiments: shaped weight layers swept three or four ways; the finding that their three-way weights are robust to low precision while the input projection is not; the hexagonal wrap / no-wrap learning-speed contrast; the emergent importance order of a centre-heavy hexagonal layer; and a hexagonal pyramid language model whose wrapped-triangle feed-forward lands within seed noise of a parameter-matched transformer.
 The isotropy of hexagonal blurs and the power of random long-range links (BigBird, small-world graphs) are known.</p>
 
 <!-- ======================================================================================= -->
