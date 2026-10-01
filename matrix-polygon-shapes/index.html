@@ -91,6 +91,7 @@ footer { margin-top: 64px; font-size: 13px; color: var(--muted); border-top: 1px
   <div class="card"><div class="label">Shape = ring of matrices</div><div class="big meh">Odd beats even</div>
     <p>Even rings (square, hexagon) admit no shortcut: rank 2^k. Odd rings (triangle, pentagon) do. The pentagon's exact cost (25 to 31) is an open problem.</p></div>
 </div>
+<p class="cap" style="font-size:14px">The common thread: the rectangle is what multiplication converges to, and other shapes earn their place only with a different multiplication. See <a href="#takeaways">Takeaways</a>.</p>
 
 <!-- ======================================================================================= -->
 <h2>1 · Shapes as nonzero patterns inside a matrix</h2>
@@ -106,6 +107,8 @@ A shape is useful as a "matrix type" only if it is <b>closed</b>: the product of
       <option value="pent" selected>pentagon (x ≤ y, x ≤ 0.7, y ≥ 0.3)</option>
       <option value="band">band = hexagon (|x − y| ≤ 0.15)</option>
       <option value="anti">anti-triangle (x + y ≤ 1)</option>
+      <option value="causal">causal attention mask (y ≤ x)</option>
+      <option value="swin">sliding-window causal mask (0 ≤ x − y ≤ 0.15)</option>
       <option value="ngon">regular n-gon, centred</option>
       <option value="disk">disk, centred</option>
     </select></label>
@@ -197,6 +200,36 @@ The tensor rank is the number of products a fused algorithm needs. For 2×2 matr
 </table></div>
 
 <!-- ======================================================================================= -->
+<h2 id="takeaways">Takeaways</h2>
+<p><b>The common thread: the rectangle is the attractor.</b> A matrix is a rectangle because a linear map pairs every input with every output.
+Shapes drawn inside that rectangle drift back towards rectangles when you multiply. Every centred shape becomes its bounding box within 2–3 products.
+Other shapes stay themselves only when the <i>multiplication</i> changes. Convolution adds shapes instead of composing them, and keeps every convex polygon.
+And when the polygon describes how matrices are wired together (a ring), what matters is not the shape but its <i>parity</i>.</p>
+<h3>Surprises</h3>
+<ol>
+  <li><b>A pentagon can be a stable matrix shape, a hexagon cannot.</b> The more symmetric shape loses. A stable shape is a box cut by at most one diagonal line, and a rectangle cut by one line has at most 5 corners.</li>
+  <li><b>Geometry gives the exact cost.</b> Multiplying two P-shaped arrays needs exactly 4|P| − B − 3 multiplications, by Pick's theorem. So the number of lattice points on the <i>edge</i> sets the cost.
+    That's why pentagons, octagons and disks, which can't be regular on a lattice, are about 4% more expensive. The crystallographic restriction shows up as a price.</li>
+  <li><b>Odd versus even decides everything for rings.</b> Square, hexagon and octagon rings are incompressible: every fused algorithm needs all 2^k terms. Triangle, pentagon and heptagon rings are compressible.
+    Strassen's speed-up is, in this light, an odd-cycle phenomenon.</li>
+  <li><b>Hexagons are made of triangles:</b> a triangular array correlated with its mirror image gives a hexagonal array.</li>
+  <li><b>2D is special.</b> A doubled lattice polygon never has gaps in 2D, but a doubled tetrahedron can (Reeve), so 3D shaped arrays are less tidy.</li>
+  <li><b>The natural symmetric generalisation of Strassen doesn't simply appear for the pentagon.</b> A rotation-symmetric 31-term fit froze at error 0.0003. The only lead below 31 is an unconfirmed 30-term approximate decomposition.</li>
+  <li><b>Exact search hits a wall quickly.</b> A SAT solver settles the triangle instantly. But it couldn't prove within 15 minutes that the square ring needs more than 15 products, a fact that a one-line flattening argument proves.</li>
+</ol>
+<h3>Where this is useful</h3>
+<ul>
+  <li><b>Attention masks are shapes.</b> A causal mask is a triangle, which is closed, so stacking causal layers stays causal. A sliding-window causal mask is a band cut by the triangle. It is not closed: each product widens the band.
+    That widening is exactly how a stack of sliding-window layers gets a receptive field of about (layers × window). Pick these two masks in section 1 to see it.</li>
+  <li><b>Storage formats that stay closed:</b> triangles, trapezoids and the triangle-in-a-window pentagon can be multiplied without the result leaving the format. Bands and centred shapes need re-allocation after every product.</li>
+  <li><b>Choosing an array shape for convolution data:</b> hexagons for round, isotropic data (images, sensors, game maps; 13.4% fewer samples); triangles for polynomials of bounded total degree. The cost formula 4|P| − B − 3 lets you budget the work exactly.</li>
+  <li><b>Tensor networks with loops:</b> an even loop can't be shortcut by any fused algorithm, so the order of pairwise contractions is all that matters. Odd loops leave room for Strassen-like tricks.</li>
+</ul>
+<h3>How new is this?</h3>
+<p>Most of it is known in some field: triangular matrices, receptive fields, Newton polytopes and Minkowski sums, Pick's theorem, hexagonal sampling, and Christandl–Zuiddam's cycle tensors.
+What this page adds is the side-by-side view, the classification of stable matrix shapes (at most 5 corners), the closed cost formula 4|P| − B − 3 for shaped convolution, and the unconfirmed hint that the pentagon ring might be approximated with 30 terms.</p>
+
+<!-- ======================================================================================= -->
 <h2>Pros and cons by shape</h2>
 <div class="panel tablewrap"><table class="pc" id="pcTable">
   <tr><th>shape</th><th>as a matrix pattern</th><th>as a convolution array</th><th>as a ring of matrices</th></tr>
@@ -267,6 +300,7 @@ const MP = (() => {
   const SHAPES = {
     tri: (x, y) => x <= y, strict: (x, y) => y >= x + 0.2, trap: (x, y) => x <= y && x <= 0.6,
     pent: (x, y) => x <= y && x <= 0.7 && y >= 0.3, band: (x, y) => Math.abs(x - y) <= 0.15, anti: (x, y) => x + y <= 1,
+    causal: (x, y) => y <= x, swin: (x, y) => y <= x && x - y <= 0.15,
   };
   function pattern(name, N, n = 6) {
     let f = SHAPES[name];
@@ -408,6 +442,11 @@ const MPTests = {
     t("triangle product costs ≈ N³/6", Math.abs(MP.cost(MP.pattern("tri", 60)) - 1 / 6) < 0.01);
     const B = MP.pattern("band", 48); let P = B; for (let i = 0; i < 6; i++) P = MP.boolMul(P, B);
     t("band powers fill up", MP.density(P) > 0.9);
+    t("causal mask closed (stacked causal layers stay causal)", closed("causal"));
+    { const W = MP.pattern("swin", 48), C = MP.pattern("causal", 48); let P = W; const reach = [];
+      for (let k = 0; k < 4; k++) { reach.push(Math.max(...P.map((row, i) => Math.max(0, ...row.map((v, j) => v ? i - j : 0))))); P = MP.boolMul(P, W); }
+      t("sliding window: not closed, stays causal, reach grows ≈ linearly per layer",
+        !closed("swin") && MP.subset(P, C) && reach[1] > 1.8 * reach[0] && reach[3] > 3.5 * reach[0]); }
     // 2. convolution: Pick formula, normality, Minkowski corners
     for (const [name, size] of [["triangle", 6], ["square", 5], ["hexagon", 4], ["pentagon", 4], ["octagon", 4], ["disk", 5]]) {
       const P = MP.shapeArray(name, size), S = MP.minkowski(P, P);

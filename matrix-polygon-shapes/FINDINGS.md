@@ -61,3 +61,31 @@ The k-gon tensor network. For 2×2 matrices (Christandl–Zuiddam, *Tensor surge
     - **30 = 5·5+5 keeps descending, error 0.044 → 0.025 over 24 long chunks while the coefficient norm grows 26 → 34 (error ∝ ‖p‖^≈−2.1, still falling at the end)**;
     - all other splits stay at √(32 − R)-type plateaus.
   - That R = 30 trajectory is the signature of a *border* (approximate) decomposition, which would beat the best known border bound of 31. It is **not confirmed**: extrapolating, error 10⁻⁶ would need coefficients near 3,000, beyond what double precision can resolve. Confirming it needs an explicit ε-family, or exact arithmetic.
+
+## Takeaways
+
+**The rectangle is the attractor.**
+- Shapes inside a matrix drift towards rectangles under multiplication.
+- Other shapes survive only with a different multiplication: convolution keeps every convex polygon.
+- For rings of matrices, parity matters, not shape.
+
+Surprises:
+- pentagons can be stable matrix shapes and hexagons cannot (at most 5 corners);
+- Pick's theorem gives the exact convolution cost 4|P| − B − 3, so lattice-irregular shapes pay about 4%;
+- even rings are incompressible and odd rings are not, so Strassen is an odd-cycle phenomenon;
+- triangle ⊕ mirrored triangle = hexagon;
+- 3D doubled shapes can have gaps;
+- the symmetric 31-term pentagon fit froze;
+- SAT can't even prove the trivial square-ring bound quickly.
+
+Uses:
+- **causal attention masks** are triangles (closed: stacked causal layers stay causal);
+- **sliding-window masks** are band ∩ triangle, which widen per product, so the receptive field is about layers × window (tested on the page);
+- storage formats that stay closed;
+- hexagons for isotropic data, triangles for total-degree polynomials;
+- even tensor-network loops admit no fused shortcut.
+
+New here:
+- the stable-shape classification (at most 5 corners);
+- the 4|P| − B − 3 cost formula;
+- the unconfirmed border-30 pentagon hint.
