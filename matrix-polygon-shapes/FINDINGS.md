@@ -54,7 +54,7 @@ The k-gon tensor network. For 2×2 matrices (Christandl–Zuiddam, *Tensor surge
 * **Open problem attacked:** the pentagon rank (25 ≤ R ≤ 31).
   - Random Levenberg–Marquardt starts stall even at R = 31, at error √(32 − R).
   - Drop-one restarts from the exact 31-term decomposition stall at error exactly 1; ridge-continuation border probes at R = 30 from there show no divergence.
-  - Exact GF(2) SAT (`sat_ring.py`): reproduces triangle 7 / not 6 instantly, but even the certain "square ring, 15" UNSAT did not finish in 15 minutes; pentagon 30 and 31 did not finish (left running).
+  - Exact GF(2) SAT (`sat_ring.py`): reproduces triangle 7 / not 6 instantly, but even the certain "square ring, 15" UNSAT did not finish in 15 minutes; pentagon 30 and 31 gave no answer and were stopped after 7.5 hours.
   - **Rotation-symmetric search** (`cyclic.py`; orbits of 5 rotated terms plus fixed v⊗v⊗v⊗v⊗v terms, the form of symmetric Strassen, which it finds from 4 of 6 starts):
     - 31 = 6·5+1 reaches error 3·10⁻⁴, then freezes;
     - 29 = 5·5+4 freezes at 0.041;

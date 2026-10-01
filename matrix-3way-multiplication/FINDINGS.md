@@ -81,7 +81,7 @@ Finite fields have no border phenomena, so SAT/UNSAT is exact for GF(2).
 
 * (7,7): SAT in 26 min. The solver independently found the A·(BC) chain.
 * (8,5): **UNSAT** (48 min), so no exact 13-mult scheme with that split exists over GF(2).
-* (6,7), (7,6), (5,8): still running at the time of writing.
+* (6,7), (7,6), (5,8): no answer; stopped after 11 hours of CaDiCaL each.
 
 ## 4. EML (exp-minus-log) trees — see `eml/README.md`
 
@@ -166,7 +166,7 @@ Next:
 - derive the explicit 6-product formula;
 - try probabilistic bounds;
 - test on trained weights;
-- let the GF(2) runs finish.
+- settle the GF(2) splits with a smarter encoding (plain SAT gave no answer in 11 hours).
 
 ## Prior work and comparison
 
