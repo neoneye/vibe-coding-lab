@@ -105,6 +105,18 @@ Here the 3-way view pays off.
 Circuits whose intermediates exceed degree 3 and cancel later. Over ℝ/ℂ, the
 homogeneous-model question for 13 has numerical evidence only. It is not proven.
 
+## Prior work and comparison
+
+| topic | published | here | verdict |
+|---|---|---|---|
+| Three-way forms | trace(ABC) is the standard trilinear form; ⟨2,2,2⟩ rank 7 ([Strassen](https://en.wikipedia.org/wiki/Strassen_algorithm), Winograd 1971, Hopcroft–Kerr over GF(2)); border rank 7 ([Landsberg](https://arxiv.org/abs/math/0407224), [border support rank](https://arxiv.org/abs/1705.09652)) | rank and border rank of trace(ABCD) = N⁴ | consistent, routine extension |
+| Iterated matrix multiplication | IMM is ABP-complete; asymptotic formula/ABP lower bounds ([1710.05481](https://arxiv.org/abs/1710.05481), [STOC'22](https://dl.acm.org/doi/10.1145/3519935.3520044), [sums of ABPs](https://dl.acm.org/doi/10.1016/j.tcs.2025.115214)) | exact small case: two-level ≥ 2R; degree-3 circuits only border 13s | complementary regime |
+| Border algorithms | border multiplicative complexity ≥ border rank / 2 ([Landsberg survey](https://people.tamu.edu/~jml/msurvey0407.pdf)), so commutative 2×2 needs ≥ 4 approximately, 7 exactly | numerical border 6 for commutative 2×2 A·B | open: inside the known window, no explicit construction |
+| Exact search | SAT / flip graphs ([Heule–Kauers–Seidl](https://arxiv.org/abs/1903.11391), [Kauers–Moosbauer](https://arxiv.org/abs/2212.01175)) | GF(2): 7+7 SAT, 8+5 UNSAT, others unresolved | partial |
+| Write-avoiding | Strassen-like algorithms can't be write-avoiding ([Carson, Demmel et al.](https://harsha-simhadri.org/pubs/EECS-2015-163.pdf), [asymmetric memories](https://link.springer.com/article/10.1007/s11390-023-3489-y)); GEMM fusion ([Bolt](https://arxiv.org/abs/2110.15238)), [FlashAttention](https://research.colfax-intl.com/wp-content/uploads/2023/12/colfax-flashattention.pdf) | fused A·B·C: N² writes at 2N³ mults with N registers | rediscovery |
+| EML | [Odrzywołek 2026](https://arxiv.org/abs/2603.21852): x·y in 17; ternary operator only future work | x·y·z in 25 vs 33 composed | new but minor (log-table trick) |
+| Ternary products | Bhattacharya–Mesner product of 3-D hypermatrices ([AMS Notices](https://www.ams.org/journals/notices/202110/noti2366/noti2366.html), [arXiv:2301.07494](https://arxiv.org/abs/2301.07494)) | not studied | different object |
+
 ## Lean certificates
 
 `lean/Chain.lean` (core Lean 4.34, no Mathlib — the Mathlib fetch fails here on a Lake/git
