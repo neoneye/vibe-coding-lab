@@ -30,6 +30,7 @@ def batch(src, g):
 
 class Attention(nn.Module):
     def __init__(s, D, A=128, H=4):
+        if kind == "hex2": A = 48
         super().__init__(); s.H = H; s.qkv = nn.Linear(D, 3 * A, bias=False); s.o = nn.Linear(A, D, bias=False)
     def forward(s, x):
         B, T, _ = x.shape
@@ -38,21 +39,28 @@ class Attention(nn.Module):
         return s.o(y.transpose(1, 2).reshape(B, T, -1))
 
 class HexFFN(nn.Module):
-    """gated 7-tap hexagonal convolution over the feature cells (weights shared across cells) + per-cell bias."""
-    def __init__(s, R, c, mult=4):
-        super().__init__(); s.R, s.c = R, c
+    """gated 7-tap hexagonal convolution over the feature cells + per-cell bias.
+    shared=True: one kernel for all cells (a hexagonal CNN layer); shared=False: every cell has its own
+    7-neighbour weights (locally connected), so the hexagonal part can hold most of the parameters."""
+    def __init__(s, R, c, mult=4, shared=True):
+        super().__init__(); s.R, s.c, s.shared = R, c, shared
         nb = torch.tensor(neighbours(R)); s.register_buffer("nb", nb.clamp(min=0)); s.register_buffer("valid", (nb >= 0).float())
-        s.up = nn.Linear(7 * c, 2 * mult * c, bias=False); s.down = nn.Linear(mult * c, c, bias=False)
-        s.bias = nn.Parameter(torch.zeros(len(cells(R)), c))
+        n = len(cells(R)); h = mult * c
+        if shared: s.up = nn.Linear(7 * c, 2 * h, bias=False); s.down = nn.Linear(h, c, bias=False)
+        else:
+            s.Wup = nn.Parameter(torch.randn(n, 7 * c, 2 * h) / math.sqrt(7 * c)); s.Wdown = nn.Parameter(torch.randn(n, h, c) / math.sqrt(h))
+        s.bias = nn.Parameter(torch.zeros(n, c))
     def forward(s, x):
         B, T, _ = x.shape; h = x.view(B, T, -1, s.c)
-        g = h[:, :, s.nb, :] * s.valid[..., None]                   # (B, T, cells, 7, c), zero outside the hexagon
-        u, v = s.up(g.flatten(-2)).chunk(2, -1)
-        return (s.down(F.silu(u) * v) + s.bias).view(B, T, -1)
+        g = (h[:, :, s.nb, :] * s.valid[..., None]).flatten(-2)      # (B, T, cells, 7c), zero outside the hexagon
+        if s.shared: u, v = s.up(g).chunk(2, -1); y = s.down(F.silu(u) * v)
+        else: u, v = torch.einsum("btnk,nkh->btnh", g, s.Wup).chunk(2, -1); y = torch.einsum("btnh,nhc->btnc", F.silu(u) * v, s.Wdown)
+        return (y + s.bias).reshape(B, T, -1)
 
 class Block(nn.Module):
     def __init__(s, D, ffn):
-        super().__init__(); s.n1 = nn.LayerNorm(D); s.att = Attention(D); s.n2 = nn.LayerNorm(D); s.ffn = ffn
+        A = 48 if kind == "hex2" else 128
+        super().__init__(); s.n1 = nn.LayerNorm(D); s.att = Attention(D, A); s.n2 = nn.LayerNorm(D); s.ffn = ffn
     def forward(s, x):
         x = x + s.att(s.n1(x)); return x + s.ffn(s.n2(x))
 
@@ -67,6 +75,7 @@ class Bottleneck(nn.Module):
         t = h[:, :, s.g, :] * s.valid[..., None]                    # (B, T, coarse, 3, c_in)
         return s.norm((s.lin(t.flatten(-2)) + s.bias).view(B, T, -1))
 
+HEX2_MULT = [4, 3, 2]                                              # hidden multiplier per level for the locally connected version
 class HexLM(nn.Module):
     LEVELS = [(12, 2), (6, 6), (3, 16)]                             # (radius, channels per cell), 2 blocks each
     def __init__(s):
@@ -77,7 +86,8 @@ class HexLM(nn.Module):
         for li, (R, c) in enumerate(s.LEVELS):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
-            layers += [Block(D, HexFFN(R, c)), Block(D, HexFFN(R, c))]
+            mult, shared = (HEX2_MULT[li], False) if kind == "hex2" else (4, True)
+            layers += [Block(D, HexFFN(R, c, mult, shared)), Block(D, HexFFN(R, c, mult, shared))]
         s.body = nn.Sequential(*layers); Dl = len(cells(3)) * 16
         s.norm = nn.LayerNorm(Dl); s.out = nn.Linear(Dl, V, bias=False)
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
@@ -92,9 +102,11 @@ class BaseLM(nn.Module):
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
 
 count = lambda m: sum(p.numel() for p in m.parameters())
-if kind == "hex": model = HexLM()
+if kind in ("hex", "hex2"): model = HexLM()
 else:                                                               # match the hex model's parameter count
-    target = count(HexLM()); D = 64
+    if kind == "base2": kind = "hex2"; target = count(HexLM()); kind = "base2"   # match the locally connected version
+    else: target = count(HexLM())
+    D = 64
     while count(BaseLM(D + 8)) <= target: D += 8
     model = BaseLM(D)
 print(f"{kind}: {count(model):,} parameters", flush=True)
