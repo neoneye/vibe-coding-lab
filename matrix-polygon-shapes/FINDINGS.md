@@ -58,6 +58,6 @@ The k-gon tensor network. For 2×2 matrices (Christandl–Zuiddam, *Tensor surge
   - **Rotation-symmetric search** (`cyclic.py`; orbits of 5 rotated terms plus fixed v⊗v⊗v⊗v⊗v terms, the form of symmetric Strassen, which it finds from 4 of 6 starts):
     - 31 = 6·5+1 reaches error 3·10⁻⁴, then freezes;
     - 29 = 5·5+4 freezes at 0.041;
-    - **30 = 5·5+5 keeps descending, error 0.044 → 0.029 while the coefficient norm grows 26 → 32 (error ∝ ‖p‖^−2.2)**;
+    - **30 = 5·5+5 keeps descending, error 0.044 → 0.025 over 24 long chunks while the coefficient norm grows 26 → 34 (error ∝ ‖p‖^≈−2.1, still falling at the end)**;
     - all other splits stay at √(32 − R)-type plateaus.
   - That R = 30 trajectory is the signature of a *border* (approximate) decomposition, which would beat the best known border bound of 31. It is **not confirmed**: extrapolating, error 10⁻⁶ would need coefficients near 3,000, beyond what double precision can resolve. Confirming it needs an explicit ε-family, or exact arithmetic.
