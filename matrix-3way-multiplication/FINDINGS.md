@@ -128,6 +128,37 @@ flat over the uncertainty interval; only the rest is recomputed at full precisio
 - Computing B·C exactly and cascading only on A·(B·C) saves up to 48 % with zero wrong decisions (sign 52 %, hardtanh 60 %, ReLU 65–81 % of the exact cost at N = 32, 8 bits).
 - Prior work for one product: SnaPEA, SeerNet, Precision Gating, ComPreEND.
 
+## Takeaways
+
+**The common thread is the intermediate product.** Every gain came from handling A·B (or B·C) deliberately:
+don't store it (writes), cache before it (its entries are sums and repeat less), and keep it exact while the
+cheap tricks go on the last multiplication (activations).
+
+Surprises:
+- the whole-chain activation cascade costs more than exact, because one refinement in a chain is a row or column (N²), not an entry (N);
+- the guaranteed bound is about 30× too cautious; at ≈ 0.03× the whole chain reaches 50% with no wrong decisions on this data;
+- more precision levels made it worse;
+- ReLU benefits least;
+- the refinement plan is a König minimum vertex cover;
+- caching helps even the plain chain (≈ k² + N²k).
+
+For practice:
+- put the product that feeds the nonlinearity last, and keep the middle product exact and in fast memory;
+- fusion pays off in memory traffic, not arithmetic;
+- cache before the sums;
+- measure how loose your bounds are on real data.
+
+Possibly new:
+- border-6 commutative 2×2 A·B (numerical);
+- for three factors, the activation shortcut belongs on the last product;
+- the triple-table trade-off (≤ k² + k³ multiplications, N⁴ additions).
+
+Next:
+- derive the explicit 6-product formula;
+- try probabilistic bounds;
+- test on trained weights;
+- let the GF(2) runs finish.
+
 ## Prior work and comparison
 
 | topic | published | here | verdict |

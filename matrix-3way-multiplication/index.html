@@ -106,6 +106,7 @@ The answer depends on what you count as the cost.</p>
   <div class="card"><div class="label">Activation after the product</div><div class="big yes">Yes: −48%</div>
     <p>Up to 48% saved: settle saturated outputs from a guaranteed low-precision estimate, but only on the last product. The whole-chain cascade costs more than exact.</p></div>
 </div>
+<p class="cap" style="font-size:14px">The common thread: every gain comes from deciding what to do with the intermediate product A·B or B·C. See <a href="#takeaways">Takeaways</a>.</p>
 
 <!-- ======================================================================================= -->
 <h2>1 · Fused 3-way products: rank exactly N⁴</h2>
@@ -287,6 +288,45 @@ Only the undecided outputs get a deeper, full-precision multiplication. Cost her
     At N = 32 with one 8-bit pass: sign 52%, hardtanh and saturated sigmoid 60%, ReLU with bias −4 65%, plain ReLU 81% of the exact cost. Every decision is guaranteed correct. The floor is 33%, the exact B·C.</li>
   <li><b>ReLU saves least:</b> only negative outputs can be skipped, because positive ones need their exact value.</li>
   <li><b>One well-chosen level beats several:</b> a 4-bit pass decides almost nothing and only adds cost. Precision has to grow with N: 8 bits is best at N = 16–32, 10 bits at N = 64.</li>
+</ul>
+
+<!-- ======================================================================================= -->
+<h2 id="takeaways">Takeaways</h2>
+<p><b>The common thread is the intermediate product.</b> Every gain came from treating A·B (or B·C) deliberately rather than as a black box:</p>
+<ul>
+  <li><b>Writes:</b> don't store it at all. Fusing halves the writes (section 4).</li>
+  <li><b>Caching:</b> cache products of the original entries. The intermediate's entries are sums, so they repeat far less than the inputs (section 5).</li>
+  <li><b>Activations:</b> compute the middle product exactly and save the cheap tricks for the last multiplication. Treating the chain as one block made things worse (section 6).</li>
+</ul>
+<h3>Surprises</h3>
+<ol>
+  <li><b>Applying the shortcut to the whole chain cost more than doing nothing</b> (107–181%). In a single product, fixing one uncertain output costs one dot product (N work). In a chain it costs a whole row of A·B or column of B·C (N² work), so the smallest unit of correction is a row or column, not an entry.</li>
+  <li><b>The guaranteed bound was about 30× too cautious.</b> With the bound shrunk to ≈ 0.03×, the whole-chain cascade reaches 50% with no wrong decisions on this data, beating the guaranteed hybrid (52%). Which strategy wins depends on whether you need a guarantee.</li>
+  <li><b>More precision levels made it worse.</b> A 4-bit first pass settled almost nothing and only added cost; one well-chosen level was best.</li>
+  <li><b>ReLU, the most common activation, benefits least,</b> because only its negative outputs can be skipped.</li>
+  <li><b>A classic graph result turned up naturally:</b> choosing the fewest rows and columns to recompute is a minimum vertex cover in a bipartite graph, solved exactly by König's theorem.</li>
+  <li><b>Caching helps the plain chain more than expected.</b> Each entry of A·B meets only k values of C, so a cache brings even the textbook chain to about k² + N²k multiplications.</li>
+</ol>
+<h3>For practice</h3>
+<ul>
+  <li><b>Order the work so the product feeding the nonlinearity comes last.</b> Keep the middle product exact and in fast memory, and apply early exit, sparsity or caching only to that last product.</li>
+  <li><b>Fusing three-factor products pays off in memory traffic, not in arithmetic.</b> That's why GPU libraries fuse back-to-back GEMMs and FlashAttention fuses attention.</li>
+  <li><b>With repeated values, cache before the sums.</b> A full table of value triples only pays off when k &lt; N and multiplications cost far more than additions.</li>
+  <li><b>Measure how loose your bounds are on real data</b> before choosing between guaranteed and predictive skipping. Here the gap was 30×.</li>
+</ul>
+<h3>Possibly new, and what to do next</h3>
+<p>Most results here rediscover known theory or practice (see the table below). Three may be new:</p>
+<ul>
+  <li>six commutative products approximating 2×2 A·B arbitrarily well (numerical only, no explicit formula yet);</li>
+  <li>for three factors, the activation shortcut belongs on the last product, not the whole chain;</li>
+  <li>the fused triple table: at most k² + k³ multiplications for any N, at the price of N⁴ additions.</li>
+</ul>
+<p>Next steps:</p>
+<ul>
+  <li>derive the explicit 6-product formula, which settles whether it is real;</li>
+  <li>replace the worst-case bound with a probabilistic one that has a stated failure rate, to close most of the 30× gap;</li>
+  <li>rerun the caching and activation experiments on trained network weights instead of random matrices;</li>
+  <li>let the remaining GF(2) SAT runs (6+7, 7+6, 5+8) finish.</li>
 </ul>
 
 <!-- ======================================================================================= -->
@@ -717,6 +757,12 @@ const M3Tests = {
       const h = M3.actCascade(i32, { act: "sign", levels: [8], strategy: "hybrid" }), c = M3.actCascade(i32, { act: "sign", levels: [8], strategy: "chain" });
       t("N=32 sign hybrid ≈ 52% (quoted on page)", Math.round(100 * h.ratio) === 52);
       t("N=32 sign whole-chain cascade > 100% (quoted on page)", c.ratio > 1);
+    }
+
+    {
+      const i32 = M3.actInstance(32, 11);
+      const p = M3.actCascade(i32, { act: "sign", levels: [8], strategy: "chain", gamma: 10 ** -1.5 });
+      t("N=32 sign whole-chain, bound ×0.03: 50%, no wrong (quoted in Takeaways)", Math.round(100 * p.ratio) === 50 && p.wrong === 0);
     }
     const failed = results.filter(r => !r[1]);
     if (typeof console !== "undefined") console.log(`M3Tests: ${results.length - failed.length}/${results.length} passed` + (failed.length ? "\nFAILED: " + failed.map(r => r[0]).join(", ") : ""));
