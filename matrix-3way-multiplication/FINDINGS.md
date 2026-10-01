@@ -128,6 +128,15 @@ flat over the uncertainty interval; only the rest is recomputed at full precisio
 - Computing B·C exactly and cascading only on A·(B·C) saves up to 48 % with zero wrong decisions (sign 52 %, hardtanh 60 %, ReLU 65–81 % of the exact cost at N = 32, 8 bits).
 - Prior work for one product: SnaPEA, SeerNet, Precision Gating, ComPreEND.
 
+## 8. Picking terms at random (activation/sampling.mjs, walks.mjs)
+
+Random sampling instead of low precision mostly loses:
+- strict bounds never decide anything;
+- empirical bounds save at most a few percent on dense data, and are badly fooled on sparse data, where early samples are all zeros and the estimate looks falsely certain;
+- to decide which side of a threshold a sum lands, seeing every term a little beats seeing some terms fully.
+
+The exception is genuinely three-way: Cohen–Lewis random walks i → j → k → l, weighted by the rest of the chain (B·C·1, C·1). For nonnegative heavy-tailed data and a top-1% threshold they need only 16–24% of the multiplications, with guaranteed decisions. They pay in random draws (about 6× more draws than the exact multiplications), so they only help when multiplications are expensive.
+
 ## Takeaways
 
 **The common thread is the intermediate product.** Every gain came from handling A·B (or B·C) deliberately:

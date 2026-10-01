@@ -48,3 +48,44 @@ exit for ReLU), SeerNet (CVPR 2019, low-bit prediction of ReLU sparsity), Precis
 (ICLR 2020, low precision first, high precision where it matters), ComPreEND (early negative
 detection). New here: the three-factor case, the strict bound, the row/column cover, and the finding
 that the cascade belongs on the last product, not the whole chain.
+
+## 3. Picking terms at random instead of lowering precision
+
+`sampling.mjs` estimates each output from randomly chosen terms (without replacement) and decides
+with either a strict Hoeffding–Serfling bound or an empirical normal-approximation bound. Cost here
+is multiplications; the exact chain is 2N³.
+
+* *hybrid*: exact B·C, then sample j for each output. Its worst case equals the exact chain.
+* *triple*: sample (j,k) pairs directly with no intermediate (2 multiplications per sample), then refine via the minimum cover.
+
+| data (N = 32) | strict bound | empirical bound |
+|---|---|---|
+| signed | never decides anything (100% / 200%) | 95–99%, a few wrong decisions |
+| nonnegative | never decides | 91–97% (hybrid), wrong decisions |
+| sparse heavy-tailed | never decides | 38–72%, **hundreds of wrong decisions** (early samples are all zero, so the sample spread looks like 0) |
+
+Why: to decide an output, the sampling error must be smaller than its distance to the threshold. With
+the threshold inside the bulk, that distance is about the spread of the outputs, which partial samples
+cannot beat. **To decide which side of a threshold a sum lands, it is better to see every term a little
+(low precision) than some terms fully (sampling).**
+
+### Random walks through A → B → C (`walks.mjs`)
+
+For nonnegative matrices, a three-step random walk i → j → k → l lands on output l with probability
+exactly D_il / Σ_l D_il. That holds if each step is weighted by the rest of the chain:
+j ∝ A_ij·(B·C·1)_j, k ∝ B_jk·(C·1)_k, l ∝ C_kl (Cohen–Lewis, extended to three factors). Setup costs
+5N² multiplications. Visit counts then give a guaranteed Hoeffding bound with no further multiplications.
+
+| data | threshold | walks / row | multiplications vs exact | undecided |
+|---|---|---|---|---|
+| sparse heavy-tailed, N = 32 | top 1% | 4,096 | **24%** | 38 / 1,024 |
+| same | top 1% | 65,536 | **16%** | 9 |
+| same | top 10% | 65,536 | 47% | 92 |
+| same, N = 64 | top 1% | 65,536 | 30% | 269 |
+| dense nonnegative | any | any | 70–108% | most |
+
+Zero wrong decisions throughout. The catch: walks replace multiplications with random draws (about
+393,000 draws at N = 32, s = 4,096, against 65,536 multiplications for the exact chain). They pay only
+when a multiplication is much more expensive than a random index, for nonnegative, heavy-tailed data,
+and when the question is "which few outputs are large" (Cohen–Lewis 1999; diamond sampling, Ballard,
+Kolda, Pinar, Seshadhri 2015).
