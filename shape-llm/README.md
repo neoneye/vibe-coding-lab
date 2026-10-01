@@ -160,3 +160,13 @@ Full pyramid model, re-run together with the corpus fixed (`shapellm.py` no long
 * The seeds differ by up to 0.19 at 1,000 steps, so the full-model differences (≤ 0.03 in the mean) are within noise.
 * **The pattern is asymmetric:** turning the long "centre" lines down hurts, turning them up is free or slightly helpful. This is consistent with the centre carrying signal.
 * Settling the small differences needs more seeds and longer runs (e.g. 4 seeds × 2,000 steps).
+
+### Loss curves
+
+![loss curves](loss_curves.png)
+
+`plot_curves.py` (validation loss logged every 200 steps; thin lines are seeds, bold lines the 2-seed mean). The two panels have separate y-scales.
+* **Full pyramid model:** the standard transformer learns fastest early (3.79 at step 400, against 3.87–3.90 for the triangles). The triangles catch up by steps 800–1,000.
+* **Every curve is still falling** at about 0.03–0.04 bits/char per 200 steps, so 1,000 steps is far from converged.
+* **The reversed, average-1 triangle has the widest seed spread** (one seed reaches 3.29, the other 3.49).
+* **Single layer:** all variants trace nearly the same curve; wrap pulls slightly ahead from step 400.
