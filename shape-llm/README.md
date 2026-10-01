@@ -99,7 +99,7 @@ The training text has grown since the earlier runs, so everything below was re-r
 | triangle, no wrap, centre lowered | 3.554 (3.528, 3.580) |
 | hexagonal local feed-forward (`hex2`) | 3.587 (3.541, 3.634) |
 
-* **The triangle feed-forward rescues the pyramid.** It is 0.18 bits/char better than the hexagonal local feed-forward and within 0.02 of a standard transformer at 1,000 steps, about the seed spread. A longer run (below) shows the transformer stays ahead: 0.044 at 4,000 steps.
+* **The triangle feed-forward rescues the pyramid.** It is 0.18 bits/char better than the hexagonal local feed-forward and within 0.02 of a standard transformer at 1,000 steps, about the seed spread. Longer runs (below) put the best triangle, the wrapped one, 0.013 behind at 4,000 steps, within seed noise.
 * So the pyramid and its 3 → 1 bottlenecks were not what held the hexagonal model back. The local 7-neighbour mixing was.
 
 ### Single layer (tiny model)
@@ -189,3 +189,24 @@ Full pyramid model, re-run together with the corpus fixed (`shapellm.py` no long
 * **Every curve is still falling** at about 0.03–0.04 bits/char per 200 steps, so 1,000 steps is far from converged.
 * **The reversed, average-1 triangle has the widest seed spread** (one seed reaches 3.29, the other 3.49).
 * **Single layer:** all variants trace nearly the same curve; wrap pulls slightly ahead from step 400.
+
+### Every triangle variant at 4,000 steps (3 seeds)
+
+`run_e5.sh` trains the remaining variants (logs `logs/e5_*`) on `corpus_e4.txt`, a frozen copy of the text the e4 runs used (`SHAPE_CORPUS=corpus_e4.txt`, rebuilt from git; the transformer's step-400 value reproduces exactly, 3.9365). One thread per run (`SHAPE_THREADS=1`), 10 runs at a time.
+
+| model | wrap | centre / edges | mean | 3 seeds | behind transformer |
+|---|---|---|---|---|---|
+| standard transformer | – | – | **2.726** | 2.737, 2.713, 2.728 | – |
+| **triangle, wrap** | yes | no centre | **2.739** | 2.751, 2.733, 2.732 | 0.013 |
+| triangle, reversed, average 1 | no | 1.48 / 0.21 | 2.770 | 2.773, 2.783, 2.754 | 0.044 |
+| triangle, reversed | no | 1 / 0.14 | 2.773 | 2.760, 2.793, 2.764 | 0.047 |
+| triangle, unscaled | no | 1 / 1 | 2.778 | 2.761, 2.780, 2.793 | 0.052 |
+| triangle, centre lowered, average 1 | no | 0.55 / 3.9 | 2.789 | 2.791, 2.787, 2.789 | 0.063 |
+| triangle, centre lowered | no | 0.14 / 1 | 2.817 | 2.787, 2.832, 2.832 | 0.091 |
+
+(centre / edges = output weight of the longest line / a length-1 line, for side 50.)
+
+* **The wrapped triangle is the best triangle** and sits 0.013 behind the transformer, with overlapping seed ranges: three seeds cannot separate them.
+* **Wrap beats no wrap** (worst wrapped seed 2.751, best unwrapped 2.761). Caveat: at the same side n, wrap holds n² weights instead of n(n+1)/2, so it does twice the three-way products per step (+0.6% parameters, ~1.5× time per step).
+* **Centre vs edges:** raising the centre (reversed) and unscaled end level (2.770 / 2.773 / 2.778, overlapping). Lowering the centre is the only clear loss.
+* **Cost:** a triangle step is ~4× (no wrap) to ~6× (wrap) a transformer step on CPU.

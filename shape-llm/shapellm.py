@@ -12,9 +12,9 @@ Each block: causal attention across tokens (on the flattened hexagon, low-rank 1
 feed-forward: every cell mixes with its 6 neighbours through a shared gated 7-tap hexagonal convolution, plus a
 per-cell bias. The baseline is an ordinary transformer with the same depth and parameter count.
 Usage: python shapellm.py hex|base seed steps [evals]"""
-import sys, glob, math, time, torch, torch.nn as nn, torch.nn.functional as F
+import os, sys, glob, math, time, torch, torch.nn as nn, torch.nn.functional as F
 from hexgrid import cells, neighbours, bottleneck
-torch.set_num_threads(2)
+torch.set_num_threads(int(os.environ.get("SHAPE_THREADS", 2)))
 
 kind, seed, steps = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 EVALS = int(sys.argv[4]) if len(sys.argv) > 4 else 5          # how many validation points to log
@@ -29,6 +29,7 @@ CTX, BATCH, LR = 64, 16, 1e-3
 
 paths = [p for p in sorted(glob.glob("../**/*.md", recursive=True)) if "/shape-llm/" not in p]   # not our own write-ups
 text = "".join(open(p, encoding="utf-8", errors="ignore").read() for p in paths)
+if os.environ.get("SHAPE_CORPUS"): text = open(os.environ["SHAPE_CORPUS"], encoding="utf-8").read()   # frozen text, so later batches match earlier ones
 common = [c for c in sorted(set(text)) if text.count(c) > 200]
 stoi = {c: i for i, c in enumerate(common)}; V = len(common) + 1
 data = torch.tensor([stoi.get(c, V - 1) for c in text], dtype=torch.long)

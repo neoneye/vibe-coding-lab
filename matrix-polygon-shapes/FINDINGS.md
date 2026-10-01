@@ -128,9 +128,12 @@ Quantisation:
 
 A pyramid of hexagonal feature cells (radius 12 → 6 → 3) with 3 → 1 triangle bottlenecks. The up-triangles on q − r ≡ 0 (mod 3) tile the grid exactly and form an aperture-3 hexagonal hierarchy.
 - With a hexagonal (6-neighbour) feed-forward it trails a parameter-matched transformer by 0.2–0.35 bits/char.
-- With the triangle feed-forward it comes within 0.02 (3.407 vs 3.384, 1,000 steps; 0.044 behind at 4,000 steps), so the local mixing was the problem, not the pyramid.
+- With the triangle feed-forward it comes within 0.02 (3.407 vs 3.384, 1,000 steps; the wrapped version is 0.013 behind at 4,000 steps), so the local mixing was the problem, not the pyramid.
 - In the triangle, the long lines ("centre") are signal: lowering them hurts, raising them is free or slightly helpful (best mean 3.391 for the reversed, average-1 version). That is within seed noise at 1,000 steps.
-- Longer run (4,000 steps, 3 seeds each): the transformer wins, 2.726 vs 2.770 for the reversed, average-1 triangle. The seed ranges do not overlap. The triangle's 1,000-step lead was noise, and it is about 4× slower per step on CPU.
+- Longer run (4,000 steps, 3 seeds per model, same text): transformer 2.726; triangle with wrap **2.739** (0.013 behind, seed ranges overlap); without wrap, reversed avg 1 2.770, reversed 2.773, unscaled 2.778, centre lowered avg 1 2.789, centre lowered 2.817.
+  - Wrap beats no wrap (ranges do not overlap), though the wrapped triangle does twice the products per step (n² vs ~n²/2 weights, +0.6% parameters, ~1.5× time).
+  - Raising the centre is level with unscaled; lowering it is the only clear loss. The 1,000-step lead of the reversed triangle was noise.
+  - Triangle steps cost ~4× (no wrap) to ~6× (wrap) a transformer step on CPU.
 - Loss curves (page section 6, `../shape-llm/loss_curves.png`): the transformer learns fastest early, the triangles catch up, and everything is still falling at step 1,000.
 
 ## Takeaways
