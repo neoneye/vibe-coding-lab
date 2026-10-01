@@ -1,6 +1,10 @@
-# hex-llm
+# shape-llm
 
-A small character-level language model whose hidden state, for every token, is a **hexagon of feature cells**,
+Small character-level language models whose structure follows a shape.
+
+## The hexagonal pyramid
+
+The hidden state, for every token, is a **hexagon of feature cells**,
 shrinking through the network like an image pyramid:
 
 | blocks | hexagon radius | cells | channels per cell | features |
@@ -18,7 +22,7 @@ shrinking through the network like an image pyramid:
 
 Files:
 - `hexgrid.py`: geometry and checks (`python3 hexgrid.py`);
-- `hexllm.py`: models and training (`python hexllm.py hex|base seed steps`).
+- `shapellm.py`: models and training (`python shapellm.py hex|base seed steps`).
 
 Data: the repository's markdown, character level.
 
@@ -60,7 +64,7 @@ Zeroing cells of the residual stream at the end of each level, outer rings first
 Cells at the hexagon's edge have only 3–4 neighbours, so their input is weaker. Scaling every cell's neighbourhood
 by √(7 / number of valid neighbours) gives each cell the same expected input (interior cells keep weight 1).
 
-| hex-llm v2 | val bits/char (2 seeds) |
+| shape-llm v2 | val bits/char (2 seeds) |
 |---|---|
 | without normalisation | 3.259 (3.223, 3.295) |
 | with normalisation | 3.254 (3.246, 3.261) |

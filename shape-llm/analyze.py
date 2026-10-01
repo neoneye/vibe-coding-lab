@@ -1,10 +1,10 @@
-"""Inspect a trained hex-llm: activation size per cell at the end of each level, and the cost of zeroing the
+"""Inspect a trained shape-llm: activation size per cell at the end of each level, and the cost of zeroing the
 outer rings vs random cells of the residual stream at the end of each level.
 Usage: python analyze.py seed steps   (writes analysis_<seed>.json for the page)"""
 import sys, json, math, torch, torch.nn.functional as F
 seed, steps = int(sys.argv[1]), int(sys.argv[2])
-sys.argv = ["hexllm.py", "hex", str(seed), str(steps)]
-src = open("hexllm.py").read(); exec(src[: src.index("count = lambda m")])
+sys.argv = ["shapellm.py", "hex", str(seed), str(steps)]
+src = open("shapellm.py").read(); exec(src[: src.index("count = lambda m")])
 from hexgrid import cells, dist
 model = HexLM(); model.load_state_dict(torch.load(f"ckpt_hex_{seed}_{steps}.pt")); model.eval()
 ends = [1, 4, 7]                                   # body index after the 2nd block of each level

@@ -1,4 +1,4 @@
-"""Hexagonal feature grids for hex-llm.
+"""Hexagonal feature grids for shape-llm.
 
 Cells use axial coordinates (q, r); a hexagon of radius R has 3R²+3R+1 cells.
 Bottleneck "3 neighbours → 1 cell": the up-triangles {b, b+(1,0), b+(0,1)} with base points b on the sublattice

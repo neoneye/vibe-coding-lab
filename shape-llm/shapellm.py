@@ -1,4 +1,6 @@
-"""hex-llm: a small character-level language model whose hidden state is a hexagon of feature cells.
+"""shape-llm: small character-level language models shaped like a hexagon (or, see below, a triangle).
+
+The hexagonal pyramid: the hidden state is a hexagon of feature cells.
 
   blocks 1–2: hexagon radius 12 (469 cells × 2 channels = 938 features)
   bottleneck: every 3 mutually adjacent cells → 1 coarse cell (aperture-3 triangles, cropped to radius 6)
@@ -9,7 +11,7 @@
 Each block: causal attention across tokens (on the flattened hexagon, low-rank 128-dim heads) and a hexagonal
 feed-forward: every cell mixes with its 6 neighbours through a shared gated 7-tap hexagonal convolution, plus a
 per-cell bias. The baseline is an ordinary transformer with the same depth and parameter count.
-Usage: python hexllm.py hex|base seed steps"""
+Usage: python shapellm.py hex|base seed steps"""
 import sys, glob, math, time, torch, torch.nn as nn, torch.nn.functional as F
 from hexgrid import cells, neighbours, bottleneck
 torch.set_num_threads(2)

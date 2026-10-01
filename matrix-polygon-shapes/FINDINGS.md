@@ -121,7 +121,7 @@ Quantisation:
 - Scaling the no-wrap hexagonal layer's outputs by fan-in^(−½) (centre 1/√91, corners 1) equalises the centre and edge contributions. Training no longer compensates at the edges, and the centre-first importance order disappears.
 - Quality is unchanged: 3.330 vs 3.324.
 - Scaling by fan-in^(−1) over-corrects: the edges become most important and quality drops to 3.392.
-- In hex-llm, normalising by neighbour count is a tie on quality (3.254 vs 3.259), with closer seeds.
+- In shape-llm, normalising by neighbour count is a tie on quality (3.254 vs 3.259), with closer seeds.
 - No evidence that the centre's larger sums were harmful noise.
 
 ## Takeaways
