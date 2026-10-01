@@ -25,6 +25,7 @@ boolean matrix products at N = 200 to within 1%.
 * **Closed but transient.** Shapes whose column range misses their row range square to zero, and some others shrink into themselves. These can be any n-gon, including hexagons, but their powers die out (nilpotent).
 * **Multiplication squares things up.** Under repeated products, every shape crossing the diagonal converges to its bounding rectangle. Band matrices (hexagons) fill the matrix after about 1/(bandwidth) steps.
 * Triangles are the classic win: closed, an LU/Cholesky building block, N³/6 per product. But upper·lower is dense.
+* Triangle *storage* (symmetric matrices) is closed under the Jordan product (AB+BA)/2 and powers, not under the ordinary product.
 
 ## 2. Shape = index set of an array, multiplied by convolution (`convolution/`)
 
