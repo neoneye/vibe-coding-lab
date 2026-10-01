@@ -91,6 +91,15 @@ Direct EML search does compress `x·y·z`: 25 tokens against 33 for composing `m
 multiplications. The tree contains no `*` at all. Under EML's cost model addition is the
 expensive operation, so it does not inform the 13-vs-14 multiplication question.
 
+## 5. Write-expensive / read-free model — see `write-avoiding/README.md`
+
+Here the 3-way view pays off.
+- Fusing A·B·C writes only the N² outputs (the optimum), against 2N² for the chain.
+- With N registers (one column of BC) it needs no extra arithmetic: still 2N³ multiplications.
+- With S registers it costs N³ + N⁴/S multiplications.
+- In the e/ln domain a triple product is a single exp. The scratch-free fused sum then costs N⁴ exps, which ties the chain at N = 2 with half the writes.
+- Strassen-like schedules are bad for writes unless every temporary fits in scratch (Carson, Demmel et al. 2015).
+
 ## Not ruled out
 
 Circuits whose intermediates exceed degree 3 and cancel later. Over ℝ/ℂ, the
