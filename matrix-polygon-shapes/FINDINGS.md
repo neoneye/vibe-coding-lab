@@ -82,6 +82,13 @@ Related: AlphaFold triangle updates; 2-simplicial attention.
 
 General d-simplex: d+1 sweeps, d(d+1) multiplications per weight read.
 
+Quantisation:
+- At the same bit width for everything, there is no bonus; shaped layers degrade slightly faster at 3–4 bits.
+- But the three-way weights themselves are robust: the cube's 49k weights at 2 bits cost +1.07, against +1.5 to +1.8 for a 33k MLP matrix.
+- The sensitive part is the input projection, whose errors are multiplied together.
+- With mixed precision (three-way weights at 3 bits, input projection at 6–8 bits), the cube reaches 3.530 bits/char at 202k stored bits, against 3.602 for the gated block and 3.670 for the MLP at 197k. So it needs fewer bits for the same quality.
+- The triangle doesn't gain, because its 3n-wide output projection dominates storage.
+
 ## Takeaways
 
 **The rectangle is the attractor.**

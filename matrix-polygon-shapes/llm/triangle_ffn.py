@@ -111,3 +111,5 @@ for step in range(1, steps + 1):
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
     if step % (steps // 5) == 0 or step == steps:
         print(f"{variant} seed={seed} step={step} val_bpc={evaluate():.4f} ffn_params={ffn_params} sec/step={(time.time()-t0)/step:.3f}", flush=True)
+if len(sys.argv) > 4 and sys.argv[4] == "save":
+    torch.save(model.state_dict(), f"ckpt_{variant}_{seed}_{steps}.pt")

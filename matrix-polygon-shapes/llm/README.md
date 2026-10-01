@@ -54,3 +54,38 @@ Same tiny LM, ≈65.5k feed-forward parameters (cube n = 29, tetrahedron n = 46)
   - the full 3-way array (cube) beats its diagonal slice (triangle) at equal parameters;
   - the cube computes as fast dense einsums, 0.11 s/step vs 0.89 for the triangle in this implementation.
 * The tetrahedron (quartic interactions, 12× weight reuse) could not be trained long enough on CPU (3.6 s/step) to tell; at 500 steps it ties.
+
+## Fewer bits? Quantisation of shaped weights (`quant_eval.py`, `mixed_eval.py`)
+
+Post-training round-to-nearest quantisation (symmetric, per tensor) of the feed-forward weights. Changes are in
+validation bits/char, mean of 2 seeds; the gated block is the SwiGLU-style feed-forward (silu gate × linear, then a projection).
+
+**Everything at the same bit width:** no precision bonus. At 3–4 bits the triangle and cube layers degrade a little
+*faster* (3 bits: MLP +0.30, gated +0.27, triangle +0.39, cube +0.39).
+
+**One weight group at a time** shows where the sensitivity lives:
+
+| quantised group | weights | 3 bits | 2 bits |
+|---|---|---|---|
+| cube's 3-way weights | 48.8k | **+0.082** | **+1.07** |
+| triangle's weights | 11.3k | +0.065 | +0.95 |
+| MLP output matrix | 32.8k | +0.115 | +1.77 |
+| MLP input matrix | 32.8k | +0.170 | +1.49 |
+| triangle's output projection | 40.7k | +0.094 | +1.24 |
+| triangle's input projection | 13.6k | **+0.197** | **+1.85** |
+
+* The three-way weights tolerate coarse rounding unusually well: the cube's 49k weights at 2 bits cost less than either 33k MLP matrix at 2 bits.
+* The weak point is the **input projection**, whose rounding errors get multiplied together inside the products.
+
+**Mixed precision at equal total storage** (absolute val bits/char = float + quantisation loss):
+
+| feed-forward storage | MLP | gated | cube (W 3 bits, input 6–8, output 3–4) |
+|---|---|---|---|
+| ≈ 262k bits (4 bits each) | 3.416 | **3.380** | — |
+| ≈ 221–241k bits | 3.521 (229k) | 3.462 (241k) | **3.460 (221k)** |
+| ≈ 197–202k bits | 3.670 | 3.602 | **3.530 (202k)** |
+
+* With the 3-way weights stored at 3 bits and the small input projection kept precise, the cube needs **fewer bits for the same quality**. It matches the gated block with 8% less storage, and at about 200k bits it beats it by 0.07 bits/char (both cube seeds beat both gated seeds).
+* The triangle does not benefit. Its large output projection (3 sweeps × n) dominates storage.
+* 2-bit three-way weights break every configuration (+1.0 or worse).
+* Caveats: tiny model, two seeds, simple per-tensor rounding. Differences at 4 bits are within noise.
