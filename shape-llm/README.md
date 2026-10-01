@@ -99,7 +99,7 @@ The training text has grown since the earlier runs, so everything below was re-r
 | triangle, no wrap, centre lowered | 3.554 (3.528, 3.580) |
 | hexagonal local feed-forward (`hex2`) | 3.587 (3.541, 3.634) |
 
-* **The triangle feed-forward rescues the pyramid.** It is 0.18 bits/char better than the hexagonal local feed-forward and within 0.02 of a standard transformer, about the seed spread.
+* **The triangle feed-forward rescues the pyramid.** It is 0.18 bits/char better than the hexagonal local feed-forward and within 0.02 of a standard transformer at 1,000 steps, about the seed spread. A longer run (below) shows the transformer stays ahead: 0.044 at 4,000 steps.
 * So the pyramid and its 3 → 1 bottlenecks were not what held the hexagonal model back. The local 7-neighbour mixing was.
 
 ### Single layer (tiny model)
@@ -159,7 +159,26 @@ Full pyramid model, re-run together with the corpus fixed (`shapellm.py` no long
 * Reversing is neutral-to-slightly-positive. It ties unscaled in the single layer, and in the full model it has the best mean and the best single run so far (3.294).
 * The seeds differ by up to 0.19 at 1,000 steps, so the full-model differences (≤ 0.03 in the mean) are within noise.
 * **The pattern is asymmetric:** turning the long "centre" lines down hurts, turning them up is free or slightly helpful. This is consistent with the centre carrying signal.
-* Settling the small differences needs more seeds and longer runs (e.g. 4 seeds × 2,000 steps).
+* Settling the small differences needs more seeds and longer runs; see the 4,000-step run below.
+
+### Longer run: transformer vs reversed triangle (4,000 steps, 3 seeds)
+
+`python shapellm.py base2|triRN <seed> 4000 10` for seeds 0–2, all six trained together (logs `logs/e4_*`).
+
+| step | transformer (mean of 3) | triangle, reversed, average 1 (mean of 3) | gap |
+|---|---|---|---|
+| 400 | 3.949 | **3.912** | −0.036 |
+| 800 | **3.466** | 3.489 | +0.023 |
+| 1,200 | **3.189** | 3.267 | +0.077 |
+| 2,000 | **2.963** | 3.042 | +0.080 |
+| 2,800 | **2.805** | 2.860 | +0.055 |
+| 3,600 | **2.731** | 2.773 | +0.043 |
+| 4,000 | **2.726** (2.737, 2.713, 2.728) | 2.770 (2.773, 2.783, 2.754) | +0.044 |
+
+* **The transformer wins.** It ends 0.044 bits/char ahead, and the seed ranges do not overlap (worst transformer 2.737, best triangle 2.754).
+* **The batch-3 lead was noise.** At 1,000 steps the triangle was 0.013 ahead with seeds 0.19 apart; with 3 seeds over a longer run, the seeds stay within 0.03 of each other and the gap is clearly on the transformer's side.
+* The gap is largest mid-run (0.08) and shrinks to 0.04 as both models settle, so a still longer run might narrow it further. Nothing here suggests it would flip.
+* **Cost:** the triangle took about 0.56 s per step against 0.14 s for the transformer (CPU, 2 threads each), because the three sweeps are many small gathers rather than one large matrix multiply.
 
 ### Loss curves
 

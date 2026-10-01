@@ -11,12 +11,13 @@ The hexagonal pyramid: the hidden state is a hexagon of feature cells.
 Each block: causal attention across tokens (on the flattened hexagon, low-rank 128-dim heads) and a hexagonal
 feed-forward: every cell mixes with its 6 neighbours through a shared gated 7-tap hexagonal convolution, plus a
 per-cell bias. The baseline is an ordinary transformer with the same depth and parameter count.
-Usage: python shapellm.py hex|base seed steps"""
+Usage: python shapellm.py hex|base seed steps [evals]"""
 import sys, glob, math, time, torch, torch.nn as nn, torch.nn.functional as F
 from hexgrid import cells, neighbours, bottleneck
 torch.set_num_threads(2)
 
 kind, seed, steps = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+EVALS = int(sys.argv[4]) if len(sys.argv) > 4 else 5          # how many validation points to log
 NORM = kind == "hex2n"
 if NORM: kind = "hex2"                                             # same model as hex2, plus neighbour-count normalisation
 TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN")   # triangle feed-forwards inside the hexagonal pyramid
@@ -158,6 +159,6 @@ t0 = time.time()
 for step in range(1, steps + 1):
     x, y = batch(train, g); loss = F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1))
     opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
-    if step % (steps // 5) == 0:
+    if step % (steps // EVALS) == 0:
         print(f"{kind}{'n' if NORM else ''} seed={seed} step={step} val_bpc={evaluate():.4f} sec/step={(time.time()-t0)/step:.3f}", flush=True)
 torch.save(model.state_dict(), f"ckpt_{kind}{'n' if NORM else ''}_{seed}_{steps}.pt")
