@@ -51,6 +51,7 @@ table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; }
 th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+@media (max-width: 520px) { th, td { padding: 6px 5px; font-size: 13px; } th { font-size: 11px; letter-spacing: .02em; } }
 tr.best td { background: color-mix(in srgb, var(--good) 10%, transparent); }
 .ok { color: var(--good); font-weight: 600; } .fail { color: var(--bad); font-weight: 600; }
 .chip { display: inline-block; font: 600 11px/1 var(--sans); padding: 4px 7px; border-radius: 99px; background: var(--chip); color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
@@ -230,11 +231,24 @@ Four schedules, each instrumented and checked against the exact product:</p>
   <svg id="cChart" viewBox="0 0 640 280" width="100%" role="img" aria-label="multiplications versus N for each caching schedule" style="margin-top:12px"></svg>
   <div class="cap">Multiplications against N (log–log) at the chosen k, from runs on random matrices. The fused triple table flattens out once all k³ triples have appeared. With all-distinct values, caching gains nothing and the triple table is the worst option.</div>
 </div>
+<h3>Results at N = 32</h3>
+<div class="panel tablewrap">
+  <table id="cSummary"><tr><td>computing…</td></tr></table>
+  <div class="cap">Multiplications for one random instance per k, computed live by the same code as the table above. The cheapest schedule in each row is highlighted.</div>
+</div>
+<h3>What this shows</h3>
+<ul>
+  <li><b>Caching a product is the same as grouping equal values.</b> For example, a·x + a·y = a·(x + y) needs one multiplication instead of two.</li>
+  <li><b>The ordinary chain benefits more than expected.</b> Each entry of A·B meets only k different values of C, so a cache brings the chain down to about k² + N²k multiplications. That needs no three-way method.</li>
+  <li><b>The genuinely three-way effect is the fused triple table.</b> Compute every a·b·c once, then build the result by additions alone. That is at most k² + k³ multiplications however large N is (80 at k = 4, against 65,536 for the plain chain at N = 32).</li>
+  <li><b>The price is additions:</b> N⁴ instead of about N³. Compared with grouping, the triple table saves multiplications only when k &lt; N (k³ &lt; N²k). It is worth it only where a multiplication costs far more than an addition.</li>
+  <li><b>With all-distinct values, caching gains nothing,</b> and the triple table is the worst option (N³ + N⁴ multiplications).</li>
+  <li><b>In the write-expensive setting of section 4, the cache itself costs writes</b> unless it fits in scratch. The k² pair table usually fits; the k³ triple table may not.</li>
+</ul>
 <p>This idea is well established for two-matrix products: the <a href="https://en.wikipedia.org/wiki/Method_of_Four_Russians">Four Russians</a> method for Boolean matrices,
 the <a href="https://www.cs.yale.edu/homes/el327/papers/matrixVectorApp.pdf">Mailman algorithm</a> for small alphabets,
 and lookup-table kernels for quantised LLMs (<a href="https://proceedings.iclr.cc/paper_files/paper/2024/file/a4f98ce85f440ee269b0df57b4368719-Paper-Conference.pdf">LUT-GEMM</a>,
-<a href="https://arxiv.org/abs/2407.00088">T-MAC</a>). In the write-expensive model of section 4, a cache is itself a set of writes unless it fits in scratch.
-The k² pair table usually fits; the k³ triple table may not.</p>
+<a href="https://arxiv.org/abs/2407.00088">T-MAC</a>). The triple-table trade-off for three factors was not found written up anywhere.</p>
 
 <!-- ======================================================================================= -->
 <h2>Prior work, and how these results compare</h2>
@@ -550,6 +564,12 @@ const M3Tests = {
         t(`cache N=${N} continuous: caching gives nothing`, by("chain + product").mults === 2 * N ** 3 && by("fused triple").mults === N ** 3 + N ** 4);
       }
     }
+
+    {
+      const at = k => M3.cacheSchedules(M3.alphabetMatrices(32, k, 5)).map(r => r.mults);
+      const k4 = at(4);
+      t("N=32 k=4 numbers quoted on the page", k4[0] === 65536 && k4[3] === 80);
+    }
     const failed = results.filter(r => !r[1]);
     if (typeof console !== "undefined") console.log(`M3Tests: ${results.length - failed.length}/${results.length} passed` + (failed.length ? "\nFAILED: " + failed.map(r => r[0]).join(", ") : ""));
     return failed.length === 0;
@@ -640,6 +660,16 @@ function writeDemo() {
 }
 
 
+
+function cacheSummary() {   // N = 32 across alphabets; runs after first paint (the all-distinct triple table is ~1M lookups)
+  const ks = [2, 4, 16, Infinity];
+  const rows = ks.map(k => ({ k, r: M3.cacheSchedules(M3.alphabetMatrices(32, k, 5)) }));
+  const names = ["chain", "chain + cache", "grouping", "triple table"];   // short forms of the four schedule names
+  $("cSummary").innerHTML = `<tr><th>k</th>${names.map(n => `<th>${n}</th>`).join("")}</tr>` +
+    rows.map(({ k, r }) => { const best = Math.min(...r.map(x => x.mults));
+      return `<tr><td>${k === Infinity ? "all distinct" : k}</td>${r.map(x => `<td${x.mults === best ? ' style="background:color-mix(in srgb, var(--good) 14%, transparent);font-weight:600"' : ""}>${x.mults.toLocaleString()}</td>`).join("")}</tr>`; }).join("");
+}
+
 function cacheDemo() {
   const N = +$("cN").value, k = $("cK").value === "Infinity" ? Infinity : +$("cK").value;
   const inst = M3.alphabetMatrices(N, k, 5), rows = M3.cacheSchedules(inst, { triple: N <= 32 }), best = Math.min(...rows.map(r => r.mults));
@@ -674,7 +704,7 @@ for (const id of ["ex", "ey", "ez"]) $(id).oninput = emlDemo;
 for (const id of ["wN", "wS", "wW", "wLog"]) $(id).oninput = writeDemo;
 $("wS").innerHTML = "<option>1</option>";
 for (const id of ["cN", "cK"]) $(id).oninput = cacheDemo;
-drawFlat(); strassenDemo(); ridgeChart(); emlDemo(); writeDemo(); cacheDemo();
+drawFlat(); strassenDemo(); ridgeChart(); emlDemo(); writeDemo(); cacheDemo(); setTimeout(cacheSummary, 50);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawFlat(); ridgeChart(); cacheDemo(); });
 </script>
 </body>
