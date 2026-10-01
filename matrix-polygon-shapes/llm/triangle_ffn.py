@@ -73,9 +73,26 @@ class Tetra(nn.Module):
         ij, kl = hi * hj, hk * hl
         outs = [torch.zeros_like(h).index_add_(-1, t, s.W * p) for t, p in [(s.I, hj * kl), (s.J, hi * kl), (s.K, ij * hl), (s.L, ij * hk)]]
         return s.b(torch.cat(outs, -1))
+from hexconv import HexConv
+class Bilinear(nn.Module):
+    """element-wise bilinear block C·((A x) ⊙ (B x)): multiplicative, no mixing across units."""
+    def __init__(s, h=171): super().__init__(); s.a = nn.Linear(D, h, bias=False); s.g = nn.Linear(D, h, bias=False); s.b = nn.Linear(h, D, bias=False)
+    def forward(s, x): return s.b(s.a(x) * s.g(x))
+class Hex(nn.Module):
+    """hidden units on a hexagon; C·((A x) ∗ (B x)) with hexagonal convolution, wrapped (uniform fan-in)
+    or not (output hexagon of twice the radius, centre-heavy fan-in)."""
+    def __init__(s, R, wrap):
+        super().__init__(); s.conv = HexConv(R, wrap)
+        s.a = nn.Linear(D, s.conv.n_in, bias=False); s.g = nn.Linear(D, s.conv.n_in, bias=False); s.b = nn.Linear(s.conv.n_out, D, bias=False)
+        s.keep = None                       # optional mask over output cells (for ablation experiments)
+    def forward(s, x):
+        z = s.conv(s.a(x), s.g(x))
+        if s.keep is not None: z = z * s.keep
+        return s.b(z)
 def make_ffn():
     return {"mlp": MLP, "glu": GLU, "tri1": lambda: Triangle(158, 1), "tri3": lambda: Triangle(106, 3),
-            "cube3": lambda: Cube(29), "tet4": lambda: Tetra(46)}[variant]()
+            "cube3": lambda: Cube(29), "tet4": lambda: Tetra(46), "bil": Bilinear,
+            "hexn": lambda: Hex(5, False), "hexw": lambda: Hex(7, True), "hexw5": lambda: Hex(5, True)}[variant]()
 ACCUM = 4 if variant == "tet4" else 1          # micro-batches (same effective batch) to bound memory
 
 class Block(nn.Module):

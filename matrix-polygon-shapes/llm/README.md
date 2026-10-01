@@ -89,3 +89,53 @@ validation bits/char, mean of 2 seeds; the gated block is the SwiGLU-style feed-
 * The triangle does not benefit. Its large output projection (3 sweeps × n) dominates storage.
 * 2-bit three-way weights break every configuration (+1.0 or worse).
 * Caveats: tiny model, two seeds, simple per-tensor rounding. Differences at 4 bits are within noise.
+
+## Properties instead of operation counts: hexagonal feed-forward layers (`hexconv.py`, `hex_props.py`, `hex_rings.py`)
+
+Hidden units on a hexagon; feed-forward block C·((A x) ∗ (B x)) with hexagonal convolution, computed exactly by FFT.
+A hexagon of radius R wrapped on a torus is the cyclic group Z_N, N = 3R²+3R+1, via φ(q,r) = ((R+1)q − Rr) mod N.
+- **Without wrap-around** the output hexagon has twice the radius, and centre outputs collect up to |P| products against 1 at the corners.
+- **With wrap-around** every output collects |P|.
+
+Quality at ≈65k feed-forward weights, 1,500 steps, validation bits/char (2 seeds):
+
+| block | bits/char |
+|---|---|
+| MLP | 3.389 |
+| gated (SwiGLU-style) | 3.325 |
+| hexagonal, no wrap (centre-heavy) | 3.324 (3.324, 3.323) |
+| element-wise bilinear C·((Ax)⊙(Bx)) | 3.301 (3.296, 3.307) |
+| hexagonal, wrap (uniform) | 3.289 (3.312, 3.265; noisy) |
+| hexagonal, wrap, half the weights | 3.384 |
+
+Competitive, but not a clear win over the plain bilinear block.
+
+**Importance ordering (the useful property).** Zeroing output cells of the trained layer:
+
+| cells kept | no wrap: drop outer rings | no wrap: drop random | wrap: drop outer rings | wrap: drop random |
+|---|---|---|---|---|
+| 82% (no wrap) / 75% (wrap) | **+0.08** | +0.23 | +0.39 | +0.36 |
+| 66% / 54% | **+0.23** | +0.44 | +0.91 | +0.91 |
+| 51% / 36% | **+0.43** | +0.69 | +1.48 | +1.54 |
+
+- The centre-heavy layer puts its important features in the centre without being trained to: trimming the outer rings hurts 2–3× less than random.
+- The uniform layer has no such order.
+- Trimming is not free, but it gives a natural knob for elastic compute (fewer output columns at inference).
+
+**Precision by ring: no gain.** Output weights at a 3-bit average:
+- uniform: +0.18
+- more bits at the centre: +0.34
+- more bits at the edge: +0.49 (no wrap) / +0.25 (wrap)
+
+Starving any ring down to 2 bits costs more than it saves.
+
+**What training does with the non-uniformity** (no wrap, per ring from centre to corner):
+- activation size: 3.9 → 0.8;
+- output-weight size: 0.46 → 0.74;
+- distance the output weights moved from initialisation: 0.42 → 0.70.
+
+The model compensates for weak edge activations by growing the edge weights; the edges move about 65% more. The compensation is partial: the centre still contributes about 3× more. With wrap-around every row is flat.
+
+Next steps:
+- train with random outer-ring dropout (Matryoshka-style) to sharpen the ordering;
+- use the ordering for early exit or elastic width.

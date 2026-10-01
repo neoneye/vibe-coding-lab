@@ -102,6 +102,20 @@ Quantisation:
 - **Isotropy:** a repeated hexagonal blur is exactly isotropic in its 4th moments; square blurs are not (4-neighbour 1.29 after 2 steps, 1.04 after 10).
 - Related: BigBird (local + random attention), HexagDLy (hexagonal CNNs), Uber H3 (hexagonal geospatial grid).
 
+## 6. Hexagonal feed-forward layers in the tiny LM: properties rather than operation counts
+
+- Quality at ≈65k weights:
+  - hexagonal wrap 3.289 (noisy)
+  - element-wise bilinear 3.301
+  - hexagonal no-wrap 3.324
+  - gated 3.325
+  - MLP 3.389
+
+  Competitive, no clear win.
+- **Natural importance ordering from non-uniform fan-in:** in the no-wrap layer, trimming the outer output rings hurts 2–3× less than dropping random cells (82% kept: +0.08 vs +0.23). The wrapped layer has no ordering.
+- **Precision by ring:** no gain; uniform bits beat centre-heavy or edge-heavy allocations.
+- **Training partly compensates:** edge activations are 5× weaker, so the edge output weights grow and move about 65% more from initialisation. The centre still contributes about 3× more.
+
 ## Takeaways
 
 **The rectangle is the attractor.**
