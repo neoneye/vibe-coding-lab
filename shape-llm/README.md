@@ -538,3 +538,16 @@ References: `matnone12` 3.220, `mat` 3.482, `base2` 3.350, `base2none12` 3.378.
 | `base2stairgain12` (transformer) | 3.408 | −0.045, +0.049 | – |
 
 Same picture as with the queens mask and the full product: the gains stay near zero. In the pyramid the content of blocks 1–2 hardly matters once it has a gain (staircase 3.193, full product 3.192, queens 3.205, nothing 3.220). In the transformer the result is worse than the plain transformer (3.350) and close to the transformer without those two feed-forward layers (3.378).
+
+### Against the standard transformer: equal steps and equal time
+
+`python shapellm.py base2 0 2000 10` and `python shapellm.py matgain12 0 2000 10` (`logs/e18_*`), seed 0, same text.
+
+| | standard transformer (`base2`) | pyramid (`matgain12`) |
+|---|---|---|
+| 1,000 steps | 3.350 | **3.192** |
+| 2,000 steps | 2.978 | **2.907** (gains −0.017, −0.021) |
+| seconds per step | **0.058** | 0.115–0.124 |
+| after ≈ 2 minutes | **2.978** (2,000 steps) | 3.192 (1,000 steps) |
+
+Per step the pyramid leads (0.159, then 0.071); per second the transformer leads by 0.214. The per-step lead halves as training doubles. One seed each.
