@@ -418,3 +418,25 @@ All six variants, seed 0, 1,000 steps, same text, one after the other (`logs/e10
 * Better in all six pairs. The three-state staircase goes from behind the transformer (3.350) to the best staircase, level with the best offset rule (3.258).
 * The fixed +26.5° staircase through the cell is within 0.02 of the transformer (the plain product is at 3.482), so here the bent path helps by itself; alternating adds 0.10 at 26.5° and 0.07 at 18.4°.
 * One seed each.
+
+### What the alternating models learned (`mat_props.py`, `matnone12`)
+
+`mat_props.py <kind>` loads a trained 1,000-step model and reports: loss on training and held-out text; held-out loss when the result of blocks 1–2 is shifted by offsets (offset family only); the loss rise when the feed-forward of blocks 1–2, or of blocks 3–6, is zeroed; and the size of each feed-forward's output relative to its input.
+
+| model | val | train | blocks 1–2 switched off | blocks 3–6 switched off |
+|---|---|---|---|---|
+| plain product (`mat`) | 3.482 | 3.150 | +0.405 | +0.99 |
+| fixed staircase through cell (`matstairfixc`) | 3.369 | 3.002 | +0.263 | +1.19 |
+| offset (x+2, y+1) (`matoff`) | 3.258 | 2.858 | +0.042 | +1.51 |
+| offset, four states (`matoff4`) | 3.275 | 2.889 | +0.013 | +1.59 |
+| staircase through cell, ±26.5° (`matstairc`) | 3.270 | 2.869 | +0.046 | +1.57 |
+| staircase through cell, three states (`matstair3c`) | 3.262 | 2.856 | +0.002 | +1.60 |
+| queens, both sides (`matq`) | 3.755 | 3.565 | −0.003 | – |
+| standard transformer | 3.350 | 3.012 | – | – |
+
+* **The alternating models have switched the blocks 1–2 feed-forward off** (cost of zeroing it 0.002–0.14 against 0.405; output 2–4× smaller). Correlation between that cost and the final loss over 19 models: 0.90.
+* **Control, `matnone12`:** the same model with no feed-forward in blocks 1–2 (weights created so the initialisation matches, never used; 1.89M parameters in use). One run, seed 0, 1,000 steps (`logs/e11_matnone12_0.log`): 4.068, 3.721, 3.397, 3.269, **3.220**. Better than every offset rule and staircase, and 0.130 better than the transformer.
+* **The gain is in learning:** the better models have lower training-text loss too (2.785 for `matnone12`, 3.150 for `mat`).
+* **Shift tolerance** (loss rise when the blocks 1–2 result is shifted): plain +0.67 to +0.90 for any shift; `matoff` +0.003 on its trained shift and about +0.10 on unseen ones; `matoff4` +0.02 to +0.03 on unseen ones.
+* **Queens:** the mask changed in all six blocks, and those models ignore every feed-forward (outputs 0.07–0.19 of the input in `matq`), including blocks 3–6, which the other models need.
+* One seed, 1,000 steps. Untested: 4,000 steps and more seeds, the same removal in the transformer and triangle models, other learning rates.

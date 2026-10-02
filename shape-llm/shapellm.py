@@ -33,7 +33,7 @@ TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 SQ = kind in ("sq4", "sq4c")                                       # square torus swept along rows, columns and both diagonals
 import re
 MAT_XY = re.fullmatch(r"matoff(\d)(\d)", kind)                      # "matoffAB": two states, (0,0) and (x+A, y+B) on odd iterations
-MAT = kind in ("mat", "matoff", "matoff3", "matoff4", "matstair", "matstairfix", "matstair3", "matstair18", "matstair18fix", "matstair32", "matq", "matqr") or bool(MAT_XY)
+MAT = kind in ("mat", "matnone12", "matoff", "matoff3", "matoff4", "matstair", "matstairfix", "matstair3", "matstair18", "matstair18fix", "matstair32", "matq", "matqr") or bool(MAT_XY)
 QMODE = {"matq": "both", "matqr": "row"}.get(kind)                 # sparse "queens" product instead of the full matrix product
 def queens_pool(m, want=200, rng_seed=0):
     """random m-queens placements (one cell per row and per column, no shared diagonal), enough of them to cover every cell."""
@@ -171,6 +171,7 @@ class MatFFN(nn.Module):
                 fk = STAIR_RISE * (c // STAIR_RUN)                    # through the output cell: read the edge-anchored result at [y − s·f(x), x + s·f(y)]
                 s.register_buffer("t" + name, ((c[:, None] - sg * fk[None, :]) % m) * m + (c[None, :] + sg * fk[:, None]) % m, persistent=False)
     def forward(s, x):
+        if s.offset == "none": return torch.zeros_like(x)             # "matnone12": no feed-forward in blocks 1–2 (weights created, never used)
         M = s.a(x).view(*x.shape[:-1], s.m, s.m); it = MATSTEP["it"] if s.offset else 0
         if QMODE:                                                     # p[y] = the one picked column of row y
             p = s.pool[QSTATE["fixed"] if QSTATE["fixed"] is not None else QSTATE["rng"].randrange(len(s.pool))]
@@ -221,7 +222,7 @@ class HexLM(nn.Module):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
             if MAT:
-                layers += [Block(D, MatFFN(D, MAT_M[li], ("stair" if kind in ("matstair", "matstair18", "matstair32") else "stairfix" if kind in ("matstairfix", "matstair18fix") else "stair3" if kind == "matstair3" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False)) for _ in range(2)]
+                layers += [Block(D, MatFFN(D, MAT_M[li], ("none" if kind == "matnone12" else "stair" if kind in ("matstair", "matstair18", "matstair32") else "stairfix" if kind in ("matstairfix", "matstair18fix") else "stair3" if kind == "matstair3" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False)) for _ in range(2)]
             elif SQ:
                 layers += [Block(D, SqFFN(D, SQ_N[li], kind == "sq4c")) for _ in range(2)]
             elif TRI:
