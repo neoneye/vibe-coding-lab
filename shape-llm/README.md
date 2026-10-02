@@ -353,3 +353,12 @@ The three offset rules span 0.05, which one seed cannot resolve; all of them bea
 
 **A three-state rule (`matoff3`):** `xoffset = yoffset = i % 3`, i.e. (0,0), (x+1, y+1), (x+2, y+2) in turn. One run, seed 0, 1,000 steps (`logs/e9_matoff3_0.log`): 4.087, 3.841, 3.496, 3.340, **3.290**; 3.293 and 3.296 when evaluated in the two shifted states.
 It lands between its ingredients, (x+1, y+1) at 3.305 and (x+2, y+2) at 3.259. Ranking so far: (x+2, y+1) 3.258, (x+2, y+2) 3.259, four states 3.275, three states 3.290, (x+1, y+1) 3.305, transformer 3.350, no offset 3.482. All one seed.
+
+### A staircase instead of straight rows and columns (`matstair`)
+
+In blocks 1–2 the row and the column of the product are followed as staircases, 2 cells along and 1 across (26.565°), wrapped:
+cell [x, y] = Σ_k M[(y + s·⌊k/2⌋) % m, k] · M[k, (x − s·⌊k/2⌋) % m], with s = +1 on even iterations and −1 on odd ones. Both paths turn by the same angle, so they stay perpendicular; every cell lies on exactly one staircase of each family.
+One run, seed 0, 1,000 steps (`logs/e9_matstair_0.log`): 4.088, 3.856, 3.500, 3.338, **3.292**; 3.288 when evaluated with the −26.5° tilt.
+
+* Ahead of the transformer (3.350) and of the plain product (3.482); behind the best offset rules (3.258, 3.259).
+* Every variant that alternates between states lands between 3.26 and 3.31, whether it shifts the result (offsets) or bends the paths (staircase). The alternation itself seems to be what helps. Untested: a staircase with a fixed tilt.

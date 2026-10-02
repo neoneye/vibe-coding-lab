@@ -31,7 +31,7 @@ TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 SQ = kind in ("sq4", "sq4c")                                       # square torus swept along rows, columns and both diagonals
 import re
 MAT_XY = re.fullmatch(r"matoff(\d)(\d)", kind)                      # "matoffAB": two states, (0,0) and (x+A, y+B) on odd iterations
-MAT = kind in ("mat", "matoff", "matoff3", "matoff4", "matq", "matqr") or bool(MAT_XY)
+MAT = kind in ("mat", "matoff", "matoff3", "matoff4", "matstair", "matq", "matqr") or bool(MAT_XY)
 QMODE = {"matq": "both", "matqr": "row"}.get(kind)                 # sparse "queens" product instead of the full matrix product
 def queens_pool(m, want=200, rng_seed=0):
     """random m-queens placements (one cell per row and per column, no shared diagonal), enough of them to cover every cell."""
@@ -147,10 +147,18 @@ class MatFFN(nn.Module):
     wrapped; the destination cell is not displaced. "matoff": xoffset = (iteration*2)&2, yoffset = iteration&1 (two states);
     "matoff4": xoffset = (iteration>>1)&1, yoffset = iteration&1 (the four states (0,0), (0,1), (1,0), (1,1) in turn);
     "matoffAB" (e.g. matoff11, matoff22): two states, no offset on even iterations and (x+A, y+B) on odd ones;
-    "matoff3": three states in turn, (0,0), (x+1, y+1), (x+2, y+2), i.e. xoffset = yoffset = iteration % 3."""
+    "matoff3": three states in turn, (0,0), (x+1, y+1), (x+2, y+2), i.e. xoffset = yoffset = iteration % 3.
+    "matstair" (blocks 1–2): the row and the column are followed as staircases, 2 cells along and 1 across (26.565°), wrapped:
+    cell [x, y] = Σ_k M[y + s·⌊k/2⌋, k] · M[k, x − s·⌊k/2⌋], with s = +1 on even iterations and −1 on odd ones
+    (both paths turned by the same angle, so they stay perpendicular)."""
     def __init__(s, D, m, offset):
         super().__init__(); s.m, s.offset = m, offset; s.a = nn.Linear(D, m * m, bias=False); s.b = nn.Linear(m * m, D, bias=False)
         if QMODE: s.register_buffer("pool", queens_pool(m), persistent=False)
+        if offset == "stair":                                         # index tables for the two tilts, s = +1 and s = −1
+            k, c = torch.arange(m), torch.arange(m)
+            for name, sg in (("p", 1), ("n", -1)):
+                s.register_buffer("ri" + name, (c[:, None] + sg * (k[None, :] // 2)) % m, persistent=False)   # [y, k] → row index
+                s.register_buffer("ci" + name, (c[None, :] - sg * (k[:, None] // 2)) % m, persistent=False)   # [k, x] → column index
     def forward(s, x):
         M = s.a(x).view(*x.shape[:-1], s.m, s.m); it = MATSTEP["it"] if s.offset else 0
         if QMODE:                                                     # p[y] = the one picked column of row y
@@ -160,6 +168,10 @@ class MatFFN(nn.Module):
             else:                                                     # both sides masked: m products, m non-zero cells
                 Y = torch.zeros_like(M); Y[..., torch.arange(s.m), p[p]] = v * v[..., p]
             return s.b(Y.flatten(-2))
+        if s.offset == "stair":
+            ri, ci = (s.rip, s.cip) if it % 2 == 0 else (s.rin, s.cin)
+            lead = M.shape[:-2]
+            return s.b((M.gather(-2, ri.expand(*lead, s.m, s.m)) @ M.gather(-1, ci.expand(*lead, s.m, s.m))).flatten(-2) * s.m ** -0.5)
         xo, yo = (it % 3, it % 3) if s.offset == 3 else ((it >> 1) & 1, it & 1) if s.offset == 4 else ((it & 1) * s.offset[0], (it & 1) * s.offset[1]) if isinstance(s.offset, tuple) else ((it * 2) & 2, it & 1)
         rows = torch.roll(M, -yo, -2) if yo else M                    # rows[y] = M[(y + yo) % m]
         cols = torch.roll(M, -xo, -1) if xo else M                    # cols[:, x] = M[:, (x + xo) % m]
@@ -195,7 +207,7 @@ class HexLM(nn.Module):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
             if MAT:
-                layers += [Block(D, MatFFN(D, MAT_M[li], (4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False)) for _ in range(2)]
+                layers += [Block(D, MatFFN(D, MAT_M[li], ("stair" if kind == "matstair" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False)) for _ in range(2)]
             elif SQ:
                 layers += [Block(D, SqFFN(D, SQ_N[li], kind == "sq4c")) for _ in range(2)]
             elif TRI:
@@ -256,6 +268,9 @@ if QMODE:                                                           # the headli
 if MAT_XY:
     MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} offset_eval x+{MAT_XY[1]},y+{MAT_XY[2]}: {v:.4f}", flush=True)
+if kind == "matstair":                                              # the headline evaluation uses the +26.5° tilt; also the −26.5° one
+    MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
+    print(f"{TAG} seed={seed} tilt_eval -26.5deg: {v:.4f}", flush=True)
 if kind == "matoff3":
     vs = []
     for it in (1, 2): MATSTEP["it"] = it; vs.append(evaluate())
