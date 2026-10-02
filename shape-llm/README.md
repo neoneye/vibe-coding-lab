@@ -398,3 +398,23 @@ A fixed tilt helps a little (about 0.02 from one tilt to the next, within single
 
 **Steeper staircase (`matstair32`):** two states, 3 cells along then 2 across (2·⌊k/3⌋, the path skips a cell when it steps but still has one cell per k), i.e. ±33.69°. One run, seed 0, 1,000 steps (`logs/e9_matstair32_0.log`): 4.094, 3.857, 3.521, 3.354, **3.303**; 3.302 with the other tilt.
 Alternating staircases so far: ±18.4° 3.359, ±26.5° 3.292, ±33.7° 3.303. The gain grows up to 26.5° and then flattens (0.011 is inside single-seed noise).
+
+### Staircases through the output cell (`matstair…c`)
+
+In the runs above each path starts at the edge of the matrix, so it usually misses the cell it computes. With a trailing `c` on the variant name, each path is the staircase of its family that passes through the output cell:
+cell [x, y] = Σ_k M[y + s·(f(k) − f(x)), k] · M[k, x − s·(f(k) − f(y))], f(k) = rise·⌊k/run⌋.
+This equals reading the edge-anchored result at [y − s·f(x), x + s·f(y)]; that map is not one-to-one, so only 76 of the 100 results are distinct for the 10 × 10 matrix (86 at 18.4°).
+All six variants, seed 0, 1,000 steps, same text, one after the other (`logs/e10_*`):
+
+| staircase | from the edge | through the output cell | improvement |
+|---|---|---|---|
+| two states, ±26.5° | 3.292 | **3.270** | 0.022 |
+| two states, ±33.7° | 3.303 | **3.285** | 0.018 |
+| two states, ±18.4° | 3.359 | **3.332** | 0.027 |
+| three states, −26.5° / 0° / +26.5° | 3.388 | **3.262** | 0.127 |
+| fixed +26.5° | 3.435 | **3.369** | 0.066 |
+| fixed +18.4° | 3.459 | **3.402** | 0.057 |
+
+* Better in all six pairs. The three-state staircase goes from behind the transformer (3.350) to the best staircase, level with the best offset rule (3.258).
+* The fixed +26.5° staircase through the cell is within 0.02 of the transformer (the plain product is at 3.482), so here the bent path helps by itself; alternating adds 0.10 at 26.5° and 0.07 at 18.4°.
+* One seed each.

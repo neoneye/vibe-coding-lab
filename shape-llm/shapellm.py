@@ -22,6 +22,8 @@ SWEEPS = "all"                                                     # triangle sw
 for suf in ("-rot", "-rnd"):                                       # -rot: skip direction (i+2) % 3 at step i; -rnd: skip a random one
     if kind.endswith(suf): SWEEPS, kind = suf[1:], kind[:-len(suf)]
 TAG = kind + ("" if SWEEPS == "all" else "-" + SWEEPS)
+THRU = kind.startswith("matstair") and kind.endswith("c")          # "matstair…c": the staircases pass through the output cell
+if THRU: kind = kind[:-1]
 SWEEP = {"drop": None, "boost": 1.0}                               # set per step by the training loop; eval uses all three sweeps
 NORM = kind == "hex2n"
 if NORM: kind = "hex2"                                             # same model as hex2, plus neighbour-count normalisation
@@ -155,7 +157,9 @@ class MatFFN(nn.Module):
     (both paths turned by the same angle, so they stay perpendicular). "matstairfix": the same with s = +1 always.
     "matstair3": three states in turn, s = −1, 0, +1 (iteration % 3), where 0 is the plain straight product.
     "matstair18": the two-state staircase with 3 cells along per 1 across (⌊k/3⌋ instead of ⌊k/2⌋), i.e. ±18.435°. "matstair18fix": that staircase with s = +1 always.
-    "matstair32": two states, 3 cells along then 2 across (2·⌊k/3⌋), i.e. ±33.69°; still one cell per k."""
+    "matstair32": two states, 3 cells along then 2 across (2·⌊k/3⌋), i.e. ±33.69°; still one cell per k.
+    With a trailing "c" (matstairc, matstair18c, …) each path is the staircase of its family that passes through the output cell:
+    cell [x, y] = Σ_k M[y + s·(f(k) − f(x)), k] · M[k, x − s·(f(k) − f(y))], f(k) = rise·⌊k/run⌋ (without the "c" the paths start at the edge)."""
     def __init__(s, D, m, offset):
         super().__init__(); s.m, s.offset = m, offset; s.a = nn.Linear(D, m * m, bias=False); s.b = nn.Linear(m * m, D, bias=False)
         if QMODE: s.register_buffer("pool", queens_pool(m), persistent=False)
@@ -164,6 +168,8 @@ class MatFFN(nn.Module):
             for name, sg in (("p", 1), ("n", -1)):
                 s.register_buffer("ri" + name, (c[:, None] + sg * STAIR_RISE * (k[None, :] // STAIR_RUN)) % m, persistent=False)   # [y, k] → row index
                 s.register_buffer("ci" + name, (c[None, :] - sg * STAIR_RISE * (k[:, None] // STAIR_RUN)) % m, persistent=False)   # [k, x] → column index
+                fk = STAIR_RISE * (c // STAIR_RUN)                    # through the output cell: read the edge-anchored result at [y − s·f(x), x + s·f(y)]
+                s.register_buffer("t" + name, ((c[:, None] - sg * fk[None, :]) % m) * m + (c[None, :] + sg * fk[:, None]) % m, persistent=False)
     def forward(s, x):
         M = s.a(x).view(*x.shape[:-1], s.m, s.m); it = MATSTEP["it"] if s.offset else 0
         if QMODE:                                                     # p[y] = the one picked column of row y
@@ -177,7 +183,9 @@ class MatFFN(nn.Module):
         if s.offset in ("stair", "stairfix", "stair3"):
             ri, ci = ((s.rin, s.cin) if it % 3 == 0 else (s.rip, s.cip)) if s.offset == "stair3" else (s.rip, s.cip) if it % 2 == 0 or s.offset == "stairfix" else (s.rin, s.cin)
             lead = M.shape[:-2]
-            return s.b((M.gather(-2, ri.expand(*lead, s.m, s.m)) @ M.gather(-1, ci.expand(*lead, s.m, s.m))).flatten(-2) * s.m ** -0.5)
+            Y = (M.gather(-2, ri.expand(*lead, s.m, s.m)) @ M.gather(-1, ci.expand(*lead, s.m, s.m))).flatten(-2)
+            if THRU: Y = Y[..., (s.tp if ri is s.rip else s.tn).flatten()]
+            return s.b(Y * s.m ** -0.5)
         xo, yo = (it % 3, it % 3) if s.offset == 3 else ((it >> 1) & 1, it & 1) if s.offset == 4 else ((it & 1) * s.offset[0], (it & 1) * s.offset[1]) if isinstance(s.offset, tuple) else ((it * 2) & 2, it & 1)
         rows = torch.roll(M, -yo, -2) if yo else M                    # rows[y] = M[(y + yo) % m]
         cols = torch.roll(M, -xo, -1) if xo else M                    # cols[:, x] = M[:, (x + xo) % m]
