@@ -529,3 +529,12 @@ References: `matnone12` 3.220, `mat` 3.482, `base2` 3.350, `base2none12` 3.378.
 * Given the choice, the model keeps the layer almost off: no gain exceeds 0.04. The queens layer is not used at all.
 * `matgain12` (the layer at about 3% strength) is the best 1,000-step model so far, 0.029 better than removing the layer, which is within noise.
 * Noise reading: `matqgain12` is in effect `matnone12` with the same starting weights (0.015 apart); `base2qgain12` is in effect `base2none12` with different starting weights (0.04 apart).
+
+**The alternating staircase with a gain (`matstairgain12`, `base2stairgain12`).** Blocks 1–2 use the two-state staircase (±26.5°, paths through the output cell) × a zero-start gain; `base2stairgain12` is the standard transformer with that layer (27 × 27) in blocks 1–2 and its standard feed-forward in blocks 3–6. One run each, seed 0, 1,000 steps (`logs/e17_*`):
+
+| model | val | learned gains | blocks 1–2 switched off afterwards |
+|---|---|---|---|
+| `matstairgain12` (pyramid) | 3.193 | +0.011, +0.013 | +0.013 |
+| `base2stairgain12` (transformer) | 3.408 | −0.045, +0.049 | – |
+
+Same picture as with the queens mask and the full product: the gains stay near zero. In the pyramid the content of blocks 1–2 hardly matters once it has a gain (staircase 3.193, full product 3.192, queens 3.205, nothing 3.220). In the transformer the result is worse than the plain transformer (3.350) and close to the transformer without those two feed-forward layers (3.378).

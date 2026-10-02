@@ -31,6 +31,11 @@ Q12 = kind in ("matqgain12", "base2qgain12")                       # … and tha
 BASE_Q12 = kind == "base2qgain12"                                  # standard transformer; only the blocks 1–2 feed-forward is replaced
 if kind in ("matgain12", "matqgain12"): kind = "mat"
 if BASE_Q12: kind = "base2"
+STAIR12 = kind in ("matstairgain12", "base2stairgain12")           # blocks 1–2: two-state staircase (±26.5°, through the output cell) × gain
+BASE_S12 = kind == "base2stairgain12"
+if STAIR12: THRU = GAIN12 = True
+if kind == "matstairgain12": kind = "matstair"
+if BASE_S12: kind = "base2"
 LOCAL = kind.startswith("matloc")                                  # "matloc…": each cell uses only ≈ m/3 cells of its row and column, centred on it
 LOCALRC = kind.startswith("matlocrc")                              # "matlocrc…": the offset moves the row arm and the column arm separately
 if LOCAL: kind = "mat" + kind[8 if LOCALRC else 6:]                # matloc → mat, matlocnone12 → matnone12, matlocoff → matoff, matlocrcoff4 → matoff4
@@ -270,7 +275,7 @@ class MLP(nn.Module):
 class BaseLM(nn.Module):
     def __init__(s, D):
         super().__init__(); s.emb = nn.Embedding(V, D); s.pos = nn.Embedding(CTX, D)
-        s.body = nn.Sequential(*[Block(D, MatFFN(D, round((4 * D) ** 0.5), False, q="both", gain=True) if BASE_Q12 and i < 2 else MLP(D, BASE_NONE12 and i < 2)) for i in range(6)]); s.norm = nn.LayerNorm(D); s.out = nn.Linear(D, V, bias=False)
+        s.body = nn.Sequential(*[Block(D, MatFFN(D, round((4 * D) ** 0.5), False, q="both", gain=True) if BASE_Q12 and i < 2 else MatFFN(D, round((4 * D) ** 0.5), "stair", gain=True) if BASE_S12 and i < 2 else MLP(D, BASE_NONE12 and i < 2)) for i in range(6)]); s.norm = nn.LayerNorm(D); s.out = nn.Linear(D, V, bias=False)
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
 
 count = lambda m: sum(p.numel() for p in m.parameters())
