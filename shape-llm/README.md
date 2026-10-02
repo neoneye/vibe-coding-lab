@@ -361,4 +361,12 @@ cell [x, y] = Σ_k M[(y + s·⌊k/2⌋) % m, k] · M[k, (x − s·⌊k/2⌋) % m
 One run, seed 0, 1,000 steps (`logs/e9_matstair_0.log`): 4.088, 3.856, 3.500, 3.338, **3.292**; 3.288 when evaluated with the −26.5° tilt.
 
 * Ahead of the transformer (3.350) and of the plain product (3.482); behind the best offset rules (3.258, 3.259).
-* Every variant that alternates between states lands between 3.26 and 3.31, whether it shifts the result (offsets) or bends the paths (staircase). The alternation itself seems to be what helps. Untested: a staircase with a fixed tilt.
+* Every variant that alternates between states lands between 3.26 and 3.31, whether it shifts the result (offsets) or bends the paths (staircase).
+* **Fixed tilt (`matstairfix`, s = +1 always):** 4.092, 3.961, 3.681, 3.491, **3.435** (`logs/e9_matstairfix_0.log`). That is 0.14 worse than the alternating staircase and only 0.05 better than the plain product (3.482).
+
+| | never changes | alternates between states |
+|---|---|---|
+| straight rows and columns | 3.482 (plain product) | 3.258–3.305 (offset rules) |
+| staircase paths | 3.435 | 3.292 |
+
+The alternation is worth 0.14–0.22; the path shape by itself about 0.05, which one seed cannot resolve.
