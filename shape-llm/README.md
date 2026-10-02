@@ -451,9 +451,23 @@ One run each, seed 0, 1,000 steps, same text (`logs/e12_*`):
 | model | full product | local product | sec/step |
 |---|---|---|---|
 | no feed-forward in blocks 1–2 (`matnone12` / `matlocnone12`) | 3.220 | **3.255** | 0.110 → 0.090 |
-| product in all six blocks (`mat` / `matloc`) | 3.482 | 3.460 | 0.130 → 0.107 |
-| two-state offset (x+2, y+1) (`matoff` / `matlocoff`) | 3.258 | 3.494 | 0.118 → 0.104 |
+| product in all six blocks (`mat` / `matloc`) | 3.482 | 3.461 | 0.130 → 0.107 |
+| two-state offset (x+2, y+1) (`matoff` / `matlocoff`) | 3.258 | 3.495 | 0.118 → 0.104 |
 
 * The local product is about level with the full one (one difference each way), at about a third of the multiplications and 18% less time per step.
 * The offset does not help the local product. `mat_props.py`: that model only half switched the blocks 1–2 layer off (cost of zeroing it +0.089, output 0.65–0.82 of its input), and ended worse than without the offset.
 * With blocks 1–2 removed, zeroing the feed-forward of blocks 3–6 costs +2.51 in the local model (+1.56 with the full product).
+
+**More offsets on the local product.** For the full product, "shift the result" and "take the row from y + yoffset and the column from x + xoffset" are the same thing; for the local product they are not. `matloc…` shifts the result; `matlocrc…` moves the arms separately: cell [x, y] = Σ_d M[y + yo, x + d] · M[y + d, x + xo]. One run each, seed 0, 1,000 steps (`logs/e13_*`):
+
+| blocks 1–2 (local product everywhere) | val | blocks 1–2 switched off afterwards |
+|---|---|---|
+| no feed-forward (`matlocnone12`) | **3.255** | – |
+| four-state offset, arms moved (`matlocrcoff4`) | 3.385 | +0.011 |
+| four-state offset, result shifted (`matlocoff4`) | 3.399 | +0.037 |
+| two-state (x+2, y+1), arms moved (`matlocrcoff`) | 3.422 | +0.021 |
+| no offset (`matloc`) | 3.461 | +0.499 |
+| two-state (x+2, y+1), result shifted (`matlocoff`) | 3.495 | +0.089 |
+
+* The offset helps much less than on the full product (best gain 0.08; none reaches the transformer's 3.350; full-product offsets reached 3.258–3.305).
+* The three better offset models did switch the layer off by the end, yet stay 0.13–0.17 behind `matlocnone12`. Ending up ignoring a layer is not the same as never having it.
