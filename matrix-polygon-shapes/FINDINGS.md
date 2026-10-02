@@ -153,6 +153,7 @@ A pyramid of hexagonal feature cells (radius 12 → 6 → 3) with 3 → 1 triang
   - Speed: 1.05 and 1.25 s per step, about the wrapped triangle's 1.14 s.
   - Direction ablation (`../shape-llm/sq_props.py`, one direction switched off at evaluation, mean of 3 seeds): square with one product +0.25 / +0.25 / +0.23 / +0.23 (added diagonal), wrapped triangle +0.40 / +0.40 / +0.40. The fourth direction is used as much as the others but each one matters less: it divides the work rather than adding to it.
   - At equal parameters each added direction cost about 0.014 (2.726 → 2.739 → 2.754); the top three models are all uniform (wrapped) layouts; the three-way product trained better than the pairwise one.
+- A matrix-product feed-forward (features → m × m matrix M, usual product M·M, back; m = 10/11/13) with a rotating offset in blocks 1–2 (cell [x, y] from row y + (i&1) and column x + ((i*2)&2) at training iteration i): **3.258** at 1,000 steps against 3.350 for the transformer on the same text. One seed each, so a lead to test, not a result; the no-offset control has not been run. 0.118 s per step against 0.058 s.
 - Loss curves (page section 6, `../shape-llm/loss_curves.png`): the transformer learns fastest early, the triangles catch up, and everything is still falling at step 1,000.
 
 ## Takeaways
