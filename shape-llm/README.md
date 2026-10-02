@@ -373,3 +373,15 @@ The alternation is worth 0.14–0.22; the path shape by itself about 0.05, which
 
 **Three-state staircase (`matstair3`):** s = −1, 0, +1 in turn (iteration % 3), i.e. −26.5°, the straight product, +26.5°. One run, seed 0, 1,000 steps (`logs/e9_matstair3_0.log`): 4.107, 3.956, 3.614, 3.439, **3.388**; 3.390 and 3.391 in the other two states.
 That is 0.10 worse than the two-state staircase (3.292) and behind the transformer (3.350), though ahead of the fixed staircase (3.435) and the plain product (3.482). With the offsets, three states (3.290) matched two; with the staircase they do not. Single seed.
+
+**Shallower staircase (`matstair18`):** two states with 3 cells along per 1 across (⌊k/3⌋), i.e. ±18.435°. One run, seed 0, 1,000 steps (`logs/e9_matstair18_0.log`): 4.089, 3.892, 3.585, 3.409, **3.359**; 3.360 with the other tilt.
+
+| staircase | loss at 1,000 |
+|---|---|
+| two states, ±26.5° | 3.292 |
+| two states, ±18.4° | 3.359 |
+| three states, −26.5° / 0° / +26.5° | 3.388 |
+| fixed +26.5° | 3.435 |
+| (plain product) | 3.482 |
+
+The further apart the two states, the better: ±26.5° > ±18.4° > fixed. Same trend as the offsets (shift 2 > shift 1). Untested: ±45° (1 along, 1 across).
