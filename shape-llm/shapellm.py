@@ -26,6 +26,11 @@ THRU = kind.startswith("matstair") and kind.endswith("c")          # "matstair�
 if THRU: kind = kind[:-1]
 BASE_NONE12 = kind == "base2none12"                                # the standard transformer without the feed-forward half of blocks 1–2
 if BASE_NONE12: kind = "base2"                                     # (weights still created, so the initialisation matches base2)
+GAIN12 = kind in ("matgain12", "matqgain12", "base2qgain12")       # blocks 1–2 feed-forward × a learnable gain that starts at 0 (ReZero)
+Q12 = kind in ("matqgain12", "base2qgain12")                       # … and that feed-forward is the queens-mask product (both sides)
+BASE_Q12 = kind == "base2qgain12"                                  # standard transformer; only the blocks 1–2 feed-forward is replaced
+if kind in ("matgain12", "matqgain12"): kind = "mat"
+if BASE_Q12: kind = "base2"
 LOCAL = kind.startswith("matloc")                                  # "matloc…": each cell uses only ≈ m/3 cells of its row and column, centred on it
 LOCALRC = kind.startswith("matlocrc")                              # "matlocrc…": the offset moves the row arm and the column arm separately
 if LOCAL: kind = "mat" + kind[8 if LOCALRC else 6:]                # matloc → mat, matlocnone12 → matnone12, matlocoff → matoff, matlocrcoff4 → matoff4
@@ -40,7 +45,11 @@ import re
 MAT_XY = re.fullmatch(r"matoff(\d)(\d)", kind)                      # "matoffAB": two states, (0,0) and (x+A, y+B) on odd iterations
 MAT = kind in ("mat", "matnone12", "matoff", "matoff3", "matoff4", "matstair", "matstairfix", "matstair3", "matstair18", "matstair18fix", "matstair32", "matq", "matqr") or bool(MAT_XY)
 QMODE = {"matq": "both", "matqr": "row"}.get(kind)                 # sparse "queens" product instead of the full matrix product
+QPOOLS = {}
 def queens_pool(m, want=200, rng_seed=0):
+    if m not in QPOOLS: QPOOLS[m] = _queens_pool(m, want, rng_seed)
+    return QPOOLS[m]
+def _queens_pool(m, want=200, rng_seed=0):
     """random m-queens placements (one cell per row and per column, no shared diagonal), enough of them to cover every cell."""
     import random; r = random.Random(rng_seed); pool, seen, cover = [], set(), set()
     def place(row, cols, d1, d2, acc):
@@ -169,10 +178,12 @@ class MatFFN(nn.Module):
     "matstair32": two states, 3 cells along then 2 across (2·⌊k/3⌋), i.e. ±33.69°; still one cell per k.
     With a trailing "c" (matstairc, matstair18c, …) each path is the staircase of its family that passes through the output cell:
     cell [x, y] = Σ_k M[y + s·(f(k) − f(x)), k] · M[k, x − s·(f(k) − f(y))], f(k) = rise·⌊k/run⌋ (without the "c" the paths start at the edge)."""
-    def __init__(s, D, m, offset):
+    def __init__(s, D, m, offset, q=None, gain=False):
         super().__init__(); s.m, s.offset = m, offset; s.a = nn.Linear(D, m * m, bias=False); s.b = nn.Linear(m * m, D, bias=False)
         s.half = round((m / 3 - 1) / 2)                               # half-width of the local window
-        if QMODE: s.register_buffer("pool", queens_pool(m), persistent=False)
+        s.q = q if q is not None else QMODE                           # queens mask for this layer ("both", "row" or None)
+        s.gain = nn.Parameter(torch.zeros(1)) if gain else None       # ReZero: the layer starts switched off and the model learns how much of it to use
+        if s.q: s.register_buffer("pool", queens_pool(m), persistent=False)
         if offset in ("stair", "stairfix", "stair3"):                 # index tables for the two tilts, s = +1 and s = −1
             k, c = torch.arange(m), torch.arange(m)
             for name, sg in (("p", 1), ("n", -1)):
@@ -181,12 +192,14 @@ class MatFFN(nn.Module):
                 fk = STAIR_RISE * (c // STAIR_RUN)                    # through the output cell: read the edge-anchored result at [y − s·f(x), x + s·f(y)]
                 s.register_buffer("t" + name, ((c[:, None] - sg * fk[None, :]) % m) * m + (c[None, :] + sg * fk[:, None]) % m, persistent=False)
     def forward(s, x):
+        y = s._ff(x); return y * s.gain if s.gain is not None else y
+    def _ff(s, x):
         if s.offset == "none": return torch.zeros_like(x)             # "matnone12": no feed-forward in blocks 1–2 (weights created, never used)
         M = s.a(x).view(*x.shape[:-1], s.m, s.m); it = MATSTEP["it"] if s.offset else 0
-        if QMODE:                                                     # p[y] = the one picked column of row y
+        if s.q:                                                       # p[y] = the one picked column of row y
             p = s.pool[QSTATE["fixed"] if QSTATE["fixed"] is not None else QSTATE["rng"].randrange(len(s.pool))]
             v = M.gather(-1, p.expand(*M.shape[:-2], s.m).unsqueeze(-1)).squeeze(-1)      # the m picked values M[y, p[y]]
-            if QMODE == "row": Y = v.unsqueeze(-1) * M[..., p, :]     # cell [x, y] = M[y, p[y]] · M[p[y], x]: m² products
+            if s.q == "row": Y = v.unsqueeze(-1) * M[..., p, :]     # cell [x, y] = M[y, p[y]] · M[p[y], x]: m² products
             else:                                                     # both sides masked: m products, m non-zero cells
                 Y = torch.zeros_like(M); Y[..., torch.arange(s.m), p[p]] = v * v[..., p]
             return s.b(Y.flatten(-2))
@@ -239,7 +252,7 @@ class HexLM(nn.Module):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
             if MAT:
-                layers += [Block(D, MatFFN(D, MAT_M[li], ("none" if kind == "matnone12" else "stair" if kind in ("matstair", "matstair18", "matstair32") else "stairfix" if kind in ("matstairfix", "matstair18fix") else "stair3" if kind == "matstair3" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False)) for _ in range(2)]
+                layers += [Block(D, MatFFN(D, MAT_M[li], ("none" if kind == "matnone12" else "stair" if kind in ("matstair", "matstair18", "matstair32") else "stairfix" if kind in ("matstairfix", "matstair18fix") else "stair3" if kind == "matstair3" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False, q=("both" if Q12 and li == 0 else None), gain=(GAIN12 and li == 0))) for _ in range(2)]
             elif SQ:
                 layers += [Block(D, SqFFN(D, SQ_N[li], kind == "sq4c")) for _ in range(2)]
             elif TRI:
@@ -257,7 +270,7 @@ class MLP(nn.Module):
 class BaseLM(nn.Module):
     def __init__(s, D):
         super().__init__(); s.emb = nn.Embedding(V, D); s.pos = nn.Embedding(CTX, D)
-        s.body = nn.Sequential(*[Block(D, MLP(D, BASE_NONE12 and i < 2)) for i in range(6)]); s.norm = nn.LayerNorm(D); s.out = nn.Linear(D, V, bias=False)
+        s.body = nn.Sequential(*[Block(D, MatFFN(D, round((4 * D) ** 0.5), False, q="both", gain=True) if BASE_Q12 and i < 2 else MLP(D, BASE_NONE12 and i < 2)) for i in range(6)]); s.norm = nn.LayerNorm(D); s.out = nn.Linear(D, V, bias=False)
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
 
 count = lambda m: sum(p.numel() for p in m.parameters())
@@ -305,6 +318,7 @@ for step in range(1, steps + 1):
 if kind == "matoff":                                                # the headline evaluation uses no offset; also evaluate with the odd-iteration offset
     MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} offset_eval x+2,y+1: {v:.4f}", flush=True)
+if GAIN12: print(f"{TAG} seed={seed} learned gains of the blocks 1–2 feed-forward: " + " ".join(f"{m.gain.item():+.3f}" for m in model.modules() if isinstance(m, MatFFN) and m.gain is not None), flush=True)
 if QMODE:                                                           # the headline evaluation draws random placements; also try three fixed ones
     vs = []
     for i in range(3): QSTATE["fixed"] = i; vs.append(evaluate())

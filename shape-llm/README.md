@@ -510,3 +510,22 @@ The matrix-product models with 1-bit or ternary weights are level with the full-
 **3. Rounding the activations** (`SHAPE_WBITS=… python act_props.py <kind>`): every LayerNorm output (the input to every attention, feed-forward and output layer) is rounded to b bits at evaluation, clipped at 3 standard deviations. Rise in loss, the same for every model within 0.02, including the few-bit-weight ones: 8 bits +0.001, 6 bits +0.002, 5 bits +0.005, 4 bits +0.02, 3 bits +0.10 to +0.13, 2 bits +1.0 to +1.8.
 
 **What still uses floats.** With ternary weights and 5-bit LayerNorm outputs, every weight-matrix multiply is small integers times −1/0/+1, and the matrix-product feed-forward (linear map, matrix product, linear map) is exact integer arithmetic with no activation function. What remains: the LayerNorm computation itself (mean, variance, square root), the softmax in attention (exponential), the per-matrix scale constants, and in the standard transformer the GELU. Not built here: an integer-only forward pass.
+
+### A gain that starts at zero on the blocks 1–2 feed-forward (`…gain12`)
+
+The layer's output is multiplied by one learnable scalar per layer, initialised to 0 (ReZero): the layer starts off and training turns it up only as far as it helps.
+`matgain12`: pyramid, full matrix product × gain in blocks 1–2. `matqgain12`: pyramid, queens-mask product (both sides, a new random placement every iteration) × gain in blocks 1–2, full product in blocks 3–6.
+`base2qgain12`: the standard transformer with the feed-forward of blocks 1–2 replaced by a 27 × 27 queens-mask product × gain (2,240,386 parameters), standard feed-forward in blocks 3–6.
+One run each, seed 0, 1,000 steps, same text (`logs/e16_*`):
+
+| model | val | learned gains | blocks 1–2 switched off afterwards |
+|---|---|---|---|
+| `matgain12` | **3.192** | −0.032, −0.036 | +0.095 |
+| `matqgain12` | 3.205 | −0.001, +0.001 | 0.000 |
+| `base2qgain12` | 3.417 | +0.005, +0.004 | – |
+
+References: `matnone12` 3.220, `mat` 3.482, `base2` 3.350, `base2none12` 3.378.
+
+* Given the choice, the model keeps the layer almost off: no gain exceeds 0.04. The queens layer is not used at all.
+* `matgain12` (the layer at about 3% strength) is the best 1,000-step model so far, 0.029 better than removing the layer, which is within noise.
+* Noise reading: `matqgain12` is in effect `matnone12` with the same starting weights (0.015 apart); `base2qgain12` is in effect `base2none12` with different starting weights (0.04 apart).
