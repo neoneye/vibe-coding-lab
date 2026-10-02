@@ -24,6 +24,8 @@ for suf in ("-rot", "-rnd"):                                       # -rot: skip 
 TAG = kind + ("" if SWEEPS == "all" else "-" + SWEEPS)
 THRU = kind.startswith("matstair") and kind.endswith("c")          # "matstair…c": the staircases pass through the output cell
 if THRU: kind = kind[:-1]
+BASE_NONE12 = kind == "base2none12"                                # the standard transformer without the feed-forward half of blocks 1–2
+if BASE_NONE12: kind = "base2"                                     # (weights still created, so the initialisation matches base2)
 LOCAL = kind.startswith("matloc")                                  # "matloc…": each cell uses only ≈ m/3 cells of its row and column, centred on it
 LOCALRC = kind.startswith("matlocrc")                              # "matlocrc…": the offset moves the row arm and the column arm separately
 if LOCAL: kind = "mat" + kind[8 if LOCALRC else 6:]                # matloc → mat, matlocnone12 → matnone12, matlocoff → matoff, matlocrcoff4 → matoff4
@@ -250,12 +252,12 @@ class HexLM(nn.Module):
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
 
 class MLP(nn.Module):
-    def __init__(s, D): super().__init__(); s.a = nn.Linear(D, 4 * D, bias=False); s.b = nn.Linear(4 * D, D, bias=False)
-    def forward(s, x): return s.b(F.gelu(s.a(x)))
+    def __init__(s, D, off=False): super().__init__(); s.off = off; s.a = nn.Linear(D, 4 * D, bias=False); s.b = nn.Linear(4 * D, D, bias=False)
+    def forward(s, x): return torch.zeros_like(x) if s.off else s.b(F.gelu(s.a(x)))
 class BaseLM(nn.Module):
     def __init__(s, D):
         super().__init__(); s.emb = nn.Embedding(V, D); s.pos = nn.Embedding(CTX, D)
-        s.body = nn.Sequential(*[Block(D, MLP(D)) for _ in range(6)]); s.norm = nn.LayerNorm(D); s.out = nn.Linear(D, V, bias=False)
+        s.body = nn.Sequential(*[Block(D, MLP(D, BASE_NONE12 and i < 2)) for i in range(6)]); s.norm = nn.LayerNorm(D); s.out = nn.Linear(D, V, bias=False)
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
 
 count = lambda m: sum(p.numel() for p in m.parameters())
@@ -266,7 +268,7 @@ else:                                                               # match the 
     D = 64
     while count(BaseLM(D + 8)) <= target: D += 8
     model = BaseLM(D)
-print(f"{TAG}: {count(model):,} parameters", flush=True)
+print(f"{TAG}: {count(model):,} parameters" + (f" (width {D}; {count(model) - 2 * 8 * D * D:,} in use)" if BASE_NONE12 else ""), flush=True)
 
 opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
 sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=steps, pct_start=0.1)

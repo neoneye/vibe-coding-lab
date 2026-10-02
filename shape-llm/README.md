@@ -471,3 +471,12 @@ One run each, seed 0, 1,000 steps, same text (`logs/e12_*`):
 
 * The offset helps much less than on the full product (best gain 0.08; none reaches the transformer's 3.350; full-product offsets reached 3.258–3.305).
 * The three better offset models did switch the layer off by the end, yet stay 0.13–0.17 behind `matlocnone12`. Ending up ignoring a layer is not the same as never having it.
+
+**The same removal in the standard transformer (`base2none12`).** The transformer with the feed-forward half of blocks 1–2 removed (weights created so the initialisation matches `base2`, never used; width 184, 1,703,840 of 2,245,536 parameters in use). One run, seed 0, 1,000 steps (`logs/e14_base2none12_0.log`): 4.104, 3.753, 3.521, 3.411, **3.378**.
+
+| feed-forward in blocks 1–2 | matrix-product model | standard transformer |
+|---|---|---|
+| present | 3.482 | 3.350 |
+| removed | **3.220** | 3.378 |
+
+Removing it helps the matrix-product model by 0.262 and costs the transformer 0.028. So this is not "early feed-forward layers are useless"; the matrix-product layer in the first two blocks is what does harm. One seed.
