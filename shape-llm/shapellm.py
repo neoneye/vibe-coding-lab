@@ -19,7 +19,7 @@ torch.set_num_threads(int(os.environ.get("SHAPE_THREADS", 2)))
 kind, seed, steps = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 EVALS = int(sys.argv[4]) if len(sys.argv) > 4 else 5          # how many validation points to log
 SWEEPS = "all"                                                     # triangle sweeps per training step: all 3, or 2 of 3
-for suf in ("-rot", "-rnd"):                                       # -rot: skip direction (i+2) % 3 at step i; -rnd: skip a random one
+for suf in ("-rot", "-rnd", "-une"):                               # -rot: skip direction (i+2) % 3 at step i; -rnd: skip a random one; -une: all three, at uneven rotating strengths
     if kind.endswith(suf): SWEEPS, kind = suf[1:], kind[:-len(suf)]
 TAG = kind + ("" if SWEEPS == "all" else "-" + SWEEPS)
 THRU = kind.startswith("matstair") and kind.endswith("c")          # "matstair…c": the staircases pass through the output cell
@@ -50,7 +50,7 @@ if BASE_T12: kind = "base2"
 LOCAL = kind.startswith("matloc")                                  # "matloc…": each cell uses only ≈ m/3 cells of its row and column, centred on it
 LOCALRC = kind.startswith("matlocrc")                              # "matlocrc…": the offset moves the row arm and the column arm separately
 if LOCAL: kind = "mat" + kind[8 if LOCALRC else 6:]                # matloc → mat, matlocnone12 → matnone12, matlocoff → matoff, matlocrcoff4 → matoff4
-SWEEP = {"drop": None, "boost": 1.0}                               # set per step by the training loop; eval uses all three sweeps
+SWEEP = {"drop": None, "boost": 1.0, "w": None}                               # set per step by the training loop; eval uses all three sweeps
 NORM = kind == "hex2n"
 if NORM: kind = "hex2"                                             # same model as hex2, plus neighbour-count normalisation
 TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN", "triL")   # triangle feed-forwards inside the hexagonal pyramid
@@ -172,8 +172,9 @@ class TriFFN(nn.Module):
             return s.b(torch.cat(out, -1))
         h = s.a(x); hi, hj, hk = h[..., s.I], h[..., s.J], h[..., s.K]
         sweeps = [(s.I, lambda: hj * hk), (s.J, lambda: hi * hk), (s.K, lambda: hi * hj)]      # the 0°, 60° and 120° sweeps
-        y = torch.cat([torch.zeros_like(h) if d == SWEEP["drop"] else torch.zeros_like(h).index_add_(-1, t, s.W * f())
-                       for d, (t, f) in enumerate(sweeps)], -1)
+        parts = [torch.zeros_like(h) if d == SWEEP["drop"] else torch.zeros_like(h).index_add_(-1, t, s.W * f()) for d, (t, f) in enumerate(sweeps)]
+        if SWEEP["w"] is not None: parts = [q * w for q, w in zip(parts, SWEEP["w"])]      # "-une": sweep strengths for this step
+        y = torch.cat(parts, -1)
         return s.b(y * s.scale * SWEEP["boost"]) if SWEEP["boost"] != 1.0 else s.b(y * s.scale)
 
 class SqFFN(nn.Module):
@@ -346,14 +347,17 @@ def evaluate(n=40):
     for _ in range(n): x, y = batch(val, gv); tot += F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1)).item()
     QSTATE["rng"] = keep; model.train(); return tot / n / math.log(2)
 rnd = random.Random(seed); QSTATE["rng"] = random.Random(seed)
+UNEVEN = [3 / 6, 2 / 6, 1 / 6]
 t0 = time.time()
 for step in range(1, steps + 1):
-    if SWEEPS != "all":                                            # 2 of 3 sweeps, scaled 3/2 like dropout so all 3 match at eval
+    if SWEEPS == "une":                                            # contributions 3/6, 2/6, 1/6 rotating with the iteration, × 3 so they average 1
+        i = step - 1; SWEEP["w"] = [3 * UNEVEN[(i + d) % 3] for d in range(3)]
+    elif SWEEPS != "all":                                          # 2 of 3 sweeps, scaled 3/2 like dropout so all 3 match at eval
         SWEEP["drop"], SWEEP["boost"] = ((step + 2) % 3 if SWEEPS == "rot" else rnd.randrange(3)), 1.5
     MATSTEP["it"] = step - 1                                        # iteration 0 has no offset
     x, y = batch(train, g); loss = F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1))
     opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
-    SWEEP["drop"], SWEEP["boost"] = None, 1.0; MATSTEP["it"] = 0
+    SWEEP["drop"], SWEEP["boost"], SWEEP["w"] = None, 1.0, None; MATSTEP["it"] = 0
     if step % (steps // EVALS) == 0:
         print(f"{TAG}{'n' if NORM else ''} seed={seed} step={step} val_bpc={evaluate():.4f} sec/step={(time.time()-t0)/step:.3f}", flush=True)
 if kind == "matoff":                                                # the headline evaluation uses no offset; also evaluate with the odd-iteration offset
@@ -386,6 +390,11 @@ if kind == "matoff4":                                               # ... and wi
     for it in (1, 2, 3): MATSTEP["it"] = it; vs.append(evaluate())
     MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} offset_eval (x+0,y+1) (x+1,y+0) (x+1,y+1): " + " ".join(f"{v:.4f}" for v in vs), flush=True)
+if TRI and SWEEPS == "une":                                         # the headline evaluation uses equal strengths; also the three uneven states
+    vs = []
+    for i in range(3): SWEEP["w"] = [3 * UNEVEN[(i + d) % 3] for d in range(3)]; vs.append(evaluate())
+    SWEEP["w"] = None
+    print(f"{TAG} seed={seed} uneven_eval " + " ".join(f"{v:.4f}" for v in vs), flush=True)
 if TRI and not TRI_LOCAL:                                           # also evaluate with only 2 of the 3 sweeps (cheaper inference)
     pair = []
     for d in range(3):

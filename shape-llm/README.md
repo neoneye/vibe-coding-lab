@@ -621,3 +621,19 @@ Per token the triangle layers then do 42,600 three-way products, against 83,700 
 * The window is 0.023 behind wrap (inside the noise) with half the products and a 17% faster step.
 * The window is 0.080 behind no wrap, which does the same number of products unevenly (1 to n per output). At 4,000 steps the evenly loaded wrapped triangle beat no wrap; at 1,000 steps no wrap has always led. Not run at 4,000 steps.
 * None of the three beats the transformer (no wrap is level with it). All three rely on their blocks 1–2 layers, unlike the best matrix-product models.
+
+### Three of three at uneven rotating strengths (`-une`)
+
+All three sweeps run on every step, with strengths that rotate with the iteration i: `contributions = [3/6, 2/6, 1/6]`, sweep A gets `contributions[i % 3]`, B `contributions[(i+1) % 3]`, C `contributions[(i+2) % 3]`.
+They are multiplied by 3 so that they average 1 (1.5, 1.0, 0.5); on that scale `-rot` (2 of 3) is 1.5, 1.5, 0 and the plain layer is 1, 1, 1. Evaluation uses equal strengths.
+`run_e23.sh`: triangle in all six blocks, 1,000 steps, seed 0, frozen text, one run at a time, 4 threads (`logs/e23_*`; equal strengths from `logs/e22_*`):
+
+| training strengths | wrap | no wrap |
+|---|---|---|
+| equal (1, 1, 1) | **3.407** | **3.351** |
+| uneven, rotating (1.5, 1.0, 0.5) | 3.448 | 3.454 |
+| 2 of 3, rotating (1.5, 1.5, 0) | 3.509 | 3.529 |
+
+* Uneven is between the two: it recovers part of what skipping a sweep lost, and still costs 0.04 (wrap) to 0.10 (no wrap) against equal strengths.
+* The uneven-trained wrapped model evaluated in its uneven states: 3.463, 3.466, 3.462 (3.448 at equal strengths); with one sweep removed 3.496.
+* Standard transformer: 3.350. One seed each.
