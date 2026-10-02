@@ -151,6 +151,8 @@ A pyramid of hexagonal feature cells (radius 12 → 6 → 3) with 3 → 1 triang
   - Hypothesis "4 of 4 beats the transformer" not supported: 0.028 behind the transformer (2.726, ranges do not overlap) and 0.015 behind the 3-direction wrapped triangle (2.739, ranges touch).
   - At a fixed parameter budget a fourth direction costs grid size (side 50 → 41), and the two effects roughly cancel. Dropping a direction hurts; adding one does not help.
   - Speed: 1.05 and 1.25 s per step, about the wrapped triangle's 1.14 s.
+  - Direction ablation (`../shape-llm/sq_props.py`, one direction switched off at evaluation, mean of 3 seeds): square with one product +0.25 / +0.25 / +0.23 / +0.23 (added diagonal), wrapped triangle +0.40 / +0.40 / +0.40. The fourth direction is used as much as the others but each one matters less: it divides the work rather than adding to it.
+  - At equal parameters each added direction cost about 0.014 (2.726 → 2.739 → 2.754); the top three models are all uniform (wrapped) layouts; the three-way product trained better than the pairwise one.
 - Loss curves (page section 6, `../shape-llm/loss_curves.png`): the transformer learns fastest early, the triangles catch up, and everything is still falling at step 1,000.
 
 ## Takeaways

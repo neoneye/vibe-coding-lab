@@ -255,3 +255,17 @@ Sides 41, 53, 67 give 2,327,754 parameters (wrapped triangle: 2,326,616). `run_e
 * At a fixed parameter budget the fourth direction is paid for with a smaller grid (side 50 → 41, 18% fewer lines per direction).
 * The single product across all four directions is the better and faster square (1.05 vs 1.25 s per step; wrapped triangle 1.14 s, transformer 0.08 s; 1 thread, idle machine).
 * Not tested: the triangle's side lengths (about 13% more parameters), longer training, a tuned learning rate.
+
+**Is the fourth direction used?** `sq_props.py` zeroes one direction's outputs in every feed-forward layer of a trained model (evaluation only) and reports the rise in loss:
+
+| model | rows 0° | columns 90° | diagonal 45° | diagonal 135° (added) |
+|---|---|---|---|---|
+| triangle, wrap | +0.398 | +0.397 | +0.396 | – |
+| square, one product (`sq4c`) | +0.250 | +0.249 | +0.233 | +0.229 |
+| square, two at a time (`sq4`) | +0.278 | +0.276 | +0.266 | +0.297 |
+
+(mean of 3 seeds; the mean |output weight| is the same for every direction, about 0.043–0.045.)
+
+* The added diagonal is used as much as the other directions, but each direction matters less in the square (about 0.24) than in the triangle (0.40): the extra direction divides the work instead of adding to it.
+* At equal parameters each added direction cost about 0.014 (transformer 2.726, three directions 2.739, four 2.754), the opposite of the hypothesis. The steps are near seed noise individually.
+* The top three models are all uniform (wrapped) layouts; every non-wrapped triangle ranks below the one-product square.
