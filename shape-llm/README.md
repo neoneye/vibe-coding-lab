@@ -385,3 +385,13 @@ That is 0.10 worse than the two-state staircase (3.292) and behind the transform
 | (plain product) | 3.482 |
 
 The further apart the two states, the better: ±26.5° > ±18.4° > fixed. Same trend as the offsets (shift 2 > shift 1). Untested: ±45° (1 along, 1 across).
+
+**Fixed shallow staircase (`matstair18fix`):** +18.4° on every iteration. One run, seed 0, 1,000 steps (`logs/e9_matstair18fix_0.log`): 4.108, 3.955, 3.691, 3.513, **3.459**.
+
+| tilt | fixed | alternating ± | gain from alternating |
+|---|---|---|---|
+| 0° (plain product) | 3.482 | – | – |
+| 18.4° | 3.459 | 3.359 | 0.10 |
+| 26.5° | 3.435 | 3.292 | 0.14 |
+
+A fixed tilt helps a little (about 0.02 from one tilt to the next, within single-seed noise); alternating helps much more, and more at the steeper tilt.
