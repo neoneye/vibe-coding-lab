@@ -146,6 +146,11 @@ A pyramid of hexagonal feature cells (radius 12 → 6 → 3) with 3 → 1 triang
   - The gap grows during training (0.03 at step 400 → 0.13 at the end), so it is not a regulariser that pays off later. Cyclic vs random: no difference.
   - Evaluating with only 2 sweeps costs a further ~0.03, equally for every pair: no direction is neglected, but each carries information the others lack.
   - The step is only ~15% faster (attention and projections dominate), so it loses at equal time too.
+- A square with four sweep directions ("4 of 4": rows, columns and both diagonals on a wrapped n × n grid, n odd; the wrapped triangle plus the second diagonal), parameter-matched (sides 41/53/67), 4,000 steps, 3 seeds:
+  - One product across all four directions: **2.754** (2.747–2.762). Products of two directions at a time: 2.781 (2.751–2.801).
+  - Hypothesis "4 of 4 beats the transformer" not supported: 0.028 behind the transformer (2.726, ranges do not overlap) and 0.015 behind the 3-direction wrapped triangle (2.739, ranges touch).
+  - At a fixed parameter budget a fourth direction costs grid size (side 50 → 41), and the two effects roughly cancel. Dropping a direction hurts; adding one does not help.
+  - Speed: 1.05 and 1.25 s per step, about the wrapped triangle's 1.14 s.
 - Loss curves (page section 6, `../shape-llm/loss_curves.png`): the transformer learns fastest early, the triangles catch up, and everything is still falling at step 1,000.
 
 ## Takeaways

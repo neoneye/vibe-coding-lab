@@ -231,3 +231,27 @@ At the end each run also prints `two_sweep_eval`: the loss with only 2 sweeps, f
 * **Two sweeps at evaluation** cost a further ~0.03, the same for whichever direction is skipped (pairs within 0.03 of each other). The rotation trains all directions equally, but each carries information the other two lack.
 * **Speed:** a step is only ~15% faster (0.66 → 0.56 s no wrap, 1.14 → 0.97 s wrap, 1 thread, idle machine); attention and the projections dominate. At equal time it still loses (all-3 wrap is at 2.780 after 3,200 steps).
 * Not tested: skipping less often, a different direction per layer, no 3/2 rescaling.
+
+### A square with four directions ("4 of 4")
+
+Hypothesis: 2 of 3 sweeps was worse than 3 of 3, so a fourth direction might beat the standard transformer.
+
+`SqFFN` in `shapellm.py`: n × n weights on a torus (n odd), swept at 0°, 45°, 90° and 135°: rows i, columns j, and the diagonals k = n−1−i−j and l = i−j (mod n).
+The first three directions are exactly the wrapped triangle; l is the extra diagonal. Each line's output sums W × the features of the cell's other three lines:
+* `sq4c`: their product (one product across all four directions; the direct extension of the triangle, with a plain matrix as the 2-direction case);
+* `sq4`: their three pairwise products, added (two directions at a time, scaled by 1/√3).
+
+Sides 41, 53, 67 give 2,327,754 parameters (wrapped triangle: 2,326,616). `run_e7.sh`, logs `logs/e7_*`, same frozen text, 4,000 steps, 3 seeds.
+
+| model | directions | mean | 3 seeds | behind transformer |
+|---|---|---|---|---|
+| standard transformer | – | **2.726** | 2.737, 2.713, 2.728 | – |
+| triangle, wrap | 3 of 3 | 2.739 | 2.751, 2.733, 2.732 | 0.013 |
+| **square, one product across all four** (`sq4c`) | 4 of 4 | **2.754** | 2.762, 2.753, 2.747 | 0.028 |
+| square, two directions at a time (`sq4`) | 4 of 4 | 2.781 | 2.790, 2.801, 2.751 | 0.055 |
+
+* **The hypothesis does not hold here.** The best square is 0.028 behind the transformer with non-overlapping seed ranges.
+* **Four directions are no better than three:** 0.015 behind the wrapped triangle, seed ranges touching.
+* At a fixed parameter budget the fourth direction is paid for with a smaller grid (side 50 → 41, 18% fewer lines per direction).
+* The single product across all four directions is the better and faster square (1.05 vs 1.25 s per step; wrapped triangle 1.14 s, transformer 0.08 s; 1 thread, idle machine).
+* Not tested: the triangle's side lengths (about 13% more parameters), longer training, a tuned learning rate.
