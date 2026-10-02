@@ -270,6 +270,19 @@ else:                                                               # match the 
     model = BaseLM(D)
 print(f"{TAG}: {count(model):,} parameters" + (f" (width {D}; {count(model) - 2 * 8 * D * D:,} in use)" if BASE_NONE12 else ""), flush=True)
 
+WBITS = int(os.environ.get("SHAPE_WBITS", 0))                      # train with few-bit weights: 1 = binary, 2 = ternary (−1, 0, +1), b ≥ 3 = b bits
+if WBITS:
+    class FewBits(nn.Module):
+        """the weight the model uses is the rounded one; gradients pass straight through to the full-precision copy."""
+        def forward(s, w):
+            if WBITS == 1: q = torch.where(w >= 0, 1.0, -1.0) * w.abs().mean()
+            elif WBITS == 2: sc = w.abs().mean().clamp(min=1e-8); q = torch.round(w / sc).clamp(-1, 1) * sc
+            else: L = 2 ** (WBITS - 1) - 1; sc = w.abs().max().clamp(min=1e-8) / L; q = torch.round(w / sc).clamp(-L, L) * sc
+            return w + (q - w).detach()
+    import torch.nn.utils.parametrize as parametrize
+    for m in list(model.modules()):                                 # every weight matrix: embeddings, attention, bottlenecks, feed-forward, output
+        if isinstance(m, (nn.Linear, nn.Embedding)): parametrize.register_parametrization(m, "weight", FewBits())
+    TAG += f"-w{WBITS}"; print(f"{TAG}: weights rounded to {WBITS} bit(s) in every forward pass", flush=True)
 opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
 sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=steps, pct_start=0.1)
 g, gv = torch.Generator().manual_seed(seed), torch.Generator().manual_seed(1234)

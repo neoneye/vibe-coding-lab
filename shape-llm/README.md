@@ -480,3 +480,33 @@ One run each, seed 0, 1,000 steps, same text (`logs/e12_*`):
 | removed | **3.220** | 3.378 |
 
 Removing it helps the matrix-product model by 0.262 and costs the transformer 0.028. So this is not "early feed-forward layers are useless"; the matrix-product layer in the first two blocks is what does harm. One seed.
+
+### Few bits: how little precision do these models need?
+
+All on the 1,000-step models above (seed 0, same text). One seed each.
+
+**1. Rounding the weights after training** (`quant_props.py <kind>`): every weight matrix in use is rounded to b bits (symmetric, per tensor, clipping point chosen for least squared error; LayerNorm gains and biases left alone). Rise in validation loss:
+
+| model | float | 5 bits | 4 bits | 3 bits | 2 bits |
+|---|---|---|---|---|---|
+| standard transformer (`base2`) | 3.350 | +0.010 | +0.028 | +0.141 | +0.718 |
+| matrix product, all blocks (`mat`) | 3.482 | +0.001 | +0.011 | +0.067 | +0.464 |
+| matrix product, offset (`matoff`) | 3.258 | +0.004 | +0.014 | +0.071 | +0.602 |
+| matrix product, no feed-forward in blocks 1–2 (`matnone12`) | 3.220 | +0.003 | +0.016 | +0.075 | +0.697 |
+| local product, no feed-forward in blocks 1–2 (`matlocnone12`) | 3.255 | +0.003 | +0.017 | +0.081 | +0.623 |
+
+8 and 6 bits cost nothing (≤ 0.003). At 3–5 bits the matrix-product models lose about half as much as the transformer. At 2 bits everything breaks.
+
+**2. Training with few-bit weights** (`SHAPE_WBITS=1|2|b python shapellm.py …`, logs `logs/e15_*`): every `nn.Linear` and `nn.Embedding` weight is rounded in each forward pass (1 = binary ±mean|w|, 2 = ternary −1/0/+1 × mean|w| as in BitNet b1.58, b ≥ 3 = b bits); gradients pass straight through to a full-precision copy that is only needed during training.
+
+| model | float weights | ternary (−1, 0, +1) | binary (±1) |
+|---|---|---|---|
+| standard transformer | 3.350 | 3.612 (+0.262) | 3.590 (+0.240) |
+| matrix product, no feed-forward in blocks 1–2 | 3.220 | 3.364 (+0.144) | **3.361** (+0.141) |
+| local product, no feed-forward in blocks 1–2 | 3.255 | **3.348** (+0.093) | – |
+
+The matrix-product models with 1-bit or ternary weights are level with the full-precision transformer (3.350), and lose about half as much as the transformer does. With 1-bit weights `matnone12` stores 1.87M weights in 0.23 MB.
+
+**3. Rounding the activations** (`SHAPE_WBITS=… python act_props.py <kind>`): every LayerNorm output (the input to every attention, feed-forward and output layer) is rounded to b bits at evaluation, clipped at 3 standard deviations. Rise in loss, the same for every model within 0.02, including the few-bit-weight ones: 8 bits +0.001, 6 bits +0.002, 5 bits +0.005, 4 bits +0.02, 3 bits +0.10 to +0.13, 2 bits +1.0 to +1.8.
+
+**What still uses floats.** With ternary weights and 5-bit LayerNorm outputs, every weight-matrix multiply is small integers times −1/0/+1, and the matrix-product feed-forward (linear map, matrix product, linear map) is exact integer arithmetic with no activation function. What remains: the LayerNorm computation itself (mean, variance, square root), the softmax in attention (exponential), the per-matrix scale constants, and in the standard transformer the GELU. Not built here: an integer-only forward pass.
