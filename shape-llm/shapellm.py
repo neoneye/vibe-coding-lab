@@ -12,7 +12,7 @@ Each block: causal attention across tokens (on the flattened hexagon, low-rank 1
 feed-forward: every cell mixes with its 6 neighbours through a shared gated 7-tap hexagonal convolution, plus a
 per-cell bias. The baseline is an ordinary transformer with the same depth and parameter count.
 Usage: python shapellm.py hex|base seed steps [evals]"""
-import os, sys, glob, math, time, torch, torch.nn as nn, torch.nn.functional as F
+import os, sys, glob, math, time, random, torch, torch.nn as nn, torch.nn.functional as F
 from hexgrid import cells, neighbours, bottleneck
 torch.set_num_threads(int(os.environ.get("SHAPE_THREADS", 2)))
 
@@ -29,7 +29,24 @@ TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN")   # tri
 TRI_WRAP, TRI_SCALED = kind in ("triW", "triWS"), kind in ("triS", "triSN", "triWS")
 TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 SQ = kind in ("sq4", "sq4c")                                       # square torus swept along rows, columns and both diagonals
-MAT = kind in ("mat", "matoff", "matoff4")                                    # feed-forward = ordinary matrix product M·M of a projected m × m matrix
+MAT = kind in ("mat", "matoff", "matoff4", "matq", "matqr")
+QMODE = {"matq": "both", "matqr": "row"}.get(kind)                 # sparse "queens" product instead of the full matrix product
+def queens_pool(m, want=200, rng_seed=0):
+    """random m-queens placements (one cell per row and per column, no shared diagonal), enough of them to cover every cell."""
+    import random; r = random.Random(rng_seed); pool, seen, cover = [], set(), set()
+    def place(row, cols, d1, d2, acc):
+        if row == m: return acc[:]
+        order = list(range(m)); r.shuffle(order)
+        for c in order:
+            if c in cols or row - c in d1 or row + c in d2: continue
+            acc.append(c); got = place(row + 1, cols | {c}, d1 | {row - c}, d2 | {row + c}, acc)
+            if got: return got
+            acc.pop()
+    while len(pool) < want or len(cover) < m * m:
+        q = tuple(place(0, frozenset(), frozenset(), frozenset(), []))
+        if q not in seen: seen.add(q); pool.append(q); cover |= {(y, c) for y, c in enumerate(q)}
+    return torch.tensor(pool)
+QSTATE = {"rng": None, "fixed": None}                              # which placement to use: a seeded random one, or a fixed index                                    # feed-forward = ordinary matrix product M·M of a projected m × m matrix
 MAT_M = [10, 11, 13]                                               # matrix side per level (≈ the triangle's feed-forward budget)
 MATSTEP = {"it": 0}                                                # training iteration, set by the training loop; evaluation uses 0 (no offset)
 SQ_N = [41, 53, 67]                                                # odd sides, chosen to match the wrapped triangle's parameter count
@@ -129,8 +146,16 @@ class MatFFN(nn.Module):
     "matoff4": xoffset = (iteration>>1)&1, yoffset = iteration&1 (the four states (0,0), (0,1), (1,0), (1,1) in turn)."""
     def __init__(s, D, m, offset):
         super().__init__(); s.m, s.offset = m, offset; s.a = nn.Linear(D, m * m, bias=False); s.b = nn.Linear(m * m, D, bias=False)
+        if QMODE: s.register_buffer("pool", queens_pool(m), persistent=False)
     def forward(s, x):
         M = s.a(x).view(*x.shape[:-1], s.m, s.m); it = MATSTEP["it"] if s.offset else 0
+        if QMODE:                                                     # p[y] = the one picked column of row y
+            p = s.pool[QSTATE["fixed"] if QSTATE["fixed"] is not None else QSTATE["rng"].randrange(len(s.pool))]
+            v = M.gather(-1, p.expand(*M.shape[:-2], s.m).unsqueeze(-1)).squeeze(-1)      # the m picked values M[y, p[y]]
+            if QMODE == "row": Y = v.unsqueeze(-1) * M[..., p, :]     # cell [x, y] = M[y, p[y]] · M[p[y], x]: m² products
+            else:                                                     # both sides masked: m products, m non-zero cells
+                Y = torch.zeros_like(M); Y[..., torch.arange(s.m), p[p]] = v * v[..., p]
+            return s.b(Y.flatten(-2))
         xo, yo = ((it >> 1) & 1, it & 1) if s.offset == 4 else ((it * 2) & 2, it & 1)
         rows = torch.roll(M, -yo, -2) if yo else M                    # rows[y] = M[(y + yo) % m]
         cols = torch.roll(M, -xo, -1) if xo else M                    # cols[:, x] = M[:, (x + xo) % m]
@@ -202,10 +227,10 @@ sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=steps, p
 g, gv = torch.Generator().manual_seed(seed), torch.Generator().manual_seed(1234)
 @torch.no_grad()
 def evaluate(n=40):
-    model.eval(); tot = 0.0; gv.manual_seed(1234)
+    model.eval(); tot = 0.0; gv.manual_seed(1234); keep = QSTATE["rng"]; QSTATE["rng"] = random.Random(1234)
     for _ in range(n): x, y = batch(val, gv); tot += F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1)).item()
-    model.train(); return tot / n / math.log(2)
-import random; rnd = random.Random(seed)
+    QSTATE["rng"] = keep; model.train(); return tot / n / math.log(2)
+rnd = random.Random(seed); QSTATE["rng"] = random.Random(seed)
 t0 = time.time()
 for step in range(1, steps + 1):
     if SWEEPS != "all":                                            # 2 of 3 sweeps, scaled 3/2 like dropout so all 3 match at eval
@@ -219,6 +244,11 @@ for step in range(1, steps + 1):
 if kind == "matoff":                                                # the headline evaluation uses no offset; also evaluate with the odd-iteration offset
     MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} offset_eval x+2,y+1: {v:.4f}", flush=True)
+if QMODE:                                                           # the headline evaluation draws random placements; also try three fixed ones
+    vs = []
+    for i in range(3): QSTATE["fixed"] = i; vs.append(evaluate())
+    QSTATE["fixed"] = None
+    print(f"{TAG} seed={seed} fixed_mask_eval: " + " ".join(f"{v:.4f}" for v in vs), flush=True)
 if kind == "matoff4":                                               # ... and with each of the other three states of the cycle
     vs = []
     for it in (1, 2, 3): MATSTEP["it"] = it; vs.append(evaluate())

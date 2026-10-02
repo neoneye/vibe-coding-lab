@@ -280,7 +280,7 @@ One run each, seed 0, 1,000 steps, same frozen text (`logs/e8_*`), run one after
 
 | step | `matoff` | standard transformer |
 |---|---|---|
-| 200 | 4.078 | 4.105 |
+| 200 | 4.078 | 4.104 |
 | 400 | 3.778 | 3.759 |
 | 600 | 3.467 | 3.503 |
 | 800 | 3.311 | 3.386 |
@@ -295,7 +295,7 @@ One run each, seed 0, 1,000 steps, same frozen text (`logs/e8_*`), run one after
 
 | step | `matoff4` (four states) | `matoff` (two states, mistyped) | standard transformer |
 |---|---|---|---|
-| 200 | 4.093 | 4.078 | 4.105 |
+| 200 | 4.093 | 4.078 | 4.104 |
 | 400 | 3.822 | 3.778 | 3.759 |
 | 600 | 3.489 | 3.467 | 3.503 |
 | 800 | 3.324 | 3.311 | 3.386 |
@@ -304,3 +304,24 @@ One run each, seed 0, 1,000 steps, same frozen text (`logs/e8_*`), run one after
 * Both offset rules end ahead of the transformer (0.076 and 0.093). They differ from each other by 0.017, which one seed cannot resolve.
 * Evaluated in the other three states of the cycle the loss is 3.277, 3.277, 3.281 (3.275 with no offset).
 * Still missing: the `mat` control (no offset), more seeds, a 4,000-step run.
+
+### No offset, and a sparse "queens" product (`mat`, `matq`, `matqr`)
+
+Same seed (0), same text, 1,000 steps, run one after the other (`logs/e9_*`). All `MatFFN` variants start from identical weights.
+
+* `mat`: the full product M·M, no offset.
+* `matq`: a queens placement p (one cell per row and column, no shared diagonal; 200 random placements per size, covering every cell; a new one per layer per iteration) masks M on both sides: only the m products M[y, p[y]] · M[p[y], p[p[y]]] remain, written to the cells [p[p[y]], y].
+* `matqr`: mask on one side: cell [x, y] = M[y, p[y]] · M[p[y], x], m² products.
+
+| step | `mat` (no offset) | `matq` (both sides) | `matqr` (one side) | `matoff4` | transformer |
+|---|---|---|---|---|---|
+| 200 | 4.065 | 4.208 | 4.298 | 4.093 | 4.104 |
+| 400 | 3.941 | 4.079 | 4.185 | 3.822 | 3.759 |
+| 600 | 3.714 | 3.898 | 4.033 | 3.489 | 3.503 |
+| 800 | 3.532 | 3.788 | 3.935 | 3.324 | 3.386 |
+| 1,000 | **3.482** | 3.755 | 3.908 | 3.275 | 3.350 |
+
+* **The offset matters:** without it the matrix-product layer is 0.21–0.22 worse and falls behind the transformer. The offset only shifts the product's result (cell [x, y] gets the value of [x + xoffset, y + yoffset]) before the read-out.
+* **Fewer multiplications did not help:** 0.27 (both sides) and 0.42 (one side) worse than the full product, for a 27% faster step (0.13 → 0.095 s).
+* Evaluation with three fixed placements instead of random ones: 3.756, 3.758, 3.757 (`matq`); 3.908, 3.904, 3.916 (`matqr`).
+* One seed each. Not tested: a fixed mask during training, more seeds, longer runs.
