@@ -29,6 +29,9 @@ TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN")   # tri
 TRI_WRAP, TRI_SCALED = kind in ("triW", "triWS"), kind in ("triS", "triSN", "triWS")
 TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 SQ = kind in ("sq4", "sq4c")                                       # square torus swept along rows, columns and both diagonals
+MAT = kind in ("mat", "matoff")                                    # feed-forward = ordinary matrix product M·M of a projected m × m matrix
+MAT_M = [10, 11, 13]                                               # matrix side per level (≈ the triangle's feed-forward budget)
+MATSTEP = {"it": 0}                                                # training iteration, set by the training loop; evaluation uses 0 (no offset)
 SQ_N = [41, 53, 67]                                                # odd sides, chosen to match the wrapped triangle's parameter count
 TRI_N = [50, 65, 85]                                               # triangle side per level (≈ the hex2 feed-forward budget)
 torch.manual_seed(seed)
@@ -119,9 +122,22 @@ class SqFFN(nn.Module):
             others = [o * 3 ** -0.5 for o in others]                     # three products per cell: keep the triangle's output size
         return s.b(torch.cat([torch.zeros_like(h).index_add_(-1, t, s.W * o) for t, o in zip(idx, others)], -1))
 
+class MatFFN(nn.Module):
+    """M = a(x) as an m × m matrix; the output cell [x, y] is the usual product: row y of M times column x of M.
+    With offset (blocks 1–2 of "matoff") the cell [x, y] is instead computed from row (y + yoffset) and column (x + xoffset),
+    wrapped, with xoffset = (iteration*2)&2 and yoffset = iteration&1; the destination cell is not displaced."""
+    def __init__(s, D, m, offset):
+        super().__init__(); s.m, s.offset = m, offset; s.a = nn.Linear(D, m * m, bias=False); s.b = nn.Linear(m * m, D, bias=False)
+    def forward(s, x):
+        M = s.a(x).view(*x.shape[:-1], s.m, s.m); it = MATSTEP["it"] if s.offset else 0
+        xo, yo = (it * 2) & 2, it & 1
+        rows = torch.roll(M, -yo, -2) if yo else M                    # rows[y] = M[(y + yo) % m]
+        cols = torch.roll(M, -xo, -1) if xo else M                    # cols[:, x] = M[:, (x + xo) % m]
+        return s.b((rows @ cols).flatten(-2) * s.m ** -0.5)
+
 class Block(nn.Module):
     def __init__(s, D, ffn):
-        A = 48 if (kind == "hex2" or TRI or SQ) else 128
+        A = 48 if (kind == "hex2" or TRI or SQ or MAT) else 128
         super().__init__(); s.n1 = nn.LayerNorm(D); s.att = Attention(D, A); s.n2 = nn.LayerNorm(D); s.ffn = ffn
     def forward(s, x):
         x = x + s.att(s.n1(x)); return x + s.ffn(s.n2(x))
@@ -148,7 +164,9 @@ class HexLM(nn.Module):
         for li, (R, c) in enumerate(s.LEVELS):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
-            if SQ:
+            if MAT:
+                layers += [Block(D, MatFFN(D, MAT_M[li], kind == "matoff" and li == 0)) for _ in range(2)]
+            elif SQ:
                 layers += [Block(D, SqFFN(D, SQ_N[li], kind == "sq4c")) for _ in range(2)]
             elif TRI:
                 layers += [Block(D, TriFFN(D, TRI_N[li], TRI_WRAP, TRI_SCALED)) for _ in range(2)]
@@ -169,7 +187,7 @@ class BaseLM(nn.Module):
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
 
 count = lambda m: sum(p.numel() for p in m.parameters())
-if kind in ("hex", "hex2") or TRI or SQ: model = HexLM()
+if kind in ("hex", "hex2") or TRI or SQ or MAT: model = HexLM()
 else:                                                               # match the hex model's parameter count
     if kind == "base2": kind = "hex2"; target = count(HexLM()); kind = "base2"   # match the locally connected version
     else: target = count(HexLM())
@@ -191,11 +209,15 @@ t0 = time.time()
 for step in range(1, steps + 1):
     if SWEEPS != "all":                                            # 2 of 3 sweeps, scaled 3/2 like dropout so all 3 match at eval
         SWEEP["drop"], SWEEP["boost"] = ((step + 2) % 3 if SWEEPS == "rot" else rnd.randrange(3)), 1.5
+    MATSTEP["it"] = step - 1                                        # iteration 0 has no offset
     x, y = batch(train, g); loss = F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1))
     opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
-    SWEEP["drop"], SWEEP["boost"] = None, 1.0
+    SWEEP["drop"], SWEEP["boost"] = None, 1.0; MATSTEP["it"] = 0
     if step % (steps // EVALS) == 0:
         print(f"{TAG}{'n' if NORM else ''} seed={seed} step={step} val_bpc={evaluate():.4f} sec/step={(time.time()-t0)/step:.3f}", flush=True)
+if kind == "matoff":                                                # the headline evaluation uses no offset; also evaluate with the odd-iteration offset
+    MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
+    print(f"{TAG} seed={seed} offset_eval x+2,y+1: {v:.4f}", flush=True)
 if TRI:                                                             # also evaluate with only 2 of the 3 sweeps (cheaper inference)
     pair = []
     for d in range(3):

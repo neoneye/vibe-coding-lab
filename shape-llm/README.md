@@ -269,3 +269,24 @@ Sides 41, 53, 67 give 2,327,754 parameters (wrapped triangle: 2,326,616). `run_e
 * The added diagonal is used as much as the other directions, but each direction matters less in the square (about 0.24) than in the triangle (0.40): the extra direction divides the work instead of adding to it.
 * At equal parameters each added direction cost about 0.014 (transformer 2.726, three directions 2.739, four 2.754), the opposite of the hypothesis. The steps are near seed noise individually.
 * The top three models are all uniform (wrapped) layouts; every non-wrapped triangle ranks below the one-product square.
+
+### A square matrix with the usual product, and a rotating offset (`matoff`)
+
+`MatFFN` in `shapellm.py`: the feed-forward projects the features to an m × m matrix M (m = 10, 11, 13 per level), computes the ordinary matrix product M·M (cell [x, y] = row y · column x) and projects back. 2,268,916 parameters.
+In blocks 1–2 of `matoff`, at training iteration i the cell [x, y] is computed from row (y + yoffset) and column (x + xoffset), wrapped, with `xoffset = (i*2)&2` and `yoffset = i&1`; the destination cell is not displaced.
+As written these give two states: no offset on even iterations, (x+2, y+1) on odd ones. Validation uses no offset. `mat` is the same model without the offset (not yet run).
+
+One run each, seed 0, 1,000 steps, same frozen text (`logs/e8_*`), run one after the other:
+
+| step | `matoff` | standard transformer |
+|---|---|---|
+| 200 | 4.078 | 4.105 |
+| 400 | 3.778 | 3.759 |
+| 600 | 3.467 | 3.503 |
+| 800 | 3.311 | 3.386 |
+| 1,000 | **3.258** | 3.350 |
+
+* `matoff` ends 0.093 bits/char ahead of the transformer, and evaluates the same with the odd-iteration offset switched on (3.261).
+* This is a single seed at 1,000 steps. Earlier 1,000-step rankings with 2 seeds were wrong twice, and seeds differed by up to 0.19, so this is a lead worth testing, not a result.
+* Not separated: whether the gain comes from the matrix-product layer or from the offset (needs the `mat` control).
+* Speed: 0.118 s per step against 0.058 s for the transformer (2 threads).
