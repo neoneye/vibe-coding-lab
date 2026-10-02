@@ -361,7 +361,7 @@ cell [x, y] = Σ_k M[(y + s·⌊k/2⌋) % m, k] · M[k, (x − s·⌊k/2⌋) % m
 One run, seed 0, 1,000 steps (`logs/e9_matstair_0.log`): 4.088, 3.856, 3.500, 3.338, **3.292**; 3.288 when evaluated with the −26.5° tilt.
 
 * Ahead of the transformer (3.350) and of the plain product (3.482); behind the best offset rules (3.258, 3.259).
-* Every variant that alternates between states lands between 3.26 and 3.31, whether it shifts the result (offsets) or bends the paths (staircase).
+* Every variant that alternates between two states lands between 3.26 and 3.31, whether it shifts the result (offsets) or bends the paths (staircase).
 * **Fixed tilt (`matstairfix`, s = +1 always):** 4.092, 3.961, 3.681, 3.491, **3.435** (`logs/e9_matstairfix_0.log`). That is 0.14 worse than the alternating staircase and only 0.05 better than the plain product (3.482).
 
 | | never changes | alternates between states |
@@ -370,3 +370,6 @@ One run, seed 0, 1,000 steps (`logs/e9_matstair_0.log`): 4.088, 3.856, 3.500, 3.
 | staircase paths | 3.435 | 3.292 |
 
 The alternation is worth 0.14–0.22; the path shape by itself about 0.05, which one seed cannot resolve.
+
+**Three-state staircase (`matstair3`):** s = −1, 0, +1 in turn (iteration % 3), i.e. −26.5°, the straight product, +26.5°. One run, seed 0, 1,000 steps (`logs/e9_matstair3_0.log`): 4.107, 3.956, 3.614, 3.439, **3.388**; 3.390 and 3.391 in the other two states.
+That is 0.10 worse than the two-state staircase (3.292) and behind the transformer (3.350), though ahead of the fixed staircase (3.435) and the plain product (3.482). With the offsets, three states (3.290) matched two; with the staircase they do not. Single seed.
