@@ -350,3 +350,6 @@ The three offset rules span 0.05, which one seed cannot resolve; all of them bea
 | standard transformer | 3.350 |
 
 (x+2, y+2) ties with (x+2, y+1). The two shift-by-2 rules lead the two shift-by-1 rules, a hint that a larger shift helps, but the whole spread (0.05) is inside single-seed noise.
+
+**A three-state rule (`matoff3`):** `xoffset = yoffset = i % 3`, i.e. (0,0), (x+1, y+1), (x+2, y+2) in turn. One run, seed 0, 1,000 steps (`logs/e9_matoff3_0.log`): 4.087, 3.841, 3.496, 3.340, **3.290**; 3.293 and 3.296 when evaluated in the two shifted states.
+It lands between its ingredients, (x+1, y+1) at 3.305 and (x+2, y+2) at 3.259. Ranking so far: (x+2, y+1) 3.258, (x+2, y+2) 3.259, four states 3.275, three states 3.290, (x+1, y+1) 3.305, transformer 3.350, no offset 3.482. All one seed.
