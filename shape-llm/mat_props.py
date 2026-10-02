@@ -21,7 +21,7 @@ def loss_on(src_data, n=40):
 tr_l, va_l = loss_on(train), loss_on(val)
 print(f"{TAG}: train {tr_l:.4f}  val {va_l:.4f}  gap {va_l - tr_l:+.4f}")
 ffns = [m.ffn for m in model.body if hasattr(m, "ffn")]             # the six feed-forward layers, in order
-first = ffns[:2] if MAT or TRI12 else []
+first = ffns[:2] if MAT or TRI12 or TRI else []
 if kind == "matnone12" and not GAIN12 and "none12" in TAG: first = []   # nothing to test: blocks 1–2 have no feed-forward
 if first and not QMODE and not kind.startswith("matstair") and all(isinstance(m, MatFFN) and m.gain is None for m in first):
     out = []

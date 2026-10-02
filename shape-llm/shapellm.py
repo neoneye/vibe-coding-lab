@@ -53,8 +53,9 @@ if LOCAL: kind = "mat" + kind[8 if LOCALRC else 6:]                # matloc → 
 SWEEP = {"drop": None, "boost": 1.0}                               # set per step by the training loop; eval uses all three sweeps
 NORM = kind == "hex2n"
 if NORM: kind = "hex2"                                             # same model as hex2, plus neighbour-count normalisation
-TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN")   # triangle feed-forwards inside the hexagonal pyramid
-TRI_WRAP, TRI_SCALED = kind in ("triW", "triWS"), kind in ("triS", "triSN", "triWS")
+TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN", "triL")   # triangle feed-forwards inside the hexagonal pyramid
+TRI_WRAP, TRI_SCALED = kind in ("triW", "triWS", "triL"), kind in ("triS", "triSN", "triWS")
+TRI_LOCAL = kind == "triL"                                         # wrapped triangle, but each output only collects the n//2 + 1 weights around its own index
 TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 SQ = kind in ("sq4", "sq4c")                                       # square torus swept along rows, columns and both diagonals
 import re
@@ -141,7 +142,10 @@ class HexFFN(nn.Module):
 class TriFFN(nn.Module):
     """triangle-shaped weights swept at 0°, 60° and 120° (see tiny.py): h = A x (n units), three sweeps, then B.
     wrap: i + j + k ≡ n − 1 (mod n), every line holds n weights; no wrap: line i holds n − i weights.
-    scaled: each output × (products it collects)^−½ (long "centre" lines turned down, length-1 lines at weight 1)."""
+    scaled: each output × (products it collects)^−½ (long "centre" lines turned down, length-1 lines at weight 1).
+    local ("triL"): wrapped, but every output collects only a window of d = n//2 + 1 weights centred on its own index:
+    sweep 0° output i uses the cells with j − i in the window, sweep 60° output j those with k − j, sweep 120° output k those with i − k
+    (offsets −⌊(d−1)/2⌋ … +⌈(d−1)/2⌉, wrapped), so each output sums d products instead of n."""
     def __init__(s, D, n, wrap, scaled, gain=False):
         super().__init__(); s.gain = nn.Parameter(torch.zeros(1)) if gain else None
         cells = [(i, j, (n - 1 - i - j) % n) for i in range(n) for j in range(n)] if wrap else \
@@ -154,9 +158,18 @@ class TriFFN(nn.Module):
         if TRI_RENORM: sc = sc / sc.mean()                                 # triSN / triRN: redistribute only, average weight 1
         s.register_buffer("scale", sc)
         s.W = nn.Parameter(torch.randn(len(cells)) / n); s.a = nn.Linear(D, n, bias=False); s.b = nn.Linear(3 * n, D, bias=False)
+        s.local = TRI_LOCAL and wrap
+        if s.local:
+            d = n // 2 + 1; lo = (d - 1) // 2; near = lambda a, b: ((a - b + lo) % n) < d      # a − b within the window
+            for name, m in (("li", near(J, I)), ("lj", near(K, J)), ("lk", near(I, K))): s.register_buffer(name, m.nonzero().squeeze(1), persistent=False)
     def forward(s, x):
         y = s._ff(x); return y * s.gain if s.gain is not None else y
     def _ff(s, x):
+        if s.local:                                                   # the three sweeps over their own windows of cells
+            h = s.a(x); out = []
+            for c, t, (u, v) in ((s.li, s.I, (s.J, s.K)), (s.lj, s.J, (s.I, s.K)), (s.lk, s.K, (s.I, s.J))):
+                out.append(torch.zeros_like(h).index_add_(-1, t[c], s.W[c] * h[..., u[c]] * h[..., v[c]]))
+            return s.b(torch.cat(out, -1))
         h = s.a(x); hi, hj, hk = h[..., s.I], h[..., s.J], h[..., s.K]
         sweeps = [(s.I, lambda: hj * hk), (s.J, lambda: hi * hk), (s.K, lambda: hi * hj)]      # the 0°, 60° and 120° sweeps
         y = torch.cat([torch.zeros_like(h) if d == SWEEP["drop"] else torch.zeros_like(h).index_add_(-1, t, s.W * f())
@@ -373,7 +386,7 @@ if kind == "matoff4":                                               # ... and wi
     for it in (1, 2, 3): MATSTEP["it"] = it; vs.append(evaluate())
     MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} offset_eval (x+0,y+1) (x+1,y+0) (x+1,y+1): " + " ".join(f"{v:.4f}" for v in vs), flush=True)
-if TRI:                                                             # also evaluate with only 2 of the 3 sweeps (cheaper inference)
+if TRI and not TRI_LOCAL:                                           # also evaluate with only 2 of the 3 sweeps (cheaper inference)
     pair = []
     for d in range(3):
         SWEEP["drop"], SWEEP["boost"] = d, 1.5; pair.append(evaluate())

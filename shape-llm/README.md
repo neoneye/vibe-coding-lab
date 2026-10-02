@@ -599,3 +599,25 @@ The first equal-time comparison used wall-clock time with unoptimised code. Thre
 The pyramid stays 1.6–1.9× slower on the CPU and gets relatively slower on the GPU as the batch grows: each token carries 938/762/592 values instead of 184, so everything that is not a matrix multiply costs 3–5× more.
 
 * **Equal time** (`logs/e21_*`, optimised code, seed 0): `matnone12` 3.216 at 1,000 steps, 3.101 at 1,250 steps (the time `base2` needs for 2,000), 2.943 at 2,000 steps; `base2` 2.978 at 2,000 steps. At equal CPU time the transformer is 0.12 ahead; at equal steps the pyramid is 0.034 ahead (0.071 for `matgain12`).
+
+### The triangle with a local window (`triL`)
+
+A third way to collect the triangle's weights, next to wrap and no wrap. The layer is wrapped (cells i + j + k ≡ n − 1 mod n), but every output collects only a window of d = n//2 + 1 weights centred on its own index, wrapped:
+the 0° output i uses the cells with j − i in the window, the 60° output j those with k − j, the 120° output k those with i − k (offsets −⌊(d−1)/2⌋ … +⌈(d−1)/2⌉). For n = 50, 65, 85 that is 26, 33, 43 products per output instead of n.
+Per token the triangle layers then do 42,600 three-way products, against 83,700 with wrap and 42,450 without wrap.
+
+`run_e22.sh`: triangle layer in all six blocks, 1,000 steps, seed 0, frozen text, one run at a time, 4 threads (`logs/e22_*`):
+
+| step | `tri` (no wrap) | `triW` (wrap) | `triL` (window) | `base2` (transformer) |
+|---|---|---|---|---|
+| 200 | 4.105 | 4.101 | 4.102 | 4.104 |
+| 400 | 3.900 | 3.901 | 3.918 | 3.759 |
+| 600 | 3.568 | 3.625 | 3.640 | 3.503 |
+| 800 | 3.399 | 3.458 | 3.479 | 3.386 |
+| 1,000 | **3.351** | 3.407 | 3.431 | **3.350** |
+| sec/step (4 threads) | 0.30 | 0.48 | 0.40 | 0.05 (2 threads) |
+| blocks 1–2 switched off afterwards | +0.237 | +0.287 | +0.241 | – |
+
+* The window is 0.023 behind wrap (inside the noise) with half the products and a 17% faster step.
+* The window is 0.080 behind no wrap, which does the same number of products unevenly (1 to n per output). At 4,000 steps the evenly loaded wrapped triangle beat no wrap; at 1,000 steps no wrap has always led. Not run at 4,000 steps.
+* None of the three beats the transformer (no wrap is level with it). All three rely on their blocks 1–2 layers, unlike the best matrix-product models.
