@@ -24,6 +24,8 @@ for suf in ("-rot", "-rnd"):                                       # -rot: skip 
 TAG = kind + ("" if SWEEPS == "all" else "-" + SWEEPS)
 THRU = kind.startswith("matstair") and kind.endswith("c")          # "matstair…c": the staircases pass through the output cell
 if THRU: kind = kind[:-1]
+LOCAL = kind.startswith("matloc")                                  # "matloc…": each cell uses only ≈ m/3 cells of its row and column, centred on it
+if LOCAL: kind = "mat" + kind[6:]                                  # matloc → mat, matlocnone12 → matnone12, matlocoff → matoff
 SWEEP = {"drop": None, "boost": 1.0}                               # set per step by the training loop; eval uses all three sweeps
 NORM = kind == "hex2n"
 if NORM: kind = "hex2"                                             # same model as hex2, plus neighbour-count normalisation
@@ -154,7 +156,9 @@ class MatFFN(nn.Module):
     "matoff3": three states in turn, (0,0), (x+1, y+1), (x+2, y+2), i.e. xoffset = yoffset = iteration % 3.
     "matstair" (blocks 1–2): the row and the column are followed as staircases, 2 cells along and 1 across (26.565°), wrapped:
     cell [x, y] = Σ_k M[y + s·⌊k/2⌋, k] · M[k, x − s·⌊k/2⌋], with s = +1 on even iterations and −1 on odd ones
-    (both paths turned by the same angle, so they stay perpendicular). "matstairfix": the same with s = +1 always.
+    (both paths turned by the same angle, so they stay perpendicular).
+    "matloc…" (matloc, matlocnone12, matlocoff): a local product, like a cross-shaped convolution on the wrapped matrix:
+    cell [x, y] = Σ_{d = −h..h} M[y, x + d] · M[y + d, x], with a window of 2h + 1 ≈ m/3 cells (3, 3, 5 for m = 10, 11, 13). "matstairfix": the same with s = +1 always.
     "matstair3": three states in turn, s = −1, 0, +1 (iteration % 3), where 0 is the plain straight product.
     "matstair18": the two-state staircase with 3 cells along per 1 across (⌊k/3⌋ instead of ⌊k/2⌋), i.e. ±18.435°. "matstair18fix": that staircase with s = +1 always.
     "matstair32": two states, 3 cells along then 2 across (2·⌊k/3⌋), i.e. ±33.69°; still one cell per k.
@@ -162,6 +166,7 @@ class MatFFN(nn.Module):
     cell [x, y] = Σ_k M[y + s·(f(k) − f(x)), k] · M[k, x − s·(f(k) − f(y))], f(k) = rise·⌊k/run⌋ (without the "c" the paths start at the edge)."""
     def __init__(s, D, m, offset):
         super().__init__(); s.m, s.offset = m, offset; s.a = nn.Linear(D, m * m, bias=False); s.b = nn.Linear(m * m, D, bias=False)
+        s.half = round((m / 3 - 1) / 2)                               # half-width of the local window
         if QMODE: s.register_buffer("pool", queens_pool(m), persistent=False)
         if offset in ("stair", "stairfix", "stair3"):                 # index tables for the two tilts, s = +1 and s = −1
             k, c = torch.arange(m), torch.arange(m)
@@ -188,6 +193,10 @@ class MatFFN(nn.Module):
             if THRU: Y = Y[..., (s.tp if ri is s.rip else s.tn).flatten()]
             return s.b(Y * s.m ** -0.5)
         xo, yo = (it % 3, it % 3) if s.offset == 3 else ((it >> 1) & 1, it & 1) if s.offset == 4 else ((it & 1) * s.offset[0], (it & 1) * s.offset[1]) if isinstance(s.offset, tuple) else ((it * 2) & 2, it & 1)
+        if LOCAL:
+            Y = sum(torch.roll(M, -d, -1) * torch.roll(M, -d, -2) for d in range(-s.half, s.half + 1))   # Σ_d M[y, x+d] · M[y+d, x]
+            if xo or yo: Y = torch.roll(Y, (-yo, -xo), (-2, -1))      # the offset shifts the result, as it does for the full product
+            return s.b(Y.flatten(-2) * (2 * s.half + 1) ** -0.5)
         rows = torch.roll(M, -yo, -2) if yo else M                    # rows[y] = M[(y + yo) % m]
         cols = torch.roll(M, -xo, -1) if xo else M                    # cols[:, x] = M[:, (x + xo) % m]
         return s.b((rows @ cols).flatten(-2) * s.m ** -0.5)

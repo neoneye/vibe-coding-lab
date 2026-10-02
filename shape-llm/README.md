@@ -440,3 +440,20 @@ All six variants, seed 0, 1,000 steps, same text, one after the other (`logs/e10
 * **Shift tolerance** (loss rise when the blocks 1–2 result is shifted): plain +0.67 to +0.90 for any shift; `matoff` +0.003 on its trained shift and about +0.10 on unseen ones; `matoff4` +0.02 to +0.03 on unseen ones.
 * **Queens:** the mask changed in all six blocks, and those models ignore every feed-forward (outputs 0.07–0.19 of the input in `matq`), including blocks 3–6, which the other models need.
 * One seed, 1,000 steps. Untested: 4,000 steps and more seeds, the same removal in the transformer and triangle models, other learning rates.
+
+### A local product: only the nearby cells (`matloc…`)
+
+Instead of the whole row and column, each cell uses a window of ≈ m/3 cells of its row and its column, centred on the cell and wrapped:
+cell [x, y] = Σ_{d = −h..h} M[y, (x + d) % m] · M[(y + d) % m, x], window 2h + 1 = 3, 3, 5 for m = 10, 11, 13 (300 / 363 / 845 products instead of 1,000 / 1,331 / 2,197).
+Unlike the full product it is translation-equivariant on the torus, like a convolution. A `matloc` prefix selects it: `matloc` (= `mat`), `matlocnone12` (= `matnone12`), `matlocoff` (= `matoff`).
+One run each, seed 0, 1,000 steps, same text (`logs/e12_*`):
+
+| model | full product | local product | sec/step |
+|---|---|---|---|
+| no feed-forward in blocks 1–2 (`matnone12` / `matlocnone12`) | 3.220 | **3.255** | 0.110 → 0.090 |
+| product in all six blocks (`mat` / `matloc`) | 3.482 | 3.460 | 0.130 → 0.107 |
+| two-state offset (x+2, y+1) (`matoff` / `matlocoff`) | 3.258 | 3.494 | 0.118 → 0.104 |
+
+* The local product is about level with the full one (one difference each way), at about a third of the multiplications and 18% less time per step.
+* The offset does not help the local product. `mat_props.py`: that model only half switched the blocks 1–2 layer off (cost of zeroing it +0.089, output 0.65–0.82 of its input), and ended worse than without the offset.
+* With blocks 1–2 removed, zeroing the feed-forward of blocks 3–6 costs +2.51 in the local model (+1.56 with the full product).
