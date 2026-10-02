@@ -29,7 +29,7 @@ TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN")   # tri
 TRI_WRAP, TRI_SCALED = kind in ("triW", "triWS"), kind in ("triS", "triSN", "triWS")
 TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 SQ = kind in ("sq4", "sq4c")                                       # square torus swept along rows, columns and both diagonals
-MAT = kind in ("mat", "matoff", "matoff4", "matq", "matqr")
+MAT = kind in ("mat", "matoff", "matoff4", "matoff11", "matq", "matqr")
 QMODE = {"matq": "both", "matqr": "row"}.get(kind)                 # sparse "queens" product instead of the full matrix product
 def queens_pool(m, want=200, rng_seed=0):
     """random m-queens placements (one cell per row and per column, no shared diagonal), enough of them to cover every cell."""
@@ -143,7 +143,8 @@ class MatFFN(nn.Module):
     """M = a(x) as an m × m matrix; the output cell [x, y] is the usual product: row y of M times column x of M.
     With offset (blocks 1–2 of "matoff") the cell [x, y] is instead computed from row (y + yoffset) and column (x + xoffset),
     wrapped; the destination cell is not displaced. "matoff": xoffset = (iteration*2)&2, yoffset = iteration&1 (two states);
-    "matoff4": xoffset = (iteration>>1)&1, yoffset = iteration&1 (the four states (0,0), (0,1), (1,0), (1,1) in turn)."""
+    "matoff4": xoffset = (iteration>>1)&1, yoffset = iteration&1 (the four states (0,0), (0,1), (1,0), (1,1) in turn);
+    "matoff11": xoffset = yoffset = iteration&1 (two states: (0,0) and (1,1))."""
     def __init__(s, D, m, offset):
         super().__init__(); s.m, s.offset = m, offset; s.a = nn.Linear(D, m * m, bias=False); s.b = nn.Linear(m * m, D, bias=False)
         if QMODE: s.register_buffer("pool", queens_pool(m), persistent=False)
@@ -156,7 +157,7 @@ class MatFFN(nn.Module):
             else:                                                     # both sides masked: m products, m non-zero cells
                 Y = torch.zeros_like(M); Y[..., torch.arange(s.m), p[p]] = v * v[..., p]
             return s.b(Y.flatten(-2))
-        xo, yo = ((it >> 1) & 1, it & 1) if s.offset == 4 else ((it * 2) & 2, it & 1)
+        xo, yo = ((it >> 1) & 1, it & 1) if s.offset == 4 else (it & 1, it & 1) if s.offset == 11 else ((it * 2) & 2, it & 1)
         rows = torch.roll(M, -yo, -2) if yo else M                    # rows[y] = M[(y + yo) % m]
         cols = torch.roll(M, -xo, -1) if xo else M                    # cols[:, x] = M[:, (x + xo) % m]
         return s.b((rows @ cols).flatten(-2) * s.m ** -0.5)
@@ -191,7 +192,7 @@ class HexLM(nn.Module):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
             if MAT:
-                layers += [Block(D, MatFFN(D, MAT_M[li], (4 if kind == "matoff4" else kind == "matoff") if li == 0 else False)) for _ in range(2)]
+                layers += [Block(D, MatFFN(D, MAT_M[li], (4 if kind == "matoff4" else 11 if kind == "matoff11" else kind == "matoff") if li == 0 else False)) for _ in range(2)]
             elif SQ:
                 layers += [Block(D, SqFFN(D, SQ_N[li], kind == "sq4c")) for _ in range(2)]
             elif TRI:
@@ -249,6 +250,9 @@ if QMODE:                                                           # the headli
     for i in range(3): QSTATE["fixed"] = i; vs.append(evaluate())
     QSTATE["fixed"] = None
     print(f"{TAG} seed={seed} fixed_mask_eval: " + " ".join(f"{v:.4f}" for v in vs), flush=True)
+if kind == "matoff11":
+    MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
+    print(f"{TAG} seed={seed} offset_eval x+1,y+1: {v:.4f}", flush=True)
 if kind == "matoff4":                                               # ... and with each of the other three states of the cycle
     vs = []
     for it in (1, 2, 3): MATSTEP["it"] = it; vs.append(evaluate())

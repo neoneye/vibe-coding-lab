@@ -325,3 +325,15 @@ Same seed (0), same text, 1,000 steps, run one after the other (`logs/e9_*`). Al
 * **Fewer multiplications did not help:** 0.27 (both sides) and 0.42 (one side) worse than the full product, for a 27% faster step (0.13 → 0.095 s).
 * Evaluation with three fixed placements instead of random ones: 3.756, 3.758, 3.757 (`matq`); 3.908, 3.904, 3.916 (`matqr`).
 * One seed each. Not tested: a fixed mask during training, more seeds, longer runs.
+
+**A third offset rule (`matoff11`):** `xoffset = yoffset = i&1`, i.e. the two states (0,0) and (x+1, y+1). One run, seed 0, 1,000 steps (`logs/e9_matoff11_0.log`): 4.122, 3.899, 3.532, 3.358, **3.305** at steps 200–1,000; 3.304 when evaluated in the shifted state.
+
+| offset rule | states | loss at 1,000 |
+|---|---|---|
+| `matoff` (mistyped) | (0,0), (x+2, y+1) | 3.258 |
+| `matoff4` | (0,0), (0,1), (1,0), (1,1) | 3.275 |
+| `matoff11` | (0,0), (x+1, y+1) | 3.305 |
+| `mat` | no offset | 3.482 |
+| standard transformer | – | 3.350 |
+
+The three offset rules span 0.05, which one seed cannot resolve; all of them beat the no-offset layer by 0.18–0.22 and the transformer by 0.045–0.093.
