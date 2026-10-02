@@ -563,3 +563,18 @@ Pyramid: triangle side 50, matrix product in blocks 3–6. Standard transformer:
 | standard transformer | 2 of 3 | 3.389 | −0.093, +0.081 | – |
 
 With a gain, 2 of 3 is as good as 3 of 3 (at full strength in all six blocks it cost 0.10–0.13), and the model gives the incomplete triangle a smaller gain. The triangle gets the largest gains of all the gated layers in the transformer, and the result (3.385) is still 0.035 behind the plain transformer (3.350), inside the noise.
+
+### Where the matrix product helps, and where it hurts (`matgelu36none12`, `matwide12`, `matwidegain12`)
+
+One run each, seed 0, 1,000 steps, same text, same starting weights as `matnone12` / `mat` where the shapes agree (`logs/e20_*`):
+
+| model | blocks 1–2 | blocks 3–6 | val |
+|---|---|---|---|
+| `matnone12` | none | matrix product | **3.220** |
+| `matgelu36none12` | none | b(GELU(a(x))), the same two projections | 3.321 |
+| `mat` | 10 × 10 product | matrix product | 3.482 |
+| `matwide12` | 30 × 30 product | matrix product | 3.547 |
+| `matwidegain12` | 30 × 30 product × gain | matrix product | 3.221 (gains +0.011, −0.019) |
+
+* The matrix product in blocks 3–6 beats a GELU layer of the same (narrow) size by 0.10; that is most of the pyramid's 0.13 lead over the transformer (3.350).
+* A 30 × 30 matrix (900 values for 938 features, 5.27M parameters) is unwanted in blocks 1–2 too, so the squeeze is not the reason.

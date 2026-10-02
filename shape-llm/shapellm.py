@@ -36,6 +36,11 @@ BASE_S12 = kind == "base2stairgain12"
 if STAIR12: THRU = GAIN12 = True
 if kind == "matstairgain12": kind = "matstair"
 if BASE_S12: kind = "base2"
+GELU36 = kind == "matgelu36none12"                                 # pyramid, no feed-forward in blocks 1–2, an ordinary GELU feed-forward of the same size in blocks 3–6
+if GELU36: kind = "matnone12"
+WIDE12 = kind in ("matwide12", "matwidegain12")                    # blocks 1–2 use a 30 × 30 matrix (900 values for 938 features: no squeeze)
+if kind == "matwidegain12": GAIN12 = True
+if WIDE12: kind = "mat"
 TRI12 = kind in ("mattrigain12", "base2trigain12")                 # blocks 1–2: the wrapped triangle layer × gain ("-rot": 2 of 3 sweeps per step)
 BASE_T12 = kind == "base2trigain12"
 BASE_T12_N = int(os.environ.get("SHAPE_TRI12_N", 64))              # triangle side in the standard transformer
@@ -207,6 +212,7 @@ class MatFFN(nn.Module):
     def forward(s, x):
         y = s._ff(x); return y * s.gain if s.gain is not None else y
     def _ff(s, x):
+        if s.offset == "gelu": return s.b(F.gelu(s.a(x)))             # same two projections, an activation function instead of the matrix product
         if s.offset == "none": return torch.zeros_like(x)             # "matnone12": no feed-forward in blocks 1–2 (weights created, never used)
         M = s.a(x).view(*x.shape[:-1], s.m, s.m); it = MATSTEP["it"] if s.offset else 0
         if s.q:                                                       # p[y] = the one picked column of row y
@@ -267,7 +273,7 @@ class HexLM(nn.Module):
             if MAT and TRI12 and li == 0:
                 layers += [Block(D, TriFFN(D, TRI_N[li], True, False, gain=True)) for _ in range(2)]
             elif MAT:
-                layers += [Block(D, MatFFN(D, MAT_M[li], ("none" if kind == "matnone12" else "stair" if kind in ("matstair", "matstair18", "matstair32") else "stairfix" if kind in ("matstairfix", "matstair18fix") else "stair3" if kind == "matstair3" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False, q=("both" if Q12 and li == 0 else None), gain=(GAIN12 and li == 0))) for _ in range(2)]
+                layers += [Block(D, MatFFN(D, 30 if WIDE12 and li == 0 else MAT_M[li], ("none" if kind == "matnone12" else "stair" if kind in ("matstair", "matstair18", "matstair32") else "stairfix" if kind in ("matstairfix", "matstair18fix") else "stair3" if kind == "matstair3" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else ("gelu" if GELU36 else False), q=("both" if Q12 and li == 0 else None), gain=(GAIN12 and li == 0))) for _ in range(2)]
             elif SQ:
                 layers += [Block(D, SqFFN(D, SQ_N[li], kind == "sq4c")) for _ in range(2)]
             elif TRI:
