@@ -337,3 +337,16 @@ Same seed (0), same text, 1,000 steps, run one after the other (`logs/e9_*`). Al
 | standard transformer | – | 3.350 |
 
 The three offset rules span 0.05, which one seed cannot resolve; all of them beat the no-offset layer by 0.18–0.22 and the transformer by 0.045–0.093.
+
+**A fourth offset rule (`matoff22`):** two states, (0,0) and (x+2, y+2). `matoffAB` now means "(x+A, y+B) on odd iterations". One run, seed 0, 1,000 steps (`logs/e9_matoff22_0.log`): 4.090, 3.767, 3.462, 3.309, **3.259**; 3.265 when evaluated in the shifted state.
+
+| offset rule | loss at 1,000 |
+|---|---|
+| (0,0), (x+2, y+1) | 3.258 |
+| (0,0), (x+2, y+2) | 3.259 |
+| four states (0,0), (0,1), (1,0), (1,1) | 3.275 |
+| (0,0), (x+1, y+1) | 3.305 |
+| no offset | 3.482 |
+| standard transformer | 3.350 |
+
+(x+2, y+2) ties with (x+2, y+1). The two shift-by-2 rules lead the two shift-by-1 rules, a hint that a larger shift helps, but the whole spread (0.05) is inside single-seed noise.
