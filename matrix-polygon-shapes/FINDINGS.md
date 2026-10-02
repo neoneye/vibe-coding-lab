@@ -141,6 +141,11 @@ A pyramid of hexagonal feature cells (radius 12 → 6 → 3) with 3 → 1 triang
   - The triangle's own weights are 14,150 numbers (0.6% of the model; 27,900 with wrap), yet the wiring change (wrap) moves the loss more than any reweighting.
   - Centre lowered + average 1 had the tightest seeds (2.787–2.791), without rescaling the widest (2.787–2.832).
   - Per unit of time the transformer wins easily (triangle steps 4–6× slower on CPU).
+- Two of three sweeps per training step (rotating or random skipped direction, kept sweeps × 3/2; 4,000 steps, 3 seeds):
+  - Costs 0.10–0.13 bits/char: wrap 2.739 → 2.866 (cyclic) / 2.854 (random); no wrap 2.778 → 2.879 / 2.891. Seed ranges far apart from the all-3 runs.
+  - The gap grows during training (0.03 at step 400 → 0.13 at the end), so it is not a regulariser that pays off later. Cyclic vs random: no difference.
+  - Evaluating with only 2 sweeps costs a further ~0.03, equally for every pair: no direction is neglected, but each carries information the others lack.
+  - The step is only ~15% faster (attention and projections dominate), so it loses at equal time too.
 - Loss curves (page section 6, `../shape-llm/loss_curves.png`): the transformer learns fastest early, the triangles catch up, and everything is still falling at step 1,000.
 
 ## Takeaways

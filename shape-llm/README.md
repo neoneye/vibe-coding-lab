@@ -210,3 +210,24 @@ Full pyramid model, re-run together with the corpus fixed (`shapellm.py` no long
 * **Wrap beats no wrap** (worst wrapped seed 2.751, best unwrapped 2.761). Caveat: at the same side n, wrap holds n² weights instead of n(n+1)/2, so it does twice the three-way products per step (+0.6% parameters, ~1.5× time per step).
 * **Centre vs edges:** raising the centre (reversed) and unscaled end level (2.770 / 2.773 / 2.778, overlapping). Lowering the centre is the only clear loss.
 * **Cost:** a triangle step is ~4× (no wrap) to ~6× (wrap) a transformer step on CPU.
+
+### Two of three sweeps per training step
+
+Idea: at training step i use only the directions `angles[i % 3]` and `angles[(i + 1) % 3]`, so each step does 2 of the 3 sweeps and all directions get exercised in turn.
+`shapellm.py <kind>-rot` uses that cyclic rule, `<kind>-rnd` skips a random direction. All layers skip the same direction on a step; the kept sweeps are scaled by 3/2 (as dropout does), and validation uses all three.
+At the end each run also prints `two_sweep_eval`: the loss with only 2 sweeps, for each of the 3 pairs. `run_e6.sh`, logs `logs/e6_*`, same frozen text as e4/e5.
+
+| triangle | sweeps per training step | eval with all 3 (3 seeds) | eval with only 2 | cost |
+|---|---|---|---|---|
+| wrap | all 3 | **2.739** (2.751, 2.733, 2.732) | – | – |
+| wrap | 2 of 3, cyclic | 2.866 (2.900, 2.846, 2.852) | 2.897 | +0.127 |
+| wrap | 2 of 3, random | 2.854 (2.862, 2.839, 2.860) | 2.884 | +0.115 |
+| no wrap | all 3 | **2.778** (2.761, 2.780, 2.793) | – | – |
+| no wrap | 2 of 3, cyclic | 2.879 (2.859, 2.893, 2.885) | 2.906 | +0.101 |
+| no wrap | 2 of 3, random | 2.891 (2.855, 2.910, 2.909) | 2.922 | +0.113 |
+
+* **It costs 0.10–0.13 bits/char**, with seed ranges far apart from the all-3 runs. The gap grows during training (wrap, cyclic: 0.03 at step 400, 0.09 at 2,000, 0.13 at 4,000).
+* **Cyclic vs random:** no difference (±0.012, inside the seed ranges).
+* **Two sweeps at evaluation** cost a further ~0.03, the same for whichever direction is skipped (pairs within 0.03 of each other). The rotation trains all directions equally, but each carries information the other two lack.
+* **Speed:** a step is only ~15% faster (0.66 → 0.56 s no wrap, 1.14 → 0.97 s wrap, 1 thread, idle machine); attention and the projections dominate. At equal time it still loses (all-3 wrap is at 2.780 after 3,200 steps).
+* Not tested: skipping less often, a different direction per layer, no 3/2 rescaling.

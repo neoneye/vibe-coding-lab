@@ -18,6 +18,11 @@ torch.set_num_threads(int(os.environ.get("SHAPE_THREADS", 2)))
 
 kind, seed, steps = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 EVALS = int(sys.argv[4]) if len(sys.argv) > 4 else 5          # how many validation points to log
+SWEEPS = "all"                                                     # triangle sweeps per training step: all 3, or 2 of 3
+for suf in ("-rot", "-rnd"):                                       # -rot: skip direction (i+2) % 3 at step i; -rnd: skip a random one
+    if kind.endswith(suf): SWEEPS, kind = suf[1:], kind[:-len(suf)]
+TAG = kind + ("" if SWEEPS == "all" else "-" + SWEEPS)
+SWEEP = {"drop": None, "boost": 1.0}                               # set per step by the training loop; eval uses all three sweeps
 NORM = kind == "hex2n"
 if NORM: kind = "hex2"                                             # same model as hex2, plus neighbour-count normalisation
 TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN")   # triangle feed-forwards inside the hexagonal pyramid
@@ -88,8 +93,10 @@ class TriFFN(nn.Module):
         s.W = nn.Parameter(torch.randn(len(cells)) / n); s.a = nn.Linear(D, n, bias=False); s.b = nn.Linear(3 * n, D, bias=False)
     def forward(s, x):
         h = s.a(x); hi, hj, hk = h[..., s.I], h[..., s.J], h[..., s.K]
-        y = torch.cat([torch.zeros_like(h).index_add_(-1, t, s.W * p) for t, p in [(s.I, hj * hk), (s.J, hi * hk), (s.K, hi * hj)]], -1)
-        return s.b(y * s.scale)
+        sweeps = [(s.I, lambda: hj * hk), (s.J, lambda: hi * hk), (s.K, lambda: hi * hj)]      # the 0°, 60° and 120° sweeps
+        y = torch.cat([torch.zeros_like(h) if d == SWEEP["drop"] else torch.zeros_like(h).index_add_(-1, t, s.W * f())
+                       for d, (t, f) in enumerate(sweeps)], -1)
+        return s.b(y * s.scale * SWEEP["boost"]) if SWEEP["boost"] != 1.0 else s.b(y * s.scale)
 
 class Block(nn.Module):
     def __init__(s, D, ffn):
@@ -146,7 +153,7 @@ else:                                                               # match the 
     D = 64
     while count(BaseLM(D + 8)) <= target: D += 8
     model = BaseLM(D)
-print(f"{kind}: {count(model):,} parameters", flush=True)
+print(f"{TAG}: {count(model):,} parameters", flush=True)
 
 opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
 sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=steps, pct_start=0.1)
@@ -156,10 +163,20 @@ def evaluate(n=40):
     model.eval(); tot = 0.0; gv.manual_seed(1234)
     for _ in range(n): x, y = batch(val, gv); tot += F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1)).item()
     model.train(); return tot / n / math.log(2)
+import random; rnd = random.Random(seed)
 t0 = time.time()
 for step in range(1, steps + 1):
+    if SWEEPS != "all":                                            # 2 of 3 sweeps, scaled 3/2 like dropout so all 3 match at eval
+        SWEEP["drop"], SWEEP["boost"] = ((step + 2) % 3 if SWEEPS == "rot" else rnd.randrange(3)), 1.5
     x, y = batch(train, g); loss = F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1))
     opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
+    SWEEP["drop"], SWEEP["boost"] = None, 1.0
     if step % (steps // EVALS) == 0:
-        print(f"{kind}{'n' if NORM else ''} seed={seed} step={step} val_bpc={evaluate():.4f} sec/step={(time.time()-t0)/step:.3f}", flush=True)
-torch.save(model.state_dict(), f"ckpt_{kind}{'n' if NORM else ''}_{seed}_{steps}.pt")
+        print(f"{TAG}{'n' if NORM else ''} seed={seed} step={step} val_bpc={evaluate():.4f} sec/step={(time.time()-t0)/step:.3f}", flush=True)
+if TRI:                                                             # also evaluate with only 2 of the 3 sweeps (cheaper inference)
+    pair = []
+    for d in range(3):
+        SWEEP["drop"], SWEEP["boost"] = d, 1.5; pair.append(evaluate())
+    SWEEP["drop"], SWEEP["boost"] = None, 1.0
+    print(f"{TAG} seed={seed} two_sweep_eval " + " ".join(f"skip{d}={v:.4f}" for d, v in enumerate(pair)) + f" mean={sum(pair) / 3:.4f}", flush=True)
+torch.save(model.state_dict(), f"ckpt_{TAG}{'n' if NORM else ''}_{seed}_{steps}.pt")
