@@ -203,3 +203,14 @@ New here:
 - the stable-shape classification (at most 5 corners);
 - the 4|P| − B − 3 cost formula;
 - the unconfirmed border-30 pentagon hint.
+
+## How the language-model findings compare with published work
+
+Raw performance is not comparable: published transformers reach 0.97–0.98 bits/char on enwik8 (Compressive Transformer, arXiv 1911.05507; Hourglass, arXiv 2110.13711); the models here have ~2M parameters, 1,000–4,000 steps and score 2.7–3.5.
+
+- Multiplicative feed-forwards about as good as a standard one: agrees with SwiGLU (Shazeer 2020, arXiv 2002.05202) and bilinear MLPs (Pearce et al. 2024, arXiv 2410.08417).
+- Offsets/staircases helping by disabling a layer: an accidental form of stochastic depth (Huang et al. 2016, arXiv 1603.09382) and LayerDrop (Fan et al. 2019, arXiv 1909.11556).
+- Feed-forward layers partly redundant: Pires et al. 2023 (arXiv 2309.01826); layer removal in LLMs, Gromov et al. 2024 (arXiv 2403.17887).
+- Local product vs full row and column: locality as in convolutions and criss-cross attention (Huang et al. 2018, arXiv 1811.11721).
+- Less standard (one seed, 1,000 steps): a clean case of an improvement that was really a removal; ending up ignoring a layer is not the same as never having it; the harm is specific to the matrix-product layer in blocks 1–2.
+- Not ruled out: the harm may come from the squeeze (938 features → 100) rather than the multiplication. Untested: a zero-initialised learnable gain on the layer (ReZero, arXiv 2003.04887; LayerScale, arXiv 2103.17239).
