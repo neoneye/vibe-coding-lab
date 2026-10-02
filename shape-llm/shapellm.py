@@ -61,6 +61,11 @@ import re
 MAT_XY = re.fullmatch(r"matoff(\d)(\d)", kind)                      # "matoffAB": two states, (0,0) and (x+A, y+B) on odd iterations
 MAT = kind in ("mat", "matnone12", "matoff", "matoff3", "matoff4", "matstair", "matstairfix", "matstair3", "matstair18", "matstair18fix", "matstair32", "matq", "matqr") or bool(MAT_XY)
 QMODE = {"matq": "both", "matqr": "row"}.get(kind)                 # sparse "queens" product instead of the full matrix product
+FASTMM = os.environ.get("SHAPE_BMM", "0") != "1"                    # SHAPE_BMM=1 restores the original batched-matmul path (bit-for-bit as in the earlier logs)
+def smallmm(A, B):
+    """product of many small matrices (…, m, m) in one vectorised multiply-and-sum: torch's batched matmul loops over the
+    batch on CPU, which costs far more than the arithmetic for 10 × 10 matrices. Same result up to rounding order."""
+    return (A.unsqueeze(-1) * B.unsqueeze(-3)).sum(-2) if FASTMM else A @ B
 QPOOLS = {}
 def queens_pool(m, want=200, rng_seed=0):
     if m not in QPOOLS: QPOOLS[m] = _queens_pool(m, want, rng_seed)
@@ -222,11 +227,11 @@ class MatFFN(nn.Module):
             else:                                                     # both sides masked: m products, m non-zero cells
                 Y = torch.zeros_like(M); Y[..., torch.arange(s.m), p[p]] = v * v[..., p]
             return s.b(Y.flatten(-2))
-        if s.offset == "stair3" and it % 3 == 1: return s.b((M @ M).flatten(-2) * s.m ** -0.5)     # the 0° state: straight rows and columns
+        if s.offset == "stair3" and it % 3 == 1: return s.b(smallmm(M, M).flatten(-2) * s.m ** -0.5)     # the 0° state: straight rows and columns
         if s.offset in ("stair", "stairfix", "stair3"):
             ri, ci = ((s.rin, s.cin) if it % 3 == 0 else (s.rip, s.cip)) if s.offset == "stair3" else (s.rip, s.cip) if it % 2 == 0 or s.offset == "stairfix" else (s.rin, s.cin)
             lead = M.shape[:-2]
-            Y = (M.gather(-2, ri.expand(*lead, s.m, s.m)) @ M.gather(-1, ci.expand(*lead, s.m, s.m))).flatten(-2)
+            Y = smallmm(M.gather(-2, ri.expand(*lead, s.m, s.m)), M.gather(-1, ci.expand(*lead, s.m, s.m))).flatten(-2)
             if THRU: Y = Y[..., (s.tp if ri is s.rip else s.tn).flatten()]
             return s.b(Y * s.m ** -0.5)
         xo, yo = (it % 3, it % 3) if s.offset == 3 else ((it >> 1) & 1, it & 1) if s.offset == 4 else ((it & 1) * s.offset[0], (it & 1) * s.offset[1]) if isinstance(s.offset, tuple) else ((it * 2) & 2, it & 1)
@@ -239,14 +244,16 @@ class MatFFN(nn.Module):
             return s.b(Y.flatten(-2) * (2 * s.half + 1) ** -0.5)
         rows = torch.roll(M, -yo, -2) if yo else M                    # rows[y] = M[(y + yo) % m]
         cols = torch.roll(M, -xo, -1) if xo else M                    # cols[:, x] = M[:, (x + xo) % m]
-        return s.b((rows @ cols).flatten(-2) * s.m ** -0.5)
+        return s.b(smallmm(rows, cols).flatten(-2) * s.m ** -0.5)
 
 class Block(nn.Module):
     def __init__(s, D, ffn):
         A = 48 if (kind == "hex2" or TRI or SQ or MAT) else 128
         super().__init__(); s.n1 = nn.LayerNorm(D); s.att = Attention(D, A); s.n2 = nn.LayerNorm(D); s.ffn = ffn
     def forward(s, x):
-        x = x + s.att(s.n1(x)); return x + s.ffn(s.n2(x))
+        x = x + s.att(s.n1(x))
+        if getattr(s.ffn, "offset", None) == "none" or getattr(s.ffn, "off", False): return x   # no feed-forward here: skip its LayerNorm too
+        return x + s.ffn(s.n2(x))
 
 class Bottleneck(nn.Module):
     """each coarse cell = linear map of its 3 fine cells (3·c_in → c_out, shared) + per-cell bias."""
@@ -256,7 +263,7 @@ class Bottleneck(nn.Module):
         s.lin = nn.Linear(3 * cin, cout, bias=False); s.bias = nn.Parameter(torch.zeros(len(cells(Rc)), cout)); s.norm = nn.LayerNorm(len(cells(Rc)) * cout)
     def forward(s, x):
         B, T, _ = x.shape; h = x.view(B, T, -1, s.cin)
-        t = h[:, :, s.g, :] * s.valid[..., None]                    # (B, T, coarse, 3, c_in)
+        t = h.index_select(2, s.g.flatten()).view(B, T, -1, 3, s.cin) * s.valid[..., None]   # (B, T, coarse, 3, c_in); index_select is faster than h[:, :, g]
         return s.norm((s.lin(t.flatten(-2)) + s.bias).view(B, T, -1))
 
 HEX2_MULT = [4, 3, 2]                                              # hidden multiplier per level for the locally connected version

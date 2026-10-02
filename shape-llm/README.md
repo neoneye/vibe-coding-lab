@@ -578,3 +578,24 @@ One run each, seed 0, 1,000 steps, same text, same starting weights as `matnone1
 
 * The matrix product in blocks 3–6 beats a GELU layer of the same (narrow) size by 0.10; that is most of the pyramid's 0.13 lead over the transformer (3.350).
 * A 30 × 30 matrix (900 values for 938 features, 5.27M parameters) is unwanted in blocks 1–2 too, so the squeeze is not the reason.
+
+### Speed: arithmetic, optimised code, equal time
+
+The first equal-time comparison used wall-clock time with unoptimised code. Three measures instead:
+
+* **Arithmetic** (`python flops.py <kind>`, multiply-adds per token in a forward pass): `base2` 2,307,960; `matnone12` 1,770,436 (matrix products: 7,056); `matgain12` 2,147,636; `matlocnone12` 1,765,796. The pyramid needs fewer multiplications than the transformer.
+* **Optimised code:** `smallmm` computes the many small matrix products in one vectorised multiply-and-sum (torch's batched matmul loops over the batch on CPU; `SHAPE_BMM=1` restores the old path, which changes the rounding order and moves `matnone12` at 1,000 steps from 3.220 to 3.216), `Block` skips the LayerNorm of a removed feed-forward, and `Bottleneck` uses `index_select`.
+* **Time per training step** (forward, backward, update; batch 16 × 64):
+
+| | `base2` | `matnone12` | `matgain12` |
+|---|---|---|---|
+| CPU, 1 thread | 64 ms | 116 ms | 136 ms |
+| CPU, 2 threads, before optimising | 50 ms | 84 ms | 96 ms |
+| CPU, 2 threads, optimised | 50 ms | 80 ms | 94 ms |
+| CPU, 8 threads | 46 ms | 72 ms | 86 ms |
+| GPU (MPS), batch 16 | 19 ms | 24 ms | 29 ms |
+| GPU (MPS), batch 256 | 88 ms | 291 ms | 332 ms |
+
+The pyramid stays 1.6–1.9× slower on the CPU and gets relatively slower on the GPU as the batch grows: each token carries 938/762/592 values instead of 184, so everything that is not a matrix multiply costs 3–5× more.
+
+* **Equal time** (`logs/e21_*`, optimised code, seed 0): `matnone12` 3.216 at 1,000 steps, 3.101 at 1,250 steps (the time `base2` needs for 2,000), 2.943 at 2,000 steps; `base2` 2.978 at 2,000 steps. At equal CPU time the transformer is 0.12 ahead; at equal steps the pyramid is 0.034 ahead (0.071 for `matgain12`).
