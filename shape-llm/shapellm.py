@@ -31,7 +31,7 @@ TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 SQ = kind in ("sq4", "sq4c")                                       # square torus swept along rows, columns and both diagonals
 import re
 MAT_XY = re.fullmatch(r"matoff(\d)(\d)", kind)                      # "matoffAB": two states, (0,0) and (x+A, y+B) on odd iterations
-MAT = kind in ("mat", "matoff", "matoff3", "matoff4", "matstair", "matstairfix", "matstair3", "matstair18", "matstair18fix", "matq", "matqr") or bool(MAT_XY)
+MAT = kind in ("mat", "matoff", "matoff3", "matoff4", "matstair", "matstairfix", "matstair3", "matstair18", "matstair18fix", "matstair32", "matq", "matqr") or bool(MAT_XY)
 QMODE = {"matq": "both", "matqr": "row"}.get(kind)                 # sparse "queens" product instead of the full matrix product
 def queens_pool(m, want=200, rng_seed=0):
     """random m-queens placements (one cell per row and per column, no shared diagonal), enough of them to cover every cell."""
@@ -49,7 +49,8 @@ def queens_pool(m, want=200, rng_seed=0):
         if q not in seen: seen.add(q); pool.append(q); cover |= {(y, c) for y, c in enumerate(q)}
     return torch.tensor(pool)
 QSTATE = {"rng": None, "fixed": None}                              # which placement to use: a seeded random one, or a fixed index                                    # feed-forward = ordinary matrix product M·M of a projected m × m matrix
-STAIR_RUN = 3 if kind in ("matstair18", "matstair18fix") else 2                       # cells along per 1 cell across: 2 → 26.565°, 3 → 18.435°
+STAIR_RUN = 3 if kind in ("matstair18", "matstair18fix", "matstair32") else 2   # cells along per step: 2 → 26.565°, 3 → 18.435°
+STAIR_RISE = 2 if kind == "matstair32" else 1                      # cells across per step; 3 along + 2 across → 33.69° (the path skips a cell when it steps)
 MAT_M = [10, 11, 13]                                               # matrix side per level (≈ the triangle's feed-forward budget)
 MATSTEP = {"it": 0}                                                # training iteration, set by the training loop; evaluation uses 0 (no offset)
 SQ_N = [41, 53, 67]                                                # odd sides, chosen to match the wrapped triangle's parameter count
@@ -153,15 +154,16 @@ class MatFFN(nn.Module):
     cell [x, y] = Σ_k M[y + s·⌊k/2⌋, k] · M[k, x − s·⌊k/2⌋], with s = +1 on even iterations and −1 on odd ones
     (both paths turned by the same angle, so they stay perpendicular). "matstairfix": the same with s = +1 always.
     "matstair3": three states in turn, s = −1, 0, +1 (iteration % 3), where 0 is the plain straight product.
-    "matstair18": the two-state staircase with 3 cells along per 1 across (⌊k/3⌋ instead of ⌊k/2⌋), i.e. ±18.435°. "matstair18fix": that staircase with s = +1 always."""
+    "matstair18": the two-state staircase with 3 cells along per 1 across (⌊k/3⌋ instead of ⌊k/2⌋), i.e. ±18.435°. "matstair18fix": that staircase with s = +1 always.
+    "matstair32": two states, 3 cells along then 2 across (2·⌊k/3⌋), i.e. ±33.69°; still one cell per k."""
     def __init__(s, D, m, offset):
         super().__init__(); s.m, s.offset = m, offset; s.a = nn.Linear(D, m * m, bias=False); s.b = nn.Linear(m * m, D, bias=False)
         if QMODE: s.register_buffer("pool", queens_pool(m), persistent=False)
         if offset in ("stair", "stairfix", "stair3"):                 # index tables for the two tilts, s = +1 and s = −1
             k, c = torch.arange(m), torch.arange(m)
             for name, sg in (("p", 1), ("n", -1)):
-                s.register_buffer("ri" + name, (c[:, None] + sg * (k[None, :] // STAIR_RUN)) % m, persistent=False)   # [y, k] → row index
-                s.register_buffer("ci" + name, (c[None, :] - sg * (k[:, None] // STAIR_RUN)) % m, persistent=False)   # [k, x] → column index
+                s.register_buffer("ri" + name, (c[:, None] + sg * STAIR_RISE * (k[None, :] // STAIR_RUN)) % m, persistent=False)   # [y, k] → row index
+                s.register_buffer("ci" + name, (c[None, :] - sg * STAIR_RISE * (k[:, None] // STAIR_RUN)) % m, persistent=False)   # [k, x] → column index
     def forward(s, x):
         M = s.a(x).view(*x.shape[:-1], s.m, s.m); it = MATSTEP["it"] if s.offset else 0
         if QMODE:                                                     # p[y] = the one picked column of row y
@@ -211,7 +213,7 @@ class HexLM(nn.Module):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
             if MAT:
-                layers += [Block(D, MatFFN(D, MAT_M[li], ("stair" if kind in ("matstair", "matstair18") else "stairfix" if kind in ("matstairfix", "matstair18fix") else "stair3" if kind == "matstair3" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False)) for _ in range(2)]
+                layers += [Block(D, MatFFN(D, MAT_M[li], ("stair" if kind in ("matstair", "matstair18", "matstair32") else "stairfix" if kind in ("matstairfix", "matstair18fix") else "stair3" if kind == "matstair3" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False)) for _ in range(2)]
             elif SQ:
                 layers += [Block(D, SqFFN(D, SQ_N[li], kind == "sq4c")) for _ in range(2)]
             elif TRI:
@@ -272,7 +274,7 @@ if QMODE:                                                           # the headli
 if MAT_XY:
     MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} offset_eval x+{MAT_XY[1]},y+{MAT_XY[2]}: {v:.4f}", flush=True)
-if kind in ("matstair", "matstair18"):                              # the headline evaluation uses the + tilt; also the − one
+if kind in ("matstair", "matstair18", "matstair32"):                            # the headline evaluation uses the + tilt; also the − one
     MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} tilt_eval minus: {v:.4f}", flush=True)
 if kind == "matstair3":                                             # the headline evaluation uses iteration 0's state (−26.5°); also the other two

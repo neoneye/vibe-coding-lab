@@ -395,3 +395,6 @@ The further apart the two states, the better: ±26.5° > ±18.4° > fixed. Same 
 | 26.5° | 3.435 | 3.292 | 0.14 |
 
 A fixed tilt helps a little (about 0.02 from one tilt to the next, within single-seed noise); alternating helps much more, and more at the steeper tilt.
+
+**Steeper staircase (`matstair32`):** two states, 3 cells along then 2 across (2·⌊k/3⌋, the path skips a cell when it steps but still has one cell per k), i.e. ±33.69°. One run, seed 0, 1,000 steps (`logs/e9_matstair32_0.log`): 4.094, 3.857, 3.521, 3.354, **3.303**; 3.302 with the other tilt.
+Alternating staircases so far: ±18.4° 3.359, ±26.5° 3.292, ±33.7° 3.303. The gain grows up to 26.5° and then flattens (0.011 is inside single-seed noise).
