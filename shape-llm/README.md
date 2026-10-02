@@ -435,7 +435,7 @@ All six variants, seed 0, 1,000 steps, same text, one after the other (`logs/e10
 | standard transformer | 3.350 | 3.012 | – | – |
 
 * **The alternating models have switched the blocks 1–2 feed-forward off** (cost of zeroing it 0.002–0.14 against 0.405; output 2–4× smaller). Correlation between that cost and the final loss over 19 models: 0.90.
-* **Control, `matnone12`:** the same model with no feed-forward in blocks 1–2 (weights created so the initialisation matches, never used; 1.89M parameters in use). One run, seed 0, 1,000 steps (`logs/e11_matnone12_0.log`): 4.068, 3.721, 3.397, 3.269, **3.220**. Better than every offset rule and staircase, and 0.130 better than the transformer.
+* **Control, `matnone12`:** the same model with no feed-forward half in blocks 1–2; their attention half stays, so there are still 6 blocks and 6 attention layers but 4 feed-forward layers instead of 6 (weights created so the initialisation matches, never used; 1.89M parameters in use against 2.27M). One run, seed 0, 1,000 steps (`logs/e11_matnone12_0.log`): 4.068, 3.721, 3.397, 3.269, **3.220**. Better than every offset rule and staircase, and 0.130 better than the transformer.
 * **The gain is in learning:** the better models have lower training-text loss too (2.785 for `matnone12`, 3.150 for `mat`).
 * **Shift tolerance** (loss rise when the blocks 1–2 result is shifted): plain +0.67 to +0.90 for any shift; `matoff` +0.003 on its trained shift and about +0.10 on unseen ones; `matoff4` +0.02 to +0.03 on unseen ones.
 * **Queens:** the mask changed in all six blocks, and those models ignore every feed-forward (outputs 0.07–0.19 of the input in `matq`), including blocks 3–6, which the other models need.
