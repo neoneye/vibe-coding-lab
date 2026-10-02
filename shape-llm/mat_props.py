@@ -20,25 +20,27 @@ def loss_on(src_data, n=40):
     return tot / n / math.log(2)
 tr_l, va_l = loss_on(train), loss_on(val)
 print(f"{TAG}: train {tr_l:.4f}  val {va_l:.4f}  gap {va_l - tr_l:+.4f}")
-first = [m for m in model.modules() if isinstance(m, MatFFN)][:2] if MAT else []
-if kind == "matnone12": first = []                                   # nothing to test: blocks 1–2 have no feed-forward
-if first and not QMODE and not kind.startswith("matstair"):
+ffns = [m.ffn for m in model.body if hasattr(m, "ffn")]             # the six feed-forward layers, in order
+first = ffns[:2] if MAT or TRI12 else []
+if kind == "matnone12" and not GAIN12 and "none12" in TAG: first = []   # nothing to test: blocks 1–2 have no feed-forward
+if first and not QMODE and not kind.startswith("matstair") and all(isinstance(m, MatFFN) and m.gain is None for m in first):
     out = []
     for xo, yo in [(0, 0), (1, 0), (0, 1), (1, 1), (2, 1), (2, 2), (3, 3), (5, 5), (0, 5), (7, 3)]:
         for m in first: m.offset = (xo, yo)
         MATSTEP["it"] = 1; out.append(f"({xo},{yo}) {loss_on(val) - va_l:+.3f}"); MATSTEP["it"] = 0
     print("   shift →", "  ".join(out))
 if first:                                                           # how much does the model rely on the feed-forward of blocks 1–2?
-    for m in first: m.offset = False if not kind.startswith("matstair") else m.offset
+    for m in first:
+        if isinstance(m, MatFFN) and not kind.startswith("matstair"): m.offset = False
     hooks = [m.register_forward_hook(lambda mod, i, o: torch.zeros_like(o)) for m in first]
     print(f"   blocks 1–2 feed-forward switched off: {loss_on(val) - va_l:+.3f}")
     for h in hooks: h.remove()
-    later = [m for m in model.modules() if isinstance(m, MatFFN)][2:]
+    later = ffns[2:]
     hooks = [m.register_forward_hook(lambda mod, i, o: torch.zeros_like(o)) for m in later]
     print(f"   blocks 3–6 feed-forward switched off: {loss_on(val) - va_l:+.3f}")
     for h in hooks: h.remove()
     norms = []
     def grab(mod, i, o): norms.append((o.norm(dim=-1).mean() / i[0].norm(dim=-1).mean()).item())
-    hooks = [m.register_forward_hook(grab) for m in [m for m in model.modules() if isinstance(m, MatFFN)]]
+    hooks = [m.register_forward_hook(grab) for m in ffns]
     loss_on(val, 4)
     n = len(norms) // 6; print("   |feed-forward output| / |its input|, blocks 1..6:", " ".join(f"{sum(norms[i::6]) / n:.2f}" for i in range(6)))

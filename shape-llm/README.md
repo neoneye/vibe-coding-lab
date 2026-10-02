@@ -551,3 +551,15 @@ Same picture as with the queens mask and the full product: the gains stay near z
 | after ≈ 2 minutes | **2.978** (2,000 steps) | 3.192 (1,000 steps) |
 
 Per step the pyramid leads (0.159, then 0.071); per second the transformer leads by 0.214. The per-step lead halves as training doubles. One seed each.
+
+**The triangle with a gain (`mattrigain12`, `base2trigain12`, and `-rot` for 2 of 3 sweeps).** Blocks 1–2 use the wrapped triangle layer × a zero-start gain; with the `-rot` suffix each training step computes 2 of the 3 sweeps (cyclic rule, kept sweeps × 3/2; evaluation uses all three).
+Pyramid: triangle side 50, matrix product in blocks 3–6. Standard transformer: width 184 as usual, triangle side 64 (`SHAPE_TRI12_N`; a parameter-matched side of 269 takes 5 s per step), 1,806,242 parameters. One run each, seed 0, 1,000 steps (`logs/e19_*`):
+
+| model | sweeps | val | learned gains | blocks 1–2 switched off afterwards |
+|---|---|---|---|---|
+| pyramid | 3 of 3 | 3.212 | +0.036, +0.054 | +0.084 |
+| pyramid | 2 of 3 | 3.212 | +0.020, +0.026 | +0.018 |
+| standard transformer | 3 of 3 | 3.385 | −0.109, +0.102 | – |
+| standard transformer | 2 of 3 | 3.389 | −0.093, +0.081 | – |
+
+With a gain, 2 of 3 is as good as 3 of 3 (at full strength in all six blocks it cost 0.10–0.13), and the model gives the incomplete triangle a smaller gain. The triangle gets the largest gains of all the gated layers in the transformer, and the result (3.385) is still 0.035 behind the plain transformer (3.350), inside the noise.

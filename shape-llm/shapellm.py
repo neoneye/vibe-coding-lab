@@ -36,6 +36,12 @@ BASE_S12 = kind == "base2stairgain12"
 if STAIR12: THRU = GAIN12 = True
 if kind == "matstairgain12": kind = "matstair"
 if BASE_S12: kind = "base2"
+TRI12 = kind in ("mattrigain12", "base2trigain12")                 # blocks 1–2: the wrapped triangle layer × gain ("-rot": 2 of 3 sweeps per step)
+BASE_T12 = kind == "base2trigain12"
+BASE_T12_N = int(os.environ.get("SHAPE_TRI12_N", 64))              # triangle side in the standard transformer
+if TRI12: GAIN12 = True
+if kind == "mattrigain12": kind = "mat"
+if BASE_T12: kind = "base2"
 LOCAL = kind.startswith("matloc")                                  # "matloc…": each cell uses only ≈ m/3 cells of its row and column, centred on it
 LOCALRC = kind.startswith("matlocrc")                              # "matlocrc…": the offset moves the row arm and the column arm separately
 if LOCAL: kind = "mat" + kind[8 if LOCALRC else 6:]                # matloc → mat, matlocnone12 → matnone12, matlocoff → matoff, matlocrcoff4 → matoff4
@@ -126,8 +132,8 @@ class TriFFN(nn.Module):
     """triangle-shaped weights swept at 0°, 60° and 120° (see tiny.py): h = A x (n units), three sweeps, then B.
     wrap: i + j + k ≡ n − 1 (mod n), every line holds n weights; no wrap: line i holds n − i weights.
     scaled: each output × (products it collects)^−½ (long "centre" lines turned down, length-1 lines at weight 1)."""
-    def __init__(s, D, n, wrap, scaled):
-        super().__init__()
+    def __init__(s, D, n, wrap, scaled, gain=False):
+        super().__init__(); s.gain = nn.Parameter(torch.zeros(1)) if gain else None
         cells = [(i, j, (n - 1 - i - j) % n) for i in range(n) for j in range(n)] if wrap else \
                 [(i, j, n - 1 - i - j) for i in range(n) for j in range(n - i)]
         I, J, K = (torch.tensor(c) for c in zip(*cells))
@@ -139,6 +145,8 @@ class TriFFN(nn.Module):
         s.register_buffer("scale", sc)
         s.W = nn.Parameter(torch.randn(len(cells)) / n); s.a = nn.Linear(D, n, bias=False); s.b = nn.Linear(3 * n, D, bias=False)
     def forward(s, x):
+        y = s._ff(x); return y * s.gain if s.gain is not None else y
+    def _ff(s, x):
         h = s.a(x); hi, hj, hk = h[..., s.I], h[..., s.J], h[..., s.K]
         sweeps = [(s.I, lambda: hj * hk), (s.J, lambda: hi * hk), (s.K, lambda: hi * hj)]      # the 0°, 60° and 120° sweeps
         y = torch.cat([torch.zeros_like(h) if d == SWEEP["drop"] else torch.zeros_like(h).index_add_(-1, t, s.W * f())
@@ -256,7 +264,9 @@ class HexLM(nn.Module):
         for li, (R, c) in enumerate(s.LEVELS):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
-            if MAT:
+            if MAT and TRI12 and li == 0:
+                layers += [Block(D, TriFFN(D, TRI_N[li], True, False, gain=True)) for _ in range(2)]
+            elif MAT:
                 layers += [Block(D, MatFFN(D, MAT_M[li], ("none" if kind == "matnone12" else "stair" if kind in ("matstair", "matstair18", "matstair32") else "stairfix" if kind in ("matstairfix", "matstair18fix") else "stair3" if kind == "matstair3" else 4 if kind == "matoff4" else 3 if kind == "matoff3" else (int(MAT_XY[1]), int(MAT_XY[2])) if MAT_XY else kind == "matoff") if li == 0 else False, q=("both" if Q12 and li == 0 else None), gain=(GAIN12 and li == 0))) for _ in range(2)]
             elif SQ:
                 layers += [Block(D, SqFFN(D, SQ_N[li], kind == "sq4c")) for _ in range(2)]
@@ -275,7 +285,7 @@ class MLP(nn.Module):
 class BaseLM(nn.Module):
     def __init__(s, D):
         super().__init__(); s.emb = nn.Embedding(V, D); s.pos = nn.Embedding(CTX, D)
-        s.body = nn.Sequential(*[Block(D, MatFFN(D, round((4 * D) ** 0.5), False, q="both", gain=True) if BASE_Q12 and i < 2 else MatFFN(D, round((4 * D) ** 0.5), "stair", gain=True) if BASE_S12 and i < 2 else MLP(D, BASE_NONE12 and i < 2)) for i in range(6)]); s.norm = nn.LayerNorm(D); s.out = nn.Linear(D, V, bias=False)
+        s.body = nn.Sequential(*[Block(D, MatFFN(D, round((4 * D) ** 0.5), False, q="both", gain=True) if BASE_Q12 and i < 2 else MatFFN(D, round((4 * D) ** 0.5), "stair", gain=True) if BASE_S12 and i < 2 else TriFFN(D, BASE_T12_N, True, False, gain=True) if BASE_T12 and i < 2 else MLP(D, BASE_NONE12 and i < 2)) for i in range(6)]); s.norm = nn.LayerNorm(D); s.out = nn.Linear(D, V, bias=False)
     def forward(s, idx): return s.out(s.norm(s.body(s.emb(idx) + s.pos(torch.arange(idx.shape[1])))))
 
 count = lambda m: sum(p.numel() for p in m.parameters())
@@ -283,9 +293,9 @@ if kind in ("hex", "hex2") or TRI or SQ or MAT: model = HexLM()
 else:                                                               # match the hex model's parameter count
     if kind == "base2": kind = "hex2"; target = count(HexLM()); kind = "base2"   # match the locally connected version
     else: target = count(HexLM())
-    D = 64
+    D = 64; _t12, BASE_T12 = BASE_T12, False                       # choose the width as for the plain transformer, whatever sits in blocks 1–2
     while count(BaseLM(D + 8)) <= target: D += 8
-    model = BaseLM(D)
+    BASE_T12 = _t12; model = BaseLM(D)
 print(f"{TAG}: {count(model):,} parameters" + (f" (width {D}; {count(model) - 2 * 8 * D * D:,} in use)" if BASE_NONE12 else ""), flush=True)
 
 WBITS = int(os.environ.get("SHAPE_WBITS", 0))                      # train with few-bit weights: 1 = binary, 2 = ternary (−1, 0, +1), b ≥ 3 = b bits
@@ -323,7 +333,7 @@ for step in range(1, steps + 1):
 if kind == "matoff":                                                # the headline evaluation uses no offset; also evaluate with the odd-iteration offset
     MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} offset_eval x+2,y+1: {v:.4f}", flush=True)
-if GAIN12: print(f"{TAG} seed={seed} learned gains of the blocks 1–2 feed-forward: " + " ".join(f"{m.gain.item():+.3f}" for m in model.modules() if isinstance(m, MatFFN) and m.gain is not None), flush=True)
+if GAIN12: print(f"{TAG} seed={seed} learned gains of the blocks 1–2 feed-forward: " + " ".join(f"{m.gain.item():+.3f}" for m in model.modules() if isinstance(m, (MatFFN, TriFFN)) and m.gain is not None), flush=True)
 if QMODE:                                                           # the headline evaluation draws random placements; also try three fixed ones
     vs = []
     for i in range(3): QSTATE["fixed"] = i; vs.append(evaluate())
