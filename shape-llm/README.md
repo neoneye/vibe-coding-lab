@@ -290,3 +290,17 @@ One run each, seed 0, 1,000 steps, same frozen text (`logs/e8_*`), run one after
 * This is a single seed at 1,000 steps. Earlier 1,000-step rankings with 2 seeds were wrong twice, and seeds differed by up to 0.19, so this is a lead worth testing, not a result.
 * Not separated: whether the gain comes from the matrix-product layer or from the offset (needs the `mat` control).
 * Speed: 0.118 s per step against 0.058 s for the transformer (2 threads).
+
+**Corrected offset (`matoff4`).** The formula above was a typo for `xoffset = (i>>1)&1`, `yoffset = i&1`, which cycles through the four states (0,0), (0,1), (1,0), (1,1). One run, seed 0, 1,000 steps, same text (`logs/e8_matoff4_0.log`):
+
+| step | `matoff4` (four states) | `matoff` (two states, mistyped) | standard transformer |
+|---|---|---|---|
+| 200 | 4.093 | 4.078 | 4.105 |
+| 400 | 3.822 | 3.778 | 3.759 |
+| 600 | 3.489 | 3.467 | 3.503 |
+| 800 | 3.324 | 3.311 | 3.386 |
+| 1,000 | **3.275** | 3.258 | 3.350 |
+
+* Both offset rules end ahead of the transformer (0.076 and 0.093). They differ from each other by 0.017, which one seed cannot resolve.
+* Evaluated in the other three states of the cycle the loss is 3.277, 3.277, 3.281 (3.275 with no offset).
+* Still missing: the `mat` control (no offset), more seeds, a 4,000-step run.

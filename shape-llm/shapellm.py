@@ -29,7 +29,7 @@ TRI = kind in ("tri", "triS", "triSN", "triW", "triWS", "triR", "triRN")   # tri
 TRI_WRAP, TRI_SCALED = kind in ("triW", "triWS"), kind in ("triS", "triSN", "triWS")
 TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 SQ = kind in ("sq4", "sq4c")                                       # square torus swept along rows, columns and both diagonals
-MAT = kind in ("mat", "matoff")                                    # feed-forward = ordinary matrix product M·M of a projected m × m matrix
+MAT = kind in ("mat", "matoff", "matoff4")                                    # feed-forward = ordinary matrix product M·M of a projected m × m matrix
 MAT_M = [10, 11, 13]                                               # matrix side per level (≈ the triangle's feed-forward budget)
 MATSTEP = {"it": 0}                                                # training iteration, set by the training loop; evaluation uses 0 (no offset)
 SQ_N = [41, 53, 67]                                                # odd sides, chosen to match the wrapped triangle's parameter count
@@ -125,12 +125,13 @@ class SqFFN(nn.Module):
 class MatFFN(nn.Module):
     """M = a(x) as an m × m matrix; the output cell [x, y] is the usual product: row y of M times column x of M.
     With offset (blocks 1–2 of "matoff") the cell [x, y] is instead computed from row (y + yoffset) and column (x + xoffset),
-    wrapped, with xoffset = (iteration*2)&2 and yoffset = iteration&1; the destination cell is not displaced."""
+    wrapped; the destination cell is not displaced. "matoff": xoffset = (iteration*2)&2, yoffset = iteration&1 (two states);
+    "matoff4": xoffset = (iteration>>1)&1, yoffset = iteration&1 (the four states (0,0), (0,1), (1,0), (1,1) in turn)."""
     def __init__(s, D, m, offset):
         super().__init__(); s.m, s.offset = m, offset; s.a = nn.Linear(D, m * m, bias=False); s.b = nn.Linear(m * m, D, bias=False)
     def forward(s, x):
         M = s.a(x).view(*x.shape[:-1], s.m, s.m); it = MATSTEP["it"] if s.offset else 0
-        xo, yo = (it * 2) & 2, it & 1
+        xo, yo = ((it >> 1) & 1, it & 1) if s.offset == 4 else ((it * 2) & 2, it & 1)
         rows = torch.roll(M, -yo, -2) if yo else M                    # rows[y] = M[(y + yo) % m]
         cols = torch.roll(M, -xo, -1) if xo else M                    # cols[:, x] = M[:, (x + xo) % m]
         return s.b((rows @ cols).flatten(-2) * s.m ** -0.5)
@@ -165,7 +166,7 @@ class HexLM(nn.Module):
             D = len(cells(R)) * c
             if li: Rp, cp = s.LEVELS[li - 1]; layers.append(Bottleneck(Rp, R, cp, c))
             if MAT:
-                layers += [Block(D, MatFFN(D, MAT_M[li], kind == "matoff" and li == 0)) for _ in range(2)]
+                layers += [Block(D, MatFFN(D, MAT_M[li], (4 if kind == "matoff4" else kind == "matoff") if li == 0 else False)) for _ in range(2)]
             elif SQ:
                 layers += [Block(D, SqFFN(D, SQ_N[li], kind == "sq4c")) for _ in range(2)]
             elif TRI:
@@ -218,6 +219,11 @@ for step in range(1, steps + 1):
 if kind == "matoff":                                                # the headline evaluation uses no offset; also evaluate with the odd-iteration offset
     MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} offset_eval x+2,y+1: {v:.4f}", flush=True)
+if kind == "matoff4":                                               # ... and with each of the other three states of the cycle
+    vs = []
+    for it in (1, 2, 3): MATSTEP["it"] = it; vs.append(evaluate())
+    MATSTEP["it"] = 0
+    print(f"{TAG} seed={seed} offset_eval (x+0,y+1) (x+1,y+0) (x+1,y+1): " + " ".join(f"{v:.4f}" for v in vs), flush=True)
 if TRI:                                                             # also evaluate with only 2 of the 3 sweeps (cheaper inference)
     pair = []
     for d in range(3):
