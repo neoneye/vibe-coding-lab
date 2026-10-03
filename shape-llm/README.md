@@ -637,3 +637,16 @@ They are multiplied by 3 so that they average 1 (1.5, 1.0, 0.5); on that scale `
 * Uneven is between the two: it recovers part of what skipping a sweep lost, and still costs 0.04 (wrap) to 0.10 (no wrap) against equal strengths.
 * The uneven-trained wrapped model evaluated in its uneven states: 3.463, 3.466, 3.462 (3.448 at equal strengths); with one sweep removed 3.496.
 * Standard transformer: 3.350. One seed each.
+
+### Queens mask with a fixed placement (`matqfix`, `matqrfix`)
+
+The same queens placement on every iteration (the first of each layer's pool, so the two blocks of a level share one), in all six blocks, during training and evaluation. One run each, seed 0, 1,000 steps, same text (`logs/e24_*`):
+
+| mask | products (10 × 10) | random placement every iteration | the same placement always |
+|---|---|---|---|
+| both sides | 10 | 3.755 (`matq`) | **3.564** (`matqfix`) |
+| one side | 100 | 3.908 (`matqr`) | **3.518** (`matqrfix`) |
+
+* Fixing the placement improves the two versions by 0.19 and 0.39. One side, fixed, is 0.036 behind the full product (3.482) with a tenth of the products. The problem was the randomness, not the sparsity.
+* Evaluated with two placements they never saw: 4.332 and 4.294 (both sides), 5.373 and 5.181 (one side). The random-placement models were insensitive to the placement because they ignored these layers.
+* Standard transformer: 3.350.

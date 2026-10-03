@@ -60,8 +60,9 @@ TRI_RENORM, TRI_REVERSE = kind in ("triSN", "triRN"), kind in ("triR", "triRN")
 SQ = kind in ("sq4", "sq4c")                                       # square torus swept along rows, columns and both diagonals
 import re
 MAT_XY = re.fullmatch(r"matoff(\d)(\d)", kind)                      # "matoffAB": two states, (0,0) and (x+A, y+B) on odd iterations
-MAT = kind in ("mat", "matnone12", "matoff", "matoff3", "matoff4", "matstair", "matstairfix", "matstair3", "matstair18", "matstair18fix", "matstair32", "matq", "matqr") or bool(MAT_XY)
-QMODE = {"matq": "both", "matqr": "row"}.get(kind)                 # sparse "queens" product instead of the full matrix product
+MAT = kind in ("mat", "matnone12", "matqfix", "matqrfix", "matoff", "matoff3", "matoff4", "matstair", "matstairfix", "matstair3", "matstair18", "matstair18fix", "matstair32", "matq", "matqr") or bool(MAT_XY)
+QMODE = {"matq": "both", "matqr": "row", "matqfix": "both", "matqrfix": "row"}.get(kind)
+QFIXED = kind in ("matqfix", "matqrfix")                           # the same queens placement on every iteration (the first of the pool for each matrix size)                 # sparse "queens" product instead of the full matrix product
 FASTMM = os.environ.get("SHAPE_BMM", "0") != "1"                    # SHAPE_BMM=1 restores the original batched-matmul path (bit-for-bit as in the earlier logs)
 def smallmm(A, B):
     """product of many small matrices (…, m, m) in one vectorised multiply-and-sum: torch's batched matmul loops over the
@@ -348,6 +349,7 @@ def evaluate(n=40):
     QSTATE["rng"] = keep; model.train(); return tot / n / math.log(2)
 rnd = random.Random(seed); QSTATE["rng"] = random.Random(seed)
 UNEVEN = [3 / 6, 2 / 6, 1 / 6]
+if QFIXED: QSTATE["fixed"] = 0
 t0 = time.time()
 for step in range(1, steps + 1):
     if SWEEPS == "une":                                            # contributions 3/6, 2/6, 1/6 rotating with the iteration, × 3 so they average 1
@@ -364,7 +366,7 @@ if kind == "matoff":                                                # the headli
     MATSTEP["it"] = 1; v = evaluate(); MATSTEP["it"] = 0
     print(f"{TAG} seed={seed} offset_eval x+2,y+1: {v:.4f}", flush=True)
 if GAIN12: print(f"{TAG} seed={seed} learned gains of the blocks 1–2 feed-forward: " + " ".join(f"{m.gain.item():+.3f}" for m in model.modules() if isinstance(m, (MatFFN, TriFFN)) and m.gain is not None), flush=True)
-if QMODE:                                                           # the headline evaluation draws random placements; also try three fixed ones
+if QMODE:                                                           # the headline evaluation draws random placements (QFIXED: uses its one placement); also try three fixed ones
     vs = []
     for i in range(3): QSTATE["fixed"] = i; vs.append(evaluate())
     QSTATE["fixed"] = None
