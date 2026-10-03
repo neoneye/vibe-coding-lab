@@ -650,3 +650,19 @@ The same queens placement on every iteration (the first of each layer's pool, so
 * Fixing the placement improves the two versions by 0.19 and 0.39. One side, fixed, is 0.036 behind the full product (3.482) with a tenth of the products. The problem was the randomness, not the sparsity.
 * Evaluated with two placements they never saw: 4.332 and 4.294 (both sides), 5.373 and 5.181 (one side). The random-placement models were insensitive to the placement because they ignored these layers.
 * Standard transformer: 3.350.
+
+### Robustness to disruptions (`robust_props.py`)
+
+`robust_props.py <kind>` disturbs a trained model at evaluation and reports the rise in loss: every weight (matrices and the triangle weights) × (1 + σ·ε) for σ = 5/10/20% (mean of 3 draws); every LayerNorm output + σ·std·ε for σ = 0.1/0.2/0.5; a random 10/20% of every LayerNorm output set to zero (rescaled). Rounding comes from `quant_props.py` (which now also rounds the triangle weights). 1,000-step models, seed 0, same text:
+
+| model | loss | weight 20% | value 0.5 | dropped 20% | 3 bits | 2 bits |
+|---|---|---|---|---|---|---|
+| `base2` (transformer) | 3.350 | +0.086 | +0.387 | +0.397 | +0.141 | +0.718 |
+| `tri` (no wrap) | 3.351 | **+0.065** | **+0.348** | **+0.348** | **+0.075** | +0.657 |
+| `triW` (wrap) | 3.407 | +0.075 | +0.366 | +0.366 | +0.075 | +0.598 |
+| `mat` | 3.482 | +0.060 | +0.313 | +0.309 | +0.067 | +0.464 |
+| `matnone12` | 3.216 | +0.081 | +0.396 | +0.401 | +0.075 | +0.677 |
+
+* At equal loss (`tri` vs `base2`) the triangle loses less in every test: 10–12% less from noisy or dropped values, a quarter less from weight noise, half from 3-bit rounding.
+* All multiplying models halve the 3-bit damage, so robustness to weight disruptions is not specific to the triangle's three factors (one weight and two values; the matrix product also multiplies values in pairs).
+* Weaker models lose less (`mat`), so only equal-loss comparisons are clean. One seed; disruptions only after training.

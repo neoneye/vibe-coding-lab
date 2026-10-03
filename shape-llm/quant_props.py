@@ -18,7 +18,8 @@ model.load_state_dict(torch.load(f"ckpt_{TAG}_{seed}_{steps}.pt")); model.eval()
 unused = set()                                                      # feed-forward weights that exist but are never used ("…none12")
 for m in model.modules():
     if (isinstance(m, MatFFN) and m.offset == "none") or (isinstance(m, MLP) and m.off): unused |= {id(p) for p in m.parameters()}
-mats = [p for p in model.parameters() if p.dim() >= 2 and id(p) not in unused]; orig = [p.detach().clone() for p in mats]
+mats = [p for nm, p in model.named_parameters() if (p.dim() >= 2 or nm.endswith(".W")) and id(p) not in unused]   # weight matrices and the triangle weights
+orig = [p.detach().clone() for p in mats]
 n = sum(p.numel() for p in mats)
 
 @torch.no_grad()
