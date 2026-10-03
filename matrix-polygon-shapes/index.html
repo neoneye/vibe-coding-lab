@@ -85,6 +85,15 @@ svg text { fill: var(--muted); font: 12px var(--sans); }
   .pc td { border: 0; padding: 3px 0; }
   .pc td:not(:first-child)::before { content: attr(data-label); display: block; font: 600 11px/1.6 var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 }
+.ov-head { margin: 4px 0 0; padding-left: 20px; }
+.ov-head li { margin: 5px 0; }
+.ov-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 22px; margin: 20px 0 8px; }
+.ov-group ul { margin: 6px 0 0; padding-left: 18px; font-size: 14.5px; }
+.ov-group li { margin: 4px 0; color: var(--muted); }
+.ov-group li a { font-weight: 600; }
+.ov-title { font: 600 17px/1.25 var(--serif); }
+.ov-sub { font-size: 13px; color: var(--muted); }
+h2, h3 { scroll-margin-top: 14px; }
 footer { margin-top: 64px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 16px; }
 </style>
 </head>
@@ -103,12 +112,101 @@ footer { margin-top: 64px; font-size: 13px; color: var(--muted); border-top: 1px
   <div class="card"><div class="label">Shape = ring of matrices</div><div class="big meh">Odd beats even</div>
     <p>Even rings (square, hexagon) admit no shortcut: rank 2^k. Odd rings (triangle, pentagon) do. The pentagon's exact cost (25 to 31) is an open problem.</p></div>
   <div class="card"><div class="label">Shaped weights in a language model</div><div class="big meh">Close, not better</div>
-    <p>Triangles and cubes of weights beat a plain MLP but not SwiGLU. A whole hexagon-pyramid model with triangle layers comes close to a standard transformer: the best version (wrapped) is 0.013 bits/char behind at 4,000 steps, within seed noise.</p></div>
+    <p>Triangles and cubes of weights beat a plain MLP but not SwiGLU. A whole hexagon-pyramid model with triangle layers comes close to a standard transformer: the best version (wrapped) is 0.013 bits/char behind at 4,000 steps, within seed noise. Matrix-product versions lead per iteration in short runs, but not per second.</p></div>
 </div>
 <p class="cap" style="font-size:14px">The common thread: the rectangle is what multiplication converges to, and other shapes earn their place only with a different multiplication. See <a href="#takeaways">Takeaways</a>.</p>
 
+<h2 id="overview">Overview</h2>
+<p>The page asks whether the rectangle of a matrix can be replaced by another shape. Sections 1–3 answer it mathematically. Sections 4–6 try shaped weights in language models, first one layer in a tiny model, then whole models, ending in a long series of experiments on a pyramid model with matrix products as its feed-forward layers.</p>
+<div class="panel">
+  <div class="label" style="font:600 12px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px">Headline results</div>
+  <ul class="ov-head">
+    <li><b>A matrix product squares shapes up.</b> At most 5 corners survive, so hexagons cannot stay hexagons (<a href="#what-survives-multiplication">details</a>). Under convolution every polygon survives, at a cost of exactly 4|P| − B − 3 (<a href="#2-shaped-arrays-multiplied-by-convolution">details</a>).</li>
+    <li><b>For rings of matrices, odd beats even.</b> Square and hexagon rings cannot be shortcut; triangle and pentagon rings can (<a href="#3-a-polygon-of-matrices-trace-a1a2-ak">details</a>).</li>
+    <li><b>No shaped layer beat a standard transformer over 4,000 steps with 3 seeds.</b> The best, the wrapped triangle, was 0.013 behind (<a href="#longer-run-every-triangle-variant-4-000-steps">details</a>).</li>
+    <li><b>The tricks that looked like wins switched a layer off.</b> Rotating offsets and staircases helped only because the model learned to ignore the layer they changed; removing it did better (<a href="#what-the-alternating-models-actually-learned">details</a>).</li>
+    <li><b>The same layer helps late and hurts early.</b> A matrix product is worth 0.10 in the later blocks and costs 0.26 in the first two (<a href="#where-the-matrix-product-helps-and-where-it-hurts">details</a>).</li>
+    <li><b>Consistency matters more than size.</b> A third, or a tenth, of the multiplications cost almost nothing when the subset stays fixed, and a great deal when it changes at random (<a href="#a-local-product-only-the-nearby-cells">local</a>, <a href="#fewer-multiplications-a-queens-mask">queens</a>).</li>
+    <li><b>Few bits.</b> With one-bit weights the matrix-product model matched the full-precision transformer (<a href="#few-bits-how-little-precision-do-these-models-need">details</a>).</li>
+    <li><b>Per iteration ahead, per second behind.</b> The best pyramid model leads the transformer after 1,000 and 2,000 iterations but needs 1.6 times as long per iteration (<a href="#compared-with-the-standard-transformer">details</a>).</li>
+  </ul>
+  <p class="cap" style="margin-top:10px">Most section 6 results are single runs at 1,000 iterations; the page says so wherever it matters. Differences below about 0.05 bits per character between single runs are noise.</p>
+</div>
+<div class="ov-groups">
+  <div class="ov-group"><div class="ov-title">Shapes and multiplication</div><div class="ov-sub">Sections 1–3: what happens to a shape when you multiply</div>
+    <ul>
+      <li><a href="#1-shapes-as-nonzero-patterns-inside-a-matrix">Shapes inside a matrix</a>: only boxes cut by at most one diagonal survive a matrix product, so at most 5 corners.</li>
+      <li><a href="#what-survives-multiplication">What survives multiplication</a>: triangles, trapezoids and some pentagons stay; hexagons, bands and disks grow into rectangles.</li>
+      <li><a href="#2-shaped-arrays-multiplied-by-convolution">Shaped arrays under convolution</a>: under convolution every convex polygon survives; a product costs exactly 4|P| − B − 3.</li>
+      <li><a href="#3-a-polygon-of-matrices-trace-a1a2-ak">Rings of matrices</a>: even rings (square, hexagon) cannot be shortcut; odd ones (triangle, pentagon) can; the pentagon's cost is open.</li>
+    </ul>
+  </div>
+  <div class="ov-group"><div class="ov-title">Shaped layers in small language models</div><div class="ov-sub">Sections 4–5: one layer swapped in a tiny model</div>
+    <ul>
+      <li><a href="#4-triangle-shaped-weights-swept-three-ways">Triangle-shaped weights</a>: one triangle of weights read three ways (0°, 60°, 120°).</li>
+      <li><a href="#does-it-help-a-language-model">Does it help a language model?</a>: triangles and cubes beat a plain MLP, not SwiGLU.</li>
+      <li><a href="#in-3d-a-cube-and-a-tetrahedron">In 3D: a cube and a tetrahedron</a>: the cube did best; the tetrahedron was too slow to judge.</li>
+      <li><a href="#fewer-bits">Fewer bits?</a>: the three-way weights tolerate 2–3 bits; the input projection does not.</li>
+      <li><a href="#5-hexagons-wrap-around-or-not-and-hexagonal-attention">Hexagons, wrapped or not</a>: wrap-around makes learning uniform; without it the centre learns about 30× faster.</li>
+      <li><a href="#does-the-centre-learn-faster">Does the centre learn faster?</a>: yes, about 30× faster than the corners.</li>
+      <li><a href="#a-hexagonal-attention-or-convolution-mask">A hexagonal attention or convolution mask</a>: a ring + skip + random sparse mask connects a radius-8 map in 5 layers.</li>
+      <li><a href="#in-a-language-model-does-the-non-uniformity-help">In a language model: does the non-uniformity help?</a>: the centre-heavy layer orders its own outputs by importance.</li>
+    </ul>
+  </div>
+  <div class="ov-group"><div class="ov-title">A whole model in a shape: the shapes</div><div class="ov-sub">Section 6: the feed-forward layer of a full model</div>
+    <ul>
+      <li><a href="#hexagonal-feed-forward-clearly-worse">Hexagonal feed-forward: clearly worse</a>: 0.2 to 0.35 behind a standard transformer.</li>
+      <li><a href="#turning-the-centre-down">Turning the centre down</a>: no sign that the centre's larger sums were noise.</li>
+      <li><a href="#triangle-feed-forward-almost-a-standard-transformer">Triangle feed-forward: almost a standard transformer</a>: within 0.02 of the transformer at 1,000 steps.</li>
+      <li><a href="#longer-run-every-triangle-variant-4-000-steps">Longer run: every triangle variant, 4,000 steps</a>: at 4,000 steps with 3 seeds the wrapped triangle is 0.013 behind the transformer; no shaped layer beats it.</li>
+      <li><a href="#what-the-longer-runs-revealed">What the longer runs revealed</a>: uniform beats centred; short runs ranked variants wrongly.</li>
+      <li><a href="#a-square-with-four-directions-4-of-4">A square with four directions (4 of 4)</a>: a fourth direction does not help: 0.028 behind the transformer.</li>
+      <li><a href="#what-the-square-revealed">What the square revealed</a>: the fourth direction is used, but divides the work.</li>
+      <li><a href="#the-triangle-with-a-local-window">The triangle with a local window</a>: half the products per output: 0.023 behind wrap, 0.08 behind the transformer at 1,000 steps.</li>
+    </ul>
+  </div>
+  <div class="ov-group"><div class="ov-title">Changing a layer from one iteration to the next</div><div class="ov-sub">Section 6: rotations, staircases and masks</div>
+    <ul>
+      <li><a href="#two-of-three-sweeps-per-step">Two of three sweeps per step</a>: skipping one of the triangle's three sweeps costs 0.10 to 0.13.</li>
+      <li><a href="#three-of-three-at-uneven-rotating-strengths">Three of three, at uneven rotating strengths</a>: uneven rotating strengths cost about half as much as skipping.</li>
+      <li><a href="#a-square-matrix-with-the-usual-product-and-a-rotating-offset">A square matrix with the usual product, and a rotating offset</a>: rotating offsets beat the transformer at 1,000 steps; the plain product does not.</li>
+      <li><a href="#a-staircase-instead-of-straight-rows-and-columns">A staircase instead of straight rows and columns</a>: bent row and column paths; alternating helps, a fixed tilt barely does.</li>
+      <li><a href="#staircases-through-the-output-cell">Staircases through the output cell</a>: better in all six pairs than paths from the edge.</li>
+      <li><a href="#fewer-multiplications-a-queens-mask">Fewer multiplications: a queens mask</a>: a random mask each iteration is the worst model; the same mask always is nearly free.</li>
+    </ul>
+  </div>
+  <div class="ov-group"><div class="ov-title">Why it worked, and what the model wants</div><div class="ov-sub">Section 6: opening up the trained models</div>
+    <ul>
+      <li><a href="#what-the-alternating-models-actually-learned">What the alternating models actually learned</a>: they had switched the blocks 1–2 layer off; removing it outright did better (3.220).</li>
+      <li><a href="#letting-the-model-decide-a-gain-that-starts-at-zero">Letting the model decide: a gain that starts at zero</a>: with a gain that starts at zero, the model keeps every blocks 1–2 layer almost off.</li>
+      <li><a href="#where-the-matrix-product-helps-and-where-it-hurts">Where the matrix product helps, and where it hurts</a>: worth 0.10 in blocks 3–6, harmful in blocks 1–2; not because of a squeeze.</li>
+    </ul>
+  </div>
+  <div class="ov-group"><div class="ov-title">Cheaper, smaller, and the bottom line</div><div class="ov-sub">Section 6: cost, precision, and the comparison</div>
+    <ul>
+      <li><a href="#a-local-product-only-the-nearby-cells">A local product: only the nearby cells</a>: a third of the multiplications, the same loss as the full product.</li>
+      <li><a href="#few-bits-how-little-precision-do-these-models-need">Few bits: how little precision do these models need?</a>: with one-bit weights the matrix-product model matches the full-precision transformer.</li>
+      <li><a href="#compared-with-the-standard-transformer">Compared with the standard transformer</a>: ahead per iteration, behind per second; fewer multiplications but a 3–5× wider vector.</li>
+      <li><a href="#all-4-000-step-models-side-by-side">All 4,000-step models side by side</a>: the ranking of the longer runs.</li>
+      <li><a href="#all-1-000-step-models-side-by-side">All 1,000-step models side by side</a>: 55 short runs as the difference from the transformer.</li>
+    </ul>
+  </div>
+  <div class="ov-group"><div class="ov-title">Takeaways</div><div class="ov-sub">What it adds up to</div>
+    <ul>
+      <li><a href="#surprises">Surprises</a>: the mathematical surprises, from 5-corner shapes to odd rings.</li>
+      <li><a href="#the-language-model-experiments-what-stood-out">The language-model experiments: what stood out</a>: twelve results, most surprising first, each marked solid or one seed.</li>
+      <li><a href="#where-this-is-useful">Where this is useful</a>: attention masks, storage formats, hexagonal data, small integer-friendly models.</li>
+      <li><a href="#how-new-is-this">How new is this?</a>: what is known and what this page adds.</li>
+      <li><a href="#how-the-language-model-findings-compare-with-published-work">Compared with published work</a>: the experiments set against published work.</li>
+      <li><a href="#pros-and-cons-by-shape">Pros and cons by shape</a>: one table for every shape.</li>
+      <li><a href="#so-can-square-matrices-be-replaced-by-n-gons">So can square matrices be replaced by n-gons?</a>: the short answer.</li>
+      <li><a href="#what-is-proven-what-is-numerical">What is proven, what is numerical</a>: how much each claim can be trusted.</li>
+    </ul>
+  </div>
+</div>
+
 <!-- ======================================================================================= -->
-<h2>1 · Shapes as nonzero patterns inside a matrix</h2>
+<h2 id="1-shapes-as-nonzero-patterns-inside-a-matrix">1 · Shapes as nonzero patterns inside a matrix</h2>
 <p>Keep ordinary matrix multiplication, but allow nonzeros only inside a shape drawn on the N×N grid. The product of two such matrices has nonzeros where
 <code>(x,z)</code> can be reached through some middle index <code>y</code> with both <code>(x,y)</code> and <code>(y,z)</code> inside the shape. That is the relational composition R∘R.
 A shape is useful as a "matrix type" only if it is <b>closed</b>: the product of two such matrices has the same shape.</p>
@@ -132,7 +230,7 @@ A shape is useful as a "matrix type" only if it is <b>closed</b>: the product of
   <div class="stat" id="pStats" style="margin-top:10px"></div>
   <div class="cap">Boolean products on a 64×64 grid, computed live. Cost counts Σ<sub>y</sub> |column y| · |row y| scalar multiplications for a sparse product, relative to the dense N³.</div>
 </div>
-<h3>What survives multiplication</h3>
+<h3 id="what-survives-multiplication">What survives multiplication</h3>
 <ul>
   <li><b>Stable shapes (R∘R = R) have at most 5 corners.</b> Any box whose row and column ranges overlap is stable, and stays stable when cut by the diagonal half-plane x ≤ y (or x ≥ y).
     That gives rectangles, triangles, trapezoids and pentagons, and that direction is proved. In a random search of 4,171 polygons, all 507 stable ones had only horizontal, vertical and diagonal edges.
@@ -144,7 +242,7 @@ A shape is useful as a "matrix type" only if it is <b>closed</b>: the product of
 </ul>
 
 <!-- ======================================================================================= -->
-<h2>2 · Shaped arrays multiplied by convolution</h2>
+<h2 id="2-shaped-arrays-multiplied-by-convolution">2 · Shaped arrays multiplied by convolution</h2>
 <p>A non-rectangular array has no natural "row times column" product. It does have a natural product, though: treat it as a two-variable polynomial (or an image filter) and convolve.
 The shape of the result is the <b>Minkowski sum</b> P + Q, so a pentagon times a pentagon is a pentagon twice the size. The exact minimum number of multiplications is the number of lattice points in P + Q.
 By Pick's theorem that is <b>4|P| − B − 3</b>, where B counts the lattice points on the boundary.</p>
@@ -177,7 +275,7 @@ By Pick's theorem that is <b>4|P| − B − 3</b>, where B counts the lattice po
 </ul>
 
 <!-- ======================================================================================= -->
-<h2>3 · A polygon of matrices: trace(A₁A₂···A<sub>k</sub>)</h2>
+<h2 id="3-a-polygon-of-matrices-trace-a1a2-ak">3 · A polygon of matrices: trace(A₁A₂···A<sub>k</sub>)</h2>
 <p>Put a matrix on each edge of a k-gon and multiply around the ring. This k-linear form is the k-gon tensor network. The <b>triangle</b> is ordinary matrix multiplication, trace(ABC), with Strassen's 7 products for 2×2.
 The <b>square</b> is the four-way form trace(ABCD) from the <a href="../matrix-3way-multiplication/">three-way project</a>. Its rank N⁴ means no fused algorithm beats the naive one.
 The tensor rank is the number of products a fused algorithm needs. For 2×2 matrices (bond dimension 2):</p>
@@ -214,7 +312,7 @@ The tensor rank is the number of products a fused algorithm needs. For 2×2 matr
 </table></div>
 
 <!-- ======================================================================================= -->
-<h2>4 · Triangle-shaped weights, swept three ways</h2>
+<h2 id="4-triangle-shaped-weights-swept-three-ways">4 · Triangle-shaped weights, swept three ways</h2>
 <p>Store weights on a triangular lattice: cells (i, j, k) with i + j + k = n − 1, about n²/2 of them. Each cell lies on <b>three</b> lines, at 0°, 60° and 120°. A matrix entry lies on only two: its row and its column.
 Sweeping each direction multiplies the two other coordinates' inputs and sums along the line. So one set of weights gives three outputs:</p>
 <p style="text-align:center"><code>y₀[i] = Σ W·h<sub>j</sub>·h<sub>k</sub> &nbsp; y₁[j] = Σ W·h<sub>i</sub>·h<sub>k</sub> &nbsp; y₂[k] = Σ W·h<sub>i</sub>·h<sub>j</sub></code></p>
@@ -230,7 +328,7 @@ Sweeping each direction multiplies the two other coordinates' inputs and sums al
   </div>
   <div class="cap">Click any cell (n = 8, 36 weights). Blue: the 0° line (output y₀[i]). Orange: the 60° line (y₁[j]). Green: the 120° line (y₂[k]). The check computes all three sweeps and compares their sum with a finite-difference gradient of E.</div>
 </div>
-<h3>Does it help a language model?</h3>
+<h3 id="does-it-help-a-language-model">Does it help a language model?</h3>
 <p>A 2-layer, width-64 character-level transformer was trained on this repository's markdown (2.8 MB, 1,500 steps, CPU). Only the feed-forward block differed, and every variant had about 65.5k feed-forward weights. Lower is better:</p>
 <div class="panel">
   <svg id="tBars" viewBox="0 0 560 206" width="100%" role="img" aria-label="validation bits per character for four feed-forward blocks"></svg>
@@ -247,7 +345,7 @@ Sweeping each direction multiplies the two other coordinates' inputs and sums al
     <a href="https://arxiv.org/abs/2507.02754">2-simplicial attention</a> (Meta, 2025) attends over triangles of tokens and improves token efficiency on maths, code and reasoning.</li>
   <li><b>Caveat:</b> tiny model, short run, CPU. This is a smoke test, not a scaling result.</li>
 </ul>
-<h3>In 3D: a cube and a tetrahedron</h3>
+<h3 id="in-3d-a-cube-and-a-tetrahedron">In 3D: a cube and a tetrahedron</h3>
 <p>A <b>cube</b> of weights W[i, j, k] is a full 3-way array. Each weight sits on 3 lines, one per axis, and the triangle above is just its diagonal slice i + j + k = n − 1.
 A <b>tetrahedron</b> (cells with i + j + k + l = n − 1) has 4 face directions. Each sweep collapses a triangular slice and multiplies the other <i>three</i> inputs, giving a 4th-order (quartic) interaction.
 In general a d-dimensional simplex has d + 1 sweeps and d(d + 1) multiplications per weight read.</p>
@@ -272,7 +370,7 @@ In general a d-dimensional simplex has d + 1 sweeps and d(d + 1) multiplications
     It also runs as plain dense array operations, so it was 8× faster per step than the triangle here.</li>
   <li><b>The tetrahedron has the most reuse</b> (12 multiplications per weight read) but was too slow on this CPU to train long enough to judge. At 500 steps it ties everything.</li>
 </ul>
-<h3>Fewer bits?</h3>
+<h3 id="fewer-bits">Fewer bits?</h3>
 <p>Does a shaped weight array, used three ways, keep its quality with fewer bits per weight? The trained models' feed-forward weights were rounded to b bits after training
 (symmetric, per tensor, round to nearest) and the language model re-evaluated. "Gated" is the SwiGLU-style feed-forward block: Swish-gated linear unit, then a projection.</p>
 <div class="panel tablewrap">
@@ -303,7 +401,7 @@ In general a d-dimensional simplex has d + 1 sweeps and d(d + 1) multiplications
 </ul>
 
 <!-- ======================================================================================= -->
-<h2>5 · Hexagons: wrap around or not, and hexagonal attention</h2>
+<h2 id="5-hexagons-wrap-around-or-not-and-hexagonal-attention">5 · Hexagons: wrap around or not, and hexagonal attention</h2>
 <p>Multiply two hexagonal arrays by convolution. <b>With wrap-around</b> (hexagons tiling a torus) every output cell receives exactly the same number of multiplications, |P|, just like an ordinary cyclic product.
 <b>Without wrap-around</b> the count is the overlap of two hexagons: |P| at the centre, falling to 1 at the corners.</p>
 <div class="panel">
@@ -315,7 +413,7 @@ In general a d-dimensional simplex has d + 1 sweeps and d(d + 1) multiplications
   <div class="stat" id="hStats"></div>
   <div class="cap">Darker means more multiplications land on that output cell. Wrapped, the doubled hexagon folds back onto the original one and every cell gets the same count.</div>
 </div>
-<h3>Does the centre learn faster?</h3>
+<h3 id="does-the-centre-learn-faster">Does the centre learn faster?</h3>
 <p>Yes. Under gradient descent an output's learning speed is its neural-tangent-kernel diagonal, Σ<sub>p</sub> b²<sub>s−p</sub> + a²<sub>p</sub>, which grows with the number of products landing on it.
 Both factors were trained (y = a ∗ b, random targets, 12 seeds, hexagons of radius 4):</p>
 <div class="panel">
@@ -327,7 +425,7 @@ Both factors were trained (y = a ∗ b, random targets, 12 seeds, hexagons of ra
   <li><b>With wrap-around every output learns at the same speed</b>, like an ordinary dense or cyclic product.</li>
   <li>The input cells, by contrast, are uniform either way: each one meets |P| outputs. Only the outputs differ.</li>
 </ul>
-<h3>A hexagonal attention or convolution mask</h3>
+<h3 id="a-hexagonal-attention-or-convolution-mask">A hexagonal attention or convolution mask</h3>
 <p>The idea: let each cell attend strongly to its 6 neighbours, skip the next ring, and attend to a few random far cells. That is a hexagonal cousin of <a href="https://arxiv.org/abs/2007.14062">BigBird</a>'s local + random sparse attention.</p>
 <div class="panel">
   <div class="controls">
@@ -350,7 +448,7 @@ Both factors were trained (y = a ∗ b, random targets, 12 seeds, hexagons of ra
 </ul>
 <div class="panel tablewrap"><table id="isoTable"></table>
 <div class="cap">Max/min over directions of the 4th moment E[(x·u)⁴] after repeated blurring, computed live. 1.000 means perfectly round up to 4th order.</div></div>
-<h3>In a language model: does the non-uniformity help?</h3>
+<h3 id="in-a-language-model-does-the-non-uniformity-help">In a language model: does the non-uniformity help?</h3>
 <p>Arrange the hidden units of the feed-forward block on a hexagon and let the block convolve two projections of the input across it: <code>y = C·((A·x) ∗ (B·x))</code>.
 Without wrap-around the output hexagon has twice the radius and is centre-heavy; with wrap-around every output gets the same number of products.
 This is computed exactly with an FFT, because a hexagon of radius R on a torus is the cyclic group Z<sub>N</sub>, N = 3R² + 3R + 1, via φ(q, r) = ((R+1)·q − R·r) mod N.
@@ -386,7 +484,7 @@ The question is not whether it saves operations, but whether the shape gives the
 A hexagonal local + skip + random mask is a natural sparse attention for such data. Choosing wrap-around or not decides whether the border learns as fast as the middle.</p>
 
 <!-- ======================================================================================= -->
-<h2>6 · A whole language model in a shape</h2>
+<h2 id="6-a-whole-language-model-in-a-shape">6 · A whole language model in a shape</h2>
 <p>The experiments above swap one layer. <a href="../shape-llm/">shape-llm</a> builds a whole small character-level model around a shape.
 Every token's hidden state is a <b>hexagon of feature cells</b>, shrinking through the network like an image pyramid.</p>
 <div class="panel tablewrap"><table>
@@ -400,7 +498,7 @@ Every token's hidden state is a <b>hexagon of feature cells</b>, shrinking throu
   <li><b>Between levels, 3 neighbouring cells become 1.</b> The small triangles {(q, r), (q+1, r), (q, r+1)}, one per point with q − r divisible by 3, tile the grid exactly. Their positions form a coarser hexagonal grid, rotated 30° and scaled √3. Cropping to radius 6 and 3 drops the outer band of cells.</li>
   <li><b>The baseline</b> is an ordinary transformer with the same depth and parameter count.</li>
 </ul>
-<h3>Hexagonal feed-forward: clearly worse</h3>
+<h3 id="hexagonal-feed-forward-clearly-worse">Hexagonal feed-forward: clearly worse</h3>
 <div class="panel tablewrap"><table>
   <tr><th>model (2,000 steps, 2 seeds)</th><th class="num">parameters</th><th class="num">val bits/char</th></tr>
   <tr><td>standard transformer</td><td class="num">2.59M</td><td class="num"><b>2.992</b></td></tr>
@@ -412,7 +510,7 @@ Every token's hidden state is a <b>hexagon of feature cells</b>, shrinking throu
 <ul>
   <li><b>It learns the centre-first importance order again.</b> At the radius-3 level, which the output reads in full, trimming the outer ring first costs +0.18 against +0.32 for random cells, and the edge activations are about 35% weaker. At the larger levels the crop builds part of that order in.</li>
 </ul>
-<h3>Turning the centre down</h3>
+<h3 id="turning-the-centre-down">Turning the centre down</h3>
 <p>Centre outputs collect many more products, so perhaps more noise. The non-wrapped hexagonal layer of section 5 was scaled so the corners keep weight 1 and the centre gets less:</p>
 <div class="panel tablewrap"><table>
   <tr><th>hexagonal layer, no wrap (tiny model, 1,500 steps)</th><th class="num">val bits/char</th><th>effect</th></tr>
@@ -421,7 +519,7 @@ Every token's hidden state is a <b>hexagon of feature cells</b>, shrinking throu
   <tr><td>centre × 1/fan-in</td><td class="num">3.392</td><td>over-corrected: the edges become most important</td></tr>
 </table></div>
 <p>No sign that the centre's larger sums were harmful noise: 1/√ balances the layer at no cost, and 1/fan-in overshoots.</p>
-<h3>Triangle feed-forward: almost a standard transformer</h3>
+<h3 id="triangle-feed-forward-almost-a-standard-transformer">Triangle feed-forward: almost a standard transformer</h3>
 <p>Same pyramid and bottlenecks, but every block uses the triangle layer, swept at 0°, 60° and 120°.
 <b>Without wrap-around</b> the line at index i holds n − i weights, so long lines are the triangle's "centre". <b>With wrap-around</b> the triangle closes into a torus and every line is equally long.
 "Centre lowered" scales each output by (products)^−½; "reversed" by (products ÷ max)^½; "average 1" renormalises so only the balance changes, not the overall size.</p>
@@ -447,7 +545,7 @@ The weights shown are for the smallest triangle (side 50); the larger ones are s
   <tr><td>hexagonal feed-forward</td><td class="num">3.587</td></tr>
 </table>
 <div class="cap">One batch, same training text. A later batch (below and in the chart) re-ran the unscaled triangle and the transformer next to the reversed variants: transformer 3.404, triangle 3.423, reversed 3.420, reversed with average 1 <b>3.391</b>.</div></div>
-<h3>Longer run: every triangle variant, 4,000 steps</h3>
+<h3 id="longer-run-every-triangle-variant-4-000-steps">Longer run: every triangle variant, 4,000 steps</h3>
 <p>The same full pyramid model, trained 4× longer with 3 seeds per variant, all on the same text. The letters are the two choices: <b>A1</b> no wrap, <b>A2</b> wrap; <b>B1</b> full signal in the centre and lower at the edges, <b>B2</b> low in the centre and full at the edges, <b>B3</b> full everywhere.
 With wrap every line is equally long, so there is no centre: A2 + B1 is the same model as A2 + B3, and A2 + B2 only turns every line down by one factor.</p>
 <div class="panel tablewrap"><table>
@@ -489,7 +587,7 @@ With wrap every line is equally long, so there is no centre: A2 + B1 is the same
   <li><b>Cost.</b> On the CPU a triangle step takes about 4× as long as a transformer step without wrap and about 6× with wrap, because the three sweeps are many small gathers instead of one large matrix multiply.</li>
 </ul>
 
-<h3>What the longer runs revealed</h3>
+<h3 id="what-the-longer-runs-revealed">What the longer runs revealed</h3>
 <ol>
   <li><b>Uniform beats every centre/edge weighting.</b> The best triangle is the one with no centre at all (wrapped). Every no-wrap profile ranks below it: full centre, flat or lowered centre.
     The hexagon said the same thing in section 5: its wrapped single layer also beat the unwrapped one (3.289 against 3.324, seed ranges apart). In both shapes, the version where every output collects the same number of products wins. That is also the property a dense matrix has.</li>
@@ -508,7 +606,7 @@ With wrap every line is equally long, so there is no centre: A2 + B1 is the same
 <p><b>If you try triangle layers:</b> wrap them, leave the weights unscaled, keep all three sweeps in every step and do not expect a fourth direction to help (see below), compare against a dense baseline at 4,000+ steps with 3 or more seeds, and test the learning rate before reading anything into gaps of 0.02.
 The fair next test of wrap is a smaller wrapped triangle doing the same number of products as the unwrapped one, so that wrap and extra work are separated.</p>
 
-<h3>Two of three sweeps per step</h3>
+<h3 id="two-of-three-sweeps-per-step">Two of three sweeps per step</h3>
 <p>An idea to make the triangle cheaper: every training step uses only two of the three directions, and the pair rotates so that all directions get exercised.</p>
 <pre>angles = [0°, 60°, 120°]
 a = angles[i % 3]            # i = training step, or a random number
@@ -541,7 +639,7 @@ The two remaining sweeps are scaled by 3/2 during training (as dropout does), so
   <li><b>Not tested:</b> skipping a direction less often, letting each layer skip a different direction, or skipping without the 3/2 rescaling.</li>
 </ul>
 
-<h3>A square with four directions (4 of 4)</h3>
+<h3 id="a-square-with-four-directions-4-of-4">A square with four directions (4 of 4)</h3>
 <p><b>The hypothesis:</b> two of three sweeps was worse than three of three, so a fourth direction might do better still, and beat the standard transformer, whose matrices only pair rows with columns.</p>
 <p>The layer keeps its weights on an n × n grid that wraps around, and sweeps it at <b>0°, 45°, 90° and 135°</b>: rows, columns and both diagonals.
 With n odd, every cell lies on exactly one line of each direction. The first three directions are exactly the wrapped triangle of the sections above, so this is the wrapped triangle plus the second diagonal.</p>
@@ -571,7 +669,7 @@ With n odd, every cell lies on exactly one line of each direction. The first thr
   <li><b>Not tested:</b> a square with the triangle's side lengths (about 13% more parameters than the wrapped triangle), longer training, and a learning rate tuned for the three-way products.</li>
 </ul>
 
-<h3>What the square revealed</h3>
+<h3 id="what-the-square-revealed">What the square revealed</h3>
 <p>Is the fourth direction actually used? In each trained model, one direction's outputs were switched off in every layer (at evaluation only), and the rise in loss measured.</p>
 <div class="panel">
   <div class="keys">
@@ -594,7 +692,7 @@ With n odd, every cell lies on exactly one line of each direction. The first thr
   <li><b>Same learning pattern as the triangles.</b> A fast start (level with the best model at step 400), then 0.07 behind the transformer around step 1,200–1,600, closing to 0.028 at the end.</li>
 </ol>
 
-<h3>All 4,000-step models side by side</h3>
+<h3 id="all-4-000-step-models-side-by-side">All 4,000-step models side by side</h3>
 <p>All thirteen models trained for 4,000 steps on the same text, ranked by their final loss. The transformer is first, the wrapped triangle second and the square with one product across all four directions third. The two-of-three models are worse than every model that sweeps all its directions.</p>
 <div class="panel">
   <div class="keys">
@@ -621,7 +719,7 @@ With n odd, every cell lies on exactly one line of each direction. The first thr
   <div class="cap">Lower left is better. Each arrow goes from sweeping all 3 directions to sweeping 2 of 3 (cyclic rule): about 15% less time per step, and 0.10–0.13 bits/char worse. The squares cost about as much as the wrapped triangle. Timed on one CPU thread on an idle machine; the random rule does the same work as the cyclic one.</div>
 </div>
 
-<h3>A square matrix with the usual product, and a rotating offset</h3>
+<h3 id="a-square-matrix-with-the-usual-product-and-a-rotating-offset">A square matrix with the usual product, and a rotating offset</h3>
 <p>A different kind of layer: no sweeps, just ordinary matrix multiplication. Each feed-forward layer turns a token's features into a small square matrix M, computes the usual product M·M, and maps the result back.
 In the product, the destination cell [x, y] is row y times column x.</p>
 <p>In blocks 1–2 the row and the column are taken from neighbours instead, and which neighbours depends on the training iteration. The destination cell itself is not moved:</p>
@@ -666,7 +764,7 @@ In the table, a column named (x+a, y+b) is a two-state rule: no offset on even i
   <li><b>It is cheap.</b> A step takes 0.12–0.13 s against 0.058 s for the transformer: twice as slow, but about five times faster than the triangle layers, because a matrix product is one dense operation.</li>
 </ul>
 
-<h3>A staircase instead of straight rows and columns</h3>
+<h3 id="a-staircase-instead-of-straight-rows-and-columns">A staircase instead of straight rows and columns</h3>
 <p>The offsets above only move the result. This idea changes the product itself. In a matrix product, a destination cell is a sum along its row and along its column, both straight lines.
 Here both lines become <b>staircases</b>: two cells along, one across, two along, one across. That is a slope of 1 in 2, an angle of 26.565°.</p>
 <p>The tilt alternates: +26.5° on even iterations, −26.5° on odd ones. The row path and the column path turn by the same angle, so they stay at right angles to each other. Everything wraps around at the edges.</p>
@@ -725,7 +823,7 @@ dest_cell[x, y] = sum over k of
   <li><b>It is one seed at 1,000 iterations</b>, so differences of a few hundredths between the alternating versions mean nothing yet.</li>
 </ul>
 
-<h3>Staircases through the output cell</h3>
+<h3 id="staircases-through-the-output-cell">Staircases through the output cell</h3>
 <p>In the runs above each path starts at the edge of the matrix, so it usually does not touch the cell it computes. Here every path is shifted so that it is the staircase of its family that <b>passes through the output cell</b>, as in the first two grids of the diagram above.
 All six staircase variants were trained again this way: same seed, same starting weights, same text, one run each.</p>
 <div class="panel">
@@ -758,7 +856,7 @@ All six staircase variants were trained again this way: same seed, same starting
   <li><b>Still one seed at 1,000 iterations.</b> The direction is consistent; the sizes are not established.</li>
 </ul>
 
-<h3>Fewer multiplications: a queens mask</h3>
+<h3 id="fewer-multiplications-a-queens-mask">Fewer multiplications: a queens mask</h3>
 <p><b>The hypothesis:</b> more multiplications did not help, so perhaps fewer do. A regular matrix product multiplies every row with every column. Here only N cells of the N × N matrix take part.
 This is no longer a matrix multiplication. The question is whether such a cheap operation is good enough as the non-linear step of the layer, the job an activation function normally does.</p>
 <p>The N cells are picked as in the <a href="https://en.wikipedia.org/wiki/Eight_queens_puzzle">eight queens puzzle</a>: one cell in every row and every column, and no two on the same diagonal.
@@ -801,7 +899,7 @@ A new placement is drawn at random for every layer on every iteration, from a po
   <li><b>All of this is one seed at 1,000 iterations</b>, so only the large gaps should be trusted: the 0.19 to 0.39 from fixing the placement, and the 0.27 to 0.42 from a random one. All of these masks are applied in every block; none of them comes near the transformer.</li>
 </ul>
 
-<h3>What the alternating models actually learned</h3>
+<h3 id="what-the-alternating-models-actually-learned">What the alternating models actually learned</h3>
 <p>Every model above that alternates between states beats the plain matrix product. The trained models were opened up to find out why. No new training was needed for the three measurements; the fourth item is one control run.</p>
 <div class="panel">
   <div class="keys">
@@ -862,7 +960,7 @@ A new placement is drawn at random for every layer on every iteration, from a po
     The obvious next run is the removed-layer model at 4,000 steps with 3 seeds, next to the transformer.</li>
 </ul>
 
-<h3>Letting the model decide: a gain that starts at zero</h3>
+<h3 id="letting-the-model-decide-a-gain-that-starts-at-zero">Letting the model decide: a gain that starts at zero</h3>
 <p>Instead of removing the feed-forward of blocks 1–2, or disturbing it with an offset, the layer's output is multiplied by one learnable number per layer, a <b>gain</b>, that starts at zero. The layer begins switched off, and training turns it up only as far as it helps.
 This is the ReZero idea from the published work below. Nine runs, seed 0, 1,000 iterations, same text. The staircase is the two-state one, ±26.5° in turn, with its paths through the output cell. The triangle is the wrapped triangle layer of section 4, sweeping all three directions on every iteration (3 of 3) or two of the three in rotation (2 of 3).</p>
 <div class="panel tablewrap"><table>
@@ -894,7 +992,7 @@ This is the ReZero idea from the published work below. Nine runs, seed 0, 1,000 
   <li><b>What the gain alone does not settle</b> is whether the layer is unwanted because it multiplies or because it squeezes 938 features into 100 values. A wider matrix was tested for that in “Where the matrix product helps, and where it hurts” below: it is unwanted too.</li>
 </ul>
 
-<h3>A local product: only the nearby cells</h3>
+<h3 id="a-local-product-only-the-nearby-cells">A local product: only the nearby cells</h3>
 <p>The best model so far has no feed-forward half in blocks 1–2 (their attention half stays) and plain matrix products in blocks 3–6. In a matrix product, every output cell multiplies its <i>whole</i> row with its <i>whole</i> column.
 Here the cell only uses the cells next to it: about N/3 of them along its row and N/3 along its column, centred on the cell and wrapping around at the edges. That makes it similar to a small cross-shaped convolution.</p>
 <pre>h = half the window          # window = 2h + 1 ≈ N/3 cells: 3 for N = 10 and 11, 5 for N = 13
@@ -936,7 +1034,7 @@ With the full product, an offset can be read two ways that come to the same thin
   <li><b>One seed at 1,000 iterations.</b> The local product is a candidate for a cheaper layer, not a result. A window of N/3 was the only size tried.</li>
 </ul>
 
-<h3>Few bits: how little precision do these models need?</h3>
+<h3 id="few-bits-how-little-precision-do-these-models-need">Few bits: how little precision do these models need?</h3>
 <p>A model stored and run with very few bits per number is smaller and can run without floating-point hardware. Three measurements on the 1,000-iteration models above, one seed each.
 The matrix-product feed-forward has a head start: it only multiplies and adds, so on whole numbers it is exact. A standard feed-forward layer needs an activation function (GELU), which is a floating-point function.</p>
 <p><b>1. Rounding the weights after training.</b> Every weight matrix of the trained model is rounded to b bits, with no retraining.</p>
@@ -982,7 +1080,7 @@ The matrix-product feed-forward has a head start: it only multiplies and adds, s
   <li><b>Not tested:</b> few-bit weights and few-bit values trained together, more than one seed, and longer runs. In section 4 the same question was asked of the tiny models, where the three-way weights of the triangle and cube also tolerated rounding better than an MLP's matrices.</li>
 </ul>
 
-<h3>All 1,000-step models side by side</h3>
+<h3 id="all-1-000-step-models-side-by-side">All 1,000-step models side by side</h3>
 <p>Every full model on this page that was trained for 1,000 iterations (55 of them), shown as its <b>difference from the standard transformer</b>. Bars to the left are better than the transformer, bars to the right are worse.</p>
 <p>The runs come from three batches trained on slightly different versions of the text, so the raw losses cannot be compared across batches. Each model is therefore compared with the transformer trained in its own batch, on the same text.</p>
 <div class="panel">
@@ -1008,7 +1106,7 @@ The matrix-product feed-forward has a head start: it only multiplies and adds, s
   <li><b>Read it as a map of leads, not a ranking.</b> The models on the left are the ones worth training longer and with more seeds.</li>
 </ul>
 
-<h3>Where the matrix product helps, and where it hurts</h3>
+<h3 id="where-the-matrix-product-helps-and-where-it-hurts">Where the matrix product helps, and where it hurts</h3>
 <p>Two questions were still open: which part of the pyramid model gives it its lead over the transformer, and whether the blocks 1–2 layer is unwanted because it squeezes 938 features into a 10 × 10 matrix.
 Three control runs answer both. Same seed, same starting weights, same text, 1,000 iterations.</p>
 <div class="panel tablewrap"><table>
@@ -1029,7 +1127,7 @@ Three control runs answer both. Same seed, same starting weights, same text, 1,0
   <li><b>So the same layer helps late and hurts early.</b> In blocks 3–6 the matrix product is worth 0.10. In blocks 1–2 it costs 0.26, or 0.33 when wide. One reading: the first blocks work on features that have barely been mixed across the text yet, and products of those are noise; later blocks multiply features that already carry context. That reading is a guess.</li>
 </ul>
 
-<h3>The triangle with a local window</h3>
+<h3 id="the-triangle-with-a-local-window">The triangle with a local window</h3>
 <p>So far the triangle layer came in two forms. <b>Without wrap</b>, the line at index i holds n − i weights, so outputs collect anything from 1 to n products. <b>With wrap</b>, every line holds n weights.
 A third form keeps the wrap but shortens every line: each output collects only the weights in a <b>window of n/2 + 1 cells centred on its own index</b>, wrapping around at the ends.
 For the side-50 triangle that is 26 weights per output instead of 50.</p>
@@ -1072,7 +1170,7 @@ For the side-50 triangle that is 26 weights per output instead of 50.</p>
   <li><b>The triangle is slow whichever way its weights are collected</b>: 0.30 to 0.48 s per iteration on four threads, six to ten times the transformer.</li>
 </ul>
 
-<h3>Three of three, at uneven rotating strengths</h3>
+<h3 id="three-of-three-at-uneven-rotating-strengths">Three of three, at uneven rotating strengths</h3>
 <p>Skipping one of the triangle's three sweeps per iteration made the model worse. A gentler version keeps all three sweeps on every iteration but gives them uneven strengths that rotate:</p>
 <pre>contributions = [3/6, 2/6, 1/6]
 a = contributions[i % 3]            # i = iteration
@@ -1106,7 +1204,7 @@ The triangle layer is in every block; 1,000 iterations, seed 0, same text.</p>
   <li><b>The same lesson as before.</b> Every scheme that changes what a layer computes from one iteration to the next has cost something, unless the layer was one the model was better off without. The triangle layers are ones the model uses, so disturbing them hurts. One seed each.</li>
 </ul>
 
-<h3>Compared with the standard transformer</h3>
+<h3 id="compared-with-the-standard-transformer">Compared with the standard transformer</h3>
 <p>The best models of this section are the pyramid with matrix products in blocks 3–6 and a blocks 1–2 layer that is removed, or switched almost off by a gain ("the pyramid" below).
 They lead the standard transformer after 1,000 iterations. A lead per iteration is only half the story, because the two models do not take the same time per iteration.</p>
 <p><b>How fast is each model?</b> That depends on what is measured. The first version of this comparison used wall-clock time, which measures the code as much as the model, so three things are reported here: the arithmetic each model needs, which does not depend on the code; the time per iteration after optimising the code; and the loss at equal training time.</p>
@@ -1165,7 +1263,7 @@ They lead the standard transformer after 1,000 iterations. A lead per iteration 
 Shapes drawn inside that rectangle drift back towards rectangles when you multiply. Every centred shape becomes its bounding box within 2–3 products.
 Other shapes stay themselves only when the <i>multiplication</i> changes. Convolution adds shapes instead of composing them, and keeps every convex polygon.
 And when the polygon describes how matrices are wired together (a ring), what matters is not the shape but its <i>parity</i>.</p>
-<h3>Surprises</h3>
+<h3 id="surprises">Surprises</h3>
 <ol>
   <li><b>A pentagon can be a stable matrix shape, a hexagon cannot.</b> The more symmetric shape loses. A stable shape is a box cut by at most one diagonal line, and a rectangle cut by one line has at most 5 corners.</li>
   <li><b>Geometry gives the exact cost.</b> Multiplying two P-shaped arrays needs exactly 4|P| − B − 3 multiplications, by Pick's theorem. So the number of lattice points on the <i>edge</i> sets the cost.
@@ -1190,7 +1288,7 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>Ahead per iteration, behind per second.</b> The best pyramid model beats the standard transformer by 0.16 after 1,000 iterations and 0.07 after 2,000. It needs fewer multiplications per token, yet takes 1.6 times as long per iteration even after optimising the code, because each token carries a vector 3 to 5 times wider. In the same 100 seconds the transformer ends 0.12 better.</li>
   <li><b>Exact search hits a wall quickly.</b> A SAT solver settles the triangle instantly. But it couldn't prove within 15 minutes that the square ring needs more than 15 products, a fact that a one-line flattening argument proves.</li>
 </ol>
-<h3>The language-model experiments: what stood out</h3>
+<h3 id="the-language-model-experiments-what-stood-out">The language-model experiments: what stood out</h3>
 <p>Section 6 grew long. These are its main results, most surprising first. Each says how far it can be trusted: <b>solid</b> means 4,000 steps with 3 seeds; <b>one seed</b> means a single 1,000-step run, usually paired with a control that started from the same weights.</p>
 <ol>
   <li><b>The tricks worked by switching a layer off.</b> Rotating offsets and staircase paths made a matrix-product model beat the transformer. The trained models turned out to ignore the layer the tricks were applied to, and removing that layer did better than any trick (3.220 against 3.258). <i>One seed.</i></li>
@@ -1206,7 +1304,7 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>Short runs mislead, and the noise is now measured.</b> Rankings from 1,000 steps and 2 seeds were wrong twice at 4,000 steps. Models that are identical in effect differ by 0.015 to 0.04 between single runs, so a gap below about 0.05 means nothing.</li>
   <li><b>What survived the longest test.</b> At 4,000 steps with 3 seeds the standard transformer beat every shaped layer that was run at that length. The best models of the later experiments have not been run that long.</li>
 </ol>
-<h3>Where this is useful</h3>
+<h3 id="where-this-is-useful">Where this is useful</h3>
 <ul>
   <li><b>Attention masks are shapes.</b> A causal mask is a triangle, which is closed, so stacking causal layers stays causal. A sliding-window causal mask is a band cut by the triangle. It is not closed: each product widens the band.
     That widening is exactly how a stack of sliding-window layers gets a receptive field of about (layers × window). Pick these two masks in section 1 to see it.</li>
@@ -1222,14 +1320,14 @@ And when the polygon describes how matrices are wired together (a ring), what ma
   <li><b>Shaped weights in a language model</b> (triangle, cube; the tetrahedron was too slow to judge) train fine and beat a plain MLP, but not SwiGLU. The cube did best. Their selling point would be 6 multiplications per weight read for memory-bound inference, which is untested without a GPU kernel.
     The triangles that already pay off in large models live over tokens (2-simplicial attention) or residue pairs (AlphaFold).</li>
 </ul>
-<h3>How new is this?</h3>
+<h3 id="how-new-is-this">How new is this?</h3>
 <p>Most of it is known in some field: triangular matrices, receptive fields, Newton polytopes and Minkowski sums, Pick's theorem, hexagonal sampling, and Christandl–Zuiddam's cycle tensors.
 What this page adds is the side-by-side view, the classification of stable matrix shapes (at most 5 corners), the closed cost formula 4|P| − B − 3 for shaped convolution, and the unconfirmed hint that the pentagon ring might be approximated with 30 terms.
 Also new are the small experiments: shaped weight layers swept three or four ways; the finding that their three-way weights are robust to low precision while the input projection is not; the hexagonal wrap / no-wrap learning-speed contrast; the emergent importance order of a centre-heavy hexagonal layer; and a hexagonal pyramid language model whose wrapped-triangle feed-forward lands within seed noise of a parameter-matched transformer.
 The isotropy of hexagonal blurs and the power of random long-range links (BigBird, small-world graphs) are known.</p>
 
 <!-- ======================================================================================= -->
-<h3>How the language-model findings compare with published work</h3>
+<h3 id="how-the-language-model-findings-compare-with-published-work">How the language-model findings compare with published work</h3>
 <p><b>On raw performance there is no comparison.</b> Published transformers reach just under 1 bit per character on the standard enwik8 benchmark (0.97 for the <a href="https://arxiv.org/abs/1911.05507">Compressive Transformer</a> with 277M parameters, 0.98 for the <a href="https://arxiv.org/abs/2110.13711">Hourglass</a> model).
 The models in section 6 have about 2M parameters, train for 1,000 to 4,000 steps on 2.5 MB of text and score 2.7 to 3.5. Nothing here competes with the state of the art. The findings are about how small models behave relative to each other.</p>
 <div class="panel tablewrap"><table>
@@ -1261,7 +1359,7 @@ The models in section 6 have about 2M parameters, train for 1,000 to 4,000 steps
 It does not: a 30 × 30 matrix, which squeezes nothing, is just as unwanted and does more harm at full strength (section 6, “Where the matrix product helps, and where it hurts”).</p>
 <p><b>What current practice would suggest trying.</b> Give the layer a learnable gain that starts at zero, so the model switches it on only if it helps. That is ReZero (<a href="https://arxiv.org/abs/2003.04887">Bachlechner et al. 2020</a>); LayerScale is the per-channel version (<a href="https://arxiv.org/abs/2103.17239">Touvron et al. 2021</a>).
 It is the principled form of what the offsets did by accident. It was run in “Letting the model decide” in section 6: the gains stay near zero (about 0.03 for the full matrix product, 0.001 to 0.005 for the queens mask), so the model keeps the layer almost off.</p>
-<h2>Pros and cons by shape</h2>
+<h2 id="pros-and-cons-by-shape">Pros and cons by shape</h2>
 <div class="panel tablewrap"><table class="pc" id="pcTable">
   <tr><th>shape</th><th>as a matrix pattern</th><th>as a convolution array</th><th>as a ring of matrices</th></tr>
   <tr><td>Triangle</td>
@@ -1287,7 +1385,7 @@ It is the principled form of what the offsets did by accident. It was run in “
       <td>odd n: shortcuts of 2^n − 1 or better; even n: none.</td></tr>
 </table></div>
 
-<h2>So can square matrices be replaced by n-gons?</h2>
+<h2 id="so-can-square-matrices-be-replaced-by-n-gons">So can square matrices be replaced by n-gons?</h2>
 <ul>
   <li><b>As general linear maps, no.</b> A linear map pairs every input with every output, and that table of pairs is a rectangle. Any other shape is a <i>restriction</i> of it. Only restrictions with at most 5 corners stay closed under multiplication, and the useful one is the triangle, which numerical linear algebra already exploits everywhere.</li>
   <li><b>As data with their own multiplication, yes.</b> For convolution-type products (polynomials, filters, images, hex grids), triangles and hexagons are as natural as squares: the product keeps the shape, and the cost is exactly 4|P| − B − 3.
@@ -1295,7 +1393,7 @@ It is the principled form of what the offsets did by accident. It was run in “
   <li><b>As the multiplication pattern, odd polygons are where the shortcuts live.</b> Every even ring is incompressible. Every odd ring inherits a speed-up from Strassen's triangle, and the pentagon's exact cost is still open.</li>
 </ul>
 
-<h2>What is proven, what is numerical</h2>
+<h2 id="what-is-proven-what-is-numerical">What is proven, what is numerical</h2>
 <div class="panel tablewrap"><table>
   <tr><td>Boxes with overlapping ranges, cut by x ≤ y or not, are closed and stable under multiplication</td><td><span class="chip proven">proof</span></td></tr>
   <tr><td>No other convex shape is stable (so at most 5 corners)</td><td><span class="chip numeric">random search</span></td></tr>
@@ -2306,6 +2404,12 @@ document.querySelectorAll(".pc").forEach(tb => { const heads = [...tb.rows[0].ce
   [...tb.rows].slice(1).forEach(r => [...r.cells].forEach((c, i) => c.dataset.label = heads[i])); });
 patternDemo(); convDemo(); convTable(); ringDiagram(); triDemo(); triBars(); sweepTable(); hexDemo(); maskDemo(); isoTable(); ordChart(); ringStatsChart(); lossCurves(); sweepSched(); sqDirs(); dirAblate(); matOffset(); stairPaths(); stairPairs(); queensMask(); relyChart(); localWin(); bitsChart(); fewBitChart(); timeChart(); triWindow(); unevenChart(); r1kChart(); rankChart(); costChart(); setTimeout(hexSpeedChart, 60);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { patternDemo(); convDemo(); ringDiagram(); triDemo(); triBars(); hexDemo(); maskDemo(); hexSpeedChart(); ordChart(); ringStatsChart(); lossCurves(); sweepSched(); sqDirs(); dirAblate(); matOffset(); stairPaths(); stairPairs(); queensMask(); relyChart(); localWin(); bitsChart(); fewBitChart(); timeChart(); triWindow(); unevenChart(); r1kChart(); rankChart(); costChart(); });
+document.addEventListener("click", e => {                         // in-page links scroll even where the page is shown without a real URL
+  const a = e.target.closest('a[href^="#"]'); if (!a) return;
+  const el = document.getElementById(a.getAttribute("href").slice(1)); if (!el) return;
+  e.preventDefault(); el.scrollIntoView({ behavior: "smooth", block: "start" });
+  try { history.replaceState(null, "", a.getAttribute("href")); } catch (_) {}
+});
 </script>
 </body>
 </html>
