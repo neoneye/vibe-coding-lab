@@ -621,7 +621,14 @@ const Wreck = (() => {
     function clampHead(yaw, pitch) {
       return { yaw: Math.max(-YAW_MAX, Math.min(YAW_MAX, yaw)), pitch: Math.max(PITCH_MIN, Math.min(PITCH_MAX, pitch)) };
     }
-    return { FAST, SLOW, YAW_MAX, PITCH_MIN, PITCH_MAX, ballGaze, smoothDir, clampHead };
+    // Stereo pan from a source's camera-space x, z: the sine of its bearing, so a
+    // sound behind the listener stays on its own side (projecting through the
+    // camera mirrors anything behind it).
+    function pan(x, z) {
+      const l = Math.hypot(x, z);
+      return l > 1e-9 ? Math.max(-0.8, Math.min(0.8, x / l * 0.8)) : 0;
+    }
+    return { FAST, SLOW, YAW_MAX, PITCH_MIN, PITCH_MAX, ballGaze, smoothDir, clampHead, pan };
   })();
 
   const assets = {
@@ -777,6 +784,13 @@ const WreckTests = {
       T.near(h.pitch, -60 * D, 1e-12, 'pitch clamps down');
       h = V.clampHead(0.5, -0.2);
       T.near(h.yaw, 0.5, 1e-12, 'yaw in range'); T.near(h.pitch, -0.2, 1e-12, 'pitch in range');
+      // pan takes camera-space x, z (camera looks along -z, right is +x)
+      T.near(V.pan(0, -5), 0, 1e-12, 'straight ahead is centred');
+      T.near(V.pan(3, 0), 0.8, 1e-12, 'hard right');
+      T.ok(V.pan(-2, 3) < 0, 'behind and to the left pans left');
+      T.ok(V.pan(2, 3) > 0, 'behind and to the right pans right');
+      T.near(V.pan(-2, 3), V.pan(-2, -3), 1e-12, 'front and back mirror images pan the same side');
+      T.near(V.pan(0, 0), 0, 1e-12, 'source at the camera is centred');
     }
 
     console.log('WreckTests: ' + pass + ' passed, ' + fail + ' failed');
@@ -1325,8 +1339,8 @@ function ensureAudio() {
   return audio.ctx;
 }
 function panFor(pos) {
-  const p = tmpP.set(pos.x, pos.y, pos.z).project(camera);
-  return Number.isFinite(p.x) ? clamp(p.x * 0.7, -0.8, 0.8) : 0;
+  const p = tmpP.set(pos.x, pos.y, pos.z).applyMatrix4(camera.matrixWorldInverse);
+  return Number.isFinite(p.x) ? W.view.pan(p.x, p.z) : 0;
 }
 function voice(pan) {
   const ctx = audio.ctx;
