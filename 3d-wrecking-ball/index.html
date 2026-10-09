@@ -590,6 +590,36 @@ const Wreck = (() => {
     return { name: 'apartment', blocks: B, radius: 11, craneStart: { pos: [0, 0, 24], heading: Math.PI } };
   }
 
+  // ------------------------------------------------------------ view math
+  // Horizontal directions are [x, z] unit vectors; heading angle = atan2(x, z).
+  const view = (() => {
+    const DEG = Math.PI / 180;
+    const FAST = 1.5, SLOW = 0.5;
+    const YAW_MAX = 120 * DEG, PITCH_MIN = -60 * DEG, PITCH_MAX = 70 * DEG;
+    const norm = (x, z) => { const l = Math.hypot(x, z); return l > 1e-9 ? [x / l, z / l] : null; };
+    // Where the ball rider looks: along the horizontal velocity when the ball is
+    // moving, toward the target when it is nearly still, blended in between.
+    function ballGaze(vel, toTarget) {
+      const s = Math.hypot(vel[0], vel[2]);
+      const v = norm(vel[0], vel[2]), t = norm(toTarget[0], toTarget[2]);
+      const w = Math.max(0, Math.min(1, (s - SLOW) / (FAST - SLOW)));
+      const mix = v && t ? norm(w * v[0] + (1 - w) * t[0], w * v[1] + (1 - w) * t[1]) : null;
+      return mix || (w < 1 && t) || v || t || [0, 1];
+    }
+    // Turn cur toward want by 1 - exp(-dt/tau) of the angle, the short way round.
+    function smoothDir(cur, want, dt, tau) {
+      const a = Math.atan2(cur[0], cur[1]);
+      let d = Math.atan2(want[0], want[1]) - a;
+      d -= 2 * Math.PI * Math.round(d / (2 * Math.PI));
+      const b = a + d * (1 - Math.exp(-dt / tau));
+      return [Math.sin(b), Math.cos(b)];
+    }
+    function clampHead(yaw, pitch) {
+      return { yaw: Math.max(-YAW_MAX, Math.min(YAW_MAX, yaw)), pitch: Math.max(PITCH_MIN, Math.min(PITCH_MAX, pitch)) };
+    }
+    return { FAST, SLOW, YAW_MAX, PITCH_MIN, PITCH_MAX, ballGaze, smoothDir, clampHead };
+  })();
+
   const assets = {
     castle: { label: 'Stone castle', build: buildCastle },
     pyramid: { label: 'Mesoamerican pyramid', build: buildPyramid },
@@ -597,7 +627,7 @@ const Wreck = (() => {
     apartment: { label: 'Brick apartment', build: buildApartment },
   };
 
-  return { MATERIALS, Q_ID, qYaw, qRoll, qPitch, qMul, rotate, axes, aabb, obbOverlap, volume, wallCourses, place, ring, Structure, assets, BOND_EPS };
+  return { MATERIALS, Q_ID, qYaw, qRoll, qPitch, qMul, rotate, axes, aabb, obbOverlap, volume, wallCourses, place, ring, Structure, assets, BOND_EPS, view };
 })();
 
 // ============================================================================
@@ -703,6 +733,46 @@ const WreckTests = {
       if (un.length) console.log(tag + 'unsupported e.g. ' + un.slice(0, 5).map(i => JSON.stringify(blocks[i].p)).join(' '));
       T.ok(un.length === 0, tag + 'unsupported blocks ' + un.length);
       T.ok(asset.radius > 0 && asset.craneStart.pos.length === 3, tag + 'meta');
+    }
+
+    // ---- view math
+    {
+      const V = W.view, D = Math.PI / 180;
+      const unit = (d, msg) => T.near(Math.hypot(d[0], d[1]), 1, 1e-9, msg + ' unit');
+      let d = V.ballGaze([3, 0, 0], [0, 0, 5]);
+      T.near(d[0], 1, 1e-9, 'fast ball looks along velocity'); T.near(d[1], 0, 1e-9, 'fast ball z');
+      d = V.ballGaze([0.2, 0, 0], [0, 0, 5]);
+      T.near(d[0], 0, 1e-9, 'slow ball looks at target x'); T.near(d[1], 1, 1e-9, 'slow ball looks at target z');
+      d = V.ballGaze([1, 0, 0], [0, 0, 1]);
+      T.near(d[0], Math.SQRT1_2, 1e-9, 'midway blend x'); T.near(d[1], Math.SQRT1_2, 1e-9, 'midway blend z');
+      d = V.ballGaze([0, -5, 0], [0, 0, -2]);
+      T.near(d[1], -1, 1e-9, 'vertical speed is ignored');
+      d = V.ballGaze([0, 0, 0], [0, 3, 0]);
+      T.near(d[0], 0, 1e-9, 'all-zero gaze x'); T.near(d[1], 1, 1e-9, 'all-zero gaze falls back to +z');
+      d = V.ballGaze([0, 0, -4], [0, 0, 0]);
+      T.near(d[1], -1, 1e-9, 'fast ball on the target centre');
+      d = V.ballGaze([-1, 0, 0], [1, 0, 0]);
+      T.near(d[0], 1, 1e-9, 'cancelling blend falls back to the target');
+      unit(d, 'cancelling blend');
+      const c170 = [Math.sin(170 * D), Math.cos(170 * D)], m170 = [Math.sin(-170 * D), Math.cos(-170 * D)];
+      d = V.smoothDir([0, 1], [1, 0], 0, 0.3);
+      T.near(d[1], 1, 1e-9, 'dt 0 keeps the current direction');
+      d = V.smoothDir([0, 1], [1, 0], 100, 0.3);
+      T.near(d[0], 1, 1e-9, 'long dt reaches the wanted direction');
+      d = V.smoothDir([0, 1], [1, 0], 0.3 * Math.LN2, 0.3);
+      T.near(d[0], Math.SQRT1_2, 1e-9, 'half-life turns halfway x'); T.near(d[1], Math.SQRT1_2, 1e-9, 'half-life turns halfway z');
+      d = V.smoothDir([0, 1], [0, -1], 0.3 * Math.LN2, 0.3);
+      T.near(Math.abs(d[0]), 1, 1e-9, 'opposite vectors turn a quarter'); unit(d, 'opposite vectors');
+      d = V.smoothDir(c170, m170, 0.3 * Math.LN2, 0.3);
+      T.near(d[1], -1, 1e-9, 'turns the short way across 180°');
+      let h = V.clampHead(3, 0);
+      T.near(h.yaw, 120 * D, 1e-12, 'yaw clamps right'); T.near(h.pitch, 0, 1e-12, 'pitch untouched');
+      h = V.clampHead(-3, 2);
+      T.near(h.yaw, -120 * D, 1e-12, 'yaw clamps left'); T.near(h.pitch, 70 * D, 1e-12, 'pitch clamps up');
+      h = V.clampHead(0, -2);
+      T.near(h.pitch, -60 * D, 1e-12, 'pitch clamps down');
+      h = V.clampHead(0.5, -0.2);
+      T.near(h.yaw, 0.5, 1e-12, 'yaw in range'); T.near(h.pitch, -0.2, 1e-12, 'pitch in range');
     }
 
     console.log('WreckTests: ' + pass + ' passed, ' + fail + ' failed');
