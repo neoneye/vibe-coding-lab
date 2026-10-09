@@ -18,7 +18,7 @@ operator's seat in the cab, and a ride on the wrecking ball itself.
 
 ## Cab view (crane operator)
 
-- Eye point at head height inside the cab, a child of `slewGroup`, so the view
+- Eye point seated at the back of the cab (slew-local `1.05, 2.55, 0.7`), a child of `slewGroup`, so the view
   turns with slew and with the tracks.
 - Default gaze: toward the ball, smoothed (operator watches the load).
 - Drag on empty space turns the head: yaw offset clamped to ±120°, pitch of the
@@ -32,14 +32,13 @@ operator's seat in the cab, and a ride on the wrecking ball itself.
 ## Ball view (stabilised rider)
 
 - Camera rides above and behind the top of the ball relative to the look
-  direction, nudged sideways so the chain rising from the ball is off-centre.
-  Starting offsets (tuned visually): up `r + 0.35`, back `0.8 r`, right
-  `0.3 r`, so the curve of the ball shows at the bottom of the frame. Ball spin
-  is ignored; no roll, always upright.
+  direction: up `r + 0.35`, back `1.1 r` (tuned visually), so the curve of
+  the ball fills the bottom quarter of the frame. Ball spin is ignored; no
+  roll, always upright. The chain is hidden in this view: it rises about a
+  metre in front of the rider and its face-on links blocked much of the frame.
 - Look direction (horizontal): horizontal velocity direction when horizontal
   speed is above 1.5 m/s, the direction to the target centre below 0.5 m/s,
-  linearly blended in between. Smoothed with a ~0.3 s time constant. Pitch
-  −12°.
+  linearly blended in between. Smoothed with a ~0.3 s time constant. Pitch −4°.
 - No grabbing from Ball view (pointer drag does nothing); Space still shoves.
 - Wheel changes field of view, 20°–75°.
 - Known limitation: on a hard hit the camera may dip into a block for a few
