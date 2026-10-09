@@ -32,11 +32,14 @@ operator's seat in the cab, and a ride on the wrecking ball itself.
 ## Ball view (stabilised rider)
 
 - Camera rides above and behind the top of the ball relative to the look
-  direction: up `r + 0.45`, back `0.6 r`, so the curve of the ball shows at the
-  bottom of the frame. Ball spin is ignored; no roll, always upright.
-- Look direction (horizontal): horizontal velocity direction when speed is
-  above 1.5 m/s, the direction to the target centre below 0.5 m/s, linearly
-  blended in between. Smoothed with a ~0.3 s time constant. Pitch −8°.
+  direction, nudged sideways so the chain rising from the ball is off-centre.
+  Starting offsets (tuned visually): up `r + 0.35`, back `0.8 r`, right
+  `0.3 r`, so the curve of the ball shows at the bottom of the frame. Ball spin
+  is ignored; no roll, always upright.
+- Look direction (horizontal): horizontal velocity direction when horizontal
+  speed is above 1.5 m/s, the direction to the target centre below 0.5 m/s,
+  linearly blended in between. Smoothed with a ~0.3 s time constant. Pitch
+  −12°.
 - No grabbing from Ball view (pointer drag does nothing); Space still shoves.
 - Wheel changes field of view, 20°–75°.
 - Known limitation: on a hard hit the camera may dip into a block for a few
