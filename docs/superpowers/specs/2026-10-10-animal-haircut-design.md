@@ -168,7 +168,7 @@ The brush is a plain loop over all vertices. At ≤ 45k vertices that is
 well under 2 ms, so a spatial hash is not needed.
 
 **Wool mass.** `Σ area_i · removed_i · fleeceDensity`, with fleeceDensity
-= 12 kg/m³ for loose fleece. That puts a full llama shear at about 2–4 kg,
+= 6 kg/m³ for loose fleece (12 overshot to about 6 kg in practice). That puts a full llama shear at about 2–4 kg,
 which matches real llama clips. The total is shown as "Fleece collected:
 2.37 kg".
 

@@ -104,7 +104,7 @@ Object.assign(HC, (() => {
   const RI = {};
   REGIONS.forEach((r, i) => { RI[r] = i; });
   const MIN_LEN = 0.006;       // m: skin fuzz the clippers never remove
-  const FLEECE_DENSITY = 12;   // kg/m^3: loose fleece
+  const FLEECE_DENSITY = 6;    // kg/m^3: loose fleece, tuned so a llama shear yields the real-world 2-4 kg
 
   const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
   function smoothstep(e0, e1, x) { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); }
@@ -339,7 +339,7 @@ Object.assign(HC, (() => {
       label: 'Alpaca', k: 0.065, res: 150,
       maxLen: 0.17, density: 300, taper: 0.9, curl: 0.7, fluff: 0.92, droop: 0.12,
       coat: 'white', skin: '#7b6455', tintColor: '#3a2c24', tintRegions: [],
-      regionLength: { body: 1, neck: 1, head: 0.45, muzzle: 0.07, topknot: 1.1, legUpper: 0.85, legLower: 0.5, tail: 0.8 },
+      regionLength: { body: 1, neck: 1, head: 0.45, muzzle: 0.07, topknot: 0.7, legUpper: 0.85, legLower: 0.5, tail: 0.8 },
       prims: [
         cap([-0.28, 0.82, 0], [0.2, 0.84, 0], 0.22, undefined, 'body'),
         ell([0.24, 0.81, 0], [0.2, 0.21, 0.18], 'body'),
@@ -354,7 +354,7 @@ Object.assign(HC, (() => {
       head: { pivot: [0.38, 1.14, 0], dir: [0.3, 0.95, 0], ramp: 0.1 },
       face: {
         center: [0.44, 1.29, 0], eye: { dir: [0.45, 0.3, 0.84], r: 0.026 }, lashes: true,
-        ear: { dir: [-0.3, 0.8, 0.5], axis: [-0.05, 1, 0.3], kind: 'spear', len: 0.11, width: 0.026 },
+        ear: { dir: [-0.3, 0.8, 0.5], axis: [-0.05, 1, 0.3], kind: 'spear', len: 0.14, width: 0.028 },
         nose: { from: [0.58, 1.245, 0], dir: [1, 0.05, 0] },
       },
       camera: { dist: 3.4 },
@@ -380,7 +380,7 @@ Object.assign(HC, (() => {
       head: { pivot: [0.4, 0.74, 0], dir: [0.8, 0.6, 0], ramp: 0.08 },
       face: {
         center: [0.49, 0.83, 0], eye: { dir: [0.4, 0.3, 0.87], r: 0.024 }, lashes: false,
-        ear: { dir: [-0.2, 0.35, 0.92], axis: [0, -0.35, 1], kind: 'droop', len: 0.1, width: 0.032 },
+        ear: { dir: [-0.6, 0.45, 0.66], axis: [-0.3, -0.2, 1], kind: 'droop', len: 0.1, width: 0.032 },
         nose: { from: [0.64, 0.75, 0], dir: [1, -0.25, 0] },
       },
       camera: { dist: 2.6 },
@@ -977,10 +977,11 @@ const furMat = new THREE.ShaderMaterial({
       float diff = clamp((dot(N, Ld) + 0.45) / 1.45, 0.0, 1.0);
       float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
       vec3 hemi = mix(uGround, uSky, N.y * 0.5 + 0.5);
-      vec3 alb = vH > 0.0 ? mix(uRoot, uTip, max(vHc, vH * 0.6)) : uSkin;
+      // under short fuzz the skin pass reads as the fleece root, not as bare (dark) skin
+      vec3 alb = vH > 0.0 ? mix(uRoot, uTip, max(vHc, vH * 0.6)) : mix(uRoot, uSkin, smoothstep(0.02, 0.08, vL));
       alb = mix(alb, uTintColor, vTint);
       float aoMin = mix(0.8, 0.3, clamp(vL / 0.08, 0.0, 1.0));
-      float ao = vH > 0.0 ? mix(aoMin, 1.0, pow(vH, 0.8)) : aoMin * 0.8;
+      float ao = vH > 0.0 ? mix(aoMin, 1.0, pow(vH, 0.8)) : aoMin * 0.9;
       vec3 c = alb * (hemi * 0.6 + uLightColor * diff * 0.9) * ao + uLightColor * alb * rim * 0.35 * vH;
       gl_FragColor = vec4(c, 1.0);
       #include <tonemapping_fragment>
@@ -996,7 +997,7 @@ let mass = 0, undo = [], slots = [null, null, null], prevMaxLen = P.maxLen, cutA
 const darkMat = new THREE.MeshStandardMaterial({ color: 0x17110e, roughness: 0.08 });
 const shineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 const noseMat = new THREE.MeshStandardMaterial({ color: 0x2a1d18, roughness: 0.55 });
-const earMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
+const earMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, emissive: 0xffffff, emissiveIntensity: 0.18 });
 const toeMat = new THREE.MeshStandardMaterial({ color: 0x2b2420, roughness: 0.5 });
 
 function disposeAnimal() {
@@ -1142,6 +1143,7 @@ function applyColors() {
   furU.uRoot.value.set(P.rootColor); furU.uTip.value.set(P.tipColor); furU.uSkin.value.set(P.skinColor);
   furU.uTintColor.value.set(an.tintColor);
   earMat.color.set(an.tintRegions.includes('head') ? an.tintColor : P.tipColor);
+  earMat.emissive.copy(earMat.color);
 }
 function applyLight() {
   const a = P.lightAngle * Math.PI / 180;
@@ -1163,14 +1165,15 @@ function applyBg() {
 // ------------------------------------------------------------------ clippings
 const MAXC = 4000;
 const clipGeo = (() => {
-  const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position;
+  // a lumpy, smooth-shaded tuft (indexed sphere, so normals stay soft)
+  const g = new THREE.SphereGeometry(1, 9, 7), p = g.attributes.position;
   for (let i = 0; i < p.count; i++) {
-    const f = 0.7 + 0.6 * H.hash3(Math.round(p.getX(i) * 100), Math.round(p.getY(i) * 100), Math.round(p.getZ(i) * 100));
-    p.setXYZ(i, p.getX(i) * f, p.getY(i) * f, p.getZ(i) * f);
+    const f = 0.75 + 0.5 * H.hash3(Math.round(p.getX(i) * 100), Math.round(p.getY(i) * 100), Math.round(p.getZ(i) * 100));
+    p.setXYZ(i, p.getX(i) * f, p.getY(i) * f * 0.7, p.getZ(i) * f);
   }
   g.computeVertexNormals(); return g;
 })();
-const clips = new THREE.InstancedMesh(clipGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), MAXC);
+const clips = new THREE.InstancedMesh(clipGeo, new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x2a2620 }), MAXC);
 clips.instanceMatrix.setUsage(THREE.DynamicDrawUsage); clips.frustumCulled = false; clips.count = 0;
 clips.setColorAt(0, new THREE.Color(1, 1, 1));
 scene.add(clips);
@@ -1230,7 +1233,7 @@ function handleCuts(res) {
     H.deform(A.mesh, A.attrs, i, A.st.len[i] + amt * (0.3 + 0.5 * Math.random()), 1, pose, _t);
     _v.set(_t[0], _t[1], _t[2]); A.root.localToWorld(_v);
     _c.copy(furU.uRoot.value).lerp(furU.uTip.value, 0.45 + 0.55 * Math.random());
-    spawnClip(_v.x, _v.y, _v.z, 0.011 + Math.min(0.035, amt * 0.16), _c);
+    spawnClip(_v.x, _v.y, _v.z, 0.008 + Math.min(0.022, amt * 0.1), _c);
   }
 }
 
