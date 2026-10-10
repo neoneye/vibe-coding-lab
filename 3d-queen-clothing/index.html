@@ -1319,8 +1319,245 @@ function buildGown(Q, p, f) {
   Q.mats = { gown, bod, tile, U };
 }
 
-// ------------------------------------------------------------------ queen: details (Task 4 replaces)
-function buildDetails(Q, p, f) {}
+// ------------------------------------------------------------------ queen: details
+const PEARL = sharedGeo(new THREE.SphereGeometry(1, 12, 8));
+const JEWEL = sharedGeo(new THREE.OctahedronGeometry(1));
+let BOW = null;
+function bowGeo() {
+  if (BOW) return BOW;
+  const parts = [];
+  for (const s of [1, -1]) {
+    const loop = new THREE.TorusGeometry(0.28, 0.1, 8, 20); loop.scale(1, 0.6, 0.5); loop.rotateZ(s * 0.25); loop.translate(s * 0.3, 0, 0); parts.push(loop);
+    const tail = new THREE.BoxGeometry(0.12, 0.45, 0.04); tail.rotateZ(s * 0.35); tail.translate(s * 0.12, -0.3, 0); parts.push(tail);
+  }
+  parts.push(new THREE.SphereGeometry(0.12, 12, 8));
+  BOW = sharedGeo(mergeGeometries(parts.map(g => (g.index ? g.toNonIndexed() : g))));   // mixed indexing makes mergeGeometries return null
+  return BOW;
+}
+const at = (x, y, z, s = 1, ry = 0, rx = 0) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, 0, 'YXZ')), new THREE.Vector3(s, s, s));
+function instanced(geo, mat, mats) { const m = new THREE.InstancedMesh(geo, mat, mats.length); mats.forEach((M, i) => m.setMatrixAt(i, M)); m.instanceMatrix.needsUpdate = true; return m; }
+const outward = (q, d) => { const r = Math.hypot(q[0], q[2]) || 1, k = (r + d) / r; return [q[0] * k, q[1], q[2] * k]; };
+
+function buildDetails(Q, p, f) {
+  const { gown, tile } = Q.mats, gap = p.frontOpen > 0.01, R = QC.mulberry32(17);
+  const braidM = (rx, ry) => new THREE.MeshStandardMaterial({ color: p.braidColor, map: braidTex(rx, ry), metalness: 0.6, roughness: 0.38, side: THREE.DoubleSide });
+
+  // ---- sleeves + engageantes
+  for (const s of [1, -1]) {
+    const curve = armCurve(p, s), L = p.sleeveLength * 0.9;
+    Q.add(new THREE.Mesh(tubeGeom(curve, 0, L, t => QC.sleeveRadius(t, p), 64, 28), fabricMat(p, p.pattern, p.bodiceColor, p.bodiceAccent, 2, 1 / tile)), { outer: true });
+    if (p.engageantes > 0.01) {
+      const P = curve.getPointAt(L), T = curve.getTangentAt(L);
+      const d = T.clone().multiplyScalar(0.35).add(new THREE.Vector3(0, -1, -0.25)).normalize();
+      const r0 = QC.sleeveRadius(L, p) * 0.92;
+      for (let k = 0; k < 3; k++) {
+        const r1 = r0 + (0.03 + 0.05 * p.engageantes) * (1 + 0.3 * k), len = (0.05 + 0.09 * p.engageantes) * (1 + 0.25 * k);
+        const cone = new THREE.Mesh(new THREE.CylinderGeometry(r0, r1, len, 36, 1, true), laceMat(4 + k, 1));
+        cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), d);   // wide (scalloped) end points along d
+        cone.position.copy(P).addScaledVector(d, len / 2 - 0.01 + 0.012 * k);
+        Q.add(cone, { outer: true, shadow: false });
+      }
+    }
+  }
+
+  // ---- collars
+  if (p.ruff > 0.01) for (let k = 0; k < p.ruffLayers; k++) {
+    const rm = new THREE.MeshPhysicalMaterial({ color: '#fbf8f1', map: laceTex(1, 1), alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.7, sheen: 0.3 });
+    const ring = QC.buildRuffRing(p, k); ring.seam = true;   // the ring is closed; shared code reports seam:false
+    Q.add(new THREE.Mesh(toGeom(ring), rm), { outer: true });
+  }
+  if (p.fanCollar > 0.01) {
+    const Rf = 0.12 + 0.3 * p.fanCollar, tilt = 0.35;
+    const pt = (s, t) => { const a = lerp(-1.9, 1.9, s), rho = Rf * (0.12 + 0.88 * t), u = rho * Math.sin(a), w = rho * Math.cos(a);
+      return [u, f.shoulderY + 0.03 + w * Math.cos(tilt), -0.06 - w * Math.sin(tilt) + 0.45 * u * u]; };
+    Q.add(new THREE.Mesh(toGeom(QC.gridMesh(64, 10, (s, t) => [...pt(s, t), s * 8, 1 - t])), laceMat(1, 1)), { outer: true, shadow: false });
+    const rimPts = Array.from({ length: 65 }, (_, k) => new THREE.Vector3(...pt(k / 64, 1)));
+    Q.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rimPts), 128, 0.0018, 5), goldMat()), { outer: true });
+  }
+  if (p.bertha > 0.01) {
+    const depth = 0.03 + 0.11 * p.bertha, rs = QC.sleeveRadius(0.06, p);
+    const m = QC.gridMesh(120, 6, (s, t) => {
+      const phi = Math.PI + s * TAU, y = QC.necklineTop(phi, p) + 0.008 - t * depth;
+      const side = Math.abs(Math.sin(phi)) ** 3;
+      const q = QC.torsoPoint(phi, Math.max(y, f.waistY), p, 0.012 + 0.035 * t * t + side * (rs + 0.01) + 0.006 * t * Math.sin(phi * 60));
+      return [q[0], q[1], q[2], s * 24, 1 - t];
+    });
+    m.seam = true;
+    Q.add(new THREE.Mesh(toGeom(m), laceMat(1, 1)), { outer: true, shadow: false });
+  }
+  if (p.highCollar > 0.01) {
+    const h = 0.02 + 0.045 * p.highCollar, tex = laceTex(10, -1); tex.offset.y = 1;   // scallops at the top
+    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.056, 0.062, h, 40, 1, true), new THREE.MeshStandardMaterial({ color: '#f7f2e8', map: tex, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.75 }));
+    c.position.set(0, f.neckY - 0.012 + h / 2, -0.004);
+    Q.add(c, { outer: true, shadow: false });
+  }
+
+  // ---- mantle of estate with ermine
+  if (p.mantle > 0.01) {
+    const MC = 48, MR = 72;
+    const mm = new THREE.MeshPhysicalMaterial({ color: p.mantleColor, roughness: 0.8, sheen: 1, sheenRoughness: 0.4, sheenColor: new THREE.Color(p.mantleColor).lerp(new THREE.Color('#ffffff'), 0.5), side: THREE.DoubleSide });
+    Q.add(new THREE.Mesh(toGeom(QC.gridMesh(MC, MR, (s, t) => [...QC.mantlePoint(s, t, p), s, t])), mm), { cloth: true, outer: true });
+    if (p.ermine > 0.005) {
+      const lift = (q, d) => { const o = outward(q, d); if (o[1] < 0.05) o[1] += 0.004; return o; };
+      const pathLen = f.shoulderY - QC.HEM_Y + p.mantle;
+      for (const edge of [0, 1]) {
+        const m = QC.gridMesh(4, MR, (a, t) => {
+          const c = QC.mantlePoint(0.5, t, p), width = Math.hypot(c[0], c[2]) * QC.mantleHalfSpan(t, p) * 2;
+          const ds = Math.min(0.5, p.ermine / Math.max(width, 0.05)), s = edge ? 1 - ds * a : ds * a;
+          return [...lift(QC.mantlePoint(s, t, p), 0.004), (a * p.ermine) / 0.25, (t * pathLen) / 0.25];
+        });
+        Q.add(new THREE.Mesh(toGeom(m), new THREE.MeshStandardMaterial({ map: ermineTex(1, 1), roughness: 0.95, side: THREE.DoubleSide })), { cloth: true, outer: true });
+      }
+      const tb = 1 - Math.min(0.5, p.ermine / pathLen);
+      const hem = QC.gridMesh(MC, 3, (s, a) => [...lift(QC.mantlePoint(s, lerp(tb, 1, a), p), 0.005), s * 12, (a * p.ermine) / 0.25]);
+      Q.add(new THREE.Mesh(toGeom(hem), new THREE.MeshStandardMaterial({ map: ermineTex(1, 1), roughness: 0.95, side: THREE.DoubleSide })), { cloth: true, outer: true });
+    }
+  }
+
+  // ---- flounces + fringe
+  for (let k = 0; k < p.flounces; k++) {
+    const d = p.flounceDepth, v0 = p.flounces === 1 ? 0.97 - d : lerp(0.32, 0.97 - d, k / (p.flounces - 1));
+    const m = QC.buildSkirtGrid(p, 200, 10, { gap: true, v0, v1: v0 + d, offset: 0.008 + 0.004 * k, flare: 0.03, ruffle: true, lift: 0.003 * (k + 1) });
+    Q.add(new THREE.Mesh(toGeom(m), gown), { cloth: true, outer: true });
+    if (p.fringe > 0.01) {
+      const C = m.cols + 1, j = m.rows, len = 0.015 + 0.06 * p.fringe, pts = [];
+      for (let i = 0; i < C - 1; i++) for (let s = 0; s < 3; s++) {
+        const a = (j * C + i) * 3, b = a + 3, t = s / 3;
+        const x = lerp(m.pos[a], m.pos[b], t), y = lerp(m.pos[a + 1], m.pos[b + 1], t), z = lerp(m.pos[a + 2], m.pos[b + 2], t);
+        pts.push(x, y, z, x * 1.01, Math.max(0.004, y - len), z * 1.01);
+      }
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      Q.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: p.braidColor })), { cloth: true, outer: true });
+    }
+  }
+
+  // ---- braid: hem bands and the edges of the opening (or a centre-front band)
+  for (let k = 0; k < p.braidBands; k++) {
+    const vc = 0.985 - k * 0.06;
+    Q.add(new THREE.Mesh(toGeom(QC.buildSkirtGrid(p, 200, 2, { gap: true, v0: vc - 0.014, v1: vc, offset: 0.004, uvBand: true, uScale: 200 })), braidM(1, 1)), { cloth: true, outer: true });
+  }
+  if (p.frontTrim > 0.001) {
+    const w = p.frontTrim, rAt = (v, th) => Math.max(0.08, QC.skirtRadius(v, th, p));
+    const spans = gap
+      ? [v => { const g = QC.halfGap(v, p); return [g, g + w / rAt(v, g)]; }, v => { const g = QC.halfGap(v, p); return [QC.TAU - g - w / rAt(v, -g), QC.TAU - g]; }]
+      : [v => { const h = w / 2 / rAt(v, 0); return [-h, h]; }];
+    for (const span of spans) Q.add(new THREE.Mesh(toGeom(QC.buildSkirtGrid(p, 3, 80, { span, offset: 0.004, uScale: 60 })), braidM(1, 1 / Math.max(w, 0.01))), { cloth: true, outer: true });
+  }
+
+  // ---- pearls: opening rows, neckline, necklaces
+  const pearls = [], ps = 0.0055;
+  if (p.pearlRows > 0) {
+    for (let row = 0; row < p.pearlRows; row++) {
+      const off = 0.012 + 0.016 * row;
+      for (let v = 0.02; v <= 1; v += 0.012) {
+        let ths = [];
+        if (gap) { const g = QC.halfGap(v, p), r = QC.skirtRadius(v, g, p); ths = [g + off / r, QC.TAU - g - off / r]; }
+        else if (p.frontTrim > 0.001) ths = [((row % 2 ? 1 : -1) * (p.frontTrim / 2 + off * 0.5)) / QC.skirtRadius(v, 0, p)];
+        for (const th of ths) { const q = outward(QC.skirtPoint(v, th, p), 0.006 + QC.foldAt(v, th, p)); pearls.push(at(q[0], q[1] + 0.003, q[2], ps)); }
+      }
+    }
+    for (let s = 0; s < 1; s += 1 / 140) {
+      const phi = Math.PI + s * TAU, q = QC.torsoPoint(phi, QC.necklineTop(phi, p) - 0.006, p, 0.012);
+      pearls.push(at(q[0], q[1], q[2], ps * 0.9));
+    }
+  }
+  for (let i = 0; i < p.necklaces; i++) {
+    const depth = 0.02 + ((0.04 + 0.3 * p.pearlLength) * (i + 1)) / p.necklaces, w = 0.062 + 0.012 * i;
+    const n = Math.max(12, Math.round((2 * w + 2 * depth) / 0.011));
+    for (let k = 0; k <= n; k++) {
+      const t = k / n, x = w * Math.cos(Math.PI * t), y = Math.max(f.waistY + 0.03, f.neckY - 0.02 - depth * Math.sin(Math.PI * t));
+      const sec = QC.torsoSection(y, p), rx = sec.rx + 0.012, rz = sec.rz + 0.012;
+      const z = sec.cz + rz * Math.sqrt(Math.max(0, 1 - (x / rx) ** 2)) + (p.ruff > 0.01 && y > f.neckY - 0.03 ? 0.03 : 0);
+      pearls.push(at(x, y, z, ps * 1.1));
+    }
+  }
+  if (pearls.length) Q.add(instanced(PEARL, pearlMat(), pearls), { cloth: true, outer: true });
+
+  // ---- jewels scattered over the skirt and bodice
+  const jewels = [], jcol = [], GEMC = ['#b3122b', '#1f4fa8', '#138a52', '#d4af37', '#f4efe6'].map(c => new THREE.Color(c));
+  const nj = Math.round(p.jewelDensity * 700);
+  if (nj > 0) {
+    const rows = Math.max(3, Math.round(Math.sqrt(nj / 3))), per = Math.ceil(nj / rows);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < per; c++) {
+      const v = (r + 0.5 + (R() - 0.5) * 0.5) / rows, th = ((c + 0.5 * (r % 2) + (R() - 0.5) * 0.4) / per) * TAU;
+      if (gap && Math.abs(Math.atan2(Math.sin(th), Math.cos(th))) < QC.halfGap(v, p) + 0.05) continue;
+      const q = outward(QC.skirtPoint(v, th, p), 0.007 + QC.foldAt(v, th, p));
+      jewels.push(at(q[0], q[1] + 0.002, q[2], 0.0075 + 0.004 * R(), th, R())); jcol.push(GEMC[(r + c) % GEMC.length]);
+    }
+    for (let k = 0; k < Math.round(nj * 0.15); k++) {
+      const phi = Math.PI + R() * TAU, y0 = QC.bodiceBottom(phi, p), y1 = QC.necklineTop(phi, p);
+      if (y1 <= y0) continue;
+      const q = QC.torsoPoint(phi, lerp(y0, y1, R()), p, 0.01); QC.pushOutsideSkirt(q, p, 0.012);
+      jewels.push(at(q[0], q[1], q[2], 0.006, phi)); jcol.push(GEMC[k % GEMC.length]);
+    }
+  }
+  if (jewels.length) {
+    const jm = instanced(JEWEL, new THREE.MeshPhysicalMaterial({ roughness: 0.12, metalness: 0.2, clearcoat: 1, emissive: '#331111', emissiveIntensity: 0.2 }), jewels);
+    jcol.forEach((c, i) => jm.setColorAt(i, c)); jm.instanceColor.needsUpdate = true;
+    Q.add(jm, { cloth: true, outer: true });
+  }
+
+  // ---- bows: échelle down the stomacher, and round the skirt
+  if (p.stomacherBows > 0) {
+    const yb = QC.bodiceBottom(0, p) + 0.035, yt = QC.necklineTop(0, p) - 0.025, n = p.stomacherBows, bows = [];
+    for (let k = 0; k < n; k++) { const t = n === 1 ? 0.5 : k / (n - 1), q = QC.torsoPoint(0, lerp(yt, yb, t), p, 0.016); QC.pushOutsideSkirt(q, p, 0.016); bows.push(at(q[0], q[1], q[2], lerp(0.075, 0.04, t))); }
+    Q.add(instanced(bowGeo(), satin(p.foreAccent), bows), { cloth: true, outer: true });
+  }
+  if (p.bowsOnSkirt > 0) {
+    const sb = [];
+    for (let k = 0; k < p.bowsOnSkirt; k++) {
+      const v = 0.45, g = gap ? QC.halfGap(v, p) + 0.15 : 0, th = gap ? lerp(g, QC.TAU - g, (k + 0.5) / p.bowsOnSkirt) : ((k + 0.5) / p.bowsOnSkirt) * TAU;
+      const q = outward(QC.skirtPoint(v, th, p), 0.012 + QC.foldAt(v, th, p));
+      sb.push(at(q[0], q[1], q[2], 0.08, th));
+    }
+    Q.add(instanced(bowGeo(), satin(p.gownAccent), sb), { cloth: true, outer: true });
+  }
+
+  // ---- order sash: right shoulder to left hip, with a star on the hip
+  if (p.sash > 0.01) {
+    const yc = (f.shoulderY + f.waistY) / 2 - 0.03, A = (f.shoulderY - f.waistY) / 2 - 0.02, wd = 0.03 + 0.05 * p.sash;
+    const m = QC.gridMesh(96, 3, (s, t) => {
+      const phi = Math.PI + s * TAU, q = QC.torsoPoint(phi, yc - A * Math.sin(phi) + (t - 0.5) * wd, p, 0.013 + 0.02 * Math.abs(Math.sin(phi)) ** 6);
+      QC.pushOutsideSkirt(q, p, 0.01); return [q[0], q[1], q[2], s * 8, t];
+    });
+    m.seam = true; Q.add(new THREE.Mesh(toGeom(m), satin(p.sashColor)), { outer: true });
+    const phi = 0.75 * Math.PI / 2, q = QC.torsoPoint(phi, yc - A * Math.sin(phi) - 0.01, p, 0.03); QC.pushOutsideSkirt(q, p, 0.03);
+    const star = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.006, 8), new THREE.MeshStandardMaterial({ color: '#dfe3ea', metalness: 1, roughness: 0.2 }));
+    star.position.set(...q); star.rotation.set(Math.PI / 2, 0, 0); star.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), phi);
+    Q.add(star, { outer: true });
+  }
+
+  // ---- regalia and the hand fan
+  const hands = [1, -1].map(s => { const c = armCurve(p, s); return c.getPointAt(1).add(c.getTangentAt(1).multiplyScalar(0.03)); });   // [left, right]
+  const gm = goldMat();
+  if (p.sceptreOrb === 'sceptre' || p.sceptreOrb === 'both') {
+    const g = new THREE.Group();
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.011, 0.78, 12), gm); rod.position.y = 0.24; g.add(rod);
+    const knob = new THREE.Mesh(SPHERE, gm); knob.scale.setScalar(0.022); knob.position.y = 0.64; g.add(knob);
+    const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.06, 0.012), gm); c1.position.y = 0.68;
+    const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.012, 0.012), gm); c2.position.y = 0.69; g.add(c1, c2);
+    const ruby = new THREE.Mesh(SPHERE, new THREE.MeshPhysicalMaterial({ color: '#b3122b', roughness: 0.1, clearcoat: 1 })); ruby.scale.setScalar(0.014); ruby.position.set(0, 0.64, 0.018); g.add(ruby);
+    g.position.copy(hands[1]); g.rotation.set(0.25, 0, 0.35); Q.add(g);
+  }
+  if (p.sceptreOrb === 'orb' || p.sceptreOrb === 'both') {
+    const g = new THREE.Group(), ball = new THREE.Mesh(SPHERE, gm); ball.scale.setScalar(0.05); g.add(ball);
+    const b1 = new THREE.Mesh(new THREE.TorusGeometry(0.051, 0.004, 6, 32), gm); b1.rotation.x = Math.PI / 2;
+    const b2 = new THREE.Mesh(new THREE.TorusGeometry(0.051, 0.004, 6, 32, Math.PI), gm); b2.rotation.y = Math.PI / 2; g.add(b1, b2);
+    const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.04, 0.008), gm); c1.position.y = 0.07;
+    const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.008, 0.008), gm); c2.position.y = 0.075; g.add(c1, c2);
+    g.position.copy(hands[0]).add(new THREE.Vector3(0, 0.055, 0.01)); Q.add(g);
+  }
+  if (p.handFan === 'on') {
+    const hand = p.sceptreOrb === 'orb' || p.sceptreOrb === 'both' ? hands[1] : hands[0];
+    const ft = useTex(`fan|${p.gownAccent}`, () => canvasTex(256, 256, (g, W, H) => {
+      g.fillStyle = '#f3ead8'; g.fillRect(0, 0, W, H); g.strokeStyle = 'rgba(80,60,40,0.45)'; g.lineWidth = 2;
+      for (let a = 0; a < Math.PI; a += Math.PI / 16) { g.beginPath(); g.moveTo(W / 2, H / 2); g.lineTo(W / 2 + Math.cos(a) * W, H / 2 - Math.sin(a) * W); g.stroke(); }
+      drawRose(g, W * 0.35, H * 0.3, 12, p.gownAccent); drawRose(g, W * 0.62, H * 0.27, 10, p.gownAccent);
+    }));
+    const fan = new THREE.Mesh(new THREE.RingGeometry(0.03, 0.17, 24, 1, 0.15 * Math.PI, 0.7 * Math.PI), new THREE.MeshStandardMaterial({ map: ft, side: THREE.DoubleSide, roughness: 0.7 }));
+    fan.position.copy(hand).add(new THREE.Vector3(0, -0.02, 0.03)); fan.rotation.set(-0.5, 0, Math.PI); Q.add(fan);
+  }
+}
 // ------------------------------------------------------------------ queen: cloth motion & underpinnings (Task 5 replaces)
 function clothify(mat, U) {}
 function buildUnder(Q, p, f) { Q.under = null; }
