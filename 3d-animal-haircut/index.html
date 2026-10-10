@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Animal Haircut</title>
+</head>
+<body>
+<script id="shared-code">
+// ============================================================ test harness
+const HaircutTests = {
+  cases: [],
+  add(name, fn) { this.cases.push([name, fn]); },
+  run() {
+    let pass = 0, fail = 0;
+    for (const [name, fn] of this.cases) {
+      try { fn(); pass++; console.log('ok   ' + name); }
+      catch (e) { fail++; console.log('FAIL ' + name + ': ' + e.message); }
+    }
+    console.log(`${pass} passed, ${fail} failed`);
+    return fail === 0;
+  },
+};
+function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
+function assertNear(a, b, eps, m) { if (!(Math.abs(a - b) <= eps)) throw new Error(`${m || 'not near'}: ${a} vs ${b} (eps ${eps})`); }
+const HC = {};
+
+// ============================================================ part 1: math, SDF, surface nets
+Object.assign(HC, (() => {
+  const REGIONS = ['body', 'neck', 'head', 'muzzle', 'topknot', 'legUpper', 'legLower', 'tail'];
+  const NR = REGIONS.length;
+  const RI = {};
+  REGIONS.forEach((r, i) => { RI[r] = i; });
+  const MIN_LEN = 0.006;       // m: skin fuzz the clippers never remove
+  const FLEECE_DENSITY = 12;   // kg/m^3: loose fleece
+
+  const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+  function smoothstep(e0, e1, x) { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); }
+  // polynomial smooth minimum: <= min(a, b), equal to it once |a - b| >= k
+  function smin(a, b, k) {
+    if (k <= 0) return Math.min(a, b);
+    const h = Math.max(k - Math.abs(a - b), 0) / k;
+    return Math.min(a, b) - h * h * k * 0.25;
+  }
+  function hash3(i, j, k) {
+    let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263) + Math.imul(k, 1274126177)) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  }
+  function vnoise(x, y, z) {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    const fx = x - xi, fy = y - yi, fz = z - zi;
+    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy), uz = fz * fz * (3 - 2 * fz);
+    let r = 0;
+    for (let c = 0; c < 8; c++) {
+      const dx = c & 1, dy = (c >> 1) & 1, dz = (c >> 2) & 1;
+      r += hash3(xi + dx, yi + dy, zi + dz) * (dx ? ux : 1 - ux) * (dy ? uy : 1 - uy) * (dz ? uz : 1 - uz);
+    }
+    return r;
+  }
+
+  const cap = (a, b, r, r2, region, extra) => Object.assign({ type: 'cap', a, b, r, r2, region }, extra);
+  const ell = (c, s, region, extra) => Object.assign({ type: 'ell', c, s, region }, extra);
+  function sdCapsule(x, y, z, p) {
+    const ax = p.a[0], ay = p.a[1], az = p.a[2];
+    const bx = p.b[0] - ax, by = p.b[1] - ay, bz = p.b[2] - az;
+    const px = x - ax, py = y - ay, pz = z - az;
+    const bb = bx * bx + by * by + bz * bz;
+    const t = bb > 0 ? clamp((px * bx + py * by + pz * bz) / bb, 0, 1) : 0;
+    const dx = px - bx * t, dy = py - by * t, dz = pz - bz * t;
+    const r = p.r2 === undefined ? p.r : p.r + (p.r2 - p.r) * t;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  }
+  function sdEllipsoid(x, y, z, p) {
+    const qx = (x - p.c[0]) / p.s[0], qy = (y - p.c[1]) / p.s[1], qz = (z - p.c[2]) / p.s[2];
+    const k0 = Math.sqrt(qx * qx + qy * qy + qz * qz);
+    const k1 = Math.sqrt((qx / p.s[0]) ** 2 + (qy / p.s[1]) ** 2 + (qz / p.s[2]) ** 2);
+    if (k1 < 1e-9) return -Math.min(p.s[0], p.s[1], p.s[2]);
+    return k0 * (k0 - 1) / k1;
+  }
+  const primDist = (x, y, z, p) => (p.type === 'cap' ? sdCapsule(x, y, z, p) : sdEllipsoid(x, y, z, p));
+  function makeSDF(prims, k) {
+    return (x, y, z) => {
+      let d = primDist(x, y, z, prims[0]);
+      for (let i = 1; i < prims.length; i++) d = smin(d, primDist(x, y, z, prims[i]), k);
+      return d;
+    };
+  }
+  function primBounds(p) {
+    if (p.type === 'cap') {
+      const r = Math.max(p.r, p.r2 === undefined ? p.r : p.r2);
+      return { min: [0, 1, 2].map(a => Math.min(p.a[a], p.b[a]) - r), max: [0, 1, 2].map(a => Math.max(p.a[a], p.b[a]) + r) };
+    }
+    return { min: [0, 1, 2].map(a => p.c[a] - p.s[a]), max: [0, 1, 2].map(a => p.c[a] + p.s[a]) };
+  }
+
+  // Naive surface nets: one vertex per sign-changing cell, one quad per sign-changing grid edge.
+  function surfaceNets(sdf, bmin, bmax, cell) {
+    const nx = Math.ceil((bmax[0] - bmin[0]) / cell) + 1;
+    const ny = Math.ceil((bmax[1] - bmin[1]) / cell) + 1;
+    const nz = Math.ceil((bmax[2] - bmin[2]) / cell) + 1;
+    const F = new Float32Array(nx * ny * nz);
+    let o = 0;
+    for (let k = 0; k < nz; k++) {
+      const z = bmin[2] + k * cell;
+      for (let j = 0; j < ny; j++) {
+        const y = bmin[1] + j * cell;
+        for (let i = 0; i < nx; i++) F[o++] = sdf(bmin[0] + i * cell, y, z);
+      }
+    }
+    const sy = nx, sz = nx * ny, cx = nx - 1, cy = ny - 1, cz = nz - 1;
+    const cellVert = new Int32Array(cx * cy * cz).fill(-1);
+    const CO = [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1];
+    const ED = [0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7];
+    const v = new Float64Array(8);
+    const pos = [];
+    for (let k = 0; k < cz; k++) for (let j = 0; j < cy; j++) for (let i = 0; i < cx; i++) {
+      const g0 = i + j * sy + k * sz;
+      let mask = 0;
+      for (let c = 0; c < 8; c++) {
+        const val = F[g0 + CO[3 * c] + CO[3 * c + 1] * sy + CO[3 * c + 2] * sz];
+        v[c] = val;
+        if (val < 0) mask |= 1 << c;
+      }
+      if (mask === 0 || mask === 255) continue;
+      let px = 0, py = 0, pz = 0, n = 0;
+      for (let e = 0; e < 24; e += 2) {
+        const a = ED[e], b = ED[e + 1];
+        if ((v[a] < 0) !== (v[b] < 0)) {
+          const t = v[a] / (v[a] - v[b]);
+          px += CO[3 * a] + t * (CO[3 * b] - CO[3 * a]);
+          py += CO[3 * a + 1] + t * (CO[3 * b + 1] - CO[3 * a + 1]);
+          pz += CO[3 * a + 2] + t * (CO[3 * b + 2] - CO[3 * a + 2]);
+          n++;
+        }
+      }
+      cellVert[i + j * cx + k * cx * cy] = pos.length / 3;
+      pos.push(bmin[0] + (i + px / n) * cell, bmin[1] + (j + py / n) * cell, bmin[2] + (k + pz / n) * cell);
+    }
+    const idx = [];
+    const cv = (i, j, k) => cellVert[i + j * cx + k * cx * cy];
+    const quad = (a, b, c, d, flip) => { if (flip) idx.push(a, c, b, a, d, c); else idx.push(a, b, c, a, c, d); };
+    for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+      const g = i + j * sy + k * sz, in0 = F[g] < 0;
+      if (in0 !== (F[g + 1] < 0)) quad(cv(i, j - 1, k - 1), cv(i, j, k - 1), cv(i, j, k), cv(i, j - 1, k), !in0);
+      if (in0 !== (F[g + sy] < 0)) quad(cv(i - 1, j, k - 1), cv(i - 1, j, k), cv(i, j, k), cv(i, j, k - 1), !in0);
+      if (in0 !== (F[g + sz] < 0)) quad(cv(i - 1, j - 1, k), cv(i, j - 1, k), cv(i, j, k), cv(i - 1, j, k), !in0);
+    }
+    return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
+  }
+  function sdfNormal(sdf, x, y, z, e) {
+    const gx = sdf(x + e, y, z) - sdf(x - e, y, z);
+    const gy = sdf(x, y + e, z) - sdf(x, y - e, z);
+    const gz = sdf(x, y, z + e) - sdf(x, y, z - e);
+    const l = Math.hypot(gx, gy, gz) || 1;
+    return [gx / l, gy / l, gz / l];
+  }
+  // Newton-project vertices onto the surface, then compute normals, vertex areas and bounds.
+  function finishMesh(sdf, raw, cell) {
+    const pos = raw.pos, idx = raw.idx, nv = pos.length / 3, e = cell * 0.25;
+    const nrm = new Float32Array(nv * 3), area = new Float32Array(nv);
+    for (let i = 0; i < nv; i++) {
+      let x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2];
+      for (let it = 0; it < 3; it++) {
+        const d = sdf(x, y, z);
+        const gx = (sdf(x + e, y, z) - sdf(x - e, y, z)) / (2 * e);
+        const gy = (sdf(x, y + e, z) - sdf(x, y - e, z)) / (2 * e);
+        const gz = (sdf(x, y, z + e) - sdf(x, y, z - e)) / (2 * e);
+        const gg = gx * gx + gy * gy + gz * gz;
+        if (gg < 1e-12) break;
+        let sx = d * gx / gg, sy = d * gy / gg, sz = d * gz / gg;
+        const sl = Math.hypot(sx, sy, sz);
+        if (sl > cell) { sx *= cell / sl; sy *= cell / sl; sz *= cell / sl; }
+        x -= sx; y -= sy; z -= sz;
+      }
+      pos[3 * i] = x; pos[3 * i + 1] = y; pos[3 * i + 2] = z;
+      nrm.set(sdfNormal(sdf, x, y, z, e), 3 * i);
+    }
+    for (let t = 0; t < idx.length; t += 3) {
+      const a = 3 * idx[t], b = 3 * idx[t + 1], c = 3 * idx[t + 2];
+      const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+      const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+      const ar = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 6;
+      area[idx[t]] += ar; area[idx[t + 1]] += ar; area[idx[t + 2]] += ar;
+    }
+    const bmin = [Infinity, Infinity, Infinity], bmax = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < nv; i++) for (let a = 0; a < 3; a++) {
+      const q = pos[3 * i + a];
+      if (q < bmin[a]) bmin[a] = q;
+      if (q > bmax[a]) bmax[a] = q;
+    }
+    return { pos, nrm, idx, area, nv, cell, bmin, bmax };
+  }
+  // res = grid cells along the longest axis of the primitives' bounding box
+  function meshPrims(prims, k, res) {
+    const sdf = makeSDF(prims, k);
+    const bmin = [Infinity, Infinity, Infinity], bmax = [-Infinity, -Infinity, -Infinity];
+    for (const p of prims) {
+      const b = primBounds(p);
+      for (let a = 0; a < 3; a++) { bmin[a] = Math.min(bmin[a], b.min[a]); bmax[a] = Math.max(bmax[a], b.max[a]); }
+    }
+    const cell = Math.max(bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2]) / res;
+    const pad = 2 * cell + k;
+    for (let a = 0; a < 3; a++) { bmin[a] -= pad; bmax[a] += pad; }
+    return finishMesh(sdf, surfaceNets(sdf, bmin, bmax, cell), cell);
+  }
+  function edgeCounts(idx) {
+    const m = new Map();
+    const add = (a, b) => { const key = a < b ? a * 2097152 + b : b * 2097152 + a; m.set(key, (m.get(key) || 0) + 1); };
+    for (let t = 0; t < idx.length; t += 3) { add(idx[t], idx[t + 1]); add(idx[t + 1], idx[t + 2]); add(idx[t + 2], idx[t]); }
+    return m;
+  }
+  return { REGIONS, NR, RI, MIN_LEN, FLEECE_DENSITY, clamp, smoothstep, smin, hash3, vnoise, cap, ell,
+    sdCapsule, sdEllipsoid, primDist, makeSDF, primBounds, surfaceNets, sdfNormal, finishMesh, meshPrims, edgeCounts };
+})());
+//@@PART2@@
+
+// ============================================================ part 1 tests
+HaircutTests.add('sdf primitives', () => {
+  const c = HC.cap([0, 0, 0], [1, 0, 0], 0.5, undefined, 'body');
+  assertNear(HC.sdCapsule(0.5, 2, 0, c), 1.5, 1e-9);
+  assertNear(HC.sdCapsule(-1, 0, 0, c), 0.5, 1e-9);
+  assertNear(HC.sdCapsule(0.5, 0, 0, c), -0.5, 1e-9);
+  const t = HC.cap([0, 0, 0], [1, 0, 0], 0.5, 0.25, 'body');
+  assertNear(HC.sdCapsule(1, 1, 0, t), 0.75, 1e-9);
+  const e = HC.ell([1, 2, 3], [0.5, 0.3, 0.2], 'body');
+  assertNear(HC.sdEllipsoid(1.6, 2, 3, e), 0.1, 1e-9);
+  assertNear(HC.sdEllipsoid(1, 2, 3.3, e), 0.1, 1e-9);
+  assert(HC.sdEllipsoid(1, 2, 3, e) < 0);
+});
+HaircutTests.add('smooth min', () => {
+  for (const [a, b] of [[0, 0], [0.1, 0.12], [-0.3, 0.2], [1, 5]]) assert(HC.smin(a, b, 0.1) <= Math.min(a, b) + 1e-12);
+  assert(HC.smin(0, 5, 0.1) === 0, 'far apart equals min');
+  assertNear(HC.smin(0, 0, 0.1), -0.025, 1e-12);
+});
+function testSphere(r, res) {
+  const prims = [HC.ell([0, 0, 0], [r, r, r], 'body')];
+  return { mesh: HC.meshPrims(prims, 0, res), sdf: HC.makeSDF(prims, 0) };
+}
+HaircutTests.add('surface nets sphere', () => {
+  const r = 0.5, { mesh: m, sdf } = testSphere(r, 40);
+  assert(m.nv > 2000, 'too few vertices ' + m.nv);
+  for (let i = 0; i < m.nv; i++) assert(Math.abs(sdf(m.pos[3 * i], m.pos[3 * i + 1], m.pos[3 * i + 2])) < 0.01 * r, 'vertex off surface');
+  for (const c of HC.edgeCounts(m.idx).values()) assert(c === 2, 'edge used ' + c + ' times');
+  let area = 0;
+  for (let t = 0; t < m.idx.length; t += 3) {
+    const [a, b, c] = [m.idx[t], m.idx[t + 1], m.idx[t + 2]].map(i => [m.pos[3 * i], m.pos[3 * i + 1], m.pos[3 * i + 2]]);
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const g = [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3];
+    assert(n[0] * g[0] + n[1] * g[1] + n[2] * g[2] > 0, 'inward-facing triangle');
+    area += Math.hypot(n[0], n[1], n[2]) / 2;
+  }
+  const exact = 4 * Math.PI * r * r;
+  assertNear(area, exact, 0.03 * exact, 'area');
+  let va = 0; for (const a of m.area) va += a;
+  assertNear(va, area, 1e-4 * area, 'vertex areas');
+  for (let i = 0; i < m.nv; i++) {
+    const p = [m.pos[3 * i], m.pos[3 * i + 1], m.pos[3 * i + 2]], n = [m.nrm[3 * i], m.nrm[3 * i + 1], m.nrm[3 * i + 2]];
+    assert((p[0] * n[0] + p[1] * n[1] + p[2] * n[2]) / r > 0.99, 'normal not outward');
+  }
+});
+</script>
+</body>
+</html>
