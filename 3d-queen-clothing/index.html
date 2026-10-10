@@ -1558,9 +1558,72 @@ function buildDetails(Q, p, f) {
     fan.position.copy(hand).add(new THREE.Vector3(0, -0.02, 0.03)); fan.rotation.set(-0.5, 0, Math.PI); Q.add(fan);
   }
 }
-// ------------------------------------------------------------------ queen: cloth motion & underpinnings (Task 5 replaces)
-function clothify(mat, U) {}
-function buildUnder(Q, p, f) { Q.under = null; }
+// ------------------------------------------------------------------ queen: cloth motion & underpinnings
+// displacement in queen-local space: hem lag (yaw + offset) grows with the square of the drop below the waist,
+// wind ripples, and the floor-lying train/mantle drags against the walking direction
+const CLOTH_GLSL = /* glsl */`
+uniform float uSwYaw; uniform vec2 uSwOff; uniform float uWaistY; uniform float uDrop; uniform float uTime; uniform float uWind; uniform vec2 uTrail;
+vec3 clothDisp(vec3 p) {
+  float w = clamp((uWaistY - p.y) / uDrop, 0.0, 1.0); w *= w;
+  float rr = length(p.xz);
+  float a = uSwYaw * w, c = cos(a), s = sin(a);
+  p.xz = vec2(c * p.x + s * p.z, -s * p.x + c * p.z);
+  p.xz += uSwOff * w;
+  float ph = atan(p.x, p.z);
+  p.xz += uWind * w * vec2(0.035 * sin(uTime * 1.9 + ph * 3.0 + p.y * 6.0), 0.025 * cos(uTime * 1.4 + ph * 2.0 - p.y * 5.0) + 0.03);
+  float tr = smoothstep(0.25, 1.2, rr) * (1.0 - smoothstep(0.0, 0.08, p.y));
+  p.xz += uTrail * tr * rr;
+  return p;
+}`;
+function clothify(mat, U) {
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + CLOTH_GLSL)
+      .replace('#include <project_vertex>', `vec4 mvPosition = vec4( transformed, 1.0 );
+#ifdef USE_BATCHING
+  mvPosition = batchingMatrix * mvPosition;
+#endif
+#ifdef USE_INSTANCING
+  mvPosition = instanceMatrix * mvPosition;
+#endif
+mvPosition.xyz = clothDisp( mvPosition.xyz );
+mvPosition = modelViewMatrix * mvPosition;
+gl_Position = projectionMatrix * mvPosition;`);
+  };
+  mat.customProgramCacheKey = () => 'cloth';
+  mat.needsUpdate = true;
+}
+function buildUnder(Q, p, f) {
+  const U = QC.underpinningsFor(p), g = new THREE.Group(), steel = U.kind === 'crinoline';
+  const hoopMat = new THREE.MeshStandardMaterial({ color: steel ? '#a4abb3' : '#c8a46a', metalness: steel ? 0.85 : 0.1, roughness: steel ? 0.3 : 0.6 });
+  const linen = new THREE.MeshStandardMaterial({ color: '#eee5d0', roughness: 0.9, side: THREE.DoubleSide });
+  const yAt = v => f.waistY - v * (f.waistY - QC.HEM_Y);
+  for (const h of U.hoops) {
+    const pts = QC.hoopPoints(h, p, 96).map(a => new THREE.Vector3(a[0], a[1], a[2])), closed = h.part === 'full';
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, closed), 192, U.kind === 'wheel' ? 0.008 : 0.0045, 6, closed), hoopMat));
+  }
+  const lastV = U.hoops.length ? U.hoops[U.hoops.length - 1].v : 0.5;
+  for (let k = 0; k < U.tapes; k++) {
+    const th = ((k + 0.5) / U.tapes) * TAU, pts = [];
+    for (let i = 0; i <= 24; i++) { const v = lerp(0.02, lastV, i / 24), r = QC.skirtRadius(v, th, p) * 0.96; pts.push(new THREE.Vector3(r * Math.sin(th), yAt(v), r * Math.cos(th))); }
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.004, 4), linen));
+  }
+  if (U.bumRoll) {
+    const roll = new THREE.Mesh(new THREE.TorusGeometry(p.waist * 1.3, 0.04, 12, 48), linen); roll.rotation.x = Math.PI / 2; roll.position.y = f.waistY - 0.035; g.add(roll);
+    const rim = U.hoops[0];
+    for (let k = 0; k < 16; k++) {   // spokes of the wheel farthingale
+      const th = (k / 16) * TAU, r1 = QC.skirtRadius(rim.v, th, p) * 0.965, r0 = p.waist * 1.35;
+      g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.LineCurve3(new THREE.Vector3(r0 * Math.sin(th), f.waistY - 0.03, r0 * Math.cos(th)), new THREE.Vector3(r1 * Math.sin(th), yAt(rim.v), r1 * Math.cos(th))), 1, 0.004, 4), hoopMat));
+    }
+  }
+  if (U.petticoat) g.add(new THREE.Mesh(toGeom(QC.buildSkirtGrid(p, 96, 40, { inset: 0.96, noTrain: true, folds: false })), linen));
+  const boning = useTex('corset', () => canvasTex(256, 64, (gg, W, H) => { gg.fillStyle = '#efe6d2'; gg.fillRect(0, 0, W, H); gg.fillStyle = 'rgba(120,100,70,0.35)'; for (let x = 4; x < W; x += 9) gg.fillRect(x, 0, 2, H); }));
+  g.add(new THREE.Mesh(toGeom(QC.buildTorsoBand(p, 64, 20, phi => f.waistY - 0.05 - 0.05 * Math.max(0, Math.cos(phi)) ** 4, () => f.bustY + 0.04, 0.004)), new THREE.MeshStandardMaterial({ map: boning, roughness: 0.85, side: THREE.DoubleSide })));
+  g.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+  g.visible = false; Q.under = g; Q.root.add(g);
+}
+function applyXray() { studioQueen.setXray(S.xray); for (const q of galleryQueens) q.setXray(S.xray); }
 
 // ------------------------------------------------------------------ the Queen
 class Queen {
@@ -1614,11 +1677,21 @@ class Queen {
       this.under.traverse(m => { for (const mt of [].concat(m.material || [])) { const t2 = x < 0.999; if (mt.transparent !== t2) { mt.transparent = t2; mt.needsUpdate = true; } mt.opacity = x; } });
     }
   }
-  step(dt, P, idle) {   // Task 5 replaces with the swing spring
+  step(dt, P, idle) {
     this.t += dt;
-    const pose = QC.poseAt(idle ? 'idle' : P.motionMode, this.t, P.speed);
-    this.root.position.set(this.base.x + pose.x, this.base.y, this.base.z + pose.z);
-    this.root.rotation.y = this.baseYaw + pose.yaw;
+    const mode = idle ? 'idle' : P.motionMode, sp = P.speed, h = 1 / 60;
+    const a = QC.poseAt(mode, this.t - h, sp), b = QC.poseAt(mode, this.t, sp), c = QC.poseAt(mode, this.t + h, sp);
+    const cy = Math.cos(b.yaw), sy = Math.sin(b.yaw), cl = (x, m) => Math.max(-m, Math.min(m, x));
+    const ax = (c.x - 2 * b.x + a.x) / (h * h), az = (c.z - 2 * b.z + a.z) / (h * h);
+    const vx = (c.x - a.x) / (2 * h), vz = (c.z - a.z) / (2 * h);
+    // world → queen-local (inverse of rotation.y = yaw)
+    const lax = ax * cy - az * sy, laz = ax * sy + az * cy, lvx = vx * cy - vz * sy, lvz = vx * sy + vz * cy;
+    if (dt > 0) QC.swingStep(this.swing, { yawAcc: cl((c.yaw - 2 * b.yaw + a.yaw) / (h * h), 40), ax: cl(lax, 12), az: cl(laz, 12) }, dt, P);
+    this.root.position.set(this.base.x + b.x, this.base.y, this.base.z + b.z);
+    this.root.rotation.y = this.baseYaw + b.yaw;
+    const U = this.U;
+    U.uSwYaw.value = this.swing.yaw; U.uSwOff.value.set(this.swing.ox, this.swing.oz);
+    U.uTime.value = this.t; U.uWind.value = idle ? P.wind * 0.3 : P.wind; U.uTrail.value.set(-lvx * 0.08, -lvz * 0.08);
   }
 }
 
@@ -1731,6 +1804,8 @@ function frame() { requestAnimationFrame(frame); tick(Math.min(clock.getDelta(),
 
 // ------------------------------------------------------------------ init
 buildUI();
+$('xray').oninput = () => { S.xray = +$('xray').value; $('xrayVal').textContent = S.xray.toFixed(2); applyXray(); };
+if (qs.has('xray')) { S.xray = QC.clamp(+qs.get('xray') || 0, 0, 1); $('xray').value = S.xray; $('xrayVal').textContent = S.xray.toFixed(2); }
 const qEra = parseInt(qs.get('era'), 10);
 if (qEra >= 0 && qEra < 6) S.active = qEra;
 if (location.hash.length > 1) {
@@ -1743,6 +1818,7 @@ if (qs.has('year')) { const y = QC.clamp(+qs.get('year') || 1600, 1500, 2000); S
 if (QC.SCHEMA_BY_KEY.motionMode.options.includes(qs.get('motion'))) for (const s of S.slots) s.motionMode = qs.get('motion');
 setCam(qs.get('cam') || 'three');
 syncUI();
+studioQueen.xray = S.xray;
 for (let i = 0, n = Math.round((+qs.get('warm') || 0) * 60); i < n; i++) tick(1 / 60);
 tick(0);
 renderer.render(scene, camera);
