@@ -1719,9 +1719,58 @@ dais.position.y = 0.04; dais.receiveShadow = true; studio.add(dais);
 const daisRim = new THREE.Mesh(new THREE.TorusGeometry(3.25, 0.012, 8, 128), goldMat()); daisRim.rotation.x = Math.PI / 2; daisRim.position.y = 0.08; studio.add(daisRim);
 const studioQueen = new Queen(); studioQueen.base.set(0, 0.08, 0); studio.add(studioQueen.root);
 
-// ------------------------------------------------------------------ gallery (Task 6 replaces)
+// ------------------------------------------------------------------ gallery
 const galleryQueens = [];
-function updateCamTween(dt) {}
+const GALLERY_OVERVIEW = { pos: [-1.9, 6, 15.4], target: [-1.9, 1, -2.6] };   // wide enough for all six, arc centred in the area beside the panel
+function buildGallery() {
+  if (galleryQueens.length) return;
+  const rugMat = new THREE.MeshStandardMaterial({ color: '#5a1a28', roughness: 0.9 }), rimMat = goldMat();
+  QC.galleryLayout(6).forEach((s, i) => {
+    const rug = new THREE.Mesh(new THREE.CircleGeometry(1.15, 64), rugMat); rug.rotation.x = -Math.PI / 2; rug.position.set(s.x, 0.004, s.z); rug.receiveShadow = true; gallery.add(rug);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.01, 6, 96), rimMat); ring.rotation.x = Math.PI / 2; ring.position.set(s.x, 0.006, s.z); gallery.add(ring);
+    const q = new Queen(); q.base.set(s.x, 0.006, s.z); q.baseYaw = s.yaw; q.t = i * 1.7; q.xray = S.xray; q.root.userData.slot = i;
+    galleryQueens.push(q); gallery.add(q.root);
+    const sp = new THREE.SpotLight(0xffe8d0, 25, 9, 0.38, 0.7, 1.5); sp.position.set(s.x * 0.8, 5.5, s.z * 0.8 + 1.2); sp.target.position.set(s.x, 0.8, s.z); gallery.add(sp, sp.target);
+  });
+  const sun = new THREE.DirectionalLight(0xfff0e0, 1.2); sun.position.set(3, 9, 6); sun.target.position.set(0, 0, -3);
+  sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
+  Object.assign(sun.shadow.camera, { left: -9, right: 9, top: 6, bottom: -6, near: 1, far: 25 }); sun.shadow.camera.updateProjectionMatrix();
+  gallery.add(sun, sun.target);
+}
+let tween = null;
+function flyTo(dst) { tween = { t: 0, p0: camera.position.clone(), t0: controls.target.clone(), p1: new THREE.Vector3(...dst.pos), t1: new THREE.Vector3(...dst.target) }; }
+function updateCamTween(dt) {
+  if (!tween) return;
+  tween.t = Math.min(1, tween.t + dt / 0.8);
+  const e = tween.t < 0.5 ? 2 * tween.t ** 2 : 1 - (-2 * tween.t + 2) ** 2 / 2;
+  camera.position.lerpVectors(tween.p0, tween.p1, e); controls.target.lerpVectors(tween.t0, tween.t1, e);
+  if (tween.t >= 1) tween = null;
+}
+function focusSlot(i) {
+  const s = QC.galleryLayout(6)[i], dir = new THREE.Vector3(-s.x, 0, 2 - s.z).normalize();
+  flyTo({ pos: [s.x + dir.x * 4.2, 1.5, s.z + dir.z * 4.2], target: [s.x, 0.95, s.z] });
+  S.active = i; syncUI(); saveHash();
+}
+function setMode(m) {
+  S.mode = m; studio.visible = m === 'studio'; gallery.visible = m === 'gallery'; key.visible = m === 'studio';
+  if (m === 'gallery') { buildGallery(); flyTo(GALLERY_OVERVIEW); } else { tween = null; setCam('three'); }
+  $('modeStudio').classList.toggle('on', m === 'studio'); $('modeGallery').classList.toggle('on', m === 'gallery');
+  $('overview').style.display = m === 'gallery' ? '' : 'none';
+  scene.fog.near = m === 'gallery' ? 18 : 10; scene.fog.far = m === 'gallery' ? 44 : 26; controls.maxDistance = m === 'gallery' ? 20 : 16;
+  applyXray();
+}
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => (t.style.opacity = 0), 1600); }
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt || S.mode !== 'gallery' || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
+  ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1); ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObjects(galleryQueens.map(q => q.root), true)[0];
+  if (!hit) return;
+  let o = hit.object; while (o && o.userData.slot === undefined) o = o.parent;
+  if (o) focusSlot(o.userData.slot);
+});
 
 // ------------------------------------------------------------------ app state
 const S = {
@@ -1806,6 +1855,18 @@ function frame() { requestAnimationFrame(frame); tick(Math.min(clock.getDelta(),
 buildUI();
 $('xray').oninput = () => { S.xray = +$('xray').value; $('xrayVal').textContent = S.xray.toFixed(2); applyXray(); };
 if (qs.has('xray')) { S.xray = QC.clamp(+qs.get('xray') || 0, 0, 1); $('xray').value = S.xray; $('xrayVal').textContent = S.xray.toFixed(2); }
+const seed = () => (Date.now() ^ (Math.random() * 1e9)) >>> 0;
+$('diceEra').onclick = () => setSlot(QC.randomCommission(QC.mulberry32(seed()), 'within', S.slotEra[S.active], cur()), S.slotEra[S.active], null);
+$('diceWild').onclick = () => setSlot(QC.randomCommission(QC.mulberry32(seed()), 'wild', S.slotEra[S.active], cur()), S.slotEra[S.active], null);
+$('resetEra').onclick = () => { const e = S.slotEra[S.active]; setSlot(QC.paramsForEra(e, cur()), e, QC.ERAS[e].year); };
+$('copyLink').onclick = async () => {
+  saveHashNow();
+  const url = location.origin + location.pathname + location.hash;
+  try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch { toast('Copy failed: the link is in the address bar'); }
+};
+$('modeStudio').onclick = () => setMode('studio');
+$('modeGallery').onclick = () => setMode('gallery');
+$('overview').onclick = () => flyTo(GALLERY_OVERVIEW);
 const qEra = parseInt(qs.get('era'), 10);
 if (qEra >= 0 && qEra < 6) S.active = qEra;
 if (location.hash.length > 1) {
@@ -1817,6 +1878,12 @@ if (location.hash.length > 1) {
 if (qs.has('year')) { const y = QC.clamp(+qs.get('year') || 1600, 1500, 2000); S.slots[S.active] = QC.paramsAtYear(y, cur()); S.slotEra[S.active] = QC.nearestEra(y); S.slotYear[S.active] = y; }
 if (QC.SCHEMA_BY_KEY.motionMode.options.includes(qs.get('motion'))) for (const s of S.slots) s.motionMode = qs.get('motion');
 setCam(qs.get('cam') || 'three');
+if (qs.get('mode') === 'gallery') {
+  setMode('gallery');
+  const fq = parseInt(qs.get('focus'), 10);
+  if (fq >= 0 && fq < 6) focusSlot(fq);
+  updateCamTween(1);   // jump straight to the destination for headless shots
+}
 syncUI();
 studioQueen.xray = S.xray;
 for (let i = 0, n = Math.round((+qs.get('warm') || 0) * 60); i < n; i++) tick(1 / 60);
