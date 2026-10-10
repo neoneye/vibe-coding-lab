@@ -440,7 +440,108 @@ Object.assign(HC, (() => {
   }
   return { COATS, ANIMALS, KEEP, scalePrims, analyze, surfacePoint, placeFeatures, initFleece, rescaleFleece, flatAttrs };
 })());
-//@@PART3@@
+
+// ============================================================ part 3: pose, pick, brush, cuts
+Object.assign(HC, (() => {
+  const { REGIONS, NR, MIN_LEN, smoothstep } = HC;
+  const TOOLS = ['clippers', 'scissors', 'regrow', 'fluff'];
+  const makePose = () => ({ R: [1, 0, 0, 0, 1, 0, 0, 0, 1], pivot: [0, 0, 0], breath: 0, droop: 0 });
+  // Same maths as the fur vertex shader (minus wind): breathing, shell offset, droop, head rotation.
+  function deform(mesh, attrs, i, L, h, pose, out) {
+    const p = mesh.pos, n = mesh.nrm, k = 3 * i;
+    const nx = n[k], ny = n[k + 1], nz = n[k + 2];
+    const off = attrs.breathW[i] * pose.breath + L * h;
+    let x = p[k] + nx * off, y = p[k + 1] + ny * off - pose.droop * L * h * h, z = p[k + 2] + nz * off;
+    let mx = nx, my = ny, mz = nz;
+    const w = attrs.headW[i];
+    if (w > 0) {
+      const R = pose.R, q = pose.pivot, dx = x - q[0], dy = y - q[1], dz = z - q[2];
+      x += (q[0] + R[0] * dx + R[1] * dy + R[2] * dz - x) * w;
+      y += (q[1] + R[3] * dx + R[4] * dy + R[5] * dz - y) * w;
+      z += (q[2] + R[6] * dx + R[7] * dy + R[8] * dz - z) * w;
+      mx += (R[0] * nx + R[1] * ny + R[2] * nz - nx) * w;
+      my += (R[3] * nx + R[4] * ny + R[5] * nz - ny) * w;
+      mz += (R[6] * nx + R[7] * ny + R[8] * nz - nz) * w;
+      const l = Math.hypot(mx, my, mz) || 1; mx /= l; my /= l; mz /= l;
+    }
+    out[0] = x; out[1] = y; out[2] = z; out[3] = mx; out[4] = my; out[5] = mz;
+  }
+  const tmp = new Float64Array(6);
+  // nearest camera-facing fleece tip within pickR of the ray (o, unit d)
+  function pickFur(mesh, attrs, len, pose, o, d, pickR) {
+    let best = Infinity, bi = -1;
+    const r2 = pickR * pickR;
+    for (let i = 0; i < mesh.nv; i++) {
+      deform(mesh, attrs, i, len[i], 1, pose, tmp);
+      if (tmp[3] * d[0] + tmp[4] * d[1] + tmp[5] * d[2] > 0.15) continue;
+      const vx = tmp[0] - o[0], vy = tmp[1] - o[1], vz = tmp[2] - o[2];
+      const t = vx * d[0] + vy * d[1] + vz * d[2];
+      if (t <= 0 || t >= best) continue;
+      if (vx * vx + vy * vy + vz * vz - t * t <= r2) { best = t; bi = i; }
+    }
+    return bi < 0 ? null : { t: best, i: bi };
+  }
+  // cylinder brush along the ray, limited to a depth window behind the hit so strokes never cut through
+  function applyBrush(mesh, attrs, st, pose, o, d, hitT, tool, bp) {
+    const out = { idx: [], amt: [], mass: 0, changed: 0 };
+    const R = bp.radius, R2 = R * R, inner = R * Math.min(bp.hardness, 0.95);
+    const guard = Math.max(bp.guard, MIN_LEN), tMin = hitT - R, tMax = hitT + R + bp.maxLen;
+    for (let i = 0; i < mesh.nv; i++) {
+      const L = st.len[i];
+      deform(mesh, attrs, i, L, 1, pose, tmp);
+      if (tmp[3] * d[0] + tmp[4] * d[1] + tmp[5] * d[2] > 0.1) continue;
+      const vx = tmp[0] - o[0], vy = tmp[1] - o[1], vz = tmp[2] - o[2];
+      const t = vx * d[0] + vy * d[1] + vz * d[2];
+      if (t < tMin || t > tMax) continue;
+      const dist2 = vx * vx + vy * vy + vz * vz - t * t;
+      if (dist2 > R2) continue;
+      const w = (1 - smoothstep(inner, R, Math.sqrt(Math.max(0, dist2)))) * bp.strength;
+      if (w <= 0) continue;
+      let nl = L;
+      if (tool === 'clippers') { if (L > guard) nl = Math.max(guard, L - w * (L - guard)); }
+      else if (tool === 'scissors') { if (L > guard) nl = Math.max(guard, L - w * bp.snip); }
+      else if (tool === 'regrow') { if (L < st.base[i]) nl = Math.min(st.base[i], L + w * bp.amount); }
+      else if (tool === 'fluff') { nl = Math.max(L, Math.min(st.base[i] * 1.15, L + w * bp.amount * 0.5)); }
+      if (nl === L) continue;
+      st.len[i] = nl; out.changed++;
+      if (nl < L) { out.idx.push(i); out.amt.push(L - nl); out.mass += mesh.area[i] * (L - nl) * bp.density; }
+    }
+    return out;
+  }
+  // per-vertex target lengths for a named style cut: region factors (x maxLen) or KEEP (< 0), then cut.fn
+  function cutTargets(mesh, attrs, st, cut, maxLen) {
+    const T = new Float32Array(mesh.nv), vals = REGIONS.map(r => cut.region[r]);
+    for (let i = 0; i < mesh.nv; i++) {
+      const L = st.len[i];
+      let t = 0;
+      for (let r = 0; r < NR; r++) {
+        const w = attrs.regW[i * NR + r];
+        if (w) t += w * (vals[r] === undefined || vals[r] < 0 ? L : vals[r] * maxLen);
+      }
+      if (cut.fn) t = cut.fn([mesh.pos[3 * i], mesh.pos[3 * i + 1], mesh.pos[3 * i + 2]], t, L, attrs.regW.subarray(i * NR, i * NR + NR));
+      T[i] = Math.min(L, Math.max(MIN_LEN, t));
+    }
+    return T;
+  }
+  // clip every vertex with x <= x down to its target (an animated plane sweeping tail to nose)
+  function applyCutSweep(mesh, st, T, x, density) {
+    const out = { idx: [], amt: [], mass: 0, changed: 0 };
+    for (let i = 0; i < mesh.nv; i++) {
+      if (mesh.pos[3 * i] > x) continue;
+      const L = st.len[i];
+      if (L <= T[i]) continue;
+      st.len[i] = T[i]; out.changed++;
+      out.idx.push(i); out.amt.push(L - T[i]); out.mass += mesh.area[i] * (L - T[i]) * density;
+    }
+    return out;
+  }
+  function coatStats(mesh, st) {
+    let now = 0, full = 0;
+    for (let i = 0; i < mesh.nv; i++) { now += mesh.area[i] * st.len[i]; full += mesh.area[i] * st.base[i]; }
+    return { removedFrac: Math.max(0, 1 - now / full) };
+  }
+  return { TOOLS, makePose, deform, pickFur, applyBrush, cutTargets, applyCutSweep, coatStats };
+})());
 
 // ============================================================ part 1 tests
 HaircutTests.add('sdf primitives', () => {
@@ -534,6 +635,105 @@ HaircutTests.add('llama features sit on the skin', () => {
   for (const e of [...feats.eyes, ...feats.ears, feats.nose]) assert(Math.abs(sdf(e.p[0], e.p[1], e.p[2])) < 1e-4, 'feature off skin');
   assertNear(feats.eyes[0].p[2], -feats.eyes[1].p[2], 1e-6, 'eyes mirrored');
   assert(feats.eyes[0].p[2] > 0 && feats.eyes[0].side === 1);
+});
+
+// ============================================================ part 3 tests
+function brushRig(len0) {
+  const { mesh } = testSphere(0.5, 40);
+  const st = { len: new Float32Array(mesh.nv).fill(len0), base: new Float32Array(mesh.nv).fill(len0) };
+  return { mesh, attrs: HC.flatAttrs(mesh.nv), st, pose: HC.makePose() };
+}
+const BP = (o) => Object.assign({ radius: 0.2, hardness: 0.5, strength: 0.6, guard: 0.02, snip: 0.03, amount: 0.05, maxLen: 0.15, density: HC.FLEECE_DENSITY }, o);
+HaircutTests.add('deform identity and head rotation', () => {
+  const { mesh, attrs, pose } = brushRig(0.1), out = new Float64Array(6);
+  HC.deform(mesh, attrs, 5, 0.1, 0, pose, out);
+  for (let a = 0; a < 3; a++) { assertNear(out[a], mesh.pos[15 + a], 1e-7); assertNear(out[3 + a], mesh.nrm[15 + a], 1e-6); }
+  HC.deform(mesh, attrs, 5, 0.1, 1, pose, out);
+  for (let a = 0; a < 3; a++) assertNear(out[a], mesh.pos[15 + a] + mesh.nrm[15 + a] * 0.1, 1e-6);
+  attrs.headW[0] = 1;
+  pose.R = [0, 0, 1, 0, 1, 0, -1, 0, 0]; // 90 degrees about +y
+  HC.deform(mesh, attrs, 0, 0.1, 0, pose, out);
+  assertNear(out[0], mesh.pos[2], 1e-6); assertNear(out[2], -mesh.pos[0], 1e-6);
+  HC.deform(mesh, attrs, 1, 0.1, 0, pose, out);
+  assertNear(out[0], mesh.pos[3], 1e-7); assertNear(out[2], mesh.pos[5], 1e-7);
+});
+HaircutTests.add('pickFur hits the fleece tips', () => {
+  const { mesh, attrs, st, pose } = brushRig(0.1);
+  const hit = HC.pickFur(mesh, attrs, st.len, pose, [0, 0, 3], [0, 0, -1], 0.03);
+  assert(hit, 'no hit'); assertNear(hit.t, 2.4, 0.03, 'tip depth');
+  assert(HC.pickFur(mesh, attrs, st.len, pose, [0, 2, 3], [0, 0, -1], 0.03) === null, 'miss');
+  // overhanging fluff outside the skin silhouette still picks
+  assert(HC.pickFur(mesh, attrs, st.len, pose, [0.55, 0, 3], [0, 0, -1], 0.03), 'fluff beyond the skin');
+});
+HaircutTests.add('clippers: monotone, guard floor, near side only', () => {
+  const { mesh, attrs, st, pose } = brushRig(0.1), o = [0, 0, 3], d = [0, 0, -1];
+  for (let s = 0; s < 40; s++) {
+    const before = st.len.slice();
+    const hit = HC.pickFur(mesh, attrs, st.len, pose, o, d, 0.03);
+    const res = HC.applyBrush(mesh, attrs, st, pose, o, d, hit.t, 'clippers', BP());
+    for (let i = 0; i < mesh.nv; i++) {
+      assert(st.len[i] <= before[i], 'clippers lengthened');
+      assert(st.len[i] >= 0.02 - 1e-7 || st.len[i] === before[i], 'below guard');
+    }
+    if (s === 0) assert(res.idx.length > 20 && res.mass > 0, 'first stroke cuts');
+  }
+  for (let i = 0; i < mesh.nv; i++) {
+    const x = mesh.pos[3 * i], y = mesh.pos[3 * i + 1], z = mesh.pos[3 * i + 2];
+    if (z > 0.3 && x * x + y * y < 0.05 * 0.05) assertNear(st.len[i], 0.02, 1e-3, 'converges to guard');
+    if (z < -0.1) assert(st.len[i] === Math.fround(0.1), 'far side cut');
+  }
+});
+HaircutTests.add('regrow and fluff never shrink, regrow caps at base', () => {
+  const { mesh, attrs, st, pose } = brushRig(0.1), o = [0, 0, 3], d = [0, 0, -1];
+  for (let i = 0; i < mesh.nv; i++) st.len[i] = 0.03;
+  for (const tool of ['regrow', 'fluff']) for (let s = 0; s < 30; s++) {
+    const before = st.len.slice();
+    const hit = HC.pickFur(mesh, attrs, st.len, pose, o, d, 0.03);
+    const res = HC.applyBrush(mesh, attrs, st, pose, o, d, hit.t, tool, BP());
+    assert(res.idx.length === 0 && res.mass === 0, tool + ' removed fleece');
+    for (let i = 0; i < mesh.nv; i++) {
+      assert(st.len[i] >= before[i], tool + ' shrank');
+      assert(st.len[i] <= (tool === 'regrow' ? Math.max(before[i], st.base[i]) : st.base[i] * 1.15) + 1e-7, tool + ' overgrew');
+    }
+  }
+});
+HaircutTests.add('scissors snip a fixed amount', () => {
+  const { mesh, attrs, st, pose } = brushRig(0.1), o = [0, 0, 3], d = [0, 0, -1];
+  const hit = HC.pickFur(mesh, attrs, st.len, pose, o, d, 0.03);
+  HC.applyBrush(mesh, attrs, st, pose, o, d, hit.t, 'scissors', BP({ strength: 1 }));
+  let lo = 1; for (let i = 0; i < mesh.nv; i++) lo = Math.min(lo, st.len[i]);
+  assertNear(lo, 0.07, 2e-3, 'one snip at the centre');
+});
+HaircutTests.add('wool mass of a full shear', () => {
+  const { mesh, st } = brushRig(0.1);
+  const T = new Float32Array(mesh.nv).fill(HC.MIN_LEN);
+  const res = HC.applyCutSweep(mesh, st, T, Infinity, HC.FLEECE_DENSITY);
+  const expect = 4 * Math.PI * 0.25 * (0.1 - HC.MIN_LEN) * HC.FLEECE_DENSITY;
+  assertNear(res.mass, expect, 0.03 * expect, 'mass');
+  assertNear(HC.coatStats(mesh, st).removedFrac, 1 - HC.MIN_LEN / 0.1, 1e-3, 'removed fraction');
+});
+HaircutTests.add('rescaleFleece keeps the cut shape', () => {
+  const st = { len: new Float32Array([0.1, 0.05, 0.006]), base: new Float32Array([0.2, 0.2, 0.2]) };
+  HC.rescaleFleece(st, 0.5);
+  assertNear(st.len[0], 0.05, 1e-7); assertNear(st.len[1], 0.025, 1e-7); assertNear(st.len[2], HC.MIN_LEN, 1e-7);
+  assertNear(st.base[0], 0.1, 1e-7);
+});
+HaircutTests.add('every style cut only shortens', () => {
+  for (const key of Object.keys(HC.ANIMALS)) {
+    const an = HC.ANIMALS[key], prims = HC.scalePrims(an.prims, 1);
+    const mesh = HC.meshPrims(prims, an.k, 70), sdf = HC.makeSDF(prims, an.k);
+    const attrs = HC.analyze(mesh, an, prims), feats = HC.placeFeatures(an, sdf, prims);
+    const st = HC.initFleece(mesh, attrs, an, an.maxLen, feats.clear);
+    for (const cut of an.cuts) {
+      const T = HC.cutTargets(mesh, attrs, st, cut, an.maxLen);
+      let sT = 0, sB = 0;
+      for (let i = 0; i < mesh.nv; i++) {
+        assert(T[i] <= st.len[i] + 1e-7 && T[i] >= HC.MIN_LEN - 1e-7, `${key}/${cut.name} target out of range`);
+        sT += T[i]; sB += st.base[i];
+      }
+      assert(sT < 0.85 * sB, `${key}/${cut.name} removes too little`);
+    }
+  }
 });
 </script>
 </body>
