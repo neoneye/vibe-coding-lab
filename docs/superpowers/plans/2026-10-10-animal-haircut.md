@@ -1,0 +1,1855 @@
+# Animal Haircut Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A standalone three.js grooming sandbox. Clippers shear a fluffy llama, alpaca, sheep or poodle, the clippings pile up on the floor, and you can compare before and after.
+
+**Architecture:** Each animal is a smooth-union SDF of capsules and ellipsoids. Naive surface nets turn it into one watertight skin mesh, which carries a per-vertex fleece length. The fleece is drawn as instanced shells by a custom ShaderMaterial. Pure logic lives in a `shared-code` script block and is tested in Node: SDF, meshing, region weights, fleece init, deform, pick, brush, cut presets and wool mass. The page module handles rendering, UI, interaction and animation.
+
+**Tech Stack:** three.js 0.170.0 (jsdelivr import map, plus OrbitControls), vanilla JS, Node for `test.mjs`, and headless Chrome for screenshots.
+
+**Spec:** `docs/superpowers/specs/2026-10-10-animal-haircut-design.md`
+
+## Global Constraints
+
+- One self-contained `3d-animal-haircut/index.html`; the only external dependency is three.js 0.170.0 from `https://cdn.jsdelivr.net/npm/three@0.170.0/`.
+- Pure logic goes in `<script id="shared-code">`. `test.mjs` extracts it with a regex and runs `HaircutTests.run()`.
+- Units are metres. The llama is about 1.8 m tall at the ears and its feet touch y = 0.
+- Pixel ratio is `Math.min(devicePixelRatio, 2)` and the backing store is sized by `renderer.setSize`.
+- `MIN_LEN` = 0.006 m. `FLEECE_DENSITY` = 12 kg/m³.
+- Commit straight to `main`. Every commit message ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+
+## Review Focus
+
+1. **Clicking fluff that overhangs the skin silhouette** must still start a cut, not an orbit. `pickFur` tests the fur tips, not the skin. This is pinned by the sphere pick test in Task 3, where the ray hits the tip at t ≈ 2.4.
+2. **A stroke must never cut through to the far side.** This is pinned by the far-hemisphere test in Task 3.
+3. **Regrow and fluff must never shrink a strand, and clippers must never lengthen one.** Pinned by the brush monotonicity tests in Task 3.
+4. **Switching animal or chubbiness repeatedly must not leak GPU geometry or leave stale features.** `disposeAnimal` traverses and disposes. This is checked in Task 5 by switching 10 times while watching `renderer.info.memory.geometries`.
+5. **Max length changes mid-cut must keep the cut shape**, with len and base scaled by the same ratio. Pinned by the `rescaleFleece` test in Task 3.
+
+---
+
+### Task 1: Scaffold, SDF core and surface nets
+
+**Files:**
+- Create: `3d-animal-haircut/index.html` (the shared-code block only, for now)
+- Create: `3d-animal-haircut/test.mjs`
+
+**Interfaces:**
+- Produces: global `HaircutTests` (`add(name, fn)`, `run()`), global `assert(c, m)` and `assertNear(a, b, eps, m)`, and global `HC` with:
+  - `REGIONS, NR, RI, MIN_LEN, FLEECE_DENSITY`
+  - `clamp, smoothstep, smin(a, b, k), hash3(i, j, k) → [0, 1), vnoise(x, y, z) → [0, 1]`
+  - `cap(a, b, r, r2, region, extra)` and `ell(c, s, region, extra)` → prim objects
+  - `sdCapsule(x, y, z, p), sdEllipsoid(x, y, z, p), primDist(x, y, z, p), makeSDF(prims, k) → (x, y, z) => d, primBounds(p) → {min, max}`
+  - `surfaceNets(sdf, bmin, bmax, cell) → {pos: Float32Array, idx: Uint32Array}`
+  - `sdfNormal(sdf, x, y, z, e) → [nx, ny, nz]`
+  - `finishMesh(sdf, raw, cell) → mesh`
+  - `meshPrims(prims, k, res) → mesh`, where mesh = `{pos, nrm, idx, area, nv, cell, bmin, bmax}`
+  - `edgeCounts(idx) → Map`
+
+- [ ] **Step 1: Write the test runner and the failing tests.** Create `3d-animal-haircut/index.html`:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Animal Haircut</title>
+</head>
+<body>
+<script id="shared-code">
+// ============================================================ test harness
+const HaircutTests = {
+  cases: [],
+  add(name, fn) { this.cases.push([name, fn]); },
+  run() {
+    let pass = 0, fail = 0;
+    for (const [name, fn] of this.cases) {
+      try { fn(); pass++; console.log('ok   ' + name); }
+      catch (e) { fail++; console.log('FAIL ' + name + ': ' + e.message); }
+    }
+    console.log(`${pass} passed, ${fail} failed`);
+    return fail === 0;
+  },
+};
+function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
+function assertNear(a, b, eps, m) { if (!(Math.abs(a - b) <= eps)) throw new Error(`${m || 'not near'}: ${a} vs ${b} (eps ${eps})`); }
+const HC = {};
+
+// ============================================================ part 1 tests
+HaircutTests.add('sdf primitives', () => {
+  const c = HC.cap([0, 0, 0], [1, 0, 0], 0.5, undefined, 'body');
+  assertNear(HC.sdCapsule(0.5, 2, 0, c), 1.5, 1e-9);
+  assertNear(HC.sdCapsule(-1, 0, 0, c), 0.5, 1e-9);
+  assertNear(HC.sdCapsule(0.5, 0, 0, c), -0.5, 1e-9);
+  const t = HC.cap([0, 0, 0], [1, 0, 0], 0.5, 0.25, 'body');
+  assertNear(HC.sdCapsule(1, 1, 0, t), 0.75, 1e-9);
+  const e = HC.ell([1, 2, 3], [0.5, 0.3, 0.2], 'body');
+  assertNear(HC.sdEllipsoid(1.6, 2, 3, e), 0.1, 1e-9);
+  assertNear(HC.sdEllipsoid(1, 2, 3.3, e), 0.1, 1e-9);
+  assert(HC.sdEllipsoid(1, 2, 3, e) < 0);
+});
+HaircutTests.add('smooth min', () => {
+  for (const [a, b] of [[0, 0], [0.1, 0.12], [-0.3, 0.2], [1, 5]]) assert(HC.smin(a, b, 0.1) <= Math.min(a, b) + 1e-12);
+  assert(HC.smin(0, 5, 0.1) === 0, 'far apart equals min');
+  assertNear(HC.smin(0, 0, 0.1), -0.025, 1e-12);
+});
+function testSphere(r, res) {
+  const prims = [HC.ell([0, 0, 0], [r, r, r], 'body')];
+  return { mesh: HC.meshPrims(prims, 0, res), sdf: HC.makeSDF(prims, 0) };
+}
+HaircutTests.add('surface nets sphere', () => {
+  const r = 0.5, { mesh: m, sdf } = testSphere(r, 40);
+  assert(m.nv > 2000, 'too few vertices ' + m.nv);
+  for (let i = 0; i < m.nv; i++) assert(Math.abs(sdf(m.pos[3 * i], m.pos[3 * i + 1], m.pos[3 * i + 2])) < 0.01 * r, 'vertex off surface');
+  for (const c of HC.edgeCounts(m.idx).values()) assert(c === 2, 'edge used ' + c + ' times');
+  let area = 0;
+  for (let t = 0; t < m.idx.length; t += 3) {
+    const [a, b, c] = [m.idx[t], m.idx[t + 1], m.idx[t + 2]].map(i => [m.pos[3 * i], m.pos[3 * i + 1], m.pos[3 * i + 2]]);
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const g = [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3];
+    assert(n[0] * g[0] + n[1] * g[1] + n[2] * g[2] > 0, 'inward-facing triangle');
+    area += Math.hypot(n[0], n[1], n[2]) / 2;
+  }
+  const exact = 4 * Math.PI * r * r;
+  assertNear(area, exact, 0.03 * exact, 'area');
+  let va = 0; for (const a of m.area) va += a;
+  assertNear(va, area, 1e-4 * area, 'vertex areas');
+  for (let i = 0; i < m.nv; i++) {
+    const p = [m.pos[3 * i], m.pos[3 * i + 1], m.pos[3 * i + 2]], n = [m.nrm[3 * i], m.nrm[3 * i + 1], m.nrm[3 * i + 2]];
+    assert((p[0] * n[0] + p[1] * n[1] + p[2] * n[2]) / r > 0.99, 'normal not outward');
+  }
+});
+</script>
+</body>
+</html>
+```
+
+Create `3d-animal-haircut/test.mjs`:
+
+```js
+// Runs the HaircutTests embedded in index.html's shared-code script block.
+// Usage: node test.mjs
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.html"), "utf8");
+const m = html.match(/<script id="shared-code">([\s\S]*?)<\/script>/);
+if (!m) {
+  console.error("shared-code block not found");
+  process.exit(1);
+}
+const ok = new Function(`${m[1]}; return HaircutTests.run();`)();
+process.exit(ok ? 0 : 1);
+```
+
+- [ ] **Step 2: Run the tests and watch them fail.**
+  - Run: `node 3d-animal-haircut/test.mjs`
+  - Expected: 3 FAIL lines (`HC.cap is not a function`, …) and exit code 1.
+
+- [ ] **Step 3: Implement part 1.** Insert this directly after `const HC = {};`, before the part 1 tests:
+
+```js
+// ============================================================ part 1: math, SDF, surface nets
+Object.assign(HC, (() => {
+  const REGIONS = ['body', 'neck', 'head', 'muzzle', 'topknot', 'legUpper', 'legLower', 'tail'];
+  const NR = REGIONS.length;
+  const RI = {};
+  REGIONS.forEach((r, i) => { RI[r] = i; });
+  const MIN_LEN = 0.006;       // m: skin fuzz the clippers never remove
+  const FLEECE_DENSITY = 12;   // kg/m^3: loose fleece
+
+  const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+  function smoothstep(e0, e1, x) { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); }
+  // polynomial smooth minimum: <= min(a, b), equal to it once |a - b| >= k
+  function smin(a, b, k) {
+    if (k <= 0) return Math.min(a, b);
+    const h = Math.max(k - Math.abs(a - b), 0) / k;
+    return Math.min(a, b) - h * h * k * 0.25;
+  }
+  function hash3(i, j, k) {
+    let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263) + Math.imul(k, 1274126177)) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  }
+  function vnoise(x, y, z) {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    const fx = x - xi, fy = y - yi, fz = z - zi;
+    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy), uz = fz * fz * (3 - 2 * fz);
+    let r = 0;
+    for (let c = 0; c < 8; c++) {
+      const dx = c & 1, dy = (c >> 1) & 1, dz = (c >> 2) & 1;
+      r += hash3(xi + dx, yi + dy, zi + dz) * (dx ? ux : 1 - ux) * (dy ? uy : 1 - uy) * (dz ? uz : 1 - uz);
+    }
+    return r;
+  }
+
+  const cap = (a, b, r, r2, region, extra) => Object.assign({ type: 'cap', a, b, r, r2, region }, extra);
+  const ell = (c, s, region, extra) => Object.assign({ type: 'ell', c, s, region }, extra);
+  function sdCapsule(x, y, z, p) {
+    const ax = p.a[0], ay = p.a[1], az = p.a[2];
+    const bx = p.b[0] - ax, by = p.b[1] - ay, bz = p.b[2] - az;
+    const px = x - ax, py = y - ay, pz = z - az;
+    const bb = bx * bx + by * by + bz * bz;
+    const t = bb > 0 ? clamp((px * bx + py * by + pz * bz) / bb, 0, 1) : 0;
+    const dx = px - bx * t, dy = py - by * t, dz = pz - bz * t;
+    const r = p.r2 === undefined ? p.r : p.r + (p.r2 - p.r) * t;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+  }
+  function sdEllipsoid(x, y, z, p) {
+    const qx = (x - p.c[0]) / p.s[0], qy = (y - p.c[1]) / p.s[1], qz = (z - p.c[2]) / p.s[2];
+    const k0 = Math.sqrt(qx * qx + qy * qy + qz * qz);
+    const k1 = Math.sqrt((qx / p.s[0]) ** 2 + (qy / p.s[1]) ** 2 + (qz / p.s[2]) ** 2);
+    if (k1 < 1e-9) return -Math.min(p.s[0], p.s[1], p.s[2]);
+    return k0 * (k0 - 1) / k1;
+  }
+  const primDist = (x, y, z, p) => (p.type === 'cap' ? sdCapsule(x, y, z, p) : sdEllipsoid(x, y, z, p));
+  function makeSDF(prims, k) {
+    return (x, y, z) => {
+      let d = primDist(x, y, z, prims[0]);
+      for (let i = 1; i < prims.length; i++) d = smin(d, primDist(x, y, z, prims[i]), k);
+      return d;
+    };
+  }
+  function primBounds(p) {
+    if (p.type === 'cap') {
+      const r = Math.max(p.r, p.r2 === undefined ? p.r : p.r2);
+      return { min: [0, 1, 2].map(a => Math.min(p.a[a], p.b[a]) - r), max: [0, 1, 2].map(a => Math.max(p.a[a], p.b[a]) + r) };
+    }
+    return { min: [0, 1, 2].map(a => p.c[a] - p.s[a]), max: [0, 1, 2].map(a => p.c[a] + p.s[a]) };
+  }
+
+  // Naive surface nets: one vertex per sign-changing cell, one quad per sign-changing grid edge.
+  function surfaceNets(sdf, bmin, bmax, cell) {
+    const nx = Math.ceil((bmax[0] - bmin[0]) / cell) + 1;
+    const ny = Math.ceil((bmax[1] - bmin[1]) / cell) + 1;
+    const nz = Math.ceil((bmax[2] - bmin[2]) / cell) + 1;
+    const F = new Float32Array(nx * ny * nz);
+    let o = 0;
+    for (let k = 0; k < nz; k++) {
+      const z = bmin[2] + k * cell;
+      for (let j = 0; j < ny; j++) {
+        const y = bmin[1] + j * cell;
+        for (let i = 0; i < nx; i++) F[o++] = sdf(bmin[0] + i * cell, y, z);
+      }
+    }
+    const sy = nx, sz = nx * ny, cx = nx - 1, cy = ny - 1, cz = nz - 1;
+    const cellVert = new Int32Array(cx * cy * cz).fill(-1);
+    const CO = [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1];
+    const ED = [0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7];
+    const v = new Float64Array(8);
+    const pos = [];
+    for (let k = 0; k < cz; k++) for (let j = 0; j < cy; j++) for (let i = 0; i < cx; i++) {
+      const g0 = i + j * sy + k * sz;
+      let mask = 0;
+      for (let c = 0; c < 8; c++) {
+        const val = F[g0 + CO[3 * c] + CO[3 * c + 1] * sy + CO[3 * c + 2] * sz];
+        v[c] = val;
+        if (val < 0) mask |= 1 << c;
+      }
+      if (mask === 0 || mask === 255) continue;
+      let px = 0, py = 0, pz = 0, n = 0;
+      for (let e = 0; e < 24; e += 2) {
+        const a = ED[e], b = ED[e + 1];
+        if ((v[a] < 0) !== (v[b] < 0)) {
+          const t = v[a] / (v[a] - v[b]);
+          px += CO[3 * a] + t * (CO[3 * b] - CO[3 * a]);
+          py += CO[3 * a + 1] + t * (CO[3 * b + 1] - CO[3 * a + 1]);
+          pz += CO[3 * a + 2] + t * (CO[3 * b + 2] - CO[3 * a + 2]);
+          n++;
+        }
+      }
+      cellVert[i + j * cx + k * cx * cy] = pos.length / 3;
+      pos.push(bmin[0] + (i + px / n) * cell, bmin[1] + (j + py / n) * cell, bmin[2] + (k + pz / n) * cell);
+    }
+    const idx = [];
+    const cv = (i, j, k) => cellVert[i + j * cx + k * cx * cy];
+    const quad = (a, b, c, d, flip) => { if (flip) idx.push(a, c, b, a, d, c); else idx.push(a, b, c, a, c, d); };
+    for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+      const g = i + j * sy + k * sz, in0 = F[g] < 0;
+      if (in0 !== (F[g + 1] < 0)) quad(cv(i, j - 1, k - 1), cv(i, j, k - 1), cv(i, j, k), cv(i, j - 1, k), !in0);
+      if (in0 !== (F[g + sy] < 0)) quad(cv(i - 1, j, k - 1), cv(i - 1, j, k), cv(i, j, k), cv(i, j, k - 1), !in0);
+      if (in0 !== (F[g + sz] < 0)) quad(cv(i - 1, j - 1, k), cv(i, j - 1, k), cv(i, j, k), cv(i - 1, j, k), !in0);
+    }
+    return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
+  }
+  function sdfNormal(sdf, x, y, z, e) {
+    const gx = sdf(x + e, y, z) - sdf(x - e, y, z);
+    const gy = sdf(x, y + e, z) - sdf(x, y - e, z);
+    const gz = sdf(x, y, z + e) - sdf(x, y, z - e);
+    const l = Math.hypot(gx, gy, gz) || 1;
+    return [gx / l, gy / l, gz / l];
+  }
+  // Newton-project vertices onto the surface, then compute normals, vertex areas and bounds.
+  function finishMesh(sdf, raw, cell) {
+    const pos = raw.pos, idx = raw.idx, nv = pos.length / 3, e = cell * 0.25;
+    const nrm = new Float32Array(nv * 3), area = new Float32Array(nv);
+    for (let i = 0; i < nv; i++) {
+      let x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2];
+      for (let it = 0; it < 3; it++) {
+        const d = sdf(x, y, z);
+        const gx = (sdf(x + e, y, z) - sdf(x - e, y, z)) / (2 * e);
+        const gy = (sdf(x, y + e, z) - sdf(x, y - e, z)) / (2 * e);
+        const gz = (sdf(x, y, z + e) - sdf(x, y, z - e)) / (2 * e);
+        const gg = gx * gx + gy * gy + gz * gz;
+        if (gg < 1e-12) break;
+        let sx = d * gx / gg, sy = d * gy / gg, sz = d * gz / gg;
+        const sl = Math.hypot(sx, sy, sz);
+        if (sl > cell) { sx *= cell / sl; sy *= cell / sl; sz *= cell / sl; }
+        x -= sx; y -= sy; z -= sz;
+      }
+      pos[3 * i] = x; pos[3 * i + 1] = y; pos[3 * i + 2] = z;
+      nrm.set(sdfNormal(sdf, x, y, z, e), 3 * i);
+    }
+    for (let t = 0; t < idx.length; t += 3) {
+      const a = 3 * idx[t], b = 3 * idx[t + 1], c = 3 * idx[t + 2];
+      const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+      const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+      const ar = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 6;
+      area[idx[t]] += ar; area[idx[t + 1]] += ar; area[idx[t + 2]] += ar;
+    }
+    const bmin = [Infinity, Infinity, Infinity], bmax = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < nv; i++) for (let a = 0; a < 3; a++) {
+      const q = pos[3 * i + a];
+      if (q < bmin[a]) bmin[a] = q;
+      if (q > bmax[a]) bmax[a] = q;
+    }
+    return { pos, nrm, idx, area, nv, cell, bmin, bmax };
+  }
+  // res = grid cells along the longest axis of the primitives' bounding box
+  function meshPrims(prims, k, res) {
+    const sdf = makeSDF(prims, k);
+    const bmin = [Infinity, Infinity, Infinity], bmax = [-Infinity, -Infinity, -Infinity];
+    for (const p of prims) {
+      const b = primBounds(p);
+      for (let a = 0; a < 3; a++) { bmin[a] = Math.min(bmin[a], b.min[a]); bmax[a] = Math.max(bmax[a], b.max[a]); }
+    }
+    const cell = Math.max(bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2]) / res;
+    const pad = 2 * cell + k;
+    for (let a = 0; a < 3; a++) { bmin[a] -= pad; bmax[a] += pad; }
+    return finishMesh(sdf, surfaceNets(sdf, bmin, bmax, cell), cell);
+  }
+  function edgeCounts(idx) {
+    const m = new Map();
+    const add = (a, b) => { const key = a < b ? a * 2097152 + b : b * 2097152 + a; m.set(key, (m.get(key) || 0) + 1); };
+    for (let t = 0; t < idx.length; t += 3) { add(idx[t], idx[t + 1]); add(idx[t + 1], idx[t + 2]); add(idx[t + 2], idx[t]); }
+    return m;
+  }
+  return { REGIONS, NR, RI, MIN_LEN, FLEECE_DENSITY, clamp, smoothstep, smin, hash3, vnoise, cap, ell,
+    sdCapsule, sdEllipsoid, primDist, makeSDF, primBounds, surfaceNets, sdfNormal, finishMesh, meshPrims, edgeCounts };
+})());
+```
+
+- [ ] **Step 4: Run the tests and watch them pass.**
+  - Run: `node 3d-animal-haircut/test.mjs`
+  - Expected: `3 passed, 0 failed`, exit code 0.
+  - If `surface nets sphere` reports inward triangles, every triangle is inward: swap the `flip` argument (`!in0` → `in0`) in all three `quad` calls and re-run.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add 3d-animal-haircut/index.html 3d-animal-haircut/test.mjs
+git commit -m "3d-animal-haircut: SDF primitives and surface-nets mesher with tests
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 2: Animals, region weights, features and fleece init
+
+**Files:**
+- Modify: `3d-animal-haircut/index.html` (append part 2 and its tests inside `shared-code`)
+
+**Interfaces:**
+- Consumes: everything from Task 1.
+- Produces on `HC`:
+  - `COATS: {name: [rootHex, tipHex]}` and `ANIMALS: {llama, alpaca, sheep, poodle}`. Each animal has `label, k, res, maxLen, density, taper, curl, fluff, droop, coat, skin, tintColor, tintRegions[], regionLength{}, prims[], head{pivot, dir, ramp}, face{center, eye{dir, r}, lashes, ear{dir, axis, kind, len, width}, nose{from, dir}}, camera{dist}, cuts[{name, region{}, fn?}]`.
+  - `scalePrims(prims, chub) → prims`
+  - `analyze(mesh, an, prims) → attrs {regW: Float32Array(nv*NR), headW, breathW, tint}`
+  - `surfacePoint(sdf, from, dir) → {p, n}`
+  - `placeFeatures(an, sdf, prims) → {eyes[{p, n, r, side}], ears[{p, n, axis, side}], nose{p, n}, toes[{p, s}], clear[{p, r}]}`
+  - `initFleece(mesh, attrs, an, maxLen, clear) → st {len, base}` (Float32Array, len starts equal to base)
+  - `rescaleFleece(st, ratio)`
+  - `flatAttrs(nv) → attrs` (all body, no head weight)
+
+- [ ] **Step 1: Write the failing tests.** Append inside `shared-code`, after the part 1 tests:
+
+```js
+// ============================================================ part 2 tests
+HaircutTests.add('surfacePoint on sphere', () => {
+  const sdf = HC.makeSDF([HC.ell([0, 0, 0], [0.5, 0.5, 0.5], 'body')], 0);
+  const sp = HC.surfacePoint(sdf, [0, 0, 0], [1, 1, 0]);
+  assertNear(Math.hypot(sp.p[0], sp.p[1], sp.p[2]), 0.5, 1e-6);
+  assertNear(sp.n[0], Math.SQRT1_2, 1e-3);
+});
+let llamaCache = null;
+function llamaBuild() {
+  if (!llamaCache) {
+    const an = HC.ANIMALS.llama, prims = HC.scalePrims(an.prims, 1);
+    const mesh = HC.meshPrims(prims, an.k, an.res), sdf = HC.makeSDF(prims, an.k);
+    const attrs = HC.analyze(mesh, an, prims), feats = HC.placeFeatures(an, sdf, prims);
+    const st = HC.initFleece(mesh, attrs, an, an.maxLen, feats.clear);
+    llamaCache = { an, prims, mesh, sdf, attrs, feats, st };
+  }
+  return llamaCache;
+}
+HaircutTests.add('llama mesh', () => {
+  const { mesh } = llamaBuild();
+  assert(mesh.nv >= 20000 && mesh.nv <= 45000, 'vertex count ' + mesh.nv);
+  for (const c of HC.edgeCounts(mesh.idx).values()) assert(c % 2 === 0, 'boundary edge');
+  assert(mesh.bmin[1] > -0.01 && mesh.bmin[1] < 0.02, 'feet on the floor ' + mesh.bmin[1]);
+  assert(mesh.bmax[1] > 1.7 && mesh.bmax[1] < 1.9, 'llama height ' + mesh.bmax[1]);
+});
+HaircutTests.add('llama region weights and default fleece', () => {
+  const { mesh, attrs, st } = llamaBuild();
+  const where = (r, fn) => { let s = 0, n = 0; for (let i = 0; i < mesh.nv; i++) if (attrs.regW[i * HC.NR + HC.RI[r]] > 0.8) { s += fn(i); n++; } assert(n > 20, 'few ' + r + ' vertices'); return s / n; };
+  const body = where('body', i => st.base[i]), muzzle = where('muzzle', i => st.base[i]);
+  assert(body > 5 * muzzle, `body ${body} muzzle ${muzzle}`);
+  for (let i = 0; i < mesh.nv; i++) {
+    assert(st.base[i] >= HC.MIN_LEN && st.len[i] === st.base[i], 'len/base init');
+    let s = 0; for (let r = 0; r < HC.NR; r++) s += attrs.regW[i * HC.NR + r];
+    assertNear(s, 1, 1e-4, 'region weights sum');
+  }
+  assert(where('head', i => attrs.headW[i]) > 0.95, 'head follows');
+  assert(where('legLower', i => attrs.headW[i]) === 0, 'legs stay');
+  assert(where('body', i => attrs.breathW[i]) > 0.8, 'body breathes');
+});
+HaircutTests.add('llama features sit on the skin', () => {
+  const { sdf, feats } = llamaBuild();
+  assert(feats.eyes.length === 2 && feats.ears.length === 2 && feats.nose && feats.toes.length === 8);
+  for (const e of [...feats.eyes, ...feats.ears, feats.nose]) assert(Math.abs(sdf(e.p[0], e.p[1], e.p[2])) < 1e-4, 'feature off skin');
+  assertNear(feats.eyes[0].p[2], -feats.eyes[1].p[2], 1e-6, 'eyes mirrored');
+  assert(feats.eyes[0].p[2] > 0 && feats.eyes[0].side === 1);
+});
+```
+
+- [ ] **Step 2: Run the tests and watch them fail.**
+  - Run: `node 3d-animal-haircut/test.mjs`
+  - Expected: the 4 new tests FAIL (`HC.makeSDF(...)` is fine, but `HC.surfacePoint is not a function`, `HC.ANIMALS` is undefined).
+
+- [ ] **Step 3: Implement part 2.** Insert it after part 1's `Object.assign(...)` and before the part 1 tests, so all implementation parts come first:
+
+```js
+// ============================================================ part 2: animals, regions, features, fleece
+Object.assign(HC, (() => {
+  const { REGIONS, NR, RI, MIN_LEN, smoothstep, vnoise, cap, ell, primDist, sdfNormal } = HC;
+  const COATS = {
+    cream: ['#cbb48c', '#f3e6c8'], white: ['#cfc9bf', '#fbf8f1'], caramel: ['#7c4d24', '#d39f63'],
+    chocolate: ['#38231a', '#74492b'], grey: ['#5f5b57', '#c0bab3'], black: ['#161414', '#403a36'],
+  };
+  // four legs: front x = xf, back x = xb, at z = +-z; a foot ellipsoid (size foot) rests on y = 0
+  function legs(xf, xb, z, yTop, yKnee, rU, rU2, rL, rL2, foot) {
+    const out = [];
+    for (const x of [xf, xb]) for (const s of [1, -1]) {
+      out.push(cap([x, yTop, s * z], [x, yKnee, s * z], rU, rU2, 'legUpper'));
+      out.push(cap([x, yKnee, s * z], [x + 0.01, foot[1] * 1.5, s * z], rL, rL2, 'legLower'));
+      out.push(ell([x + foot[0] * 0.4, foot[1], s * z], foot.slice(), 'legLower', { foot: true }));
+    }
+    return out;
+  }
+  const KEEP = -1; // cut-region value: keep the current length
+  const ANIMALS = {
+    llama: {
+      label: 'Llama', k: 0.07, res: 150,
+      maxLen: 0.22, density: 240, taper: 1.0, curl: 0.35, fluff: 0.8, droop: 0.3,
+      coat: 'cream', skin: '#6e5a4b', tintColor: '#3a2c24', tintRegions: [],
+      regionLength: { body: 1, neck: 0.9, head: 0.12, muzzle: 0.03, topknot: 0.5, legUpper: 0.6, legLower: 0.4, tail: 0.85 },
+      prims: [
+        cap([-0.36, 1.0, 0], [0.28, 1.02, 0], 0.26, undefined, 'body'),
+        ell([0.32, 0.99, 0], [0.24, 0.25, 0.21], 'body'),
+        ell([-0.42, 1.03, 0], [0.24, 0.25, 0.22], 'body'),
+        cap([0.4, 1.1, 0], [0.52, 1.56, 0], 0.115, 0.085, 'neck'),
+        ell([0.57, 1.67, 0], [0.13, 0.11, 0.1], 'head'),
+        cap([0.63, 1.635, 0], [0.77, 1.59, 0], 0.062, 0.05, 'muzzle'),
+        ell([0.52, 1.765, 0], [0.09, 0.05, 0.085], 'topknot'),
+        cap([-0.63, 1.1, 0], [-0.72, 0.95, 0], 0.055, 0.045, 'tail'),
+        ...legs(0.3, -0.42, 0.13, 0.98, 0.52, 0.085, 0.06, 0.05, 0.044, [0.065, 0.045, 0.05]),
+      ],
+      head: { pivot: [0.5, 1.48, 0], dir: [0.25, 0.97, 0], ramp: 0.12 },
+      face: {
+        center: [0.57, 1.67, 0], eye: { dir: [0.42, 0.32, 0.85], r: 0.03 }, lashes: true,
+        ear: { dir: [-0.35, 0.8, 0.5], axis: [-0.12, 1, 0.32], kind: 'banana', len: 0.2, width: 0.035 },
+        nose: { from: [0.77, 1.59, 0], dir: [1, 0.1, 0] },
+      },
+      camera: { dist: 4.2 },
+      cuts: [
+        { name: 'Pom-pom', region: { body: 0, neck: 0, legUpper: 0, legLower: KEEP, topknot: KEEP, head: KEEP, muzzle: KEEP, tail: KEEP } },
+        { name: 'Lion', region: { body: 0, neck: KEEP, legUpper: 0, legLower: KEEP, topknot: KEEP, head: KEEP, muzzle: KEEP, tail: KEEP },
+          fn: (p, t, L, w) => Math.max(t, w[RI.body] * smoothstep(0.12, 0.32, p[0]) * L) },
+      ],
+    },
+    alpaca: {
+      label: 'Alpaca', k: 0.065, res: 150,
+      maxLen: 0.17, density: 300, taper: 0.9, curl: 0.7, fluff: 0.92, droop: 0.12,
+      coat: 'white', skin: '#7b6455', tintColor: '#3a2c24', tintRegions: [],
+      regionLength: { body: 1, neck: 1, head: 0.45, muzzle: 0.07, topknot: 1.1, legUpper: 0.85, legLower: 0.5, tail: 0.8 },
+      prims: [
+        cap([-0.28, 0.82, 0], [0.2, 0.84, 0], 0.22, undefined, 'body'),
+        ell([0.24, 0.81, 0], [0.2, 0.21, 0.18], 'body'),
+        ell([-0.33, 0.85, 0], [0.2, 0.21, 0.19], 'body'),
+        cap([0.31, 0.9, 0], [0.4, 1.2, 0], 0.1, 0.075, 'neck'),
+        ell([0.44, 1.29, 0], [0.105, 0.095, 0.085], 'head'),
+        cap([0.5, 1.265, 0], [0.58, 1.245, 0], 0.05, 0.042, 'muzzle'),
+        ell([0.41, 1.37, 0], [0.09, 0.06, 0.09], 'topknot'),
+        cap([-0.5, 0.9, 0], [-0.57, 0.79, 0], 0.045, 0.038, 'tail'),
+        ...legs(0.24, -0.33, 0.11, 0.8, 0.42, 0.07, 0.05, 0.042, 0.037, [0.055, 0.038, 0.042]),
+      ],
+      head: { pivot: [0.38, 1.14, 0], dir: [0.3, 0.95, 0], ramp: 0.1 },
+      face: {
+        center: [0.44, 1.29, 0], eye: { dir: [0.45, 0.3, 0.84], r: 0.026 }, lashes: true,
+        ear: { dir: [-0.3, 0.8, 0.5], axis: [-0.05, 1, 0.3], kind: 'spear', len: 0.11, width: 0.026 },
+        nose: { from: [0.58, 1.245, 0], dir: [1, 0.05, 0] },
+      },
+      camera: { dist: 3.4 },
+      cuts: [
+        { name: 'Shorn with topknot', region: { body: 0, neck: 0, legUpper: 0, legLower: 0.12, head: KEEP, topknot: KEEP, muzzle: KEEP, tail: KEEP } },
+      ],
+    },
+    sheep: {
+      label: 'Sheep', k: 0.08, res: 140,
+      maxLen: 0.15, density: 340, taper: 0.8, curl: 1.0, fluff: 0.95, droop: 0.04,
+      coat: 'white', skin: '#d9c2b0', tintColor: '#3b302a', tintRegions: ['head', 'muzzle', 'legLower'],
+      regionLength: { body: 1, neck: 0.95, head: 0.05, muzzle: 0.02, topknot: 0.6, legUpper: 0.6, legLower: 0.03, tail: 0.7 },
+      prims: [
+        cap([-0.24, 0.62, 0], [0.22, 0.63, 0], 0.25, undefined, 'body'),
+        ell([-0.02, 0.6, 0], [0.44, 0.26, 0.25], 'body'),
+        cap([0.3, 0.68, 0], [0.42, 0.8, 0], 0.11, 0.09, 'neck'),
+        ell([0.49, 0.83, 0], [0.12, 0.095, 0.085], 'head'),
+        cap([0.55, 0.8, 0], [0.64, 0.75, 0], 0.06, 0.048, 'muzzle'),
+        ell([0.46, 0.905, 0], [0.08, 0.045, 0.07], 'topknot'),
+        cap([-0.46, 0.67, 0], [-0.52, 0.56, 0], 0.045, 0.035, 'tail'),
+        ...legs(0.24, -0.26, 0.12, 0.5, 0.28, 0.07, 0.05, 0.035, 0.032, [0.042, 0.035, 0.036]),
+      ],
+      head: { pivot: [0.4, 0.74, 0], dir: [0.8, 0.6, 0], ramp: 0.08 },
+      face: {
+        center: [0.49, 0.83, 0], eye: { dir: [0.4, 0.3, 0.87], r: 0.024 }, lashes: false,
+        ear: { dir: [-0.2, 0.35, 0.92], axis: [0, -0.35, 1], kind: 'droop', len: 0.1, width: 0.032 },
+        nose: { from: [0.64, 0.75, 0], dir: [1, -0.25, 0] },
+      },
+      camera: { dist: 2.6 },
+      cuts: [
+        { name: 'Full shear', region: { body: 0, neck: 0, legUpper: 0, topknot: 0.25, tail: 0.15, head: KEEP, muzzle: KEEP, legLower: KEEP } },
+      ],
+    },
+    poodle: {
+      label: 'Poodle', k: 0.05, res: 160,
+      maxLen: 0.11, density: 420, taper: 0.8, curl: 1.2, fluff: 0.95, droop: 0.03,
+      coat: 'caramel', skin: '#d6b49c', tintColor: '#000000', tintRegions: [],
+      regionLength: { body: 1, neck: 1, head: 0.65, muzzle: 0.3, topknot: 1.2, legUpper: 0.9, legLower: 0.85, tail: 1.0 },
+      prims: [
+        cap([-0.2, 0.58, 0], [0.16, 0.6, 0], 0.14, undefined, 'body'),
+        ell([0.19, 0.6, 0], [0.13, 0.15, 0.12], 'body'),
+        cap([0.24, 0.66, 0], [0.3, 0.86, 0], 0.065, 0.052, 'neck'),
+        ell([0.32, 0.93, 0], [0.08, 0.07, 0.065], 'head'),
+        cap([0.37, 0.915, 0], [0.48, 0.885, 0], 0.036, 0.026, 'muzzle'),
+        ell([0.3, 0.99, 0], [0.065, 0.045, 0.06], 'topknot'),
+        cap([-0.3, 0.66, 0], [-0.37, 0.84, 0], 0.028, 0.022, 'tail'),
+        ell([-0.38, 0.88, 0], [0.035, 0.035, 0.035], 'tail'),
+        ...legs(0.18, -0.22, 0.075, 0.55, 0.3, 0.05, 0.038, 0.03, 0.026, [0.04, 0.025, 0.03]),
+      ],
+      head: { pivot: [0.28, 0.8, 0], dir: [0.3, 0.95, 0], ramp: 0.07 },
+      face: {
+        center: [0.32, 0.93, 0], eye: { dir: [0.55, 0.3, 0.78], r: 0.017 }, lashes: false,
+        ear: { dir: [-0.15, 0.2, 0.97], axis: [0, -0.95, 0.3], kind: 'droop', len: 0.15, width: 0.04 },
+        nose: { from: [0.48, 0.885, 0], dir: [1, 0, 0] },
+      },
+      camera: { dist: 2.3 },
+      cuts: [
+        { name: 'Continental', region: { body: KEEP, neck: KEEP, head: 0.3, muzzle: 0, topknot: KEEP, legUpper: 0, legLower: KEEP, tail: KEEP },
+          fn: (p, t, L, w) => {
+            const s = Math.max(w[RI.body] * smoothstep(0.06, -0.04, p[0]),
+              w[RI.legLower] * smoothstep(0.15, 0.21, p[1]),
+              w[RI.tail] * smoothstep(0.83, 0.78, p[1]));
+            return t * (1 - s) + MIN_LEN * s;
+          } },
+      ],
+    },
+  };
+  function scalePrims(prims, chub) {
+    return prims.map(p => {
+      const q = JSON.parse(JSON.stringify(p));
+      if (p.region === 'body' || p.region === 'neck') {
+        if (q.type === 'cap') { q.r *= chub; if (q.r2 !== undefined) q.r2 *= chub; }
+        else { q.s[0] *= 1 + (chub - 1) * 0.5; q.s[1] *= chub; q.s[2] *= chub; }
+      }
+      return q;
+    });
+  }
+  // soft region weights (softmax over primitive distances), head-follow, breathing and tint weights
+  function analyze(mesh, an, prims) {
+    const nv = mesh.nv, regW = new Float32Array(nv * NR);
+    const headW = new Float32Array(nv), breathW = new Float32Array(nv), tint = new Float32Array(nv);
+    const tau = 0.03, d = new Float64Array(prims.length), pr = prims.map(p => RI[p.region]);
+    const hp = an.head.pivot, hl = Math.hypot(...an.head.dir), hd = an.head.dir.map(c => c / hl), ramp = an.head.ramp;
+    const tintR = an.tintRegions.map(r => RI[r]);
+    for (let i = 0; i < nv; i++) {
+      const x = mesh.pos[3 * i], y = mesh.pos[3 * i + 1], z = mesh.pos[3 * i + 2];
+      let dmin = Infinity;
+      for (let j = 0; j < prims.length; j++) { d[j] = primDist(x, y, z, prims[j]); if (d[j] < dmin) dmin = d[j]; }
+      let sum = 0;
+      for (let j = 0; j < prims.length; j++) { const w = Math.exp(-(d[j] - dmin) / tau); regW[i * NR + pr[j]] += w; sum += w; }
+      for (let r = 0; r < NR; r++) regW[i * NR + r] /= sum;
+      headW[i] = smoothstep(-ramp, ramp, (x - hp[0]) * hd[0] + (y - hp[1]) * hd[1] + (z - hp[2]) * hd[2]);
+      breathW[i] = regW[i * NR + RI.body];
+      let t = 0; for (const r of tintR) t += regW[i * NR + r];
+      tint[i] = t;
+    }
+    return { regW, headW, breathW, tint };
+  }
+  function surfacePoint(sdf, from, dir) {
+    const l = Math.hypot(dir[0], dir[1], dir[2]), dx = dir[0] / l, dy = dir[1] / l, dz = dir[2] / l;
+    const at = t => sdf(from[0] + dx * t, from[1] + dy * t, from[2] + dz * t);
+    if (at(0) >= 0) throw new Error('surfacePoint: start is outside');
+    let t0 = 0, t1 = 0;
+    while (at(t1) < 0) { t0 = t1; t1 += 0.004; if (t1 > 3) throw new Error('surfacePoint: no exit'); }
+    for (let k = 0; k < 40; k++) { const m = (t0 + t1) / 2; if (at(m) < 0) t0 = m; else t1 = m; }
+    const t = (t0 + t1) / 2, p = [from[0] + dx * t, from[1] + dy * t, from[2] + dz * t];
+    return { p, n: sdfNormal(sdf, p[0], p[1], p[2], 1e-4) };
+  }
+  function placeFeatures(an, sdf, prims) {
+    const f = an.face, out = { eyes: [], ears: [], nose: null, toes: [], clear: [] };
+    const mirror = (v, s) => [v[0], v[1], v[2] * s];
+    for (const s of [1, -1]) {
+      const e = surfacePoint(sdf, f.center, mirror(f.eye.dir, s));
+      out.eyes.push({ p: e.p, n: e.n, r: f.eye.r, side: s });
+      out.clear.push({ p: e.p, r: f.eye.r * 2.0 });
+      const a = surfacePoint(sdf, f.center, mirror(f.ear.dir, s));
+      out.ears.push({ p: a.p, n: a.n, axis: mirror(f.ear.axis, s), side: s });
+      out.clear.push({ p: a.p, r: f.ear.width * 1.6 });
+    }
+    const n = surfacePoint(sdf, f.nose.from, f.nose.dir);
+    out.nose = { p: n.p, n: n.n };
+    out.clear.push({ p: n.p, r: f.eye.r * 1.5 });
+    for (const p of prims) if (p.foot) for (const s of [1, -1]) {
+      const c = [p.c[0] + p.s[0] * 0.72, p.c[1] - p.s[1] * 0.3, p.c[2] + s * p.s[2] * 0.4];
+      out.toes.push({ p: c, s: [p.s[0] * 0.38, p.s[1] * 0.6, p.s[2] * 0.36] });
+      out.clear.push({ p: c, r: Math.max(p.s[0], p.s[1], p.s[2]) * 0.9 });
+    }
+    return out;
+  }
+  function initFleece(mesh, attrs, an, maxLen, clear) {
+    const nv = mesh.nv, base = new Float32Array(nv), rl = REGIONS.map(r => an.regionLength[r]);
+    for (let i = 0; i < nv; i++) {
+      const x = mesh.pos[3 * i], y = mesh.pos[3 * i + 1], z = mesh.pos[3 * i + 2];
+      let f = 0;
+      for (let r = 0; r < NR; r++) f += attrs.regW[i * NR + r] * rl[r];
+      let L = f * maxLen * (0.85 + 0.3 * vnoise(x * 6 + 11.3, y * 6, z * 6));
+      for (const c of clear) {
+        const dd = Math.hypot(x - c.p[0], y - c.p[1], z - c.p[2]);
+        if (dd < c.r * 1.3) L *= smoothstep(c.r * 0.55, c.r * 1.3, dd);
+      }
+      base[i] = Math.max(MIN_LEN, L);
+    }
+    return { len: base.slice(), base };
+  }
+  function rescaleFleece(st, ratio) {
+    for (let i = 0; i < st.base.length; i++) {
+      st.base[i] = Math.max(MIN_LEN, st.base[i] * ratio);
+      st.len[i] = Math.max(MIN_LEN, st.len[i] * ratio);
+    }
+  }
+  function flatAttrs(nv) {
+    const regW = new Float32Array(nv * NR);
+    for (let i = 0; i < nv; i++) regW[i * NR + RI.body] = 1;
+    return { regW, headW: new Float32Array(nv), breathW: new Float32Array(nv), tint: new Float32Array(nv) };
+  }
+  return { COATS, ANIMALS, KEEP, scalePrims, analyze, surfacePoint, placeFeatures, initFleece, rescaleFleece, flatAttrs };
+})());
+```
+
+- [ ] **Step 4: Run the tests and watch them pass.**
+  - Run: `node 3d-animal-haircut/test.mjs`
+  - Expected: `7 passed, 0 failed`.
+  - If `llama mesh` fails only on the vertex count, adjust `ANIMALS.llama.res` (vertex count scales with res², so for example 150 → 165 for +20%) until it lands in [20000, 45000]. Then use that same scale factor on the other animals' `res`.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add 3d-animal-haircut/index.html
+git commit -m "3d-animal-haircut: animal recipes, region weights, features and fleece init
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 3: Pose, pick, brush, style cuts and wool mass
+
+**Files:**
+- Modify: `3d-animal-haircut/index.html` (append part 3 and its tests)
+
+**Interfaces:**
+- Consumes: Tasks 1–2.
+- Produces on `HC`:
+  - `TOOLS = ['clippers', 'scissors', 'regrow', 'fluff']`
+  - `makePose() → {R: number[9] (row-major), pivot: [3], breath, droop}`
+  - `deform(mesh, attrs, i, L, h, pose, out)`: writes the tip xyz to `out[0..2]` and the unit normal to `out[3..5]`
+  - `pickFur(mesh, attrs, len, pose, o, d, pickR) → {t, i} | null`
+  - `applyBrush(mesh, attrs, st, pose, o, d, hitT, tool, bp) → {idx: number[], amt: number[], mass, changed}`, where `bp = {radius, hardness, strength, guard, snip, amount, maxLen, density}`
+  - `cutTargets(mesh, attrs, st, cut, maxLen) → Float32Array`
+  - `applyCutSweep(mesh, st, T, x, density) → {idx, amt, mass, changed}`
+  - `coatStats(mesh, st) → {removedFrac}`
+
+- [ ] **Step 1: Write the failing tests.** Append after the part 2 tests:
+
+```js
+// ============================================================ part 3 tests
+function brushRig(len0) {
+  const { mesh } = testSphere(0.5, 40);
+  const st = { len: new Float32Array(mesh.nv).fill(len0), base: new Float32Array(mesh.nv).fill(len0) };
+  return { mesh, attrs: HC.flatAttrs(mesh.nv), st, pose: HC.makePose() };
+}
+const BP = (o) => Object.assign({ radius: 0.2, hardness: 0.5, strength: 0.6, guard: 0.02, snip: 0.03, amount: 0.05, maxLen: 0.15, density: HC.FLEECE_DENSITY }, o);
+HaircutTests.add('deform identity and head rotation', () => {
+  const { mesh, attrs, pose } = brushRig(0.1), out = new Float64Array(6);
+  HC.deform(mesh, attrs, 5, 0.1, 0, pose, out);
+  for (let a = 0; a < 3; a++) { assertNear(out[a], mesh.pos[15 + a], 1e-7); assertNear(out[3 + a], mesh.nrm[15 + a], 1e-6); }
+  HC.deform(mesh, attrs, 5, 0.1, 1, pose, out);
+  for (let a = 0; a < 3; a++) assertNear(out[a], mesh.pos[15 + a] + mesh.nrm[15 + a] * 0.1, 1e-6);
+  attrs.headW[0] = 1;
+  pose.R = [0, 0, 1, 0, 1, 0, -1, 0, 0]; // 90 degrees about +y
+  HC.deform(mesh, attrs, 0, 0.1, 0, pose, out);
+  assertNear(out[0], mesh.pos[2], 1e-6); assertNear(out[2], -mesh.pos[0], 1e-6);
+  HC.deform(mesh, attrs, 1, 0.1, 0, pose, out);
+  assertNear(out[0], mesh.pos[3], 1e-7); assertNear(out[2], mesh.pos[5], 1e-7);
+});
+HaircutTests.add('pickFur hits the fleece tips', () => {
+  const { mesh, attrs, st, pose } = brushRig(0.1);
+  const hit = HC.pickFur(mesh, attrs, st.len, pose, [0, 0, 3], [0, 0, -1], 0.03);
+  assert(hit, 'no hit'); assertNear(hit.t, 2.4, 0.03, 'tip depth');
+  assert(HC.pickFur(mesh, attrs, st.len, pose, [0, 2, 3], [0, 0, -1], 0.03) === null, 'miss');
+  // overhanging fluff outside the skin silhouette still picks
+  assert(HC.pickFur(mesh, attrs, st.len, pose, [0.55, 0, 3], [0, 0, -1], 0.03), 'fluff beyond the skin');
+});
+HaircutTests.add('clippers: monotone, guard floor, near side only', () => {
+  const { mesh, attrs, st, pose } = brushRig(0.1), o = [0, 0, 3], d = [0, 0, -1];
+  for (let s = 0; s < 40; s++) {
+    const before = st.len.slice();
+    const hit = HC.pickFur(mesh, attrs, st.len, pose, o, d, 0.03);
+    const res = HC.applyBrush(mesh, attrs, st, pose, o, d, hit.t, 'clippers', BP());
+    for (let i = 0; i < mesh.nv; i++) {
+      assert(st.len[i] <= before[i], 'clippers lengthened');
+      assert(st.len[i] >= 0.02 - 1e-7 || st.len[i] === before[i], 'below guard');
+    }
+    if (s === 0) assert(res.idx.length > 20 && res.mass > 0, 'first stroke cuts');
+  }
+  for (let i = 0; i < mesh.nv; i++) {
+    const x = mesh.pos[3 * i], y = mesh.pos[3 * i + 1], z = mesh.pos[3 * i + 2];
+    if (z > 0.3 && x * x + y * y < 0.05 * 0.05) assertNear(st.len[i], 0.02, 1e-3, 'converges to guard');
+    if (z < -0.1) assert(st.len[i] === 0.1, 'far side cut');
+  }
+});
+HaircutTests.add('regrow and fluff never shrink, regrow caps at base', () => {
+  const { mesh, attrs, st, pose } = brushRig(0.1), o = [0, 0, 3], d = [0, 0, -1];
+  for (let i = 0; i < mesh.nv; i++) st.len[i] = 0.03;
+  for (const tool of ['regrow', 'fluff']) for (let s = 0; s < 30; s++) {
+    const before = st.len.slice();
+    const hit = HC.pickFur(mesh, attrs, st.len, pose, o, d, 0.03);
+    const res = HC.applyBrush(mesh, attrs, st, pose, o, d, hit.t, tool, BP());
+    assert(res.idx.length === 0 && res.mass === 0, tool + ' removed fleece');
+    for (let i = 0; i < mesh.nv; i++) {
+      assert(st.len[i] >= before[i], tool + ' shrank');
+      assert(st.len[i] <= (tool === 'regrow' ? Math.max(before[i], st.base[i]) : st.base[i] * 1.15) + 1e-7, tool + ' overgrew');
+    }
+  }
+});
+HaircutTests.add('scissors snip a fixed amount', () => {
+  const { mesh, attrs, st, pose } = brushRig(0.1), o = [0, 0, 3], d = [0, 0, -1];
+  const hit = HC.pickFur(mesh, attrs, st.len, pose, o, d, 0.03);
+  HC.applyBrush(mesh, attrs, st, pose, o, d, hit.t, 'scissors', BP({ strength: 1 }));
+  let lo = 1; for (let i = 0; i < mesh.nv; i++) lo = Math.min(lo, st.len[i]);
+  assertNear(lo, 0.07, 2e-3, 'one snip at the centre');
+});
+HaircutTests.add('wool mass of a full shear', () => {
+  const { mesh, st } = brushRig(0.1);
+  const T = new Float32Array(mesh.nv).fill(HC.MIN_LEN);
+  const res = HC.applyCutSweep(mesh, st, T, Infinity, HC.FLEECE_DENSITY);
+  const expect = 4 * Math.PI * 0.25 * (0.1 - HC.MIN_LEN) * HC.FLEECE_DENSITY;
+  assertNear(res.mass, expect, 0.03 * expect, 'mass');
+  assertNear(HC.coatStats(mesh, st).removedFrac, 1 - HC.MIN_LEN / 0.1, 1e-3, 'removed fraction');
+});
+HaircutTests.add('rescaleFleece keeps the cut shape', () => {
+  const st = { len: new Float32Array([0.1, 0.05, 0.006]), base: new Float32Array([0.2, 0.2, 0.2]) };
+  HC.rescaleFleece(st, 0.5);
+  assertNear(st.len[0], 0.05, 1e-7); assertNear(st.len[1], 0.025, 1e-7); assertNear(st.len[2], HC.MIN_LEN, 1e-7);
+  assertNear(st.base[0], 0.1, 1e-7);
+});
+HaircutTests.add('every style cut only shortens', () => {
+  for (const key of Object.keys(HC.ANIMALS)) {
+    const an = HC.ANIMALS[key], prims = HC.scalePrims(an.prims, 1);
+    const mesh = HC.meshPrims(prims, an.k, 70), sdf = HC.makeSDF(prims, an.k);
+    const attrs = HC.analyze(mesh, an, prims), feats = HC.placeFeatures(an, sdf, prims);
+    const st = HC.initFleece(mesh, attrs, an, an.maxLen, feats.clear);
+    for (const cut of an.cuts) {
+      const T = HC.cutTargets(mesh, attrs, st, cut, an.maxLen);
+      let sT = 0, sB = 0;
+      for (let i = 0; i < mesh.nv; i++) {
+        assert(T[i] <= st.len[i] + 1e-7 && T[i] >= HC.MIN_LEN - 1e-7, `${key}/${cut.name} target out of range`);
+        sT += T[i]; sB += st.base[i];
+      }
+      assert(sT < 0.85 * sB, `${key}/${cut.name} removes too little`);
+    }
+  }
+});
+```
+
+- [ ] **Step 2: Run the tests and watch them fail.**
+  - Run: `node 3d-animal-haircut/test.mjs`
+  - Expected: the 8 new tests FAIL (`HC.makePose is not a function`, …).
+
+- [ ] **Step 3: Implement part 3.** Insert it after part 2's `Object.assign(...)`:
+
+```js
+// ============================================================ part 3: pose, pick, brush, cuts
+Object.assign(HC, (() => {
+  const { REGIONS, NR, MIN_LEN, smoothstep } = HC;
+  const TOOLS = ['clippers', 'scissors', 'regrow', 'fluff'];
+  const makePose = () => ({ R: [1, 0, 0, 0, 1, 0, 0, 0, 1], pivot: [0, 0, 0], breath: 0, droop: 0 });
+  // Same maths as the fur vertex shader (minus wind): breathing, shell offset, droop, head rotation.
+  function deform(mesh, attrs, i, L, h, pose, out) {
+    const p = mesh.pos, n = mesh.nrm, k = 3 * i;
+    const nx = n[k], ny = n[k + 1], nz = n[k + 2];
+    const off = attrs.breathW[i] * pose.breath + L * h;
+    let x = p[k] + nx * off, y = p[k + 1] + ny * off - pose.droop * L * h * h, z = p[k + 2] + nz * off;
+    let mx = nx, my = ny, mz = nz;
+    const w = attrs.headW[i];
+    if (w > 0) {
+      const R = pose.R, q = pose.pivot, dx = x - q[0], dy = y - q[1], dz = z - q[2];
+      x += (q[0] + R[0] * dx + R[1] * dy + R[2] * dz - x) * w;
+      y += (q[1] + R[3] * dx + R[4] * dy + R[5] * dz - y) * w;
+      z += (q[2] + R[6] * dx + R[7] * dy + R[8] * dz - z) * w;
+      mx += (R[0] * nx + R[1] * ny + R[2] * nz - nx) * w;
+      my += (R[3] * nx + R[4] * ny + R[5] * nz - ny) * w;
+      mz += (R[6] * nx + R[7] * ny + R[8] * nz - nz) * w;
+      const l = Math.hypot(mx, my, mz) || 1; mx /= l; my /= l; mz /= l;
+    }
+    out[0] = x; out[1] = y; out[2] = z; out[3] = mx; out[4] = my; out[5] = mz;
+  }
+  const tmp = new Float64Array(6);
+  // nearest camera-facing fleece tip within pickR of the ray (o, unit d)
+  function pickFur(mesh, attrs, len, pose, o, d, pickR) {
+    let best = Infinity, bi = -1;
+    const r2 = pickR * pickR;
+    for (let i = 0; i < mesh.nv; i++) {
+      deform(mesh, attrs, i, len[i], 1, pose, tmp);
+      if (tmp[3] * d[0] + tmp[4] * d[1] + tmp[5] * d[2] > 0.15) continue;
+      const vx = tmp[0] - o[0], vy = tmp[1] - o[1], vz = tmp[2] - o[2];
+      const t = vx * d[0] + vy * d[1] + vz * d[2];
+      if (t <= 0 || t >= best) continue;
+      if (vx * vx + vy * vy + vz * vz - t * t <= r2) { best = t; bi = i; }
+    }
+    return bi < 0 ? null : { t: best, i: bi };
+  }
+  // cylinder brush along the ray, limited to a depth window behind the hit so strokes never cut through
+  function applyBrush(mesh, attrs, st, pose, o, d, hitT, tool, bp) {
+    const out = { idx: [], amt: [], mass: 0, changed: 0 };
+    const R = bp.radius, R2 = R * R, inner = R * Math.min(bp.hardness, 0.95);
+    const guard = Math.max(bp.guard, MIN_LEN), tMin = hitT - R, tMax = hitT + R + bp.maxLen;
+    for (let i = 0; i < mesh.nv; i++) {
+      const L = st.len[i];
+      deform(mesh, attrs, i, L, 1, pose, tmp);
+      if (tmp[3] * d[0] + tmp[4] * d[1] + tmp[5] * d[2] > 0.1) continue;
+      const vx = tmp[0] - o[0], vy = tmp[1] - o[1], vz = tmp[2] - o[2];
+      const t = vx * d[0] + vy * d[1] + vz * d[2];
+      if (t < tMin || t > tMax) continue;
+      const dist2 = vx * vx + vy * vy + vz * vz - t * t;
+      if (dist2 > R2) continue;
+      const w = (1 - smoothstep(inner, R, Math.sqrt(Math.max(0, dist2)))) * bp.strength;
+      if (w <= 0) continue;
+      let nl = L;
+      if (tool === 'clippers') { if (L > guard) nl = Math.max(guard, L - w * (L - guard)); }
+      else if (tool === 'scissors') { if (L > guard) nl = Math.max(guard, L - w * bp.snip); }
+      else if (tool === 'regrow') { if (L < st.base[i]) nl = Math.min(st.base[i], L + w * bp.amount); }
+      else if (tool === 'fluff') { nl = Math.max(L, Math.min(st.base[i] * 1.15, L + w * bp.amount * 0.5)); }
+      if (nl === L) continue;
+      st.len[i] = nl; out.changed++;
+      if (nl < L) { out.idx.push(i); out.amt.push(L - nl); out.mass += mesh.area[i] * (L - nl) * bp.density; }
+    }
+    return out;
+  }
+  // per-vertex target lengths for a named style cut: region factors (x maxLen) or KEEP (< 0), then cut.fn
+  function cutTargets(mesh, attrs, st, cut, maxLen) {
+    const T = new Float32Array(mesh.nv), vals = REGIONS.map(r => cut.region[r]);
+    for (let i = 0; i < mesh.nv; i++) {
+      const L = st.len[i];
+      let t = 0;
+      for (let r = 0; r < NR; r++) {
+        const w = attrs.regW[i * NR + r];
+        if (w) t += w * (vals[r] === undefined || vals[r] < 0 ? L : vals[r] * maxLen);
+      }
+      if (cut.fn) t = cut.fn([mesh.pos[3 * i], mesh.pos[3 * i + 1], mesh.pos[3 * i + 2]], t, L, attrs.regW.subarray(i * NR, i * NR + NR));
+      T[i] = Math.min(L, Math.max(MIN_LEN, t));
+    }
+    return T;
+  }
+  // clip every vertex with x <= x down to its target (an animated plane sweeping tail to nose)
+  function applyCutSweep(mesh, st, T, x, density) {
+    const out = { idx: [], amt: [], mass: 0, changed: 0 };
+    for (let i = 0; i < mesh.nv; i++) {
+      if (mesh.pos[3 * i] > x) continue;
+      const L = st.len[i];
+      if (L <= T[i]) continue;
+      st.len[i] = T[i]; out.changed++;
+      out.idx.push(i); out.amt.push(L - T[i]); out.mass += mesh.area[i] * (L - T[i]) * density;
+    }
+    return out;
+  }
+  function coatStats(mesh, st) {
+    let now = 0, full = 0;
+    for (let i = 0; i < mesh.nv; i++) { now += mesh.area[i] * st.len[i]; full += mesh.area[i] * st.base[i]; }
+    return { removedFrac: Math.max(0, 1 - now / full) };
+  }
+  return { TOOLS, makePose, deform, pickFur, applyBrush, cutTargets, applyCutSweep, coatStats };
+})());
+```
+
+- [ ] **Step 4: Run the tests and watch them pass.**
+  - Run: `node 3d-animal-haircut/test.mjs`
+  - Expected: `15 passed, 0 failed`.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add 3d-animal-haircut/index.html
+git commit -m "3d-animal-haircut: pose, fur picking, brush tools, style cuts and wool mass
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 4: The page (rendering, UI, interaction, animation)
+
+**Files:**
+- Modify: `3d-animal-haircut/index.html` (head styles, panel markup, import map and the app module around the existing `shared-code` block)
+
+**Interfaces:**
+- Consumes the global `HC` from Tasks 1–3. Uses the name `HC` directly: the classic script's top-level `const` is visible to the module.
+- Produces `window.__hc` (a debug handle: `{P, A, step, render, startCut, instantCut, camera, controls, renderer}`) and the URL params `?animal=llama|alpaca|sheep|poodle&cut=<cut name>&split=1&before=1`.
+
+- [ ] **Step 1: Replace the `<head>` contents and add the panel markup.** The new `<head>`:
+
+```html
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Animal Haircut</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #efe3d3; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #ece7df; }
+  canvas { display: block; touch-action: none; }
+  #panel { position: absolute; top: 12px; left: 12px; width: 286px; max-height: calc(100% - 24px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; z-index: 2; }
+  .card { background: rgba(28, 22, 18, 0.84); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px 12px; }
+  .card h2 { margin: 0 0 6px; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: #f0b884; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; }
+  .card h2 .chev { font-size: 11px; color: #998; }
+  .card.collapsed .body { display: none; }
+  .card.collapsed h2 { margin-bottom: 0; }
+  h1 { font-size: 17px; margin: 0 0 2px; font-weight: 600; }
+  .sub { font-size: 12px; color: #b9b0a4; margin: 0; line-height: 1.35; }
+  label { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #d6cfc4; margin-top: 7px; }
+  label .val { color: #fff; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; margin: 3px 0 0; accent-color: #f0b884; }
+  input[type=color] { width: 44px; height: 20px; border: 1px solid #554a40; border-radius: 4px; background: none; padding: 0; }
+  .row { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; align-items: center; }
+  button { background: #3a2f27; color: #f2ece4; border: 1px solid #5c4c3f; border-radius: 6px; padding: 5px 9px; font-size: 12px; cursor: pointer; text-transform: capitalize; }
+  button:hover { background: #4a3c31; }
+  button.on { background: #7a4a22; border-color: #f0b884; }
+  .grid2, .grid3 { display: grid; gap: 6px; margin-top: 6px; }
+  .grid2 { grid-template-columns: 1fr 1fr; } .grid3 { grid-template-columns: 1fr 1fr 1fr; }
+  .grid2 button, .grid3 button { width: 100%; }
+  .readout { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; }
+  .readout .k { color: #a39a8e; } .readout .v { color: #fff; font-variant-numeric: tabular-nums; text-align: right; }
+  #rMass { color: #ffd59a; font-weight: 600; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 11.5px; margin-top: 8px; color: #d6cfc4; }
+  .keys b { color: #fff; font-weight: 600; font-family: ui-monospace, Menlo, monospace; }
+  .note { font-size: 11px; color: #a39a8e; margin-top: 7px; line-height: 1.35; }
+  .check { justify-content: flex-start; gap: 6px; }
+  .check input { accent-color: #f0b884; margin: 0; }
+  #split { position: absolute; top: 0; bottom: 0; left: 50%; width: 0; display: none; z-index: 1; pointer-events: none; }
+  #split .line { position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: rgba(255,255,255,0.9); box-shadow: 0 0 6px rgba(0,0,0,0.35); }
+  #split .grip { pointer-events: auto; cursor: ew-resize; position: absolute; top: 50%; left: -15px; width: 30px; height: 30px; margin-top: -15px; border-radius: 50%; background: #fff; color: #3a2f27; font-size: 13px; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 6px rgba(0,0,0,0.35); }
+  #split .tag { position: absolute; top: 14px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; background: rgba(28,22,18,0.75); padding: 3px 8px; border-radius: 4px; }
+  #split .tag.l { right: 10px; } #split .tag.r { left: 10px; }
+  #beforeTag { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-size: 12px; letter-spacing: 0.2em; background: rgba(28,22,18,0.8); padding: 5px 12px; border-radius: 5px; opacity: 0; transition: opacity 0.15s; z-index: 2; pointer-events: none; }
+  #loading { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 15px; color: #6b5a4b; z-index: 3; }
+  #err { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); background: #4a1d1d; padding: 16px 20px; border-radius: 8px; display: none; max-width: 440px; z-index: 5; font-size: 13px; }
+  @media (max-width: 560px) { #panel { width: calc(100% - 24px); max-height: 48%; } }
+</style>
+</head>
+```
+
+At the top of `<body>`, before the `shared-code` script, add:
+
+```html
+<div id="panel">
+  <div class="card">
+    <h1>Animal Haircut</h1>
+    <p class="sub">Drag across the fleece to clip it. Drag the background (or right-drag) to orbit, scroll to zoom. Hold <b>B</b> to see the before.</p>
+  </div>
+  <div class="card" id="cardAnimal"><h2>Animal <span class="chev">&#9662;</span></h2><div class="body"></div></div>
+  <div class="card" id="cardTool"><h2>Tool <span class="chev">&#9662;</span></h2><div class="body"></div></div>
+  <div class="card" id="cardFleece"><h2>Fleece <span class="chev">&#9662;</span></h2><div class="body"></div></div>
+  <div class="card collapsed" id="cardView"><h2>Before / after &amp; view <span class="chev">&#9662;</span></h2><div class="body"></div></div>
+  <div class="card collapsed" id="cardClips"><h2>Clippings <span class="chev">&#9662;</span></h2><div class="body"></div></div>
+  <div class="card collapsed" id="cardAnim"><h2>Animation <span class="chev">&#9662;</span></h2><div class="body"></div></div>
+  <div class="card" id="cardInfo"><h2>Readout <span class="chev">&#9662;</span></h2><div class="body">
+    <div class="readout">
+      <span class="k">Fleece collected</span><span class="v" id="rMass">0.00 kg</span>
+      <span class="k">Coat removed</span><span class="v" id="rRemoved">0 %</span>
+      <span class="k">Skin vertices</span><span class="v" id="rVerts">–</span>
+      <span class="k">FPS</span><span class="v" id="rFps">–</span>
+    </div>
+    <div class="keys">
+      <b>drag</b><span>clip on the animal, orbit elsewhere</span>
+      <b>1–4</b><span>clippers, scissors, regrow, fluff</span>
+      <b>[ ]</b><span>brush size</span>
+      <b>B</b><span>hold for before</span>
+      <b>⌘Z</b><span>undo a stroke</span>
+    </div>
+  </div></div>
+</div>
+<div id="split"><div class="line"></div><div class="grip">&#8596;</div><span class="tag l">before</span><span class="tag r">after</span></div>
+<div id="beforeTag">BEFORE</div>
+<div id="loading">Combing the fleece…</div>
+<div id="err"></div>
+```
+
+- [ ] **Step 2: Add the import map, the CDN watchdog and the app module** after the closing `</script>` of `shared-code`:
+
+```html
+<script>
+  setTimeout(() => { if (!window.__hc && !document.getElementById('err').textContent) { const e = document.getElementById('err'); e.style.display = 'block'; e.textContent = 'three.js could not be loaded from cdn.jsdelivr.net. This page needs an internet connection the first time.'; } }, 15000);
+</script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const H = HC;
+const $ = id => document.getElementById(id);
+function showErr(err) { const e = $('err'); e.style.display = 'block'; e.textContent = 'Error: ' + (err && err.message ? err.message : err); console.error(err); }
+addEventListener('error', e => showErr(e.error || e.message));
+const params = new URLSearchParams(location.search);
+const TOOL_LABEL = { clippers: 'Clippers', scissors: 'Scissors', regrow: 'Regrow', fluff: 'Fluff' };
+const TOOL_COLOR = { clippers: 0xffffff, scissors: 0xffd27a, regrow: 0x8fe39a, fluff: 0xf3a6d8 };
+const BGS = {
+  salon:   { bg: '#efe3d3', floor: 'checker', sky: '#fff3e2', ground: '#8a7560' },
+  pasture: { bg: '#bfe0f2', floor: 'grass',   sky: '#e9f5ff', ground: '#5f7d3f' },
+  studio:  { bg: '#15181d', floor: 'dark',    sky: '#c8d2df', ground: '#2a2622' },
+};
+
+// ------------------------------------------------------------------ parameters
+const P = {
+  animal: H.ANIMALS[params.get('animal')] ? params.get('animal') : 'llama',
+  chub: 1, tool: 'clippers', radius: 0.12, guard: 0.006, strength: 0.6, hardness: 0.5,
+  maxLen: 0.22, density: 240, taper: 1, curl: 0.35, fluff: 0.8, droop: 0.3, wind: 0.15, shells: 40,
+  rootColor: '#cbb48c', tipColor: '#f3e6c8', skinColor: '#6e5a4b',
+  split: false, autoRotate: false, lightAngle: 35, bg: 'salon',
+  maxClips: 2500, clipLife: 60,
+  breathing: true, headFollow: true, blink: true, happy: true,
+};
+function applyAnimalDefaults() {
+  const an = H.ANIMALS[P.animal];
+  for (const k of ['maxLen', 'density', 'taper', 'curl', 'fluff', 'droop']) P[k] = an[k];
+  [P.rootColor, P.tipColor] = H.COATS[an.coat];
+  P.skinColor = an.skin;
+  P.radius = +(0.12 * an.camera.dist / 4.2).toFixed(3);
+}
+applyAnimalDefaults();
+
+// ------------------------------------------------------------------ renderer & scene
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NeutralToneMapping;
+document.body.prepend(renderer.domElement);
+const cv = renderer.domElement;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.05, 100);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.1);
+const sun = new THREE.DirectionalLight(0xfff4e8, 2.2);
+scene.add(hemi, sun);
+
+function canvasTex(size, draw) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  draw(c.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const floorTex = {
+  checker: canvasTex(512, (g, s) => { const n = 8, w = s / n; for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { g.fillStyle = (i + j) % 2 ? '#3a332e' : '#ece5da'; g.fillRect(i * w, j * w, w, w); } }),
+  grass: canvasTex(256, (g, s) => { g.fillStyle = '#7fae5c'; g.fillRect(0, 0, s, s); for (let k = 0; k < 2500; k++) { const v = H.hash3(k, 1, 2); g.fillStyle = `rgba(${60 + v * 60 | 0},${120 + v * 60 | 0},${40 + v * 30 | 0},0.5)`; g.fillRect(H.hash3(k, 3, 4) * s, H.hash3(k, 5, 6) * s, 2, 5); } }),
+};
+for (const t of Object.values(floorTex)) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; }
+floorTex.checker.repeat.set(5, 5); floorTex.grass.repeat.set(10, 10);
+const floorMat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0 });
+const floor = new THREE.Mesh(new THREE.CircleGeometry(8, 72), floorMat);
+floor.rotation.x = -Math.PI / 2; scene.add(floor);
+const blob = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
+  map: canvasTex(128, (g, s) => { const gr = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2); gr.addColorStop(0, 'rgba(0,0,0,0.45)'); gr.addColorStop(0.6, 'rgba(0,0,0,0.2)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(0, 0, s, s); }),
+  transparent: true, depthWrite: false, toneMapped: false }));
+blob.rotation.x = -Math.PI / 2; blob.position.y = 0.003; scene.add(blob);
+
+// ------------------------------------------------------------------ fur material
+function dataTex(n, filter, seed) {
+  const d = new Uint8Array(n * n * 4);
+  for (let i = 0; i < n * n; i++) { const v = H.hash3(i % n, (i / n) | 0, seed) * 255; d[4 * i] = d[4 * i + 1] = d[4 * i + 2] = v; d[4 * i + 3] = 255; }
+  const t = new THREE.DataTexture(d, n, n);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = t.minFilter = filter; t.needsUpdate = true; return t;
+}
+const furU = {
+  uShowBase: { value: 0 }, uBreath: { value: 0 }, uDroop: { value: 0 }, uWind: { value: 0 }, uTime: { value: 0 },
+  uHeadR: { value: new THREE.Matrix3() }, uPivot: { value: new THREE.Vector3() },
+  uStrand: { value: dataTex(256, THREE.NearestFilter, 7) }, uClump: { value: dataTex(64, THREE.LinearFilter, 13) },
+  uDensity: { value: 240 }, uTaper: { value: 1 }, uCoverage: { value: 0.8 }, uCurl: { value: 0.3 },
+  uRoot: { value: new THREE.Color() }, uTip: { value: new THREE.Color() }, uSkin: { value: new THREE.Color() }, uTintColor: { value: new THREE.Color() },
+  uLightDir: { value: new THREE.Vector3(0, 1, 0) }, uLightColor: { value: new THREE.Color(1, 0.96, 0.9) },
+  uSky: { value: new THREE.Color() }, uGround: { value: new THREE.Color() },
+};
+const furMat = new THREE.ShaderMaterial({
+  uniforms: furU,
+  vertexShader: /* glsl */`
+    attribute float len;
+    attribute float base;
+    attribute float headW;
+    attribute float breathW;
+    attribute float tint;
+    attribute float shellH;
+    uniform float uShowBase, uBreath, uDroop, uWind, uTime;
+    uniform mat3 uHeadR;
+    uniform vec3 uPivot;
+    varying vec3 vBase;
+    varying vec3 vNBase;
+    varying vec3 vN;
+    varying vec3 vWorld;
+    varying float vH;
+    varying float vHc;
+    varying float vL;
+    varying float vTint;
+    void main() {
+      float L = mix(len, base, uShowBase);
+      float h = shellH;
+      float h2 = h * h;
+      vec3 p = position + normal * (breathW * uBreath + L * h);
+      p.y -= uDroop * L * h2;
+      p += vec3(sin(uTime * 1.7 + position.x * 3.1 + position.z * 2.3), 0.0,
+                cos(uTime * 1.3 + position.y * 2.7 + position.x * 1.9)) * (uWind * L * h2);
+      p = mix(p, uPivot + uHeadR * (p - uPivot), headW);
+      vec3 n = normalize(mix(normal, uHeadR * normal, headW));
+      vN = normalize(mat3(modelMatrix) * n);
+      vBase = position;
+      vNBase = normal;
+      vH = h;
+      vL = L;
+      vHc = clamp(h * L / max(base, 1e-4), 0.0, 1.0);
+      vTint = tint;
+      vec4 wp = modelMatrix * vec4(p, 1.0);
+      vWorld = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D uStrand;
+    uniform sampler2D uClump;
+    uniform float uDensity, uTaper, uCoverage, uCurl;
+    uniform vec3 uRoot, uTip, uSkin, uTintColor, uLightDir, uLightColor, uSky, uGround;
+    varying vec3 vBase;
+    varying vec3 vNBase;
+    varying vec3 vN;
+    varying vec3 vWorld;
+    varying float vH;
+    varying float vHc;
+    varying float vL;
+    varying float vTint;
+    void main() {
+      if (vH > 0.0) {
+        vec3 an = abs(vNBase);
+        vec2 uv = (an.x > an.y && an.x > an.z) ? vBase.yz : ((an.y > an.z) ? vBase.xz : vBase.xy);
+        uv *= uDensity;
+        float clump = texture2D(uClump, uv / 384.0).r;
+        float a = clump * 6.2831 + vH * uCurl * 9.0;
+        uv += vec2(cos(a), sin(a)) * (uCurl * vH * 1.6);
+        float r = texture2D(uStrand, uv / 256.0).r;
+        float s = (r - (1.0 - uCoverage)) / uCoverage;
+        s *= 0.7 + 0.6 * clump;
+        if (s <= 0.0 || pow(vHc, uTaper) > s) discard;
+      }
+      vec3 N = normalize(vN);
+      vec3 Ld = normalize(uLightDir);
+      vec3 V = normalize(cameraPosition - vWorld);
+      float diff = clamp((dot(N, Ld) + 0.45) / 1.45, 0.0, 1.0);
+      float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
+      vec3 hemi = mix(uGround, uSky, N.y * 0.5 + 0.5);
+      vec3 alb = vH > 0.0 ? mix(uRoot, uTip, max(vHc, vH * 0.6)) : uSkin;
+      alb = mix(alb, uTintColor, vTint);
+      float aoMin = mix(0.8, 0.3, clamp(vL / 0.08, 0.0, 1.0));
+      float ao = vH > 0.0 ? mix(aoMin, 1.0, pow(vH, 0.8)) : aoMin * 0.8;
+      vec3 c = alb * (hemi * 0.6 + uLightColor * diff * 0.9) * ao + uLightColor * alb * rim * 0.35 * vH;
+      gl_FragColor = vec4(c, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+});
+
+// ------------------------------------------------------------------ animal
+const A = { root: new THREE.Group(), head: new THREE.Group(), fur: null, eyes: [], arcs: [], ears: [], an: null, mesh: null, attrs: null, feats: null, st: null, lenAttr: null, baseAttr: null, center: new THREE.Vector3(), height: 1, restPitch: 0, pickR: 0.02 };
+scene.add(A.root);
+const pose = H.makePose();
+let mass = 0, undo = [], slots = [null, null, null], prevMaxLen = P.maxLen, cutAnim = null;
+const darkMat = new THREE.MeshStandardMaterial({ color: 0x17110e, roughness: 0.08 });
+const shineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+const noseMat = new THREE.MeshStandardMaterial({ color: 0x2a1d18, roughness: 0.55 });
+const earMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
+const toeMat = new THREE.MeshStandardMaterial({ color: 0x2b2420, roughness: 0.5 });
+
+function disposeAnimal() {
+  A.root.traverse(o => { if (o.isMesh && o.geometry) o.geometry.dispose(); });
+  A.root.clear(); A.head.clear(); A.head.quaternion.identity();
+}
+function setShells() {
+  const n = P.shells | 0, hs = new Float32Array(n + 1);
+  for (let i = 0; i <= n; i++) hs[i] = i / n;
+  A.fur.geometry.setAttribute('shellH', new THREE.InstancedBufferAttribute(hs, 1));
+  A.fur.geometry.instanceCount = n + 1;
+}
+function buildAnimal(resetCam) {
+  const an = H.ANIMALS[P.animal];
+  disposeAnimal();
+  const prims = H.scalePrims(an.prims, P.chub);
+  const sdf = H.makeSDF(prims, an.k);
+  const mesh = H.meshPrims(prims, an.k, an.res);
+  const attrs = H.analyze(mesh, an, prims);
+  const feats = H.placeFeatures(an, sdf, prims);
+  const st = H.initFleece(mesh, attrs, an, P.maxLen, feats.clear);
+  Object.assign(A, { an, mesh, attrs, feats, st });
+  prevMaxLen = P.maxLen;
+  A.pickR = Math.max(0.018, mesh.cell * 1.5);
+  const g = new THREE.InstancedBufferGeometry();
+  g.setIndex(new THREE.BufferAttribute(mesh.idx, 1));
+  g.setAttribute('position', new THREE.BufferAttribute(mesh.pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(mesh.nrm, 3));
+  A.lenAttr = new THREE.BufferAttribute(st.len, 1).setUsage(THREE.DynamicDrawUsage);
+  A.baseAttr = new THREE.BufferAttribute(st.base, 1).setUsage(THREE.DynamicDrawUsage);
+  g.setAttribute('len', A.lenAttr);
+  g.setAttribute('base', A.baseAttr);
+  g.setAttribute('headW', new THREE.BufferAttribute(attrs.headW, 1));
+  g.setAttribute('breathW', new THREE.BufferAttribute(attrs.breathW, 1));
+  g.setAttribute('tint', new THREE.BufferAttribute(attrs.tint, 1));
+  A.fur = new THREE.Mesh(g, furMat);
+  A.fur.frustumCulled = false;
+  A.root.add(A.fur, A.head);
+  setShells();
+  pose.pivot = an.head.pivot.slice();
+  furU.uPivot.value.fromArray(an.head.pivot);
+  A.head.position.fromArray(an.head.pivot);
+  buildFeatures();
+  const rv = an.face.center.map((c, i) => c - an.head.pivot[i]);
+  A.restPitch = Math.atan2(rv[1], Math.hypot(rv[0], rv[2]));
+  const b0 = mesh.bmin, b1 = mesh.bmax;
+  A.height = b1[1];
+  A.center.set((b0[0] + b1[0]) / 2, b1[1] * 0.5, 0);
+  blob.scale.set(b1[0] - b0[0] + P.maxLen + 0.2, b1[2] - b0[2] + 2 * P.maxLen + 0.25, 1);
+  blob.position.x = A.center.x;
+  if (resetCam) {
+    const d = an.camera.dist;
+    controls.target.copy(A.center);
+    camera.position.set(A.center.x + d * 0.62, A.center.y + d * 0.22, d * 0.75);
+    controls.update();
+  }
+  undo = []; slots = [null, null, null]; refreshSlots(); mass = 0; cutAnim = null;
+  refreshCutButtons(); applyColors();
+  $('rVerts').textContent = mesh.nv.toLocaleString();
+}
+function basis(n) {
+  const z = new THREE.Vector3().fromArray(n).normalize();
+  const up = Math.abs(z.y) > 0.95 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const x = new THREE.Vector3().crossVectors(up, z).normalize();
+  const y = new THREE.Vector3().crossVectors(z, x);
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+function earGeometry(e) {
+  if (e.kind === 'droop') {
+    const g = new THREE.SphereGeometry(1, 18, 14);
+    g.scale(e.width, e.len * 0.5, e.width * 0.45); g.translate(0, e.len * 0.42, 0); return g;
+  }
+  const pts = [new THREE.Vector2(1e-4, 0)];
+  for (let i = 0; i <= 14; i++) {
+    const t = i / 14;
+    let r = e.width * Math.pow(Math.sin(Math.PI * (0.15 + 0.85 * t)), 0.6);
+    if (e.kind === 'spear') r *= 1 - 0.35 * t;
+    pts.push(new THREE.Vector2(Math.max(r, 1e-4), t * e.len));
+  }
+  const g = new THREE.LatheGeometry(pts, 16);
+  g.scale(1, 1, 0.5);
+  if (e.kind === 'banana') {
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) { const y = p.getY(i) / e.len; p.setX(i, p.getX(i) + e.len * 0.25 * y * y); }
+  }
+  g.computeVertexNormals();
+  return g;
+}
+function buildFeatures() {
+  const f = A.feats, an = A.an, piv = new THREE.Vector3().fromArray(an.head.pivot);
+  const local = p => new THREE.Vector3().fromArray(p).sub(piv);
+  A.eyes = []; A.arcs = []; A.ears = [];
+  for (const e of f.eyes) {
+    const g = new THREE.Group();
+    g.position.copy(local(e.p)).addScaledVector(new THREE.Vector3().fromArray(e.n), e.r * 0.25);
+    g.quaternion.copy(basis(e.n));
+    const open = new THREE.Group();
+    open.add(new THREE.Mesh(new THREE.SphereGeometry(e.r, 28, 18), darkMat));
+    const s1 = new THREE.Mesh(new THREE.SphereGeometry(e.r * 0.26, 12, 8), shineMat); s1.position.set(e.r * 0.3, e.r * 0.36, e.r * 0.86);
+    const s2 = new THREE.Mesh(new THREE.SphereGeometry(e.r * 0.12, 8, 6), shineMat); s2.position.set(-e.r * 0.28, -e.r * 0.26, e.r * 0.92);
+    open.add(s1, s2);
+    if (an.face.lashes) for (const deg of [62, 90, 118]) {
+      const a = deg * Math.PI / 180, L = e.r * 0.75;
+      const dir = new THREE.Vector3(Math.cos(a), Math.sin(a), 0.5).normalize();
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(e.r * 0.035, e.r * 0.07, L, 5), darkMat);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      m.position.set(Math.cos(a) * e.r * 0.92, Math.sin(a) * e.r * 0.92, e.r * 0.3).addScaledVector(dir, L / 2);
+      open.add(m);
+    }
+    const arc = new THREE.Mesh(new THREE.TorusGeometry(e.r * 0.7, e.r * 0.14, 6, 18, Math.PI), darkMat);
+    arc.position.set(0, -e.r * 0.25, e.r * 0.55); arc.visible = false;
+    g.add(open, arc); A.head.add(g); A.eyes.push(open); A.arcs.push(arc);
+  }
+  for (const e of f.ears) {
+    const g = new THREE.Group(), axis = new THREE.Vector3().fromArray(e.axis).normalize();
+    g.position.copy(local(e.p)).addScaledVector(axis, -0.012);
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
+    g.add(new THREE.Mesh(earGeometry(an.face.ear), earMat));
+    A.head.add(g); A.ears.push({ g, base: g.quaternion.clone(), side: e.side });
+  }
+  const s = an.face.eye.r / 0.03, ng = new THREE.Group();
+  ng.position.copy(local(f.nose.p)); ng.quaternion.copy(basis(f.nose.n));
+  for (const sx of [-1, 1]) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.0085 * s, 12, 8), noseMat);
+    m.scale.set(1, 0.55, 0.5); m.position.set(sx * 0.013 * s, 0.009 * s, 0); m.rotation.z = sx * 0.5; ng.add(m);
+  }
+  const smile = new THREE.Mesh(new THREE.TorusGeometry(0.012 * s, 0.0024 * s, 6, 16, Math.PI), noseMat);
+  smile.rotation.z = Math.PI; smile.position.set(0, -0.006 * s, 0.001); ng.add(smile);
+  A.head.add(ng);
+  for (const t of f.toes) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), toeMat);
+    m.scale.fromArray(t.s); m.position.fromArray(t.p); A.root.add(m);
+  }
+}
+
+// ------------------------------------------------------------------ appearance
+function applyFur() {
+  furU.uDensity.value = P.density; furU.uTaper.value = P.taper; furU.uCoverage.value = 0.35 + 0.6 * P.fluff;
+  furU.uCurl.value = P.curl; furU.uWind.value = P.wind * 0.3; furU.uDroop.value = P.droop; pose.droop = P.droop;
+}
+function applyColors() {
+  const an = H.ANIMALS[P.animal];
+  furU.uRoot.value.set(P.rootColor); furU.uTip.value.set(P.tipColor); furU.uSkin.value.set(P.skinColor);
+  furU.uTintColor.value.set(an.tintColor);
+  earMat.color.set(an.tintRegions.includes('head') ? an.tintColor : P.tipColor);
+}
+function applyLight() {
+  const a = P.lightAngle * Math.PI / 180;
+  sun.position.set(Math.cos(a) * 5, 6.5, Math.sin(a) * 5);
+  furU.uLightDir.value.copy(sun.position).normalize();
+}
+function applyBg() {
+  const b = BGS[P.bg];
+  scene.background = new THREE.Color(b.bg);
+  document.body.style.background = b.bg;
+  floorMat.map = floorTex[b.floor] || null;
+  floorMat.color.set(b.floor === 'dark' ? '#23272e' : '#ffffff');
+  floorMat.needsUpdate = true;
+  furU.uSky.value.set(b.sky); furU.uGround.value.set(b.ground);
+  hemi.color.set(b.sky); hemi.groundColor.set(b.ground);
+  bgBtns.forEach(x => x.classList.toggle('on', x.dataset.key === P.bg));
+}
+
+// ------------------------------------------------------------------ clippings
+const MAXC = 4000;
+const clipGeo = (() => {
+  const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const f = 0.7 + 0.6 * H.hash3(Math.round(p.getX(i) * 100), Math.round(p.getY(i) * 100), Math.round(p.getZ(i) * 100));
+    p.setXYZ(i, p.getX(i) * f, p.getY(i) * f, p.getZ(i) * f);
+  }
+  g.computeVertexNormals(); return g;
+})();
+const clips = new THREE.InstancedMesh(clipGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), MAXC);
+clips.instanceMatrix.setUsage(THREE.DynamicDrawUsage); clips.frustumCulled = false; clips.count = 0;
+clips.setColorAt(0, new THREE.Color(1, 1, 1));
+scene.add(clips);
+const C = { p: new Float32Array(MAXC * 3), v: new Float32Array(MAXC * 3), spin: new Float32Array(MAXC * 3), s: new Float32Array(MAXC), age: new Float32Array(MAXC), rest: new Float32Array(MAXC), state: new Uint8Array(MAXC), head: 0, used: 0 };
+const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
+const _v = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color(), _X = new THREE.Vector3(1, 0, 0), _t = new Float64Array(6);
+function spawnClip(x, y, z, size, color) {
+  const cap = P.maxClips | 0;
+  if (cap <= 0) return;
+  if (C.head >= cap) C.head = 0;
+  const i = C.head++, k = 3 * i;
+  C.used = Math.min(cap, Math.max(C.used, i + 1));
+  C.p[k] = x; C.p[k + 1] = y; C.p[k + 2] = z;
+  C.v[k] = (Math.random() - 0.5) * 0.7; C.v[k + 1] = 0.2 + Math.random() * 0.5; C.v[k + 2] = (Math.random() - 0.5) * 0.7;
+  C.spin[k] = Math.random() * 6.28; C.spin[k + 1] = Math.random() * 6.28; C.spin[k + 2] = Math.random() * 6.28;
+  C.s[i] = size; C.age[i] = 0; C.rest[i] = Math.random() * size * 0.9; C.state[i] = 1;
+  clips.setColorAt(i, color); clips.instanceColor.needsUpdate = true;
+}
+function updateClips(dt, t) {
+  const life = P.clipLife;
+  for (let i = 0; i < C.used; i++) {
+    const k = 3 * i;
+    if (C.state[i] === 0) { _m.makeScale(0, 0, 0); clips.setMatrixAt(i, _m); continue; }
+    C.age[i] += dt;
+    if (life > 0 && C.age[i] > life) { C.state[i] = 0; _m.makeScale(0, 0, 0); clips.setMatrixAt(i, _m); continue; }
+    if (C.state[i] === 1) {
+      const drag = Math.exp(-2.8 * dt);
+      C.v[k] = C.v[k] * drag + Math.sin(t * 6 + i) * 1.4 * dt;
+      C.v[k + 1] = C.v[k + 1] * drag - 9.8 * dt;
+      C.v[k + 2] = C.v[k + 2] * drag + Math.cos(t * 5 + i * 1.7) * 1.4 * dt;
+      C.p[k] += C.v[k] * dt; C.p[k + 1] += C.v[k + 1] * dt; C.p[k + 2] += C.v[k + 2] * dt;
+      C.spin[k] += dt * 3; C.spin[k + 1] += dt * 2.3;
+      const ground = C.s[i] * 0.45 + C.rest[i];
+      if (C.p[k + 1] < ground) {
+        C.p[k + 1] = ground; C.v[k + 1] *= -0.2; C.v[k] *= 0.5; C.v[k + 2] *= 0.5;
+        if (Math.abs(C.v[k + 1]) < 0.25) C.state[i] = 2;
+      }
+    }
+    const fade = life > 0 ? Math.min(1, (life - C.age[i]) / 2) : 1, sz = C.s[i] * fade;
+    _q.setFromEuler(_e.set(C.spin[k], C.spin[k + 1], C.spin[k + 2]));
+    _m.compose(_v.set(C.p[k], C.p[k + 1], C.p[k + 2]), _q, _s.set(sz, sz * (C.state[i] === 2 ? 0.65 : 1), sz));
+    clips.setMatrixAt(i, _m);
+  }
+  clips.count = C.used; clips.instanceMatrix.needsUpdate = true;
+}
+function sweepFloor() { C.used = 0; C.head = 0; C.state.fill(0); clips.count = 0; }
+function clampClips() { C.used = Math.min(C.used, P.maxClips); C.head = P.maxClips > 0 ? C.head % P.maxClips : 0; }
+let content = 0;
+function handleCuts(res) {
+  if (!res.idx.length) return;
+  mass += res.mass; content += res.mass * 25;
+  A.root.updateMatrixWorld();
+  for (let k = 0; k < res.idx.length; k++) {
+    const amt = res.amt[k];
+    if (Math.random() > Math.min(1, amt * 0.8)) continue;
+    const i = res.idx[k];
+    H.deform(A.mesh, A.attrs, i, A.st.len[i] + amt * (0.3 + 0.5 * Math.random()), 1, pose, _t);
+    _v.set(_t[0], _t[1], _t[2]); A.root.localToWorld(_v);
+    _c.copy(furU.uRoot.value).lerp(furU.uTip.value, 0.45 + 0.55 * Math.random());
+    spawnClip(_v.x, _v.y, _v.z, 0.011 + Math.min(0.035, amt * 0.16), _c);
+  }
+}
+
+// ------------------------------------------------------------------ brush & input
+let cutting = false, orbiting = false, mouseIn = false, bHeld = params.get('before') === '1', snipT = 0;
+const ndc = new THREE.Vector2(), raycaster = new THREE.Raycaster(), invM = new THREE.Matrix4();
+const ro = [0, 0, 0], rd = [0, 0, 0];
+function localRay() {
+  raycaster.setFromCamera(ndc, camera);
+  A.root.updateMatrixWorld(); invM.copy(A.root.matrixWorld).invert();
+  _v.copy(raycaster.ray.origin).applyMatrix4(invM); ro[0] = _v.x; ro[1] = _v.y; ro[2] = _v.z;
+  _v.copy(raycaster.ray.origin).add(raycaster.ray.direction).applyMatrix4(invM);
+  const dx = _v.x - ro[0], dy = _v.y - ro[1], dz = _v.z - ro[2], l = Math.hypot(dx, dy, dz);
+  rd[0] = dx / l; rd[1] = dy / l; rd[2] = dz / l;
+}
+const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 64), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthTest: false, side: THREE.DoubleSide, toneMapped: false }));
+ring.renderOrder = 10; ring.visible = false; scene.add(ring);
+function updateRing(hit) {
+  if (!hit) { ring.visible = false; return; }
+  H.deform(A.mesh, A.attrs, hit.i, A.st.len[hit.i], 1, pose, _t);
+  A.root.localToWorld(_v.set(_t[0], _t[1], _t[2]));
+  _s.set(_t[3], _t[4], _t[5]).transformDirection(A.root.matrixWorld);
+  ring.position.copy(_v).addScaledVector(_s, 0.004);
+  ring.lookAt(_v.copy(ring.position).add(_s));
+  ring.scale.setScalar(P.radius);
+  ring.material.color.setHex(TOOL_COLOR[P.tool]);
+  ring.visible = true;
+}
+function updateBrush(dt) {
+  let hit = null;
+  if (mouseIn && !orbiting && !cutAnim && showBase < 0.5) {
+    localRay();
+    hit = H.pickFur(A.mesh, A.attrs, A.st.len, pose, ro, rd, A.pickR);
+    if (cutting && hit) {
+      let go = true;
+      if (P.tool === 'scissors') { snipT -= dt; if (snipT > 0) go = false; else snipT = 0.12; }
+      if (go) {
+        const res = H.applyBrush(A.mesh, A.attrs, A.st, pose, ro, rd, hit.t, P.tool,
+          { radius: P.radius, hardness: P.hardness, strength: P.strength, guard: P.guard, snip: 0.03, amount: 0.3 * dt, maxLen: P.maxLen * 1.3, density: H.FLEECE_DENSITY });
+        if (res.changed) A.lenAttr.needsUpdate = true;
+        if (res.idx.length) { handleCuts(res); nearHead(hit); }
+      }
+    }
+  }
+  updateRing(hit);
+}
+function setNdc(e) { ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1); }
+cv.addEventListener('pointermove', e => { setNdc(e); mouseIn = true; });
+cv.addEventListener('pointerleave', () => { if (!cutting) mouseIn = false; });
+// registered before OrbitControls so a press on the fleece can disable orbiting first
+cv.addEventListener('pointerdown', e => {
+  setNdc(e); mouseIn = true;
+  if (e.button !== 0 || cutAnim || showBase > 0.5) return;
+  localRay();
+  if (!H.pickFur(A.mesh, A.attrs, A.st.len, pose, ro, rd, A.pickR)) return;
+  cutting = true; controls.enabled = false; snipT = 0; pushUndo();
+  cv.setPointerCapture(e.pointerId);
+});
+addEventListener('pointerup', () => { if (cutting) { cutting = false; controls.enabled = true; } });
+const controls = new OrbitControls(camera, cv);
+controls.enableDamping = true;
+controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+controls.maxPolarAngle = Math.PI * 0.495; controls.minDistance = 0.5; controls.maxDistance = 12; controls.autoRotateSpeed = 1.2;
+controls.addEventListener('start', () => { orbiting = true; });
+controls.addEventListener('end', () => { orbiting = false; });
+
+// ------------------------------------------------------------------ edits: undo, slots, cuts
+function pushUndo() { undo.push({ len: A.st.len.slice(), mass }); if (undo.length > 20) undo.shift(); }
+function doUndo() { if (cutAnim) return; const u = undo.pop(); if (!u) return; A.st.len.set(u.len); mass = u.mass; A.lenAttr.needsUpdate = true; }
+function resetFleece() { cutAnim = null; pushUndo(); A.st.len.set(A.st.base); mass = 0; A.lenAttr.needsUpdate = true; }
+function slotClick(i, e) {
+  if (!slots[i] || e.shiftKey) slots[i] = A.st.len.slice();
+  else { pushUndo(); A.st.len.set(slots[i]); A.lenAttr.needsUpdate = true; }
+  refreshSlots();
+}
+function refreshSlots() { slotBtns.forEach((b, i) => { b.textContent = slots[i] ? `Slot ${i + 1} ●` : `Slot ${i + 1}`; b.classList.toggle('on', !!slots[i]); }); }
+function startCut(cut) {
+  if (cutAnim) return;
+  pushUndo();
+  cutAnim = { T: H.cutTargets(A.mesh, A.attrs, A.st, cut, P.maxLen), x0: A.mesh.bmin[0] - 0.02, x1: A.mesh.bmax[0] + 0.02, t: 0, dur: 3 };
+}
+function instantCut(cut) {
+  const res = H.applyCutSweep(A.mesh, A.st, H.cutTargets(A.mesh, A.attrs, A.st, cut, P.maxLen), Infinity, H.FLEECE_DENSITY);
+  mass += res.mass; A.lenAttr.needsUpdate = true;
+}
+function updateCutAnim(dt) {
+  if (!cutAnim) return;
+  cutAnim.t += dt;
+  const u = Math.min(1, cutAnim.t / cutAnim.dur);
+  const res = H.applyCutSweep(A.mesh, A.st, cutAnim.T, cutAnim.x0 + (cutAnim.x1 - cutAnim.x0) * u, H.FLEECE_DENSITY);
+  if (res.changed) { A.lenAttr.needsUpdate = true; handleCuts(res); }
+  if (u >= 1) cutAnim = null;
+}
+function onMaxLen() {
+  H.rescaleFleece(A.st, P.maxLen / prevMaxLen); prevMaxLen = P.maxLen;
+  A.lenAttr.needsUpdate = A.baseAttr.needsUpdate = true;
+  undo = []; slots = [null, null, null]; refreshSlots();
+}
+
+// ------------------------------------------------------------------ life: head, breathing, blink, ears, hop
+const headS = { yaw: 0, pitch: 0, vy: 0, vp: 0 };
+let time = 0, hopT = -1, happyT = 0, hopCool = 0, blinkT = 2, blinkPhase = -1, twitchT = 3, twitchPhase = -1, twitchSide = 0;
+function updateHead(dt) {
+  let ty = 0, tp = 0;
+  if (P.headFollow && mouseIn) {
+    raycaster.setFromCamera(ndc, camera);
+    const hp = A.an.head.pivot;
+    A.root.localToWorld(_v.fromArray(hp));
+    const tgt = raycaster.ray.at(camera.position.distanceTo(_v), _s);
+    A.root.worldToLocal(tgt);
+    const vx = tgt.x - hp[0], vy = tgt.y - hp[1], vz = tgt.z - hp[2];
+    ty = THREE.MathUtils.clamp(Math.atan2(-vz, Math.max(vx, 0.05)), -0.44, 0.44);
+    tp = THREE.MathUtils.clamp(Math.atan2(vy, Math.hypot(vx, vz)) - A.restPitch, -0.21, 0.21);
+  }
+  const k = 30, c = 2 * Math.sqrt(k);
+  headS.vy += (k * (ty - headS.yaw) - c * headS.vy) * dt; headS.yaw += headS.vy * dt;
+  headS.vp += (k * (tp - headS.pitch) - c * headS.vp) * dt; headS.pitch += headS.vp * dt;
+  _m.makeRotationY(headS.yaw).multiply(_m2.makeRotationZ(headS.pitch));
+  furU.uHeadR.value.setFromMatrix4(_m);
+  const e = _m.elements, R = pose.R;
+  R[0] = e[0]; R[1] = e[4]; R[2] = e[8]; R[3] = e[1]; R[4] = e[5]; R[5] = e[9]; R[6] = e[2]; R[7] = e[6]; R[8] = e[10];
+  A.head.quaternion.setFromRotationMatrix(_m);
+}
+function startTwitch(side) { twitchPhase = 0; twitchSide = side; twitchT = 3 + Math.random() * 5; }
+function nearHead(hit) {
+  if (twitchPhase >= 0 || !P.blink) return;
+  const p = A.mesh.pos, i = hit.i, c = A.an.face.center;
+  if (Math.hypot(p[3 * i] - c[0], p[3 * i + 1] - c[1], p[3 * i + 2] - c[2]) < 0.3 * A.height / 1.8) startTwitch(p[3 * i + 2] >= 0 ? 1 : -1);
+}
+function updateLife(dt) {
+  const sc = A.height / 1.8;
+  pose.breath = P.breathing ? 0.006 * sc * Math.sin(time * Math.PI * 2 * 0.25) : 0;
+  furU.uBreath.value = pose.breath;
+  content = Math.max(0, content - dt * 0.6); hopCool -= dt;
+  if (P.happy && content > 1 && hopCool <= 0) { hopT = 0; happyT = 1.6; hopCool = 3.5; content = 0; }
+  if (hopT >= 0) {
+    hopT += dt;
+    const u = hopT / 0.55;
+    if (u >= 1) { hopT = -1; A.root.position.y = 0; A.root.scale.set(1, 1, 1); }
+    else {
+      A.root.position.y = 0.1 * sc * Math.sin(Math.PI * u);
+      const sq = 0.045 * Math.sin(Math.PI * 2 * u);
+      A.root.scale.set(1 + sq * 0.5, 1 - sq, 1 + sq * 0.5);
+    }
+  }
+  happyT -= dt;
+  const happy = happyT > 0;
+  blinkT -= dt;
+  if (P.blink && blinkT <= 0 && blinkPhase < 0) { blinkPhase = 0; blinkT = 2 + Math.random() * 4; }
+  let eyeY = 1;
+  if (blinkPhase >= 0) { blinkPhase += dt; const u = blinkPhase / 0.16; if (u >= 1) blinkPhase = -1; else eyeY = 1 - 0.92 * Math.sin(Math.PI * u); }
+  for (const e of A.eyes) { e.visible = !happy; e.scale.y = eyeY; }
+  for (const a of A.arcs) a.visible = happy;
+  twitchT -= dt;
+  if (P.blink && twitchT <= 0 && twitchPhase < 0) startTwitch(0);
+  for (const ear of A.ears) {
+    const on = twitchPhase >= 0 && (twitchSide === 0 || twitchSide === ear.side);
+    const ang = on ? 0.35 * Math.sin(Math.PI * twitchPhase / 0.3) : 0;
+    ear.g.quaternion.copy(ear.base).multiply(_q.setFromAxisAngle(_X, ang * ear.side));
+  }
+  if (twitchPhase >= 0) { twitchPhase += dt; if (twitchPhase > 0.3) twitchPhase = -1; }
+}
+
+// ------------------------------------------------------------------ UI
+const sliders = {};
+let animalBtns = [], toolBtns = [], bgBtns = [], slotBtns = [], cutRow = null;
+const body = id => $(id).querySelector('.body');
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function slider(b, label, key, min, max, step, fmt, onInput, onChange) {
+  const lab = el('label'); lab.append(label); const v = el('span', 'val'); lab.append(v);
+  const inp = document.createElement('input'); Object.assign(inp, { type: 'range', min, max, step }); inp.value = P[key];
+  const show = () => { v.textContent = fmt(P[key]); };
+  inp.addEventListener('input', () => { P[key] = parseFloat(inp.value); show(); if (onInput) onInput(); });
+  if (onChange) inp.addEventListener('change', onChange);
+  b.append(lab, inp); show(); sliders[key] = { inp, show };
+}
+function check(b, label, key, onChange) {
+  const l = el('label', 'check'), i = document.createElement('input'); i.type = 'checkbox'; i.checked = P[key];
+  i.addEventListener('change', () => { P[key] = i.checked; if (onChange) onChange(); });
+  l.append(i, label); b.append(l); sliders[key] = { inp: i, show() {} };
+}
+function colorIn(b, label, key, onInput) {
+  const l = el('label'); l.append(label); const i = document.createElement('input'); i.type = 'color'; i.value = P[key];
+  i.addEventListener('input', () => { P[key] = i.value; onInput(); });
+  l.append(i); b.append(l); sliders[key] = { inp: i, show() {} };
+}
+function syncInput(key) { const s = sliders[key]; if (!s) return; if (s.inp.type === 'checkbox') s.inp.checked = P[key]; else s.inp.value = P[key]; s.show(); }
+function buttons(b, cls, items) {
+  const wrap = el('div', cls);
+  const out = items.map(it => { const x = el('button', null, it.text); if (it.key) x.dataset.key = it.key; x.addEventListener('click', it.onClick); wrap.append(x); return x; });
+  b.append(wrap); return out;
+}
+const cm = v => (v * 100).toFixed(1) + ' cm', f2 = v => v.toFixed(2);
+const mm = v => (v < 0.01 ? (v * 1000).toFixed(0) + ' mm' : (v * 100).toFixed(1) + ' cm');
+function refreshCutButtons() {
+  cutRow.innerHTML = '';
+  for (const cut of A.an.cuts) { const x = el('button', null, '✂ ' + cut.name); x.addEventListener('click', () => startCut(cut)); cutRow.append(x); }
+}
+function setTool(t) { P.tool = t; toolBtns.forEach(b => b.classList.toggle('on', b.dataset.key === t)); }
+function setCoat(k) { [P.rootColor, P.tipColor] = H.COATS[k]; syncInput('rootColor'); syncInput('tipColor'); applyColors(); }
+function switchAnimal(k) {
+  P.animal = k; applyAnimalDefaults();
+  for (const key of ['maxLen', 'density', 'taper', 'curl', 'fluff', 'droop', 'rootColor', 'tipColor', 'skinColor', 'radius']) syncInput(key);
+  applyFur(); sweepFloor(); buildAnimal(true);
+  animalBtns.forEach(b => b.classList.toggle('on', b.dataset.key === k));
+}
+function buildUI() {
+  document.querySelectorAll('.card h2').forEach(h => h.addEventListener('click', () => h.parentElement.classList.toggle('collapsed')));
+  const bA = body('cardAnimal');
+  animalBtns = buttons(bA, 'grid2', Object.keys(H.ANIMALS).map(k => ({ text: H.ANIMALS[k].label, key: k, onClick: () => switchAnimal(k) })));
+  cutRow = el('div', 'row'); bA.append(cutRow);
+  buttons(bA, 'row', [{ text: 'Reset fleece', onClick: resetFleece }]);
+  slider(bA, 'Chubbiness', 'chub', 0.8, 1.25, 0.01, f2, null, () => buildAnimal(false));
+  bA.append(el('div', 'note', 'Coat colour'));
+  buttons(bA, 'grid3', Object.keys(H.COATS).map(k => ({ text: k, onClick: () => setCoat(k) })));
+
+  const bT = body('cardTool');
+  toolBtns = buttons(bT, 'grid2', H.TOOLS.map((t, i) => ({ text: `${TOOL_LABEL[t]} (${i + 1})`, key: t, onClick: () => setTool(t) })));
+  slider(bT, 'Brush radius', 'radius', 0.03, 0.4, 0.005, cm);
+  slider(bT, 'Guard length', 'guard', 0, 0.08, 0.001, mm);
+  slider(bT, 'Strength', 'strength', 0.05, 1, 0.01, f2);
+  slider(bT, 'Hardness', 'hardness', 0, 0.95, 0.01, f2);
+  buttons(bT, 'row', [{ text: 'Undo (⌘Z)', onClick: doUndo }]);
+
+  const bF = body('cardFleece');
+  slider(bF, 'Max length', 'maxLen', 0.05, 0.4, 0.005, cm, onMaxLen);
+  slider(bF, 'Strand density', 'density', 80, 600, 10, v => v.toFixed(0) + ' /m', applyFur);
+  slider(bF, 'Strand thickness', 'taper', 0.3, 3, 0.05, f2, applyFur);
+  slider(bF, 'Curl', 'curl', 0, 1.5, 0.01, f2, applyFur);
+  slider(bF, 'Fluffiness', 'fluff', 0, 1, 0.01, f2, applyFur);
+  slider(bF, 'Droop', 'droop', 0, 0.8, 0.01, f2, applyFur);
+  slider(bF, 'Wind', 'wind', 0, 1, 0.01, f2, applyFur);
+  slider(bF, 'Shells', 'shells', 12, 64, 1, v => v.toFixed(0), null, setShells);
+  colorIn(bF, 'Root colour', 'rootColor', applyColors);
+  colorIn(bF, 'Tip colour', 'tipColor', applyColors);
+  colorIn(bF, 'Skin colour', 'skinColor', applyColors);
+
+  const bV = body('cardView');
+  const [beforeBtn] = buttons(bV, 'row', [{ text: 'Hold for before (B)', onClick: () => {} }]);
+  beforeBtn.addEventListener('pointerdown', () => { bHeld = true; });
+  for (const ev of ['pointerup', 'pointerleave']) beforeBtn.addEventListener(ev, () => { bHeld = false; });
+  check(bV, 'Split compare (drag the divider)', 'split', () => { $('split').style.display = P.split ? 'block' : 'none'; });
+  bV.append(el('div', 'note', 'Snapshots: click an empty slot to save the cut, a filled slot to load it, shift-click to overwrite.'));
+  slotBtns = buttons(bV, 'grid3', [0, 1, 2].map(i => ({ text: `Slot ${i + 1}`, onClick: e => slotClick(i, e) })));
+  check(bV, 'Auto-rotate', 'autoRotate');
+  slider(bV, 'Light angle', 'lightAngle', 0, 360, 1, v => v.toFixed(0) + '°', applyLight);
+  bgBtns = buttons(bV, 'grid3', Object.keys(BGS).map(k => ({ text: k, key: k, onClick: () => { P.bg = k; applyBg(); } })));
+
+  const bC = body('cardClips');
+  slider(bC, 'Max clippings', 'maxClips', 0, MAXC, 100, v => v.toFixed(0), clampClips);
+  slider(bC, 'Lifetime', 'clipLife', 0, 120, 1, v => (v === 0 ? 'forever' : v.toFixed(0) + ' s'));
+  buttons(bC, 'row', [{ text: 'Sweep floor', onClick: sweepFloor }]);
+
+  const bN = body('cardAnim');
+  check(bN, 'Breathing', 'breathing');
+  check(bN, 'Head follows the cursor', 'headFollow');
+  check(bN, 'Blinking & ear twitches', 'blink');
+  check(bN, 'Happy hop while clipping', 'happy');
+}
+const splitEl = $('split');
+let splitX = 0.5;
+splitEl.querySelector('.grip').addEventListener('pointerdown', e => {
+  e.preventDefault(); e.stopPropagation();
+  const move = ev => { splitX = THREE.MathUtils.clamp(ev.clientX / innerWidth, 0.05, 0.95); splitEl.style.left = (splitX * 100) + '%'; };
+  const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+  addEventListener('pointermove', move); addEventListener('pointerup', up);
+});
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); doUndo(); return; }
+  if (e.key >= '1' && e.key <= '4') setTool(H.TOOLS[+e.key - 1]);
+  else if (e.key === '[' || e.key === ']') { P.radius = THREE.MathUtils.clamp(P.radius * (e.key === '[' ? 0.85 : 1.18), 0.03, 0.4); syncInput('radius'); }
+  else if (e.key === 'b' || e.key === 'B') bHeld = true;
+});
+addEventListener('keyup', e => { if (e.key === 'b' || e.key === 'B') bHeld = false; });
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+// ------------------------------------------------------------------ frame
+let showBase = bHeld ? 1 : 0, readT = 0, fpsAcc = 0, fpsN = 0;
+function updateReadout(dt) {
+  fpsAcc += dt; fpsN++; readT -= dt;
+  if (readT > 0) return;
+  readT = 0.25;
+  $('rMass').textContent = mass.toFixed(2) + ' kg';
+  $('rRemoved').textContent = (H.coatStats(A.mesh, A.st).removedFrac * 100).toFixed(0) + ' %';
+  if (fpsAcc > 0) $('rFps').textContent = (fpsN / fpsAcc).toFixed(0);
+  fpsAcc = 0; fpsN = 0;
+}
+function step(dt) {
+  time += dt;
+  showBase += ((bHeld ? 1 : 0) - showBase) * Math.min(1, dt * 14);
+  $('beforeTag').style.opacity = showBase > 0.5 && !P.split ? 1 : 0;
+  furU.uTime.value = time;
+  updateHead(dt); updateLife(dt); updateBrush(dt); updateCutAnim(dt); updateClips(dt, time);
+  controls.autoRotate = P.autoRotate && !cutting;
+  controls.update(dt);
+  updateReadout(dt);
+}
+function render() {
+  if (P.split) {
+    const w = innerWidth, h = innerHeight, sx = Math.round(w * splitX);
+    renderer.setScissorTest(true);
+    renderer.setScissor(0, 0, sx, h); furU.uShowBase.value = 1; clips.visible = false;
+    renderer.render(scene, camera);
+    renderer.setScissor(sx, 0, w - sx, h); furU.uShowBase.value = showBase; clips.visible = true;
+    renderer.render(scene, camera);
+    renderer.setScissorTest(false);
+  } else {
+    furU.uShowBase.value = showBase; clips.visible = true;
+    renderer.render(scene, camera);
+  }
+}
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+  step(dt); render();
+  requestAnimationFrame(loop);
+}
+
+// ------------------------------------------------------------------ init
+try {
+  buildUI(); applyFur(); applyLight(); applyBg();
+  buildAnimal(true);
+  animalBtns.forEach(b => b.classList.toggle('on', b.dataset.key === P.animal));
+  setTool(P.tool);
+  const cutName = params.get('cut');
+  if (cutName) { const cut = A.an.cuts.find(c => c.name.toLowerCase() === cutName.toLowerCase()); if (cut) instantCut(cut); }
+  if (params.get('split') === '1') { P.split = true; syncInput('split'); splitEl.style.display = 'block'; }
+  $('loading').remove();
+  window.__hc = { P, A, H, step, render, startCut, instantCut, camera, controls, renderer, switchAnimal };
+  step(0); render();
+  requestAnimationFrame(loop);
+} catch (err) { showErr(err); }
+</script>
+```
+
+- [ ] **Step 3: Check that the tests still pass** (the module isn't part of shared-code).
+  - Run: `node 3d-animal-haircut/test.mjs`
+  - Expected: `15 passed, 0 failed`.
+
+- [ ] **Step 4: Take a headless screenshot of the uncut and the Pom-pom llama.**
+
+```bash
+cd 3d-animal-haircut && for q in "animal=llama" "animal=llama&cut=Pom-pom"; do "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu-sandbox --window-size=1400,900 --virtual-time-budget=8000 --screenshot="$SCRATCH/shot-${q//[=&]/_}.png" "file://$PWD/index.html?$q"; done
+```
+
+Expected: two PNGs, each showing a cream llama on the checker floor, with the panel on the left and no `#err` box. The first is a big fluffy llama. The second has a shorn body and neck, with the topknot, tail and leg puffs still fluffy. If the page is blank, open it in the Browser pane over http (Task 5) and read the console.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add 3d-animal-haircut/index.html
+git commit -m "3d-animal-haircut: shell-fur renderer, grooming tools, clippings, before/after and panel
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 5: Interactive verification in the Browser pane
+
+**Files:**
+- Modify (only if a fix is needed): `3d-animal-haircut/index.html`
+- Create (gitignored, only if it doesn't exist yet): `.claude/launch.json` with the `static` http.server config on port 8765 (see memory `browser-pane-localstorage-http`)
+
+- [ ] **Step 1: Start the preview.** Run `preview_start {name: "static"}` and navigate to `http://localhost:8765/3d-animal-haircut/index.html`.
+- [ ] **Step 2: Check the console.** Run `read_console_messages {onlyErrors: true}`. Expected: none.
+- [ ] **Step 3: Drive a stroke through the debug handle.** With `javascript_tool`, set `ndc` by dispatching pointer events on the canvas centre: `pointerdown`, 20 × `pointermove` across the body, then `pointerup`. Then read `__hc.A.st.len` statistics and `#rMass`.
+  - Expected: rMass > 0, and some `len` values equal the guard (0.006).
+  - Expected: `__hc.controls.enabled` is true again after pointerup.
+- [ ] **Step 4: Check the review focus items.**
+  - Run `__hc.switchAnimal(k)` 10 times across all four animals. Expected: `__hc.renderer.info.memory.geometries` stays bounded and does not grow by ~10 per switch.
+  - Move Max length mid-cut by setting `__hc.P.maxLen` and calling the slider's input handler (dispatch an `input` event on its range). Expected: the cut stays visible and is not reset.
+- [ ] **Step 5: Screenshots** (with the Browser pane shown, because rAF pauses while it is hidden):
+  - the uncut llama;
+  - after clicking `✂ Pom-pom` and waiting 3.5 s;
+  - split-compare mode.
+
+  Look for these problems:
+  - the ears buried in the topknot;
+  - the eyes hidden by fur;
+  - the shells looking stripey or bandy (raise the shell count or adjust the coverage maths);
+  - the head-follow twisting the neck;
+  - clippings not reaching the floor.
+
+  Fix the recipe numbers or the shader constants as needed, re-run `node test.mjs`, then commit with the message `3d-animal-haircut: visual tuning`.
+
+---
+
+### Task 6: Screenshot, gallery and wrap-up
+
+**Files:**
+- Create: `3d-animal-haircut/screenshot1.jpg`
+- Modify (only if the auto title "3D Animal Haircut" is wrong): `gallery.yaml`
+
+- [ ] **Step 1: Capture the gallery screenshot.** Use the split-compare view of the llama: `?animal=llama&cut=Pom-pom&split=1` with a plain `--headless=new` screenshot, or a Browser pane screenshot. Convert it to JPEG at about 1200 px wide: `sips -s format jpeg -s formatOptions 80 -Z 1400 in.png --out 3d-animal-haircut/screenshot1.jpg`.
+- [ ] **Step 2: Check the gallery builder.** Run `python3 build_gallery.py`, if that is how the gallery index is regenerated (check `git log -3 --stat` on an earlier project commit to see whether `index.html` at the root changes with new projects). Then check that the new entry appears.
+- [ ] **Step 3: Run the full test suite one last time.**
+  - Run: `node 3d-animal-haircut/test.mjs`
+  - Expected: `15 passed, 0 failed`.
+- [ ] **Step 4: Commit.**
+
+```bash
+git add 3d-animal-haircut/screenshot1.jpg index.html gallery.yaml
+git commit -m "3d-animal-haircut: screenshot and gallery entry
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```

@@ -75,7 +75,8 @@ These are ordinary meshes in a `headGroup` that shares the head transform:
   the alpaca, droopy ellipsoids for the sheep and poodle;
 - hooves/toes: dark rounded caps at the leg ends.
 
-Ears get a short fixed fuzz from their own colour. They are not cuttable.
+Ears are matte and coat-coloured (tint-coloured on the sheep). They are not
+cuttable.
 
 ### 4. Fleece model
 
@@ -91,10 +92,10 @@ coat looks natural.
 |---|---|
 | body | 1.0 |
 | neck | 0.9 |
-| topknot | 0.7 |
+| topknot | 0.5 (the ears must stick out above it) |
 | tail | 0.8 |
 | legUpper | 0.6 |
-| legLower | 0.08 |
+| legLower | 0.4 (the "leg puffs" the Pom-pom cut keeps) |
 | head | 0.10 |
 | muzzle | 0.03 |
 
@@ -148,8 +149,8 @@ even for overhanging fluff beyond the skin silhouette.
 - **Affected set:** vertices whose tip lies within `R` of the ray and whose
   `t ∈ [tHit − R, tHit + R + maxLen]`. That depth window means a stroke
   never cuts through to the far side.
-- **Weight** `w = smoothstep(R, R·(1 − hardness), dist)` · strength · dt
-  scaling.
+- **Weight** `w = (1 − smoothstep(R·hardness, R, dist)) · strength`, with
+  hardness ∈ [0, 0.95]. Regrow and fluff also scale by dt.
 
 The tools:
 
@@ -163,9 +164,8 @@ The tools:
 The brush returns `removed[]`, the length removed at each vertex, which feeds
 the clippings and the wool mass.
 
-A spatial hash over the vertices (cell = brush radius) limits the work to
-nearby cells along the ray. A full loop over 45k vertices also stays under
-2 ms as a fallback.
+The brush is a plain loop over all vertices. At ≤ 45k vertices that is
+well under 2 ms, so a spatial hash is not needed.
 
 **Wool mass.** `Σ area_i · removed_i · fleeceDensity`, with fleeceDensity
 = 12 kg/m³ for loose fleece. That puts a full llama shear at about 2–4 kg,
@@ -196,7 +196,7 @@ capped at `maxClippings` (default 2500) as a ring buffer.
   rotates vertices about the neck pivot, weighted by `headW`. `headGroup`
   uses the same transform. The CPU uses the same `deform()` function in
   shared code, so picking matches the screen.
-- **Blink:** random every 2–6 s; the eyelids scale over 120 ms.
+- **Blink:** random every 2–6 s; the eye squashes vertically over 160 ms.
 - **Ears:** a random twitch, plus a flick when the brush is near the head.
 - **Happy wiggle:** while cutting, a "contentment" value rises. Above a
   threshold the animal does a small hop or squash and its eyes turn into
