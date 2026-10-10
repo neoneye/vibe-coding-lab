@@ -499,18 +499,17 @@ Object.assign(HC, (() => {
     }
     return { len: base.slice(), base };
   }
-  function rescaleFleece(st, ratio) {
-    for (let i = 0; i < st.base.length; i++) {
-      st.base[i] = Math.max(MIN_LEN, st.base[i] * ratio);
-      st.len[i] = Math.max(MIN_LEN, st.len[i] * ratio);
-    }
+  // scale only the part above the skin-fuzz floor, so repeated slider moves round-trip and shorn skin stays shorn
+  function rescaleLen(a, ratio) {
+    for (let i = 0; i < a.length; i++) a[i] = MIN_LEN + Math.max(0, a[i] - MIN_LEN) * ratio;
   }
+  function rescaleFleece(st, ratio) { rescaleLen(st.base, ratio); rescaleLen(st.len, ratio); }
   function flatAttrs(nv) {
     const regW = new Float32Array(nv * NR);
     for (let i = 0; i < nv; i++) regW[i * NR + RI.body] = 1;
     return { regW, headW: new Float32Array(nv), breathW: new Float32Array(nv), tint: new Float32Array(nv) };
   }
-  return { COATS, ANIMALS, KEEP, scalePrims, analyze, surfacePoint, placeFeatures, initFleece, rescaleFleece, flatAttrs };
+  return { COATS, ANIMALS, KEEP, scalePrims, analyze, surfacePoint, placeFeatures, initFleece, rescaleLen, rescaleFleece, flatAttrs };
 })());
 
 // ============================================================ part 3: pose, pick, brush, cuts
@@ -553,21 +552,42 @@ Object.assign(HC, (() => {
     }
     return bi < 0 ? null : { t: best, i: bi };
   }
-  // cylinder brush along the ray, limited to a depth window behind the hit so strokes never cut through
+  // Cylinder brush along the ray, limited to a depth window behind the hit. Inside the window an occlusion
+  // grid across the brush disk keeps only the front-most skin per cell, so a stroke on a near leg never
+  // reaches the far leg behind it.
+  const OCC = 8, occMin = new Float64Array(OCC * OCC), cand = [];
   function applyBrush(mesh, attrs, st, pose, o, d, hitT, tool, bp) {
     const out = { idx: [], amt: [], mass: 0, changed: 0 };
     const R = bp.radius, R2 = R * R, inner = R * Math.min(bp.hardness, 0.95);
     const guard = Math.max(bp.guard, MIN_LEN), tMin = hitT - R, tMax = hitT + R + bp.maxLen;
+    // lateral basis (e1, e2) perpendicular to the ray
+    let ax = Math.abs(d[0]) < 0.9 ? 1 : 0, ay = ax ? 0 : 1;
+    let e1x = d[1] * 0 - d[2] * ay, e1y = d[2] * ax - d[0] * 0, e1z = d[0] * ay - d[1] * ax;
+    const el = Math.hypot(e1x, e1y, e1z); e1x /= el; e1y /= el; e1z /= el;
+    const e2x = d[1] * e1z - d[2] * e1y, e2y = d[2] * e1x - d[0] * e1z, e2z = d[0] * e1y - d[1] * e1x;
+    const cs = 2 * R / OCC, slack = 2 * cs + 0.02;
+    occMin.fill(Infinity); cand.length = 0;
     for (let i = 0; i < mesh.nv; i++) {
-      const L = st.len[i];
-      deform(mesh, attrs, i, L, 1, pose, tmp);
+      deform(mesh, attrs, i, st.len[i], 1, pose, tmp);
       if (tmp[3] * d[0] + tmp[4] * d[1] + tmp[5] * d[2] > 0.1) continue;
       const vx = tmp[0] - o[0], vy = tmp[1] - o[1], vz = tmp[2] - o[2];
       const t = vx * d[0] + vy * d[1] + vz * d[2];
       if (t < tMin || t > tMax) continue;
       const dist2 = vx * vx + vy * vy + vz * vz - t * t;
       if (dist2 > R2) continue;
-      const w = (1 - smoothstep(inner, R, Math.sqrt(Math.max(0, dist2)))) * bp.strength;
+      deform(mesh, attrs, i, 0, 0, pose, tmp); // the skin under this strand
+      const sx = tmp[0] - o[0], sy = tmp[1] - o[1], sz = tmp[2] - o[2];
+      const ts = sx * d[0] + sy * d[1] + sz * d[2];
+      const cu = Math.min(OCC - 1, Math.max(0, Math.floor(((sx * e1x + sy * e1y + sz * e1z) + R) / cs)));
+      const cw = Math.min(OCC - 1, Math.max(0, Math.floor(((sx * e2x + sy * e2y + sz * e2z) + R) / cs)));
+      const c = cu + cw * OCC;
+      if (ts < occMin[c]) occMin[c] = ts;
+      cand.push(i, Math.sqrt(Math.max(0, dist2)), ts, c);
+    }
+    for (let k = 0; k < cand.length; k += 4) {
+      const i = cand[k], L = st.len[i];
+      if (cand[k + 2] > occMin[cand[k + 3]] + slack) continue; // hidden behind nearer skin
+      const w = (1 - smoothstep(inner, R, cand[k + 1])) * bp.strength;
       if (w <= 0) continue;
       let nl = L;
       if (tool === 'clippers') { if (L > guard) nl = Math.max(guard, L - w * (L - guard)); }
@@ -787,8 +807,34 @@ HaircutTests.add('wool mass of a full shear', () => {
 HaircutTests.add('rescaleFleece keeps the cut shape', () => {
   const st = { len: new Float32Array([0.1, 0.05, 0.006]), base: new Float32Array([0.2, 0.2, 0.2]) };
   HC.rescaleFleece(st, 0.5);
-  assertNear(st.len[0], 0.05, 1e-7); assertNear(st.len[1], 0.025, 1e-7); assertNear(st.len[2], HC.MIN_LEN, 1e-7);
-  assertNear(st.base[0], 0.1, 1e-7);
+  const m = HC.MIN_LEN;
+  assertNear(st.len[0], m + (0.1 - m) * 0.5, 1e-7); assertNear(st.len[1], m + (0.05 - m) * 0.5, 1e-7); assertNear(st.len[2], m, 1e-7);
+  assertNear(st.base[0], m + (0.2 - m) * 0.5, 1e-7);
+});
+HaircutTests.add('rescaleLen round trip keeps shorn skin shorn', () => {
+  const a = new Float32Array([HC.MIN_LEN, 0.03, 0.2]), orig = a.slice();
+  for (let k = 0; k < 30; k++) HC.rescaleLen(a, 0.95);
+  for (let k = 0; k < 30; k++) HC.rescaleLen(a, 1 / 0.95);
+  for (let i = 0; i < a.length; i++) assertNear(a[i], orig[i], 1e-5, 'round trip ' + i);
+  HC.rescaleLen(a, 0.01);
+  assert(a[0] === Math.fround(HC.MIN_LEN) && a[1] >= HC.MIN_LEN, 'floor holds');
+});
+HaircutTests.add('brush does not cut a hidden body behind the near one', () => {
+  // two balls on the view axis, 0.3 m apart: the far ball's front face points at the camera
+  const prims = [HC.ell([0, 0, 0.3], [0.15, 0.15, 0.15], 'body'), HC.ell([0, 0, -0.3], [0.15, 0.15, 0.15], 'body')];
+  const mesh = HC.meshPrims(prims, 0, 60), attrs = HC.flatAttrs(mesh.nv), pose = HC.makePose();
+  const st = { len: new Float32Array(mesh.nv).fill(0.08), base: new Float32Array(mesh.nv).fill(0.08) };
+  const o = [0, 0, 3], d = [0, 0, -1];
+  for (let s = 0; s < 10; s++) {
+    const hit = HC.pickFur(mesh, attrs, st.len, pose, o, d, 0.02);
+    HC.applyBrush(mesh, attrs, st, pose, o, d, hit.t, 'clippers', BP({ radius: 0.2, maxLen: 0.6 }));
+  }
+  let near = 0;
+  for (let i = 0; i < mesh.nv; i++) {
+    if (mesh.pos[3 * i + 2] < 0) assert(st.len[i] === Math.fround(0.08), 'far ball was cut');
+    else if (st.len[i] < 0.05) near++;
+  }
+  assert(near > 50, 'near ball not cut: ' + near);
 });
 HaircutTests.add('every style cut only shortens', () => {
   for (const key of Object.keys(HC.ANIMALS)) {
@@ -1306,7 +1352,7 @@ function doUndo() { if (cutAnim) return; const u = undo.pop(); if (!u) return; A
 function resetFleece() { cutAnim = null; pushUndo(); A.st.len.set(A.st.base); mass = 0; A.lenAttr.needsUpdate = true; }
 function slotClick(i, e) {
   if (!slots[i] || e.shiftKey) slots[i] = A.st.len.slice();
-  else { pushUndo(); A.st.len.set(slots[i]); A.lenAttr.needsUpdate = true; }
+  else { cutAnim = null; pushUndo(); A.st.len.set(slots[i]); A.lenAttr.needsUpdate = true; }
   refreshSlots();
 }
 function refreshSlots() { slotBtns.forEach((b, i) => { b.textContent = slots[i] ? `Slot ${i + 1} ●` : `Slot ${i + 1}`; b.classList.toggle('on', !!slots[i]); }); }
@@ -1327,10 +1373,14 @@ function updateCutAnim(dt) {
   if (res.changed) { A.lenAttr.needsUpdate = true; handleCuts(res); }
   if (u >= 1) cutAnim = null;
 }
+// every stored length array gets the same floor-preserving rescale, so undo, snapshots and a running style cut stay valid
 function onMaxLen() {
-  H.rescaleFleece(A.st, P.maxLen / prevMaxLen); prevMaxLen = P.maxLen;
+  const ratio = P.maxLen / prevMaxLen; prevMaxLen = P.maxLen;
+  H.rescaleFleece(A.st, ratio);
+  for (const u of undo) H.rescaleLen(u.len, ratio);
+  for (const sl of slots) if (sl) H.rescaleLen(sl, ratio);
+  if (cutAnim) H.rescaleLen(cutAnim.T, ratio);
   A.lenAttr.needsUpdate = A.baseAttr.needsUpdate = true;
-  undo = []; slots = [null, null, null]; refreshSlots();
 }
 
 // ------------------------------------------------------------------ life: head, breathing, blink, ears, hop
