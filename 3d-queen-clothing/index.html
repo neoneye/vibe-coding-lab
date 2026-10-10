@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Queen Clothing Simulator</title>
+</head>
+<body>
+<script id="shared-code">
+// ============================================================ test harness
+const QueenTests = {
+  cases: [],
+  add(name, fn) { this.cases.push([name, fn]); },
+  run() {
+    let pass = 0, fail = 0;
+    for (const [name, fn] of this.cases) {
+      try { fn(); pass++; console.log('ok   ' + name); }
+      catch (e) { fail++; console.log('FAIL ' + name + ': ' + e.message); }
+    }
+    console.log(`${pass} passed, ${fail} failed`);
+    return fail === 0;
+  },
+};
+function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
+function assertNear(a, b, eps, m) { if (!(Math.abs(a - b) <= eps)) throw new Error(`${m || 'not near'}: ${a} vs ${b} (eps ${eps})`); }
+const QC = {};
+// ============================================================ part 1: parameter model, eras, morph, hash, dice
+Object.assign(QC, (() => {
+  const TAU = Math.PI * 2;
+  const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+  const lerp = (a, b, t) => a * (1 - t) + b * t;
+  function smoothstep(e0, e1, x) { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); }
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+  function decimals(step) { const s = String(step), i = s.indexOf('.'); return i < 0 ? 0 : s.length - i - 1; }
+  function snap(v, d) {
+    const n = Math.round((clamp(v, d.min, d.max) - d.min) / d.step);
+    return +clamp(d.min + n * d.step, d.min, d.max).toFixed(decimals(d.step));
+  }
+
+  // -------- colours
+  const HEX = /^#[0-9a-f]{6}$/;
+  function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
+  function rgbToHex(c) { return '#' + c.map(x => Math.round(clamp(x, 0, 1) * 255).toString(16).padStart(2, '0')).join(''); }
+  const toLin = c => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const toSrgb = c => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+  function mixHex(a, b, t) {
+    if (t <= 0) return a; if (t >= 1) return b;
+    const A = hexToRgb(a).map(toLin), B = hexToRgb(b).map(toLin);
+    return rgbToHex(A.map((x, i) => toSrgb(lerp(x, B[i], t))));
+  }
+  function rgbToHsl([r, g, b]) {
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+    if (mx === mn) return [0, 0, l];
+    const d = mx - mn, s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    const h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [h / 6, s, l];
+  }
+  function hslToRgb([h, s, l]) {
+    if (s === 0) return [l, l, l];
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+    const f = t => { t = (t + 1) % 1; return t < 1 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p; };
+    return [f(h + 1 / 3), f(h), f(h - 1 / 3)];
+  }
+  function jitterHex(hex, rng, amt) {
+    const [h, s, l] = rgbToHsl(hexToRgb(hex));
+    return rgbToHex(hslToRgb([(h + (rng() * 2 - 1) * 0.07 * amt + 1) % 1, clamp(s + (rng() * 2 - 1) * 0.12 * amt, 0, 1), clamp(l + (rng() * 2 - 1) * 0.08 * amt, 0, 1)]));
+  }
+
+  // -------- schema
+  const PATTERNS = ['plain', 'damask', 'trellis', 'floral', 'brocade', 'stripes', 'jewelgrid'];
+  const GROUPS = ['Silhouette', 'Bodice', 'Sleeves', 'Collar', 'Mantle', 'Fabric', 'Trim', 'Jewels', 'Hair & face', 'Motion'];
+  const N = (key, group, min, max, step, label, extra) => Object.assign({ key, group, kind: 'num', min, max, step, label }, extra);
+  const C = (key, group, label) => ({ key, group, kind: 'color', label });
+  const CH = (key, group, options, label, extra) => Object.assign({ key, group, kind: 'choice', options, label }, extra);
+  const SCHEMA = [
+    N('waistY', 'Silhouette', 0.95, 1.12, 0.005, 'Waist height (m)'),
+    N('waist', 'Silhouette', 0.085, 0.17, 0.001, 'Waist radius (m)'),
+    N('hipShelf', 'Silhouette', 0.12, 0.6, 0.005, 'Hip shelf / drum (m)'),
+    N('hemRadius', 'Silhouette', 0.15, 0.85, 0.005, 'Hem radius (m)'),
+    N('curve', 'Silhouette', -1, 1, 0.01, 'Profile: trumpet ↔ dome'),
+    N('pannier', 'Silhouette', 0, 1.2, 0.01, 'Panniers'),
+    N('bustle', 'Silhouette', 0, 1, 0.01, 'Bustle'),
+    N('trainLength', 'Silhouette', 0, 3, 0.05, 'Train (m)'),
+    N('frontOpen', 'Silhouette', 0, 1.2, 0.01, 'Front opening'),
+    N('flounces', 'Silhouette', 0, 6, 1, 'Flounce tiers'),
+    N('flounceDepth', 'Silhouette', 0.05, 0.25, 0.005, 'Flounce depth'),
+    N('hemFullness', 'Silhouette', 0, 1, 0.01, 'Hem folds'),
+    N('bust', 'Bodice', 0.1, 0.18, 0.001, 'Bust radius (m)'),
+    CH('corsetShape', 'Bodice', ['cone', 'hourglass', 'sbend', 'natural'], 'Corset shape'),
+    CH('neckShape', 'Bodice', ['square', 'high', 'offshoulder', 'v', 'sweetheart'], 'Neckline'),
+    N('neckDepth', 'Bodice', 0, 0.2, 0.005, 'Neckline depth'),
+    N('neckWidth', 'Bodice', 0.04, 0.16, 0.005, 'Neckline width'),
+    N('pointDepth', 'Bodice', 0, 0.16, 0.005, 'Waist point'),
+    N('stomacher', 'Bodice', 0, 1, 0.01, 'Stomacher'),
+    N('stomacherBows', 'Bodice', 0, 7, 1, 'Échelle bows'),
+    N('sleeveLength', 'Sleeves', 0.15, 1, 0.01, 'Length'),
+    N('shoulderPuff', 'Sleeves', 0, 1, 0.01, 'Shoulder puff'),
+    N('upperFull', 'Sleeves', 0, 1, 0.01, 'Upper fullness (gigot)'),
+    N('cuffFlare', 'Sleeves', 0, 1, 0.01, 'Trumpet cuff'),
+    N('engageantes', 'Sleeves', 0, 1, 0.01, 'Lace engageantes'),
+    N('sleeveSlash', 'Sleeves', 0, 6, 1, 'Slashed puffs'),
+    N('ruff', 'Collar', 0, 1, 0.01, 'Cartwheel ruff'),
+    N('ruffLayers', 'Collar', 1, 3, 1, 'Ruff layers'),
+    N('fanCollar', 'Collar', 0, 1, 0.01, 'Wired lace fan'),
+    N('bertha', 'Collar', 0, 1, 0.01, 'Lace bertha'),
+    N('highCollar', 'Collar', 0, 1, 0.01, 'High lace collar'),
+    N('mantle', 'Mantle', 0, 4, 0.05, 'Mantle trail (m)'),
+    N('mantleWidth', 'Mantle', 0, 1, 0.01, 'Mantle spread'),
+    N('ermine', 'Mantle', 0, 0.25, 0.005, 'Ermine border (m)'),
+    C('mantleColor', 'Mantle', 'Mantle'),
+    C('gownColor', 'Fabric', 'Gown'), C('gownAccent', 'Fabric', 'Gown accent'),
+    C('foreColor', 'Fabric', 'Forepart'), C('foreAccent', 'Fabric', 'Forepart accent'),
+    C('bodiceColor', 'Fabric', 'Bodice'), C('bodiceAccent', 'Fabric', 'Bodice accent'),
+    CH('pattern', 'Fabric', PATTERNS, 'Gown pattern'),
+    CH('forePattern', 'Fabric', PATTERNS, 'Forepart pattern'),
+    N('patternScale', 'Fabric', 0.4, 2.5, 0.05, 'Pattern scale'),
+    CH('material', 'Fabric', ['satin', 'velvet', 'brocade', 'taffeta'], 'Material'),
+    N('sheen', 'Fabric', 0, 1, 0.01, 'Sheen'),
+    N('braidBands', 'Trim', 0, 6, 1, 'Hem braid bands'),
+    C('braidColor', 'Trim', 'Braid'),
+    N('frontTrim', 'Trim', 0, 0.08, 0.002, 'Opening trim (m)'),
+    N('pearlRows', 'Trim', 0, 3, 1, 'Pearl rows'),
+    N('jewelDensity', 'Trim', 0, 1, 0.01, 'Jewels on skirt'),
+    N('fringe', 'Trim', 0, 1, 0.01, 'Fringe'),
+    N('bowsOnSkirt', 'Trim', 0, 12, 1, 'Skirt bows'),
+    N('sash', 'Trim', 0, 1, 0.01, 'Order sash'),
+    C('sashColor', 'Trim', 'Sash'),
+    N('necklaces', 'Jewels', 0, 6, 1, 'Pearl ropes'),
+    N('pearlLength', 'Jewels', 0, 1, 0.01, 'Rope length'),
+    CH('crown', 'Jewels', ['none', 'tudor', 'diadem', 'tiara', 'coronation'], 'Crown'),
+    N('crownScale', 'Jewels', 0.6, 1.4, 0.01, 'Crown size'),
+    CH('gloves', 'Jewels', ['none', 'wrist', 'opera'], 'Gloves'),
+    CH('sceptreOrb', 'Jewels', ['none', 'sceptre', 'orb', 'both'], 'Sceptre & orb'),
+    CH('handFan', 'Jewels', ['off', 'on'], 'Hand fan'),
+    CH('hairStyle', 'Hair & face', ['gable', 'curls', 'pouf', 'chignon', 'upswept', 'modern'], 'Hair style'),
+    C('hairColor', 'Hair & face', 'Hair'),
+    N('poufHeight', 'Hair & face', 0, 1, 0.01, 'Pouf height'),
+    C('skinTone', 'Hair & face', 'Skin'),
+    N('faceMakeup', 'Hair & face', 0, 1, 0.01, 'Court make-up'),
+    CH('motionMode', 'Motion', ['still', 'turntable', 'walk', 'twirl'], 'Motion', { global: true, def: 'turntable' }),
+    N('speed', 'Motion', 0.2, 2, 0.05, 'Speed', { global: true, def: 1 }),
+    N('wind', 'Motion', 0, 1, 0.01, 'Wind', { global: true, def: 0.15 }),
+    N('swing', 'Motion', 0, 1, 0.01, 'Looseness', { global: true, def: 0.6 }),
+    N('damping', 'Motion', 0, 1, 0.01, 'Damping', { global: true, def: 0.45 }),
+  ];
+  const SCHEMA_BY_KEY = {};
+  for (const d of SCHEMA) SCHEMA_BY_KEY[d.key] = d;
+
+  // -------- eras (notes are our own words)
+  const ERAS = [
+    { year: 1500, name: 'Tudor', dates: 'c. 1500–1560',
+      note: 'Early Tudor court dress: a stiff cone of a skirt held out by a Spanish farthingale of graduated hoops, a square neckline, wide trumpet sleeves turned back in fur or brocade, and a gable hood framing the face. The gown often opened at the front over a separate forepart of richer cloth.',
+      params: { waistY: 1, waist: 0.112, hipShelf: 0.2, hemRadius: 0.55, curve: 0, pannier: 0, bustle: 0, trainLength: 0.35, frontOpen: 0.45, flounces: 0, flounceDepth: 0.12, hemFullness: 0.3,
+        bust: 0.13, corsetShape: 'cone', neckShape: 'square', neckDepth: 0.08, neckWidth: 0.11, pointDepth: 0.03, stomacher: 0.8, stomacherBows: 0,
+        sleeveLength: 0.78, shoulderPuff: 0.1, upperFull: 0.1, cuffFlare: 1, engageantes: 0, sleeveSlash: 2,
+        ruff: 0, ruffLayers: 1, fanCollar: 0, bertha: 0, highCollar: 0,
+        mantle: 0, mantleWidth: 0.5, ermine: 0.1, mantleColor: '#5a1020',
+        gownColor: '#7a1424', gownAccent: '#c9a245', foreColor: '#c9a24a', foreAccent: '#7a1424', bodiceColor: '#7a1424', bodiceAccent: '#c9a245',
+        pattern: 'plain', forePattern: 'brocade', patternScale: 1, material: 'velvet', sheen: 0.7,
+        braidBands: 1, braidColor: '#d4af37', frontTrim: 0.03, pearlRows: 1, jewelDensity: 0.05, fringe: 0, bowsOnSkirt: 0, sash: 0, sashColor: '#2a5aa8',
+        necklaces: 2, pearlLength: 0.4, crown: 'none', crownScale: 1, gloves: 'none', sceptreOrb: 'none', handFan: 'off',
+        hairStyle: 'gable', hairColor: '#6b3a1e', poufHeight: 0, skinTone: '#f1d3bf', faceMakeup: 0.25 } },
+    { year: 1600, name: 'Elizabethan', dates: 'c. 1580–1620',
+      note: 'Late Elizabethan: the French wheel farthingale threw the skirt out flat at the hips before it dropped straight to the floor. Starched cartwheel ruffs, wired lace fans behind the head, jewel-studded silk and long ropes of pearls turned the queen into an icon.',
+      params: { waistY: 1, waist: 0.105, hipShelf: 0.46, hemRadius: 0.49, curve: 0, pannier: 0, bustle: 0, trainLength: 0.2, frontOpen: 0, flounces: 0, flounceDepth: 0.12, hemFullness: 0.45,
+        bust: 0.12, corsetShape: 'cone', neckShape: 'high', neckDepth: 0.02, neckWidth: 0.07, pointDepth: 0.13, stomacher: 0.9, stomacherBows: 0,
+        sleeveLength: 1, shoulderPuff: 0.85, upperFull: 0.6, cuffFlare: 0, engageantes: 0.15, sleeveSlash: 0,
+        ruff: 0.8, ruffLayers: 2, fanCollar: 0.9, bertha: 0, highCollar: 0,
+        mantle: 0, mantleWidth: 0.5, ermine: 0.1, mantleColor: '#3a1830',
+        gownColor: '#f2eee4', gownAccent: '#b3122b', foreColor: '#f2eee4', foreAccent: '#b3122b', bodiceColor: '#f2eee4', bodiceAccent: '#b3122b',
+        pattern: 'jewelgrid', forePattern: 'jewelgrid', patternScale: 1, material: 'satin', sheen: 0.6,
+        braidBands: 0, braidColor: '#d4af37', frontTrim: 0.02, pearlRows: 2, jewelDensity: 0.6, fringe: 0, bowsOnSkirt: 0, sash: 0, sashColor: '#2a5aa8',
+        necklaces: 5, pearlLength: 1, crown: 'tudor', crownScale: 0.8, gloves: 'none', sceptreOrb: 'none', handFan: 'on',
+        hairStyle: 'curls', hairColor: '#b5532a', poufHeight: 0, skinTone: '#f6e7dc', faceMakeup: 0.9 } },
+    { year: 1700, name: 'Rococo', dates: 'c. 1720–1780',
+      note: 'The robe à la française at its mid-century height: side hoops called panniers made the skirt very wide but flat front to back. The gown opened over a matching petticoat and a stomacher laced with a ladder of bows, with tiers of lace at the elbow and a tall powdered coiffure.',
+      params: { waistY: 1.02, waist: 0.1, hipShelf: 0.28, hemRadius: 0.38, curve: 0.1, pannier: 1, bustle: 0, trainLength: 0.5, frontOpen: 0.55, flounces: 2, flounceDepth: 0.1, hemFullness: 0.6,
+        bust: 0.12, corsetShape: 'cone', neckShape: 'square', neckDepth: 0.09, neckWidth: 0.12, pointDepth: 0.09, stomacher: 1, stomacherBows: 6,
+        sleeveLength: 0.5, shoulderPuff: 0, upperFull: 0.05, cuffFlare: 0.35, engageantes: 1, sleeveSlash: 0,
+        ruff: 0, ruffLayers: 1, fanCollar: 0, bertha: 0, highCollar: 0,
+        mantle: 0, mantleWidth: 0.5, ermine: 0.1, mantleColor: '#2b4a7a',
+        gownColor: '#b8d2e3', gownAccent: '#e8a0b0', foreColor: '#f1ece2', foreAccent: '#e8a0b0', bodiceColor: '#b8d2e3', bodiceAccent: '#e8a0b0',
+        pattern: 'floral', forePattern: 'floral', patternScale: 1, material: 'taffeta', sheen: 0.5,
+        braidBands: 0, braidColor: '#f1ece2', frontTrim: 0.04, pearlRows: 0, jewelDensity: 0, fringe: 0, bowsOnSkirt: 6, sash: 0, sashColor: '#2a5aa8',
+        necklaces: 1, pearlLength: 0.1, crown: 'none', crownScale: 1, gloves: 'none', sceptreOrb: 'none', handFan: 'on',
+        hairStyle: 'pouf', hairColor: '#e8e2d8', poufHeight: 0.8, skinTone: '#f7e4dc', faceMakeup: 0.5 } },
+    { year: 1800, name: 'Victorian', dates: 'c. 1840–1870',
+      note: 'Mid-Victorian court and evening dress: a cage crinoline of steel hoops replaced heavy layers of petticoats and gave a smooth dome. Bodices sat off the shoulder under a deep lace bertha, the skirt was tiered in flounces, and long gloves and a tiara finished the look.',
+      params: { waistY: 1.03, waist: 0.095, hipShelf: 0.22, hemRadius: 0.72, curve: 0.7, pannier: 0, bustle: 0, trainLength: 0.6, frontOpen: 0, flounces: 3, flounceDepth: 0.16, hemFullness: 0.5,
+        bust: 0.13, corsetShape: 'hourglass', neckShape: 'offshoulder', neckDepth: 0.12, neckWidth: 0.13, pointDepth: 0.06, stomacher: 0, stomacherBows: 0,
+        sleeveLength: 0.22, shoulderPuff: 0.2, upperFull: 0, cuffFlare: 0.15, engageantes: 0.4, sleeveSlash: 0,
+        ruff: 0, ruffLayers: 1, fanCollar: 0, bertha: 0.8, highCollar: 0,
+        mantle: 1.2, mantleWidth: 0.5, ermine: 0.05, mantleColor: '#8b2b3a',
+        gownColor: '#f3efe6', gownAccent: '#d8cdb8', foreColor: '#f3efe6', foreAccent: '#d8cdb8', bodiceColor: '#f3efe6', bodiceAccent: '#d8cdb8',
+        pattern: 'damask', forePattern: 'damask', patternScale: 0.9, material: 'satin', sheen: 0.7,
+        braidBands: 0, braidColor: '#d9c9a0', frontTrim: 0, pearlRows: 1, jewelDensity: 0.05, fringe: 0, bowsOnSkirt: 0, sash: 0, sashColor: '#2a5aa8',
+        necklaces: 2, pearlLength: 0.25, crown: 'tiara', crownScale: 1, gloves: 'opera', sceptreOrb: 'none', handFan: 'off',
+        hairStyle: 'chignon', hairColor: '#4a2c1d', poufHeight: 0, skinTone: '#f4dccd', faceMakeup: 0.15 } },
+    { year: 1900, name: 'Edwardian', dates: 'c. 1895–1910',
+      note: 'Around 1900 a straight-front corset pushed the figure into an S-bend, with the bust forward and the hips back. Skirts were smooth over the hips and flared into long trains; boned lace collars rose up the neck and the upper sleeves were full.',
+      params: { waistY: 1.02, waist: 0.09, hipShelf: 0.17, hemRadius: 0.4, curve: -0.4, pannier: 0, bustle: 0.05, trainLength: 1.4, frontOpen: 0, flounces: 0, flounceDepth: 0.1, hemFullness: 0.3,
+        bust: 0.135, corsetShape: 'sbend', neckShape: 'high', neckDepth: 0, neckWidth: 0.07, pointDepth: 0.02, stomacher: 0, stomacherBows: 0,
+        sleeveLength: 1, shoulderPuff: 0.9, upperFull: 0.7, cuffFlare: 0, engageantes: 0.15, sleeveSlash: 0,
+        ruff: 0, ruffLayers: 1, fanCollar: 0.4, bertha: 0, highCollar: 0.8,
+        mantle: 0, mantleWidth: 0.5, ermine: 0.1, mantleColor: '#4a2a5a',
+        gownColor: '#c79ac4', gownAccent: '#7e5a8c', foreColor: '#c79ac4', foreAccent: '#7e5a8c', bodiceColor: '#c79ac4', bodiceAccent: '#7e5a8c',
+        pattern: 'trellis', forePattern: 'trellis', patternScale: 1, material: 'satin', sheen: 0.7,
+        braidBands: 1, braidColor: '#8a6a9c', frontTrim: 0.02, pearlRows: 0, jewelDensity: 0.1, fringe: 0, bowsOnSkirt: 0, sash: 0, sashColor: '#2a5aa8',
+        necklaces: 1, pearlLength: 0.05, crown: 'tiara', crownScale: 0.9, gloves: 'none', sceptreOrb: 'none', handFan: 'off',
+        hairStyle: 'upswept', hairColor: '#5a3a28', poufHeight: 0, skinTone: '#f3dccf', faceMakeup: 0.1 } },
+    { year: 2000, name: 'Modern', dates: 'c. 1990–2020',
+      note: 'A modern state gown: a natural waist and a fluid column or soft A-line skirt with no hoops at all, embroidered or beaded rather than boned, the sash of an order of chivalry worn across the bodice, and a diamond tiara for evening.',
+      params: { waistY: 1.04, waist: 0.115, hipShelf: 0.17, hemRadius: 0.33, curve: -0.1, pannier: 0, bustle: 0, trainLength: 0.25, frontOpen: 0, flounces: 0, flounceDepth: 0.1, hemFullness: 0.15,
+        bust: 0.125, corsetShape: 'natural', neckShape: 'v', neckDepth: 0.07, neckWidth: 0.07, pointDepth: 0, stomacher: 0, stomacherBows: 0,
+        sleeveLength: 0.35, shoulderPuff: 0, upperFull: 0, cuffFlare: 0, engageantes: 0, sleeveSlash: 0,
+        ruff: 0, ruffLayers: 1, fanCollar: 0, bertha: 0, highCollar: 0,
+        mantle: 0, mantleWidth: 0.5, ermine: 0.1, mantleColor: '#3a2a6e',
+        gownColor: '#efe9df', gownAccent: '#b9c2cf', foreColor: '#efe9df', foreAccent: '#b9c2cf', bodiceColor: '#efe9df', bodiceAccent: '#b9c2cf',
+        pattern: 'plain', forePattern: 'plain', patternScale: 1, material: 'satin', sheen: 0.8,
+        braidBands: 0, braidColor: '#c0c8d8', frontTrim: 0, pearlRows: 0, jewelDensity: 0.25, fringe: 0, bowsOnSkirt: 0, sash: 1, sashColor: '#3a6fb8',
+        necklaces: 3, pearlLength: 0.1, crown: 'tiara', crownScale: 1, gloves: 'none', sceptreOrb: 'none', handFan: 'off',
+        hairStyle: 'modern', hairColor: '#8a7f78', poufHeight: 0, skinTone: '#f0d5c4', faceMakeup: 0.1 } },
+  ];
+  const ROYAL = ['#7a1424', '#b3122b', '#1d3a6e', '#2a6fb5', '#0f5132', '#3d6b45', '#5b2a6e', '#c79ac4', '#b8d2e3', '#f2eee4', '#efe9df', '#d4af37', '#c9a24a', '#1a1a1a', '#e8a0b0', '#a9c8de', '#8b2b3a', '#f3efe6'];
+
+  // -------- param sets
+  function paramsForEra(i, cur) {
+    const out = {};
+    for (const d of SCHEMA) out[d.key] = d.global ? (cur && cur[d.key] !== undefined ? cur[d.key] : d.def) : ERAS[i].params[d.key];
+    return out;
+  }
+  function clampParams(p, fallback) {
+    const out = {};
+    for (const d of SCHEMA) {
+      const v = p ? p[d.key] : undefined, fb = fallback[d.key];
+      if (d.kind === 'num') out[d.key] = typeof v === 'number' && isFinite(v) ? snap(v, d) : fb;
+      else if (d.kind === 'color') out[d.key] = typeof v === 'string' && HEX.test(v.toLowerCase()) ? v.toLowerCase() : fb;
+      else out[d.key] = d.options.includes(v) ? v : fb;
+    }
+    return out;
+  }
+  function paramsAtYear(year, cur) {
+    const y = clamp(year, ERAS[0].year, ERAS[ERAS.length - 1].year);
+    let i = 0;
+    while (i < ERAS.length - 2 && y > ERAS[i + 1].year) i++;
+    const A = ERAS[i], B = ERAS[i + 1], t = smoothstep(0, 1, (y - A.year) / (B.year - A.year));
+    const out = paramsForEra(i, cur);
+    for (const d of SCHEMA) {
+      if (d.global) continue;
+      const a = A.params[d.key], b = B.params[d.key];
+      if (d.kind === 'num') out[d.key] = d.step >= 1 ? Math.round(lerp(a, b, t)) : lerp(a, b, t);
+      else if (d.kind === 'color') out[d.key] = mixHex(a, b, t);
+      else out[d.key] = t < 0.5 ? a : b;
+    }
+    return out;
+  }
+  const nearestEra = y => clamp(Math.round((y - ERAS[0].year) / 100), 0, ERAS.length - 1);
+
+  // -------- share links
+  function encodeHash(p, eraIndex) {
+    const base = paramsForEra(eraIndex), parts = ['e=' + eraIndex];
+    for (const d of SCHEMA) {
+      const v = p[d.key], b = base[d.key];
+      if (d.kind === 'num') { const sv = snap(v, d); if (sv !== snap(b, d)) parts.push(d.key + '=' + sv); }
+      else if (d.kind === 'color') { if (v !== b) parts.push(d.key + '=' + v.slice(1)); }
+      else if (v !== b) parts.push(d.key + '=' + v);
+    }
+    return parts.join('&');
+  }
+  function decodeHash(str) {
+    const kv = Object.create(null);
+    for (const part of String(str || '').replace(/^#/, '').split('&')) { const i = part.indexOf('='); if (i > 0) kv[part.slice(0, i)] = part.slice(i + 1); }
+    let e = parseInt(kv.e, 10);
+    if (!(e >= 0 && e < ERAS.length)) e = 0;
+    const p = paramsForEra(e);
+    for (const d of SCHEMA) {
+      if (!(d.key in kv)) continue;
+      const s = kv[d.key];
+      if (d.kind === 'num') { const n = parseFloat(s); if (isFinite(n)) p[d.key] = snap(n, d); }
+      else if (d.kind === 'color') { if (/^[0-9a-fA-F]{6}$/.test(s)) p[d.key] = '#' + s.toLowerCase(); }
+      else if (d.options.includes(s)) p[d.key] = s;
+    }
+    return { era: e, params: p };
+  }
+
+  // -------- dice
+  function randomCommission(rng, mode, eraIndex, cur) {
+    const base = paramsForEra(eraIndex, cur), out = Object.assign({}, base);
+    for (const d of SCHEMA) {
+      if (d.global) continue;
+      const b = base[d.key];
+      if (mode === 'wild') {
+        if (d.kind === 'num') out[d.key] = snap(d.min + rng() * (d.max - d.min), d);
+        else if (d.kind === 'color') out[d.key] = ROYAL[Math.floor(rng() * ROYAL.length)];
+        else out[d.key] = d.options[Math.floor(rng() * d.options.length)];
+      } else {
+        if (d.kind === 'num') out[d.key] = snap(b + (rng() * 2 - 1) * 0.25 * (d.max - d.min), d);
+        else if (d.kind === 'color') out[d.key] = jitterHex(b, rng, 1);
+        else out[d.key] = rng() < 0.8 ? b : d.options[Math.floor(rng() * d.options.length)];
+      }
+    }
+    return out;
+  }
+
+  return { TAU, clamp, lerp, smoothstep, mulberry32, decimals, snap, HEX, hexToRgb, rgbToHex, mixHex, jitterHex,
+    PATTERNS, GROUPS, SCHEMA, SCHEMA_BY_KEY, ERAS, ROYAL, paramsForEra, clampParams, paramsAtYear, nearestEra, encodeHash, decodeHash, randomCommission };
+})());
+
+// ============================================================ part 1 tests
+function validParams(p, label) {
+  for (const d of QC.SCHEMA) {
+    const v = p[d.key];
+    if (d.kind === 'num') {
+      assert(typeof v === 'number' && v >= d.min - 1e-9 && v <= d.max + 1e-9, `${label}: ${d.key}=${v} out of range`);
+      if (d.step >= 1) assert(Number.isInteger(v), `${label}: ${d.key} must be an integer`);
+    } else if (d.kind === 'color') assert(QC.HEX.test(v), `${label}: ${d.key}=${v} is not a colour`);
+    else assert(d.options.includes(v), `${label}: ${d.key}=${v} is not an option`);
+  }
+}
+QueenTests.add('schema is well formed', () => {
+  const seen = new Set();
+  for (const d of QC.SCHEMA) {
+    assert(!seen.has(d.key), 'duplicate key ' + d.key); seen.add(d.key);
+    assert(QC.GROUPS.includes(d.group), 'unknown group ' + d.group);
+    if (d.kind === 'num') { assert(d.min < d.max && d.step > 0, d.key); assertNear((d.max - d.min) / d.step, Math.round((d.max - d.min) / d.step), 1e-6, d.key + ' grid'); }
+    if (d.kind === 'choice') assert(d.options.length >= 2, d.key);
+    if (d.global) assert(d.def !== undefined, d.key + ' global without default');
+  }
+  assert(QC.SCHEMA.length >= 65, 'lots of parameters');
+});
+QueenTests.add('era presets are complete, on the grid and in range', () => {
+  assert(QC.ERAS.map(e => e.year).join() === '1500,1600,1700,1800,1900,2000', 'era years');
+  const local = QC.SCHEMA.filter(d => !d.global);
+  QC.ERAS.forEach((e, i) => {
+    assert(Object.keys(e.params).length === local.length, `era ${i} has ${Object.keys(e.params).length} keys`);
+    for (const d of local) {
+      const v = e.params[d.key];
+      assert(v !== undefined, `era ${i} misses ${d.key}`);
+      if (d.kind === 'num') assert(QC.snap(v, d) === v, `era ${i} ${d.key}=${v} off grid`);
+    }
+    validParams(QC.paramsForEra(i), 'era ' + i);
+    assert(e.name && e.dates && e.note.length > 80, 'era text ' + i);
+  });
+});
+QueenTests.add('paramsAtYear hits every preset exactly and clamps outside', () => {
+  QC.ERAS.forEach((e, i) => {
+    const p = QC.paramsAtYear(e.year);
+    for (const k of Object.keys(e.params)) assert(p[k] === e.params[k], `${e.year} ${k}: ${p[k]} vs ${e.params[k]}`);
+  });
+  const lo = QC.paramsAtYear(1200), hi = QC.paramsAtYear(2400);
+  for (const k of Object.keys(QC.ERAS[0].params)) { assert(lo[k] === QC.ERAS[0].params[k], 'lo ' + k); assert(hi[k] === QC.ERAS[5].params[k], 'hi ' + k); }
+});
+QueenTests.add('morph years in between stay valid', () => {
+  for (let y = 1500; y <= 2000; y += 12.5) validParams(QC.paramsAtYear(y), 'year ' + y);
+});
+QueenTests.add('global motion keys survive era changes and morphs', () => {
+  const cur = QC.paramsForEra(0); cur.wind = 0.9; cur.motionMode = 'twirl';
+  assert(QC.paramsForEra(3, cur).wind === 0.9, 'paramsForEra keeps wind');
+  assert(QC.paramsAtYear(1750, cur).motionMode === 'twirl', 'paramsAtYear keeps mode');
+  assert(QC.paramsForEra(3).motionMode === QC.SCHEMA_BY_KEY.motionMode.def, 'defaults without cur');
+});
+QueenTests.add('mixHex mixes in linear light and keeps its endpoints', () => {
+  assert(QC.mixHex('#123456', '#abcdef', 0) === '#123456');
+  assert(QC.mixHex('#123456', '#abcdef', 1) === '#abcdef');
+  assert(QC.mixHex('#000000', '#ffffff', 0.5) === '#bcbcbc', QC.mixHex('#000000', '#ffffff', 0.5));
+});
+QueenTests.add('hash round-trips to step precision', () => {
+  const rng = QC.mulberry32(7);
+  for (let n = 0; n < 40; n++) {
+    const e = n % 6, p = QC.randomCommission(rng, n % 2 ? 'wild' : 'within', e);
+    p.wind = rng(); p.motionMode = 'walk';
+    const d = QC.decodeHash(QC.encodeHash(p, e));
+    assert(d.era === e, 'era index');
+    for (const def of QC.SCHEMA) {
+      const want = def.kind === 'num' ? QC.snap(p[def.key], def) : p[def.key];
+      assert(d.params[def.key] === want, `${def.key}: ${d.params[def.key]} vs ${want}`);
+    }
+  }
+  assert(QC.encodeHash(QC.paramsForEra(2), 2) === 'e=2', 'a preset is just its era');
+});
+QueenTests.add('garbage hashes decode safely', () => {
+  for (const s of ['', '#', 'e=99', 'e=-1&waist=abc', 'waist=1e9&gownColor=zzzzzz&crown=hat', '%%%&&&==', '#e=3&hemRadius=NaN&__proto__=1&constructor=2']) {
+    const d = QC.decodeHash(s);
+    assert(d.era >= 0 && d.era < 6, 'era in range for ' + s);
+    validParams(d.params, 'decoded ' + JSON.stringify(s));
+  }
+  assert(QC.decodeHash('waist=1e9').params.waist === QC.SCHEMA_BY_KEY.waist.max, 'huge values clamp');
+  assert(QC.decodeHash('#e=4&crown=diadem').params.crown === 'diadem', 'valid choice applies');
+});
+QueenTests.add('random commissions are deterministic and valid', () => {
+  for (const mode of ['within', 'wild']) for (let e = 0; e < 6; e++) {
+    const a = QC.randomCommission(QC.mulberry32(42 + e), mode, e), b = QC.randomCommission(QC.mulberry32(42 + e), mode, e);
+    assert(JSON.stringify(a) === JSON.stringify(b), 'same seed, same gown');
+    validParams(a, mode + ' ' + e);
+  }
+  const w = QC.randomCommission(QC.mulberry32(1), 'within', 2), base = QC.paramsForEra(2);
+  assert(Math.abs(w.pannier - base.pannier) <= 0.25 * 1.2 + 1e-9, 'within stays near the era');
+});
+</script>
+</body>
+</html>
