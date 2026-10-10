@@ -91,7 +91,7 @@ The groups (≈70 parameters in total):
 - **Collar:**
   - `ruff`: cartwheel ruff size
   - `ruffLayers`
-  - `fan`: the size of the wired lace fan behind the head
+  - `fanCollar`: the size of the wired lace fan behind the head
   - `bertha`: the depth of the off-shoulder lace band
   - `highCollar`: the height of the Edwardian collar
 - **Mantle:**
@@ -122,7 +122,7 @@ The groups (≈70 parameters in total):
   - `crownScale`
   - `gloves`
   - `sceptreOrb`
-  - `fan`: the hand fan, keyed `handFan`
+  - `handFan`: a hand-held fan
 - **Hair:**
   - `hairStyle`: gable-covered / red curls / powdered pouf / chignon /
     upswept / modern set
