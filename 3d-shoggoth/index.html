@@ -303,7 +303,13 @@ const Shoggoth = (() => {
     N("happyEyes", "face", "Smiling eyes", 0, 1, .3, { gate: "eyes", pow: 3.5 }),
     N("sparkle", "face", "Eye sparkle", 0, 1, .3, { gate: "eyes", pow: 2 }),
     N("brows", "face", "Eyebrows", 0, 1, .3, { gate: "eyes", pow: 3.5 }),
-    N("blush", "face", "Blush", 0, 1, .3, { pow: 3.5 })
+    N("blush", "face", "Blush", 0, 1, .3, { pow: 3.5 }),
+    // Hand genes came after the face genes; they must stay last (see decodeGenome). They live in the
+    // Arms card and only matter for arm type "hands".
+    I("fingers", "arms", "Fingers", 2, 12, .4, { when: (g) => g.arms > 0 && g.armType === "hands", buckets: [[2, 3, 1], [4, 5, 2.5], [6, 8, 1.6], [9, 12, 1]] }),
+    I("thumbs", "arms", "Thumbs", 0, 2, .2, { when: (g) => g.arms > 0 && g.armType === "hands" }),
+    N("fingerLen", "arms", "Finger length", .4, 2, .2, { when: (g) => g.arms > 0 && g.armType === "hands", fmt: "x" }),
+    N("fingerSpread", "arms", "Finger spread", 0, 1, .2, { when: (g) => g.arms > 0 && g.armType === "hands" })
   ];
   const GENE = Object.fromEntries(GENES.map((gene) => [gene.key, gene]));
 
@@ -316,11 +322,13 @@ const Shoggoth = (() => {
     hue: .44, sat: .2, accent: .2, pattern: "mottle",
     hyperrealism: 72, cartoonish: 18, slime: 38, cuteness: 22, ugliness: 45, glow: 50,
     pimples: 9, pimplePlace: "scattered", pimpleSize: 1, ripeness: .55, inflammation: .5, throb: .25,
-    smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0, seed: 48217
+    smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0,
+    fingers: 5, thumbs: 1, fingerLen: 1, fingerSpread: .5, seed: 48217
   };
   // Older share links carry only the genes that existed when they were made: v1 stops before
-  // the pimples, v2 before the face. Missing genes decode as "absent".
-  const LINK_GENE_COUNTS = [GENES.findIndex((gene) => gene.key === "pimples"), GENES.findIndex((gene) => gene.key === "smile"), GENES.length];
+  // the pimples, v2 before the face, v3 before the hand genes. Missing genes decode as "absent"
+  // (or, for hands, as the old five-fingered hand).
+  const LINK_GENE_COUNTS = ["pimples", "smile", "fingers"].map((key) => GENES.findIndex((gene) => gene.key === key)).concat(GENES.length);
 
   const qOf = (gene, v) => gene.kind === "hue" ? Math.round((((v % 1) + 1) % 1) * 256) % 256 : Math.round(clamp((v - gene.min) / (gene.max - gene.min), 0, 1) * 255);
   const fromQ = (gene, q) => gene.kind === "hue" ? q / 256 : gene.min + q * (gene.max - gene.min) / 255;
@@ -342,6 +350,7 @@ const Shoggoth = (() => {
     if (g.mouthPlace === "arms" && g.arms === 0) g.mouthPlace = "body";
     if (g.eyeStyle === "cyclops") g.eyes = Math.min(g.eyes, 6);
     if (g.eyeStyle === "compound") g.eyes = Math.min(g.eyes, 30);
+    g.thumbs = Math.min(g.thumbs, g.fingers - 1);
     return g;
   }
 
@@ -370,6 +379,7 @@ const Shoggoth = (() => {
 
   function geneDiff(gene, a, b) {
     if (gene.gate && (!a[gene.gate] || !b[gene.gate])) return 0;
+    if (gene.when && (!gene.when(a) || !gene.when(b))) return 0;
     const x = a[gene.key], y = b[gene.key];
     if (gene.kind === "enum") return x === y ? 0 : 1;
     if (gene.kind === "hue") return hueDist(x, y) * 2;
@@ -485,7 +495,7 @@ const Shoggoth = (() => {
     const bytes = b64ToBytes(str.slice(2));
     const n = bytes ? bytes.length - 5 : -1;
     if (!bytes || !LINK_GENE_COUNTS.includes(n) || bytes[0] !== 1) return null;
-    const g = { pimples: 0, smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0 };
+    const g = { pimples: 0, smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0, fingers: 5, thumbs: 1, fingerLen: 1, fingerSpread: .5 };
     for (let i = 0; i < n; i++) {
       const gene = GENES[i], b = bytes[i + 1];
       if (gene.kind === "enum") { if (b >= gene.values.length) return null; g[gene.key] = gene.values[b]; }
@@ -844,7 +854,7 @@ const Shoggoth = (() => {
       const armDir = norm(add(hit.n, scale(dir, .5)));
       const arm = {
         lobe: li, root: hit.local, rootW: hit.p, dir: armDir, len: baseLen * (.8 + rng() * .35), r0: baseR * (.85 + rng() * .3) * (leg ? 1.25 : 1),
-        type: leg ? "leg" : g.armType, tip: g.armTip, leg, phase: rng() * TAU, speed: .6 + rng() * .8,
+        type: leg ? "leg" : g.armType, tip: g.armTip, leg, hand: { fingers: g.fingers, thumbs: g.thumbs, len: g.fingerLen, spread: g.fingerSpread }, phase: rng() * TAU, speed: .6 + rng() * .8,
         suckers: g.armType === "tentacle" && !leg ? g.suckers : 0, twist: (rng() - .5) * 1.2, curl: rng() * .6,
         mouthTip: false, gait: (i % 2) * Math.PI,
         strands: g.armType === "tendrils" && !leg ? [0, 1, 2].map((k) => ({ yaw: (k - 1) * .32, phase: k * 1.9, scale: 1 - k * .12 })) : [{ yaw: 0, phase: 0, scale: 1 }]
@@ -1134,6 +1144,12 @@ const ShoggothTests = {
     check("pre-pimple classic link decodes", !!S.decodeGenome("s1AQAFgIBNc0ABAAABZnQHAABgM4ABAQFbCAAAjIkHOnEtMwNIEiYWLTIAALxZ"));
     const v2 = S.decodeGenome("s1AQYBfjtg1dwDBQMCMAMMAgI2gq4BAALRBgQD8xQHKdF3iQBdHxcLIi4RAVQTV5gFVdTM");
     check("pre-face share links still decode, with a neutral face", !!v2 && v2.plan === "cluster" && v2.pimples === 17 && v2.pimplePlace === "clustered" && v2.seed === 89511116 && v2.smile === 0 && v2.blush === 0 && v2.brows === 0);
+    const v3 = S.decodeGenome("s1AQMFRPrUgpcCAQAAnZoRAQSjVYIDAACvBgQEL7EIElU4swFLExgJNisnALTQw9mzACI2ZgT1Uxk");
+    check("pre-hand share links still decode, with the old five-fingered hand", !!v3 && v3.plan === "worm" && v3.armType === "hands" && v3.arms === 6 && Math.abs(v3.smile - .702) < .01 && v3.seed === 83186457 && v3.fingers === 5 && v3.thumbs === 1 && Math.abs(v3.fingerLen - 1) < .01 && Math.abs(v3.fingerSpread - .5) < .01);
+    check("thumbs never outnumber the fingers", S.normalizeGenome({ ...S.CLASSIC, fingers: 2, thumbs: 2 }).thumbs === 1 && pool.every((g) => g.thumbs < g.fingers && g.fingers >= 2 && g.fingers <= 12));
+    const fingered = S.buildLayout({ ...S.CLASSIC, armType: "hands", fingers: 9, thumbs: 2 });
+    check("hand genes reach every hand arm", fingered.arms.filter((a) => a.type === "hands").every((a) => a.hand.fingers === 9 && a.hand.thumbs === 2));
+    check("hand genes never move other features", ["eyes", "mouths", "dermal", "pimples"].every((k) => JSON.stringify(S.buildLayout({ ...S.CLASSIC, armType: "hands" })[k]) === JSON.stringify(fingered[k])));
     const plain = S.buildLayout(S.CLASSIC), friendly = S.buildLayout({ ...S.CLASSIC, smile: 1, happyEyes: 1, sparkle: 1, brows: 1, blush: 1 });
     check("a friendly face never moves other features", ["eyes", "mouths", "arms", "dermal", "pimples"].every((k) => JSON.stringify(plain[k]) === JSON.stringify(friendly[k])));
     check("blush puts two cheeks on the face", plain.cheeks.length === 0 && friendly.cheeks.length === 2 && finite(friendly.cheeks.map((c) => ({ pos: c.pos, normal: c.normal, r: c.r }))));
@@ -1546,14 +1562,28 @@ function makeTip(arm, M, G) {
   const group = new THREE.Group();
   const r = arm.r0;
   if (arm.type === "hands") {
-    mesh(group, G.sphere, M.limb, [0, 0, r * .5], [r * 1.5, r * .6, r * 1.3], true);
-    for (let k = 0; k < 4; k++) {
-      const f = mesh(group, G.cylZ, M.limb, [lerp(-.9, .9, k / 3) * r, 0, r * 1.3], [r * .26, r * .22, r * (1.2 + (k === 1 || k === 2 ? .5 : 0))], true);
-      f.rotation.y = lerp(-.35, .35, k / 3);
-      if (arm.tip === "claw") mesh(group, G.coneZ, M.claw, [lerp(-.9, .9, k / 3) * r * 1.35, 0, r * 2.7], [r * .2, r * .2, r * .6]).rotation.y = lerp(-.35, .35, k / 3);
+    // `hand.fingers` digits in total: `hand.thumbs` of them stick out sideways from the palm, the
+    // rest fan across its front edge. The palm widens with the finger count; the middle fingers
+    // are the longest. Defaults (5 fingers, 1 thumb) give the original four-and-a-thumb hand.
+    const hand = arm.hand, n = hand.fingers - hand.thumbs, wide = Math.sqrt(Math.max(1, n) / 4);
+    const fanAngle = .35 * hand.spread * 2 * Math.max(.6, wide), fingerR = r * .26 / Math.max(1, wide * .8);
+    mesh(group, G.sphere, M.limb, [0, 0, r * .5], [r * 1.5 * wide, r * .6, r * 1.3], true);
+    for (let k = 0; k < n; k++) {
+      const u = n === 1 ? .5 : k / (n - 1), d = Math.abs(u - .5) * 2;
+      const x = lerp(-.9, .9, u) * r * wide, a = lerp(-fanAngle, fanAngle, u);
+      const len = r * (1.2 + .55 * (1 - d * d) * (n > 2 ? 1 : 0)) * hand.len;
+      const f = mesh(group, G.cylZ, M.limb, [x, 0, r * 1.3], [fingerR, fingerR * .85, len], true);
+      f.rotation.y = a;
+      mesh(group, G.sphereLo, M.limb, [x + Math.sin(a) * len, 0, r * 1.3 + Math.cos(a) * len], [fingerR, fingerR * .85, fingerR]);
+      if (arm.tip === "claw") mesh(group, G.coneZ, M.claw, [x + Math.sin(a) * len, 0, r * 1.3 + Math.cos(a) * len], [fingerR * .78, fingerR * .78, r * .6]).rotation.y = a;
     }
-    const thumb = mesh(group, G.cylZ, M.limb, [r * 1.2, 0, r * .4], [r * .26, r * .24, r * 1.1], true);
-    thumb.rotation.y = 1.1;
+    for (let k = 0; k < hand.thumbs; k++) {
+      const side = k === 0 ? 1 : -1;
+      const tl = r * 1.1 * Math.sqrt(hand.len), tx = side * r * 1.2 * wide;
+      const thumb = mesh(group, G.cylZ, M.limb, [tx, 0, r * .4], [r * .26, r * .24, tl], true);
+      thumb.rotation.y = side * 1.1;
+      mesh(group, G.sphereLo, M.limb, [tx + Math.sin(side * 1.1) * tl, 0, r * .4 + Math.cos(side * 1.1) * tl], [r * .26, r * .24, r * .26]);
+    }
   }
   if (arm.mouthTip) return group;
   if (arm.tip === "claw" && arm.type !== "hands") {
@@ -2061,7 +2091,7 @@ function syncControls() {
     if (String(el.value) !== String(v)) el.value = v;
     const out = $(`out-${gene.key}`);
     if (out) out.textContent = formatGene(gene, v);
-    $(`field-${gene.key}`).classList.toggle("inactive", !!gene.gate && !genome[gene.gate]);
+    $(`field-${gene.key}`).classList.toggle("inactive", (!!gene.gate && !genome[gene.gate]) || (!!gene.when && !gene.when(genome)));
   }
   for (const [group, key] of Object.entries(GROUP_COUNT)) $(`count-${group}`).textContent = group === "body" ? genome.plan : genome[key];
 }
