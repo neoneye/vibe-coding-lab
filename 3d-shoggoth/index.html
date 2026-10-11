@@ -315,7 +315,16 @@ const Shoggoth = (() => {
     E("mask", "mask", "Smiley mask", ["none", "body", "head", "tentacle"], .05, { weights: [14, 1.2, 1, 1.6] }),
     E("maskFace", "mask", "Expression", ["smile", "grin", "wink"], .02, { when: (g) => g.mask !== "none" }),
     N("maskSize", "mask", "Mask size", .4, 2, .02, { when: (g) => g.mask !== "none", fmt: "x" }),
-    N("maskTilt", "mask", "Tilt", -1, 1, .02, { when: (g) => g.mask !== "none", fmt: "signed" })
+    N("maskTilt", "mask", "Tilt", -1, 1, .02, { when: (g) => g.mask !== "none", fmt: "signed" }),
+    // Trypophobia genes came after the mask; keep these last. Random rarely uses them (weights and
+    // tiny novelty weights), since the patterns genuinely distress some visitors.
+    I("holes", "holes", "Hole clusters", 0, 12, .02, { count: true, buckets: [[0, 0, 12], [1, 3, .7], [4, 12, .25]] }),
+    N("holeDensity", "holes", "Holes per cluster", 0, 1, .02, { gate: "holes" }),
+    N("holeSize", "holes", "Hole size", .3, 2, .02, { gate: "holes", fmt: "x" }),
+    N("holeDepth", "holes", "Depth", 0, 1, .02, { gate: "holes" }),
+    N("holeRim", "holes", "Swollen rims", 0, 1, .02, { gate: "holes" }),
+    N("holeSeeds", "holes", "Seeds", 0, 1, .02, { gate: "holes" }),
+    N("holePulse", "holes", "Pulse", 0, 1, .02, { gate: "holes" })
   ];
   const GENE = Object.fromEntries(GENES.map((gene) => [gene.key, gene]));
 
@@ -330,12 +339,13 @@ const Shoggoth = (() => {
     pimples: 9, pimplePlace: "scattered", pimpleSize: 1, ripeness: .55, inflammation: .5, throb: .25,
     smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0,
     fingers: 5, thumbs: 1, fingerLen: 1, fingerSpread: .5,
-    mask: "none", maskFace: "smile", maskSize: 1, maskTilt: 0, seed: 48217
+    mask: "none", maskFace: "smile", maskSize: 1, maskTilt: 0,
+    holes: 0, holeDensity: .5, holeSize: 1, holeDepth: .6, holeRim: .4, holeSeeds: .3, holePulse: .2, seed: 48217
   };
   // Older share links carry only the genes that existed when they were made: v1 stops before
   // the pimples, v2 before the face, v3 before the hand genes. Missing genes decode as "absent"
   // (or, for hands, as the old five-fingered hand).
-  const LINK_GENE_COUNTS = ["pimples", "smile", "fingers", "mask"].map((key) => GENES.findIndex((gene) => gene.key === key)).concat(GENES.length);
+  const LINK_GENE_COUNTS = ["pimples", "smile", "fingers", "mask", "holes"].map((key) => GENES.findIndex((gene) => gene.key === key)).concat(GENES.length);
 
   const qOf = (gene, v) => gene.kind === "hue" ? Math.round((((v % 1) + 1) % 1) * 256) % 256 : Math.round(clamp((v - gene.min) / (gene.max - gene.min), 0, 1) * 255);
   const fromQ = (gene, q) => gene.kind === "hue" ? q / 256 : gene.min + q * (gene.max - gene.min) / 255;
@@ -508,7 +518,7 @@ const Shoggoth = (() => {
     const bytes = b64ToBytes(str.slice(2));
     const n = bytes ? bytes.length - 5 : -1;
     if (!bytes || !LINK_GENE_COUNTS.includes(n) || bytes[0] !== 1) return null;
-    const g = { pimples: 0, smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0, fingers: 5, thumbs: 1, fingerLen: 1, fingerSpread: .5, mask: "none" };
+    const g = { pimples: 0, smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0, fingers: 5, thumbs: 1, fingerLen: 1, fingerSpread: .5, mask: "none", holes: 0 };
     for (let i = 0; i < n; i++) {
       const gene = GENES[i], b = bytes[i + 1];
       if (gene.kind === "enum") { if (b >= gene.values.length) return null; g[gene.key] = gene.values[b]; }
@@ -533,7 +543,8 @@ const Shoggoth = (() => {
     const pustules = g.pimples >= 25 ? " pustulosus" : "";
     const smiling = g.mouths && g.smile >= .6 ? " ridens" : "";
     const masked = g.mask !== "none" ? " personatus" : "";
-    return `${genus} ${species} ${eyes}${mouths}${pustules}${smiling}${masked}`;
+    const sieved = g.holes >= 3 ? " cribrosus" : "";
+    return `${genus} ${species} ${eyes}${mouths}${pustules}${smiling}${masked}${sieved}`;
   }
 
   // Colours as [h, s, l] in 0..1 so the renderer can feed them to setHSL.
@@ -1003,6 +1014,39 @@ const Shoggoth = (() => {
       }
     }
 
+    // trypophobic hole clusters: packed patches of pits on the lobes, own rng stream
+    const holes = [];
+    if (g.holes) {
+      const hrng = makeRng((g.seed ^ 0x27d4eb2f) >>> 0);
+      const lobeOf = (host) => host.kind === "lobe" ? host.index : -1;
+      const keepOut = [...eyes.map((e) => ({ li: lobeOf(e.host), p: e.pos, r: e.r + e.stalk })), ...mouths.map((m) => ({ li: lobeOf(m.host), p: m.pos, r: m.r * 1.2 }))].filter((k) => k.li >= 0);
+      const perCluster = Math.round(lerp(6, 70, g.holeDensity));
+      for (let c = 0; c < g.holes; c++) {
+        let li = 0, centre = null;
+        for (let k = 0; k < 24 && !centre; k++) {
+          li = pickLobe();
+          const d = randomUnit(hrng), dd = norm([d[0], Math.max(-.3, d[1]), d[2]]), hit = onLobe(li, dd);
+          if (!inside(hit.p, li) && hit.p[1] > .2) centre = dd;
+        }
+        if (!centre) continue;
+        const R = lobeR(li), base = Math.min(R * .1, lobeR(main) * .05) * g.holeSize;   // one hole size for the whole creature, capped on small lobes
+        const b = basis(centre), spread = Math.sqrt(perCluster) * base * 1.35 / R;
+        const placed = [];
+        for (let t = 0; t < perCluster * 12 && placed.length < perCluster; t++) {
+          // denser, larger holes in the middle of a patch, smaller ones at its fringe
+          const rad = spread * Math.sqrt(hrng()), ang = hrng() * TAU, edge = rad / spread;
+          const size = base * (1.25 - .55 * edge) * (.75 + hrng() * .5);
+          const d = norm(fromBasis(b, [Math.cos(ang) * rad, Math.sin(ang) * rad, 1]));
+          const hit = onLobe(li, d);
+          if (inside(hit.p, li) || hit.p[1] < .05) continue;
+          if (placed.concat(holes).some((q) => q.lobe === li && Math.hypot(q.pos[0] - hit.local[0], q.pos[1] - hit.local[1], q.pos[2] - hit.local[2]) < (q.size + size) * 1.12)) continue;
+          if (keepOut.some((k) => k.li === li && Math.hypot(k.p[0] - hit.local[0], k.p[1] - hit.local[1], k.p[2] - hit.local[2]) < k.r + size * 1.4)) continue;
+          placed.push({ lobe: li, cluster: c, pos: hit.local, normal: hit.n, size, seed: hrng() < g.holeSeeds, phase: hrng() * TAU });
+        }
+        holes.push(...placed);
+      }
+    }
+
     // bounds for camera / stage framing
     const lo = [Infinity, 0, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     const grow = (p, r = 0) => { for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], p[k] - r); hi[k] = Math.max(hi[k], p[k] + r); } };
@@ -1014,7 +1058,7 @@ const Shoggoth = (() => {
     const radius = Math.max(1.5, length(sub(hi, lo)) * .5);
     const footprint = Math.max(Math.abs(lo[0]), Math.abs(hi[0]), Math.abs(lo[2]), Math.abs(hi[2]));
 
-    return { genome: g, lobes, main, along, strands, heads, eyes, mouths, arms, dermal, pimples, cheeks, mask, bounds: { lo, hi, center, radius, footprint } };
+    return { genome: g, lobes, main, along, strands, heads, eyes, mouths, arms, dermal, pimples, cheeks, mask, holes, bounds: { lo, hi, center, radius, footprint } };
   }
 
   function armRadius(arm, s) {
@@ -1184,6 +1228,14 @@ const ShoggothTests = {
     check("pre-pimple classic link decodes", !!S.decodeGenome("s1AQAFgIBNc0ABAAABZnQHAABgM4ABAQFbCAAAjIkHOnEtMwNIEiYWLTIAALxZ"));
     const v2 = S.decodeGenome("s1AQYBfjtg1dwDBQMCMAMMAgI2gq4BAALRBgQD8xQHKdF3iQBdHxcLIi4RAVQTV5gFVdTM");
     check("pre-face share links still decode, with a neutral face", !!v2 && v2.plan === "cluster" && v2.pimples === 17 && v2.pimplePlace === "clustered" && v2.seed === 89511116 && v2.smile === 0 && v2.blush === 0 && v2.brows === 0);
+    const v5 = S.decodeGenome("s1AQUAMR-hYUACAwMCI68SAgDru_oBAAOUDAACB0YILhUQpwFDEClbQA4tAvMi_pwDkBhHjgIAn4IDAn8yH1EdCQ");
+    check("pre-trypophobia share links still decode, without holes", !!v5 && v5.plan === "crawler" && v5.mask === "tentacle" && v5.maskFace === "wink" && v5.seed === 525409545 && v5.holes === 0);
+    const holey = S.buildLayout({ ...S.CLASSIC, holes: 5, holeDensity: .8 });
+    check("hole clusters place packed holes", holey.holes.length > 5 * 25 && new Set(holey.holes.map((h) => h.cluster)).size === 5 && finite(holey.holes.map((h) => ({ pos: h.pos, normal: h.normal, size: h.size }))));
+    check("holes never overlap", holey.holes.every((a, i) => holey.holes.every((b, j) => j <= i || a.lobe !== b.lobe || Math.hypot(a.pos[0] - b.pos[0], a.pos[1] - b.pos[1], a.pos[2] - b.pos[2]) >= (a.size + b.size) * 1.1)));
+    check("holes never move other features", ["eyes", "mouths", "arms", "dermal", "pimples"].every((k) => JSON.stringify(S.buildLayout(S.CLASSIC)[k]) === JSON.stringify(holey[k])));
+    const holeRate = pool.filter((g) => g.holes > 0).length / pool.length;
+    check("Random rarely makes trypophobic specimens", holeRate < .2, holeRate.toFixed(2));
     const v4 = S.decodeGenome("s1AQMBeQJwhTMCAgAAV_cOAwEjKuwCBQFxBAQApQIFT9Se5AQPNA0dP2IEAA2yeKaUADGyAAUCeZ62eWtV");
     check("pre-mask share links still decode, unmasked", !!v4 && v4.plan === "worm" && v4.fingers === 7 && v4.thumbs === 2 && v4.seed === 3061410645 && v4.mask === "none");
     check("a head mask falls back to the body without heads", S.normalizeGenome({ ...S.CLASSIC, heads: 0, mask: "head" }).mask === "body");
@@ -1238,8 +1290,8 @@ const { clamp, lerp, TAU } = S;
 const $ = (id) => document.getElementById(id);
 const MEMORY_KEY = "shoggoth.memory.v1";
 const MEMORY_MAX = 500;
-const GROUP_TITLES = { body: "Body", heads: "Heads", eyes: "Eyes", mouths: "Mouths", mask: "Smiley mask", face: "Friendly face", arms: "Arms", pimples: "Pimples", surface: "Surface & character" };
-const GROUP_COUNT = { heads: "heads", eyes: "eyes", mouths: "mouths", arms: "arms", pimples: "pimples", body: "segments" };
+const GROUP_TITLES = { body: "Body", heads: "Heads", eyes: "Eyes", mouths: "Mouths", mask: "Smiley mask", face: "Friendly face", arms: "Arms", pimples: "Pimples", holes: "Trypophobia", surface: "Surface & character" };
+const GROUP_COUNT = { heads: "heads", eyes: "eyes", mouths: "mouths", arms: "arms", pimples: "pimples", holes: "holes", body: "segments" };
 const PLAN_NOTES = { blob: "single deformable mass", heap: "heap of fused lobes", column: "stacked column", worm: "segmented worm", ring: "closed ring of lobes", crawler: "mass raised on legs", cluster: "floating cluster on strands", tree: "stalked branching tree" };
 
 let THREE, mergeVertices;
@@ -1675,6 +1727,69 @@ function makeSmiley(r, face, G) {
   return group;
 }
 
+// Trypophobic pits: a disc whose radial gradient runs from a black core (wider when deeper) out to a
+// translucent rim colour. The raised rim torus around it sells the concavity.
+function pitTexture(depth) {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const x = c.getContext("2d"), gr = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+  const core = .2 + depth * .45;
+  gr.addColorStop(0, "rgba(4,1,2,1)");
+  gr.addColorStop(core, `rgba(${10 + (1 - depth) * 30},${4 + (1 - depth) * 12},${5 + (1 - depth) * 10},1)`);
+  gr.addColorStop(Math.min(.9, core + .28), "rgba(62,24,20,.8)");
+  gr.addColorStop(1, "rgba(70,30,24,0)");
+  x.fillStyle = gr;
+  x.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+function buildHoles(L, g, M, rec) {
+  const C = M.C;
+  const pitMat = new THREE.MeshStandardMaterial({ map: pitTexture(g.holeDepth), transparent: true, depthWrite: false, roughness: .55, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+  const rimMat = new THREE.MeshPhysicalMaterial({ color: C.skin.clone().lerp(new THREE.Color(.72, .3, .28), g.holeRim * .6), roughness: .5, clearcoat: .4 + g.slime / 250, clearcoatRoughness: .25, sheen: .5, sheenColor: C.highlight });
+  const seedMat = new THREE.MeshPhysicalMaterial({ color: new THREE.Color(.82, .79, .58).lerp(C.skin, .15), roughness: .25, clearcoat: 1, clearcoatRoughness: .1 });
+  const disc = new THREE.CircleGeometry(1, 22), ring = new THREE.TorusGeometry(1, .22, 8, 22), ball = new THREE.SphereGeometry(1, 12, 9);
+  rec.holeGeometries = [disc, ring, ball];
+  const Z = new THREE.Vector3(0, 0, 1), m = new THREE.Matrix4(), v = new THREE.Vector3(), sc = new THREE.Vector3();
+  const byCluster = new Map();
+  for (const h of L.holes) { if (!byCluster.has(h.cluster)) byCluster.set(h.cluster, []); byCluster.get(h.cluster).push(h); }
+  rec.holeClusters = [];
+  for (const list of byCluster.values()) {
+    const seeds = list.filter((h) => h.seed);
+    const pits = new THREE.InstancedMesh(disc, pitMat, list.length), rims = new THREE.InstancedMesh(ring, rimMat, list.length);
+    const pods = seeds.length ? new THREE.InstancedMesh(ball, seedMat, seeds.length) : null;
+    rims.castShadow = true; rims.receiveShadow = true;
+    if (pods) { pods.castShadow = true; pods.receiveShadow = true; }
+    const items = list.map((h) => ({ h, n: new THREE.Vector3(...h.normal), q: new THREE.Quaternion().setFromUnitVectors(Z, new THREE.Vector3(...h.normal)) }));
+    const cluster = { pits, rims, pods, items, seeds: items.filter((it) => it.h.seed) };
+    const place = (k) => {
+      // k scales the hole opening (pulse); rims stretch with it, seeds sink and swell a little
+      cluster.items.forEach((it, i) => {
+        const s = it.h.size * (k ? 1 + k * Math.sin(it.phase) : 1);
+        m.compose(v.set(...it.h.pos).addScaledVector(it.n, it.h.size * .03), it.q, sc.set(s, s, s));
+        pits.setMatrixAt(i, m);
+        m.compose(v.set(...it.h.pos).addScaledVector(it.n, it.h.size * .02), it.q, sc.set(s * 1.1, s * 1.1, it.h.size * (.3 + g.holeRim * 1.1)));
+        rims.setMatrixAt(i, m);
+      });
+      cluster.seeds.forEach((it, i) => {
+        const s = it.h.size * (k ? 1 + k * .6 * Math.sin(it.phase) : 1);
+        m.compose(v.set(...it.h.pos).addScaledVector(it.n, -it.h.size * .12), it.q, sc.set(s * .5, s * .5, s * .38));
+        pods.setMatrixAt(i, m);
+      });
+      pits.instanceMatrix.needsUpdate = true; rims.instanceMatrix.needsUpdate = true;
+      if (pods) pods.instanceMatrix.needsUpdate = true;
+    };
+    items.forEach((it) => { it.phase = it.h.phase; });
+    cluster.place = place;
+    place(0);
+    const parent = rec.lobes[list[0].lobe].group;
+    parent.add(rims, pits);
+    if (pods) parent.add(pods);
+    rec.holeClusters.push(cluster);
+  }
+}
+
 // ---- build the creature from the layout ---------------------------------------------
 function buildCreature(L) {
   const g = L.genome;
@@ -1773,6 +1888,8 @@ function buildCreature(L) {
       m.position.addScaledVector(n, d.size * .35);
     }
   });
+
+  if (L.holes.length) buildHoles(L, g, M, rec);
 
   L.pimples.forEach((p) => {
     const group = new THREE.Group(), s = p.size;
@@ -2004,6 +2121,15 @@ function stepCreature(t) {
     p.group.scale.set(1 + throb * .14 * beat, 1 + throb * .28 * beat, 1 + throb * .14 * beat);
   }
 
+  if (build.holeClusters && g.holePulse > 0) {
+    // the pits slowly dilate and close, each on its own beat
+    const k = g.holePulse * .16;
+    for (const c of build.holeClusters) {
+      c.items.forEach((it) => { it.phase = it.h.phase + t * (.9 + (it.h.phase % 1) * .5); });
+      c.place(k);
+    }
+  }
+
   const mk = build.mask;
   if (mk && mk.kind === "tentacle") {
     const a = lobeWorld(mk.lobe, mk.local, _v1), n = mk.normal, L = mk.len, p = mk.pts;
@@ -2038,7 +2164,7 @@ function disposeObject(object) {
     if (child.material) materials.add(child.material);
   });
   geometries.forEach((x) => x.dispose());
-  materials.forEach((x) => x.dispose());
+  materials.forEach((x) => { if (x.map && x.map.isCanvasTexture) x.map.dispose(); x.dispose(); });
 }
 
 function buildEnvironment() {
@@ -2224,6 +2350,7 @@ function syncControls() {
 }
 
 function mood(g) {
+  if (g.holes >= 4 && g.holeDensity > .5) return "hard to look at";
   if (g.mask !== "none") return "smiling politely";
   if (g.smile > .55 && (g.blush > .3 || g.brows > .3 || g.happyEyes > .3)) return "friendly";
   if (g.cuteness > 68) return "affectionate";
