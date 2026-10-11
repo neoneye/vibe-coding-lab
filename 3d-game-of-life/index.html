@@ -24,7 +24,8 @@
   #panel .lab { display: flex; justify-content: space-between; }
   #panel .lab b { color: var(--fg); font-weight: 500; }
   .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  .seg.seg3 { grid-template-columns: 1fr 1fr 1fr; }
+  .seg.seg4 { grid-template-columns: repeat(4, 1fr); }
+  .seg.seg4 button { padding-left: 2px; padding-right: 2px; }
   .seg button { border: 0; border-radius: 0; background: transparent; }
   .seg button.on { background: #7fd4ff22; color: var(--accent); }
   .row { display: flex; gap: 6px; }
@@ -56,9 +57,9 @@
 <aside id="panel">
   <div>
     <h1>3D Game of Life</h1>
-    <p class="sub">Wrap-around voxel world of cubes, tetrahedra or a triangle crystal</p>
+    <p class="sub">Wrap-around world of cubes, tetrahedra or tetrahedral crystals</p>
   </div>
-  <div class="seg seg3" id="latticeSeg"><button data-v="cube" title="One cube per voxel">Cubes</button><button data-v="tetra" title="Each voxel split into 6 right-angled Kuhn tetrahedra">Kuhn tetra</button><button data-v="crystal" title="Triangle crystal: regular tetrahedra (d4) and octahedra (d8), every face a 60° triangle">d4 + d8</button></div>
+  <div class="seg seg4" id="latticeSeg"><button data-v="cube" title="One cube per voxel">Cubes</button><button data-v="tetra" title="Each voxel split into 6 right-angled Kuhn tetrahedra">Kuhn</button><button data-v="crystal" title="Triangle crystal: regular tetrahedra (d4) and octahedra (d8), every face a 60° triangle">d4 + d8</button><button data-v="a15" title="A15 Frank–Kasper crystal: space filled by nearly regular tetrahedra only, 46 per unit cell">All d4</button></div>
   <div class="seg" id="nbhdSeg"><button data-v="1">3×3×3</button><button data-v="2">5×5×5</button></div>
   <p class="hint" id="nbhdHint"></p>
   <label>Preset <select id="preset"></select></label>
@@ -138,25 +139,15 @@ const GOL = (() => {
   });
   const CRYSTAL_OCTA = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
-  // Neighbour offsets per cell class (0: d4 in an even voxel, 1: d4 in an odd voxel, 2: d8) as flat Int8Arrays of
-  // [dx, dy, dz, isOcta, ...]. Ring 1, the 3×3 analogue, is every cell sharing at least one corner; ring 2, the 5×5
-  // analogue, adds every cell sharing a corner with a ring-1 cell. Derived from the shapes on a small patch.
-  const CRYSTAL_NBRS = (() => {
-    const R = 6, cells = [], byCorner = new Map(), key = (x, y, z) => `${x},${y},${z}`;
-    const add = (x, y, z, octa, corners) => {
-      const i = cells.length;
-      cells.push({ x, y, z, octa, corners: corners.map(([a, b, c]) => key(a, b, c)) });
-      for (const k of cells[i].corners) { if (!byCorner.has(k)) byCorner.set(k, []); byCorner.get(k).push(i); }
-    };
-    for (let x = -R; x <= R; x++) for (let y = -R; y <= R; y++) for (let z = -R; z <= R; z++) {
-      const p = (x + y + z) & 1;
-      add(x, y, z, 0, CRYSTAL_TET[p].map(q => [x + q[0], y + q[1], z + q[2]]));
-      if (p) add(x, y, z, 1, CRYSTAL_OCTA.map(d => [x + d[0], y + d[1], z + d[2]]));
-    }
+  // Corner-sharing neighbour rings, derived from the shapes on a small patch. `cells` lists {x, y, z, cls, corners}
+  // (corners as "x,y,z" keys); for each reference cell the result holds flat Int8Arrays of [dx, dy, dz, cls, ...].
+  // Ring 1, the 3×3 analogue, is every cell sharing at least one corner; ring 2, the 5×5 analogue, adds every cell
+  // sharing a corner with a ring-1 cell.
+  function cornerRings(cells, refs) {
+    const byCorner = new Map();
+    cells.forEach((c, i) => { for (const k of c.corners) { if (!byCorner.has(k)) byCorner.set(k, []); byCorner.get(k).push(i); } });
     const ring1 = i => { const s = new Set(); for (const k of cells[i].corners) for (const j of byCorner.get(k)) s.add(j); s.delete(i); return s; };
-    const find = (x, y, z, octa) => cells.findIndex(c => c.x === x && c.y === y && c.z === z && c.octa === octa);
-    const refs = [find(0, 0, 0, 0), find(1, 0, 0, 0), find(1, 0, 0, 1)];
-    const flat = (i, set) => Int8Array.from([...set].flatMap(j => [cells[j].x - cells[i].x, cells[j].y - cells[i].y, cells[j].z - cells[i].z, cells[j].octa]));
+    const flat = (i, set) => Int8Array.from([...set].flatMap(j => [cells[j].x - cells[i].x, cells[j].y - cells[i].y, cells[j].z - cells[i].z, cells[j].cls]));
     const out = { 1: [], 2: [] };
     for (const i of refs) {
       const r1 = ring1(i), r2 = new Set(r1);
@@ -165,12 +156,59 @@ const GOL = (() => {
       out[1].push(flat(i, r1)); out[2].push(flat(i, r2));
     }
     return out;
+  }
+  const ringReach = rings => Math.max(...rings[2].flatMap(L => [...L].filter((_, i) => i % 4 < 3).map(Math.abs)));
+  const cornerKeys = (pts, dx, dy, dz) => pts.map(([a, b, c]) => `${a + dx},${b + dy},${c + dz}`);
+
+  // Triangle crystal rings per cell class (0: d4 in an even voxel, 1: d4 in an odd voxel, 2: d8); cls in the
+  // offsets is 0 for a d4 target and 1 for a d8 target.
+  const CRYSTAL_NBRS = (() => {
+    const R = 6, cells = [];
+    for (let x = -R; x <= R; x++) for (let y = -R; y <= R; y++) for (let z = -R; z <= R; z++) {
+      const p = (x + y + z) & 1;
+      cells.push({ x, y, z, cls: 0, corners: cornerKeys(CRYSTAL_TET[p], x, y, z) });
+      if (p) cells.push({ x, y, z, cls: 1, corners: cornerKeys(CRYSTAL_OCTA, x, y, z) });
+    }
+    const find = (x, y, z, cls) => cells.findIndex(c => c.x === x && c.y === y && c.z === z && c.cls === cls);
+    return cornerRings(cells, [find(0, 0, 0, 0), find(1, 0, 0, 0), find(1, 0, 0, 1)]);
   })();
-  const CRYSTAL_REACH = Math.max(...CRYSTAL_NBRS[2].flatMap(L => [...L].filter((_, i) => i % 4 < 3).map(Math.abs)));
+  const CRYSTAL_REACH = ringReach(CRYSTAL_NBRS);
+
+  // A15 Frank–Kasper crystal (β-tungsten / Cr3Si) split into its Delaunay tetrahedra: space filled by d4 cells only,
+  // 46 per cubic unit cell in 3 slightly irregular shapes (edges within ±11%), 5 or 6 tetrahedra around every edge.
+  // Corners in quarter-cell units: a unit cell is 4 across, and in the world it spans 4 voxels.
+  // Cells: tetrahedron k of unit cell v (index over the (N/4)³ cells) is c = v * 46 + k.
+  const A15_TETS = [
+    [[1,0,2],[-1,0,2],[0,2,1],[0,0,0]], [[1,0,2],[0,2,3],[-1,0,2],[0,0,4]], [[1,0,2],[0,2,3],[0,2,1],[-1,0,2]],
+    [[0,2,3],[0,2,1],[-1,4,2],[1,4,2]], [[0,2,1],[-1,4,2],[1,4,2],[0,4,0]], [[0,4,4],[0,2,3],[-1,4,2],[1,4,2]],
+    [[2,1,0],[0,2,1],[0,2,-1],[0,0,0]], [[0,2,1],[0,2,-1],[0,4,0],[2,3,0]], [[1,0,2],[0,2,1],[2,1,0],[0,0,0]],
+    [[1,0,2],[0,2,3],[0,0,4],[2,1,4]], [[1,0,2],[0,2,1],[0,2,3],[2,2,2]], [[0,2,3],[0,2,1],[1,4,2],[2,2,2]],
+    [[0,2,1],[0,4,0],[1,4,2],[2,3,0]], [[0,4,4],[0,2,3],[1,4,2],[2,3,4]], [[2,1,0],[0,2,-1],[0,2,1],[2,3,0]],
+    [[2,-1,0],[1,0,2],[2,1,0],[0,0,0]], [[1,0,2],[0,0,4],[2,-1,4],[2,1,4]], [[1,0,2],[2,1,0],[0,2,1],[2,2,2]],
+    [[1,0,2],[0,2,3],[2,1,4],[2,2,2]], [[0,2,1],[2,3,0],[1,4,2],[2,2,2]], [[0,2,3],[1,4,2],[2,3,4],[2,2,2]],
+    [[2,1,0],[2,3,0],[0,2,1],[2,2,2]], [[0,2,3],[2,3,4],[2,1,4],[2,2,2]], [[2,-1,0],[1,0,2],[3,0,2],[2,1,0]],
+    [[3,0,2],[1,0,2],[2,-1,4],[2,1,4]], [[3,0,2],[2,1,0],[1,0,2],[2,2,2]], [[3,0,2],[1,0,2],[2,1,4],[2,2,2]],
+    [[1,4,2],[2,3,0],[3,4,2],[2,2,2]], [[1,4,2],[3,4,2],[2,3,4],[2,2,2]], [[2,1,0],[4,2,1],[2,3,0],[2,2,2]],
+    [[4,2,3],[2,1,4],[2,3,4],[2,2,2]], [[2,-1,0],[2,1,0],[3,0,2],[4,0,0]], [[3,0,2],[2,-1,4],[4,0,4],[2,1,4]],
+    [[3,0,2],[4,2,1],[2,1,0],[2,2,2]], [[3,0,2],[2,1,4],[4,2,3],[2,2,2]], [[3,4,2],[2,3,0],[4,2,1],[2,2,2]],
+    [[4,2,3],[2,3,4],[3,4,2],[2,2,2]], [[2,1,0],[2,3,0],[4,2,1],[4,2,-1]], [[3,0,2],[4,0,0],[2,1,0],[4,2,1]],
+    [[3,0,2],[4,0,4],[4,2,3],[2,1,4]], [[3,0,2],[4,2,3],[4,2,1],[2,2,2]], [[4,2,3],[3,4,2],[4,2,1],[2,2,2]],
+    [[4,4,0],[4,2,1],[3,4,2],[2,3,0]], [[4,2,3],[4,4,4],[3,4,2],[2,3,4]], [[2,1,0],[4,2,1],[4,0,0],[4,2,-1]],
+    [[4,4,0],[4,2,1],[2,3,0],[4,2,-1]],
+  ];
+  // Rings per tetrahedron k of the unit cell; offsets in whole cells, cls = the target tetrahedron's index.
+  const A15_NBRS = (() => {
+    const R = 3, cells = [];
+    for (let x = -R; x <= R; x++) for (let y = -R; y <= R; y++) for (let z = -R; z <= R; z++)
+      A15_TETS.forEach((t, k) => cells.push({ x, y, z, cls: k, corners: cornerKeys(t, 4 * x, 4 * y, 4 * z) }));
+    return cornerRings(cells, A15_TETS.map((_, k) => cells.findIndex(c => !c.x && !c.y && !c.z && c.cls === k)));
+  })();
+  const A15_REACH = ringReach(A15_NBRS);
 
   const cellsPerVoxel = lattice => (lattice === 'tetra' ? 6 : 1);
-  const maxCount = (lattice, r) => lattice === 'crystal'
-    ? Math.max(...CRYSTAL_NBRS[r].map(L => L.length / 4))
+  const ringMax = rings => Math.max(...rings.map(L => L.length / 4));
+  const maxCount = (lattice, r) => lattice === 'crystal' ? ringMax(CRYSTAL_NBRS[r])
+    : lattice === 'a15' ? ringMax(A15_NBRS[r])
     : cellsPerVoxel(lattice) * (2 * r + 1) ** 3 - 1;
 
   // "S/B/C", optionally followed by "/M" (box neighbourhood) as in common 3D CA rule lists.
@@ -220,19 +258,26 @@ const GOL = (() => {
   class World {
     constructor(N, lattice, r) {
       this.crystal = lattice === 'crystal';
+      this.a15 = lattice === 'a15';
+      this.cellCounted = this.crystal || this.a15;   // per-cell corner rings instead of voxel box sums
       if (this.crystal) {
         if (N % 2 || N < 2 * CRYSTAL_REACH + 2) throw new Error(`triangle crystal needs an even N >= ${2 * CRYSTAL_REACH + 2}, got ${N}`);
+      } else if (this.a15) {
+        if (N % 4 || N / 4 < 2 * A15_REACH + 1) throw new Error(`A15 needs N a multiple of 4 with N/4 >= ${2 * A15_REACH + 1}, got ${N}`);
       } else if (N < 2 * r + 1) throw new Error(`N=${N} is too small for radius ${r}`);
       this.N = N; this.lattice = lattice; this.r = r;
-      this.per = cellsPerVoxel(lattice);   // crystal: 1 d4 per voxel; its d8 cells live after the d4s (see CRYSTAL_TET)
-      this.nv = N * N * N; this.nc = this.crystal ? this.nv + this.nv / 2 : this.nv * this.per;
+      this.G = this.a15 ? N / 4 : N;      // grid side: voxels, or A15 unit cells of 4 voxels
+      // crystal: 1 d4 per voxel, its d8 cells live after the d4s (see CRYSTAL_TET); A15: 46 d4 per unit cell
+      this.per = this.a15 ? 46 : cellsPerVoxel(lattice);
+      this.nv = this.G ** 3; this.nc = this.crystal ? this.nv + this.nv / 2 : this.nv * this.per;
       this.maxCount = maxCount(lattice, r);
       this.state = new Uint8Array(this.nc);
       this.next = new Uint8Array(this.nc);
-      if (this.crystal) {
+      if (this.cellCounted) {
+        const G = this.G, K = this.reach = this.a15 ? A15_REACH : CRYSTAL_REACH;
         this.cnt = new Uint16Array(this.nc);
-        this.nbrs = CRYSTAL_NBRS[r];
-        this.wrap = Int32Array.from({ length: N + 2 * CRYSTAL_REACH }, (_, i) => (i - CRYSTAL_REACH + N) % N);
+        this.nbrs = (this.a15 ? A15_NBRS : CRYSTAL_NBRS)[r];
+        this.wrap = Int32Array.from({ length: G + 2 * K }, (_, i) => (i - K + G) % G);
       } else {
         this.a = new Uint16Array(this.nv);
         this.b = new Uint16Array(this.nv);
@@ -247,11 +292,11 @@ const GOL = (() => {
     }
     clear() { this.state.fill(0); this.gen = 0; this.updateStats(); }
     seed(density, region, rng) {
-      const { N, per, state } = this;
+      const { N, G, per, state } = this;
       state.fill(0);
-      const L = Math.max(1, Math.min(N, Math.round(region))), o = (N - L) >> 1;
+      const L = Math.max(1, Math.min(G, Math.round(region * G / N))), o = (G - L) >> 1;   // region is in voxels
       for (let z = o; z < o + L; z++) for (let y = o; y < o + L; y++) for (let x = o; x < o + L; x++) {
-        const v = x + N * (y + N * z), base = v * per;
+        const v = x + G * (y + G * z), base = v * per;
         for (let k = 0; k < per; k++) if (rng() < density) state[base + k] = 1;
         if (this.crystal && ((x + y + z) & 1) && rng() < density) state[this.nv + (v >> 1)] = 1;
       }
@@ -275,21 +320,27 @@ const GOL = (() => {
       boxAxis(a, b, N, r, 0); boxAxis(b, a, N, r, 1); boxAxis(a, b, N, r, 2);
       return b;
     }
-    // Triangle crystal: per-cell count of alive neighbours (self excluded). Each alive cell adds 1 to every cell in its
-    // offset list; the corner-sharing relation is symmetric, so this equals counting each cell's own neighbours.
+    // Triangle crystal and A15: per-cell count of alive neighbours (self excluded). Each alive cell adds 1 to every
+    // cell in its offset list; the corner-sharing relation is symmetric, so this equals counting each cell's own neighbours.
     countCells() {
-      const { N, nv, state, cnt, wrap: W } = this, [L0, L1, L2] = this.nbrs, K = CRYSTAL_REACH;
+      const { G, nv, state, cnt, wrap: W, reach: K, nbrs } = this;
       cnt.fill(0);
-      const scatter = (L, x, y, z) => {
-        for (let i = 0; i < L.length; i += 4) {
-          const t = W[x + L[i] + K] + N * (W[y + L[i + 1] + K] + N * W[z + L[i + 2] + K]);
-          cnt[L[i + 3] ? nv + (t >> 1) : t]++;
-        }
+      // target(t, cls) maps a neighbour's grid position and class to its cell index.
+      const scatter = (L, x, y, z, target) => {
+        for (let i = 0; i < L.length; i += 4)
+          cnt[target(W[x + L[i] + K] + G * (W[y + L[i + 1] + K] + G * W[z + L[i + 2] + K]), L[i + 3])]++;
       };
-      for (let z = 0, v = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++, v++) {
-        const p = (x + y + z) & 1;
-        if (state[v] === 1) scatter(p ? L1 : L0, x, y, z);
-        if (p && state[nv + (v >> 1)] === 1) scatter(L2, x, y, z);
+      if (this.a15) {
+        const target = (t, k) => t * 46 + k;
+        for (let z = 0, v = 0; z < G; z++) for (let y = 0; y < G; y++) for (let x = 0; x < G; x++, v++)
+          for (let k = 0, c = v * 46; k < 46; k++, c++) if (state[c] === 1) scatter(nbrs[k], x, y, z, target);
+      } else {
+        const target = (t, octa) => (octa ? nv + (t >> 1) : t);
+        for (let z = 0, v = 0; z < G; z++) for (let y = 0; y < G; y++) for (let x = 0; x < G; x++, v++) {
+          const p = (x + y + z) & 1;
+          if (state[v] === 1) scatter(nbrs[p], x, y, z, target);
+          if (p && state[nv + (v >> 1)] === 1) scatter(nbrs[2], x, y, z, target);
+        }
       }
       return cnt;
     }
@@ -304,7 +355,7 @@ const GOL = (() => {
         if (ns) { nonDead++; if (ns === 1) alive++; }
         if (ns !== s) changes++;
       };
-      if (this.crystal) {
+      if (this.cellCounted) {
         const cnt = this.countCells();
         for (let c = 0; c < nc; c++) advance(c, cnt[c]);
       } else {
@@ -369,6 +420,19 @@ const GOL = (() => {
     { name: 'Boiling Lumps',       lattice: 'crystal', r: 2, rule: '24-44/34-44/10',           density: 0.3,  fill: 0.3 },
     { name: 'Twin Nuggets',        lattice: 'crystal', r: 2, rule: '39-96/80-96/8',            density: 0.5,  fill: 0.5 },
     { name: 'Shattered Glass',     lattice: 'crystal', r: 2, rule: '20-55/55-61/8',            density: 0.3,  fill: 1.0 },
+    // A15 all-d4 r=1 (67–70 corner neighbours): other lattices' presets with counts scaled to this ring, then mutated
+    { name: 'Coral Drift',         lattice: 'a15', r: 1, rule: '8-18/15-19/16',                density: 0.2,  fill: 0.5 },
+    { name: 'Ember Veins',         lattice: 'a15', r: 1, rule: '7-17/14-18/16',                density: 0.2,  fill: 0.3 },
+    { name: 'Spark Storm',         lattice: 'a15', r: 1, rule: '3-7/4/5',                      density: 0.2,  fill: 0.3 },
+    { name: 'Geode Shell',         lattice: 'a15', r: 1, rule: '11-36/8/24',                   density: 0.4,  fill: 0.5 },
+    { name: 'Glass Bloom',         lattice: 'a15', r: 1, rule: '6-20/17-22/24',                density: 0.3,  fill: 0.3 },
+    { name: 'Frosted Block',       lattice: 'a15', r: 1, rule: '5-16/17-22/16',                density: 0.2,  fill: 1.0 },
+    // A15 all-d4 r=2 (339–349)
+    { name: 'Quartz Geode',        lattice: 'a15', r: 2, rule: '59-172/43-47/24',              density: 0.5,  fill: 0.5 },
+    { name: 'Drifting Isles',      lattice: 'a15', r: 2, rule: '31-92/83-100/8',               density: 0.4,  fill: 0.5 },
+    { name: 'Glitter Lump',        lattice: 'a15', r: 2, rule: '30-102/91-106/16',             density: 0.4,  fill: 0.5 },
+    { name: 'Ash Shell',           lattice: 'a15', r: 2, rule: '55-160/40-42/10',              density: 0.5,  fill: 0.5 },
+    { name: 'Boiling Foam',        lattice: 'a15', r: 2, rule: '34-63/49-63/10',               density: 0.3,  fill: 0.3 },
   ];
   const presetsFor = (lattice, r) => PRESETS.filter(p => p.lattice === lattice && p.r === r);
 
@@ -412,7 +476,7 @@ const GOL = (() => {
            (C > 2 || flicker <= FLICKER_CAP);
   }
 
-  return { PERMS, TETRA, CRYSTAL_TET, CRYSTAL_OCTA, CRYSTAL_NBRS, CRYSTAL_REACH, mulberry32, cellsPerVoxel, maxCount, parseRule, boxAxis, World, PRESETS, presetsFor, evaluate, accepts, FLICKER_CAP, MAX_FRAC, MAX_ALIVE_FRAC };
+  return { PERMS, TETRA, CRYSTAL_TET, CRYSTAL_OCTA, CRYSTAL_NBRS, CRYSTAL_REACH, A15_TETS, A15_NBRS, A15_REACH, mulberry32, cellsPerVoxel, maxCount, parseRule, boxAxis, World, PRESETS, presetsFor, evaluate, accepts, FLICKER_CAP, MAX_FRAC, MAX_ALIVE_FRAC };
 })();
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -607,7 +671,7 @@ GolTests.add('every preset parses for its own neighbourhood', () => {
 });
 
 GolTests.add('at least 4 presets per lattice/neighbourhood', () => {
-  for (const lat of ['cube', 'tetra', 'crystal']) for (const r of [1, 2]) {
+  for (const lat of ['cube', 'tetra', 'crystal', 'a15']) for (const r of [1, 2]) {
     const n = GOL.presetsFor(lat, r).length;
     assert(n >= 4, `${lat} r=${r} has ${n} presets`);
   }
@@ -622,7 +686,7 @@ GolTests.add('every preset passes the acceptance test (N=32, seed 1): alive, spa
 });
 
 GolTests.add('each combination default also passes on seeds 2 and 3', () => {
-  for (const lat of ['cube', 'tetra', 'crystal']) for (const r of [1, 2]) {
+  for (const lat of ['cube', 'tetra', 'crystal', 'a15']) for (const r of [1, 2]) {
     const p = GOL.presetsFor(lat, r)[0];
     for (const seed of [2, 3]) {
       const e = GOL.evaluate(p, { seed });
@@ -775,6 +839,101 @@ GolTests.add('triangle crystal dynamics are invariant under even shifts across t
     each((a, b) => assert(w2.state[b] === w1.state[a], `r=${r} mismatch at cell ${a}`));
   }
 });
+
+// ── A15 Frank–Kasper crystal (all d4) ────────────────────────────────────
+const TA = (() => {
+  // Independent neighbour count on a torus of M³ unit cells: key every corner by its wrapped absolute position
+  // (quarter-cell units) and count alive tetrahedra sharing a corner (r=1) or sharing one with such a tetrahedron (r=2).
+  function bruteA15Counts(w) {
+    const M = w.N / 4, S = 4 * M, verts = [], byCorner = new Map();
+    const key = ([x, y, z]) => ((x % S) + S) % S + S * ((((y % S) + S) % S) + S * (((z % S) + S) % S));
+    for (let cz = 0, v = 0; cz < M; cz++) for (let cy = 0; cy < M; cy++) for (let cx = 0; cx < M; cx++, v++)
+      GOL.A15_TETS.forEach((t, k) => { verts[v * 46 + k] = t.map(([x, y, z]) => key([x + 4 * cx, y + 4 * cy, z + 4 * cz])); });
+    verts.forEach((vs, c) => vs.forEach(k => { if (!byCorner.has(k)) byCorner.set(k, []); byCorner.get(k).push(c); }));
+    const ring1 = verts.map((vs, c) => { const s = new Set(); for (const k of vs) for (const d of byCorner.get(k)) s.add(d); s.delete(c); return s; });
+    const out = new Uint16Array(w.nc);
+    for (let c = 0; c < w.nc; c++) {
+      let set = ring1[c];
+      if (w.r === 2) { const s2 = new Set(set); for (const d of set) for (const e of ring1[d]) s2.add(e); s2.delete(c); set = s2; }
+      let n = 0;
+      for (const d of set) if (w.state[d] === 1) n++;
+      out[c] = n;
+    }
+    return out;
+  }
+  return { bruteA15Counts };
+})();
+
+GolTests.add('A15: 46 positive tetrahedra fill the unit cell exactly, nothing else', () => {
+  assert(GOL.A15_TETS.length === 46);
+  let vol = 0;
+  for (const t of GOL.A15_TETS) { const v = T.orient(...t) / 6; assert(v > 0, 'tetra orientation'); vol += v; }
+  assert(Math.abs(vol - 64) < 1e-9, `volume ${vol} (cell = 4³ quarter units)`);
+  const rng = GOL.mulberry32(8);
+  for (let i = 0; i < 3000; i++) {
+    const p = [4 * rng(), 4 * rng(), 4 * rng()];
+    let hits = 0;
+    for (const t of GOL.A15_TETS) for (let sx = -4; sx <= 4; sx += 4) for (let sy = -4; sy <= 4; sy += 4) for (let sz = -4; sz <= 4; sz += 4)
+      if (T.insideTet(p, t.map(([x, y, z]) => [x + sx, y + sy, z + sz]))) hits++;
+    assert(hits === 1, `point ${p} in ${hits} tetrahedra`);
+  }
+});
+
+GolTests.add('A15: near-regular d4 with 5 or 6 tetrahedra around every edge (48 and 6 per cell)', () => {
+  const edges = new Map();
+  let lo = Infinity, hi = 0;
+  for (const t of GOL.A15_TETS) for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) {
+    const a = t[i], b = t[j], len = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    lo = Math.min(lo, len); hi = Math.max(hi, len);
+    const sh = [0, 1, 2].map(d => 4 * Math.floor((a[d] + b[d]) / 8));   // move the edge midpoint into the cell
+    const k = [a, b].map(p => p.map((x, d) => x - sh[d]).join(',')).sort().join('|');
+    edges.set(k, (edges.get(k) || 0) + 1);
+  }
+  const hist = {};
+  for (const n of edges.values()) hist[n] = (hist[n] || 0) + 1;
+  assert(hist[5] === 48 && hist[6] === 6 && Object.keys(hist).length === 2, JSON.stringify(hist));
+  assert(hi / lo < 1.23, `edge ratio ${hi / lo}`);
+});
+
+GolTests.add('A15 World: N multiple of 4, neighbour counts and an independent corner-sharing check', () => {
+  let threw = false;
+  try { new GOL.World(26, 'a15', 1); } catch { threw = true; }
+  assert(threw, 'N=26 accepted');
+  for (const r of [1, 2]) {
+    const w = new GOL.World(24, 'a15', r);
+    assert(w.nc === 46 * 216 && w.maxCount === GOL.maxCount('a15', r));
+    assert(w.maxCount === Math.max(...GOL.A15_NBRS[r].map(L => L.length / 4)));
+    T.randomStates(w, 31 + r);
+    const a = TA.bruteA15Counts(w), b = w.countCells();
+    for (let c = 0; c < w.nc; c++) assert(a[c] === b[c], `r=${r} cell ${c}: ${b[c]} != ${a[c]}`);
+  }
+});
+
+GolTests.add('A15 dynamics are invariant under whole-cell shifts across the wrap', () => {
+  for (const r of [1, 2]) {
+    const N = 24, M = 6, m = GOL.maxCount('a15', r), f = x => Math.round(m * x);
+    const rule = GOL.parseRule(`${f(0.15)}-${f(0.35)}/${f(0.2)}-${f(0.3)}/4`, m);
+    const w1 = new GOL.World(N, 'a15', r), w2 = new GOL.World(N, 'a15', r);
+    w1.setRule(rule); w2.setRule(rule);
+    w1.seed(0.4, N, GOL.mulberry32(3));
+    const cell = (x, y, z) => (x % M) + M * ((y % M) + M * (z % M));
+    const each = fn => { for (let z = 0; z < M; z++) for (let y = 0; y < M; y++) for (let x = 0; x < M; x++)
+      for (let k = 0; k < 46; k++) fn(cell(x, y, z) * 46 + k, cell(x + 1, y + 2, z + 5) * 46 + k); };
+    each((a, b) => { w2.state[b] = w1.state[a]; });
+    w2.updateStats();
+    for (let g = 0; g < 4; g++) {
+      w1.step(); w2.step();
+      if (g === 0) assert(w1.changed, `r=${r}: rule did nothing`);
+    }
+    each((a, b) => assert(w2.state[b] === w1.state[a], `r=${r} mismatch at cell ${a}`));
+  }
+});
+
+GolTests.add('A15 seed fills the unit cells of the region', () => {
+  const w = new GOL.World(24, 'a15', 1);
+  w.seed(1, 8, GOL.mulberry32(1));   // 8 voxels = 2 unit cells per side
+  assert(w.alive === 46 * 8, `${w.alive}`);
+});
 </script>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script type="module">
@@ -893,6 +1052,7 @@ function buildLayers() {
   for (const L of view.layers) { scene.remove(L.mesh); L.geo.dispose(); }
   const srcs = w.lattice === 'cube' ? [cubeGeometry()]
              : w.crystal ? crystalGeometries()
+             : w.a15 ? GOL.A15_TETS.map(t => polyGeometry(t, TET_FACES, 0.84))   // quarter-cell units = voxels
              : GOL.TETRA.map((_, k) => tetraGeometry(k));
   const cap = w.crystal ? w.nv / 2 : w.nv;   // crystal: half the voxels are even, half odd; one d8 per odd voxel
   view.layers = srcs.map(src => { const L = makeLayer(src, cap); src.dispose(); scene.add(L.mesh); return L; });
@@ -921,9 +1081,10 @@ function refill() {
       if (p && st[nv + (v >> 1)]) put(2, x, y, z, st[nv + (v >> 1)]);
     }
   } else {
-    for (let z = 0, c = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-      if ((ax === 0 ? x : ax === 1 ? y : z) >= lim) { c += per; continue; }
-      for (let k = 0; k < per; k++, c++) if (st[c]) put(k, x, y, z, st[c]);
+    const G = w.G, sc = N / G;   // A15: one grid step is a unit cell of 4 voxels
+    for (let z = 0, c = 0; z < G; z++) for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+      if ((ax === 0 ? x : ax === 1 ? y : z) * sc >= lim) { c += per; continue; }
+      for (let k = 0; k < per; k++, c++) if (st[c]) put(k, x * sc, y * sc, z * sc, st[c]);
     }
   }
   view.layers.forEach((L, k) => {
@@ -1006,7 +1167,7 @@ function frame(now) {
 
 // ── Boot ─────────────────────────────────────────────────────────────────
 {
-  const lat = ['tetra', 'crystal'].includes(params.get('lattice')) ? params.get('lattice') : 'cube';
+  const lat = ['tetra', 'crystal', 'a15'].includes(params.get('lattice')) ? params.get('lattice') : 'cube';
   const r = params.get('r') === '2' ? 2 : 1;
   const n = [24, 32, 48, 64].includes(+params.get('n')) ? +params.get('n') : 48;
   const seed = params.has('seed') ? +params.get('seed') >>> 0 : undefined;
@@ -1039,8 +1200,10 @@ function syncPanel() {
   for (const b of $('latticeSeg').children) b.classList.toggle('on', b.dataset.v === sim.lattice);
   for (const b of $('nbhdSeg').children) b.classList.toggle('on', +b.dataset.v === sim.r);
   const w = sim.world, cells = w.nc.toLocaleString('en-US');
+  const ringSizes = w.cellCounted ? w.nbrs.map(L => L.length / 4) : [];
   $('nbhdHint').textContent = w.crystal
-    ? `d4 ${GOL.CRYSTAL_NBRS[w.r][0].length / 4} · d8 ${w.maxCount} neighbours · ${cells} cells`
+    ? `d4 ${ringSizes[0]} · d8 ${ringSizes[2]} neighbours · ${cells} cells`
+    : w.a15 ? `${Math.min(...ringSizes)}–${Math.max(...ringSizes)} neighbours per d4 · ${cells} cells`
     : `${w.maxCount} neighbours per cell · ${cells} cells`;
   const list = GOL.presetsFor(sim.lattice, sim.r);
   $('preset').innerHTML = list.map((p, i) => `<option value="${i}">${p.name}</option>`).join('') +
