@@ -138,7 +138,7 @@ button.link:hover { color: var(--pink); }
       <button class="secondary" id="song" type="button" title="Make it sing like a whale (W)">Song</button>
       <button class="secondary" id="sigh" type="button" title="Make it sigh (H)">Sigh</button>
     </div>
-    <p class="hint"><b>R</b> random · <b>M</b> mutate · <b>B</b> back · <b>space</b> pause · <b>S</b> sound · <b>T</b> call · <b>W</b> song · <b>H</b> sigh · <b>click</b> poke · <b>drag</b> orbit · <b>wheel</b> zoom · the URL is a shareable specimen</p>
+    <p class="hint"><b>R</b> random · <b>M</b> mutate · <b>B</b> back · <b>space</b> pause · <b>S</b> sound · <b>T</b> call · <b>W</b> song · <b>H</b> sigh · <b>click</b> poke or pop a pimple · <b>drag</b> orbit · <b>wheel</b> zoom · the URL is a shareable specimen</p>
   </section>
   <div id="geneCards"></div>
   <details class="card">
@@ -1577,10 +1577,11 @@ function buildCreature(L) {
     // the red halo is a wide ellipsoid sunk into the skin, so only a soft rim shows around the bump
     const halo = s * (1.35 + g.inflammation * .55);
     if (g.inflammation > .05) mesh(group, G.sphere, M.pimpleHalo, [0, -s * .3, 0], [halo, s * .42, halo]);
-    mesh(group, G.sphere, M.pimple, [0, -s * .05, 0], [s, s * .8, s], true);
+    const bump = mesh(group, G.sphere, M.pimple, [0, -s * .05, 0], [s, s * .8, s], true);
     let head = null;
     if (p.ripe > .12) head = mesh(group, G.sphereLo, M.pimpleHead, [0, s * .62, 0], [s * .42 * Math.sqrt(p.ripe), s * .3 * p.ripe + s * .06, s * .42 * Math.sqrt(p.ripe)]);
-    rec.pimples.push({ group, head, phase: p.phase, rate: 1.6 + (p.phase % 1) * 1.4 });
+    group.traverse((o) => { o.userData.pimple = rec.pimples.length; });
+    rec.pimples.push({ group, bump, head, size: s, ripe: p.ripe, popped: false, phase: p.phase, rate: 1.6 + (p.phase % 1) * 1.4 });
   });
 
   const slime = g.slime / 100;
@@ -1740,6 +1741,7 @@ function stepCreature(t) {
 
   const throb = g.throb;
   if (throb > 0) for (const p of build.pimples) {
+    if (p.popped) continue;
     const beat = Math.pow(.5 + .5 * Math.sin(t * p.rate + p.phase), 3);
     p.group.scale.set(1 + throb * .14 * beat, 1 + throb * .28 * beat, 1 + throb * .14 * beat);
   }
@@ -1845,6 +1847,7 @@ function frameCreature() {
 
 function rebuild() {
   if (!scene) return;
+  clearSplats();
   if (build) { scene.remove(build.root); disposeObject(build.root); }
   layout = S.buildLayout(genome);
   build = buildCreature(layout);
@@ -2433,6 +2436,93 @@ function heaveAmount() {
   if (u >= 1) { audio.heave = null; return 0; }
   return u < .6 ? 1 - 1.5 * ease(u / .6) : -.5 * (1 - ease((u - .6) / .4));
 }
+// ---- pimple popping --------------------------------------------------------------
+// A click on (or right next to) a pimple pops it: the head bursts into a spray of pus droplets
+// that arc out along the skin normal, land and spread into little puddles, and the bump sinks
+// into a raw crater. Popped pimples stay popped until the specimen is rebuilt.
+const splats = [];
+let splatGroup = null, splatGeometry = null;
+function clearSplats() {
+  splats.length = 0;
+  if (splatGroup) splatGroup.clear();
+}
+function pimpleAt(point) {
+  if (!build || !build.pimples.length) return null;
+  let best = null, bestD = Infinity;
+  for (const p of build.pimples) {
+    if (p.popped) continue;
+    const d = p.group.getWorldPosition(_ap).distanceTo(point);
+    if (d < Math.max(.09, p.size * 2.4) && d < bestD) { best = p; bestD = d; }
+  }
+  return best;
+}
+function popPimple(p) {
+  p.popped = true;
+  p.group.scale.set(1, 1, 1);
+  if (p.head) p.head.visible = false;
+  if (!build.craterMat) {
+    const C = build.M.C;
+    build.craterMat = new THREE.MeshPhysicalMaterial({ color: C.skin.clone().lerp(new THREE.Color(.55, .05, .05), .7).multiplyScalar(.75), roughness: .25, clearcoat: 1, clearcoatRoughness: .05 });
+  }
+  p.bump.material = build.craterMat;
+  p.bump.scale.set(p.size * .9, p.size * .3, p.size * .9);
+  const origin = p.group.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 1, 0).applyQuaternion(p.group.getWorldQuaternion(new THREE.Quaternion())).multiplyScalar(p.size * .6));
+  const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(p.group.getWorldQuaternion(new THREE.Quaternion()));
+  if (!splatGroup) { splatGroup = new THREE.Group(); scene.add(splatGroup); }
+  const material = p.ripe > .12 ? build.M.pimpleHead : build.M.pimple;
+  const n = 5 + Math.round(p.ripe * 9);
+  for (let i = 0; i < n; i++) {
+    const r = p.size * (.12 + Math.random() * .2) * (.6 + p.ripe * .6);
+    splatGeometry ||= new THREE.SphereGeometry(1, 10, 8);
+    const m = new THREE.Mesh(splatGeometry, material);
+    m.scale.setScalar(r);
+    m.position.copy(origin);
+    splatGroup.add(m);
+    const vel = normal.clone().multiplyScalar(1 + Math.random() * 1.6 * (.5 + p.ripe)).add(new THREE.Vector3(Math.random() - .5, Math.random() * .5, Math.random() - .5).multiplyScalar(1.3));
+    splats.push({ mesh: m, vel, r, life: 3 + Math.random() * 2, landed: false, sound: i === 0 });
+  }
+  popSound(origin, p);
+  const left = build.pimples.filter((x) => !x.popped).length;
+  showToast(left ? `Pimple popped · ${left} left` : "Every pimple popped");
+  if (audio.enabled && !audio.heave && Math.random() < .4) setTimeout(sighOut, 500);   // relief
+}
+function stepSplats(dt) {
+  for (let i = splats.length - 1; i >= 0; i--) {
+    const s = splats[i];
+    if (!s.landed) {
+      s.vel.y -= 9.8 * dt;
+      s.mesh.position.addScaledVector(s.vel, dt);
+      s.mesh.scale.y = s.r * (1 + Math.min(.6, s.vel.length() * .12));   // stretch in flight
+      if (s.mesh.position.y <= s.r * .2) {
+        s.landed = true;
+        s.mesh.position.y = s.r * .2;
+        s.mesh.scale.set(s.r * 1.8, s.r * .25, s.r * 1.8);              // splat into a puddle
+        if (s.sound) landSound(s.mesh.position);
+      }
+    } else {
+      s.life -= dt;
+      if (s.life < 1) s.mesh.scale.set(s.r * 1.8 * Math.max(0, s.life), s.r * .25, s.r * 1.8 * Math.max(0, s.life));
+      if (s.life <= 0) { splatGroup.remove(s.mesh); splats.splice(i, 1); }
+    }
+  }
+}
+function popSound(point, p) {
+  if (!audio.enabled || !audio.voice) return;
+  const v = audio.voice, t = audio.ctx.currentTime + .005, k = clamp(.08 / p.size, .6, 1.8);
+  _ap.copy(point).applyMatrix4(camera.matrixWorldInverse);
+  const out = eventOut(clamp(_ap.x / (Math.abs(_ap.z) * .55 + 1), -.85, .85), audio.near);
+  toneHit(out, t, "sine", 2300 * k, 650 * k, .028, .32);                                     // the skin giving way: a tight "pik"
+  noiseHit(out, t, .022, "bandpass", 3200 * k, 1900 * k, 2, .38);
+  noiseHit(out, t + .012, .12 + p.ripe * .1, "lowpass", 3600, 550, 3 + v.wet * 8, .28 * (.4 + p.ripe)); // the squirt
+  if (p.ripe > .5) toneHit(out, t + .05, "sine", 480 * k, 1300 * k, .05, .1);
+}
+function landSound(point) {
+  if (!audio.enabled || !audio.voice) return;
+  const t = audio.ctx.currentTime + .005;
+  _ap.copy(point).applyMatrix4(camera.matrixWorldInverse);
+  const out = eventOut(clamp(_ap.x / (Math.abs(_ap.z) * .55 + 1), -.85, .85), .5 * audio.near);
+  noiseHit(out, t, .06, "lowpass", 1400, 300, 4 + audio.voice.wet * 6, .18);
+}
 function pokeSound(point) {
   if (!audio.enabled || !audio.voice) return;
   const v = audio.voice, t = audio.ctx.currentTime + .005;
@@ -2559,7 +2649,9 @@ function attachControls() {
       pokeNdc.set(((event.clientX - r.left) / r.width) * 2 - 1, -((event.clientY - r.top) / r.height) * 2 + 1);
       pokeRay.setFromCamera(pokeNdc, camera);
       const hit = pokeRay.intersectObject(build.root, true)[0];
-      if (hit) pokeSound(hit.point);
+      const pimple = hit && (hit.object.userData.pimple !== undefined && !build.pimples[hit.object.userData.pimple].popped ? build.pimples[hit.object.userData.pimple] : pimpleAt(hit.point));
+      if (pimple) popPimple(pimple);
+      else if (hit) pokeSound(hit.point);
     }
     pointer = null;
   };
@@ -2595,6 +2687,7 @@ function animate(now) {
   if (view.autoRotate) cameraYaw += delta * .065;
   updateCamera();
   if (running) stepCreature(time);
+  stepSplats(delta);
   audioUpdate(delta);
   if (environment) { environment.motes.rotation.y = time * .006; environment.halo.rotation.z = time * .015; }
   renderer.render(scene, camera);
@@ -2666,6 +2759,8 @@ async function main() {
       call: () => callOut(),
       song: () => songOut(),
       sigh: () => sighOut(),
+      pop(index = 0) { const p = build && build.pimples[index]; if (!p || p.popped) return false; popPimple(p); return true; },
+      splats: (dt = 0) => { if (dt) stepSplats(dt); return splats.length; },
       advance(seconds = 1, dt = 1 / 60) { for (let k = 0; k < seconds / dt; k++) { if (running) time += dt * view.speed; stepCreature(time); audioUpdate(dt); } return audio.events; },
       audio: () => ({ enabled: audio.enabled, state: audio.ctx && audio.ctx.state, level: audioLevel(), events: audio.events, heave: heaveAmount(), voice: audio.voice })
     };
