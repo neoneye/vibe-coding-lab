@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Game of Life</title>
+</head>
+<body>
+<script id="shared-code">
+// ── Test harness ─────────────────────────────────────────────────────────
+const GolTests = (() => {
+  const tests = [];
+  return {
+    add(name, fn) { tests.push([name, fn]); },
+    run() {
+      let pass = 0, fail = 0;
+      for (const [name, fn] of tests) {
+        try { fn(); pass++; } catch (e) { fail++; console.log(`FAIL ${name}: ${e.message}`); }
+      }
+      console.log(`${pass} passed, ${fail} failed`);
+      return fail === 0;
+    },
+  };
+})();
+function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
+
+// ── Engine ───────────────────────────────────────────────────────────────
+const GOL = (() => {
+  // Kuhn/Freudenthal triangulation: tetra k = monotone path (0,0,0) → (1,1,1) adding axes in PERMS[k] order.
+  const PERMS = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+  const TETRA = PERMS.map(p => {
+    const v = [0, 0, 0], out = [[0, 0, 0]];
+    for (const ax of p) { v[ax] = 1; out.push(v.slice()); }
+    return out;
+  });
+
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  const cellsPerVoxel = lattice => (lattice === 'tetra' ? 6 : 1);
+  const maxCount = (lattice, r) => cellsPerVoxel(lattice) * (2 * r + 1) ** 3 - 1;
+
+  // "S/B/C", optionally followed by "/M" (box neighbourhood) as in common 3D CA rule lists.
+  function parseRule(text, maxC) {
+    const parts = String(text).replace(/\s+/g, '').split('/');
+    if (parts.length === 4) {
+      if (/^n$/i.test(parts[3])) return { error: 'Only box (M) neighbourhoods are supported, not von Neumann (N)' };
+      if (!/^m$/i.test(parts[3])) return { error: `Unknown neighbourhood "${parts[3]}"` };
+      parts.pop();
+    }
+    if (parts.length !== 3) return { error: 'Rule must be S/B/C, e.g. 4/4/5' };
+    const tables = [];
+    for (let i = 0; i < 2; i++) {
+      const t = new Uint8Array(maxC + 1);
+      if (parts[i] !== '') for (const tok of parts[i].split(',')) {
+        const m = /^(\d+)(?:-(\d+))?$/.exec(tok);
+        if (!m) return { error: `Bad ${i ? 'birth' : 'survival'} entry "${tok}"` };
+        const a = +m[1], b = m[2] === undefined ? a : +m[2];
+        if (a > b) return { error: `Backwards range "${tok}"` };
+        if (b > maxC) return { error: `${b} exceeds the max neighbour count ${maxC}` };
+        for (let c = a; c <= b; c++) t[c] = 1;
+      }
+      tables.push(t);
+    }
+    if (!/^\d+$/.test(parts[2])) return { error: 'State count C must be a whole number' };
+    const C = +parts[2];
+    if (C < 2 || C > 255) return { error: 'State count C must be 2..255' };
+    return { S: tables[0], B: tables[1], C, text: parts.join('/') };
+  }
+
+  // Wrap-around sliding-window sum of radius r along one axis of an N³ grid.
+  function boxAxis(src, dst, N, r, axis) {
+    const st = axis === 0 ? 1 : axis === 1 ? N : N * N;  // stride along the summed axis
+    const s1 = axis === 0 ? N : 1;                       // strides of the two other axes
+    const s2 = axis === 2 ? N : N * N;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const base = i * s1 + j * s2;
+      let sum = 0;
+      for (let d = -r; d <= r; d++) sum += src[base + ((d + N) % N) * st];
+      for (let t = 0; t < N; t++) {
+        dst[base + t * st] = sum;
+        sum += src[base + ((t + r + 1) % N) * st] - src[base + ((t - r + N) % N) * st];
+      }
+    }
+  }
+
+  class World {
+    constructor(N, lattice, r) {
+      if (N < 2 * r + 1) throw new Error(`N=${N} is too small for radius ${r}`);
+      this.N = N; this.lattice = lattice; this.r = r;
+      this.per = cellsPerVoxel(lattice);
+      this.nv = N * N * N; this.nc = this.nv * this.per;
+      this.maxCount = maxCount(lattice, r);
+      this.state = new Uint8Array(this.nc);
+      this.next = new Uint8Array(this.nc);
+      this.a = new Uint16Array(this.nv);
+      this.b = new Uint16Array(this.nv);
+      this.rule = null;
+      this.gen = 0; this.alive = 0; this.nonDead = 0; this.changes = 0; this.changed = false;
+    }
+    setRule(rule) {
+      if (!rule || rule.error || rule.S.length !== this.maxCount + 1)
+        throw new Error('rule was parsed for a different neighbourhood');
+      this.rule = rule;
+    }
+    clear() { this.state.fill(0); this.gen = 0; this.updateStats(); }
+    seed(density, region, rng) {
+      const { N, per, state } = this;
+      state.fill(0);
+      const L = Math.max(1, Math.min(N, Math.round(region))), o = (N - L) >> 1;
+      for (let z = o; z < o + L; z++) for (let y = o; y < o + L; y++) for (let x = o; x < o + L; x++) {
+        const base = (x + N * (y + N * z)) * per;
+        for (let k = 0; k < per; k++) if (rng() < density) state[base + k] = 1;
+      }
+      this.gen = 0; this.updateStats();
+    }
+    updateStats() {
+      let alive = 0, nonDead = 0;
+      const st = this.state;
+      for (let c = 0; c < st.length; c++) { const s = st[c]; if (s) { nonDead++; if (s === 1) alive++; } }
+      this.alive = alive; this.nonDead = nonDead; this.changes = 0; this.changed = false;
+    }
+    // Per-voxel count of alive cells in the (2r+1)³ voxel block, the voxel itself included.
+    countVoxels() {
+      const { N, r, per, state, a, b, nv } = this;
+      if (per === 1) for (let v = 0; v < nv; v++) a[v] = state[v] === 1 ? 1 : 0;
+      else for (let v = 0, c = 0; v < nv; v++) {
+        let s = 0;
+        for (let k = 0; k < 6; k++, c++) if (state[c] === 1) s++;
+        a[v] = s;
+      }
+      boxAxis(a, b, N, r, 0); boxAxis(b, a, N, r, 1); boxAxis(a, b, N, r, 2);
+      return b;
+    }
+    step() {
+      const { per, state, next, nv } = this, { S, B, C } = this.rule;
+      const cnt = this.countVoxels();
+      let alive = 0, nonDead = 0, changes = 0;
+      for (let v = 0, c = 0; v < nv; v++) {
+        const n = cnt[v];
+        for (let k = 0; k < per; k++, c++) {
+          const s = state[c];
+          let ns;
+          if (s === 0) ns = B[n];
+          else if (s === 1) ns = S[n - 1] ? 1 : (C === 2 ? 0 : 2);
+          else ns = s + 1 >= C ? 0 : s + 1;
+          next[c] = ns;
+          if (ns) { nonDead++; if (ns === 1) alive++; }
+          if (ns !== s) changes++;
+        }
+      }
+      this.state = next; this.next = state;
+      this.alive = alive; this.nonDead = nonDead; this.changes = changes; this.changed = changes > 0;
+      this.gen++;
+    }
+  }
+
+  return { PERMS, TETRA, mulberry32, cellsPerVoxel, maxCount, parseRule, boxAxis, World };
+})();
+
+// ── Tests ────────────────────────────────────────────────────────────────
+const T = (() => {
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const det3 = (u, v, w) =>
+    u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0]) + u[2] * (v[0] * w[1] - v[1] * w[0]);
+  const orient = (a, b, c, d) => det3(sub(b, a), sub(c, a), sub(d, a));
+  function insideTet(p, [a, b, c, d]) {
+    const s = Math.sign(orient(a, b, c, d));
+    return Math.sign(orient(p, b, c, d)) === s && Math.sign(orient(a, p, c, d)) === s &&
+           Math.sign(orient(a, b, p, d)) === s && Math.sign(orient(a, b, c, p)) === s;
+  }
+  // Brute-force per-cell neighbour count straight from the definition.
+  function bruteCounts(w) {
+    const { N, r, per, state } = w, out = new Uint16Array(w.nc);
+    for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++)
+      for (let k = 0; k < per; k++) {
+        const c = (x + N * (y + N * z)) * per + k;
+        let s = 0;
+        for (let dz = -r; dz <= r; dz++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+          const v = ((x + dx + N) % N) + N * (((y + dy + N) % N) + N * ((z + dz + N) % N));
+          for (let kk = 0; kk < per; kk++) if (state[v * per + kk] === 1) s++;
+        }
+        if (state[c] === 1) s--;
+        out[c] = s;
+      }
+    return out;
+  }
+  function engineCounts(w) {
+    const cnt = w.countVoxels(), out = new Uint16Array(w.nc);
+    for (let c = 0; c < w.nc; c++) out[c] = cnt[(c / w.per) | 0] - (w.state[c] === 1 ? 1 : 0);
+    return out;
+  }
+  function randomStates(w, seed) {
+    const rng = GOL.mulberry32(seed);
+    for (let c = 0; c < w.nc; c++) w.state[c] = Math.floor(rng() * 4); // 0..3 incl. decaying
+  }
+  return { orient, insideTet, bruteCounts, engineCounts, randomStates };
+})();
+
+GolTests.add('maxCount per lattice and radius', () => {
+  assert(GOL.maxCount('cube', 1) === 26 && GOL.maxCount('cube', 2) === 124);
+  assert(GOL.maxCount('tetra', 1) === 161 && GOL.maxCount('tetra', 2) === 749);
+});
+
+GolTests.add('parseRule ranges and lists', () => {
+  const r = GOL.parseRule(' 9-26 / 5-7,12-13,15 / 5 ', 26);
+  assert(!r.error, r.error);
+  assert(r.C === 5 && r.text === '9-26/5-7,12-13,15/5', r.text);
+  for (let c = 0; c <= 26; c++) {
+    assert(r.S[c] === (c >= 9 ? 1 : 0), `S[${c}]`);
+    const inB = (c >= 5 && c <= 7) || c === 12 || c === 13 || c === 15;
+    assert(r.B[c] === (inB ? 1 : 0), `B[${c}]`);
+  }
+});
+
+GolTests.add('parseRule empty S or B', () => {
+  const r = GOL.parseRule('/3/2', 26);
+  assert(!r.error && r.S.every(x => x === 0) && r.B[3] === 1);
+  const q = GOL.parseRule('4//3', 26);
+  assert(!q.error && q.B.every(x => x === 0) && q.S[4] === 1);
+});
+
+GolTests.add('parseRule rejects malformed or out-of-range rules', () => {
+  for (const bad of ['', '4/4', '4/4/1', '4/x/5', '27/4/5', '5-3/4/5', '4,,5/4/5', '4/4/2.5', '4/4/256', '4/4/5/M/1'])
+    assert(GOL.parseRule(bad, 26).error, `accepted "${bad}"`);
+  assert(/exceeds/.test(GOL.parseRule('27/4/5', 26).error));
+  assert(!GOL.parseRule('26/26/2', 26).error);
+});
+
+GolTests.add('parseRule accepts /M, rejects /N', () => {
+  const r = GOL.parseRule('4/4/5/M', 26);
+  assert(!r.error && r.C === 5 && r.text === '4/4/5', r.error);
+  assert(!GOL.parseRule('4/4/5/m', 26).error);
+  assert(/box/.test(GOL.parseRule('0-6/1,3/2/N', 26).error));
+});
+
+GolTests.add('World rejects N < 2r+1', () => {
+  let threw = false;
+  try { new GOL.World(4, 'cube', 2); } catch { threw = true; }
+  assert(threw);
+  new GOL.World(5, 'cube', 2);
+});
+
+GolTests.add('World.setRule rejects a rule parsed for another neighbourhood', () => {
+  const w = new GOL.World(6, 'cube', 1);
+  let threw = false;
+  try { w.setRule(GOL.parseRule('4/4/5', 161)); } catch { threw = true; }
+  assert(threw);
+  w.setRule(GOL.parseRule('4/4/5', 26));
+});
+
+GolTests.add('box-sum counts match brute force (cube/tetra, r=1/2, across the wrap)', () => {
+  for (const [lat, r, N] of [['cube', 1, 3], ['cube', 1, 6], ['cube', 2, 5], ['cube', 2, 7],
+                             ['tetra', 1, 3], ['tetra', 1, 4], ['tetra', 2, 5]]) {
+    const w = new GOL.World(N, lat, r);
+    T.randomStates(w, 11 + N);
+    const a = T.bruteCounts(w), b = T.engineCounts(w);
+    for (let c = 0; c < w.nc; c++) assert(a[c] === b[c], `${lat} r=${r} N=${N} cell ${c}: ${b[c]} != ${a[c]}`);
+  }
+});
+
+GolTests.add('Kuhn tetrahedra partition the unit cube', () => {
+  let total = 0;
+  for (const t of GOL.TETRA) {
+    const V = Math.abs(T.orient(...t)) / 6;
+    assert(Math.abs(V - 1 / 6) < 1e-12, `volume ${V}`);
+    total += V;
+  }
+  assert(Math.abs(total - 1) < 1e-12);
+  const rng = GOL.mulberry32(7);
+  for (let i = 0; i < 3000; i++) {
+    const p = [rng(), rng(), rng()];
+    const hits = GOL.TETRA.filter(t => T.insideTet(p, t)).length;
+    assert(hits === 1, `point ${p} in ${hits} tetrahedra`);
+  }
+});
+
+GolTests.add('Generations: decay 1→2→3→4→0, no rebirth while decaying', () => {
+  const w = new GOL.World(5, 'cube', 1);
+  w.setRule(GOL.parseRule('/1-26/5', 26)); // nothing survives; any neighbour gives birth
+  const c = 2 + 5 * (2 + 5 * 2), nb = 3 + 5 * (2 + 5 * 2);
+  w.state[c] = 1; w.updateStats();
+  w.step(); assert(w.state[c] === 2 && w.state[nb] === 1, `step1 ${w.state[c]} ${w.state[nb]}`);
+  w.step(); assert(w.state[c] === 3, `decaying cell reborn: ${w.state[c]}`);
+  w.step(); assert(w.state[c] === 4);
+  w.step(); assert(w.state[c] === 0);
+  assert(w.gen === 4);
+});
+
+GolTests.add('C=2 is classic Life: 2x2x2 block is a still life under 5-7/6/2', () => {
+  const N = 8, w = new GOL.World(N, 'cube', 1);
+  w.setRule(GOL.parseRule('5-7/6/2', 26));
+  for (const [x, y, z] of [[3,3,3],[4,3,3],[3,4,3],[4,4,3],[3,3,4],[4,3,4],[3,4,4],[4,4,4]])
+    w.state[x + N * (y + N * z)] = 1;
+  const lone = 0; w.state[lone] = 1; // isolated cell dies straight to 0 (no decay when C=2)
+  w.updateStats();
+  w.step();
+  assert(w.state[lone] === 0, 'lone cell should die to 0');
+  w.step(); w.step();
+  assert(w.alive === 8 && w.nonDead === 8 && !w.changed, `alive ${w.alive} changed ${w.changed}`);
+});
+
+GolTests.add('B0 on an empty world births every cell', () => {
+  const w = new GOL.World(4, 'tetra', 1);
+  w.setRule(GOL.parseRule('/0/2', 161));
+  w.clear(); w.step();
+  assert(w.alive === w.nc, `${w.alive}/${w.nc}`);
+});
+
+GolTests.add('dynamics are translation-invariant across the wrap', () => {
+  for (const [lat, r] of [['cube', 1], ['cube', 2], ['tetra', 1], ['tetra', 2]]) {
+    const N = 7, m = GOL.maxCount(lat, r), f = x => Math.round(m * x);
+    const rule = GOL.parseRule(`${f(0.15)}-${f(0.35)}/${f(0.2)}-${f(0.3)}/4`, m);
+    const w1 = new GOL.World(N, lat, r), w2 = new GOL.World(N, lat, r);
+    w1.setRule(rule); w2.setRule(rule);
+    w1.seed(0.4, N, GOL.mulberry32(3));
+    const per = w1.per, idx = (x, y, z) => (x % N) + N * ((y % N) + N * (z % N));
+    for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++)
+      for (let k = 0; k < per; k++)
+        w2.state[idx(x + 3, y + 5, z + 6) * per + k] = w1.state[idx(x, y, z) * per + k];
+    w2.updateStats();
+    for (let g = 0; g < 4; g++) {
+      w1.step(); w2.step();
+      if (g === 0) assert(w1.changed, `${lat} r=${r}: rule did nothing`);
+    }
+    for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++)
+      for (let k = 0; k < per; k++)
+        assert(w2.state[idx(x + 3, y + 5, z + 6) * per + k] === w1.state[idx(x, y, z) * per + k],
+               `${lat} r=${r} mismatch at ${x},${y},${z},${k}`);
+  }
+});
+
+GolTests.add('seed fills only the centred region, reproducibly', () => {
+  const w = new GOL.World(10, 'cube', 1);
+  w.seed(1, 4, GOL.mulberry32(1));
+  assert(w.alive === 64 && w.gen === 0, `${w.alive}`);
+  assert(w.state[3 + 10 * (3 + 10 * 3)] === 1 && w.state[2 + 10 * (3 + 10 * 3)] === 0);
+  const a = new GOL.World(10, 'tetra', 1), b = new GOL.World(10, 'tetra', 1);
+  a.seed(0.3, 10, GOL.mulberry32(9)); b.seed(0.3, 10, GOL.mulberry32(9));
+  assert(a.state.every((s, i) => s === b.state[i]));
+});
+</script>
+</body>
+</html>
