@@ -5,7 +5,7 @@
 // the presets in index.html are picked by eye in the browser.
 // Stage 0 seeds known 26-neighbour classics (counts scaled to this neighbourhood), stage 1 samples random
 // windows, stage 2 refines the best viable candidates, stage 3 applies the full test.
-// Usage: node search.mjs <cube|tetra> <1|2> [tries=300] [seed=1]
+// Usage: node search.mjs <cube|tetra|crystal> <1|2> [tries=300] [seed=1]
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
