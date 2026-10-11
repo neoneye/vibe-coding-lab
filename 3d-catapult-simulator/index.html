@@ -30,7 +30,7 @@ button, input, select { font: inherit; }
 button, select, input[type="range"], input[type="checkbox"] { accent-color: var(--amber); }
 button { color: var(--text); }
 button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
-#viewport { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+#viewport { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 #viewport:active { cursor: grabbing; }
 .vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(circle at 53% 38%, transparent 32%, rgba(3, 10, 16, .05) 70%, rgba(3, 8, 13, .34) 130%); z-index: 1; }
 #panel { position: fixed; z-index: 4; top: 16px; left: 16px; width: min(370px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding-right: 3px; scrollbar-width: thin; scrollbar-color: rgba(224,164,84,.45) transparent; }
@@ -72,6 +72,8 @@ button.action:hover { filter: brightness(1.12); transform: translateY(-1px); }
 button.action:active { transform: translateY(1px); }
 button.secondary { min-height: 43px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.055); color: var(--soft); font-weight: 700; cursor: pointer; }
 button.secondary:hover { background: rgba(255,255,255,.1); color: var(--text); }
+.view-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 11px; }
+.view-row button.secondary { min-height: 32px; font-size: 11px; }
 .hint { margin: 10px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .hint b { color: var(--soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
 #statusRail { position: fixed; z-index: 3; top: 18px; right: 18px; width: min(360px, calc(100vw - 36px)); display: flex; flex-direction: column; gap: 9px; pointer-events: none; }
@@ -175,13 +177,14 @@ button.secondary:hover { background: rgba(255,255,255,.1); color: var(--text); }
       <label class="check"><input id="sound" type="checkbox" checked><span>Synthesized sound</span></label>
       <label class="check"><input id="shadows" type="checkbox" checked><span>Soft shadows</span></label>
       <label class="check"><input id="followCam" type="checkbox"><span>Camera follows projectile</span></label>
+      <div class="view-row" role="group" aria-label="Camera view"><button class="secondary" id="viewCatapult" type="button" title="Zoom to the catapult (1)">Catapult</button><button class="secondary" id="viewOverview" type="button" title="Show the whole range (0)">Overview</button><button class="secondary" id="viewFortress" type="button" title="Zoom to the target (2)">Fortress</button></div>
     </div>
   </details>
   <details class="card" open>
     <summary>Telemetry</summary>
     <div class="card-body">
       <div class="action-row"><button class="action" id="fire" type="button" aria-label="Fire or launch projectile">Fire / Launch</button><button class="secondary" id="reset" type="button" aria-label="Reset the device and rebuild the target">Full Reset</button></div>
-      <p class="hint"><b>Space</b> fire again without repairing the target · <b>R</b> full reset · drag to orbit · wheel to zoom</p>
+      <p class="hint"><b>Space</b> fire again without repairing the target · <b>R</b> full reset · drag to orbit · right/shift-drag to pan · wheel or pinch zooms toward the cursor · double-click to focus · <b>1</b>/<b>2</b>/<b>0</b> catapult/fortress/overview</p>
     </div>
   </details>
 </div>
@@ -442,10 +445,14 @@ async function main() {
   const identityRotation = { x: 0, y: 0, z: 0, w: 1 };
   const audio = { ctx: null, master: null, bus: null, reverbIn: null, noise: null, creak: null, plucks: null, windGain: null, windFilter: null, enabled: true, userGesture: false, lastClatter: -1, lastSplash: -1, ratchetStep: 0, loadedThunk: false };
   const keys = new Set();
-  const cameraState = { az: 0.72, el: 0.36, dist: 68, target: new THREE.Vector3(0, 5, 22) };
-  let pointerDown = false;
-  let lastPointerX = 0;
-  let lastPointerY = 0;
+  // target = autoTarget (smoothed midpoint / followed projectile) + pan (user offset).
+  const cameraState = { az: 0.72, el: 0.36, dist: 68, target: new THREE.Vector3(0, 5, 22), autoTarget: new THREE.Vector3(0, 5, 22), pan: new THREE.Vector3() };
+  const CAM_MIN_DIST = 2.5;
+  const CAM_MAX_DIST = 180;
+  const pointers = new Map();
+  let dragMode = null;
+  let pinchDist = 0;
+  let cameraFly = null;
   let screenShake = 0;
   let cameraFocus = null;
   let paused = false;
@@ -4006,34 +4013,68 @@ async function main() {
     });
     $("fire").addEventListener("click", () => { audio.userGesture = true; launch(); });
     $("reset").addEventListener("click", () => { audio.userGesture = true; resetSimulation(); });
-    $("viewport").addEventListener("pointerdown", (event) => {
+    const viewport = $("viewport");
+    $("viewCatapult").addEventListener("click", () => setView("catapult"));
+    $("viewOverview").addEventListener("click", () => setView("overview"));
+    $("viewFortress").addEventListener("click", () => setView("fortress"));
+    viewport.addEventListener("contextmenu", (event) => event.preventDefault());
+    viewport.addEventListener("pointerdown", (event) => {
       audio.userGesture = true;
       ensureAudio();
-      if (event.button !== 0) return;
-      pointerDown = true;
-      lastPointerX = event.clientX;
-      lastPointerY = event.clientY;
-      $("viewport").setPointerCapture(event.pointerId);
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      try { viewport.setPointerCapture(event.pointerId); } catch (_) { /* synthetic or already-released pointer */ }
+      cameraFly = null;
+      if (pointers.size === 2) { dragMode = "pinch"; return; }
+      if (pointers.size > 2) return;
+      if (event.button === 1 || event.button === 2 || (event.button === 0 && (event.shiftKey || event.ctrlKey || event.metaKey))) dragMode = "pan";
+      else dragMode = event.button === 0 ? "orbit" : null;
     });
-    $("viewport").addEventListener("pointermove", (event) => {
-      if (!pointerDown) return;
-      cameraState.az -= (event.clientX - lastPointerX) * 0.006;
-      cameraState.el = clamp(cameraState.el + (event.clientY - lastPointerY) * 0.004, 0.08, 1.25);
-      lastPointerX = event.clientX;
-      lastPointerY = event.clientY;
+    viewport.addEventListener("pointermove", (event) => {
+      const p = pointers.get(event.pointerId);
+      if (!p) return;
+      const dx = event.clientX - p.x;
+      const dy = event.clientY - p.y;
+      if (dragMode === "pinch" && pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        const cx0 = (a.x + b.x) / 2, cy0 = (a.y + b.y) / 2, s0 = Math.hypot(a.x - b.x, a.y - b.y);
+        p.x = event.clientX;
+        p.y = event.clientY;
+        const cx1 = (a.x + b.x) / 2, cy1 = (a.y + b.y) / 2, s1 = Math.hypot(a.x - b.x, a.y - b.y);
+        panBy(cx1 - cx0, cy1 - cy0);
+        if (s0 > 4 && s1 > 4) zoomAt(cx1, cy1, s0 / s1);
+        return;
+      }
+      p.x = event.clientX;
+      p.y = event.clientY;
+      if (dragMode === "orbit") {
+        cameraState.az -= dx * 0.006;
+        cameraState.el = clamp(cameraState.el + dy * 0.004, 0.08, 1.25);
+      } else if (dragMode === "pan") panBy(dx, dy);
     });
-    const endPointer = () => { pointerDown = false; };
-    $("viewport").addEventListener("pointerup", endPointer);
-    $("viewport").addEventListener("pointercancel", endPointer);
-    $("viewport").addEventListener("wheel", (event) => {
-      cameraState.dist = clamp(cameraState.dist * Math.exp(event.deltaY * 0.0012), 8, 150);
+    const endPointer = (event) => {
+      pointers.delete(event.pointerId);
+      // Lifting one finger of a pinch hands the remaining finger back to orbiting.
+      dragMode = pointers.size === 1 && dragMode === "pinch" ? "orbit" : pointers.size ? dragMode : null;
+    };
+    viewport.addEventListener("pointerup", endPointer);
+    viewport.addEventListener("pointercancel", endPointer);
+    viewport.addEventListener("wheel", (event) => {
       event.preventDefault();
+      const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * 400 : event.deltaY;
+      zoomAt(event.clientX, event.clientY, Math.exp(clamp(delta, -120, 120) * 0.0016));
     }, { passive: false });
+    viewport.addEventListener("dblclick", (event) => {
+      const point = pickPoint(event.clientX, event.clientY);
+      if (point) flyTo(point, Math.min(cameraState.dist, 26));
+    });
     window.addEventListener("keydown", (event) => {
       audio.userGesture = true;
       if (event.target && ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(event.target.tagName)) return;
       if (event.code === "Space") { event.preventDefault(); launch(); }
       if (event.code === "KeyR") { event.preventDefault(); resetSimulation(); }
+      if (event.code === "Digit1" || event.code === "Numpad1") setView("catapult");
+      if (event.code === "Digit2" || event.code === "Numpad2") setView("fortress");
+      if (event.code === "Digit0" || event.code === "Numpad0" || event.code === "Home") setView("overview");
       keys.add(event.code);
     });
     window.addEventListener("keyup", (event) => keys.delete(event.code));
@@ -4047,10 +4088,86 @@ async function main() {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(window.innerWidth, window.innerHeight, false);
   }
+  const raycaster = new THREE.Raycaster();
+  const pickNdc = new THREE.Vector2();
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const camRight = new THREE.Vector3();
+  const camUp = new THREE.Vector3();
+  const camDelta = new THREE.Vector3();
+  function overviewTarget(out) { return out.set(0, 5.2, state.range * 0.43); }
+  function isPickable(object) {
+    if (!object.isMesh) return false;
+    for (let o = object; o; o = o.parent) if (!o.visible) return false;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    return materials.some((m) => m && m.visible !== false && m.side !== THREE.BackSide && !(m.transparent && m.opacity < 0.35));
+  }
+  // World point under the cursor: nearest solid mesh, else the ground plane, else null (sky).
+  function pickPoint(clientX, clientY) {
+    if (!camera || !scene) return null;
+    const rect = $("viewport").getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    pickNdc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    camera.updateMatrixWorld();
+    raycaster.setFromCamera(pickNdc, camera);
+    for (const hit of raycaster.intersectObjects(scene.children, true)) {
+      if (hit.distance > 400) break;
+      if (isPickable(hit.object)) return hit.point.clone();
+    }
+    const ground = raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3());
+    return ground && ground.distanceTo(camera.position) < 400 ? ground : null;
+  }
+  function clampPan() {
+    const t = camDelta.addVectors(cameraState.autoTarget, cameraState.pan);
+    cameraState.pan.x += clamp(t.x, -220, 220) - t.x;
+    cameraState.pan.y += clamp(t.y, 0.3, 60) - t.y;
+    cameraState.pan.z += clamp(t.z, -220, 260) - t.z;
+  }
+  function panBy(dx, dy) {
+    if (!camera) return;
+    cameraFly = null;
+    const h = $("viewport").clientHeight || window.innerHeight;
+    const perPx = 2 * cameraState.dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.max(1, h);
+    camRight.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(-dx * perPx);
+    camUp.setFromMatrixColumn(camera.matrixWorld, 1).multiplyScalar(dy * perPx);
+    cameraState.pan.add(camRight).add(camUp);
+    clampPan();
+  }
+  // Scale the orbit about the point under the cursor so that point stays put on screen.
+  function zoomAt(clientX, clientY, factor) {
+    cameraFly = null;
+    const old = cameraState.dist;
+    cameraState.dist = clamp(old * factor, CAM_MIN_DIST, CAM_MAX_DIST);
+    const k = cameraState.dist / old;
+    const point = cameraFocus ? null : pickPoint(clientX, clientY);
+    if (!point) return;
+    cameraState.pan.add(camDelta.subVectors(point, cameraState.target).multiplyScalar(1 - k));
+    clampPan();
+  }
+  function flyTo(point, dist, angles = {}) {
+    cameraFly = { pan: point.clone().sub(overviewTarget(camDelta)), dist: clamp(dist, CAM_MIN_DIST, CAM_MAX_DIST), az: angles.az, el: angles.el };
+  }
+  function setView(name) {
+    if (name === "catapult") flyTo(new THREE.Vector3(0, 4.2, 0), 26);
+    else if (name === "fortress") flyTo(new THREE.Vector3(0, 6, state.range), 42);
+    else if (name === "overview") flyTo(overviewTarget(new THREE.Vector3()), 68, { az: 0.72, el: 0.36 });
+    else return null;
+    return name;
+  }
   function updateCamera() {
     if (!camera) return;
-    const follow = cameraFocus || (state.followCam && state.flightStarted && projectiles.length ? projectiles[0].mesh.position : tmpV2.set(0, 5.2, state.range * 0.43));
-    cameraState.target.lerp(follow, cameraFocus ? 1 : 0.08);
+    const following = !cameraFocus && state.followCam && state.flightStarted && projectiles.length;
+    const follow = cameraFocus || (following ? projectiles[0].mesh.position : overviewTarget(tmpV2));
+    cameraState.autoTarget.lerp(follow, cameraFocus ? 1 : 0.08);
+    if (cameraFly) {
+      cameraState.pan.lerp(cameraFly.pan, 0.12);
+      cameraState.dist += (cameraFly.dist - cameraState.dist) * 0.12;
+      if (cameraFly.az !== undefined) cameraState.az += Math.atan2(Math.sin(cameraFly.az - cameraState.az), Math.cos(cameraFly.az - cameraState.az)) * 0.12;
+      if (cameraFly.el !== undefined) cameraState.el += (cameraFly.el - cameraState.el) * 0.12;
+      if (cameraState.pan.distanceTo(cameraFly.pan) < 0.01 && Math.abs(cameraFly.dist - cameraState.dist) < 0.01) cameraFly = null;
+    }
+    if (following) cameraState.pan.multiplyScalar(0.92);
+    if (cameraFocus) cameraState.target.copy(cameraState.autoTarget);
+    else cameraState.target.addVectors(cameraState.autoTarget, cameraState.pan);
     const elevation = clamp(cameraState.el, 0.08, 1.25);
     const horizontal = Math.cos(elevation) * cameraState.dist;
     const shakeX = Math.sin(state.simTime * 43.7) * screenShake;
@@ -4146,7 +4263,7 @@ async function main() {
     else { cameraState.az = Number(az); cameraState.el = Number(el); cameraState.dist = Number(dist); }
     cameraState.az = Number.isFinite(cameraState.az) ? cameraState.az : 0.72;
     cameraState.el = clamp(Number.isFinite(cameraState.el) ? cameraState.el : 0.36, 0.08, 1.25);
-    cameraState.dist = clamp(Number.isFinite(cameraState.dist) ? cameraState.dist : 68, 8, 150);
+    cameraState.dist = clamp(Number.isFinite(cameraState.dist) ? cameraState.dist : 68, CAM_MIN_DIST, CAM_MAX_DIST);
     updateCamera();
     return { az: cameraState.az, el: cameraState.el, dist: cameraState.dist };
   }
@@ -4181,6 +4298,7 @@ async function main() {
       shot() { const s = getShot(); return { machine: s.kind, releaseTime: s.releaseTime, releasePos: s.releasePos, releaseVel: s.releaseVel, speed: s.speed, kineticEnergyKJ: s.kineticEnergy / 1000, storedEnergyKJ: s.storedEnergy / 1000, efficiency: s.efficiency, radius: s.radius, mass: s.mass, frames: s.frames.length, endTime: s.endTime }; },
       stats() { return statsSnapshot(); },
       camera(az, el, dist) { return setCamera(az, el, dist); },
+      view(name) { const v = setView(name); if (v && cameraFly) { cameraState.pan.copy(cameraFly.pan); cameraState.dist = cameraFly.dist; if (cameraFly.az !== undefined) cameraState.az = cameraFly.az; if (cameraFly.el !== undefined) cameraState.el = cameraFly.el; cameraFly = null; updateCamera(); } return v; },
       setCamera(az, el, dist) { return setCamera(az, el, dist); },
       pause(value = true) { paused = Boolean(value); return paused; },
       focus(x, y, z) { cameraFocus = Number.isFinite(x) ? new THREE.Vector3(x, y, z) : null; updateCamera(); return cameraFocus ? cameraFocus.toArray() : null; },
