@@ -163,7 +163,55 @@ const GOL = (() => {
     }
   }
 
-  return { PERMS, TETRA, mulberry32, cellsPerVoxel, maxCount, parseRule, boxAxis, World };
+  // Presets: cube r=1 entries are mostly well-known 26-neighbour rules (tuned seeds); the rest come from search.mjs. First entry per combination is its default.
+  const PRESETS = [
+    { name: 'Fading Ripples',  lattice: 'cube', r: 1, rule: '4-6/5-6/8',           density: 0.5,  fill: 0.3 },
+    { name: 'Pyroclastic',     lattice: 'cube', r: 1, rule: '4-7/6-8/10',          density: 0.35, fill: 0.3 },
+    { name: 'Crystal Growth',  lattice: 'cube', r: 1, rule: '0-6/1,3/2',           density: 0.15, fill: 0.3 },
+    { name: 'Builder',         lattice: 'cube', r: 1, rule: '2,6,9/4,6,8-9/10',    density: 0.5,  fill: 0.3 },
+    { name: '445',             lattice: 'cube', r: 1, rule: '4/4/5',               density: 0.15, fill: 1.0 },
+    // cube r=2 (5x5x5 box, 124 neighbours): from search.mjs cube 2 300 1
+    { name: 'Churning Fog',   lattice: 'cube', r: 2, rule: '35-37/6-11/4',        density: 0.3,  fill: 0.7 },
+    { name: 'Rising Tide',    lattice: 'cube', r: 2, rule: '9-34/31-45/2',        density: 0.4,  fill: 0.3 },
+    { name: 'Simmer',         lattice: 'cube', r: 2, rule: '10-13/12-20/2',       density: 0.4,  fill: 0.7 },
+    { name: 'Sparse Shimmer', lattice: 'cube', r: 2, rule: '60-72/11-12/2',       density: 0.5,  fill: 0.5 },
+    { name: 'Fading Embers',  lattice: 'cube', r: 2, rule: '18-36/11-12/4',       density: 0.5,  fill: 0.5 },
+    { name: 'Slow Embers',    lattice: 'cube', r: 2, rule: '18-37/4-11/8',        density: 0.3,  fill: 1.0 },
+    // tetra r=1 (161 neighbours): from search.mjs tetra 1 300 1
+    { name: 'Prism Fog',      lattice: 'tetra', r: 1, rule: '61-76/10-13/4',      density: 0.3,  fill: 0.3 },
+    { name: 'Lattice Rain',   lattice: 'tetra', r: 1, rule: '29-34/29-40/2',      density: 0.2,  fill: 0.3 },
+    { name: 'Pale Shimmer',   lattice: 'tetra', r: 1, rule: '52-95/14-23/2',      density: 0.5,  fill: 0.7 },
+    { name: 'Slow Bloom',     lattice: 'tetra', r: 1, rule: '10-41/41-51/2',      density: 0.3,  fill: 0.3 },
+    { name: 'Ash Drift',      lattice: 'tetra', r: 1, rule: '43-57/20-33/8',      density: 0.5,  fill: 0.7 },
+    { name: 'Cooling Embers', lattice: 'tetra', r: 1, rule: '29-59/9-12/10',      density: 0.2,  fill: 0.7 },
+    // tetra r=2 (749 neighbours): from search.mjs tetra 2 300 1
+    { name: 'Wide Bloom',     lattice: 'tetra', r: 2, rule: '53-205/184-272/2',   density: 0.4,  fill: 0.3 },
+    { name: 'Deep Fog',       lattice: 'tetra', r: 2, rule: '210-226/37-67/4',    density: 0.3,  fill: 0.7 },
+    { name: 'Faint Static',   lattice: 'tetra', r: 2, rule: '61-78/73-119/2',     density: 0.4,  fill: 0.7 },
+    { name: 'Thin Mist',      lattice: 'tetra', r: 2, rule: '149-359/36-40/2',    density: 0.5,  fill: 0.3 },
+    { name: 'Creeping Frost', lattice: 'tetra', r: 2, rule: '44-140/144-203/4',   density: 0.3,  fill: 1.0 },
+    { name: 'Wide Embers',    lattice: 'tetra', r: 2, rule: '108-221/26-68/8',    density: 0.3,  fill: 1.0 },
+  ];
+  const presetsFor = (lattice, r) => PRESETS.filter(p => p.lattice === lattice && p.r === r);
+
+  function evaluate(preset, { N = 32, gens = 300, window = 50, seed = 1 } = {}) {
+    const w = new World(N, preset.lattice, preset.r);
+    const rule = parseRule(preset.rule, w.maxCount);
+    if (rule.error) return { ok: false, reason: rule.error };
+    w.setRule(rule);
+    w.seed(preset.density, preset.fill * N, mulberry32(seed));
+    let lastChange = -1, act = 0;
+    for (let g = 0; g < gens; g++) {
+      w.step();
+      if (w.changed) lastChange = g;
+      if (g >= gens - window) act += w.changes / w.nc;
+    }
+    const frac = w.nonDead / w.nc;
+    return { ok: w.alive > 0 && frac < 0.5 && lastChange >= gens - window,
+             alive: w.alive, frac, lastChange, activity: act / window };
+  }
+
+  return { PERMS, TETRA, mulberry32, cellsPerVoxel, maxCount, parseRule, boxAxis, World, PRESETS, presetsFor, evaluate };
 })();
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -346,6 +394,29 @@ GolTests.add('seed fills only the centred region, reproducibly', () => {
   const a = new GOL.World(10, 'tetra', 1), b = new GOL.World(10, 'tetra', 1);
   a.seed(0.3, 10, GOL.mulberry32(9)); b.seed(0.3, 10, GOL.mulberry32(9));
   assert(a.state.every((s, i) => s === b.state[i]));
+});
+
+GolTests.add('every preset parses for its own neighbourhood', () => {
+  assert(GOL.PRESETS.length > 0);
+  for (const p of GOL.PRESETS) {
+    const r = GOL.parseRule(p.rule, GOL.maxCount(p.lattice, p.r));
+    assert(!r.error, `${p.name}: ${r.error}`);
+    assert(p.density > 0 && p.density <= 1 && p.fill > 0 && p.fill <= 1, p.name);
+  }
+});
+
+GolTests.add('at least 4 presets per lattice/neighbourhood', () => {
+  for (const lat of ['cube', 'tetra']) for (const r of [1, 2]) {
+    const n = GOL.presetsFor(lat, r).length;
+    assert(n >= 4, `${lat} r=${r} has ${n} presets`);
+  }
+});
+
+GolTests.add('every preset stays alive, below 50% and active for 300 generations (N=32)', () => {
+  for (const p of GOL.PRESETS) {
+    const e = GOL.evaluate(p);
+    assert(e.ok, `${p.name} (${p.lattice} r=${p.r} ${p.rule}): alive ${e.alive} frac ${e.frac?.toFixed(3)} lastChange ${e.lastChange} ${e.reason || ''}`);
+  }
 });
 </script>
 </body>
