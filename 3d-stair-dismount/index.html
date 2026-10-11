@@ -105,7 +105,7 @@
   </div>
 </div>
 <div id="banner"><div class="big" id="bannerScore">0</div><div class="small" id="bannerText">Dismount over</div></div>
-<div id="hint">click a body part to aim · drag to orbit · wheel to zoom</div>
+<div id="hint">click a body part to aim · drag to orbit · shift/right-drag to pan · wheel to zoom</div>
 <div id="loading">Loading physics…</div>
 <div id="err"></div>
 <script id="shared-code">
@@ -1023,7 +1023,8 @@ function saveBest() { try { localStorage.setItem(bestKey(), String(state.best));
 // ---------------------------------------------------------------------------
 // Camera
 // ---------------------------------------------------------------------------
-const cam = { theta: 0.9, phi: 1.15, dist: 7, target: new THREE.Vector3(), goal: new THREE.Vector3() };
+// Looks at target (smoothed goal) + pan (user offset from shift-drag).
+const cam = { theta: 0.9, phi: 1.15, dist: 7, target: new THREE.Vector3(), goal: new THREE.Vector3(), pan: new THREE.Vector3(), look: new THREE.Vector3() };
 function cameraDefaults() {
   const d = state.stairs.down;
   // Look from the side, a little in front of the figure (down the stairs).
@@ -1032,6 +1033,7 @@ function cameraDefaults() {
   const p = state.stairs.landing.p;
   cam.goal.set(p[0], p[1] + 0.9, p[2]);
   cam.target.copy(cam.goal);
+  cam.pan.set(0, 0, 0);
 }
 function updateCamera(dt) {
   if (state.phase !== 'aim' && state.follow) {
@@ -1041,9 +1043,11 @@ function updateCamera(dt) {
     const p = state.stairs.landing.p; cam.goal.set(p[0], p[1] + 0.9, p[2]);
   }
   cam.target.lerp(cam.goal, 1 - Math.exp(-dt * 4));
+  if (state.phase !== 'aim' && state.follow) cam.pan.multiplyScalar(Math.exp(-dt * 3));
+  cam.look.addVectors(cam.target, cam.pan);
   const sp = Math.sin(cam.phi), off = new THREE.Vector3(sp * Math.cos(cam.theta), Math.cos(cam.phi), sp * Math.sin(cam.theta)).multiplyScalar(cam.dist);
-  camera.position.copy(cam.target).add(off);
-  camera.lookAt(cam.target);
+  camera.position.copy(cam.look).add(off);
+  camera.lookAt(cam.look);
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,7 +1140,7 @@ window.addEventListener('keydown', e => {
   else if (k >= '1' && k <= '4') { const key = Object.keys(Dismount.stairs)[+k - 1]; if (key) loadStairs(key); }
 });
 
-// Mouse: click a bone to aim, drag to orbit, wheel to zoom.
+// Mouse: click a bone to aim, drag to orbit, shift/right-drag to pan, wheel to zoom.
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 let drag = null, hovered = null;
@@ -1147,15 +1151,30 @@ function pick(ev) {
   const hits = raycaster.intersectObjects(rigGroup.children, false);
   return hits.length ? hits[0] : null;
 }
+const panRight = new THREE.Vector3(), panUp = new THREE.Vector3();
+// Screen-space pan: the point under the cursor follows the cursor at the look point's depth.
+function panBy(dx, dy) {
+  const perPx = 2 * cam.dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.max(1, renderer.domElement.clientHeight);
+  panRight.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(-dx * perPx);
+  panUp.setFromMatrixColumn(camera.matrixWorld, 1).multiplyScalar(dy * perPx);
+  cam.pan.add(panRight).add(panUp);
+  const r = Math.max(10, state.stairs.radius * 2);
+  if (cam.pan.length() > r) cam.pan.setLength(r);
+}
+renderer.domElement.addEventListener('contextmenu', ev => ev.preventDefault());
 renderer.domElement.addEventListener('pointerdown', ev => {
-  drag = { x: ev.clientX, y: ev.clientY, moved: false, theta: cam.theta, phi: cam.phi };
+  const pan = ev.shiftKey || ev.button === 1 || ev.button === 2;
+  drag = { x: ev.clientX, y: ev.clientY, lx: ev.clientX, ly: ev.clientY, moved: false, pan, theta: cam.theta, phi: cam.phi };
   renderer.domElement.setPointerCapture(ev.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', ev => {
   if (drag) {
     const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
     if (Math.hypot(dx, dy) > 4) drag.moved = true;
-    if (drag.moved) {
+    if (drag.pan) {
+      panBy(ev.clientX - drag.lx, ev.clientY - drag.ly);
+      drag.lx = ev.clientX; drag.ly = ev.clientY;
+    } else if (drag.moved) {
       cam.theta = drag.theta + dx * 0.006;
       cam.phi = Math.max(0.15, Math.min(1.5, drag.phi + dy * 0.006));
     }
@@ -1170,7 +1189,7 @@ renderer.domElement.addEventListener('pointermove', ev => {
   renderer.domElement.style.cursor = hovered ? 'crosshair' : 'grab';
 });
 renderer.domElement.addEventListener('pointerup', ev => {
-  if (drag && !drag.moved && state.phase === 'aim') {
+  if (drag && !drag.moved && !drag.pan && state.phase === 'aim') {
     const hit = pick(ev);
     if (hit) {
       const bone = bones[hit.object.userData.bone];
