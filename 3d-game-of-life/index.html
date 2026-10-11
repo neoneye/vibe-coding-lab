@@ -4,8 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>3D Game of Life</title>
+<style>
+  :root { --bg:#07080c; --panel:rgba(14,16,24,0.9); --fg:#d8dce8; --dim:#8a90a2; --accent:#7fd4ff; --err:#ff8a8a; --line:#ffffff18; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 system-ui, -apple-system, sans-serif; }
+  #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #readout { position: fixed; right: 12px; bottom: 12px; padding: 6px 10px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--line); font: 12px/1.4 ui-monospace, Menlo, monospace;
+    color: var(--dim); pointer-events: none; }
+  body.noui #panel, body.noui #readout, body.noui #panelToggle { display: none !important; }
+</style>
 </head>
 <body>
+<canvas id="view"></canvas>
+<div id="readout"></div>
 <script id="shared-code">
 // ── Test harness ─────────────────────────────────────────────────────────
 const GolTests = (() => {
@@ -443,6 +456,237 @@ GolTests.add('flicker is high for TV static and low for a calm pattern', () => {
   const calm = GOL.evaluate(GOL.presetsFor('cube', 1)[0]);
   assert(calm.flicker < 0.5 && calm.flicker >= 0, `calm flicker ${calm.flicker}`);
 });
+</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const params = new URLSearchParams(location.search);
+if (params.get('ui') === '0') document.body.classList.add('noui');
+
+// ── Renderer, camera ─────────────────────────────────────────────────────
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07080c);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 4000);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.autoRotate = params.get('rotate') !== '0';
+controls.autoRotateSpeed = 0.6;
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+// ── Cell material: per-instance vec4 (x, y, z, state) ────────────────────
+const material = new THREE.ShaderMaterial({
+  uniforms: { uN: { value: 48 }, uC: { value: 2 }, uMode: { value: 0 } },
+  vertexShader: `
+    attribute vec4 aCell;
+    uniform float uN, uC, uMode;
+    varying vec3 vColor;
+    const vec3 LIGHT = vec3(0.4575, 0.7625, 0.4575); // normalized (0.45, 0.75, 0.45), view space
+    void main() {
+      vec3 p = position + aCell.xyz - 0.5 * uN;
+      vec3 n = normalize(normalMatrix * normal);
+      float diff = max(dot(n, LIGHT), 0.0);
+      float t = uC > 2.0 ? (aCell.w - 1.0) / (uC - 1.0) : 0.0;   // 0 alive → ~1 nearly gone
+      vec3 base, ember;
+      if (uMode < 0.5) {
+        base = 0.22 + 0.78 * (aCell.xyz + 0.5) / uN;               // hue from position
+        ember = vec3(0.55, 0.15, 0.08);
+      } else {
+        base = vec3(1.0, 0.93, 0.62);                              // warm white = alive
+        ember = mix(vec3(1.0, 0.42, 0.08), vec3(0.32, 0.05, 0.28), t);
+      }
+      vec3 col = mix(base, ember, clamp(t * 1.6, 0.0, 1.0)) * (1.0 - 0.5 * t);
+      vColor = col * (0.34 + 0.76 * diff);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    }`,
+  fragmentShader: `
+    varying vec3 vColor;
+    void main() { gl_FragColor = vec4(vColor, 1.0); }`,
+});
+
+// ── Geometry ─────────────────────────────────────────────────────────────
+function cubeGeometry() {
+  const g = new THREE.BoxGeometry(0.86, 0.86, 0.86);
+  g.translate(0.5, 0.5, 0.5);
+  return g;
+}
+function tetraGeometry(k) {
+  const V = GOL.TETRA[k].map(v => new THREE.Vector3(...v));
+  const cen = V.reduce((a, v) => a.add(v), new THREE.Vector3()).multiplyScalar(0.25);
+  const P = V.map(v => v.clone().sub(cen).multiplyScalar(0.8).add(cen));
+  const pos = [];
+  for (const f of [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]]) {
+    let [a, b, c] = f.map(i => P[i]);
+    const opp = P[6 - f[0] - f[1] - f[2]];
+    const n = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a));
+    if (n.dot(new THREE.Vector3().subVectors(opp, a)) > 0) [b, c] = [c, b]; // face outward
+    pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals(); // non-indexed → flat face normals
+  return g;
+}
+function makeLayer(src, cap) {
+  const geo = new THREE.InstancedBufferGeometry().copy(src);
+  const buf = new Float32Array(cap * 4);
+  const attr = new THREE.InstancedBufferAttribute(buf, 4);
+  attr.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('aCell', attr);
+  geo.instanceCount = 0;
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  return { mesh, geo, attr, buf };
+}
+
+// ── Simulation + view state ──────────────────────────────────────────────
+const MAX_GPS = 61;
+const sim = { world: null, rule: null, lattice: 'cube', r: 1, N: 48, playing: params.get('play') !== '0',
+              gps: 12, density: 0.35, fill: 0.5, presetIndex: 0 };
+const view = { layers: [], frame: null, sliceAxis: 1, sliceValue: 48, colorMode: 0 };
+let dirty = true, stepMs = 0;
+const markDirty = () => { dirty = true; };
+
+function buildLayers() {
+  const w = sim.world;
+  for (const L of view.layers) { scene.remove(L.mesh); L.geo.dispose(); }
+  const srcs = w.lattice === 'cube' ? [cubeGeometry()] : GOL.TETRA.map((_, k) => tetraGeometry(k));
+  view.layers = srcs.map(src => { const L = makeLayer(src, w.nv); src.dispose(); scene.add(L.mesh); return L; });
+  if (view.frame) { scene.remove(view.frame); view.frame.geometry.dispose(); view.frame.material.dispose(); }
+  view.frame = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w.N, w.N, w.N)),
+                                      new THREE.LineBasicMaterial({ color: 0x3a4660 }));
+  scene.add(view.frame);
+  material.uniforms.uN.value = w.N;
+  view.sliceValue = w.N;
+  camera.position.set(1.3, 0.95, 1.6).normalize().multiplyScalar(w.N * 2.3);
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
+
+function refill() {
+  const w = sim.world, { N, per } = w, st = w.state;
+  const ax = view.sliceAxis, lim = view.sliceValue;
+  const counts = new Array(per).fill(0), bufs = view.layers.map(L => L.buf);
+  for (let z = 0, c = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    if ((ax === 0 ? x : ax === 1 ? y : z) >= lim) { c += per; continue; }
+    for (let k = 0; k < per; k++, c++) {
+      const s = st[c];
+      if (!s) continue;
+      const b = bufs[k], i = counts[k]++ * 4;
+      b[i] = x; b[i + 1] = y; b[i + 2] = z; b[i + 3] = s;
+    }
+  }
+  view.layers.forEach((L, k) => {
+    L.geo.instanceCount = counts[k];
+    L.mesh.visible = counts[k] > 0;
+    if (counts[k] > 0) {
+      L.attr.clearUpdateRanges();
+      L.attr.addUpdateRange(0, counts[k] * 4);
+      L.attr.needsUpdate = true;
+    }
+  });
+  material.uniforms.uC.value = sim.rule ? sim.rule.C : 2;
+  material.uniforms.uMode.value = view.colorMode;
+}
+
+const readout = document.getElementById('readout');
+function updateReadout() {
+  const w = sim.world, f = n => n.toLocaleString('en-US');
+  readout.textContent = `gen ${f(w.gen)} · alive ${f(w.alive)} · cells ${f(w.nonDead)} · ${stepMs.toFixed(1)} ms/step`;
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────
+function applyRule(text) {
+  const rule = GOL.parseRule(text, sim.world.maxCount);
+  if (rule.error) return rule.error;
+  sim.rule = rule;
+  sim.world.setRule(rule);
+  markDirty();
+  return null;
+}
+function reseed(seed = (Math.random() * 2 ** 32) >>> 0) {
+  sim.world.seed(sim.density, sim.fill * sim.N, GOL.mulberry32(seed));
+  markDirty();
+}
+function clearWorld() { sim.world.clear(); markDirty(); }
+function applyPreset(i, seed) {
+  const list = GOL.presetsFor(sim.lattice, sim.r);
+  const p = list[Math.max(0, Math.min(list.length - 1, i))];
+  sim.presetIndex = list.indexOf(p);
+  sim.density = p.density; sim.fill = p.fill;
+  const err = applyRule(p.rule);
+  if (err) throw new Error(`preset ${p.name}: ${err}`);
+  reseed(seed);
+}
+function setCombo(lattice, r, N, presetIndex = 0, seed) {
+  sim.lattice = lattice; sim.r = r; sim.N = N;
+  sim.world = new GOL.World(N, lattice, r);
+  sim.rule = null;
+  buildLayers();
+  applyPreset(presetIndex, seed);
+}
+function stepOnce() {
+  const t0 = performance.now();
+  sim.world.step();
+  stepMs = stepMs ? stepMs * 0.8 + (performance.now() - t0) * 0.2 : performance.now() - t0;
+  markDirty();
+}
+
+// ── Loop ─────────────────────────────────────────────────────────────────
+let acc = 0, last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.25, (now - last) / 1000);
+  last = now;
+  if (sim.playing && sim.world.rule) {
+    if (sim.gps >= MAX_GPS) {
+      const t0 = performance.now();
+      do stepOnce(); while (performance.now() - t0 < 12);
+    } else {
+      acc += dt * sim.gps;
+      let n = 0;
+      while (acc >= 1 && n < 4) { stepOnce(); acc -= 1; n++; }
+      if (n === 4) acc = 0;
+    }
+  }
+  if (dirty) { refill(); updateReadout(); dirty = false; }
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────
+{
+  const lat = params.get('lattice') === 'tetra' ? 'tetra' : 'cube';
+  const r = params.get('r') === '2' ? 2 : 1;
+  const n = [24, 32, 48, 64].includes(+params.get('n')) ? +params.get('n') : 48;
+  const seed = params.has('seed') ? +params.get('seed') >>> 0 : undefined;
+  setCombo(lat, r, n, +params.get('preset') || 0, seed);
+  const pre = Math.min(2000, +params.get('gen') || 0);
+  for (let g = 0; g < pre; g++) stepOnce();
+  refill(); updateReadout(); dirty = false;
+  controls.update();
+  renderer.render(scene, camera); // complete first frame (headless screenshots)
+}
+window.__gol = {
+  sim, view, GOL, renderer, setCombo, applyPreset, applyRule,
+  step(n = 1) { for (let i = 0; i < n; i++) stepOnce(); refill(); updateReadout(); dirty = false; },
+  render() { controls.update(); renderer.render(scene, camera); },
+};
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
