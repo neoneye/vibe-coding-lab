@@ -72,6 +72,8 @@ button.random:active, button.secondary:active { transform: translateY(1px); }
 button.secondary { min-height: 36px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.055); color: var(--soft); font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
 button.secondary:hover { background: rgba(255,255,255,.11); color: var(--text); }
 button.secondary:disabled { opacity: .4; cursor: default; }
+button.secondary.on { border-color: rgba(167,242,208,.66); background: rgba(93,230,220,.13); color: var(--mint); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 8px; }
 .readout { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; }
 .readout .k { color: var(--muted); font-size: 10.5px; }
 .readout .v { color: var(--text); font-size: 10.5px; text-align: right; }
@@ -130,13 +132,18 @@ button.link:hover { color: var(--pink); }
       <button class="secondary" id="back" type="button">Back</button>
       <button class="secondary" id="reset" type="button">Classic</button>
     </div>
-    <p class="hint"><b>R</b> random · <b>M</b> mutate · <b>B</b> back · <b>space</b> pause · <b>drag</b> orbit · <b>wheel</b> zoom · the URL is a shareable specimen</p>
+    <div class="row2">
+      <button class="secondary" id="sound" type="button" aria-pressed="false" title="Hear the specimen (S)">Listen</button>
+      <button class="secondary" id="call" type="button" title="Make it call (T)">Call</button>
+    </div>
+    <p class="hint"><b>R</b> random · <b>M</b> mutate · <b>B</b> back · <b>space</b> pause · <b>S</b> sound · <b>T</b> call · <b>click</b> poke · <b>drag</b> orbit · <b>wheel</b> zoom · the URL is a shareable specimen</p>
   </section>
   <div id="geneCards"></div>
   <details class="card">
     <summary>View &amp; motion</summary>
     <div class="card-body">
       <div class="field"><div class="label-row"><label for="speed">Motion rate</label><output id="value-speed">1.00×</output></div><input id="speed" type="range" min="0" max="2.5" step="0.05" value="1"></div>
+      <div class="field"><div class="label-row"><label for="volume">Volume</label><output id="value-volume">80%</output></div><input id="volume" type="range" min="0" max="1" step="0.05" value="0.8"></div>
       <label class="check"><input id="animated" type="checkbox" checked><span>Let it move</span></label>
       <label class="check"><input id="autoRotate" type="checkbox" checked><span>Slow camera orbit</span></label>
       <label class="check"><input id="shadows" type="checkbox" checked><span>Soft shadows</span></label>
@@ -151,6 +158,7 @@ button.link:hover { color: var(--pink); }
         <span class="k">Growth model</span><span class="v" id="growthModel"></span>
         <span class="k">Surface response</span><span class="v" id="surfaceResponse"></span>
         <span class="k">Current mood</span><span class="v" id="currentMood"></span>
+        <span class="k">Voice</span><span class="v" id="voiceNote"></span>
         <span class="k">Lab memory</span><span class="v" id="memoryCount"></span>
       </div>
       <button class="link" id="forget" type="button">Forget remembered specimens</button>
@@ -933,7 +941,30 @@ const Shoggoth = (() => {
     return out;
   }
 
+  // ---- voice ----------------------------------------------------------------
+  // Pure: genome -> sound parameters. The page's Web Audio module decides how.
+  function voiceOf(input) {
+    const g = normalizeGenome(input);
+    const slime = g.slime / 100, cute = g.cuteness / 100, ugly = g.ugliness / 100;
+    const toon = g.cartoonish / 100, real = g.hyperrealism / 100, glow = g.glow / 100, wob = g.wobble / 100;
+    const pitch = Math.pow(1.1 / g.size, .8) * (1 + cute * .6) * (1 - ugly * .25);
+    return {
+      pitch,                                                   // 1 is roughly the classic specimen
+      droneHz: clamp(46 * pitch, 28, 110),
+      growl: clamp(ugly * .9 + real * .2 - cute * .5, 0, 1),   // grit and distortion in breath and calls
+      wet: clamp(.15 + slime * .85, 0, 1),                     // squelch resonance and abyss reverb
+      bubbleRate: .08 + slime * slime * 3.2,                   // slime pops per second
+      slither: g.arms ? clamp(Math.sqrt(g.arms / 12) * (.25 + wob * .9) * (g.armType === "feeler" ? .4 : 1), 0, 1.2) : 0,
+      suckerRate: g.arms && g.armType === "tentacle" ? g.suckers * Math.min(g.arms, 12) * .02 * (.3 + wob) : 0,
+      boing: clamp(toon * 1.2 - real * .3, 0, 1),              // cartoon blinks become pitched blips
+      shimmer: glow * glow,
+      callRate: g.mouths ? .035 + cute * .05 + ugly * .03 : 0, // "tekeli-li" calls per second
+      blinkGain: 1 / Math.sqrt(Math.max(1, g.eyes))
+    };
+  }
+
   return {
+    voiceOf,
     TAU, clamp, lerp, makeRng, noise3, basis, fromBasis, norm,
     PLANS, GENES, GENE, CLASSIC, HEAD_SHAPES, ARM_N,
     normalizeGenome, randomGenome, mutateGenome, genomeDistance, majorDifferences, nearest, pickNovel,
@@ -1001,6 +1032,14 @@ const ShoggothTests = {
     check("plans all appear in 200 Randoms", S.PLANS.every((p) => history.some((g) => g.plan === p)));
     const names = new Set(history.map(S.speciesName));
     log(`  ${names.size} distinct species names in 200`);
+
+    const voices = pool.map(S.voiceOf);
+    check("voice parameters are finite", voices.every(finite));
+    check("voice parameters stay in range", voices.every((v) => v.droneHz >= 28 && v.droneHz <= 110 && v.growl >= 0 && v.growl <= 1 && v.wet >= .15 && v.wet <= 1 && v.bubbleRate > 0 && v.bubbleRate < 3.5 && v.blinkGain > 0 && v.blinkGain <= 1));
+    check("bigger specimens drone lower", S.voiceOf({ ...S.CLASSIC, size: 1.5 }).droneHz < S.voiceOf({ ...S.CLASSIC, size: .7 }).droneHz);
+    check("slime raises the bubble rate", S.voiceOf({ ...S.CLASSIC, slime: 95 }).bubbleRate > 4 * S.voiceOf({ ...S.CLASSIC, slime: 10 }).bubbleRate);
+    check("mouthless specimens never call", S.voiceOf({ ...S.CLASSIC, mouths: 0 }).callRate === 0);
+    check("armless specimens never slither", S.voiceOf({ ...S.CLASSIC, arms: 0 }).slither === 0 && S.voiceOf({ ...S.CLASSIC, arms: 0 }).suckerRate === 0);
 
     log(failures ? `${failures} failure(s)` : "all shoggoth tests passed");
     return failures === 0;
@@ -1478,6 +1517,7 @@ function buildCreature(L) {
 
 // ---- per-frame animation ----------------------------------------------------------------
 let _v1, _v2, _v3, _q1, _m1, _e1;
+let pokeRay, pokeNdc;
 function lobeOffset(plan, i, n, t, w) {
   switch (plan) {
     case "worm": return [0, Math.max(0, Math.sin(t * 1.6 - i * .8)) * .12 * w, Math.sin(t * 1.1 - i * .7) * .1 * w];
@@ -1713,6 +1753,7 @@ function rebuild() {
   applyWireframe();
   frameCreature();
   stepCreature(time);
+  audioSetCreature();
   updateUi();
 }
 
@@ -1840,6 +1881,9 @@ function updateUi() {
   $("growthModel").textContent = PLAN_NOTES[g.plan];
   $("surfaceResponse").textContent = g.slime > 70 ? "wet membrane" : g.hyperrealism > 72 ? "subsurface sheen" : g.cartoonish > 60 ? "graphic shading" : "soft biological sheen";
   $("currentMood").textContent = mood(g);
+  $("voiceNote").textContent = voiceNote(S.voiceOf(g));
+  $("call").disabled = g.mouths === 0;
+  $("call").title = g.mouths ? "Make it call (T)" : "No mouth to call with";
   $("memoryCount").textContent = `${memory.length} specimens`;
   $("back").disabled = backStack.length === 0;
   $("pause").textContent = running ? "Pause" : "Resume";
@@ -1879,6 +1923,356 @@ function doBack() {
 }
 function doReset() { showGenome(S.CLASSIC); showToast("Classic specimen restored"); }
 
+// ---- sound -------------------------------------------------------------------
+// Synthesized with Web Audio, no samples. Reads the creature, never moves it.
+// Beds (drone, slime, slither, shimmer, breath) run continuously; events (blinks,
+// mouth closes, bubbles, sucker pops, calls, pokes) are one-shot node graphs.
+const audio = {
+  ctx: null, master: null, bus: null, send: null, analyser: null, noise: null, beds: null, mouthVoices: [],
+  enabled: false, volume: .8, voice: null, eyeCyc: [], mouthOpen: [], mouthFalling: [], blinkBudget: 6, near: 1, events: 0
+};
+let _ap;
+function voiceNote(v) {
+  const pitch = v.pitch > 1.35 ? "piping" : v.pitch < .8 ? "booming" : "hollow";
+  const tex = v.wet > .75 ? "gurgling" : v.wet > .45 ? "wet" : "dry";
+  const grit = v.growl > .6 ? ", rasping" : v.growl < .15 ? ", soft" : "";
+  return `${tex}, ${pitch}${grit}`;
+}
+function aGain(value) { const g = audio.ctx.createGain(); g.gain.value = value; return g; }
+function aFilter(type, freq, q = 1) { const f = audio.ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q; return f; }
+function aNoise(rate = 1) { const s = audio.ctx.createBufferSource(); s.buffer = audio.noise; s.loop = true; s.playbackRate.value = rate; return s; }
+function shaperCurve(k) {
+  const c = new Float32Array(1024);
+  for (let i = 0; i < c.length; i++) { const x = i / 511.5 - 1; c[i] = Math.tanh(k * x) / Math.tanh(k); }
+  return c;
+}
+function audioInit() {
+  if (audio.ctx) return true;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return false;
+  try {
+    const ctx = audio.ctx = new AC();
+    audio.master = aGain(0);
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -16; comp.ratio.value = 4;
+    audio.analyser = ctx.createAnalyser();
+    audio.analyser.fftSize = 1024;
+    audio.master.connect(comp).connect(ctx.destination);
+    comp.connect(audio.analyser);
+    audio.bus = aGain(1);
+    audio.bus.connect(audio.master);
+    // the abyss: a generated impulse of decaying noise that darkens as it fades
+    const len = Math.floor(ctx.sampleRate * 3.2), ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      let lp = 0;
+      for (let i = 0; i < len; i++) { const k = i / len; lp += (Math.random() * 2 - 1 - lp) * (.9 - k * .75); d[i] = lp * Math.pow(1 - k, 2.6) * .6; }
+    }
+    const verb = ctx.createConvolver();
+    verb.buffer = ir;
+    audio.send = aGain(.35);
+    audio.bus.connect(audio.send).connect(verb).connect(audio.master);
+    const n = ctx.sampleRate * 2, buf = ctx.createBuffer(1, n, ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    audio.noise = buf;
+    buildSoundBeds();
+    audioSetCreature();
+    return true;
+  } catch (error) {
+    console.warn("Web Audio unavailable", error);
+    audio.ctx = null;
+    return false;
+  }
+}
+function buildSoundBeds() {
+  const ctx = audio.ctx, b = {};
+  // drone: a low root and its fifth, felt more than heard
+  b.droneGain = aGain(0);
+  const droneLp = aFilter("lowpass", 260, .7);
+  b.osc1 = ctx.createOscillator(); b.osc1.type = "sine";
+  b.osc2 = ctx.createOscillator(); b.osc2.type = "triangle";
+  b.osc1.connect(droneLp); b.osc2.connect(droneLp);
+  droneLp.connect(b.droneGain).connect(audio.bus);
+  // slime: a resonant band of noise squishing in and out
+  b.slimeBp = aFilter("bandpass", 600, 4);
+  b.slimeGain = aGain(0);
+  const slime = aNoise(.6);
+  slime.connect(b.slimeBp).connect(b.slimeGain).connect(audio.bus);
+  // slither: the hiss of skin dragging over skin
+  b.slitherGain = aGain(0);
+  const slither = aNoise(1);
+  slither.connect(aFilter("highpass", 1100, .7)).connect(aFilter("bandpass", 2800, .8)).connect(b.slitherGain).connect(audio.bus);
+  // shimmer: faint glassy partials for bio-luminescent specimens
+  b.shimmerGain = aGain(0);
+  b.shimmer = [1, 1.5, 2.25].map((r, i) => {
+    const o = ctx.createOscillator();
+    o.detune.value = (i - 1) * 7;
+    o.connect(b.shimmerGain);
+    return o;
+  });
+  b.shimmerGain.connect(audio.bus);
+  for (const node of [b.osc1, b.osc2, slime, slither, ...b.shimmer]) node.start();
+  // mouths: up to three breathing voices, formant-filtered air plus a gritty growl
+  audio.mouthVoices = [0, 1, 2].map(() => {
+    const pan = ctx.createStereoPanner(), formant = aFilter("bandpass", 700, 3), airGain = aGain(0);
+    const growl = ctx.createOscillator(), shaper = ctx.createWaveShaper(), glp = aFilter("lowpass", 600, 1), growlGain = aGain(0);
+    growl.type = "sawtooth";
+    const air = aNoise(.8);
+    air.connect(formant).connect(airGain).connect(pan);
+    growl.connect(shaper).connect(glp).connect(growlGain).connect(pan);
+    pan.connect(audio.bus);
+    air.start(0, Math.random() * 2);
+    growl.start();
+    return { pan, formant, airGain, growl, shaper, glp, growlGain };
+  });
+  audio.beds = b;
+}
+// Retune the beds for the current genome; called on every rebuild.
+function audioSetCreature() {
+  audio.voice = S.voiceOf(genome);
+  audio.eyeCyc = []; audio.mouthOpen = []; audio.mouthFalling = [];
+  if (!audio.beds) return;
+  const v = audio.voice, b = audio.beds, t = audio.ctx.currentTime;
+  b.osc1.frequency.setTargetAtTime(v.droneHz, t, .4);
+  b.osc2.frequency.setTargetAtTime(v.droneHz * 1.5 * 1.004, t, .4);
+  b.slimeBp.Q.setTargetAtTime(2 + v.wet * 9, t, .2);
+  b.shimmer.forEach((o, i) => o.frequency.setTargetAtTime(880 * v.pitch * [1, 1.5, 2.25][i], t, .3));
+  audio.send.gain.setTargetAtTime(.22 + v.wet * .4, t, .3);
+  const formantHz = { lips: 650, grin: 900, beak: 1300, vertical: 520, lamprey: 380, sphincter: 300 }[genome.mouthStyle] * v.pitch;
+  const curve = shaperCurve(1 + v.growl * 18);
+  for (const m of audio.mouthVoices) {
+    m.formant.frequency.setTargetAtTime(formantHz, t, .2);
+    m.growl.frequency.setTargetAtTime(v.droneHz * 2, t, .2);
+    m.shaper.curve = curve;
+    m.glp.frequency.setTargetAtTime(280 + v.growl * 1000, t, .2);
+  }
+}
+function setSound(on) {
+  if (on && !audioInit()) { showToast("Web Audio is unavailable here"); on = false; }
+  audio.enabled = on;
+  const b = $("sound");
+  b.textContent = on ? "Mute" : "Listen";
+  b.classList.toggle("on", on);
+  b.setAttribute("aria-pressed", String(on));
+  if (!audio.ctx) return;
+  if (on && audio.ctx.state === "suspended") audio.ctx.resume();
+  const t = audio.ctx.currentTime;
+  audio.master.gain.cancelScheduledValues(t);
+  audio.master.gain.setValueAtTime(audio.master.gain.value, t);
+  audio.master.gain.linearRampToValueAtTime(on ? audio.volume : 0, t + .15);
+}
+function setVolume(v) {
+  audio.volume = v;
+  $("value-volume").textContent = `${Math.round(v * 100)}%`;
+  if (audio.ctx && audio.enabled) audio.master.gain.setTargetAtTime(v, audio.ctx.currentTime, .05);
+}
+// Stereo position of a creature part: the sine-ish bearing in camera space.
+function panOf(object) {
+  if (!object) return 0;
+  object.getWorldPosition(_ap).applyMatrix4(camera.matrixWorldInverse);
+  return clamp(_ap.x / (Math.abs(_ap.z) * .55 + 1), -.85, .85);
+}
+function eventOut(pan, level) {
+  const p = audio.ctx.createStereoPanner(), g = aGain(level);
+  p.pan.value = pan;
+  g.connect(p).connect(audio.bus);
+  audio.events++;
+  return g;
+}
+function envelope(param, t, peak, attack, decay) {
+  param.setValueAtTime(0, t);
+  param.linearRampToValueAtTime(peak, t + attack);
+  param.exponentialRampToValueAtTime(.0001, t + attack + decay);
+}
+function noiseHit(out, t, dur, type, f0, f1, q, peak) {
+  const s = aNoise(.5 + Math.random()), f = aFilter(type, f0, q), g = aGain(0);
+  f.frequency.setValueAtTime(f0, t);
+  f.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+  envelope(g.gain, t, peak, .004, dur);
+  s.connect(f).connect(g).connect(out);
+  s.start(t, Math.random() * 1.5);
+  s.stop(t + dur + .06);
+}
+function toneHit(out, t, type, f0, f1, dur, peak, attack = .003) {
+  const o = audio.ctx.createOscillator(), g = aGain(0);
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+  envelope(g.gain, t, peak, attack, dur);
+  o.connect(g).connect(out);
+  o.start(t);
+  o.stop(t + attack + dur + .05);
+}
+function eyeSound(eye, layoutEye) {
+  const v = audio.voice, t = audio.ctx.currentTime + .005;
+  const size = clamp(layoutEye.r / .4, .4, 3);
+  const out = eventOut(panOf(eye.group), v.blinkGain * clamp(.55 + size * .3, .5, 1.4) * audio.near);
+  const p = v.pitch / Math.sqrt(size);
+  if (eye.style === "compound") {
+    // facets twitch: an insect chitter
+    const n = 3 + Math.floor(Math.random() * 3);
+    for (let k = 0; k < n; k++) noiseHit(out, t + k * .021, .012, "bandpass", 4300 * p, 3000 * p, 6, .3);
+    return;
+  }
+  if (eye.style === "orb") {
+    // glass orbs ring faintly instead of blinking
+    toneHit(out, t, "sine", 1400 * p, 1385 * p, .8, .06, .01);
+    toneHit(out, t, "sine", 1400 * p * 2.76, 1400 * p * 2.74, .35, .02, .01);
+    return;
+  }
+  const heavy = eye.style === "cyclops" ? .6 : 0;
+  noiseHit(out, t, .05 + heavy * .08, "bandpass", 2200 * p, 700 * p, 2 + v.wet * 6, .22);       // lid sliding over the eyeball
+  toneHit(out, t, "sine", 520 * p * (1 - heavy), 250 * p * (1 - heavy), .06 + heavy * .12, .12 + heavy * .25);
+  if (v.boing > .05) toneHit(out, t + .012, "sine", 700 * p, 1500 * p, .09, .11 * v.boing);   // cartoon "bink"
+  if (v.wet > .4) noiseHit(out, t + .045, .1, "lowpass", 1500 * p, 240 * p, 4 + v.wet * 9, .14 * v.wet); // sticky reopening
+}
+function mouthClose(mouth) {
+  const v = audio.voice, t = audio.ctx.currentTime + .005;
+  const size = clamp(mouth.m / .2, .4, 3), p = v.pitch / Math.sqrt(size);
+  const out = eventOut(panOf(mouth.group), .75 * audio.near / Math.sqrt(Math.max(1, build.mouths.length * .5)));
+  const style = mouth.style;
+  if (style === "beak") {
+    toneHit(out, t, "sine", 1900 * p, 1650 * p, .045, .22);
+    noiseHit(out, t, .02, "bandpass", 2600 * p, 2200 * p, 3, .2);
+  } else if (style === "grin") {
+    noiseHit(out, t, .012, "bandpass", 3600 * p, 3000 * p, 4, .3);
+    noiseHit(out, t + .035, .012, "bandpass", 3300 * p, 2800 * p, 4, .22);
+  } else if (style === "lamprey" || style === "sphincter") {
+    const n = 4 + Math.floor(Math.random() * 4);
+    for (let k = 0; k < n; k++) {
+      const f = (120 + Math.random() * 160) * p;
+      toneHit(out, t + k * (.035 + Math.random() * .03), "sine", f, f * 1.9, .05, .18);
+    }
+    noiseHit(out, t, .25, "lowpass", 600 * p, 150 * p, 6, .1 * v.wet + .03);
+  } else if (style === "vertical") {
+    noiseHit(out, t, .26, "bandpass", 380 * p, 1800 * p, 5, .22);
+  } else {
+    noiseHit(out, t, .05, "bandpass", 1500 * p, 600 * p, 2, .26);                               // lips: a wet smack
+    toneHit(out, t, "sine", 190 * p, 90 * p, .05, .14);
+  }
+}
+function bubble() {
+  const v = audio.voice, t = audio.ctx.currentTime + .005;
+  const lobe = build.lobes[Math.floor(Math.random() * build.lobes.length)];
+  const out = eventOut(lobe ? panOf(lobe.group) : 0, .9 * audio.near);
+  const f = (240 + Math.random() * 650) * v.pitch * (Math.random() < .2 ? .5 : 1);
+  toneHit(out, t, "sine", f, f * (2 + Math.random()), .04 + Math.random() * .05, .15);       // a bubble's rising pop
+  if (Math.random() < v.wet * .5) noiseHit(out, t, .08, "lowpass", 1800, 200, 3 + v.wet * 10, .1 * v.wet);
+}
+function suckerPop() {
+  const v = audio.voice, t = audio.ctx.currentTime + .005;
+  const arm = build.arms[Math.floor(Math.random() * build.arms.length)];
+  const out = eventOut(arm ? panOf(arm.tip) : 0, .6 * audio.near);
+  toneHit(out, t, "sine", 950 * v.pitch, 360 * v.pitch, .03, .14);
+  noiseHit(out, t, .015, "bandpass", 2600, 1800, 3, .1);
+}
+// The shoggoth's piping "Tekeli-li!": four fluted syllables, gargled by slime and roughened by ugliness.
+function callOut() {
+  if (!audio.enabled || !build || !build.mouths.length) return;
+  const ctx = audio.ctx, v = audio.voice, t0 = ctx.currentTime + .03;
+  const mouth = build.mouths[Math.floor(Math.random() * build.mouths.length)];
+  const out = eventOut(panOf(mouth.group), .5 * audio.near);
+  const trem = aGain(1 - v.wet * .3), tremLfo = ctx.createOscillator(), tremDepth = aGain(v.wet * .3);
+  tremLfo.frequency.value = 24 + Math.random() * 8;
+  tremLfo.connect(tremDepth).connect(trem.gain);
+  trem.connect(out);
+  const vib = ctx.createOscillator(), vibDepth = aGain(0);
+  vib.frequency.value = 6.2;
+  vib.connect(vibDepth);
+  const base = 560 * v.pitch * (.92 + Math.random() * .16);
+  const syllables = [[1, .085], [1.19, .085], [1.5, .13], [1.42, .26]];  // te-ke-li-li
+  let t = t0;
+  for (const [ratio, dur] of syllables) {
+    const f = base * ratio, g = aGain(0);
+    const flute = ctx.createOscillator();
+    flute.type = "triangle";
+    flute.frequency.value = f;
+    vibDepth.connect(flute.frequency);
+    flute.connect(g);
+    if (v.growl > .2) {
+      const rasp = ctx.createOscillator(), shaper = ctx.createWaveShaper(), rg = aGain(v.growl * .5);
+      rasp.type = "sawtooth";
+      rasp.frequency.value = f / 2;
+      shaper.curve = shaperCurve(2 + v.growl * 10);
+      rasp.connect(shaper).connect(rg).connect(g);
+      rasp.start(t); rasp.stop(t + dur + .1);
+    }
+    noiseHit(trem, t, .03, "bandpass", f * 2, f * 1.5, 2, .12);                              // the consonant
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(.32, t + .014);
+    g.gain.setValueAtTime(.3, t + dur);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur + .07);
+    g.connect(trem);
+    flute.start(t); flute.stop(t + dur + .1);
+    t += dur + .045;
+  }
+  vibDepth.gain.setValueAtTime(0, t0);
+  vibDepth.gain.linearRampToValueAtTime(base * .02, t);
+  vib.start(t0); vib.stop(t + .1);
+  tremLfo.start(t0); tremLfo.stop(t + .1);
+}
+function pokeSound(point) {
+  if (!audio.enabled || !audio.voice) return;
+  const v = audio.voice, t = audio.ctx.currentTime + .005;
+  _ap.copy(point).applyMatrix4(camera.matrixWorldInverse);
+  const out = eventOut(clamp(_ap.x / (Math.abs(_ap.z) * .55 + 1), -.85, .85), audio.near);
+  noiseHit(out, t, .2, "lowpass", 1700 * v.pitch, 160 * v.pitch, 5 + v.wet * 12, .35);       // squelch
+  toneHit(out, t, "sine", 170 * v.pitch, 65 * v.pitch, .14, .3);
+  if (v.wet > .5) for (let k = 0; k < 3; k++) { const f = (300 + Math.random() * 500) * v.pitch; toneHit(out, t + .08 + k * .05, "sine", f, f * 2.4, .05, .1); }
+  if (build.mouths.length && Math.random() < .35) setTimeout(callOut, 350);
+}
+function audioUpdate(dt) {
+  if (!audio.ctx || !audio.enabled || !build || !audio.voice) return;
+  const now = audio.ctx.currentTime, v = audio.voice, b = audio.beds;
+  const act = running ? clamp(view.speed, 0, 1.5) : 0;
+  const simDt = running ? dt * view.speed : 0;
+  const near = audio.near = clamp(Math.sqrt(12 / Math.max(3, cameraDistance)), .55, 1.6);
+  b.droneGain.gain.setTargetAtTime(.022 * near * (.75 + .25 * Math.sin(time * .7)), now, .3);
+  const squish = .5 + .5 * Math.sin(time * 1.3) * Math.sin(time * .37 + 1);
+  b.slimeGain.gain.setTargetAtTime(act * v.wet * v.wet * .11 * near * (.25 + squish), now, .08);
+  b.slimeBp.frequency.setTargetAtTime((330 + 520 * squish) * v.pitch, now, .08);
+  const writhe = .55 + .45 * Math.sin(time * .9) * Math.sin(time * 1.7 + 2);
+  b.slitherGain.gain.setTargetAtTime(act * v.slither * .045 * near * writhe, now, .08);
+  b.shimmerGain.gain.setTargetAtTime(v.shimmer * .012 * near * (.6 + .4 * Math.sin(time * .5)), now, .4);
+  // mouths breathe with their animation: air while moving, growl when wide open, a sound on closing
+  const share = 1 / Math.sqrt(Math.max(1, Math.min(build.mouths.length, 3)));
+  audio.mouthVoices.forEach((mv, i) => {
+    const mo = build.mouths[i];
+    const flow = mo ? Math.abs(Math.cos(time * mo.rate + mo.phase)) * mo.rate : 0;
+    const open = mo ? .5 + .5 * Math.sin(time * mo.rate + mo.phase) : 0;
+    mv.airGain.gain.setTargetAtTime(act * flow * .06 * share * near, now, .08);
+    mv.growlGain.gain.setTargetAtTime(act * v.growl * open * open * .018 * share * near, now, .08);
+    if (mo) mv.pan.pan.setTargetAtTime(panOf(mo.group), now, .1);
+  });
+  if (!simDt) return;
+  build.mouths.forEach((mo, i) => {
+    const open = .5 + .5 * Math.sin(time * mo.rate + mo.phase), prev = audio.mouthOpen[i];
+    audio.mouthOpen[i] = open;
+    if (prev === undefined) return;
+    const falling = open < prev;
+    if (audio.mouthFalling[i] && !falling && i < 6) mouthClose(mo);
+    audio.mouthFalling[i] = falling;
+  });
+  // eyes: one sound as each lid starts to close (the same cycle stepCreature blinks on)
+  audio.blinkBudget = Math.min(8, audio.blinkBudget + dt * 8);
+  build.eyes.forEach((e, i) => {
+    const cyc = ((time * e.rate + e.phase / TAU) % 1 + 1) % 1, prev = audio.eyeCyc[i];
+    audio.eyeCyc[i] = cyc;
+    if (prev !== undefined && cyc < prev && audio.blinkBudget >= 1) { audio.blinkBudget--; eyeSound(e, layout.eyes[i]); }
+  });
+  if (Math.random() < v.bubbleRate * simDt) bubble();
+  if (Math.random() < v.suckerRate * simDt) suckerPop();
+  if (Math.random() < v.callRate * simDt) callOut();
+}
+function audioLevel() {
+  if (!audio.analyser) return 0;
+  const d = new Float32Array(audio.analyser.fftSize);
+  audio.analyser.getFloatTimeDomainData(d);
+  let sum = 0;
+  for (const x of d) sum += x * x;
+  return Math.sqrt(sum / d.length);
+}
+
 function setPaused(paused) {
   running = !paused;
   view.animated = running;
@@ -1906,6 +2300,14 @@ function attachControls() {
   $("reset").addEventListener("click", doReset);
   $("speed").addEventListener("input", () => { view.speed = Number($("speed").value); $("value-speed").textContent = `${view.speed.toFixed(2)}×`; });
   $("animated").addEventListener("change", () => setPaused(!$("animated").checked));
+  $("sound").addEventListener("click", () => setSound(!audio.enabled));
+  $("call").addEventListener("click", () => { if (!audio.enabled) setSound(true); callOut(); });
+  $("volume").addEventListener("input", () => setVolume(Number($("volume").value)));
+  document.addEventListener("visibilitychange", () => {
+    if (!audio.ctx) return;
+    if (document.hidden) audio.ctx.suspend();
+    else if (audio.enabled) audio.ctx.resume();
+  });
   $("autoRotate").addEventListener("change", () => { view.autoRotate = $("autoRotate").checked; });
   $("shadows").addEventListener("change", () => { view.shadows = $("shadows").checked; renderer.shadowMap.enabled = view.shadows; scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; }); });
   $("wireframe").addEventListener("change", () => { view.wireframe = $("wireframe").checked; applyWireframe(); });
@@ -1915,14 +2317,25 @@ function attachControls() {
   $("forget").addEventListener("click", () => { memory = []; saveMemory(); lastNovelty = null; updateUi(); showToast("Lab memory wiped"); });
   $("retry").addEventListener("click", () => location.reload());
   const canvas = $("viewport");
-  canvas.addEventListener("pointerdown", (event) => { pointer = { x: event.clientX, y: event.clientY }; canvas.setPointerCapture?.(event.pointerId); });
+  canvas.addEventListener("pointerdown", (event) => { pointer = { x: event.clientX, y: event.clientY, x0: event.clientX, y0: event.clientY }; canvas.setPointerCapture?.(event.pointerId); });
   canvas.addEventListener("pointermove", (event) => {
     if (!pointer) return;
     cameraYaw -= (event.clientX - pointer.x) * .006;
     cameraPitch = clamp(cameraPitch + (event.clientY - pointer.y) * .004, -.1, 1.1);
-    pointer = { x: event.clientX, y: event.clientY };
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
   });
-  const release = () => { pointer = null; };
+  const release = (event) => {
+    // a click without a drag pokes the specimen
+    if (pointer && event.type === "pointerup" && Math.hypot(event.clientX - pointer.x0, event.clientY - pointer.y0) < 5 && build) {
+      const r = canvas.getBoundingClientRect();
+      pokeNdc.set(((event.clientX - r.left) / r.width) * 2 - 1, -((event.clientY - r.top) / r.height) * 2 + 1);
+      pokeRay.setFromCamera(pokeNdc, camera);
+      const hit = pokeRay.intersectObject(build.root, true)[0];
+      if (hit) pokeSound(hit.point);
+    }
+    pointer = null;
+  };
   canvas.addEventListener("pointerup", release);
   canvas.addEventListener("pointercancel", release);
   canvas.addEventListener("wheel", (event) => { event.preventDefault(); cameraDistance = clamp(cameraDistance * (1 + event.deltaY * .0012), 4, 45); }, { passive: false });
@@ -1939,6 +2352,8 @@ function attachControls() {
     else if (k === "r") doRandom();
     else if (k === "m") doMutate();
     else if (k === "b") doBack();
+    else if (k === "s") $("sound").click();
+    else if (k === "t") $("call").click();
     else if (event.key === "Home") $("frame").click();
   });
 }
@@ -1951,6 +2366,7 @@ function animate(now) {
   if (view.autoRotate) cameraYaw += delta * .065;
   updateCamera();
   if (running) stepCreature(time);
+  audioUpdate(delta);
   if (environment) { environment.motes.rotation.y = time * .006; environment.halo.rotation.z = time * .015; }
   renderer.render(scene, camera);
   frameCount++;
@@ -1967,6 +2383,7 @@ async function main() {
     ({ mergeVertices } = await import("three/addons/utils/BufferGeometryUtils.js"));
     _v1 = new THREE.Vector3(); _v2 = new THREE.Vector3(); _v3 = new THREE.Vector3();
     _q1 = new THREE.Quaternion(); _m1 = new THREE.Matrix4(); _e1 = new THREE.Euler();
+    _ap = new THREE.Vector3(); pokeRay = new THREE.Raycaster(); pokeNdc = new THREE.Vector2();
     renderer = new THREE.WebGLRenderer({ canvas: $("viewport"), antialias: true, powerPreference: "high-performance", preserveDrawingBuffer: false });
     renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
     renderer.setSize(innerWidth, innerHeight, false);
@@ -2015,7 +2432,11 @@ async function main() {
       frame(t = time) { time = t; stepCreature(t); updateCamera(); renderer.render(scene, camera); return renderer.info.render; },
       camera(yaw, pitch, distance) { if (Number.isFinite(yaw)) cameraYaw = yaw; if (Number.isFinite(pitch)) cameraPitch = pitch; if (Number.isFinite(distance)) cameraDistance = distance; updateCamera(); },
       setView(o) { Object.assign(view, o); applyWireframe(); },
-      debug: () => ({ cameraDistance, cameraYaw, cameraPitch, cameraTarget, freeRect })
+      debug: () => ({ cameraDistance, cameraYaw, cameraPitch, cameraTarget, freeRect }),
+      sound: (on = true) => { setSound(on); return audio.enabled; },
+      call: () => callOut(),
+      advance(seconds = 1, dt = 1 / 60) { for (let k = 0; k < seconds / dt; k++) { if (running) time += dt * view.speed; stepCreature(time); audioUpdate(dt); } return audio.events; },
+      audio: () => ({ enabled: audio.enabled, state: audio.ctx && audio.ctx.state, level: audioLevel(), events: audio.events, voice: audio.voice })
     };
     window.__shoggoth = api;
     readyResolve(api);
