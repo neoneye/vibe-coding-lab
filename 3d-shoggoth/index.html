@@ -181,6 +181,7 @@ button.link:hover { color: var(--pink); }
       <div class="metric"><span class="k">Mouths</span><span class="v" id="metricMouths">0</span></div>
       <div class="metric"><span class="k">Arms</span><span class="v" id="metricArms">0</span></div>
       <div class="metric"><span class="k">Suckers</span><span class="v" id="metricSuckers">0</span></div>
+      <div class="metric"><span class="k">Pimples</span><span class="v" id="metricPimples">0</span></div>
       <div class="metric"><span class="k">Frame rate</span><span class="v" id="metricFps">–</span></div>
     </div>
   </section>
@@ -288,7 +289,14 @@ const Shoggoth = (() => {
     I("slime", "surface", "Slime", 0, 100, .5, { fmt: "pct100" }),
     I("cuteness", "surface", "Cuteness", 0, 100, .4, { fmt: "pct100", pow: 1.6 }),
     I("ugliness", "surface", "Ugliness", 0, 100, .4, { fmt: "pct100" }),
-    I("glow", "surface", "Bio-luminescence", 0, 100, .3, { fmt: "pct100" })
+    I("glow", "surface", "Bio-luminescence", 0, 100, .3, { fmt: "pct100" }),
+    // Added after the first share links went out; they must stay last (see decodeGenome).
+    I("pimples", "pimples", "Pimples", 0, 80, .9, { count: true, buckets: [[0, 0, 2.2], [1, 6, 1.4], [7, 20, 1.4], [21, 45, 1], [46, 80, .6]] }),
+    E("pimplePlace", "pimples", "Distribution", ["scattered", "clustered", "face"], .5, { gate: "pimples" }),
+    N("pimpleSize", "pimples", "Pimple size", .4, 2, .3, { gate: "pimples", fmt: "x" }),
+    N("ripeness", "pimples", "Ripeness", 0, 1, .3, { gate: "pimples" }),
+    N("inflammation", "pimples", "Inflammation", 0, 1, .3, { gate: "pimples" }),
+    N("throb", "pimples", "Throb", 0, 1, .2, { gate: "pimples" })
   ];
   const GENE = Object.fromEntries(GENES.map((gene) => [gene.key, gene]));
 
@@ -299,8 +307,11 @@ const Shoggoth = (() => {
     mouths: 1, mouthStyle: "lips", mouthPlace: "body", mouthSize: .9,
     arms: 8, armType: "tentacle", armTip: "none", armLen: .55, armThick: 1, suckers: 7, wobble: 58,
     hue: .44, sat: .2, accent: .2, pattern: "mottle",
-    hyperrealism: 72, cartoonish: 18, slime: 38, cuteness: 22, ugliness: 45, glow: 50, seed: 48217
+    hyperrealism: 72, cartoonish: 18, slime: 38, cuteness: 22, ugliness: 45, glow: 50,
+    pimples: 9, pimplePlace: "scattered", pimpleSize: 1, ripeness: .55, inflammation: .5, throb: .25, seed: 48217
   };
+  // Share links made before the pimple genes existed carry only the genes before them.
+  const V1_GENE_COUNT = GENES.findIndex((gene) => gene.key === "pimples");
 
   const qOf = (gene, v) => gene.kind === "hue" ? Math.round((((v % 1) + 1) % 1) * 256) % 256 : Math.round(clamp((v - gene.min) / (gene.max - gene.min), 0, 1) * 255);
   const fromQ = (gene, q) => gene.kind === "hue" ? q / 256 : gene.min + q * (gene.max - gene.min) / 255;
@@ -370,7 +381,7 @@ const Shoggoth = (() => {
   function majorDifferences(a, b) {
     let n = 0;
     if (a.plan !== b.plan) n++;
-    for (const k of ["heads", "eyes", "mouths", "arms"]) if (countBucket(a[k]) !== countBucket(b[k])) n++;
+    for (const k of ["heads", "eyes", "mouths", "arms", "pimples"]) if (countBucket(a[k]) !== countBucket(b[k])) n++;
     if (a.heads && b.heads && a.headShape !== b.headShape) n++;
     if (a.eyes && b.eyes && a.eyeStyle !== b.eyeStyle) n++;
     if (a.eyes && b.eyes && a.eyeLayout !== b.eyeLayout) n++;
@@ -463,15 +474,16 @@ const Shoggoth = (() => {
     const str = String(text || "").replace(/^#/, "");
     if (!str.startsWith("s1")) return null;
     const bytes = b64ToBytes(str.slice(2));
-    if (!bytes || bytes.length !== GENES.length + 5 || bytes[0] !== 1) return null;
-    const g = {};
-    for (let i = 0; i < GENES.length; i++) {
+    const n = bytes ? bytes.length - 5 : -1;
+    if (!bytes || (n !== GENES.length && n !== V1_GENE_COUNT) || bytes[0] !== 1) return null;
+    const g = { pimples: 0 };
+    for (let i = 0; i < n; i++) {
       const gene = GENES[i], b = bytes[i + 1];
       if (gene.kind === "enum") { if (b >= gene.values.length) return null; g[gene.key] = gene.values[b]; }
       else if (gene.kind === "int") { if (b > gene.max - gene.min) return null; g[gene.key] = gene.min + b; }
       else g[gene.key] = fromQ(gene, b);
     }
-    const o = GENES.length + 1;
+    const o = n + 1;
     g.seed = ((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3]) >>> 0;
     return normalizeGenome(g);
   }
@@ -486,7 +498,8 @@ const Shoggoth = (() => {
     const species = g.heads ? `${NUMERAL[g.heads]}cephalus` : "acephalus";
     const eyes = g.eyes === 0 ? "caecus" : g.eyes === 1 ? `${EYE_NAME[g.eyeStyle]}monops` : g.eyes <= 3 ? `${EYE_NAME[g.eyeStyle]}oculatus` : g.eyes <= 15 ? `${EYE_NAME[g.eyeStyle]}polyops` : `${EYE_NAME[g.eyeStyle]}myriops`;
     const mouths = g.mouths === 0 ? " astomus" : g.mouths >= 4 ? " polystomus" : "";
-    return `${genus} ${species} ${eyes}${mouths}`;
+    const pustules = g.pimples >= 25 ? " pustulosus" : "";
+    return `${genus} ${species} ${eyes}${mouths}${pustules}`;
   }
 
   // Colours as [h, s, l] in 0..1 so the renderer can feed them to setHSL.
@@ -864,6 +877,43 @@ const Shoggoth = (() => {
       });
     }
 
+    // pimples: own rng stream, so adding them never moves any other feature
+    const pimples = [];
+    if (g.pimples) {
+      const prng = makeRng((g.seed ^ 0x5bd1e995) >>> 0);
+      const lobeOf = (host) => host.kind === "lobe" ? host.index : -1;
+      const keepOut = [...eyes.map((e) => ({ li: lobeOf(e.host), p: e.pos, r: e.r + e.stalk })), ...mouths.map((m) => ({ li: lobeOf(m.host), p: m.pos, r: m.r * 1.2 }))].filter((k) => k.li >= 0);
+      const clusters = Array.from({ length: Math.max(1, Math.ceil(g.pimples / 7)) }, () => {
+        let c;
+        for (let k = 0; k < 24; k++) {
+          c = { li: pickLobe(), d: randomUnit(prng) };
+          c.d = norm([c.d[0], Math.abs(c.d[1]) * .8, c.d[2]]);
+          const hit = onLobe(c.li, c.d);
+          if (!inside(hit.p, c.li) && hit.p[1] > .15) break;
+        }
+        return c;
+      });
+      for (let i = 0, tries = 0; i < g.pimples && tries < g.pimples * 6; tries++) {
+        let li, d;
+        if (g.pimplePlace === "clustered") {
+          const c = clusters[tries % clusters.length];
+          li = c.li; d = norm(add(c.d, scale(randomUnit(prng), .28)));
+        } else if (g.pimplePlace === "face") {
+          li = main; d = norm(add(lobeFront(main), scale(randomUnit(prng), .75)));
+        } else {
+          li = pickLobe(); d = randomUnit(prng);
+        }
+        d = norm([d[0], Math.max(-.35, d[1]), d[2]]);
+        const hit = onLobe(li, d);
+        if (inside(hit.p, li) || hit.p[1] < .08) continue;
+        const size = lobeR(li) * .055 * g.pimpleSize * (.6 + prng() * .8);
+        if (keepOut.some((k) => k.li === li && Math.hypot(k.p[0] - hit.local[0], k.p[1] - hit.local[1], k.p[2] - hit.local[2]) < k.r + size * 1.6)) continue;
+        const ripe = clamp(g.ripeness + (prng() - .5) * .5, 0, 1);
+        pimples.push({ lobe: li, pos: hit.local, normal: hit.n, size, ripe, phase: prng() * TAU });
+        i++;
+      }
+    }
+
     // bounds for camera / stage framing
     const lo = [Infinity, 0, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     const grow = (p, r = 0) => { for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], p[k] - r); hi[k] = Math.max(hi[k], p[k] + r); } };
@@ -875,7 +925,7 @@ const Shoggoth = (() => {
     const radius = Math.max(1.5, length(sub(hi, lo)) * .5);
     const footprint = Math.max(Math.abs(lo[0]), Math.abs(hi[0]), Math.abs(lo[2]), Math.abs(hi[2]));
 
-    return { genome: g, lobes, main, along, strands, heads, eyes, mouths, arms, dermal, bounds: { lo, hi, center, radius, footprint } };
+    return { genome: g, lobes, main, along, strands, heads, eyes, mouths, arms, dermal, pimples, bounds: { lo, hi, center, radius, footprint } };
   }
 
   function armRadius(arm, s) {
@@ -1039,6 +1089,15 @@ const ShoggothTests = {
     const names = new Set(history.map(S.speciesName));
     log(`  ${names.size} distinct species names in 200`);
 
+    const legacy = S.decodeGenome("s1AQIGirAA0AMAAQEAVrkCAgN9Ro4FBAOEBwECr2QEGLFl5gBSFD05TByXri81");
+    check("pre-pimple share links still decode, without pimples", !!legacy && legacy.pimples === 0 && legacy.plan === "column" && legacy.mouths === 5 && legacy.glow === 28 && legacy.seed === 2544774965);
+    check("pre-pimple classic link decodes", !!S.decodeGenome("s1AQAFgIBNc0ABAAABZnQHAABgM4ABAQFbCAAAjIkHOnEtMwNIEiYWLTIAALxZ"));
+    const bare = S.buildLayout({ ...S.CLASSIC, pimples: 0 }), spotty = S.buildLayout({ ...S.CLASSIC, pimples: 40 });
+    check("pimples never move other features", JSON.stringify(bare.eyes) === JSON.stringify(spotty.eyes) && JSON.stringify(bare.arms) === JSON.stringify(spotty.arms) && JSON.stringify(bare.dermal) === JSON.stringify(spotty.dermal));
+    check("pimple count follows the gene", bare.pimples.length === 0 && spotty.pimples.length >= 30 && spotty.pimples.length <= 40, `${spotty.pimples.length}`);
+    check("every distribution places pimples", ["scattered", "clustered", "face"].every((pimplePlace) => S.buildLayout({ ...S.CLASSIC, pimples: 20, pimplePlace }).pimples.length >= 12));
+    check("pimple layouts are finite", pool.slice(0, 80).every((g) => finite(S.buildLayout(g).pimples)));
+
     const voices = pool.map(S.voiceOf);
     check("voice parameters are finite", voices.every(finite));
     check("voice parameters stay in range", voices.every((v) => v.droneHz >= 28 && v.droneHz <= 110 && v.growl >= 0 && v.growl <= 1 && v.wet >= .15 && v.wet <= 1 && v.bubbleRate > 0 && v.bubbleRate < 3.5 && v.blinkGain > 0 && v.blinkGain <= 1));
@@ -1068,8 +1127,8 @@ const { clamp, lerp, TAU } = S;
 const $ = (id) => document.getElementById(id);
 const MEMORY_KEY = "shoggoth.memory.v1";
 const MEMORY_MAX = 500;
-const GROUP_TITLES = { body: "Body", heads: "Heads", eyes: "Eyes", mouths: "Mouths", arms: "Arms", surface: "Surface & character" };
-const GROUP_COUNT = { heads: "heads", eyes: "eyes", mouths: "mouths", arms: "arms", body: "segments" };
+const GROUP_TITLES = { body: "Body", heads: "Heads", eyes: "Eyes", mouths: "Mouths", arms: "Arms", pimples: "Pimples", surface: "Surface & character" };
+const GROUP_COUNT = { heads: "heads", eyes: "eyes", mouths: "mouths", arms: "arms", pimples: "pimples", body: "segments" };
 const PLAN_NOTES = { blob: "single deformable mass", heap: "heap of fused lobes", column: "stacked column", worm: "segmented worm", ring: "closed ring of lobes", crawler: "mass raised on legs", cluster: "floating cluster on strands", tree: "stalked branching tree" };
 
 let THREE, mergeVertices;
@@ -1113,6 +1172,16 @@ function remember(g) {
 // ---- colour & materials ------------------------------------------------------
 const hsl = (c) => new THREE.Color().setHSL(((c[0] % 1) + 1) % 1, clamp(c[1], 0, 1), clamp(c[2], 0, 1), THREE.SRGBColorSpace);
 
+// Inflammation reddens the bump and its halo; ripeness turns the head from pink to a glossy yellow-white.
+function pimpleMaterials(g, C, phys, std) {
+  const red = new THREE.Color(.62, .07, .06), infl = g.inflammation;
+  const head = new THREE.Color(.95, .7, .62).lerp(new THREE.Color(.98, .93, .7), g.ripeness);
+  return {
+    pimple: phys({ color: C.skin.clone().lerp(red, .2 + infl * .65), roughness: .45, clearcoat: .5, clearcoatRoughness: .3, sheen: .4, sheenColor: red }),
+    pimpleHalo: std(C.skin.clone().lerp(red, infl * .75), { roughness: .6 }),
+    pimpleHead: phys({ color: head, roughness: .2, clearcoat: 1, clearcoatRoughness: .1, emissive: head.clone().multiplyScalar(.04) })
+  };
+}
 function makeMaterials(g) {
   const P = S.paletteOf(g);
   const C = {};
@@ -1148,6 +1217,7 @@ function makeMaterials(g) {
     claw: std(C.claw, { roughness: .25, metalness: .15 }),
     bulb: std(C.accent, { emissive: C.accent, emissiveIntensity: .6 + glow * 2, roughness: .25 }),
     wart: std(C.shadow.clone().lerp(C.skin, .35), { roughness: .8 }),
+    ...pimpleMaterials(g, C, phys, std),
     spine: std(C.highlight.clone().lerp(C.teeth, .5), { roughness: .4 }),
     frill: phys({ color: C.accent.clone().lerp(C.skin, .45), roughness: .45, side: THREE.DoubleSide, transparent: true, opacity: .88, emissive: C.accent.clone().multiplyScalar(.05 + glow * .15), emissiveIntensity: 1 }),
     slime: phys({ color: C.slime, roughness: .07 + (1 - slime) * .16, transmission: .12 + slime * .32, thickness: .55, ior: 1.34, transparent: true, opacity: .12 + slime * .52, clearcoat: .95, clearcoatRoughness: .04, emissive: C.slime.clone().multiplyScalar(.04 + glow * .12), emissiveIntensity: .7 + glow * .7 }),
@@ -1414,7 +1484,7 @@ function buildCreature(L) {
   const realism = g.hyperrealism / 100;
   const detail = realism > .6 ? [64, 40] : [48, 30];
   const outline = g.cartoonish > 30;
-  const rec = { root, M, lobes: [], heads: [], eyes: [], mouths: [], arms: [], strands: [], drips: [], suckers: null, genome: g, layout: L };
+  const rec = { root, M, lobes: [], heads: [], eyes: [], mouths: [], arms: [], strands: [], drips: [], pimples: [], suckers: null, genome: g, layout: L };
 
   L.lobes.forEach((l, i) => {
     const group = new THREE.Group();
@@ -1497,6 +1567,20 @@ function buildCreature(L) {
       m.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, n, z));
       m.position.addScaledVector(n, d.size * .35);
     }
+  });
+
+  L.pimples.forEach((p) => {
+    const group = new THREE.Group(), s = p.size;
+    group.position.copy(vec(p.pos));
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), vec(p.normal));
+    rec.lobes[p.lobe].group.add(group);
+    // the red halo is a wide ellipsoid sunk into the skin, so only a soft rim shows around the bump
+    const halo = s * (1.35 + g.inflammation * .55);
+    if (g.inflammation > .05) mesh(group, G.sphere, M.pimpleHalo, [0, -s * .3, 0], [halo, s * .42, halo]);
+    mesh(group, G.sphere, M.pimple, [0, -s * .05, 0], [s, s * .8, s], true);
+    let head = null;
+    if (p.ripe > .12) head = mesh(group, G.sphereLo, M.pimpleHead, [0, s * .62, 0], [s * .42 * Math.sqrt(p.ripe), s * .3 * p.ripe + s * .06, s * .42 * Math.sqrt(p.ripe)]);
+    rec.pimples.push({ group, head, phase: p.phase, rate: 1.6 + (p.phase % 1) * 1.4 });
   });
 
   const slime = g.slime / 100;
@@ -1652,6 +1736,12 @@ function stepCreature(t) {
     else if (mo.style === "vertical") { mo.upper.position.x = -open * m * .08; mo.lower.position.x = open * m * .08; }
     else { mo.upper.position.y = open * m * .08; mo.lower.position.y = -open * m * .1; }
     mo.cavity.scale.set(mo.cavityScale.x, mo.cavityScale.y * (.8 + open * .5), mo.cavityScale.z);
+  }
+
+  const throb = g.throb;
+  if (throb > 0) for (const p of build.pimples) {
+    const beat = Math.pow(.5 + .5 * Math.sin(t * p.rate + p.phase), 3);
+    p.group.scale.set(1 + throb * .14 * beat, 1 + throb * .28 * beat, 1 + throb * .14 * beat);
   }
 
   for (const d of build.drips) {
@@ -1885,6 +1975,7 @@ function updateUi() {
     $("metricHeads").textContent = L.heads.length;
     $("metricEyes").textContent = L.eyes.length;
     $("metricMouths").textContent = L.mouths.length;
+    $("metricPimples").textContent = L.pimples.length;
     $("metricArms").textContent = L.arms.length;
     $("metricSuckers").textContent = L.arms.reduce((a, arm) => a + arm.suckers * arm.strands.length, 0);
   }
