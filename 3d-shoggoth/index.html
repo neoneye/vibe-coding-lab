@@ -324,7 +324,17 @@ const Shoggoth = (() => {
     N("holeDepth", "holes", "Depth", 0, 1, .02, { gate: "holes" }),
     N("holeRim", "holes", "Swollen rims", 0, 1, .02, { gate: "holes" }),
     N("holeSeeds", "holes", "Seeds", 0, 1, .02, { gate: "holes" }),
-    N("holePulse", "holes", "Pulse", 0, 1, .02, { gate: "holes" })
+    N("holePulse", "holes", "Pulse", 0, 1, .02, { gate: "holes" }),
+    // Hair genes came after the trypophobia genes; keep these last. About half of Random specimens
+    // get hair; tiny novelty weights keep the novelty search from chasing it.
+    I("hair", "hair", "Hairiness", 0, 100, .05, { count: true, fmt: "pct100", buckets: [[0, 0, 1.6], [5, 30, .5], [31, 70, .7], [71, 100, .4]] }),
+    E("hairPlace", "hair", "Growth", ["all over", "tufts", "fringe"], .02, { gate: "hair" }),
+    N("hairLen", "hair", "Length", .2, 2, .02, { gate: "hair", fmt: "x" }),
+    N("hairThick", "hair", "Thickness", .3, 2, .02, { gate: "hair", fmt: "x" }),
+    N("hairDroop", "hair", "Droop", 0, 1, .02, { gate: "hair" }),
+    N("hairCurl", "hair", "Curl", 0, 1, .02, { gate: "hair" }),
+    E("hairTint", "hair", "Tint", ["pale", "golden", "dark", "skin"], .02, { gate: "hair" }),
+    N("hairSway", "hair", "Sway", 0, 1, .02, { gate: "hair" })
   ];
   const GENE = Object.fromEntries(GENES.map((gene) => [gene.key, gene]));
 
@@ -340,12 +350,13 @@ const Shoggoth = (() => {
     smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0,
     fingers: 5, thumbs: 1, fingerLen: 1, fingerSpread: .5,
     mask: "none", maskFace: "smile", maskSize: 1, maskTilt: 0,
-    holes: 0, holeDensity: .5, holeSize: 1, holeDepth: .6, holeRim: .4, holeSeeds: .3, holePulse: .2, seed: 48217
+    holes: 0, holeDensity: .5, holeSize: 1, holeDepth: .6, holeRim: .4, holeSeeds: .3, holePulse: .2,
+    hair: 0, hairPlace: "fringe", hairLen: 1, hairThick: 1, hairDroop: .3, hairCurl: .2, hairTint: "pale", hairSway: .4, seed: 48217
   };
   // Older share links carry only the genes that existed when they were made: v1 stops before
   // the pimples, v2 before the face, v3 before the hand genes. Missing genes decode as "absent"
   // (or, for hands, as the old five-fingered hand).
-  const LINK_GENE_COUNTS = ["pimples", "smile", "fingers", "mask", "holes"].map((key) => GENES.findIndex((gene) => gene.key === key)).concat(GENES.length);
+  const LINK_GENE_COUNTS = ["pimples", "smile", "fingers", "mask", "holes", "hair"].map((key) => GENES.findIndex((gene) => gene.key === key)).concat(GENES.length);
 
   const qOf = (gene, v) => gene.kind === "hue" ? Math.round((((v % 1) + 1) % 1) * 256) % 256 : Math.round(clamp((v - gene.min) / (gene.max - gene.min), 0, 1) * 255);
   const fromQ = (gene, q) => gene.kind === "hue" ? q / 256 : gene.min + q * (gene.max - gene.min) / 255;
@@ -518,7 +529,7 @@ const Shoggoth = (() => {
     const bytes = b64ToBytes(str.slice(2));
     const n = bytes ? bytes.length - 5 : -1;
     if (!bytes || !LINK_GENE_COUNTS.includes(n) || bytes[0] !== 1) return null;
-    const g = { pimples: 0, smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0, fingers: 5, thumbs: 1, fingerLen: 1, fingerSpread: .5, mask: "none", holes: 0 };
+    const g = { pimples: 0, smile: 0, happyEyes: 0, sparkle: 0, brows: 0, blush: 0, fingers: 5, thumbs: 1, fingerLen: 1, fingerSpread: .5, mask: "none", holes: 0, hair: 0 };
     for (let i = 0; i < n; i++) {
       const gene = GENES[i], b = bytes[i + 1];
       if (gene.kind === "enum") { if (b >= gene.values.length) return null; g[gene.key] = gene.values[b]; }
@@ -544,7 +555,8 @@ const Shoggoth = (() => {
     const smiling = g.mouths && g.smile >= .6 ? " ridens" : "";
     const masked = g.mask !== "none" ? " personatus" : "";
     const sieved = g.holes >= 3 ? " cribrosus" : "";
-    return `${genus} ${species} ${eyes}${mouths}${pustules}${smiling}${masked}${sieved}`;
+    const hairy = g.hair >= 50 ? " hirsutus" : "";
+    return `${genus} ${species} ${eyes}${mouths}${pustules}${smiling}${masked}${sieved}${hairy}`;
   }
 
   // Colours as [h, s, l] in 0..1 so the renderer can feed them to setHSL.
@@ -1056,6 +1068,46 @@ const Shoggoth = (() => {
       }
     }
 
+    // hair: bristles on the lobes and heads, own rng stream. Each hair is a root, a surface normal
+    // and a length; the renderer bends it (droop, curl) and sways it.
+    const hairs = [];
+    if (g.hair) {
+      const hr = makeRng((g.seed ^ 0x165667b1) >>> 0);
+      const hosts = [...lobes.map((l, i) => ({ host: { kind: "lobe", index: i }, r: lobeR(i), area: l.r[0] * l.r[1] + l.r[1] * l.r[2] + l.r[0] * l.r[2] })),
+        ...heads.map((h, i) => ({ host: { kind: "head", index: i }, r: h.r, area: h.r * h.r * (h.scale[0] * h.scale[1] + h.scale[1] * h.scale[2] + h.scale[0] * h.scale[2]) }))];
+      const total = hosts.reduce((a, h) => a + h.area, 0);
+      const pickHost = () => { let r = hr() * total; for (const h of hosts) if ((r -= h.area) <= 0) return h; return hosts[0]; };
+      const surface = (host, d) => {
+        if (host.kind === "lobe") return onLobe(host.index, d);
+        const h = heads[host.index];
+        const local = scale(mul(d, h.scale), h.r);
+        return { local, p: add(h.center, local), n: norm(div(d, h.scale)) };
+      };
+      const same = (a, b) => a.kind === b.kind && a.index === b.index;
+      const keepOut = [...eyes.map((e) => ({ host: e.host, p: e.pos, r: e.r * 1.1 + e.stalk })), ...mouths.map((m) => ({ host: m.host, p: m.pos, r: m.r * 1.1 }))];
+      const count = Math.round(g.hair / 100 * 2400);
+      const tufts = Array.from({ length: Math.max(3, Math.round(count / 70)) }, () => ({ h: pickHost(), d: randomUnit(hr) }));
+      const baseLen = lobeR(main) * .32 * g.hairLen;
+      for (let i = 0, tries = 0; i < count && tries < count * 4; tries++) {
+        let h, d;
+        if (g.hairPlace === "tufts") {
+          const t = tufts[tries % tufts.length];
+          h = t.h; d = norm(add(t.d, scale(randomUnit(hr), .3)));
+        } else {
+          h = pickHost(); d = randomUnit(hr);
+          // a fringe grows from the lower half, like the bristles under a treehopper's bulbs
+          if (g.hairPlace === "fringe") d = norm([d[0], -.15 - Math.abs(d[1]) * .75, d[2]]);
+        }
+        const hit = surface(h.host, d);
+        if (h.host.kind === "lobe" && inside(hit.p, h.host.index)) continue;
+        if (hit.p[1] < .06) continue;
+        if (keepOut.some((k) => same(k.host, h.host) && Math.hypot(k.p[0] - hit.local[0], k.p[1] - hit.local[1], k.p[2] - hit.local[2]) < k.r)) continue;
+        const len = baseLen * Math.min(1, h.r / lobeR(main) + .45) * (.6 + hr() * .8);
+        hairs.push({ host: h.host, pos: hit.local, normal: hit.n, len, phase: hr() * TAU });
+        i++;
+      }
+    }
+
     // bounds for camera / stage framing
     const lo = [Infinity, 0, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     const grow = (p, r = 0) => { for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], p[k] - r); hi[k] = Math.max(hi[k], p[k] + r); } };
@@ -1067,7 +1119,7 @@ const Shoggoth = (() => {
     const radius = Math.max(1.5, length(sub(hi, lo)) * .5);
     const footprint = Math.max(Math.abs(lo[0]), Math.abs(hi[0]), Math.abs(lo[2]), Math.abs(hi[2]));
 
-    return { genome: g, lobes, main, along, strands, heads, eyes, mouths, arms, dermal, pimples, cheeks, mask, holes, bounds: { lo, hi, center, radius, footprint } };
+    return { genome: g, lobes, main, along, strands, heads, eyes, mouths, arms, dermal, pimples, cheeks, mask, holes, hairs, bounds: { lo, hi, center, radius, footprint } };
   }
 
   function armRadius(arm, s) {
@@ -1237,6 +1289,15 @@ const ShoggothTests = {
     check("pre-pimple classic link decodes", !!S.decodeGenome("s1AQAFgIBNc0ABAAABZnQHAABgM4ABAQFbCAAAjIkHOnEtMwNIEiYWLTIAALxZ"));
     const v2 = S.decodeGenome("s1AQYBfjtg1dwDBQMCMAMMAgI2gq4BAALRBgQD8xQHKdF3iQBdHxcLIi4RAVQTV5gFVdTM");
     check("pre-face share links still decode, with a neutral face", !!v2 && v2.plan === "cluster" && v2.pimples === 17 && v2.pimplePlace === "clustered" && v2.seed === 89511116 && v2.smile === 0 && v2.blush === 0 && v2.brows === 0);
+    const v6 = S.decodeGenome("s1AQcF8wwbgxgBAgIAorUNAAIVAJkGBQHPAAICGwkDDHLhwQJPSEgUFkwAAkG9mBUrmQiwAQMBQrACAtCSBKMsCRM1U7nNqa8");
+    check("pre-hair share links still decode, hairless", !!v6 && v6.plan === "tree" && v6.holes === 4 && v6.seed === 3117263279 && v6.hair === 0);
+    const furry = S.buildLayout({ ...S.CLASSIC, hair: 60 });
+    check("hairiness places hairs on the body", furry.hairs.length > 1000 && finite(furry.hairs.map((h) => ({ pos: h.pos, normal: h.normal, len: h.len }))));
+    check("every growth pattern places hairs", ["all over", "tufts", "fringe"].every((hairPlace) => S.buildLayout({ ...S.CLASSIC, heads: 2, hair: 30, hairPlace }).hairs.length > 500));
+    check("a fringe grows from the lower half", S.buildLayout({ ...S.CLASSIC, hair: 40, hairPlace: "fringe" }).hairs.every((h) => h.normal[1] < .35));
+    check("hair never moves other features", ["eyes", "mouths", "arms", "dermal", "pimples", "holes"].every((k) => JSON.stringify(S.buildLayout(S.CLASSIC)[k]) === JSON.stringify(furry[k])));
+    const hairRate = pool.filter((g) => g.hair > 0).length / pool.length;
+    check("about half of Random specimens get hair", hairRate > .35 && hairRate < .65, hairRate.toFixed(2));
     const v5 = S.decodeGenome("s1AQUAMR-hYUACAwMCI68SAgDru_oBAAOUDAACB0YILhUQpwFDEClbQA4tAvMi_pwDkBhHjgIAn4IDAn8yH1EdCQ");
     check("pre-trypophobia share links still decode, without holes", !!v5 && v5.plan === "crawler" && v5.mask === "tentacle" && v5.maskFace === "wink" && v5.seed === 525409545 && v5.holes === 0);
     const holey = S.buildLayout({ ...S.CLASSIC, holes: 5, holeDensity: .8 });
@@ -1299,7 +1360,7 @@ const { clamp, lerp, TAU } = S;
 const $ = (id) => document.getElementById(id);
 const MEMORY_KEY = "shoggoth.memory.v1";
 const MEMORY_MAX = 500;
-const GROUP_TITLES = { body: "Body", heads: "Heads", eyes: "Eyes", mouths: "Mouths", mask: "Smiley mask", face: "Friendly face", arms: "Arms", pimples: "Pimples", holes: "Trypophobia", surface: "Surface & character" };
+const GROUP_TITLES = { body: "Body", heads: "Heads", eyes: "Eyes", mouths: "Mouths", mask: "Smiley mask", face: "Friendly face", arms: "Arms", pimples: "Pimples", holes: "Trypophobia", hair: "Hair", surface: "Surface & character" };
 const GROUP_COUNT = { heads: "heads", eyes: "eyes", mouths: "mouths", arms: "arms", pimples: "pimples", holes: "holes", body: "segments" };
 const PLAN_NOTES = { blob: "single deformable mass", heap: "heap of fused lobes", column: "stacked column", worm: "segmented worm", ring: "closed ring of lobes", crawler: "mass raised on legs", cluster: "floating cluster on strands", tree: "stalked branching tree" };
 
@@ -1799,6 +1860,79 @@ function buildHoles(L, g, M, rec) {
   }
 }
 
+// Hair: one merged mesh per host (lobe or head). Each strand is a 3-sided tapered tube along a
+// curve that leaves the skin along its normal, droops toward the host's "down" and curls around
+// its own axis. Attributes aSway (direction * length, w = 0 at the root .. 1 at the tip) and aPhase
+// let the vertex shader sway tips without touching the CPU each frame.
+const HAIR_SEG = 5, HAIR_RAD = 3;
+const HAIR_TINTS = { pale: 0xeee5bf, golden: 0xd9a03c, dark: 0x1f1813 };
+function buildHair(L, g, M, rec, hostGroup) {
+  const color = g.hairTint === "skin" ? M.C.skin.clone().lerp(M.C.highlight, .35) : new THREE.Color(HAIR_TINTS[g.hairTint]);
+  const material = new THREE.MeshStandardMaterial({ color, roughness: .45, metalness: 0, emissive: color.clone().multiplyScalar(g.hairTint === "pale" ? .18 : .06) });
+  const uniforms = { uTime: { value: 0 }, uAmp: { value: g.hairSway * .35 } };
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute vec4 aSway;\nattribute float aPhase;\nuniform float uTime;\nuniform float uAmp;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\ntransformed += aSway.xyz * (aSway.w * aSway.w) * uAmp * sin(uTime * 1.9 + aPhase);");
+  };
+  rec.hair = { material, uniforms };
+  const byHost = new Map();
+  for (const h of L.hairs) { const key = `${h.host.kind}${h.host.index}`; if (!byHost.has(key)) byHost.set(key, { host: h.host, list: [] }); byHost.get(key).list.push(h); }
+  const V = THREE.Vector3, up = new V(), a = new V(), b = new V(), n = new V(), down = new V(), u = new V(), w = new V(), tan = new V();
+  const pts = Array.from({ length: HAIR_SEG + 1 }, () => new V());
+  for (const { host, list } of byHost.values()) {
+    // "down" in the host's own frame: heads are turned, lobes are not
+    if (host.kind === "head") down.set(0, -1, 0).applyQuaternion(rec.heads[host.index].baseQuat.clone().invert()); else down.set(0, -1, 0);
+    const ringVerts = (HAIR_SEG + 1) * HAIR_RAD, vCount = list.length * ringVerts;
+    const pos = new Float32Array(vCount * 3), nrm = new Float32Array(vCount * 3), sway = new Float32Array(vCount * 4), phase = new Float32Array(vCount);
+    const index = new Uint32Array(list.length * HAIR_SEG * HAIR_RAD * 6);
+    let vi = 0, ii = 0;
+    list.forEach((h, hi) => {
+      n.set(...h.normal);
+      u.set(Math.abs(n.y) < .9 ? 0 : 1, Math.abs(n.y) < .9 ? 1 : 0, 0).cross(n).normalize();
+      w.crossVectors(n, u);
+      const L0 = h.len, r0 = L0 * .022 * g.hairThick;
+      const swayDir = new V().copy(u).multiplyScalar(Math.cos(h.phase)).addScaledVector(w, Math.sin(h.phase));
+      for (let k = 0; k <= HAIR_SEG; k++) {
+        const t = k / HAIR_SEG, curl = g.hairCurl * L0 * .14 * t;
+        pts[k].set(...h.pos).addScaledVector(n, L0 * t * (1 - g.hairDroop * .45 * t)).addScaledVector(down, L0 * g.hairDroop * .8 * t * t)
+          .addScaledVector(u, Math.cos(h.phase + t * 9) * curl).addScaledVector(w, Math.sin(h.phase + t * 9) * curl);
+      }
+      for (let k = 0; k <= HAIR_SEG; k++) {
+        const t = k / HAIR_SEG, r = r0 * (1 - .88 * t);
+        tan.subVectors(pts[Math.min(HAIR_SEG, k + 1)], pts[Math.max(0, k - 1)]).normalize();
+        a.copy(Math.abs(tan.y) < .9 ? up.set(0, 1, 0) : up.set(1, 0, 0)).cross(tan).normalize();
+        b.crossVectors(tan, a);
+        for (let j = 0; j < HAIR_RAD; j++) {
+          const ang = j / HAIR_RAD * TAU, c = Math.cos(ang), s = Math.sin(ang);
+          const nx = a.x * c + b.x * s, ny = a.y * c + b.y * s, nz = a.z * c + b.z * s;
+          pos[vi * 3] = pts[k].x + nx * r; pos[vi * 3 + 1] = pts[k].y + ny * r; pos[vi * 3 + 2] = pts[k].z + nz * r;
+          nrm[vi * 3] = nx; nrm[vi * 3 + 1] = ny; nrm[vi * 3 + 2] = nz;
+          sway[vi * 4] = swayDir.x * L0; sway[vi * 4 + 1] = swayDir.y * L0; sway[vi * 4 + 2] = swayDir.z * L0; sway[vi * 4 + 3] = t;
+          phase[vi] = h.phase;
+          vi++;
+        }
+      }
+      const base = hi * ringVerts;
+      for (let k = 0; k < HAIR_SEG; k++) for (let j = 0; j < HAIR_RAD; j++) {
+        const p0 = base + k * HAIR_RAD + j, p1 = base + k * HAIR_RAD + (j + 1) % HAIR_RAD, q0 = p0 + HAIR_RAD, q1 = p1 + HAIR_RAD;
+        index[ii++] = p0; index[ii++] = p1; index[ii++] = q0; index[ii++] = q0; index[ii++] = p1; index[ii++] = q1;
+      }
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
+    geo.setAttribute("aSway", new THREE.BufferAttribute(sway, 4));
+    geo.setAttribute("aPhase", new THREE.BufferAttribute(phase, 1));
+    geo.setIndex(new THREE.BufferAttribute(index, 1));
+    geo.computeBoundingSphere();
+    const m = new THREE.Mesh(geo, material);
+    m.frustumCulled = false;   // tips sway outside the static bounds
+    hostGroup(host).add(m);
+  }
+}
+
 // ---- build the creature from the layout ---------------------------------------------
 function buildCreature(L) {
   const g = L.genome;
@@ -1899,6 +2033,7 @@ function buildCreature(L) {
   });
 
   if (L.holes.length) buildHoles(L, g, M, rec);
+  if (L.hairs.length) buildHair(L, g, M, rec, hostGroup);
 
   L.pimples.forEach((p) => {
     const group = new THREE.Group(), s = p.size;
@@ -2129,6 +2264,8 @@ function stepCreature(t) {
     const beat = Math.pow(.5 + .5 * Math.sin(t * p.rate + p.phase), 3);
     p.group.scale.set(1 + throb * .14 * beat, 1 + throb * .28 * beat, 1 + throb * .14 * beat);
   }
+
+  if (build.hair) build.hair.uniforms.uTime.value = t;
 
   if (build.holeClusters && g.holePulse > 0) {
     // the pits slowly dilate and close, each on its own beat
