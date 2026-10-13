@@ -433,9 +433,9 @@ function machineFrame(dt, t) {
   machine.chars += v * 5000 * dt;
   if (Math.floor(machine.pos / machine.tapeLength) !== before && machine.onLap) machine.onLap();
   machine.holes.setAttribute("stroke-dashoffset", -machine.pos);
-  machine.holes.setAttribute("opacity", ((machine.loaded > 0 ? 1 : 0) * .55 * (1 - Math.min(1, v * 1.4))).toFixed(3));
+  machine.holes.setAttribute("opacity", ((machine.loaded >= 1 ? 1 : 0) * .55 * (1 - Math.min(1, v * 1.4))).toFixed(3));
   machine.streak.setAttribute("stroke-dashoffset", -machine.pos);
-  machine.streak.setAttribute("opacity", ((machine.loaded > 0 ? 1 : 0) * Math.min(1, v * 1.4) * .7).toFixed(3));
+  machine.streak.setAttribute("opacity", ((machine.loaded >= 1 ? 1 : 0) * Math.min(1, v * 1.4) * .7).toFixed(3));
   for (const s of machine.spokes) s.g.setAttribute("transform", `rotate(${(machine.pos / s.r * 57.2958) % 360} ${s.cx} ${s.cy})`);
   machine.readerLamp.setAttribute("opacity", (.15 + .55 * Math.min(1, v + machine.loaded * .2)).toFixed(3));
   const a = machine.activity;
@@ -506,13 +506,250 @@ const typewriter = {
     this.rows.forEach((t, i) => { const line = shown[shown.length - 1 - i]; t.textContent = line ?? ""; t.setAttribute("y", (bottom - i * LINE).toFixed(1)); });
   }
 };
-// TEMPORARY (Task 3 check) — removed in Task 5
-buildMachine(); const tmp = Colossus.makePuzzle(7); machine.setPatterns(tmp.key); machine.setTapeLoaded(1); machine.tape = tmp.Z;
-machine.setSetTotal(2589); machine.setCounters([2711, 2490, 2533, 2502, 2468]); machine.setLamps({ START: true }); machine.setK2("ΔZ1+ΔZ2+Δχ1+Δχ2=•  → COUNT");
-machine.speed = 1; let tmpLast = performance.now();
-(function tick(now) { requestAnimationFrame(tick); const dt = Math.min(.1, (now - tmpLast) / 1000); tmpLast = now; machineFrame(dt, now / 1000); drawCloseup(); })(tmpLast);
-document.getElementById("closeupCanvas").style.display = "block";
-typewriter.type("1+2  TOTAL 2589"); typewriter.type(Colossus.typedLine([35, 20], 2789)); typewriter.update(10, 100);
+// ---- controller: the guided break ----------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const STEPS = ["Intercept", "1+2 break-in", "Read the printout", "Short runs χ3–χ5", "De-chi", "Testery"];
+const S = { pz: null, step: 0, reached: 0, threading: -1, r12: null, run: null, found: {}, D: null, demo: false, demoWait: 0, soundTouched: false };
+const speedFactor = () => +$("speed").value;                       // 0 = instant
+const perPass = () => (+$("model").value === 2 ? 5 : 1);           // Mk 2 makes five tests per pass
+const passSeconds = () => S.pz.Z.length / 5000 + 0.1;              // one trip round the loop, plus the gap at the stop/start marks
+const countFrac = () => S.pz.Z.length / 5000 / passSeconds();
+const pos2 = (p) => String(p + 1).padStart(2, "0");
+const sig = (x) => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(1) + "σ";
+const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+const typeRate = () => (speedFactor() === 0 ? 2000 : 12 * speedFactor());
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), 2600); }
+
+function newIntercept(seed = Math.floor(Math.random() * 1e9)) {
+  stopRun(false);
+  S.pz = Colossus.makePuzzle(seed);
+  Object.assign(S, { step: 0, reached: 0, threading: -1, r12: null, run: null, found: {}, D: null });
+  machine.setPatterns(S.pz.key); machine.setTapeLoaded(0); machine.tape = null;
+  machine.setSetTotal(0); machine.setCounters(null); machine.setLamps({}); machine.setK2("");
+  typewriter.clear();
+  go(0);
+}
+// Punch the intercept onto tape and thread it round the bedstead.
+function thread() { if (S.threading >= 0 || S.reached > 0) return; S.threading = 0; machine.tape = S.pz.Z; if (speedFactor() === 0) threadDone(); }
+function threadFrame(dt) { if (S.threading < 0) return; S.threading = Math.min(1, S.threading + dt / 1.6); machine.setTapeLoaded(S.threading); if (S.threading >= 1) threadDone(); }
+function threadDone() { S.threading = -1; machine.setTapeLoaded(1); go(1); }
+
+// ---- runs: the counts come from the engine up front; the machine then plays them out pass by pass ----
+function makeRun(kind) {
+  const pz = S.pz;
+  if (kind === "12") {
+    const { counts, n } = Colossus.run12(pz.Z, pz.key);
+    return { kind, counts, n, order: Array.from(counts.keys()), line: (s) => Colossus.typedLine([Math.floor(s / 31), s % 31], counts[s]),
+      header: (t) => `1+2  TOTAL ${t}`, k2: "ΔZ1+ΔZ2+Δχ1+Δχ2=•  → COUNT" };
+  }
+  const plan = Colossus.nextShortRun(S.found), { counts, n } = Colossus.shortRun(pz.Z, pz.key, S.found, plan), w = plan.wheel + 1;
+  const term = (p) => { const a = Math.min(p.partner + 1, w), b = Math.max(p.partner + 1, w); return `ΔZ${a}+ΔZ${b}+Δχ${a}+Δχ${b}=${p.dots ? "•" : "x"}`; };
+  return { kind, plan, counts, n, order: Array.from(counts.keys()), line: (s) => Colossus.typedLine([s], counts[s]),
+    header: (t) => `χ${w}  TOTAL ${t}`, k2: plan.pairs.map(term).join("  ") };
+}
+function startRun(kind) {
+  const run = makeRun(kind);
+  Object.assign(run, { total: Math.max(0, Math.round(+$("total").value || 0)), i: 0, batch: [], frac: 0, printed: [], running: false, done: false });
+  S.run = run; if (kind === "12") S.r12 = run;
+  machine.setSetTotal(run.total); machine.setK2(run.k2); machine.setCounters(null);
+  typewriter.type(""); typewriter.type(run.header(run.total));
+  resumeRun();
+}
+function resumeRun() {
+  const run = S.run; if (!run || run.done) return;
+  if (!S.soundTouched) { S.soundTouched = true; $("sound").checked = true; sound.setEnabled(true); }   // sound comes on with the first Start
+  run.running = true; machine.speed = 1; machine.setLamps({ START: true });
+  if (speedFactor() === 0) finishInstant(); else renderBody();
+}
+function stopRun(render = true) {
+  const run = S.run; if (!run || !run.running) return;
+  run.running = false; machine.speed = 0; machine.setLamps({ STOP: true });
+  if (render) renderBody();
+}
+function beginPass(run) { run.batch = run.order.slice(run.i, run.i + perPass()); run.i += run.batch.length; run.frac = 0; }
+// End of a pass: the counts latch on the relays; those at or above the set total are typed.
+function finishPass(run, quiet) {
+  if (!run.batch.length) beginPass(run);
+  machine.setCounters(run.batch.map((s) => run.counts[s]));
+  for (const s of run.batch) if (run.counts[s] >= run.total) { run.printed.push(s); typewriter.type(run.line(s)); }
+  if (!quiet) sound.relays(run.batch.length);
+  run.batch = []; run.frac = 0;
+  if (run.i >= run.order.length) {
+    run.done = true; run.running = false; machine.speed = 0; machine.setLamps({ STOP: true });
+    typewriter.type(`END  ${run.printed.length} TYPED`);
+    sound.bell();
+    renderBody();
+  }
+}
+function finishInstant() { const run = S.run; if (!run) return; while (!run.done) finishPass(run, true); }
+function runFrame(dt) {
+  const run = S.run; if (!run || !run.running) return;
+  if (speedFactor() === 0) { finishInstant(); return; }
+  if (!run.batch.length) beginPass(run);
+  run.frac += dt * speedFactor() / passSeconds();
+  while (run.frac >= 1) { const carry = run.frac - 1; finishPass(run, false); if (run.done) return; beginPass(run); run.frac = Math.min(carry, .999); }
+  const f = Math.min(1, run.frac / countFrac());                     // the counters run up while the tape goes round
+  machine.setCounters(run.batch.map((s) => run.counts[s] * f));
+}
+function updateProgress() {
+  const p = $("progress"), run = S.run; if (!p || !run) return;
+  const st = run.done ? "Done" : run.running ? "Running" : "Stopped", k = run.printed.length;
+  p.textContent = `${st} · ${run.i - run.batch.length} of ${run.order.length} settings tested · ${k} line${k === 1 ? "" : "s"} typed`;
+}
+
+// ---- picks ------------------------------------------------------------------------------------------
+function pick12(s) { S.found = { 0: Math.floor(s / 31), 1: s % 31 }; S.run = null; S.reached = 2; go(3); }
+function pickShort(s) { S.found[S.run.plan.wheel] = s; S.run = null; S.reached = 3; go(3); }
+function redoShort() { S.found = { 0: S.found[0], 1: S.found[1] }; S.run = null; S.reached = 3; go(3); }
+const topOf = (run) => run.printed.reduce((a, s) => (run.counts[s] > run.counts[a] ? s : a), run.printed[0]);
+
+// ---- step panel -------------------------------------------------------------------------------------
+function go(step) {
+  if (S.run && S.run.running) stopRun(false);
+  S.step = step; S.reached = Math.max(S.reached, step);
+  renderSteps(); renderBody();
+}
+function renderSteps() {
+  $("steps").innerHTML = STEPS.map((name, i) => `<li class="${i === S.step ? "current" : i <= S.reached ? "done" : ""}" data-step="${i}">${i + 1}. ${name}</li>`).join("");
+}
+function runButtons(run, label) {
+  const running = run && run.running;
+  return `<div class="row"><button id="startBtn" class="primary" ${running ? "disabled" : ""}>${running ? "Running…" : run && !run.done ? "Continue" : run ? "Run again" : label}</button><button id="stopBtn" ${running ? "" : "disabled"}>Stop</button></div>
+  <p id="progress" class="hint"></p>`;
+}
+function totalInput(value, running) { return `<label>Set total <input type="number" id="total" min="0" value="${value}" ${running ? "disabled" : ""}></label>`; }
+function bodyIntercept() {
+  const pz = S.pz, text = Colossus.toText(pz.Z), head = [...text.slice(0, 5)];
+  return `<p>A teleprinter message on a German Army link, intercepted at Knockholt as ${pz.Z.length.toLocaleString("en-GB")} characters of Tunny cipher (seed ${pz.seed}). At Bletchley each character was written as five impulses, dot or cross:</p>
+  <pre class="tape">${head.map((c) => `${c}  ${Colossus.dotCross(Colossus.CODE[c])}`).join("\n")}</pre>
+  <pre class="tape">${esc(text.slice(0, 900))}…</pre>
+  <p class="hint">This month's χ wheel patterns are known (wheel breaking found them) and are set on the switches; the wheels' starting positions are not.</p>
+  <div class="row"><button id="threadBtn" class="primary" ${S.reached > 0 || S.threading >= 0 ? "disabled" : ""}>Punch the tape and thread the bedstead</button></div>`;
+}
+function bodyRun12() {
+  const n = S.pz.Z.length - 1, r = S.r12, suggested = Colossus.setTotal(n);
+  let html = `<p>Tutte's 1+2 break-in. Colossus adds impulses 1 and 2 of the delta'd cipher tape to the delta'd χ1 and χ2 patterns and counts the dots, for all 41 × 31 = 1,271 starting positions. A wrong position counts about half of ${n.toLocaleString("en-GB")}; the right one about 55 %.</p>
+  ${totalInput(r ? r.total : suggested, r && r.running)}
+  <p class="hint">Suggested ${suggested}: half the count plus 2.5σ (σ = ${Colossus.sigma(n).toFixed(1)}). Only counts at or above the set total are typed.</p>
+  ${runButtons(r, "Start")}`;
+  if (r && r.done) html += r.printed.length ? `<div class="row"><button id="nextBtn" class="primary">Read the printout →</button></div>` : `<p class="bad">Nothing reached the set total of ${r.total}. Lower it and run again.</p>`;
+  return html;
+}
+function bodyPrintout() {
+  const r = S.r12;
+  if (!r || !r.printed.length) return `<p class="bad">The last 1+2 run typed nothing. Go back to step 2, lower the set total and run again.</p>`;
+  const rows = r.printed.slice().sort((a, b) => r.counts[b] - r.counts[a]).slice(0, 12), chosen = 0 in S.found ? S.found[0] * 31 + S.found[1] : -1;
+  return `<p>The typewriter printed ${r.printed.length} line${r.printed.length === 1 ? "" : "s"}: χ1 and χ2 positions (numbered from 01) and the count. Pick the setting to take forward. A count standing well clear of the rest is the one to trust.</p>
+  <div class="picks">${rows.map((s) => `<button data-s="${s}" class="${s === chosen ? "on" : ""}">${Colossus.typedLine([Math.floor(s / 31), s % 31], r.counts[s])}   ${sig(Colossus.sigmasOf(r.counts[s], r.n))}</button>`).join("")}</div>
+  ${r.printed.length > 12 ? `<p class="hint">Showing the 12 highest of ${r.printed.length}.</p>` : ""}`;
+}
+function bodyShort() {
+  const f = S.found, plan = Colossus.nextShortRun(f);
+  let html = `<p class="mono">${[0, 1, 2, 3, 4].map((k) => `χ${k + 1} ${k in f ? pos2(f[k]) : "··"}`).join(" · ")}</p>`;
+  if (!plan) return html + `<p>All five χ wheels are set.</p><div class="row"><button id="dechiBtn" class="primary">De-chi →</button><button id="redoBtn">Redo the short runs</button></div>`;
+  const w = plan.wheel + 1, run = S.run && S.run.kind === "short" ? S.run : null, n = plan.pairs.length * (S.pz.Z.length - 1), suggested = Colossus.setTotal(n, 1);
+  const partners = plan.pairs.map((p) => `χ${p.partner + 1} (counting ${p.dots ? "dots" : "crosses"})`).join(" and ");
+  html += `<p>Short run for χ${w}: the wheels already set stay at their positions while χ${w} steps through all ${Colossus.SIZES.chi[plan.wheel]} of its own. It is tested against ${partners}: German teleprinter text favours one or the other for each pair of impulses, and the two counts are added.</p>
+  ${totalInput(run ? run.total : suggested, run && run.running)}
+  <p class="hint">Suggested ${suggested}: half the count plus 1σ, so a few wrong positions print too.</p>
+  ${runButtons(run, `Start run χ${w}`)}`;
+  if (run && run.done) {
+    const rows = run.printed.slice().sort((a, b) => run.counts[b] - run.counts[a]).slice(0, 12);
+    html += rows.length ? `<div class="picks">${rows.map((s) => `<button data-s="${s}">${Colossus.typedLine([s], run.counts[s])}   ${sig(Colossus.sigmasOf(run.counts[s], run.n))}</button>`).join("")}</div>`
+      : `<p class="bad">Nothing reached the set total of ${run.total}. Lower it and run again.</p>`;
+  }
+  return html;
+}
+function bodyDechi() {
+  const pz = S.pz, chi = [0, 1, 2, 3, 4].map((k) => S.found[k]);
+  S.D = Colossus.dechi(pz.Z, pz.key, chi);
+  return `<p class="mono">χ ${chi.map(pos2).join(" ")}</p>
+  <p>Subtracting the χ stream from the cipher leaves the "de-chi", D = P + ψ′: plaintext still covered by the ψ stream, which stands still for long stretches while the motor wheels hold it. It went to the Testery as a printed tape.</p>
+  <pre class="tape">${esc(Colossus.toText(S.D.subarray(0, 900)))}…</pre>
+  <div class="row"><button id="testeryBtn" class="primary">Send to the Testery →</button></div>`;
+}
+function bodyTestery() {
+  const pz = S.pz, out = Colossus.toText(Colossus.testery(S.D, pz.key, pz.start)), ok = out === pz.message.tele;
+  const narr = `<p>In the Testery, Major Ralph Tester's section, codebreakers worked on the de-chi by hand. Using the operators' habits and the stretches where ψ′ stands still, they guessed plaintext, recovered pieces of ψ′, and from those the ψ and motor wheel settings. This page does not simulate that hand work: it applies the true ψ and motor settings to your de-chi.</p>`;
+  if (ok) return narr + `<p class="ok">The German plaintext:</p><pre class="plain">${esc(Colossus.readable(out))}</pre><p>In English:</p><pre class="plain">${esc(pz.message.english)}</pre><div class="row"><button id="againBtn">New intercept</button></div>`;
+  return narr + `<p class="bad">This is not German. One of the χ settings is wrong, so the de-chi was wrong and the Testery could make nothing of it.</p><pre class="tape">${esc(out.slice(0, 600))}…</pre>
+  <div class="row"><button id="back2">Back to the printout</button><button id="back3">Back to the short runs</button></div>`;
+}
+function renderBody() {
+  const B = $("stepBody");
+  B.innerHTML = [bodyIntercept, bodyRun12, bodyPrintout, bodyShort, bodyDechi, bodyTestery][S.step]();
+  const on = (id, fn) => { const b = $(id); if (b) b.onclick = () => { setDemo(false); fn(); }; };
+  on("threadBtn", thread);
+  on("startBtn", () => {
+    if (S.step === 1) { if (S.r12 && !S.r12.done) { S.run = S.r12; resumeRun(); } else startRun("12"); }
+    else if (S.run && S.run.kind === "short" && !S.run.done) resumeRun(); else startRun("short");
+  });
+  on("stopBtn", () => stopRun());
+  on("nextBtn", () => go(2)); on("dechiBtn", () => go(4)); on("redoBtn", redoShort); on("testeryBtn", () => go(5));
+  on("againBtn", () => newIntercept()); on("back2", () => go(2)); on("back3", redoShort);
+  B.querySelectorAll(".picks button").forEach((b) => { b.onclick = () => { setDemo(false); (S.step === 2 ? pick12 : pickShort)(+b.dataset.s); }; });
+  const t = $("total"); if (t) { t.oninput = () => machine.setSetTotal(Math.round(+t.value || 0)); if (!(S.run && S.run.running)) machine.setSetTotal(Math.round(+t.value || 0)); }
+  updateProgress();
+}
+
+// ---- demo: the whole break, picking the top line each time ------------------------------------------
+function setDemo(on) {
+  if (S.demo === on) return;
+  S.demo = on; S.demoWait = .8;
+  if (on && speedFactor() !== 0 && speedFactor() < 100) $("speed").value = "100";
+  $("demo").textContent = on ? "Stop demo" : "Demo"; $("demo").classList.toggle("on", on);
+}
+function demoFrame(dt) {
+  if (!S.demo || S.threading >= 0 || (S.run && S.run.running) || typewriter.busy()) return;
+  if ((S.demoWait -= dt) > 0) return;
+  S.demoWait = 1.2;
+  const N = S.pz.Z.length;
+  switch (S.step) {
+    case 0: if (S.reached === 0) thread(); else go(1); break;
+    case 1: {
+      const r = S.r12;
+      if (r && r.done && r.printed.length) go(2);
+      else if (r && !r.done) { S.run = r; resumeRun(); }
+      else { $("total").value = Colossus.setTotal(N - 1); startRun("12"); }
+      break;
+    }
+    case 2: if (S.r12 && S.r12.printed.length) pick12(topOf(S.r12)); else go(1); break;
+    case 3: {
+      const run = S.run && S.run.kind === "short" ? S.run : null;
+      if (!Colossus.nextShortRun(S.found)) go(4);
+      else if (run && run.done && run.printed.length) pickShort(topOf(run));
+      else if (run && !run.done) resumeRun();
+      else { $("total").value = Colossus.setTotal(2 * (N - 1), 1); startRun("short"); }
+      break;
+    }
+    case 4: go(5); break;
+    default: setDemo(false); toast("Demo finished");
+  }
+}
+
+// ---- controls and main loop -------------------------------------------------------------------------
+$("newIntercept").onclick = () => { setDemo(false); newIntercept(); };
+$("demo").onclick = () => { if (S.demo) setDemo(false); else { if (S.step === 5) newIntercept(); setDemo(true); } };
+$("steps").addEventListener("click", (e) => { const li = e.target.closest("li"); if (!li) return; const i = +li.dataset.step; if (i <= S.reached && i !== S.step) { setDemo(false); go(i); } });
+$("sound").onchange = () => { S.soundTouched = true; sound.setEnabled($("sound").checked); };
+$("volume").oninput = () => sound.setVolume(+$("volume").value);
+$("closeup").onchange = () => { closeupCanvas.style.display = $("closeup").checked ? "block" : "none"; };
+
+function frame(dt, t) {
+  threadFrame(dt); runFrame(dt); demoFrame(dt); updateProgress();
+  typewriter.update(dt, typeRate());
+  machine.activity += ((S.run && S.run.running ? 1 : .3) - machine.activity) * Math.min(1, dt * 3);
+  machineFrame(dt, t); drawCloseup(); sound.update(dt);
+}
+let lastT = performance.now();
+function loop(now) { const dt = Math.min(.1, Math.max(0, (now - lastT) / 1000)); lastT = now; frame(dt, now / 1000); requestAnimationFrame(loop); }
+
+buildMachine();
+machine.onLap = () => sound.splice();
+newIntercept(+new URLSearchParams(location.search).get("seed") || undefined);
+requestAnimationFrame(loop);
+window.__colossus = { S, machine, typewriter, sound, newIntercept, thread, go, startRun, resumeRun, stopRun, finishInstant, pick12, pickShort, setDemo, frame,
+  level: () => sound.level() };
 </script>
 </body>
 </html>
