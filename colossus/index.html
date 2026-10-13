@@ -470,8 +470,94 @@ function drawCloseup() {
   cctx.fillText("PHOTOCELLS", rx - 34, 22); cctx.fillText(`slowed ${400}×`, 10, H - 12);
   cctx.fillText("1  2  · sprocket ·  3  4  5", 10, 22);
 }
-// TEMPORARY sound stub — replaced by the sound engine in Task 6
-const sound = { key() {}, carriageReturn() {}, bell() {}, relays() {}, splice() {}, setEnabled() {}, setVolume() {}, update() {}, level() { return 0; } };
+// ---- sound: synthesized, off until the first Start ------------------------------------------------
+// Beds that follow the machine (tape, motor, pulleys, valve room) plus one-shots (relays, typewriter,
+// splice). Accelerated speeds make passes come faster; the tape itself always sounds at real speed.
+const sound = {
+  ctx: null, out: null, analyser: null, noise: null, on: false, volume: .7, bed: null, last: {},
+  ensure() {
+    if (this.ctx) return;
+    const ctx = this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 4;
+    this.out = ctx.createGain(); this.out.gain.value = 0;
+    this.analyser = ctx.createAnalyser(); this.analyser.fftSize = 2048;
+    this.out.connect(comp); comp.connect(ctx.destination); comp.connect(this.analyser);
+    const buf = this.noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = buf.getChannelData(0), r = Colossus.rng(1944);
+    for (let i = 0; i < d.length; i++) d[i] = r() * 2 - 1;
+    const gain = (v, to = this.out) => { const g = ctx.createGain(); g.gain.value = v; g.connect(to); return g; };
+    const filt = (type, f, q, to) => { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q; b.connect(to); return b; };
+    const noise = (to) => { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.connect(to); s.start(0, Math.random() * 2); return s; };
+    const osc = (type, f, to) => { const o = ctx.createOscillator(); o.type = type; o.frequency.value = f; o.connect(to); o.start(); return o; };
+    const bed = this.bed = {};
+    // tape: paper rushing past the reader and over the pulleys, fluttering once a lap
+    bed.tape = gain(0); noise(filt("bandpass", 2400, .7, bed.tape));
+    bed.hiss = gain(0); noise(filt("highpass", 6500, .5, bed.hiss));
+    bed.flutter = gain(0, bed.tape.gain); bed.lap = osc("sine", 1, bed.flutter);       // the level wobbles once a lap
+    bed.sprocket = gain(0); bed.sprocketOsc = osc("sine", 5000, bed.sprocket);        // 5,000 holes a second sing faintly
+    bed.pulley = gain(0); bed.pulleyOsc = osc("triangle", 160, filt("lowpass", 900, .7, bed.pulley));
+    // motor
+    bed.motor = gain(0); bed.motorOsc = osc("sawtooth", 100, filt("lowpass", 380, 1, bed.motor));
+    // the valve room: fans, 50 Hz mains hum, a faint buzz that rises while counting
+    noise(filt("lowpass", 650, .5, gain(.045)));
+    osc("sine", 50, gain(.03)); osc("sine", 150, gain(.01));
+    bed.buzz = gain(.004); osc("sawtooth", 50, filt("bandpass", 1100, 2, bed.buzz));
+  },
+  setEnabled(on) {
+    this.on = on;
+    if (on) { this.ensure(); this.ctx.resume(); }
+    if (this.ctx) this.out.gain.setTargetAtTime(on ? this.volume : 0, this.ctx.currentTime, .08);
+  },
+  setVolume(v) { this.volume = v; if (this.ctx && this.on) this.out.gain.setTargetAtTime(v, this.ctx.currentTime, .05); },
+  update() {
+    if (!this.ctx || !this.on) return;
+    const t = this.ctx.currentTime, v = machine.shown, b = this.bed, set = (p, x) => p.setTargetAtTime(x, t, .06);
+    set(b.tape.gain, .1 * v); set(b.flutter.gain, .03 * v); set(b.lap.frequency, Math.max(.01, v));
+    set(b.hiss.gain, .035 * v);
+    set(b.sprocket.gain, .0035 * v); set(b.sprocketOsc.frequency, 40 + 4960 * v);
+    set(b.pulley.gain, .02 * v); set(b.pulleyOsc.frequency, 40 + 120 * v);
+    set(b.motor.gain, .07 * Math.min(1, v * 1.5)); set(b.motorOsc.frequency, 60 + 40 * v);
+    set(b.buzz.gain, .004 + .012 * machine.activity);
+  },
+  // a short filtered noise burst, and a decaying tone
+  burst(t, dur, f, q, g, type = "bandpass") {
+    const ctx = this.ctx, s = ctx.createBufferSource(), fl = ctx.createBiquadFilter(), e = ctx.createGain();
+    s.buffer = this.noise; fl.type = type; fl.frequency.value = f; fl.Q.value = q;
+    e.gain.setValueAtTime(g, t); e.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    s.connect(fl); fl.connect(e); e.connect(this.out); s.start(t, Math.random() * 1.5); s.stop(t + dur + .02);
+  },
+  tone(t, dur, f, g, type = "sine") {
+    const ctx = this.ctx, o = ctx.createOscillator(), e = ctx.createGain();
+    o.type = type; o.frequency.value = f; e.gain.setValueAtTime(g, t); e.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(e); e.connect(this.out); o.start(t); o.stop(t + dur + .02);
+  },
+  ready(name, gap) { if (!this.on || !this.ctx) return false; const t = this.ctx.currentTime; if (t - (this.last[name] ?? -1) < gap) return false; this.last[name] = t; return true; },
+  // relays latching the counts at the end of a pass: a ragged little clatter, one click per counter and then some
+  relays(n) {
+    if (!this.ready("relays", .04)) return;
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < Math.min(n, 5) + 2; i++) { const dt = Math.random() * .05; this.burst(t + dt, .006 + Math.random() * .006, 2400 + Math.random() * 2200, 2, .12 + Math.random() * .14); }
+    this.tone(t, .03, 90, .08);
+  },
+  key() {
+    if (!this.ready("key", .03)) return;
+    const t = this.ctx.currentTime + Math.random() * .006;
+    this.burst(t, .012, 1600 + Math.random() * 600, 1.2, .2 + Math.random() * .08);
+    this.tone(t, .05, 130 + Math.random() * 25, .1);
+  },
+  carriageReturn() {
+    if (!this.ready("cr", .08)) return;
+    const t = this.ctx.currentTime;
+    this.burst(t, .2, 900 + Math.random() * 300, .8, .06);
+    this.tone(t + .18, .08, 70, .16); this.burst(t + .18, .015, 2200, 1.5, .1);
+  },
+  bell() { if (!this.ready("bell", .3)) return; const t = this.ctx.currentTime; this.tone(t, 1.4, 2093, .1); this.tone(t, .6, 5230, .03); },
+  splice() { if (machine.shown > .3 && this.ready("splice", .2)) this.burst(this.ctx.currentTime, .004, 3500, 1, .1 * machine.shown, "highpass"); },
+  level() {
+    if (!this.analyser) return 0;
+    const a = new Float32Array(this.analyser.fftSize); this.analyser.getFloatTimeDomainData(a);
+    return Math.sqrt(a.reduce((s, x) => s + x * x, 0) / a.length);
+  }
+};
 // ---- the electric typewriter: types queued result lines onto the paper, a character at a time ------
 const typewriter = {
   queue: [], lines: [], cur: "", target: null, acc: 0, rows: [],
