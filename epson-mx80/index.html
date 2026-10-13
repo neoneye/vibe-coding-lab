@@ -211,7 +211,43 @@ const MX80 = (() => {
     return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   }
 
-  return { CELL, LINE_UNITS, PAGE_216, GLYPH_ROWS, glyph, rng, newState, feed, flush, textToBytes, unescape };
+  const HEAD_SPEED = 960;                       // half-dots per second: 80 characters per second
+  // Turn a line job into timed head events. The head prints in whichever direction starts nearer
+  // (logical seeking), ramps up and down at the ends, and makes a second, reversed pass for
+  // double-strike. Feeds are quick for a line and faster per inch for long form feeds.
+  function schedule(job, head = { x: 0, dir: 0 }, speed = 1) {
+    const events = [];
+    let t = 0;
+    if (job.bell) events.push({ t, kind: "bell" });
+    for (const pass of [0, 1]) {
+      const byX = new Map();
+      for (const s of job.strikes) if (s.pass === pass) byX.set(s.x, (byX.get(s.x) || 0) | s.pins);
+      if (!byX.size) continue;
+      const xs = [...byX.keys()].sort((a, b) => a - b), lo = xs[0], hi = xs[xs.length - 1];
+      const ltr = Math.abs(head.x - lo) <= Math.abs(head.x - hi);
+      const start = ltr ? lo : hi, end = ltr ? hi : lo, dir = ltr ? 1 : -1;
+      if (Math.abs(head.x - start) > .5) {
+        const dur = (Math.abs(head.x - start) / (HEAD_SPEED * 1.6) + .03) / speed;
+        events.push({ t, kind: "move", x0: head.x, x1: start, dur, printing: false });
+        t += dur;
+      }
+      if (head.dir && head.dir !== dir) events.push({ t, kind: "turn", x: start });
+      const v = HEAD_SPEED * (job.slow ? .5 : 1) * speed, ramp = .025 / speed, dur = Math.abs(end - start) / v + 2 * ramp;
+      events.push({ t, kind: "move", x0: start, x1: end, dur, printing: true });
+      for (const x of ltr ? xs : xs.slice().reverse()) events.push({ t: t + ramp + Math.abs(x - start) / v, kind: "strike", x, pins: byX.get(x), pass });
+      t += dur;
+      head = { x: end, dir };
+    }
+    if (job.feed > 0) {
+      const n = job.feed, dur = (Math.min(n, 72) / 36 * .09 + Math.max(0, n - 72) / 36 * .03 + .015) / speed;
+      events.push({ t, kind: "feed", n216: n, dur });
+      t += dur;
+    }
+    events.sort((a, b) => a.t - b.t);
+    return { events, duration: t, head };
+  }
+
+  return { CELL, LINE_UNITS, PAGE_216, GLYPH_ROWS, glyph, rng, newState, feed, flush, textToBytes, unescape, HEAD_SPEED, schedule };
 })();
 
 const MX80Tests = {
@@ -267,6 +303,20 @@ const MX80Tests = {
     check("unescape: an astral character is one sentinel", S.unescape("😀").join() === "256");
     check("unescape: BMP non-ASCII: Ж is a sentinel, é (233) is a raw byte", S.unescape("Жé").join() === "256,233");
     check("unescape: an astral character between ASCII letters", S.unescape("a😀b").join() === "97,256,98");
+
+    const line80 = parse("H".repeat(80)).out[0];
+    const sch = S.schedule(line80, { x: 0, dir: 0 });
+    check("80 characters take about one second", Math.abs(sch.duration - 1) < .15, sch.duration.toFixed(3));
+    const back = S.schedule(line80, sch.head);
+    const firstStrike = (r) => r.events.find((e) => e.kind === "strike");
+    check("bidirectional: the next line prints right to left", firstStrike(back).x > firstStrike(sch).x && back.events.some((e) => e.kind === "turn"));
+    const twice = S.schedule(parse("\x1bGHELLO").out[0], { x: 0, dir: 0 });
+    check("double-strike makes two printing passes", twice.events.filter((e) => e.kind === "move" && e.printing).length === 2);
+    const slow = S.schedule(parse("\x1bE" + "H".repeat(40)).out[0], { x: 0, dir: 0 }), fast = S.schedule(parse("H".repeat(40)).out[0], { x: 0, dir: 0 });
+    check("emphasized prints at half speed", slow.duration > fast.duration * 1.8);
+    check("a feed event follows the line", S.schedule(lf[1], sch.head).events.some((e) => e.kind === "feed" && e.n216 === 36));
+    check("2x speed halves the time", Math.abs(S.schedule(line80, { x: 0, dir: 0 }, 2).duration - sch.duration / 2) < 1e-9);
+    check("strike times rise along the pass", sch.events.filter((e) => e.kind === "strike").every((e, i, a) => i === 0 || e.t >= a[i - 1].t));
 
     log(failures ? `${failures} failure(s)` : "all MX-80 tests passed");
     return failures === 0;
