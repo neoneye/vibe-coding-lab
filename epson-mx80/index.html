@@ -848,8 +848,124 @@ function setLeds(on) {
   }
 }
 
-// Sound stub until Task 9 replaces it.
-const sound = { active: () => false, playJob() {}, bell() {}, stopAll() {}, set() {}, setVolume() {} };
+// Every sound is synthesized from the schedule that also places the dots: each line's pin clicks,
+// carriage motor, turnaround thunk and platen ratchet are rendered into one buffer and started on
+// the audio clock at the same moment the visuals start the line.
+const sound = {
+  ctx: null, master: null, analyser: null, bank: null, sources: new Set(), idle: null,
+  ensure() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      const ctx = this.ctx = new AC();
+      this.master = ctx.createGain(); this.master.gain.value = 0;
+      const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -12; comp.ratio.value = 3;
+      this.analyser = ctx.createAnalyser(); this.analyser.fftSize = 1024;
+      this.master.connect(comp).connect(ctx.destination); comp.connect(this.analyser);
+      this.bank = makeClickBank(ctx.sampleRate);
+      this.idle = idleHum(ctx, this.master);
+    }
+    if (this.ctx.state === "suspended") this.ctx.resume();
+    return true;
+  },
+  set(on) {
+    if (on && !this.ensure()) { toast("Web Audio is not available here"); return; }
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.master.gain.cancelScheduledValues(t);
+    this.master.gain.setValueAtTime(this.master.gain.value, t);
+    this.master.gain.linearRampToValueAtTime(on ? settings.volume : 0, t + .12);
+  },
+  setVolume(v) { if (this.ctx && settings.sound) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, .05); },
+  active() { return settings.sound && this.ctx && this.ctx.state === "running" && settings.speed !== 0; },
+  playJob(sched, lead) {
+    if (!this.active()) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = renderJobAudio(this.ctx, sched, this.bank);
+    src.connect(this.master);
+    src.start(this.ctx.currentTime + lead);
+    this.sources.add(src);
+    src.onended = () => this.sources.delete(src);
+  },
+  bell() {
+    if (!this.active()) return;
+    const ctx = this.ctx, o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime;
+    o.type = "square"; o.frequency.value = 2100;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.06, t + .01); g.gain.setValueAtTime(.06, t + .25); g.gain.linearRampToValueAtTime(0, t + .3);
+    o.connect(g).connect(this.master); o.start(t); o.stop(t + .32);
+  },
+  stopAll() { for (const s of this.sources) { try { s.stop(); } catch (_) {} } this.sources.clear(); },
+  level() {
+    if (!this.analyser) return 0;
+    const d = new Float32Array(this.analyser.fftSize); this.analyser.getFloatTimeDomainData(d);
+    let s = 0; for (const x of d) s += x * x; return Math.sqrt(s / d.length);
+  }
+};
+// A pin strike: a few milliseconds of noise rung through two stiff resonances (the wire and the
+// platen), eight variants so a run of clicks is never a machine-gun of identical samples.
+function makeClickBank(sr) {
+  const bank = [], n = Math.round(sr * .005), r = MX80.rng(77);
+  for (let v = 0; v < 8; v++) {
+    const out = new Float32Array(n);
+    const res = [[3000 + r() * 500, .9965], [6200 + r() * 900, .993]].map(([f, rad]) => ({ c1: 2 * rad * Math.cos(TAU * f / sr), c2: -rad * rad, y1: 0, y2: 0 }));
+    let peak = 0;
+    for (let i = 0; i < n; i++) {
+      const env = Math.exp(-i / (sr * .0009)), x = (r() * 2 - 1) * env;
+      let y = 0;
+      res.forEach((q, j) => { const yy = x * (j ? .5 : 1) + q.c1 * q.y1 + q.c2 * q.y2; q.y2 = q.y1; q.y1 = yy; y += yy; });
+      out[i] = y * Math.exp(-i / (sr * .0016)); peak = Math.max(peak, Math.abs(out[i]));
+    }
+    for (let i = 0; i < n; i++) out[i] /= peak || 1;
+    bank.push(out);
+  }
+  return bank;
+}
+function idleHum(ctx, dest) {
+  const g = ctx.createGain(); g.gain.value = .012;
+  const o = ctx.createOscillator(); o.frequency.value = 100; o.connect(g);
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const n = ctx.createBufferSource(); n.buffer = buf; n.loop = true;
+  const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 400;
+  const ng = ctx.createGain(); ng.gain.value = .25;
+  n.connect(lp).connect(ng).connect(g);
+  g.connect(dest); o.start(); n.start();
+  return g;
+}
+function renderJobAudio(ctx, sched, bank) {
+  const sr = ctx.sampleRate, len = Math.ceil((sched.duration + .2) * sr), buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0);
+  const r = MX80.rng(Math.floor(sched.duration * 1e6) + sched.events.length);
+  let k = 0;
+  for (const ev of sched.events) {
+    const i0 = Math.round(ev.t * sr);
+    if (ev.kind === "strike") {
+      let pins = 0; for (let p = ev.pins; p; p &= p - 1) pins++;
+      const click = bank[(k++ * 5 + pins) & 7], amp = .055 * Math.sqrt(pins);
+      for (let i = 0; i < click.length && i0 + i < len; i++) d[i0 + i] += click[i] * amp;
+    } else if (ev.kind === "move") {
+      // carriage motor: a rough low buzz whose pitch follows the head's speed through the ramps
+      const n = Math.round(ev.dur * sr), seek = !ev.printing;
+      let ph = 0;
+      for (let i = 0; i < n && i0 + i < len; i++) {
+        const u = i / n, v = Math.min(1, u / .08, (1 - u) / .08), f = (seek ? 95 : 70) + (seek ? 120 : 85) * v;
+        ph += TAU * f / sr;
+        d[i0 + i] += (Math.sin(ph) + .45 * Math.sin(2 * ph + .7) + .25 * Math.sin(3 * ph)) * .028 * v + (r() * 2 - 1) * .012 * v;
+      }
+    } else if (ev.kind === "turn") {
+      const n = Math.round(.07 * sr);
+      for (let i = 0; i < n && i0 + i < len; i++) { const t = i / sr; d[i0 + i] += Math.sin(TAU * 82 * t) * Math.exp(-t / .016) * .3 + (r() * 2 - 1) * Math.exp(-t / .002) * .12; }
+    } else if (ev.kind === "feed") {
+      // platen ratchet: one tick per 1/24" step, plus the feed motor's whir on long runs
+      const steps = Math.max(1, Math.round(ev.n216 / 9)), n = Math.round(ev.dur * sr);
+      for (let s = 0; s < steps; s++) {
+        const j0 = i0 + Math.round(n * s / steps);
+        for (let i = 0; i < Math.round(.003 * sr) && j0 + i < len; i++) d[j0 + i] += (r() * 2 - 1) * Math.exp(-i / (sr * .0006)) * .16;
+      }
+      if (ev.n216 > 72) for (let i = 0; i < n && i0 + i < len; i++) d[i0 + i] += Math.sin(TAU * 230 * i / sr) * .02;
+    }
+  }
+  return buf;
+}
 
 const printer = { state: MX80.newState(), queue: [], manual: [], current: null, head: { x: 0, dir: 0 }, online: true };
 const now = () => performance.now() / 1000;
@@ -1007,7 +1123,7 @@ layoutStage(); buildPrinter(); placePrinter();
 $("btnOnline").addEventListener("click", toggleOnline);
 $("btnFF").addEventListener("click", () => panelFeed("ff"));
 $("btnLF").addEventListener("click", () => panelFeed("lf"));
-window.__mx80 = { submit, printDoc, docs: MX80.DOCS, settings, printed, view, drain, state: () => ({ queue: printer.queue.length, busy: !!printer.current, head: printer.head, printY: printed.printY, strikes: printed.strikes.length }) };
+window.__mx80 = { level: () => sound.level(), submit, printDoc, docs: MX80.DOCS, settings, printed, view, drain, state: () => ({ queue: printer.queue.length, busy: !!printer.current, head: printer.head, printY: printed.printY, strikes: printed.strikes.length }) };
 requestAnimationFrame(frame);
 </script>
 </body>
