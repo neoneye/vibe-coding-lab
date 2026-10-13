@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Colossus</title>
+<style></style>
+</head>
+<body>
+<script id="shared-code">
+const Colossus = (() => {
+  const SIZES = { chi: [41, 31, 29, 26, 23], psi: [43, 47, 51, 53, 59], mu: [61, 37] };
+
+  // mulberry32: every puzzle is reproducible from its seed
+  function rng(seed) {
+    let a = seed >>> 0;
+    return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+
+  // ---- teleprinter code: ITA2 in Bletchley Park's shiftless notation -------------------------
+  // Impulses 1..5 left to right, x = cross (1), . = dot (0). 9 space, 3 carriage return, 4 line feed,
+  // / null, 5 figure shift, 8 letter shift.
+  const ITA2 = { A: "xx...", B: "x..xx", C: ".xxx.", D: "x..x.", E: "x....", F: "x.xx.", G: ".x.xx", H: "..x.x", I: ".xx..", J: "xx.x.",
+    K: "xxxx.", L: ".x..x", M: "..xxx", N: "..xx.", O: "...xx", P: ".xx.x", Q: "xxx.x", R: ".x.x.", S: "x.x..", T: "....x",
+    U: "xxx..", V: ".xxxx", W: "xx..x", X: "x.xxx", Y: "x.x.x", Z: "x...x", 9: "..x..", 3: "...x.", 4: ".x...", "/": ".....", 5: "xx.xx", 8: "xxxxx" };
+  const CODE = {}, CHAR = [];
+  for (const [ch, s] of Object.entries(ITA2)) { let v = 0; for (let i = 0; i < 5; i++) if (s[i] === "x") v |= 1 << i; CODE[ch] = v; CHAR[v] = ch; }
+  const toCodes = (text) => Uint8Array.from([...text].filter((c) => c in CODE), (c) => CODE[c]);
+  const toText = (codes) => Array.from(codes, (v) => CHAR[v]).join("");
+  const dotCross = (v) => Array.from({ length: 5 }, (_, i) => ((v >> i) & 1 ? "x" : "•")).join("");
+
+  // ---- the Lorenz SZ42 (without "limitations") --------------------------------------------------
+  // Random pin patterns with no run longer than four (a German pattern rule of thumb). The 37 motor
+  // wheel has about 30% crosses, so the psi wheels stall about 70% of the time: the weakness Tutte used.
+  function pattern(n, r, crosses = .5) {
+    const p = [];
+    for (let i = 0; i < n; i++) { let b = r() < crosses ? 1 : 0; if (i >= 4 && p[i - 1] === b && p[i - 2] === b && p[i - 3] === b && p[i - 4] === b) b ^= 1; p.push(b); }
+    return p;
+  }
+  const makeKey = (r) => ({ chi: SIZES.chi.map((n) => pattern(n, r)), psi: SIZES.psi.map((n) => pattern(n, r)), mu: [pattern(61, r, .6), pattern(37, r, .3)] });
+  const randomStart = (r) => ({ chi: SIZES.chi.map((n) => Math.floor(r() * n)), psi: SIZES.psi.map((n) => Math.floor(r() * n)), mu: SIZES.mu.map((n) => Math.floor(r() * n)) });
+  // Key streams for n characters: chi every character; mu61 every character; mu37 when mu61 shows a
+  // cross; the psi wheels together when mu37 shows a cross (so psi' repeats while they stall).
+  function keystream(key, start, n) {
+    const c = start.chi.slice(), p = start.psi.slice(), chi = new Uint8Array(n), psi = new Uint8Array(n);
+    let m61 = start.mu[0], m37 = start.mu[1];
+    for (let i = 0; i < n; i++) {
+      for (let k = 0; k < 5; k++) { chi[i] |= key.chi[k][c[k]] << k; psi[i] |= key.psi[k][p[k]] << k; }
+      const psiMoves = key.mu[1][m37], m37Moves = key.mu[0][m61];
+      for (let k = 0; k < 5; k++) c[k] = (c[k] + 1) % SIZES.chi[k];
+      if (psiMoves) for (let k = 0; k < 5; k++) p[k] = (p[k] + 1) % SIZES.psi[k];
+      if (m37Moves) m37 = (m37 + 1) % 37;
+      m61 = (m61 + 1) % 61;
+    }
+    return { chi, psi };
+  }
+  // Z = P + chi + psi' (bitwise mod 2); the same operation deciphers.
+  function encipher(codes, key, start) { const ks = keystream(key, start, codes.length); return codes.map((v, i) => v ^ ks.chi[i] ^ ks.psi[i]); }
+
+  // ---- invented German messages in teleprinter style ------------------------------------------
+  const PICK = (r, a) => a[Math.floor(r() * a.length)];
+  // [name, grammatical gender, English]; places as [dative, accusative, English].
+  const UNITS = [["PANZERDIVISION", "f", "armoured division"], ["INFANTERIEREGIMENT", "n", "infantry regiment"], ["PIONIERBATAILLON", "n", "engineer battalion"], ["ARTILLERIEABTEILUNG", "f", "artillery battalion"], ["NACHRICHTENKOMPANIE", "f", "signals company"]];
+  const PLACES = [["DER BRUECKE OSTWAERTS", "DIE BRUECKE OSTWAERTS", "the bridge to the east"], ["HOEHE 207", "HOEHE 207", "hill 207"], ["DEM DORF AM FLUSS", "DAS DORF AM FLUSS", "the village by the river"], ["DEM WALDRAND NORDWESTLICH", "DEN WALDRAND NORDWESTLICH", "the north-western edge of the forest"], ["DER STRASSENKREUZUNG", "DIE STRASSENKREUZUNG", "the crossroads"]];
+  const SUPPLIES = [["TREIBSTOFF", "fuel"], ["MUNITION", "ammunition"], ["VERPFLEGUNG", "rations"], ["ERSATZTEILE", "spare parts"]];
+  const nom = (u) => (u[1] === "f" ? "DIE " : "DAS ") + u[0], gen = (u) => (u[1] === "f" ? "DER " + u[0] : "DES " + u[0] + "S");
+  const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+  const SENTENCES = [
+    (r) => { const u = PICK(r, UNITS), n = 2 + Math.floor(r() * 30), p = PICK(r, PLACES), h = 10 + Math.floor(r() * 13);
+      return [`${u[1] === "f" ? "DIE" : "DAS"} ${n}. ${u[0]} ERREICHT ${p[1]} UM ${h} UHR.`, `The ${ordinal(n)} ${u[2]} reaches ${p[2]} at ${h}:00.`]; },
+    (r) => { const s = PICK(r, SUPPLIES), t = 20 + Math.floor(r() * 80); return [`NACHSCHUB VON ${t} TONNEN ${s[0]} VERZOEGERT.`, `Delivery of ${t} tonnes of ${s[1]} delayed.`]; },
+    (r) => { const p = PICK(r, PLACES); return [`FEINDLICHE ARTILLERIE BESCHIESST ${p[1]}.`, `Enemy artillery is shelling ${p[2]}.`]; },
+    (r) => { const p = PICK(r, PLACES); return [`STELLUNG AN ${p[0]} WIRD GEHALTEN. VERLUSTE GERING.`, `The position at ${p[2]} is being held. Losses light.`]; },
+    (r) => { const u = PICK(r, UNITS); return [`ERBITTE WEISUNG FUER DEN WEITEREN EINSATZ ${gen(u)}.`, `Request orders for the further deployment of the ${u[2]}.`]; },
+    (r) => { const p = PICK(r, PLACES); return [`UEBERGANG BEI ${p[0]} GESICHERT.`, `The crossing at ${p[2]} is secured.`]; },
+    (r) => { const s = PICK(r, SUPPLIES), n = 3 + Math.floor(r() * 9); return [`BESTAND AN ${s[0]} REICHT NUR NOCH FUER ${n} TAGE.`, `Stocks of ${s[1]} will last only ${n} more days.`]; },
+    (r) => { const u = PICK(r, UNITS); return [`WETTER: REGEN, STRASSEN SCHLECHT BEFAHRBAR. ${nom(u)} MELDET VERZOEGERUNG.`, `Weather: rain, roads barely passable. The ${u[2]} reports a delay.`]; }
+  ];
+  const FIGS = { 1: "Q", 2: "W", 3: "E", 4: "R", 5: "T", 6: "Y", 7: "U", 8: "I", 9: "O", 0: "P", ".": "M", ",": "N", ":": "C", "-": "A" };
+  // Operators' habits: 9 for space (often doubled), digits and punctuation inside doubled figure
+  // shifts (55 ... 88), a full stop as 55M88, a new line as 3344. These habits bias the deltas.
+  function teleprinter(german, r) {
+    let out = "", figs = false;
+    for (const ch of german) {
+      if (ch === " ") { if (figs) { out += "88"; figs = false; } out += r() < .15 ? "99" : "9"; }
+      else if (ch === "\n") { if (figs) { out += "88"; figs = false; } out += "3344"; }
+      else if (ch in FIGS) { if (!figs) { out += "55"; figs = true; } out += FIGS[ch]; }
+      else if (/[A-Z]/.test(ch)) { if (figs) { out += "88"; figs = false; } out += ch; }
+    }
+    return out + (figs ? "88" : "");
+  }
+  // Teleprinter text back to readable German (for the final reveal).
+  const FIG_BACK = Object.fromEntries(Object.entries(FIGS).map(([k, v]) => [v, k]));
+  function readable(tele) {
+    let out = "", figs = false;
+    for (const ch of tele) {
+      if (ch === "5") figs = true; else if (ch === "8") figs = false;
+      else if (ch === "9") out += out.endsWith(" ") ? "" : " ";
+      else if (ch === "3" || ch === "4") out += out.endsWith("\n") ? "" : "\n";
+      else if (ch !== "/") out += figs ? (FIG_BACK[ch] ?? "?") : ch;
+    }
+    return out;
+  }
+  function makeMessage(r, length = 5000) {
+    const de = [], en = [];
+    let tele = "";
+    while (tele.length < length) {
+      const [g, e] = PICK(r, SENTENCES)(r);
+      de.push(g); en.push(e);
+      tele += teleprinter((de.length % 4 === 0 ? "\n" : de.length > 1 ? " " : "") + g, r);
+    }
+    return { tele: tele.slice(0, length), german: de.join(" "), english: en.join(" ") };
+  }
+
+  // ---- what Bletchley knew about the language -------------------------------------------------
+  // P(dot) of dP_i + dP_k for each impulse pair, measured on a long sample of the same kind of traffic
+  // (the cryptanalysts kept such statistics). Index "i,k" with i < k, impulses 0-based.
+  const LANG = (() => {
+    const r = rng(1944), P = toCodes(makeMessage(r, 60000).tele), out = {};
+    for (let i = 0; i < 5; i++) for (let k = i + 1; k < 5; k++) {
+      let dots = 0;
+      for (let t = 0; t + 1 < P.length; t++) if (!((((P[t] ^ P[t + 1]) >> i) ^ ((P[t] ^ P[t + 1]) >> k)) & 1)) dots++;
+      out[`${i},${k}`] = dots / (P.length - 1);
+    }
+    return out;
+  })();
+
+  // ---- Colossus ----------------------------------------------------------------------------------
+  // dZ for impulse pair (i, k): the delta of the cipher tape, impulses i and k added.
+  function deltaPair(Z, i, k) { const n = Z.length - 1, out = new Uint8Array(n); for (let t = 0; t < n; t++) { const d = Z[t] ^ Z[t + 1]; out[t] = ((d >> i) ^ (d >> k)) & 1; } return out; }
+  const deltaWheel = (key, k) => { const L = SIZES.chi[k], p = key.chi[k]; return Uint8Array.from({ length: L }, (_, j) => p[j] ^ p[(j + 1) % L]); };
+  // Count, over the tape, how often dZ_ik + dchi_i + dchi_k is a dot (or a cross) for chi starts si, sk.
+  function count(dz, dA, sA, dB, sB, dots) {
+    const LA = dA.length, LB = dB.length; let c = 0, a = sA % LA, b = sB % LB;
+    for (let t = 0; t < dz.length; t++) { if ((dz[t] ^ dA[a] ^ dB[b]) === (dots ? 0 : 1)) c++; if (++a === LA) a = 0; if (++b === LB) b = 0; }
+    return c;
+  }
+  // Tutte's 1+2 break-in: all 41 x 31 starting pairs; counts[s1 * 31 + s2].
+  function run12(Z, key) {
+    const dz = deltaPair(Z, 0, 1), d1 = deltaWheel(key, 0), d2 = deltaWheel(key, 1), counts = new Int32Array(41 * 31);
+    for (let s1 = 0; s1 < 41; s1++) for (let s2 = 0; s2 < 31; s2++) counts[s1 * 31 + s2] = count(dz, d1, s1, d2, s2, true);
+    return { counts, n: dz.length };
+  }
+  // The next short run: the unset chi wheel whose known language biases with the already-set wheels are
+  // strongest; it is counted against its two best set partners, each counting dots or crosses to match
+  // its bias (a simplified version of the Newmanry's run choices). Counts from the two pairs are added.
+  function nextShortRun(found) {
+    const set = Object.keys(found).map(Number);
+    let best = null;
+    for (let k = 0; k < 5; k++) {
+      if (k in found) continue;
+      const pairs = set.map((i) => { const b = LANG[i < k ? `${i},${k}` : `${k},${i}`]; return { partner: i, dots: b > .5, m: Math.abs(b - .5) }; })
+        .sort((a, b) => b.m - a.m).slice(0, 2);
+      const strength = pairs.reduce((a, p) => a + p.m, 0);
+      if (!best || strength > best.strength) best = { wheel: k, pairs, strength };
+    }
+    return best && { wheel: best.wheel, pairs: best.pairs.map(({ partner, dots }) => ({ partner, dots })) };
+  }
+  function shortRun(Z, key, found, plan) {
+    const dk = deltaWheel(key, plan.wheel), counts = new Int32Array(SIZES.chi[plan.wheel]);
+    let n = 0;
+    for (const { partner, dots } of plan.pairs) {
+      const dz = deltaPair(Z, Math.min(plan.wheel, partner), Math.max(plan.wheel, partner)), dp = deltaWheel(key, partner);
+      for (let s = 0; s < counts.length; s++) counts[s] += count(dz, dp, found[partner], dk, s, dots);
+      n += dz.length;
+    }
+    return { counts, n };
+  }
+  const sigma = (n) => Math.sqrt(n) / 2;                      // binomial spread of a count at p = 1/2
+  const setTotal = (n, sigmas = 2.5) => Math.ceil(n / 2 + sigmas * sigma(n));
+  const sigmasOf = (count, n) => (count - n / 2) / sigma(n);
+  // A typewriter line: wheel positions numbered from 01 as at Bletchley, then the count.
+  const typedLine = (positions, count) => positions.map((p) => String(p + 1).padStart(2, "0")).join(" ") + "  " + String(count).padStart(5);
+
+  // ---- after Colossus ----------------------------------------------------------------------------
+  // De-chi: remove the chi stream found by Colossus; what remains is P + psi'.
+  function dechi(Z, key, chiStart) { const ks = keystream(key, { chi: chiStart, psi: [0, 0, 0, 0, 0], mu: [0, 0] }, Z.length); return Z.map((v, i) => v ^ ks.chi[i]); }
+  // The Testery's result: remove psi' with the psi and motor settings (found by hand at Bletchley;
+  // applied here from the puzzle, as the page explains).
+  function testery(D, key, start) { const ks = keystream(key, start, D.length); return D.map((v, i) => v ^ ks.psi[i]); }
+
+  function makePuzzle(seed, length = 5000) {
+    const r = rng(seed), key = makeKey(r), start = randomStart(r), message = makeMessage(r, length);
+    const P = toCodes(message.tele), Z = encipher(P, key, start);
+    return { seed, key, start, message, P, Z };
+  }
+
+  return { SIZES, rng, CODE, CHAR, toCodes, toText, dotCross, makeKey, randomStart, keystream, encipher, teleprinter, readable, makeMessage, LANG,
+    deltaPair, deltaWheel, run12, nextShortRun, shortRun, sigma, setTotal, sigmasOf, typedLine, dechi, testery, makePuzzle };
+})();
+
+const ColossusTests = {
+  run(log = (m) => console.log(m)) {
+    const C = Colossus;
+    let failures = 0;
+    const check = (name, ok, detail = "") => { if (!ok) failures++; log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`); };
+    // teleprinter
+    check("32 ITA2 symbols, all distinct", C.CODE && Object.keys(C.CODE).length === 32 && new Set(Object.values(C.CODE)).size === 32);
+    check("teleprinter letters round-trip", C.toText(C.toCodes("TUNNY9NACHRICHT")) === "TUNNY9NACHRICHT");
+    check("9 is space (..x..), 8 is letter shift (xxxxx)", C.dotCross(C.CODE["9"]) === "••x••" && C.dotCross(C.CODE["8"]) === "xxxxx");
+    const A = C.toCodes("TUNNY9FISH"), B = C.toCodes("XQZ9RTYUIO"), X = A.map((v, i) => v ^ B[i]);
+    check("delta of a sum is the sum of the deltas", [[0, 1], [2, 4], [1, 3]].every(([i, k]) => { const a = C.deltaPair(A, i, k), b = C.deltaPair(B, i, k), x = C.deltaPair(X, i, k); return x.length === 9 && x.every((v, t) => v === (a[t] ^ b[t])); }));
+    // Lorenz SZ42
+    const r = C.rng(5), key = C.makeKey(r), start = C.randomStart(r), ks = C.keystream(key, start, 2000);
+    check("wheel sizes", key.chi.map((w) => w.length).join() === "41,31,29,26,23" && key.psi.map((w) => w.length).join() === "43,47,51,53,59" && key.mu.map((w) => w.length).join() === "61,37");
+    check("the chi wheels step every character", Array.from(ks.chi).every((v, i) => [0, 1, 2, 3, 4].every((k) => ((v >> k) & 1) === key.chi[k][(start.chi[k] + i) % C.SIZES.chi[k]])));
+    let repeats = 0; for (let i = 0; i + 1 < ks.psi.length; i++) if (ks.psi[i] === ks.psi[i + 1]) repeats++;
+    check("psi' repeats while the psi wheels stall (most of the time)", repeats / (ks.psi.length - 1) > .55, (repeats / (ks.psi.length - 1)).toFixed(2));
+    const P0 = C.toCodes("ANGRIFF9MORGEN9FRUEH55M88"), Z0 = C.encipher(P0, key, start);
+    check("enciphering twice gives the plaintext back", C.toText(C.encipher(Z0, key, start)) === C.toText(P0) && C.toText(Z0) !== C.toText(P0));
+    // messages
+    const m = C.makeMessage(C.rng(9), 3000);
+    check("a message is the asked-for number of teleprinter characters", m.tele.length === 3000 && C.toCodes(m.tele).length === 3000);
+    check("the German comes back from the teleprinter text", C.readable(m.tele).startsWith(m.german.slice(0, 40)));
+    check("every message has an English translation", m.english.length > 100 && /[a-z]/.test(m.english));
+    // the statistic Tutte found: dD1 + dD2 is a dot about 55% of the time
+    let rate = 0;
+    for (let s = 1; s <= 10; s++) {
+      const pz = C.makePuzzle(s * 31), kk = C.keystream(pz.key, pz.start, pz.P.length); let d = 0;
+      for (let i = 0; i + 1 < pz.P.length; i++) { const x = (pz.P[i] ^ kk.psi[i]) ^ (pz.P[i + 1] ^ kk.psi[i + 1]); if (!((x ^ (x >> 1)) & 1)) d++; }
+      rate += d / (pz.P.length - 1) / 10;
+    }
+    check("dD1 + dD2 is a dot 53-57% of the time", rate > .53 && rate < .57, rate.toFixed(3));
+    // Colossus
+    let top12 = 0, broken = 0, readBack = 0;
+    for (let s = 1; s <= 20; s++) {
+      const pz = C.makePuzzle(s * 7919), { counts } = C.run12(pz.Z, pz.key);
+      let bi = 0; for (let i = 1; i < counts.length; i++) if (counts[i] > counts[bi]) bi = i;
+      const found = { 0: Math.floor(bi / 31), 1: bi % 31 };
+      top12 += found[0] === pz.start.chi[0] && found[1] === pz.start.chi[1];
+      let plan; while ((plan = C.nextShortRun(found))) { const sr = C.shortRun(pz.Z, pz.key, found, plan); let b = 0; for (let i = 1; i < sr.counts.length; i++) if (sr.counts[i] > sr.counts[b]) b = i; found[plan.wheel] = b; }
+      const chi = [0, 1, 2, 3, 4].map((k) => found[k]), ok = chi.every((v, k) => v === pz.start.chi[k]);
+      broken += ok;
+      readBack += ok && C.toText(C.testery(C.dechi(pz.Z, pz.key, chi), pz.key, pz.start)) === pz.message.tele;
+    }
+    check("1+2 break-in: the true setting tops the count in at least 19 of 20 puzzles", top12 >= 19, `${top12}/20`);
+    check("short runs then set chi 3-5 in at least 19 of 20", broken >= 19, `${broken}/20`);
+    check("de-chi + Testery give the plaintext back", readBack === broken, `${readBack}/${broken}`);
+    check("set total is n/2 + 2.5 sigma, sigma = sqrt(n)/2", C.setTotal(4999) === Math.ceil(4999 / 2 + 2.5 * Math.sqrt(4999) / 2) && Math.abs(C.sigmasOf(2600, 4999) - (2600 - 2499.5) / (Math.sqrt(4999) / 2)) < 1e-9);
+    check("typed lines number positions from 01", C.typedLine([35, 20], 2789) === "36 21   2789");
+    log(failures ? `${failures} failure(s)` : "all Colossus tests passed");
+    return failures === 0;
+  }
+};
+</script>
+</body>
+</html>
