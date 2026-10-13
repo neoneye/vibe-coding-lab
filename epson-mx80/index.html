@@ -1071,7 +1071,15 @@ function idleHum(ctx, dest) {
 const printer = { state: MX80.newState(), queue: [], manual: [], current: null, head: { x: 0, dir: 0 }, online: true };
 const now = () => performance.now() / 1000;
 function toast(msg) { const el = document.getElementById("toast"); el.textContent = msg; el.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 2200); }
-function formFeedDistance() { const at = Math.round((printed.printY - TOP_GAP) * 216) % MX80.PAGE_216; return at === 0 ? 0 : MX80.PAGE_216 - at; }
+// Distance to the next page's first line. At the top of a form a feed is a no-op, unless the current
+// line already has ink on it (from this form-feed job or an earlier flushed partial line): then the
+// paper goes on a whole page, so the next text cannot print on top of it.
+function formFeedDistance(job) {
+  const at = Math.round((printed.printY - TOP_GAP) * 216) % MX80.PAGE_216;
+  if (at !== 0) return MX80.PAGE_216 - at;
+  const last = printed.rows[printed.rows.length - 1], inked = job.strikes.length > 0 || (last && Math.abs(last.y - printed.printY) < 1e-9);
+  return inked ? MX80.PAGE_216 : 0;
+}
 
 function submit(bytes, { final = true, flush = true } = {}) {
   const jobs = [];
@@ -1099,7 +1107,7 @@ function drain() {
   const jobs = printer.manual.splice(0);
   if (printer.online) jobs.push(...printer.queue.splice(0));
   for (const job of jobs) {
-    if (job.formFeed) job.feed = formFeedDistance();
+    if (job.formFeed) job.feed = formFeedDistance(job);
     for (const s of job.strikes) addPrintedStrike(s.x, s.pins, s.pass, printed.printY);
     if (job.strikes.length) printer.head = { x: job.strikes[job.strikes.length - 1].x, dir: 0 };
     printed.printY += job.feed / 216;
@@ -1108,7 +1116,7 @@ function drain() {
 }
 function startJob(t) {
   const job = printer.manual.length ? printer.manual.shift() : printer.queue.shift();
-  if (job.formFeed) job.feed = formFeedDistance();
+  if (job.formFeed) job.feed = formFeedDistance(job);
   const sched = MX80.schedule(job, printer.head, settings.speed);
   const lead = sound.active() ? .06 : 0;
   // `from` is where the head physically is until the job's first move starts (after the sound lead);
