@@ -78,13 +78,140 @@ const MX80 = (() => {
   }
   const glyph = (code, italic = false) => { const g = GLYPHS.get(code); return g ? g[italic ? 1 : 0] : null; };
 
+  const COND_CELL = 120 * 8 / 132;              // 132 condensed characters on the 8" line
+  const DEFAULTS = { spacing: 36, emph: false, dstrike: false, wide: false, wideLine: false, cond: false, italic: false, under: false };
+  const newState = () => ({ x: 0, ...DEFAULTS, strikes: [], slow: false, pending: [], warnings: [] });
+  const cellWidth = (s) => (s.cond ? COND_CELL : CELL) * (s.wide || s.wideLine ? 2 : 1);
+  const hex = (n) => n.toString(16).toUpperCase().padStart(2, "0");
+
+  function addStrike(s, x, pins) {
+    s.strikes.push({ x, pins, pass: 0 });
+    if (s.emph) { s.strikes.push({ x: x + 1, pins, pass: 0 }); s.slow = true; }
+    if (s.dstrike) s.strikes.push({ x, pins, pass: 1 });
+  }
+  function endLine(s, out, feed, extra = null) {
+    if (!s.strikes.length && !feed && !extra) return;
+    out.push({ strikes: s.strikes, feed, slow: s.slow, ...extra });
+    s.strikes = []; s.slow = false;
+  }
+  function newLine(s, out) { endLine(s, out, s.spacing); s.x = 0; s.wideLine = false; }
+  function putGlyph(s, out, cols, marked) {
+    const w = cellWidth(s);
+    if (s.x + w > LINE_UNITS + 1e-6) newLine(s, out);           // the line is full: print it and feed
+    const step = w / CELL;
+    for (let hc = 0; hc < CELL; hc++) if (cols[hc]) addStrike(s, s.x + hc * step, cols[hc]);
+    if (s.under || marked) for (let hc = 0; hc < CELL; hc += 2) addStrike(s, s.x + hc * step, 1 << 8);
+    s.x += w;
+  }
+  function unsupported(s, out, why) { s.warnings.push(why); putGlyph(s, out, glyph(63), true); }
+  function graphics(s, out, data, step) {
+    let dropped = false;
+    if (step === 1) s.slow = true;                               // double density: half head speed
+    for (const byte of data) {
+      if (s.x > LINE_UNITS - step + 1e-6) { dropped = true; break; }
+      let pins = 0;
+      for (let k = 0; k < 8; k++) if (byte & (0x80 >> k)) pins |= 1 << k;
+      if (pins) s.strikes.push({ x: s.x, pins, pass: 0 });
+      s.x += step;
+    }
+    if (dropped) s.warnings.push("graphics wider than the 8-inch line were dropped");
+  }
+
+  // Feed bytes into the interpreter; completed line jobs are appended to `out`. An escape sequence
+  // cut off at the end waits in s.pending for the next call, unless `final`.
+  function feed(s, input, out, final = false) {
+    const b = s.pending.length ? s.pending.concat(Array.from(input)) : Array.from(input);
+    s.pending = [];
+    let i = 0;
+    const has = (n) => i + n <= b.length;
+    while (i < b.length) {
+      const c = b[i];
+      if (c === 0x1b) {
+        if (!has(2)) break;
+        const ch = String.fromCharCode(b[i + 1]);
+        if ("EFGH45@012".includes(ch)) {
+          if (ch === "E") s.emph = true; else if (ch === "F") s.emph = false;
+          else if (ch === "G") s.dstrike = true; else if (ch === "H") s.dstrike = false;
+          else if (ch === "4") s.italic = true; else if (ch === "5") s.italic = false;
+          else if (ch === "@") Object.assign(s, DEFAULTS);
+          else s.spacing = { 0: 27, 1: 21, 2: 36 }[ch];
+          i += 2; continue;
+        }
+        if ("A3W-".includes(ch)) {
+          if (!has(3)) break;
+          const n = b[i + 2], on = n === 1 || n === 49;
+          if (ch === "A") s.spacing = n * 3; else if (ch === "3") s.spacing = n;
+          else if (ch === "W") s.wide = on; else s.under = on;
+          i += 3; continue;
+        }
+        if (ch === "K" || ch === "L") {
+          if (!has(4)) break;
+          const count = b[i + 2] + 256 * b[i + 3];
+          if (!has(4 + count) && !final) break;
+          const data = b.slice(i + 4, i + 4 + count);
+          if (data.length < count) s.warnings.push(`ESC ${ch}: graphics cut short (${data.length} of ${count} bytes)`);
+          graphics(s, out, data, ch === "K" ? 2 : 1);
+          i += 4 + data.length; continue;
+        }
+        unsupported(s, out, `ESC ${b[i + 1] >= 32 && b[i + 1] < 127 ? ch : "0x" + hex(b[i + 1])} is not supported`);
+        i += 2; continue;
+      }
+      i++;
+      switch (c) {
+        case 0x0d: endLine(s, out, 0); s.x = 0; break;
+        case 0x0a: newLine(s, out); break;
+        case 0x0c: endLine(s, out, 0, { formFeed: true }); s.x = 0; s.wideLine = false; break;
+        case 0x07: out.push({ strikes: [], feed: 0, slow: false, bell: true }); break;
+        case 0x08: s.x = Math.max(0, s.x - cellWidth(s)); break;
+        case 0x09: s.x = Math.min(LINE_UNITS, (Math.floor(s.x / (8 * CELL)) + 1) * 8 * CELL); break;
+        case 0x0e: s.wideLine = true; break;
+        case 0x14: s.wideLine = false; break;
+        case 0x0f: s.cond = true; break;
+        case 0x12: s.cond = false; break;
+        default:
+          if (c >= 32 && c <= 126) putGlyph(s, out, glyph(c, s.italic), false);
+          else if (c === 0x100) unsupported(s, out, "a non-ASCII character was printed as ?");
+          else unsupported(s, out, `byte 0x${hex(c)} is not supported`);
+      }
+    }
+    if (i < b.length) { if (final) s.warnings.push("the input ended inside an escape sequence"); else s.pending = b.slice(i); }
+    return out;
+  }
+  const flush = (s, out) => endLine(s, out, 0);
+
+  function textToBytes(text) {
+    const out = [];
+    for (const ch of text) {
+      if (ch === "\n") out.push(13, 10);
+      else if (ch !== "\r") { const code = ch.codePointAt(0); out.push(code < 128 ? code : 0x100); }
+    }
+    return out;
+  }
+  function unescape(str) {
+    const out = [], simple = { e: 27, n: 10, r: 13, t: 9, f: 12, "\\": 92 };
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (ch === "\\" && i + 1 < str.length) {
+        const n = str[i + 1];
+        if (n in simple) { out.push(simple[n]); i++; continue; }
+        if (n === "x" && /^[0-9a-fA-F]{2}$/.test(str.substr(i + 2, 2))) { out.push(parseInt(str.substr(i + 2, 2), 16)); i += 3; continue; }
+      }
+      if (ch === "\n") { out.push(13, 10); continue; }
+      if (ch === "\r") continue;
+      const code = ch.codePointAt(0);
+      out.push(code < 256 ? code : 0x100);
+      if (code > 0xffff) i++;
+    }
+    return out;
+  }
+
   // mulberry32: deterministic documents and paper blemishes
   function rng(seed) {
     let a = seed >>> 0;
     return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   }
 
-  return { CELL, LINE_UNITS, PAGE_216, GLYPH_ROWS, glyph, rng };
+  return { CELL, LINE_UNITS, PAGE_216, GLYPH_ROWS, glyph, rng, newState, feed, flush, textToBytes, unescape };
 })();
 
 const MX80Tests = {
@@ -102,6 +229,41 @@ const MX80Tests = {
     check("descenders reach pins 8-9", (S.glyph("g".charCodeAt(0))[8] & 0b110000000) !== 0 && (S.glyph("y".charCodeAt(0))[8] & 0b110000000) !== 0);
     check("italic slants: the top of 'l' moves right", S.glyph("l".charCodeAt(0), true).findIndex((m) => m & 1) > S.glyph("l".charCodeAt(0)).findIndex((m) => m & 1));
     check("unknown codes have no glyph", S.glyph(200) === null);
+
+    const parse = (input, final = true) => { const st = S.newState(), out = []; S.feed(st, typeof input === "string" ? S.unescape(input) : input, out, final); if (final) S.flush(st, out); return { st, out }; };
+    const strikesOf = (jobs) => jobs.flatMap((j) => j.strikes);
+    const H = parse("H").out;
+    check("text prints the glyph's columns at 12 half-dots per character", H.length === 1 && strikesOf(H).map((s) => s.x).join() === "0,2,4,6,8");
+    const lf = parse("A\r\n").out;
+    check("CR LF: the line, then a 1/6-inch feed", lf.length === 2 && lf[0].feed === 0 && lf[1].feed === 36);
+    const wide = parse("\x0eH").out, cond = parse("\x0fH").out;
+    check("double width doubles the column spacing", Math.max(...strikesOf(wide).map((s) => s.x)) === 16);
+    check("condensed fits 132 characters on the 8-inch line", parse("\x0f" + "H".repeat(132)).out.length === 1 && parse("\x0f" + "H".repeat(133)).out.length === 2 && strikesOf(cond).length === 5);
+    const emph = strikesOf(parse("\x1bEH").out);
+    check("emphasized re-strikes every dot a half-dot right and slows the head", emph.length === 10 && emph.some((s) => s.x === 1) && parse("\x1bEH").out[0].slow === true);
+    const dbl = strikesOf(parse("\x1bGH").out);
+    check("double-strike adds a second pass", dbl.filter((s) => s.pass === 1).length === 5);
+    check("underline adds pin 9 across the cell", strikesOf(parse("\x1b-\x01 ").out).filter((s) => s.pins === 256).length === 6);
+    const g = strikesOf(parse("\x1bK\x02\x00\x80\x01").out);
+    check("ESC K: MSB is the top pin, columns 1/60 inch apart", g.length === 2 && g[0].pins === 1 && g[1].pins === 128 && g[1].x === 2);
+    check("ESC L: double density, columns 1/120 inch apart", strikesOf(parse("\x1bL\x02\x00\xff\xff").out)[1].x === 1);
+    const spacing = (code) => parse(code + "A\n").out.at(-1).feed;
+    check("line spacing: ESC 0, ESC 1, ESC 2, ESC A 12, ESC 3 30", [spacing("\x1b0"), spacing("\x1b1"), spacing("\x1b2"), spacing("\x1bA\x0c"), spacing("\x1b3\x1e")].join() === "27,21,36,36,30");
+    check("form feed asks for the top of the next page", parse("A\f").out.some((j) => j.formFeed));
+    check("ESC @ resets modes", parse("\x1bE\x1b@H").out[0].strikes.length === 5);
+    // Review focus
+    const intl = parse(S.textToBytes("é")), bad = parse("\x1bZ");
+    check("non-ASCII prints one marked ? and warns", intl.st.warnings.length === 1 && strikesOf(intl.out).some((s) => s.pins === 256));
+    check("unsupported ESC prints a marked ? and warns", bad.st.warnings.length === 1 && strikesOf(bad.out).some((s) => s.pins === 256));
+    check("lines longer than 80 columns wrap at the margin", parse("x".repeat(81)).out.filter((j) => j.strikes.length).length === 2 && strikesOf(parse("x".repeat(81)).out).every((s) => s.x < S.LINE_UNITS));
+    const short = parse("\x1bK\x05\x00\xff\xff");
+    check("ESC K with too few bytes prints what it has and warns", strikesOf(short.out).length === 2 && short.st.warnings.length === 1);
+    const tooWide = parse(S.unescape("\x1bK\xe8\x01") .concat(new Array(488).fill(255)));
+    check("graphics past the 8-inch line are dropped with a warning", strikesOf(tooWide.out).every((s) => s.x < S.LINE_UNITS) && tooWide.st.warnings.length === 1);
+    const split = S.newState(), splitOut = [];
+    S.feed(split, [27], splitOut); S.feed(split, S.textToBytes("EH"), splitOut); S.flush(split, splitOut);
+    check("an escape split across chunks is held, then applied", split.warnings.length === 0 && strikesOf(splitOut).length === 10);
+    check("unescape understands \\e \\xHH \\n", S.unescape("\\e\\x41\\n").join() === "27,65,10");
 
     log(failures ? `${failures} failure(s)` : "all MX-80 tests passed");
     return failures === 0;
