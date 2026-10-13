@@ -1012,18 +1012,38 @@ function drawLoupe() {
   loupeCanvas.style.left = `${loupe.mx - size / 2}px`; loupeCanvas.style.top = `${loupe.my - size / 2}px`;
 }
 
-function savePng() {
-  if (!printed.strikes.length) return false;
-  const last = Math.floor(printed.rows[printed.rows.length - 1].y / PAGE_IN), first = Math.max(0, last - 9), S = 150;
-  const c = document.createElement("canvas"); c.width = PAPER_W * S; c.height = (last - first + 1) * PAGE_IN * S;
-  const g = c.getContext("2d");
-  for (let p = first; p <= last; p++) {
-    g.save(); g.translate(0, (p - first) * PAGE_IN * S);
+// Render one 11" page at S pixels per inch, the same way the page caches and the loupe do. Browsers cap
+// canvas size (phones at about 16.7 Mpx), so try 600 dpi first and fall back to coarser resolutions.
+async function renderPageBlob(p) {
+  for (const S of [600, 400, 250]) {
+    const c = document.createElement("canvas"); c.width = Math.round(PAPER_W * S); c.height = Math.round(PAGE_IN * S);
+    const g = c.getContext("2d");
+    if (!g) continue;
     paintPaper(g, S, 0, p * PAGE_IN, PAPER_W, PAGE_IN);
     drawDots(g, S, 0, p * PAGE_IN, strikesInRange(p * PAGE_IN - .2, (p + 1) * PAGE_IN));
-    g.restore();
+    const blob = await new Promise((res) => c.toBlob(res, "image/png"));
+    c.width = c.height = 0;                                   // free the big backing store now
+    if (blob) return blob;
   }
-  c.toBlob((blob) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "mx80-printout.png"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); });
+  return null;
+}
+// Save PNG: every printed page as its own high-resolution PNG (one file per page keeps each image within
+// the browser's canvas limits).
+async function savePng() {
+  if (!printed.strikes.length) return false;
+  const last = Math.floor(printed.rows[printed.rows.length - 1].y / PAGE_IN);
+  const pages = [];
+  for (let p = 0; p <= last; p++) if (strikesInRange(p * PAGE_IN - .2, (p + 1) * PAGE_IN).length) pages.push(p);
+  toast(pages.length > 1 ? `Saving ${pages.length} pages…` : "Saving…");
+  await new Promise((r) => setTimeout(r, 30));                // let the toast paint before the heavy render
+  for (const p of pages) {
+    const blob = await renderPageBlob(p);
+    if (!blob) { toast("This browser could not render the page for saving"); return true; }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = pages.length > 1 ? `mx80-page-${p + 1}.png` : "mx80-printout.png";
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    await new Promise((r) => setTimeout(r, 400));             // browsers drop downloads fired back to back
+  }
   return true;
 }
 
@@ -1494,7 +1514,7 @@ $("paperType").addEventListener("change", (e) => { settings.paper = e.target.val
 $("aging").addEventListener("input", (e) => { settings.aging = Number(e.target.value); invalidatePaper(); });
 $("wear").addEventListener("input", (e) => { settings.wear = Number(e.target.value); invalidatePaper(); });
 $("mech").addEventListener("input", (e) => { settings.mech = Number(e.target.value); });
-$("savePng").addEventListener("click", () => { if (!savePng()) toast("Nothing printed yet"); });
+$("savePng").addEventListener("click", async () => { if (!(await savePng())) toast("Nothing printed yet"); });
 $("follow").addEventListener("click", () => { view.follow = true; $("follow").style.display = "none"; });
 stage.addEventListener("wheel", (e) => {
   e.preventDefault();
