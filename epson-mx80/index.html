@@ -26,6 +26,7 @@ textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-siz
 label { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 8px; margin: 6px 0; color: var(--muted); }
 label.check { grid-template-columns: auto 1fr; }
 input[type=range] { width: 100%; accent-color: var(--accent); }
+label select { width: 100%; min-width: 0; }
 .hint { color: var(--muted); font-size: 12px; margin: 6px 0; }
 #docs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 #docs li { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; cursor: pointer; }
@@ -68,12 +69,20 @@ details code { font-family: ui-monospace, Menlo, monospace; color: var(--ink); }
     <button data-tab="type" class="on">Type</button>
     <button data-tab="gallery">Gallery</button>
     <button data-tab="escp">ESC/P</button>
+    <button data-tab="music">Music</button>
   </nav>
   <section id="tab-type">
     <input type="text" id="typeLine" maxlength="400" placeholder="Type here, press Enter…" autocomplete="off" spellcheck="false">
     <p class="hint">Enter prints the line and feeds the paper. Pause typing for a moment and the printer prints what you have so far, then carries on from there.</p>
   </section>
   <section id="tab-gallery" hidden><ol id="docs"></ol></section>
+  <section id="tab-music" hidden>
+    <label>Tune <select id="tune"></select></label>
+    <textarea id="notes" rows="8" spellcheck="false" aria-label="Notes to play"></textarea>
+    <label class="check"><input type="file" id="midiFile" accept=".mid,.midi,audio/midi" aria-label="Load a MIDI file"></label>
+    <div id="musicLog" class="hint"></div>
+    <p class="hint">Printer music: like the hacked printers on YouTube, the firmware pulses the pins and the carriage stepper at each note's pitch, so the printout is nonsense but the machine sings. Notes look like <code>C4/4</code>, <code>F#3/8.</code> (dotted) or <code>R/2</code> (rest); add <code>tempo=120</code> or <code>octave=-1</code>. Load a MIDI file to play its melody line. Press Print.</p>
+  </section>
   <section id="tab-escp" hidden>
     <textarea id="escp" rows="10" spellcheck="false"></textarea>
     <div id="escpLog"></div>
@@ -113,6 +122,7 @@ details code { font-family: ui-monospace, Menlo, monospace; color: var(--ink); }
     <summary>About this simulation</summary>
     <p>The character shapes are original, drawn in the MX-80 style on a 9-pin grid. They are not Epson's character ROM. The printer understands the text, spacing and bit-image commands listed under ESC/P (the MX-80 with its Graftrax 80 upgrade). Anything else prints as a marked <b>?</b> and is reported, rather than guessed.</p>
     <p>Timing is approximate: about 80 characters per second, printing in both directions, with emphasized text at half speed. The sounds are synthesized live from the same events that place the dots, not recorded. The paper, ink and plastic aging are invented models of the look of old printouts.</p>
+    <p>The Music tab is not something a stock MX-80 can do: its pins only fire on the column grid, far too coarse for a melody. It simulates the firmware hacks of printer-music hobbyists, who pulse the pin solenoids and the carriage stepper at each note's frequency. The built-in tunes are public domain.</p>
   </details>
 </aside>
 <main id="stage">
@@ -332,6 +342,7 @@ const MX80 = (() => {
   // (logical seeking), ramps up and down at the ends, and makes a second, reversed pass for
   // double-strike. Feeds are quick for a line and faster per inch for long form feeds.
   function schedule(job, head = { x: 0, dir: 0 }, speed = 1) {
+    if (job.music) return scheduleMusic(job, head, speed);
     const events = [];
     let t = 0;
     if (job.bell) events.push({ t, kind: "bell" });
@@ -481,7 +492,128 @@ const MX80 = (() => {
     { id: "banner", title: "Banner: MX-80", note: "Bit-image graphics printed sideways; listen to the harsher buzz.", build: banner }
   ].map((d) => ({ id: d.id, title: d.title, note: d.note, bytes: () => asBytes(d.build()) }));
 
-  return { CELL, LINE_UNITS, PAGE_216, GLYPH_ROWS, glyph, rng, newState, feed, flush, textToBytes, unescape, HEAD_SPEED, schedule, DOCS };
+  // ---- printer music: a simulated firmware hack ----------------------------------------------------
+  // A stock MX-80 fires pins only on its column grid, far too coarse for a melody. Printer-music hackers
+  // replace the firmware and pulse the pin solenoids and the carriage stepper at the note's frequency;
+  // the printout is a by-product. Music jobs carry notes ({ freq Hz, 0 = rest; dur seconds }) instead
+  // of strikes, and scheduleMusic turns them into the usual head events.
+  const NOTE_STEPS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+  function noteFreq(name) {
+    const m = /^([A-Ga-g])([#b]?)(-?\d)$/.exec(name);
+    if (!m) return null;
+    const semis = NOTE_STEPS[m[1].toUpperCase()] + (m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0) + 12 * (Number(m[3]) + 1);
+    return 440 * Math.pow(2, (semis - 69) / 12);
+  }
+  // Note text: whitespace-separated tokens like `G3/8`, `C#4/4.` (dotted), `R/2` (rest), plus `tempo=120`
+  // (quarter notes per minute) and `octave=-1`; `;` starts a comment. Duration defaults to a quarter.
+  function parseNotes(text) {
+    let tempo = 120, octave = 0;
+    const notes = [], warnings = [];
+    for (const tok of String(text).replace(/;.*$/gm, " ").split(/\s+/).filter(Boolean)) {
+      let m;
+      if ((m = /^tempo=(\d+(?:\.\d+)?)$/i.exec(tok))) { tempo = Math.max(20, Math.min(400, Number(m[1]))); continue; }
+      if ((m = /^octave=([+-]?\d)$/i.exec(tok))) { octave = Number(m[1]); continue; }
+      m = /^([A-Ga-g][#b]?-?\d|[Rr])(?:\/(\d+))?(\.?)$/.exec(tok);
+      const den = m && m[2] ? Number(m[2]) : 4;
+      if (!m || ![1, 2, 4, 8, 16, 32].includes(den)) { warnings.push(`"${tok}" is not a note`); continue; }
+      const dur = 240 / tempo / den * (m[3] ? 1.5 : 1);
+      notes.push({ freq: /^[Rr]$/.test(m[1]) ? 0 : noteFreq(m[1]) * Math.pow(2, octave), dur });
+    }
+    return { notes, warnings };
+  }
+  // Standard MIDI file → a single melody line: at every moment the highest sounding note (drums on
+  // channel 10 ignored), timed through the file's tempo map; silences become rests.
+  function parseMidi(input) {
+    const b = Array.from(input), warnings = [], fail = (why) => ({ notes: [], warnings: [why] });
+    const str = (i) => String.fromCharCode(...b.slice(i, i + 4)), u32 = (i) => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0, u16 = (i) => (b[i] << 8) | b[i + 1];
+    if (b.length < 14 || str(0) !== "MThd") return fail("not a MIDI file");
+    const ntrks = u16(10), division = u16(12);
+    if (division & 0x8000) return fail("SMPTE-timed MIDI files are not supported");
+    const tempos = [[0, 500000]], spans = [];
+    let pos = 8 + u32(4);
+    for (let tr = 0; tr < ntrks && pos + 8 <= b.length; tr++) {
+      if (str(pos) !== "MTrk") return fail("damaged MIDI track");
+      const end = Math.min(b.length, pos + 8 + u32(pos + 4));
+      let i = pos + 8, tick = 0, status = 0;
+      const open = new Map();
+      const vlq = () => { let v = 0, c; do { c = b[i++]; v = (v << 7) | (c & 127); } while (c & 128 && i < end); return v; };
+      while (i < end) {
+        tick += vlq();
+        let st = b[i];
+        if (st & 0x80) i++; else st = status;
+        if (st === 0xff) { const type = b[i++], len = vlq(); if (type === 0x51 && len === 3) tempos.push([tick, (b[i] << 16) | (b[i + 1] << 8) | b[i + 2]]); i += len; continue; }
+        if (st === 0xf0 || st === 0xf7) { i += vlq(); continue; }
+        status = st;
+        const kind = st & 0xf0, ch = st & 15;
+        if (kind === 0xc0 || kind === 0xd0) { i += 1; continue; }
+        const d1 = b[i++], d2 = b[i++];
+        if (ch === 9 || (kind !== 0x90 && kind !== 0x80)) continue;
+        const key = ch * 128 + d1;
+        if (kind === 0x90 && d2 > 0) { if (!open.has(key)) open.set(key, tick); }
+        else if (open.has(key)) { spans.push([open.get(key), tick, d1]); open.delete(key); }
+      }
+      pos = end;
+    }
+    if (!spans.length) return fail("no notes found in the MIDI file");
+    tempos.sort((p, q) => p[0] - q[0]);
+    const seconds = (tick) => {
+      let t = 0, last = 0, us = tempos[0][1];
+      for (const [at, v] of tempos) { if (at >= tick) break; t += (at - last) * us; last = at; us = v; }
+      return (t + (tick - last) * us) / 1e6 / division;
+    };
+    const cuts = [...new Set(spans.flatMap(([a, z]) => [a, z]))].sort((p, q) => p - q), notes = [];
+    let prev = null;
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      const a = cuts[k], dur = seconds(cuts[k + 1]) - seconds(a);
+      let top = null;
+      for (const sp of spans) if (sp[0] <= a && a < sp[1] && (!top || sp[2] > top[2])) top = sp;
+      const freq = top ? 440 * Math.pow(2, (top[2] - 69) / 12) : 0;
+      if (prev && prev.span === top) prev.dur += dur;                  // the same held note continues
+      else notes.push(prev = { freq, dur, span: top });
+    }
+    if (seconds(cuts[cuts.length - 1]) > 600) warnings.push("the MIDI file is longer than 10 minutes");
+    return { notes: notes.map(({ freq, dur }) => ({ freq, dur })), warnings };
+  }
+  // Group notes into phrases of about two seconds; each phrase is one job, with a small paper feed after it.
+  function musicJobs(notes) {
+    const jobs = [];
+    let cur = [], len = 0;
+    for (const n of notes) {
+      cur.push(n); len += n.dur;
+      if (len >= 2) { jobs.push({ music: cur, strikes: [], feed: 24, slow: false }); cur = []; len = 0; }
+    }
+    if (cur.length) jobs.push({ music: cur, strikes: [], feed: 24, slow: false });
+    return jobs;
+  }
+  const MUSIC_LO = 24, MUSIC_HI = LINE_UNITS - 24;
+  function scheduleMusic(job, head, speed = 1) {
+    const events = [], v = HEAD_SPEED;
+    let t = 0, x = Math.max(MUSIC_LO, Math.min(MUSIC_HI, head.x)), dir = head.dir || 1;
+    job.music.forEach((note, ni) => {
+      const dur = note.dur / speed, t0 = t, f = note.freq;
+      // higher notes fire higher pins: a three-pin band that rises and falls with the melody
+      const midi = f > 0 ? 69 + 12 * Math.log2(f / 440) : 0, mid = Math.max(1, Math.min(7, Math.round(8 - (midi - 40) / 4))), pins = 7 << (mid - 1);
+      let left = dur, k = 0;
+      while (left > 1e-9) {
+        const wall = dir > 0 ? MUSIC_HI - x : x - MUSIC_LO, seg = Math.min(left, Math.max(wall, 0) / v);
+        if (seg <= 1e-9) { events.push({ t, kind: "turn", x }); dir = -dir; continue; }
+        events.push({ t, kind: "move", x0: x, x1: x + dir * v * seg, dur: seg, printing: f > 0, freq: f });
+        if (f > 0) for (let ts = t0 + k / f; ts < Math.min(t + seg, t0 + dur * .9); ts = t0 + ++k / f) if (ts >= t) events.push({ t: ts, kind: "strike", x: x + dir * v * (ts - t), pins, pass: 0, note: ni });
+        x += dir * v * seg; t += seg; left -= seg;
+      }
+    });
+    if (job.feed > 0) { const dur = (job.feed / 36 * .09 + .015) / speed; events.push({ t, kind: "feed", n216: job.feed, dur }); t += dur; }
+    events.sort((a, b) => a.t - b.t);
+    return { events, duration: t, head: { x, dir } };
+  }
+  // Public-domain melodies (Beethoven 1824, Grieg 1875, Petzold c. 1725).
+  const TUNES = [
+    { id: "ode", title: "Ode to Joy (Beethoven)", notes: "tempo=132\nE4 E4 F4 G4 G4 F4 E4 D4 C4 C4 D4 E4 E4. D4/8 D4/2\nE4 E4 F4 G4 G4 F4 E4 D4 C4 C4 D4 E4 D4. C4/8 C4/2" },
+    { id: "mountain", title: "In the Hall of the Mountain King (Grieg)", notes: "tempo=126\nB3/8 C#4/8 D4/8 E4/8 F#4/8 D4/8 F#4/4 F4/8 C#4/8 F4/4 E4/8 C4/8 E4/4\nB3/8 C#4/8 D4/8 E4/8 F#4/8 D4/8 F#4/8 B4/8 A4/8 F#4/8 D4/8 F#4/8 A4/2" },
+    { id: "minuet", title: "Minuet in G (Petzold)", notes: "tempo=112 octave=-1\nD5/4 G4/8 A4/8 B4/8 C5/8 D5/4 G4/4 G4/4 E5/4 C5/8 D5/8 E5/8 F#5/8 G5/4 G4/4 G4/4\nC5/4 D5/8 C5/8 B4/8 A4/8 B4/4 C5/8 B4/8 A4/8 G4/8 F#4/4 G4/8 A4/8 B4/8 G4/8 B4/4 A4/2." }
+  ];
+
+  return { CELL, LINE_UNITS, PAGE_216, GLYPH_ROWS, glyph, rng, newState, feed, flush, textToBytes, unescape, HEAD_SPEED, schedule, DOCS, noteFreq, parseNotes, parseMidi, musicJobs, TUNES };
 })();
 
 const MX80Tests = {
@@ -567,6 +699,29 @@ const MX80Tests = {
     }
     const bannerJobs = (() => { const st = S.newState(), out = []; S.feed(st, S.DOCS.find((d) => d.id === "banner").bytes(), out, true); return out; })();
     check("the banner is bit-image graphics with touching bands", bannerJobs.filter((j) => j.strikes.some((s) => s.pins === 255)).length > 50 && bannerJobs.some((j) => j.feed === 24));
+
+    // ---- printer music ----
+    const near = (a, b, tol) => Math.abs(a - b) <= tol;
+    check("note frequencies: A4 = 440 Hz, C4 = 261.63 Hz, Bb3, octave shift", S.noteFreq && near(S.noteFreq("A4"), 440, 1e-9) && near(S.noteFreq("C4"), 261.626, .01) && near(S.noteFreq("Bb3"), 233.082, .01) && S.noteFreq("H4") === null);
+    const tune = S.parseNotes ? S.parseNotes("; a comment\ntempo=120 C4/4 R/8 G3/2. octave=-1 A4 X9 C4/3") : { notes: [], warnings: [] };
+    check("note text: durations, dotted notes, rests, tempo and octave", tune.notes.length === 4 && near(tune.notes[0].dur, .5, 1e-9) && tune.notes[1].freq === 0 && near(tune.notes[1].dur, .25, 1e-9) && near(tune.notes[2].dur, 1.5, 1e-9) && near(tune.notes[3].freq, 220, 1e-9));
+    check("note text: bad tokens are reported, not played", tune.warnings.length === 2, tune.warnings.join("; "));
+    // a tiny format-0 MIDI file: tempo 120, C4 for one beat with a lower G3 under it, then E4 for one beat
+    const vlq = (n) => n < 128 ? [n] : [0x80 | (n >> 7), n & 127];
+    const ev = (dt, ...b) => [...vlq(dt), ...b];
+    const trk = [...ev(0, 0xff, 0x51, 3, 0x07, 0xa1, 0x20), ...ev(0, 0x90, 60, 90), ...ev(0, 0x90, 55, 80), ...ev(96, 0x80, 60, 0), ...ev(0, 0x80, 55, 0), ...ev(0, 0x90, 64, 90), ...ev(96, 0x90, 64, 0), ...ev(0, 0xff, 0x2f, 0)];
+    const midi = [0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, 0, 96, 0x4d, 0x54, 0x72, 0x6b, 0, 0, 0, trk.length, ...trk];
+    const mel = S.parseMidi ? S.parseMidi(midi) : { notes: [] };
+    check("MIDI: the melody is the highest sounding note, timed by the tempo map", mel.notes.length === 2 && near(mel.notes[0].freq, S.noteFreq("C4"), .01) && near(mel.notes[0].dur, .5, 1e-6) && near(mel.notes[1].freq, S.noteFreq("E4"), .01) && near(mel.notes[1].dur, .5, 1e-6));
+    check("MIDI: garbage is rejected with a warning", S.parseMidi && S.parseMidi([1, 2, 3]).notes.length === 0 && S.parseMidi([1, 2, 3]).warnings.length === 1);
+    const a3 = S.schedule ? S.schedule({ music: [{ freq: 220, dur: 2.5 }], strikes: [], feed: 24, slow: false }, { x: 0, dir: 0 }) : { events: [] };
+    const hits = a3.events.filter((e) => e.kind === "strike"), gaps = hits.slice(1).map((e, i) => e.t - hits[i].t);
+    check("music: pins strike at the note's frequency", hits.length > 400 && gaps.every((g) => near(g, 1 / 220, 1e-9)), `${hits.length} strikes`);
+    check("music: the head sweeps both ways inside the margins", a3.events.some((e) => e.kind === "turn") && hits.every((e) => e.x >= 0 && e.x <= S.LINE_UNITS));
+    check("music: the carriage motor sings the note; rests are silent", a3.events.filter((e) => e.kind === "move").every((e) => e.freq === 220) && S.schedule({ music: [{ freq: 0, dur: .5 }], strikes: [], feed: 0, slow: false }).events.every((e) => e.kind !== "strike"));
+    const phrases = S.musicJobs ? S.musicJobs(tune.notes) : [];
+    check("music: phrases keep every note, in order", phrases.flatMap((j) => j.music).length === tune.notes.length && phrases.every((j) => j.feed > 0));
+    check("music: built-in tunes parse cleanly", S.TUNES && S.TUNES.length >= 3 && S.TUNES.every((tu) => { const r = S.parseNotes(tu.notes); return r.warnings.length === 0 && r.notes.length > 10; }));
 
     log(failures ? `${failures} failure(s)` : "all MX-80 tests passed");
     return failures === 0;
@@ -908,7 +1063,7 @@ const sound = {
     src.buffer = renderJobAudio(this.ctx, sched, this.bank, 1 + this.jobs++, settings.mech);
     const g = this.ctx.createGain();
     src.connect(g).connect(this.body);
-    src.start(this.ctx.currentTime + lead);
+    if (lead >= 0) src.start(this.ctx.currentTime + lead); else src.start(this.ctx.currentTime, -lead);
     this.sources.set(src, g);
     src.onended = () => { this.sources.delete(src); g.disconnect(); };
   },
@@ -1000,7 +1155,12 @@ function renderJobAudio(ctx, sched, bank, seed = 1, mech = .5) {
   const thump = new Float32Array(len);                        // chassis vibration builds with dense printing
   for (const ev of sched.events) {
     const i0 = Math.round(ev.t * sr);
-    if (ev.kind === "strike") {
+    if (ev.kind === "strike" && ev.note !== undefined) {
+      // printer music: the hacked firmware times the solenoids exactly, so within a note every strike
+      // is the same click at the same strength; that regularity is what makes the pitch
+      const v = (ev.note * 7 + 3) % CLICK_VARIANTS, jitter = Math.round(gauss() * sr * .00002);
+      add(bank[v], i0 + jitter, .09 * (.96 + .08 * r()));
+    } else if (ev.kind === "strike") {
       let pins = 0; for (let p = ev.pins; p; p &= p - 1) pins++;
       const jitter = Math.round(gauss() * sr * (.00015 + .0003 * mech));
       const v = (pins * 3 + Math.floor(r() * 8) + k++) % CLICK_VARIANTS;
@@ -1011,6 +1171,18 @@ function renderJobAudio(ctx, sched, bank, seed = 1, mech = .5) {
       if (hard > 1) noiseBurst(i0 + jitter, Math.round(.02 * sr), .006, .05, .05);
       energy = energy * Math.exp(-(ev.t - lastT) / .09) + pins * .004; lastT = ev.t;
       const j = Math.min(len - 1, i0); thump[j] += energy;
+    } else if (ev.kind === "move" && ev.freq !== undefined) {
+      // printer music: the hacked firmware pulses the carriage stepper at the note, so the motor sings it;
+      // during a rest it is silent
+      if (ev.freq > 0) {
+        const n = Math.round(ev.dur * sr), flutPh = r() * TAU;
+        let ph = 0;
+        for (let i = 0; i < n && i0 + i < len; i++) {
+          ph += TAU * ev.freq * (1 + (.002 + .006 * mech) * Math.sin(TAU * 5.5 * i / sr + flutPh)) / sr;
+          const sq = Math.sin(ph) + Math.sin(3 * ph) / 3 + Math.sin(5 * ph) / 5;
+          d[i0 + i] += sq * .03 * Math.min(1, i / (sr * .004), (n - i) / (sr * .004));
+        }
+      }
     } else if (ev.kind === "move") {
       // carriage motor: a rough low buzz whose pitch follows the head's speed, with flutter, the
       // stepper's grind, and loose rails that rattle more on a worn machine
@@ -1068,7 +1240,7 @@ function idleHum(ctx, dest) {
   g.connect(dest); o.start(); n.start();
   return g;
 }
-const printer = { state: MX80.newState(), queue: [], manual: [], current: null, head: { x: 0, dir: 0 }, online: true };
+const printer = { state: MX80.newState(), queue: [], manual: [], current: null, head: { x: 0, dir: 0 }, online: true, lastEnd: null };
 const now = () => performance.now() / 1000;
 function toast(msg) { const el = document.getElementById("toast"); el.textContent = msg; el.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 2200); }
 // Distance to the next page's first line. At the top of a form a feed is a no-op, unless the current
@@ -1110,6 +1282,11 @@ function drain() {
     if (job.formFeed) job.feed = formFeedDistance(job);
     for (const s of job.strikes) addPrintedStrike(s.x, s.pins, s.pass, printed.printY);
     if (job.strikes.length) printer.head = { x: job.strikes[job.strikes.length - 1].x, dir: 0 };
+    if (job.music) {
+      const sched = MX80.schedule(job, printer.head, 1);
+      for (const ev of sched.events) if (ev.kind === "strike") addPrintedStrike(ev.x, ev.pins, ev.pass, printed.printY);
+      printer.head = sched.head;
+    }
     printed.printY += job.feed / 216;
   }
   printed.feedAnim = null;
@@ -1118,12 +1295,15 @@ function startJob(t) {
   const job = printer.manual.length ? printer.manual.shift() : printer.queue.shift();
   if (job.formFeed) job.feed = formFeedDistance(job);
   const sched = MX80.schedule(job, printer.head, settings.speed);
-  const lead = sound.active() ? .06 : 0;
+  // A job that follows straight on from the previous one starts exactly where it ended (keeps the rhythm
+  // of printer music, and no dead gap between lines); a fresh start gets the sound's 60 ms lead.
+  const chained = printer.lastEnd !== null && t - printer.lastEnd < .05;
+  const start = chained ? printer.lastEnd : t + (sound.active() ? .06 : 0);
   // `from` is where the head physically is until the job's first move starts (after the sound lead);
   // printer.head already holds where the job will leave it.
-  printer.current = { events: sched.events, duration: sched.duration, start: t + lead, idx: 0, lineY: printed.printY, move: null, from: printer.head.x };
+  printer.current = { events: sched.events, duration: sched.duration, start, idx: 0, lineY: printed.printY, move: null, from: printer.head.x };
   printer.head = sched.head;
-  sound.playJob(sched, lead);
+  sound.playJob(sched, start - t);
 }
 function apply(ev, cur) {
   if (ev.kind === "strike") addPrintedStrike(ev.x, ev.pins, ev.pass, cur.lineY);
@@ -1141,7 +1321,7 @@ function pump(t) {
     }
     const cur = printer.current, local = t - cur.start;
     while (cur.idx < cur.events.length && cur.events[cur.idx].t <= local) apply(cur.events[cur.idx++], cur);
-    if (local >= cur.duration) { printer.current = null; continue; }
+    if (local >= cur.duration) { printer.lastEnd = cur.start + cur.duration; printer.current = null; continue; }
     break;
   }
 }
@@ -1152,7 +1332,7 @@ function carriageX(t) {
   const m = cur.move, u = clamp((t - cur.start - m.t) / m.dur, 0, 1), e = u * u * (3 - 2 * u);
   return m.x0 + (m.x1 - m.x0) * (m.printing ? u : e);
 }
-function cancelPrinting() { printer.queue = []; printer.manual = []; printer.current = null; printer.state.pending = []; sound.stopAll(); printed.feedAnim = null; }
+function cancelPrinting() { printer.queue = []; printer.manual = []; printer.current = null; printer.lastEnd = null; printer.state.pending = []; sound.stopAll(); printed.feedAnim = null; }
 function toggleOnline() {
   printer.online = !printer.online;
   document.getElementById("pause").classList.toggle("on", !printer.online);
@@ -1182,7 +1362,7 @@ function printDoc(id) { firstPrintSound(); startFreshLine(); submit(MX80.DOCS.fi
 document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => {
   activeTab = b.dataset.tab;
   document.querySelectorAll("[data-tab]").forEach((x) => x.classList.toggle("on", x === b));
-  for (const t of ["type", "gallery", "escp"]) $(`tab-${t}`).hidden = t !== activeTab;
+  for (const t of ["type", "gallery", "escp", "music"]) $(`tab-${t}`).hidden = t !== activeTab;
 }));
 $("docs").innerHTML = MX80.DOCS.map((d) => `<li data-doc="${d.id}"${d.id === selectedDoc ? ' class="on"' : ""}><b>${d.title}</b><small>${d.note}</small></li>`).join("");
 $("docs").addEventListener("click", (e) => {
@@ -1192,7 +1372,30 @@ $("docs").addEventListener("click", (e) => {
   printDoc(selectedDoc);
 });
 $("escp").value = "\\e@Plain text, then \\eEemphasized\\eF and \\eGdouble-strike\\eH.\n\\x0eDOUBLE WIDTH\\x14 back to normal.\n\\x0fCondensed fits 132 characters on the 8-inch line.\\x12\n\\e-\\x01Underlined\\e-\\x00 and \\e4italic\\e5 type.\nGraphics: \\eK\\x10\\x00\\xff\\x81\\xbd\\xa5\\xa5\\xbd\\x81\\xff\\xff\\x81\\xbd\\xa5\\xa5\\xbd\\x81\\xff\n";
+function playNotes(notes) {
+  if (!notes.length) { toast("No notes to play"); return; }
+  firstPrintSound(); startFreshLine();
+  printer.queue.push(...MX80.musicJobs(notes));
+  if (settings.speed === 0) drain();
+}
+$("tune").innerHTML = MX80.TUNES.map((tu) => `<option value="${tu.id}">${tu.title}</option>`).join("") + '<option value="">Your notes / MIDI</option>';
+$("notes").value = MX80.TUNES[0].notes;
+let midiNotes = null;
+$("tune").addEventListener("change", (e) => { const tu = MX80.TUNES.find((x) => x.id === e.target.value); if (tu) { $("notes").value = tu.notes; midiNotes = null; $("musicLog").textContent = ""; } });
+$("notes").addEventListener("input", () => { midiNotes = null; $("tune").value = ""; });
+$("midiFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0]; if (!file) return;
+  const r = MX80.parseMidi(new Uint8Array(await file.arrayBuffer()));
+  midiNotes = r.notes.length ? r.notes : null; $("tune").value = "";
+  const secs = r.notes.reduce((a, n) => a + n.dur, 0);
+  $("musicLog").textContent = r.notes.length ? `${file.name}: ${r.notes.filter((n) => n.freq).length} melody notes, ${secs.toFixed(0)} s. ${r.warnings.join(" ")}` : r.warnings.join(" ");
+});
 $("print").addEventListener("click", () => {
+  if (activeTab === "music") {
+    if (midiNotes) playNotes(midiNotes);
+    else { const r = MX80.parseNotes($("notes").value); $("musicLog").textContent = r.warnings.join("; "); playNotes(r.notes); }
+    return;
+  }
   firstPrintSound();
   if (activeTab === "gallery") printDoc(selectedDoc);
   else if (activeTab === "escp") { $("escpLog").textContent = ""; startFreshLine(); submit(MX80.unescape($("escp").value)); }
