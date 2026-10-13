@@ -213,7 +213,8 @@ const MX80 = (() => {
     const w = cellWidth(s);
     if (s.x + w > LINE_UNITS + 1e-6) newLine(s, out);           // the line is full: print it and feed
     const step = w / CELL;
-    for (let hc = 0; hc < CELL; hc++) if (cols[hc]) addStrike(s, s.x + hc * step, cols[hc]);
+    const wide = s.wide || s.wideLine;                           // expanded mode strikes each dot twice, a full dot apart
+    for (let hc = 0; hc < CELL; hc++) if (cols[hc]) { addStrike(s, s.x + hc * step, cols[hc]); if (wide) addStrike(s, s.x + hc * step + 2, cols[hc]); }
     if (s.under || marked) for (let hc = 0; hc < CELL; hc += 2) addStrike(s, s.x + hc * step, 1 << 8);
     s.x += w;
   }
@@ -407,10 +408,10 @@ const MX80 = (() => {
   function invoice() {
     const rows = [[12, "Fabric ribbon, black", 3.95], [2, "Print head, 9-pin (spare)", 29.5], [5, "Continuous paper, green-bar, 2000 sh", 24.0], [1, "Centronics cable, 6 ft", 14.75], [40, "Tractor-feed labels, 1000", .85]];
     let s = ESC + "@" + ESC + "E" + SO + "DOTWORKS SUPPLY CO." + ESC + "F" + CRLF + "14 Platen Road, Tractorville" + " ".repeat(34) + "INVOICE 000417" + CRLF + "-".repeat(80) + CRLF +
-      " QTY  ITEM" + " ".repeat(38) + "UNIT PRICE      AMOUNT" + CRLF + "-".repeat(80) + CRLF;
+      (" QTY  ITEM".padEnd(52) + "UNIT PRICE".padStart(10) + "AMOUNT".padStart(12)) + CRLF + "-".repeat(80) + CRLF;
     let total = 0;
     for (const [q, name, unit] of rows) { const amount = q * unit; total += amount; s += String(q).padStart(4) + "  " + name.padEnd(46) + unit.toFixed(2).padStart(10) + amount.toFixed(2).padStart(12) + CRLF; }
-    return s + "-".repeat(80) + CRLF + ESC + "E" + "TOTAL DUE".padStart(68) + total.toFixed(2).padStart(12) + ESC + "F" + CRLF + CRLF + "Thank you for your business. Payment within 30 days." + CRLF;
+    return s + "-".repeat(80) + CRLF + ESC + "E" + "TOTAL DUE".padStart(62) + total.toFixed(2).padStart(12) + ESC + "F" + CRLF + CRLF + "Thank you for your business. Payment within 30 days." + CRLF;
   }
   function table() {
     const codes = ["PP", "PP", "PP", "A3", "YCN", "1AP2", "2AP1", "APM3", "LAP6"], r = rng(11);
@@ -454,7 +455,7 @@ const MX80 = (() => {
   function banner(text = "MX-80") {
     // Letters run down the paper. Each of a glyph's 5 columns becomes three lines of bit-image
     // graphics, and each of its 7 rows a block 64 graphics columns wide; 24/216" spacing makes the
-    // 8-pin bands touch. Turn the paper a quarter turn clockwise to read it.
+    // 8-pin bands touch. Turn the paper a quarter turn counterclockwise to read it.
     let s = ESC + "@" + ESC + "3" + String.fromCharCode(24);
     for (const ch of text) {
       const cols = glyph(ch.charCodeAt(0));
@@ -505,7 +506,10 @@ const MX80Tests = {
     const lf = parse("A\r\n").out;
     check("CR LF: the line, then a 1/6-inch feed", lf.length === 2 && lf[0].feed === 0 && lf[1].feed === 36);
     const wide = parse("\x0eH").out, cond = parse("\x0fH").out;
-    check("double width doubles the column spacing", Math.max(...strikesOf(wide).map((s) => s.x)) === 16);
+    check("double width doubles the column spacing (each dot struck twice, a full dot apart)", Math.max(...strikesOf(wide).map((s) => s.x)) === 18);
+    const wideAll = strikesOf(parse("\x0eHEllo, Wg").out);
+    const closeDots = [...Array(9).keys()].some((pin) => { const xs = [...new Set(wideAll.filter((s) => s.pins & (1 << pin)).map((s) => s.x))].sort((a, b) => a - b); return xs.some((x, i) => i && x - xs[i - 1] < 2); });
+    check("wide glyph dots on one pin are never closer than 2 half-dots", wideAll.length > 0 && !closeDots);
     check("condensed fits 132 characters on the 8-inch line", parse("\x0f" + "H".repeat(132)).out.length === 1 && parse("\x0f" + "H".repeat(133)).out.length === 2 && strikesOf(cond).length === 5);
     const emph = strikesOf(parse("\x1bEH").out);
     check("emphasized re-strikes every dot a half-dot right and slows the head", emph.length === 10 && emph.some((s) => s.x === 1) && parse("\x1bEH").out[0].slow === true);
@@ -550,6 +554,10 @@ const MX80Tests = {
     check("2x speed halves the time", Math.abs(S.schedule(line80, { x: 0, dir: 0 }, 2).duration - sch.duration / 2) < 1e-9);
     check("strike times rise along the pass", sch.events.filter((e) => e.kind === "strike").every((e, i, a) => i === 0 || e.t >= a[i - 1].t));
 
+    const invoiceLines = String.fromCharCode(...S.DOCS.find((d) => d.id === "invoice").bytes()).split("\r\n");
+    const headerLine = invoiceLines.find((l) => l.includes("AMOUNT")), rowLine = invoiceLines.find((l) => l.includes("Fabric ribbon")), totalLine = invoiceLines.find((l) => l.includes("TOTAL DUE"));
+    check("invoice: AMOUNT, UNIT PRICE, row amounts and the total end in the same columns",
+      headerLine.indexOf("AMOUNT") + 6 === rowLine.length && headerLine.indexOf("UNIT PRICE") + 10 === rowLine.length - 12 && totalLine.replace(/\x1b./g, "").length === rowLine.length);
     check("nine gallery documents", S.DOCS && S.DOCS.length === 9);
     for (const doc of S.DOCS || []) {
       const st = S.newState(), out = [];
@@ -702,9 +710,12 @@ function addPrintedStrike(x, pins, pass, lineY) {
 let paperVersion = 0;
 const pageCaches = new Map();
 function invalidatePaper() { paperVersion++; }
-function tearOff() { printed.rows = []; printed.strikes = []; printed.printY = TOP_GAP; printed.feedAnim = null; pageCaches.clear(); paperVersion++; view.follow = true; }
-function pageCache(p, S) {
+function tearOff() { printed.rows = []; printed.strikes = []; printed.printY = TOP_GAP; printed.feedAnim = null; pageCaches.clear(); paperVersion++; view.follow = true; $("follow").style.display = "none"; }
+// A stale cache (the settings changed) is rebuilt only when `canRebuild()` allows, so dragging a slider
+// repaints one page per frame and shows the old picture meanwhile; a page never drawn is always built.
+function pageCache(p, S, canRebuild = () => true) {
   let e = pageCaches.get(p);
+  if (e && (e.S !== S || e.version !== paperVersion) && !canRebuild()) return e.canvas;
   if (!e || e.S !== S || e.version !== paperVersion) {
     const canvas = e && e.S === S ? e.canvas : document.createElement("canvas");
     canvas.width = Math.round(PAPER_W * S); canvas.height = Math.round(PAGE_IN * S);
@@ -714,7 +725,6 @@ function pageCache(p, S) {
     drawDots(g, S, 0, p * PAGE_IN, strikesInRange(p * PAGE_IN - .2, (p + 1) * PAGE_IN));
     e = { canvas, S, version: paperVersion, upTo: printed.strikes.length };
     pageCaches.set(p, e);
-    if (pageCaches.size > 6) { const far = [...pageCaches.keys()].sort((a, b) => Math.abs(b - p) - Math.abs(a - p))[0]; pageCaches.delete(far); }
   } else if (e.upTo < printed.strikes.length) {
     const fresh = printed.strikes.slice(e.upTo).filter((st) => st.y > p * PAGE_IN - .2 && st.y < (p + 1) * PAGE_IN);
     if (fresh.length) drawDots(e.canvas.getContext("2d"), S, 0, p * PAGE_IN, fresh);
@@ -745,8 +755,17 @@ function drawPaper(t) {
   pctx.save(); pctx.beginPath(); pctx.rect(0, 0, paperCanvas.width, (view.platenY + 4.4 * view.k) * dpr); pctx.clip();   // paper never shows below the printer front panel
   if (view.follow) view.atPlaten = displayPrintY(t) + .06;
   const S = view.k * dpr, top = view.atPlaten - view.platenY / view.k, bottom = view.atPlaten + (H - view.platenY) / view.k;
-  for (let p = Math.max(0, Math.floor(top / PAGE_IN)); p <= Math.floor(bottom / PAGE_IN); p++) {
-    pctx.drawImage(pageCache(p, S), Math.round(view.paperLeft * dpr), Math.round((view.platenY + (p * PAGE_IN - view.atPlaten) * view.k) * dpr));
+  const p0 = Math.max(0, Math.floor(top / PAGE_IN)), p1 = Math.floor(bottom / PAGE_IN);
+  let rebuilt = false;
+  const canRebuild = () => { if (rebuilt) return false; rebuilt = true; return true; };
+  for (let p = p0; p <= p1; p++) {
+    const img = pageCache(p, S, canRebuild);
+    pctx.drawImage(img, Math.round(view.paperLeft * dpr), Math.round((view.platenY + (p * PAGE_IN - view.atPlaten) * view.k) * dpr), Math.round(PAPER_W * S), Math.round(PAGE_IN * S));
+  }
+  while (pageCaches.size > p1 - p0 + 2) {                       // keep the visible pages plus one; evict the farthest
+    const dist = (q) => (q < p0 ? p0 - q : q > p1 ? q - p1 : 0);
+    const far = [...pageCaches.keys()].sort((a, b) => dist(b) - dist(a))[0];
+    pageCaches.delete(far);
   }
   pctx.restore();
 }
@@ -984,7 +1003,7 @@ function renderJobAudio(ctx, sched, bank) {
 const printer = { state: MX80.newState(), queue: [], manual: [], current: null, head: { x: 0, dir: 0 }, online: true };
 const now = () => performance.now() / 1000;
 function toast(msg) { const el = document.getElementById("toast"); el.textContent = msg; el.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 2200); }
-function formFeedDistance() { const at = Math.round(printed.printY * 216) % MX80.PAGE_216; return at === 0 ? 0 : MX80.PAGE_216 - at; }
+function formFeedDistance() { const at = Math.round((printed.printY - TOP_GAP) * 216) % MX80.PAGE_216; return at === 0 ? 0 : MX80.PAGE_216 - at; }
 
 function submit(bytes, { final = true, flush = true } = {}) {
   const jobs = [];
@@ -1078,7 +1097,8 @@ function frame() {
 const $ = (id) => document.getElementById(id);
 let activeTab = "type", selectedDoc = MX80.DOCS[1].id;
 function firstPrintSound() { if (!settings.soundTouched && !settings.sound) { settings.sound = true; $("sound").checked = true; sound.set(true); } }
-function printDoc(id) { firstPrintSound(); submit(MX80.DOCS.find((d) => d.id === id).bytes()); }
+function startFreshLine() { if (printer.state.x > 0) submit(MX80.textToBytes("\n")); }   // a paused typed line must not run into the document
+function printDoc(id) { firstPrintSound(); startFreshLine(); submit(MX80.DOCS.find((d) => d.id === id).bytes()); }
 
 document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => {
   activeTab = b.dataset.tab;
@@ -1096,7 +1116,7 @@ $("escp").value = "\\e@Plain text, then \\eEemphasized\\eF and \\eGdouble-strike
 $("print").addEventListener("click", () => {
   firstPrintSound();
   if (activeTab === "gallery") printDoc(selectedDoc);
-  else if (activeTab === "escp") { $("escpLog").textContent = ""; submit(MX80.unescape($("escp").value)); }
+  else if (activeTab === "escp") { $("escpLog").textContent = ""; startFreshLine(); submit(MX80.unescape($("escp").value)); }
   else sendTyped(true);
 });
 let typeTimer = 0;
@@ -1108,7 +1128,7 @@ function sendTyped(newline) {
   submit(MX80.textToBytes(text + (newline ? "\n" : "")), { final: false, flush: true });
 }
 $("typeLine").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); firstPrintSound(); sendTyped(true); } });
-$("typeLine").addEventListener("input", () => { clearTimeout(typeTimer); typeTimer = setTimeout(() => sendTyped(false), 1100); });
+$("typeLine").addEventListener("input", () => { firstPrintSound(); clearTimeout(typeTimer); typeTimer = setTimeout(() => sendTyped(false), 1100); });
 $("pause").addEventListener("click", toggleOnline);
 $("cancel").addEventListener("click", () => { cancelPrinting(); toast("Cancelled"); });
 $("tear").addEventListener("click", () => { cancelPrinting(); tearOff(); toast("Torn off along the perforation"); });
