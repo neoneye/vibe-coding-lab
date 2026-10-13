@@ -564,5 +564,224 @@ const MX80Tests = {
   }
 };
 </script>
+<script>
+const PAPER_W = 9.5, MARGIN_X = .75, PAGE_IN = 11, PIN_IN = 1 / 72, UNIT_IN = 1 / 120, TOP_GAP = .5, TAU = Math.PI * 2;
+const PIN_WEAR = [1, .97, 1, .86, 1, 1, .94, 1, .9];       // this printer's pin 4 has always been a little weak
+const settings = { paper: "green-bar", aging: .45, wear: .35, plastic: .55, speed: 1, sound: false, soundTouched: false, volume: .7 };
+const printed = { rows: [], strikes: [], printY: TOP_GAP, ribbonPos: 0, lastX: 0, feedAnim: null };
+const view = { k: 60, paperLeft: 0, platenY: 400, follow: true, atPlaten: TOP_GAP };
+const stage = document.getElementById("stage"), paperCanvas = document.getElementById("paperCanvas"), pctx = paperCanvas.getContext("2d");
+const loupeCanvas = document.getElementById("loupe"), lctx = loupeCanvas.getContext("2d");
+const PAPERS = {
+  "green-bar": { base: [244, 242, 231], bar: [194, 221, 192] },
+  "blue-bar": { base: [244, 243, 238], bar: [198, 214, 238] },
+  plain: { base: [246, 244, 238], bar: null },
+  recycled: { base: [224, 220, 207], bar: null }
+};
+const AGED = [233, 214, 163];
+const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+const rgb = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function hash(a, b, c) { let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(b + 0x632be5ab, 0xc2b2ae35) ^ Math.imul(c + 0x27d4eb2f, 0x165667b1); h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; return (h >>> 0) / 4294967296; }
+
+// Seeded value-noise tile (grayscale in alpha) for fibre grain and blotches.
+function noiseTile(size, cells, seed, speckle) {
+  const r = MX80.rng(seed), grid = Array.from({ length: cells * cells }, r), c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d"), img = g.createImageData(size, size), s = (t) => t * t * (3 - 2 * t);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const fx = x / size * cells, fy = y / size * cells, ix = Math.floor(fx), iy = Math.floor(fy), tx = s(fx - ix), ty = s(fy - iy);
+    const at = (i, j) => grid[((j % cells) * cells + (i % cells))];
+    let v = (at(ix, iy) * (1 - tx) + at(ix + 1, iy) * tx) * (1 - ty) + (at(ix, iy + 1) * (1 - tx) + at(ix + 1, iy + 1) * tx) * ty;
+    if (speckle) v = v * .6 + r() * .4;
+    const i = (y * size + x) * 4;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = 0;
+    img.data[i + 3] = v * 255;
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+const grainTile = noiseTile(256, 48, 7, true), blotchTile = noiseTile(128, 5, 21, false);
+
+// Ink stamps: soft discs with ragged, lobed rims and a grainy fill, like a fabric ribbon hit by a wire.
+const inkSprites = Array.from({ length: 16 }, (_, v) => {
+  const n = 48, c = document.createElement("canvas"); c.width = c.height = n;
+  const g = c.getContext("2d"), img = g.createImageData(n, n), r = MX80.rng(900 + v);
+  const lobes = Array.from({ length: 7 }, () => [r() * TAU, .05 + r() * .12, 1 + Math.floor(r() * 4)]);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const dx = (x + .5) / n * 2 - 1, dy = (y + .5) / n * 2 - 1, d = Math.hypot(dx, dy), a = Math.atan2(dy, dx);
+    let edge = .8;
+    for (const [ph, amp, f] of lobes) edge += amp * Math.sin(a * f + ph) * .5;
+    const t = clamp((edge - d) / .24, 0, 1), i = (y * n + x) * 4;
+    img.data[i] = 31; img.data[i + 1] = 29; img.data[i + 2] = 37;
+    img.data[i + 3] = t * t * (3 - 2 * t) * (.8 + .2 * r()) * 255;
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+});
+
+// Paint the paper itself for the region whose top-left is (x0, y0) inches, at S pixels per inch.
+function paintPaper(ctx, S, x0, y0, w, h) {
+  const P = PAPERS[settings.paper], age = settings.aging, base = mix(P.base, AGED, age * .75);
+  ctx.save();
+  ctx.scale(S, S); ctx.translate(-x0, -y0);
+  ctx.beginPath(); ctx.rect(0, Math.max(0, y0), PAPER_W, y0 + h - Math.max(0, y0)); ctx.clip();
+  ctx.fillStyle = rgb(base); ctx.fillRect(x0, y0, w, h);
+  if (P.bar) {
+    ctx.fillStyle = rgb(mix(P.bar, base, .2 + age * .45));
+    for (let b = Math.floor(y0 / .5); b * .5 < y0 + h; b++) if (b % 2 === 0) ctx.fillRect(.5, b * .5, PAPER_W - 1, .5);
+  }
+  ctx.globalCompositeOperation = "multiply";
+  const grain = ctx.createPattern(grainTile, "repeat"); grain.setTransform(new DOMMatrix().scale(1.3 / 256));
+  ctx.globalAlpha = .1 + age * .12; ctx.fillStyle = grain; ctx.fillRect(x0, y0, w, h);
+  const blotch = ctx.createPattern(blotchTile, "repeat"); blotch.setTransform(new DOMMatrix().translate(1.7, 3.1).scale(5 / 128));
+  ctx.globalAlpha = age * .5; ctx.fillStyle = blotch; ctx.fillRect(x0, y0, w, h);
+  ctx.globalAlpha = 1;
+  for (const [ex, dir] of [[0, 1], [PAPER_W, -1]]) {               // yellowed, handled edges
+    const gr = ctx.createLinearGradient(ex, 0, ex + dir * .7, 0);
+    gr.addColorStop(0, `rgba(150,108,40,${.38 * age})`); gr.addColorStop(1, "rgba(150,108,40,0)");
+    ctx.fillStyle = gr; ctx.fillRect(Math.min(ex, ex + dir * .7), y0, .7, h);
+  }
+  for (let p = Math.max(0, Math.floor(y0 / PAGE_IN)); p * PAGE_IN < y0 + h; p++) {   // foxing spots, fixed per page
+    const r = MX80.rng(4000 + p), count = Math.round(age * 7);
+    for (let i = 0; i < count; i++) {
+      const fx = .7 + r() * 8.1, fy = p * PAGE_IN + r() * PAGE_IN, fr = .02 + r() * .08;
+      const gr = ctx.createRadialGradient(fx, fy, 0, fx, fy, fr);
+      gr.addColorStop(0, `rgba(140,90,40,${.35 * age})`); gr.addColorStop(1, "rgba(140,90,40,0)");
+      ctx.fillStyle = gr; ctx.fillRect(fx - fr, fy - fr, 2 * fr, 2 * fr);
+    }
+  }
+  ctx.globalCompositeOperation = "source-over";
+  ctx.strokeStyle = "rgba(95,82,60,.35)"; ctx.lineWidth = .006; ctx.setLineDash([.02, .025]);
+  ctx.beginPath();
+  for (const vx of [.5, PAPER_W - .5]) { ctx.moveTo(vx, y0); ctx.lineTo(vx, y0 + h); }
+  for (let p = Math.ceil(y0 / PAGE_IN); p * PAGE_IN < y0 + h; p++) { ctx.moveTo(0, p * PAGE_IN); ctx.lineTo(PAPER_W, p * PAGE_IN); }
+  ctx.stroke(); ctx.setLineDash([]);
+  ctx.globalCompositeOperation = "destination-out";                 // sprocket holes
+  ctx.beginPath();
+  for (let n = Math.floor((y0 - .25) / .5); .25 + n * .5 < y0 + h + .1; n++) for (const hx of [.25, PAPER_W - .25]) { ctx.moveTo(hx + .078, .25 + n * .5); ctx.arc(hx, .25 + n * .5, .078, 0, TAU); }
+  ctx.fill();
+  ctx.restore();
+}
+
+// Stamp the dots of `list` (strikes) into ctx, for a region whose top-left is (x0, y0) inches.
+// A fresh ribbon makes big soft blots that merge; a worn one small, faint, separate dots.
+function drawDots(ctx, S, x0, y0, list) {
+  const wear = settings.wear, dia = PIN_IN * (1.45 - .7 * wear), base = 1 - .6 * wear;
+  ctx.save();
+  ctx.globalCompositeOperation = "multiply";
+  for (const st of list) for (let r = 0; r < 9; r++) {
+    if (!(st.pins & (1 << r))) continue;
+    const h1 = hash(st.id, r, 7), h2 = hash(st.id, r, 13), h3 = hash(st.id, r, 29);
+    const d = dia * (.82 + .32 * h1) * S;
+    const x = (MARGIN_X + st.x * UNIT_IN - x0 + (h2 - .5) * .0016) * S, y = (st.y + r * PIN_IN + st.pass / 216 - y0 + (h3 - .5) * .0016) * S;
+    ctx.globalAlpha = clamp(base * st.ink * PIN_WEAR[r] * (.78 + .3 * h2), 0, 1);
+    ctx.drawImage(inkSprites[(st.id * 9 + r) & 15], x - d / 2, y - d / 2, d, d);
+  }
+  ctx.restore();
+}
+
+function strikesInRange(y0, y1) {
+  const rows = printed.rows; let lo = 0, hi = rows.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (rows[mid].y < y0) lo = mid + 1; else hi = mid; }
+  const out = [];
+  for (let i = lo; i < rows.length && rows[i].y < y1; i++) out.push(...rows[i].strikes);
+  return out;
+}
+function addPrintedStrike(x, pins, pass, lineY) {
+  // Ribbon model: the fabric is inked unevenly, so its darkness drifts as the head travels.
+  printed.ribbonPos += Math.abs(x - printed.lastX); printed.lastX = x;
+  const rp = printed.ribbonPos, band = .8 + .2 * (.5 + .5 * Math.sin(rp * .0021)) * (.55 + .45 * Math.sin(rp * .00077 + 1.3));
+  let row = printed.rows[printed.rows.length - 1];
+  if (!row || row.y !== lineY) printed.rows.push(row = { y: lineY, strikes: [] });
+  const st = { id: printed.strikes.length, x, y: lineY, pins, pass, ink: band };
+  row.strikes.push(st); printed.strikes.push(st);
+}
+
+let paperVersion = 0;
+const pageCaches = new Map();
+function invalidatePaper() { paperVersion++; }
+function tearOff() { printed.rows = []; printed.strikes = []; printed.printY = TOP_GAP; printed.feedAnim = null; pageCaches.clear(); paperVersion++; view.follow = true; }
+function pageCache(p, S) {
+  let e = pageCaches.get(p);
+  if (!e || e.S !== S || e.version !== paperVersion) {
+    const canvas = e && e.S === S ? e.canvas : document.createElement("canvas");
+    canvas.width = Math.round(PAPER_W * S); canvas.height = Math.round(PAGE_IN * S);
+    const g = canvas.getContext("2d");
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    paintPaper(g, S, 0, p * PAGE_IN, PAPER_W, PAGE_IN);
+    drawDots(g, S, 0, p * PAGE_IN, strikesInRange(p * PAGE_IN - .2, (p + 1) * PAGE_IN));
+    e = { canvas, S, version: paperVersion, upTo: printed.strikes.length };
+    pageCaches.set(p, e);
+    if (pageCaches.size > 6) { const far = [...pageCaches.keys()].sort((a, b) => Math.abs(b - p) - Math.abs(a - p))[0]; pageCaches.delete(far); }
+  } else if (e.upTo < printed.strikes.length) {
+    const fresh = printed.strikes.slice(e.upTo).filter((st) => st.y > p * PAGE_IN - .2 && st.y < (p + 1) * PAGE_IN);
+    if (fresh.length) drawDots(e.canvas.getContext("2d"), S, 0, p * PAGE_IN, fresh);
+    e.upTo = printed.strikes.length;
+  }
+  return e.canvas;
+}
+
+// The newest line (plus a little) sits at the platen; earlier paper rises above it.
+function displayPrintY(t) {
+  const f = printed.feedAnim;
+  if (!f) return printed.printY;
+  const u = clamp((t - f.t0) / f.dur, 0, 1);
+  if (u >= 1) printed.feedAnim = null;
+  return f.from + (f.to - f.from) * u;
+}
+function layoutStage() {
+  const W = stage.clientWidth, H = stage.clientHeight;
+  view.k = Math.max(20, Math.min(W / 16.4, H / 9));
+  view.paperLeft = (W - PAPER_W * view.k) / 2;
+  view.platenY = H - 4.75 * view.k;
+}
+function drawPaper(t) {
+  const W = stage.clientWidth, H = stage.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if (paperCanvas.width !== Math.round(W * dpr) || paperCanvas.height !== Math.round(H * dpr)) { paperCanvas.width = Math.round(W * dpr); paperCanvas.height = Math.round(H * dpr); }
+  pctx.setTransform(1, 0, 0, 1, 0, 0);
+  pctx.clearRect(0, 0, paperCanvas.width, paperCanvas.height);
+  if (view.follow) view.atPlaten = displayPrintY(t) + .06;
+  const S = view.k * dpr, top = view.atPlaten - view.platenY / view.k, bottom = view.atPlaten + (H - view.platenY) / view.k;
+  for (let p = Math.max(0, Math.floor(top / PAGE_IN)); p <= Math.floor(bottom / PAGE_IN); p++) {
+    pctx.drawImage(pageCache(p, S), Math.round(view.paperLeft * dpr), Math.round((view.platenY + (p * PAGE_IN - view.atPlaten) * view.k) * dpr));
+  }
+}
+
+const loupe = { on: false, mx: 0, my: 0 };
+function drawLoupe() {
+  if (!loupe.on) { loupeCanvas.style.display = "none"; return; }
+  const size = 220, dpr = Math.min(window.devicePixelRatio || 1, 2), M = 7, S = view.k * M * dpr;
+  if (loupeCanvas.width !== size * dpr) { loupeCanvas.width = loupeCanvas.height = size * dpr; }
+  const xIn = (loupe.mx - view.paperLeft) / view.k, yIn = view.atPlaten + (loupe.my - view.platenY) / view.k, rIn = size / 2 / (view.k * M);
+  lctx.setTransform(1, 0, 0, 1, 0, 0);
+  lctx.fillStyle = "#1a1612"; lctx.fillRect(0, 0, loupeCanvas.width, loupeCanvas.height);
+  paintPaper(lctx, S, xIn - rIn, yIn - rIn, 2 * rIn, 2 * rIn);
+  drawDots(lctx, S, xIn - rIn, yIn - rIn, strikesInRange(yIn - rIn - .15, yIn + rIn));
+  loupeCanvas.style.display = "block";
+  loupeCanvas.style.left = `${loupe.mx - size / 2}px`; loupeCanvas.style.top = `${loupe.my - size / 2}px`;
+}
+
+function savePng() {
+  if (!printed.strikes.length) return false;
+  const last = Math.floor(printed.rows[printed.rows.length - 1].y / PAGE_IN), first = Math.max(0, last - 9), S = 150;
+  const c = document.createElement("canvas"); c.width = PAPER_W * S; c.height = (last - first + 1) * PAGE_IN * S;
+  const g = c.getContext("2d");
+  for (let p = first; p <= last; p++) {
+    g.save(); g.translate(0, (p - first) * PAGE_IN * S);
+    paintPaper(g, S, 0, p * PAGE_IN, PAPER_W, PAGE_IN);
+    drawDots(g, S, 0, p * PAGE_IN, strikesInRange(p * PAGE_IN - .2, (p + 1) * PAGE_IN));
+    g.restore();
+  }
+  c.toBlob((blob) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "mx80-printout.png"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); });
+  return true;
+}
+
+// TEMPORARY (Task 6 check) — removed in Task 8
+layoutStage();
+{ const st = MX80.newState(), out = []; MX80.feed(st, MX80.DOCS[1].bytes(), out, true); MX80.flush(st, out);
+  for (const job of out) { for (const s of job.strikes) addPrintedStrike(s.x, s.pins, s.pass, printed.printY); printed.printY += job.feed / 216; } }
+drawPaper(performance.now() / 1000);
+</script>
 </body>
 </html>
