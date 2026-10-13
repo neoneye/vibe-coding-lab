@@ -852,7 +852,7 @@ function setLeds(on) {
 // carriage motor, turnaround thunk and platen ratchet are rendered into one buffer and started on
 // the audio clock at the same moment the visuals start the line.
 const sound = {
-  ctx: null, master: null, analyser: null, bank: null, sources: new Set(), idle: null,
+  ctx: null, master: null, analyser: null, bank: null, sources: new Map(), idle: null, warmUntil: 0,
   ensure() {
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -865,9 +865,12 @@ const sound = {
       this.bank = makeClickBank(ctx.sampleRate);
       this.idle = idleHum(ctx, this.master);
     }
-    if (this.ctx.state === "suspended") this.ctx.resume();
+    if (this.ctx.state !== "running") { this.warmUntil = performance.now() + 300; this.ctx.resume(); }
     return true;
   },
+  // The audio device takes a moment to open after the first click; the controller holds the next job back
+  // (for at most 300 ms) so that job gets its sound instead of starting silently.
+  warming() { return !!(settings.sound && settings.speed !== 0 && this.ctx && this.ctx.state !== "running" && performance.now() < this.warmUntil); },
   set(on) {
     if (on && !this.ensure()) { toast("Web Audio is not available here"); return; }
     if (!this.ctx) return;
@@ -882,10 +885,11 @@ const sound = {
     if (!this.active()) return;
     const src = this.ctx.createBufferSource();
     src.buffer = renderJobAudio(this.ctx, sched, this.bank);
-    src.connect(this.master);
+    const g = this.ctx.createGain();
+    src.connect(g).connect(this.master);
     src.start(this.ctx.currentTime + lead);
-    this.sources.add(src);
-    src.onended = () => this.sources.delete(src);
+    this.sources.set(src, g);
+    src.onended = () => { this.sources.delete(src); g.disconnect(); };
   },
   bell() {
     if (!this.active()) return;
@@ -894,7 +898,16 @@ const sound = {
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.06, t + .01); g.gain.setValueAtTime(.06, t + .25); g.gain.linearRampToValueAtTime(0, t + .3);
     o.connect(g).connect(this.master); o.start(t); o.stop(t + .32);
   },
-  stopAll() { for (const s of this.sources) { try { s.stop(); } catch (_) {} } this.sources.clear(); },
+  // Cancel, tear off and a switch to Instant fade each job's gain to zero in 15 ms before stopping it, so nothing pops.
+  stopAll() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    for (const [s, g] of this.sources) {
+      g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + .015);
+      try { s.stop(t + .02); } catch (_) {}
+    }
+    this.sources.clear();
+  },
   level() {
     if (!this.analyser) return 0;
     const d = new Float32Array(this.analyser.fftSize); this.analyser.getFloatTimeDomainData(d);
@@ -945,9 +958,10 @@ function renderJobAudio(ctx, sched, bank) {
     } else if (ev.kind === "move") {
       // carriage motor: a rough low buzz whose pitch follows the head's speed through the ramps
       const n = Math.round(ev.dur * sr), seek = !ev.printing;
+      const ratio = Math.abs(ev.x1 - ev.x0) / ev.dur / (MX80.HEAD_SPEED * (seek ? 1.6 : 1)), sc = Math.pow(ratio, .6);
       let ph = 0;
       for (let i = 0; i < n && i0 + i < len; i++) {
-        const u = i / n, v = Math.min(1, u / .08, (1 - u) / .08), f = (seek ? 95 : 70) + (seek ? 120 : 85) * v;
+        const u = i / n, v = Math.min(1, u / .08, (1 - u) / .08), f = Math.min(400, Math.max(40, ((seek ? 95 : 70) + (seek ? 120 : 85) * v) * sc));
         ph += TAU * f / sr;
         d[i0 + i] += (Math.sin(ph) + .45 * Math.sin(2 * ph + .7) + .25 * Math.sin(3 * ph)) * .028 * v + (r() * 2 - 1) * .012 * v;
       }
@@ -988,6 +1002,7 @@ function submit(bytes, { final = true, flush = true } = {}) {
 function finishCurrent() {
   const cur = printer.current;
   if (!cur) return;
+  sound.stopAll();
   while (cur.idx < cur.events.length) apply(cur.events[cur.idx++], cur);
   printer.current = null;
   printed.feedAnim = null;
@@ -1024,6 +1039,7 @@ function pump(t) {
   for (let guard = 0; guard < 1000; guard++) {
     if (!printer.current) {
       if (!printer.manual.length && !(printer.online && printer.queue.length)) break;
+      if (sound.warming()) break;
       startJob(t);
     }
     const cur = printer.current, local = t - cur.start;
