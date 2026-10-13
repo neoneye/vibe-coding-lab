@@ -66,6 +66,9 @@ faint fibre grain. Paper texture is pre-rendered per page sheet and re-tinted wh
 size jitter, darkness from a ribbon model: overall wear (fresh black → pale grey), slow across-page
 ribbon banding (uneven inking), occasional weak pins, multiply-style compositing so overlaps
 (emphasized/double-strike) darken. Sliders: ribbon wear.
+Ribbon wear also sets **dot spread**: a fresh, over-inked ribbon makes large soft blots that merge into
+strokes (the "Delivery" close-up); a worn ribbon makes small, faint, clearly separate round dots with
+paper showing between them (the "10.11 BX=K10L022" close-up and the grey Soviet table printout).
 
 **Printer (SVG):** boxy MX-80 silhouette, front/top three-quarter view. Beige plastic with a
 **plastic yellowing** slider. Dark smoked cover, "EPSON" and "MX-80" labels, POWER/READY indicators,
@@ -91,7 +94,9 @@ rail at the scheduler's carriage x; paper rises from behind the platen and scrol
    character-set self-test (sliding alphabet rows); "Greetings from the versatile MX-80" test page;
    font sampler (normal, emphasized, double-strike, double-width, condensed, italic, underline);
    BASIC listing; invoice/spreadsheet table; daily newspaper sheet ("Schmelyun Tribune" style, with
-   original placeholder content — no real news); ASCII art; sideways banner via bit-image graphics.
+   original placeholder content — no real news); data table (columns of codes and readings separated by
+   `*` and dashed `----` rules, like the reference table printout); ASCII art; sideways banner via
+   bit-image graphics.
 3. **ESC/P** — editable raw byte stream with escape notation (`\e`, `\x0e`, `\n`), a collapsible
    command reference, and a log of unsupported codes.
 
