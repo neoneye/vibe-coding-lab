@@ -42,7 +42,9 @@ input (typed text | gallery doc | ESC/P box)
   never guessed.
 - **Head scheduler** — line job → timed events at ≈80 cps in normal pitch (≈1 s for 80 characters),
   bidirectional (alternate passes reverse), with accel/decel ramps at turnarounds, a turnaround pause,
-  and double passes for double-strike. Speeds: real, 2×, 8×, instant.
+  and double passes for double-strike. Emphasized text runs the head at half speed, which is how its
+  half-dot re-strikes get around the adjacent-half-column rule (the rule constrains glyph design, not
+  emphasized output). Speeds: real, 2×, 8×, instant.
 - **`MX80Tests.run()`** — glyph rule, interpreter output, scheduler timing, gallery documents parse.
 
 ### Page (not unit-tested; verified in browser/headless)
