@@ -742,11 +742,13 @@ function drawPaper(t) {
   if (paperCanvas.width !== Math.round(W * dpr) || paperCanvas.height !== Math.round(H * dpr)) { paperCanvas.width = Math.round(W * dpr); paperCanvas.height = Math.round(H * dpr); }
   pctx.setTransform(1, 0, 0, 1, 0, 0);
   pctx.clearRect(0, 0, paperCanvas.width, paperCanvas.height);
+  pctx.save(); pctx.beginPath(); pctx.rect(0, 0, paperCanvas.width, (view.platenY + 4.4 * view.k) * dpr); pctx.clip();   // paper never shows below the printer front panel
   if (view.follow) view.atPlaten = displayPrintY(t) + .06;
   const S = view.k * dpr, top = view.atPlaten - view.platenY / view.k, bottom = view.atPlaten + (H - view.platenY) / view.k;
   for (let p = Math.max(0, Math.floor(top / PAGE_IN)); p <= Math.floor(bottom / PAGE_IN); p++) {
     pctx.drawImage(pageCache(p, S), Math.round(view.paperLeft * dpr), Math.round((view.platenY + (p * PAGE_IN - view.atPlaten) * view.k) * dpr));
   }
+  pctx.restore();
 }
 
 const loupe = { on: false, mx: 0, my: 0 };
@@ -820,9 +822,10 @@ function buildPrinter() {
   <text x="-2.55" y="2.95" font-size=".3" fill="#5a4c38" font-family="Helvetica, Arial, sans-serif" letter-spacing=".06">MX-80</text>
   ${Array.from({ length: 9 }, (_, i) => `<rect x="${1.4 + i * .5}" y="3.3" width=".3" height=".8" rx=".05" fill="rgba(0,0,0,.12)"/>`).join("")}
   <g transform="translate(8.0,2.0)">
-    ${led("ledPower", .3, "POWER", "#5ef07a")}${led("ledReady", 1.0, "READY", "#5ef07a")}${led("ledPaper", 1.7, "PAPER OUT", "#ff8a3a")}${led("ledOnline", 2.4, "ON LINE", "#5ef07a")}
+    ${led("ledPower", .3, "POWER", "#5ef07a")}${led("ledReady", 1.0, "READY", "#5ef07a")}${led("ledPaper", 1.7, "PAPER", "#ff8a3a")}${led("ledOnline", 2.4, "ON LINE", "#5ef07a")}
     ${button("btnOnline", 0, "ON LINE")}${button("btnFF", 1.1, "FORM FEED")}${button("btnLF", 2.2, "LINE FEED")}
   </g>`;
+  carriageEl = document.getElementById("carriage");
   setPlastic(settings.plastic);
   setLeds({ power: true, ready: true, online: true, paper: false });
 }
@@ -835,7 +838,8 @@ function setPlastic(t) {
   const base = mix([233, 225, 207], [214, 193, 140], t), light = mix(base, [250, 246, 236], .45), dark = mix(base, [120, 104, 76], .35);
   svg.style.setProperty("--plastic", rgb(base)); svg.style.setProperty("--plastic-light", rgb(light)); svg.style.setProperty("--plastic-dark", rgb(dark));
 }
-function setCarriage(xUnits) { document.getElementById("carriage").setAttribute("transform", `translate(${MARGIN_X + xUnits * UNIT_IN},0)`); }
+let carriageEl = null;
+function setCarriage(xUnits) { (carriageEl ||= document.getElementById("carriage")).setAttribute("transform", `translate(${MARGIN_X + xUnits * UNIT_IN},0)`); }
 function setLeds(on) {
   for (const [key, id] of [["power", "ledPower"], ["ready", "ledReady"], ["paper", "ledPaper"], ["online", "ledOnline"]]) {
     const el = document.getElementById(id);
@@ -844,12 +848,157 @@ function setLeds(on) {
   }
 }
 
-// TEMPORARY (Task 6 check) — removed in Task 8
-layoutStage();
-buildPrinter(); placePrinter(); setCarriage(480);
-{ const st = MX80.newState(), out = []; MX80.feed(st, MX80.DOCS[1].bytes(), out, true); MX80.flush(st, out);
-  for (const job of out) { for (const s of job.strikes) addPrintedStrike(s.x, s.pins, s.pass, printed.printY); printed.printY += job.feed / 216; } }
-drawPaper(performance.now() / 1000);
+// Sound stub until Task 9 replaces it.
+const sound = { active: () => false, playJob() {}, bell() {}, stopAll() {}, set() {}, setVolume() {} };
+
+const printer = { state: MX80.newState(), queue: [], manual: [], current: null, head: { x: 0, dir: 0 }, online: true };
+const now = () => performance.now() / 1000;
+function toast(msg) { const el = document.getElementById("toast"); el.textContent = msg; el.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 2200); }
+function formFeedDistance() { const at = Math.round(printed.printY * 216) % MX80.PAGE_216; return at === 0 ? 0 : MX80.PAGE_216 - at; }
+
+function submit(bytes, { final = true, flush = true } = {}) {
+  const jobs = [];
+  MX80.feed(printer.state, bytes, jobs, final);
+  if (flush) MX80.flush(printer.state, jobs);
+  const counts = new Map();
+  for (const w of printer.state.warnings.splice(0)) counts.set(w, (counts.get(w) || 0) + 1);
+  const warnings = [...counts].map(([w, n]) => (n > 1 ? `${w} (×${n})` : w));
+  if (warnings.length) { document.getElementById("escpLog").textContent = warnings.join("\n"); toast(warnings[0]); }
+  printer.queue.push(...jobs);
+  if (settings.speed === 0) drain();
+}
+// Instant speed: lay every queued job down at once, without timing or sound.
+function drain() {
+  for (const job of [...printer.manual.splice(0), ...printer.queue.splice(0)]) {
+    if (job.formFeed) job.feed = formFeedDistance();
+    for (const s of job.strikes) addPrintedStrike(s.x, s.pins, s.pass, printed.printY);
+    if (job.strikes.length) printer.head = { x: job.strikes[job.strikes.length - 1].x, dir: 0 };
+    printed.printY += job.feed / 216;
+  }
+  printed.feedAnim = null;
+  printer.current = null;
+}
+function startJob(t) {
+  const job = printer.manual.length ? printer.manual.shift() : printer.queue.shift();
+  if (job.formFeed) job.feed = formFeedDistance();
+  const sched = MX80.schedule(job, printer.head, settings.speed);
+  const lead = sound.active() ? .06 : 0;
+  printer.current = { events: sched.events, duration: sched.duration, start: t + lead, idx: 0, lineY: printed.printY, move: null };
+  printer.head = sched.head;
+  sound.playJob(sched, lead);
+}
+function apply(ev, cur) {
+  if (ev.kind === "strike") addPrintedStrike(ev.x, ev.pins, ev.pass, cur.lineY);
+  else if (ev.kind === "move") cur.move = ev;
+  else if (ev.kind === "feed") { printed.feedAnim = { from: printed.printY, to: printed.printY + ev.n216 / 216, t0: cur.start + ev.t, dur: ev.dur }; printed.printY += ev.n216 / 216; }
+  else if (ev.kind === "bell") sound.bell();
+}
+function pump(t) {
+  if (settings.speed === 0) { if (printer.queue.length || printer.manual.length) drain(); return; }
+  for (let guard = 0; guard < 1000; guard++) {
+    if (!printer.current) {
+      if (!printer.manual.length && !(printer.online && printer.queue.length)) break;
+      startJob(t);
+    }
+    const cur = printer.current, local = t - cur.start;
+    while (cur.idx < cur.events.length && cur.events[cur.idx].t <= local) apply(cur.events[cur.idx++], cur);
+    if (local >= cur.duration) { printer.current = null; continue; }
+    break;
+  }
+}
+function carriageX(t) {
+  const cur = printer.current;
+  if (!cur || !cur.move) return printer.head.x;
+  const m = cur.move, u = clamp((t - cur.start - m.t) / m.dur, 0, 1), e = u * u * (3 - 2 * u);
+  return m.x0 + (m.x1 - m.x0) * (m.printing ? u : e);
+}
+function cancelPrinting() { printer.queue = []; printer.manual = []; printer.current = null; printer.state.pending = []; sound.stopAll(); printed.feedAnim = null; }
+function toggleOnline() {
+  printer.online = !printer.online;
+  document.getElementById("pause").classList.toggle("on", !printer.online);
+  toast(printer.online ? "ON LINE" : "Off line: FORM FEED and LINE FEED work now");
+}
+function panelFeed(kind) {
+  if (printer.online) { toast("Take the printer off line first (ON LINE button)"); return; }
+  printer.manual.push(kind === "ff" ? { strikes: [], feed: 0, slow: false, formFeed: true } : { strikes: [], feed: 36, slow: false });
+}
+
+function frame() {
+  requestAnimationFrame(frame);
+  const t = now();
+  pump(t);
+  setCarriage(carriageX(t));
+  setLeds({ power: true, ready: !printer.current && !printer.queue.length, online: printer.online, paper: false });
+  drawPaper(t);
+  drawLoupe();
+}
+
+const $ = (id) => document.getElementById(id);
+let activeTab = "type", selectedDoc = MX80.DOCS[1].id;
+function firstPrintSound() { if (!settings.soundTouched && !settings.sound) { settings.sound = true; $("sound").checked = true; sound.set(true); } }
+function printDoc(id) { firstPrintSound(); submit(MX80.DOCS.find((d) => d.id === id).bytes()); }
+
+document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => {
+  activeTab = b.dataset.tab;
+  document.querySelectorAll("[data-tab]").forEach((x) => x.classList.toggle("on", x === b));
+  for (const t of ["type", "gallery", "escp"]) $(`tab-${t}`).hidden = t !== activeTab;
+}));
+$("docs").innerHTML = MX80.DOCS.map((d) => `<li data-doc="${d.id}"${d.id === selectedDoc ? ' class="on"' : ""}><b>${d.title}</b><small>${d.note}</small></li>`).join("");
+$("docs").addEventListener("click", (e) => {
+  const li = e.target.closest("[data-doc]"); if (!li) return;
+  selectedDoc = li.dataset.doc;
+  document.querySelectorAll("#docs li").forEach((x) => x.classList.toggle("on", x === li));
+  printDoc(selectedDoc);
+});
+$("escp").value = "\\e@Plain text, then \\eEemphasized\\eF and \\eGdouble-strike\\eH.\n\\x0eDOUBLE WIDTH\\x14 back to normal.\n\\x0fCondensed fits 132 characters on the 8-inch line.\\x12\n\\e-\\x01Underlined\\e-\\x00 and \\e4italic\\e5 type.\nGraphics: \\eK\\x10\\x00\\xff\\x81\\xbd\\xa5\\xa5\\xbd\\x81\\xff\\xff\\x81\\xbd\\xa5\\xa5\\xbd\\x81\\xff\n";
+$("print").addEventListener("click", () => {
+  firstPrintSound();
+  if (activeTab === "gallery") printDoc(selectedDoc);
+  else if (activeTab === "escp") { $("escpLog").textContent = ""; submit(MX80.unescape($("escp").value)); }
+  else sendTyped(true);
+});
+let typeTimer = 0;
+function sendTyped(newline) {
+  clearTimeout(typeTimer);
+  const text = $("typeLine").value;
+  if (!text && !newline) return;
+  $("typeLine").value = "";
+  submit(MX80.textToBytes(text + (newline ? "\n" : "")), { final: false, flush: true });
+}
+$("typeLine").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); firstPrintSound(); sendTyped(true); } });
+$("typeLine").addEventListener("input", () => { clearTimeout(typeTimer); typeTimer = setTimeout(() => sendTyped(false), 1100); });
+$("pause").addEventListener("click", toggleOnline);
+$("cancel").addEventListener("click", () => { cancelPrinting(); toast("Cancelled"); });
+$("tear").addEventListener("click", () => { cancelPrinting(); tearOff(); toast("Torn off along the perforation"); });
+$("speed").addEventListener("change", (e) => { settings.speed = Number(e.target.value); });
+$("sound").addEventListener("change", (e) => { settings.soundTouched = true; settings.sound = e.target.checked; sound.set(settings.sound); });
+$("volume").addEventListener("input", (e) => { settings.volume = Number(e.target.value); sound.setVolume(settings.volume); });
+$("plastic").addEventListener("input", (e) => { settings.plastic = Number(e.target.value); setPlastic(settings.plastic); });
+$("paperType").addEventListener("change", (e) => { settings.paper = e.target.value; invalidatePaper(); });
+$("aging").addEventListener("input", (e) => { settings.aging = Number(e.target.value); invalidatePaper(); });
+$("wear").addEventListener("input", (e) => { settings.wear = Number(e.target.value); invalidatePaper(); });
+$("savePng").addEventListener("click", () => { if (!savePng()) toast("Nothing printed yet"); });
+$("follow").addEventListener("click", () => { view.follow = true; $("follow").style.display = "none"; });
+stage.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  view.follow = false; $("follow").style.display = "block";
+  view.atPlaten = clamp(view.atPlaten + e.deltaY / view.k, 0, printed.printY + .06);
+  if (view.atPlaten >= printed.printY + .05) { view.follow = true; $("follow").style.display = "none"; }
+}, { passive: false });
+stage.addEventListener("pointermove", (e) => {
+  const r = stage.getBoundingClientRect();
+  loupe.mx = e.clientX - r.left; loupe.my = e.clientY - r.top;
+  loupe.on = loupe.my < view.platenY - .62 * view.k && loupe.mx > view.paperLeft && loupe.mx < view.paperLeft + PAPER_W * view.k;
+});
+stage.addEventListener("pointerleave", () => { loupe.on = false; });
+window.addEventListener("resize", () => { layoutStage(); placePrinter(); });
+
+layoutStage(); buildPrinter(); placePrinter();
+$("btnOnline").addEventListener("click", toggleOnline);
+$("btnFF").addEventListener("click", () => panelFeed("ff"));
+$("btnLF").addEventListener("click", () => panelFeed("lf"));
+window.__mx80 = { submit, printDoc, docs: MX80.DOCS, settings, printed, view, drain, state: () => ({ queue: printer.queue.length, busy: !!printer.current, head: printer.head, printY: printed.printY, strikes: printed.strikes.length }) };
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
