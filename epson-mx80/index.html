@@ -102,6 +102,7 @@ details code { font-family: ui-monospace, Menlo, monospace; color: var(--ink); }
   <label>Speed <select id="speed"><option value="1">Real (80 cps)</option><option value="2">2×</option><option value="8">8×</option><option value="0">Instant</option></select></label>
   <label class="check"><input type="checkbox" id="sound"> Sound</label>
   <label>Volume <input type="range" id="volume" min="0" max="1" step="0.05" value="0.7"></label>
+  <label title="How loose and rattly the mechanism sounds">Mechanical wear <input type="range" id="mech" min="0" max="1" step="0.01" value="0.5"></label>
   <label>Plastic yellowing <input type="range" id="plastic" min="0" max="1" step="0.01" value="0.55"></label>
   <h2>Paper and ribbon</h2>
   <label>Paper <select id="paperType"><option value="green-bar">Green-bar</option><option value="blue-bar">Blue-bar</option><option value="plain">Plain white</option><option value="recycled">Recycled grey</option></select></label>
@@ -575,7 +576,7 @@ const MX80Tests = {
 <script>
 const PAPER_W = 9.5, MARGIN_X = .75, PAGE_IN = 11, PIN_IN = 1 / 72, UNIT_IN = 1 / 120, TOP_GAP = .5, TAU = Math.PI * 2;
 const PIN_WEAR = [1, .97, 1, .86, 1, 1, .94, 1, .9];       // this printer's pin 4 has always been a little weak
-const settings = { paper: "green-bar", aging: .45, wear: .35, plastic: .55, speed: 1, sound: false, soundTouched: false, volume: .7 };
+const settings = { paper: "green-bar", aging: .45, wear: .35, plastic: .55, mech: .5, speed: 1, sound: false, soundTouched: false, volume: .7 };
 const printed = { rows: [], strikes: [], printY: TOP_GAP, ribbonPos: 0, lastX: 0, feedAnim: null };
 const view = { k: 60, paperLeft: 0, platenY: 400, follow: true, atPlaten: TOP_GAP };
 const stage = document.getElementById("stage"), paperCanvas = document.getElementById("paperCanvas"), pctx = paperCanvas.getContext("2d");
@@ -871,7 +872,7 @@ function setLeds(on) {
 // carriage motor, turnaround thunk and platen ratchet are rendered into one buffer and started on
 // the audio clock at the same moment the visuals start the line.
 const sound = {
-  ctx: null, master: null, analyser: null, bank: null, sources: new Map(), idle: null, warmUntil: 0,
+  ctx: null, master: null, body: null, analyser: null, bank: null, sources: new Map(), idle: null, warmUntil: 0, jobs: 0,
   ensure() {
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -881,6 +882,7 @@ const sound = {
       const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -12; comp.ratio.value = 3;
       this.analyser = ctx.createAnalyser(); this.analyser.fftSize = 1024;
       this.master.connect(comp).connect(ctx.destination); comp.connect(this.analyser);
+      this.body = printerBody(ctx, this.master);
       this.bank = makeClickBank(ctx.sampleRate);
       this.idle = idleHum(ctx, this.master);
     }
@@ -903,9 +905,9 @@ const sound = {
   playJob(sched, lead) {
     if (!this.active()) return;
     const src = this.ctx.createBufferSource();
-    src.buffer = renderJobAudio(this.ctx, sched, this.bank);
+    src.buffer = renderJobAudio(this.ctx, sched, this.bank, 1 + this.jobs++, settings.mech);
     const g = this.ctx.createGain();
-    src.connect(g).connect(this.master);
+    src.connect(g).connect(this.body);
     src.start(this.ctx.currentTime + lead);
     this.sources.set(src, g);
     src.onended = () => { this.sources.delete(src); g.disconnect(); };
@@ -915,7 +917,7 @@ const sound = {
     const ctx = this.ctx, o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime;
     o.type = "square"; o.frequency.value = 2100;
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.06, t + .01); g.gain.setValueAtTime(.06, t + .25); g.gain.linearRampToValueAtTime(0, t + .3);
-    o.connect(g).connect(this.master); o.start(t); o.stop(t + .32);
+    o.connect(g).connect(this.body); o.start(t); o.stop(t + .32);
   },
   // Cancel, tear off and a switch to Instant fade each job's gain to zero in 15 ms before stopping it, so nothing pops.
   stopAll() {
@@ -933,24 +935,126 @@ const sound = {
     let s = 0; for (const x of d) s += x * x; return Math.sqrt(s / d.length);
   }
 };
-// A pin strike: a few milliseconds of noise rung through two stiff resonances (the wire and the
-// platen), eight variants so a run of clicks is never a machine-gun of identical samples.
+// A pin strike: a few milliseconds of noise rung through stiff resonances (the wire, the platen and,
+// in some variants, a high wire ring). 32 variants with scattered pitches and decays; which one a
+// strike uses depends partly on how many pins fired, so dense columns have their own colour.
+const CLICK_VARIANTS = 32;
 function makeClickBank(sr) {
-  const bank = [], n = Math.round(sr * .005), r = MX80.rng(77);
-  for (let v = 0; v < 8; v++) {
-    const out = new Float32Array(n);
-    const res = [[3000 + r() * 500, .9965], [6200 + r() * 900, .993]].map(([f, rad]) => ({ c1: 2 * rad * Math.cos(TAU * f / sr), c2: -rad * rad, y1: 0, y2: 0 }));
-    let peak = 0;
+  const bank = [], n = Math.round(sr * .006), r = MX80.rng(77);
+  for (let v = 0; v < CLICK_VARIANTS; v++) {
+    const out = new Float32Array(n), dull = .55 + r() * .45;
+    const modes = [[2500 + r() * 1300, .996 - r() * .002, 1], [5300 + r() * 2300, .992 - r() * .003, .4 + r() * .4]];
+    if (r() < .5) modes.push([8800 + r() * 2600, .985, .15 + r() * .2]);
+    const res = modes.map(([f, rad, g]) => ({ c1: 2 * rad * Math.cos(TAU * f / sr), c2: -rad * rad, g, y1: 0, y2: 0 }));
+    const attack = sr * (.0006 + r() * .0006), tail = sr * (.0012 + r() * .0012);
+    let peak = 0, lp = 0;
     for (let i = 0; i < n; i++) {
-      const env = Math.exp(-i / (sr * .0009)), x = (r() * 2 - 1) * env;
+      const x = (r() * 2 - 1) * Math.exp(-i / attack);
       let y = 0;
-      res.forEach((q, j) => { const yy = x * (j ? .5 : 1) + q.c1 * q.y1 + q.c2 * q.y2; q.y2 = q.y1; q.y1 = yy; y += yy; });
-      out[i] = y * Math.exp(-i / (sr * .0016)); peak = Math.max(peak, Math.abs(out[i]));
+      for (const q of res) { const yy = x * q.g + q.c1 * q.y1 + q.c2 * q.y2; q.y2 = q.y1; q.y1 = yy; y += yy; }
+      lp += (y - lp) * dull;                       // some wires strike duller than others
+      out[i] = lp * Math.exp(-i / tail); peak = Math.max(peak, Math.abs(out[i]));
     }
     for (let i = 0; i < n; i++) out[i] /= peak || 1;
     bank.push(out);
   }
   return bank;
+}
+// The printer's body: everything mechanical is heard through the hollow plastic case and the metal
+// frame, which ring briefly after every strike, plus a short desk-and-room tail. Built as an impulse
+// response of decaying modes so each click excites the same box.
+function printerBody(ctx, dest) {
+  const sr = ctx.sampleRate, n = Math.round(sr * .45), ir = ctx.createBuffer(2, n, sr), r = MX80.rng(4242);
+  const modes = [[180, .06, .55], [415, .045, .45], [905, .03, .4], [2300, .014, .28]];
+  for (let k = 0; k < 7; k++) modes.push([300 + r() * 3600, .008 + r() * .03, .08 + r() * .14]);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch), phases = modes.map(() => r() * TAU);
+    let lp = 0, energy = 0;
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      let v = 0;
+      modes.forEach(([f, tau, a], m) => { v += a * Math.exp(-t / tau) * Math.sin(TAU * f * (1 + (ch ? .004 : 0)) * t + phases[m]); });
+      lp += ((r() * 2 - 1) - lp) * .35;
+      v += lp * .09 * Math.exp(-t / .085);                 // the desk and the room
+      d[i] = v; energy += v * v;
+    }
+    const g = 1 / Math.sqrt(energy);
+    for (let i = 0; i < n; i++) d[i] *= g;
+  }
+  const input = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain(), conv = ctx.createConvolver();
+  conv.normalize = false; conv.buffer = ir;
+  dry.gain.value = .55; wet.gain.value = .55;          // keeps the overall level near the bare clicks'
+  input.connect(dry).connect(dest);
+  input.connect(conv).connect(wet).connect(dest);
+  return input;
+}
+// One line's sound. `seed` differs per line, so no two lines sound alike; `mech` (0..1, the Mechanical
+// wear slider) scales how loose the mechanism is: timing slop, rattles, double ticks and rebounds.
+function renderJobAudio(ctx, sched, bank, seed = 1, mech = .5) {
+  const sr = ctx.sampleRate, len = Math.ceil((sched.duration + .25) * sr), buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0);
+  const r = MX80.rng(seed * 7919 + 13), gauss = () => (r() + r() + r() - 1.5) / 1.5;
+  const add = (src, i0, amp) => { for (let i = 0; i < src.length && i0 + i < len; i++) if (i0 + i >= 0) d[i0 + i] += src[i] * amp; };
+  const noiseBurst = (i0, n, tau, amp, lpCoef) => { let lp = 0; for (let i = 0; i < n && i0 + i < len; i++) { lp += ((r() * 2 - 1) - lp) * lpCoef; d[i0 + i] += lp * Math.exp(-i / (sr * tau)) * amp; } };
+  const wobblePh = r() * TAU, wobbleF = .7 + r() * 1.6;     // ribbon and platen drift over the line
+  let k = 0, energy = 0, lastT = 0;
+  const thump = new Float32Array(len);                        // chassis vibration builds with dense printing
+  for (const ev of sched.events) {
+    const i0 = Math.round(ev.t * sr);
+    if (ev.kind === "strike") {
+      let pins = 0; for (let p = ev.pins; p; p &= p - 1) pins++;
+      const jitter = Math.round(gauss() * sr * (.00015 + .0003 * mech));
+      const v = (pins * 3 + Math.floor(r() * 8) + k++) % CLICK_VARIANTS;
+      const hard = r() < .02 + .03 * mech ? 1.7 : 1;
+      const amp = .05 * Math.sqrt(pins) * (.72 + .56 * r()) * (1 + .14 * Math.sin(TAU * wobbleF * ev.t + wobblePh)) * hard;
+      add(bank[v], i0 + jitter, amp);
+      if (pins > 2) add(bank[(v + 11) % CLICK_VARIANTS], i0 + jitter + Math.round(sr * (.00008 + r() * .00018)), amp * .35);   // pins land a hair apart
+      if (hard > 1) noiseBurst(i0 + jitter, Math.round(.02 * sr), .006, .05, .05);
+      energy = energy * Math.exp(-(ev.t - lastT) / .09) + pins * .004; lastT = ev.t;
+      const j = Math.min(len - 1, i0); thump[j] += energy;
+    } else if (ev.kind === "move") {
+      // carriage motor: a rough low buzz whose pitch follows the head's speed, with flutter, the
+      // stepper's grind, and loose rails that rattle more on a worn machine
+      const n = Math.round(ev.dur * sr), seek = !ev.printing;
+      const ratio = Math.abs(ev.x1 - ev.x0) / ev.dur / (MX80.HEAD_SPEED * (seek ? 1.6 : 1)), sc = Math.pow(ratio, .6);
+      const flutF = 5 + r() * 4, flutPh = r() * TAU, flutD = .012 + .03 * mech, base = .92 + r() * .16;
+      let ph = 0, gph = 0, lp = 0;
+      for (let i = 0; i < n && i0 + i < len; i++) {
+        const u = i / n, v = Math.min(1, u / .08, (1 - u) / .08);
+        const f = Math.min(400, Math.max(40, ((seek ? 95 : 70) + (seek ? 120 : 85) * v) * sc * base)) * (1 + flutD * Math.sin(TAU * flutF * i / sr + flutPh));
+        ph += TAU * f / sr; gph += TAU * f * 4.02 / sr;
+        lp += ((r() * 2 - 1) - lp) * .2;
+        d[i0 + i] += ((Math.sin(ph) + .45 * Math.sin(2 * ph + .7) + .25 * Math.sin(3 * ph)) * .026 + Math.sin(gph) * (.5 + .5 * Math.sin(ph)) * .008 + lp * .02) * v;
+      }
+      const rattles = Math.round(ev.dur * (6 + 30 * mech) * r());
+      for (let q = 0; q < rattles; q++) { const j = i0 + Math.floor(r() * n); add(bank[Math.floor(r() * CLICK_VARIANTS)], j, .012 + .02 * r() * mech); }
+    } else if (ev.kind === "turn") {
+      const f = 70 + r() * 25, tau = .012 + r() * .01, amp = .24 + r() * .12;
+      const thunk = (j0, a) => { for (let i = 0; i < Math.round(.08 * sr) && j0 + i < len; i++) { const t = i / sr; d[j0 + i] += Math.sin(TAU * f * t) * Math.exp(-t / tau) * a + (r() * 2 - 1) * Math.exp(-t / .002) * a * .4; } };
+      thunk(i0, amp);
+      if (r() < .25 + .4 * mech) thunk(i0 + Math.round(sr * (.025 + r() * .02)), amp * (.2 + .2 * r()));   // the carriage bounces back a little
+    } else if (ev.kind === "feed") {
+      // platen ratchet: one tick per 1/24" step, unevenly spaced and weighted, now and then a double tap;
+      // the paper rustles; long runs add the feed motor's whir
+      const steps = Math.max(1, Math.round(ev.n216 / 9)), n = Math.round(ev.dur * sr), tickN = Math.round(.003 * sr);
+      for (let st = 0; st < steps; st++) {
+        const j0 = i0 + Math.round(n * (st + gauss() * (.06 + .1 * mech)) / steps), a = .16 * (.65 + .7 * r());
+        noiseBurst(j0, tickN, .0006, a, .9);
+        if (r() < .05 + .12 * mech) noiseBurst(j0 + Math.round(sr * (.0015 + r() * .0015)), tickN, .0005, a * .45, .9);
+      }
+      if (r() < .6) { let lp = 0; for (let i = 0; i < n && i0 + i < len; i++) { lp += ((r() * 2 - 1) - lp) * .5; d[i0 + i] += lp * .012 * Math.sin(Math.PI * i / n); } }
+      if (ev.n216 > 72) for (let i = 0; i < n && i0 + i < len; i++) d[i0 + i] += Math.sin(TAU * (230 + 6 * Math.sin(TAU * 3 * i / sr)) * i / sr) * .02;
+    }
+  }
+  // chassis thump: low rumble whose level follows recent strike density (smoothed)
+  let env = 0, lp1 = 0, lp2 = 0;
+  const rel = 1 - Math.exp(-1 / (sr * .12));
+  for (let i = 0; i < len; i++) {
+    const target = Math.min(.08, thump[i] > 0 ? thump[i] : 0);
+    if (thump[i] > 0) env += (target - env) * .5; else env -= env * rel;
+    lp1 += ((r() * 2 - 1) - lp1) * .012; lp2 += (lp1 - lp2) * .012;
+    d[i] += lp2 * env * 9;
+  }
+  return buf;
 }
 function idleHum(ctx, dest) {
   const g = ctx.createGain(); g.gain.value = .012;
@@ -964,42 +1068,6 @@ function idleHum(ctx, dest) {
   g.connect(dest); o.start(); n.start();
   return g;
 }
-function renderJobAudio(ctx, sched, bank) {
-  const sr = ctx.sampleRate, len = Math.ceil((sched.duration + .2) * sr), buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0);
-  const r = MX80.rng(Math.floor(sched.duration * 1e6) + sched.events.length);
-  let k = 0;
-  for (const ev of sched.events) {
-    const i0 = Math.round(ev.t * sr);
-    if (ev.kind === "strike") {
-      let pins = 0; for (let p = ev.pins; p; p &= p - 1) pins++;
-      const click = bank[(k++ * 5 + pins) & 7], amp = .055 * Math.sqrt(pins);
-      for (let i = 0; i < click.length && i0 + i < len; i++) d[i0 + i] += click[i] * amp;
-    } else if (ev.kind === "move") {
-      // carriage motor: a rough low buzz whose pitch follows the head's speed through the ramps
-      const n = Math.round(ev.dur * sr), seek = !ev.printing;
-      const ratio = Math.abs(ev.x1 - ev.x0) / ev.dur / (MX80.HEAD_SPEED * (seek ? 1.6 : 1)), sc = Math.pow(ratio, .6);
-      let ph = 0;
-      for (let i = 0; i < n && i0 + i < len; i++) {
-        const u = i / n, v = Math.min(1, u / .08, (1 - u) / .08), f = Math.min(400, Math.max(40, ((seek ? 95 : 70) + (seek ? 120 : 85) * v) * sc));
-        ph += TAU * f / sr;
-        d[i0 + i] += (Math.sin(ph) + .45 * Math.sin(2 * ph + .7) + .25 * Math.sin(3 * ph)) * .028 * v + (r() * 2 - 1) * .012 * v;
-      }
-    } else if (ev.kind === "turn") {
-      const n = Math.round(.07 * sr);
-      for (let i = 0; i < n && i0 + i < len; i++) { const t = i / sr; d[i0 + i] += Math.sin(TAU * 82 * t) * Math.exp(-t / .016) * .3 + (r() * 2 - 1) * Math.exp(-t / .002) * .12; }
-    } else if (ev.kind === "feed") {
-      // platen ratchet: one tick per 1/24" step, plus the feed motor's whir on long runs
-      const steps = Math.max(1, Math.round(ev.n216 / 9)), n = Math.round(ev.dur * sr);
-      for (let s = 0; s < steps; s++) {
-        const j0 = i0 + Math.round(n * s / steps);
-        for (let i = 0; i < Math.round(.003 * sr) && j0 + i < len; i++) d[j0 + i] += (r() * 2 - 1) * Math.exp(-i / (sr * .0006)) * .16;
-      }
-      if (ev.n216 > 72) for (let i = 0; i < n && i0 + i < len; i++) d[i0 + i] += Math.sin(TAU * 230 * i / sr) * .02;
-    }
-  }
-  return buf;
-}
-
 const printer = { state: MX80.newState(), queue: [], manual: [], current: null, head: { x: 0, dir: 0 }, online: true };
 const now = () => performance.now() / 1000;
 function toast(msg) { const el = document.getElementById("toast"); el.textContent = msg; el.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 2200); }
@@ -1142,6 +1210,7 @@ $("plastic").addEventListener("input", (e) => { settings.plastic = Number(e.targ
 $("paperType").addEventListener("change", (e) => { settings.paper = e.target.value; invalidatePaper(); });
 $("aging").addEventListener("input", (e) => { settings.aging = Number(e.target.value); invalidatePaper(); });
 $("wear").addEventListener("input", (e) => { settings.wear = Number(e.target.value); invalidatePaper(); });
+$("mech").addEventListener("input", (e) => { settings.mech = Number(e.target.value); });
 $("savePng").addEventListener("click", () => { if (!savePng()) toast("Nothing printed yet"); });
 $("follow").addEventListener("click", () => { view.follow = true; $("follow").style.display = "none"; });
 stage.addEventListener("wheel", (e) => {
