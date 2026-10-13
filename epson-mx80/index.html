@@ -730,7 +730,10 @@ const MX80Tests = {
 </script>
 <script>
 const PAPER_W = 9.5, MARGIN_X = .75, PAGE_IN = 11, PIN_IN = 1 / 72, UNIT_IN = 1 / 120, TOP_GAP = .5, TAU = Math.PI * 2;
-const PIN_WEAR = [1, .97, 1, .86, 1, 1, .94, 1, .9];       // this printer's pin 4 has always been a little weak
+// This printer's pins: each sits a hair off its nominal height (inches) and strikes with its own habitual
+// force; pin 4 has always been a little weak.
+const PIN_DY = [.0006, -.0004, .0009, -.0011, .0003, .0012, -.0007, .0004, -.0009];
+const PIN_FORCE = [.04, -.02, .07, -.2, 0, .05, -.07, .02, -.11];
 const settings = { paper: "green-bar", aging: .45, wear: .35, plastic: .55, mech: .5, speed: 1, sound: false, soundTouched: false, volume: .7 };
 const printed = { rows: [], strikes: [], printY: TOP_GAP, ribbonPos: 0, lastX: 0, feedAnim: null };
 const view = { k: 60, paperLeft: 0, platenY: 400, follow: true, atPlaten: TOP_GAP };
@@ -768,20 +771,56 @@ function noiseTile(size, cells, seed, speckle) {
 const grainTile = noiseTile(256, 48, 7, true), blotchTile = noiseTile(128, 5, 21, false);
 
 // Ink stamps: soft discs with ragged, lobed rims and a grainy fill, like a fabric ribbon hit by a wire.
-const inkSprites = Array.from({ length: 16 }, (_, v) => {
-  const n = 48, c = document.createElement("canvas"); c.width = c.height = n;
-  const g = c.getContext("2d"), img = g.createImageData(n, n), r = MX80.rng(900 + v);
+// Ink stamps. A wire hits a fabric ribbon, so a dot is a ragged disc with the ribbon's weave pressed into
+// it. Light hits leave only a partial ring (the rim caught the ribbon, the centre barely did). Around every
+// dot a faint halo of ink wicks into the paper fibres, and now and then a hairline tendril runs along one.
+function spriteSet(count, seed, n, fill) {
+  return Array.from({ length: count }, (_, v) => {
+    const c = document.createElement("canvas"); c.width = c.height = n;
+    const g = c.getContext("2d"), img = g.createImageData(n, n), r = MX80.rng(seed + v);
+    fill(img.data, n, r);
+    g.putImageData(img, 0, 0);
+    return c;
+  });
+}
+function raggedDisc(data, n, r, ring) {
   const lobes = Array.from({ length: 7 }, () => [r() * TAU, .05 + r() * .12, 1 + Math.floor(r() * 4)]);
+  const weaveA = r() * Math.PI, wk = 9 + r() * 4, ca = Math.cos(weaveA), sa = Math.sin(weaveA);
   for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
     const dx = (x + .5) / n * 2 - 1, dy = (y + .5) / n * 2 - 1, d = Math.hypot(dx, dy), a = Math.atan2(dy, dx);
     let edge = .8;
     for (const [ph, amp, f] of lobes) edge += amp * Math.sin(a * f + ph) * .5;
-    const t = clamp((edge - d) / .24, 0, 1), i = (y * n + x) * 4;
-    img.data[i] = 22; img.data[i + 1] = 20; img.data[i + 2] = 28;
-    img.data[i + 3] = t * t * (3 - 2 * t) * (.8 + .2 * r()) * 255;
+    const t = clamp((edge - d) / .24, 0, 1), u = dx * ca + dy * sa, w = -dx * sa + dy * ca;
+    const weave = .8 + .2 * Math.abs(Math.sin(u * wk) * Math.sin(w * wk));          // the ribbon's fabric
+    const body = ring ? (.35 + .65 * clamp(1 - Math.abs(d - edge * .8) / .3, 0, 1)) * (.6 + .4 * Math.sin(a * 2 + r() * .4)) : 1;
+    const i = (y * n + x) * 4;
+    data[i] = 22; data[i + 1] = 20; data[i + 2] = 28;
+    data[i + 3] = t * t * (3 - 2 * t) * weave * body * (.78 + .22 * r()) * 255;
   }
-  g.putImageData(img, 0, 0);
-  return c;
+}
+const inkSprites = spriteSet(16, 900, 48, (data, n, r) => raggedDisc(data, n, r, false));
+const ringSprites = spriteSet(8, 950, 48, (data, n, r) => raggedDisc(data, n, r, true));
+const haloSprites = spriteSet(8, 980, 48, (data, n, r) => {
+  // feathered, streaky bleed: stronger along the fibre direction
+  const fa = r() * Math.PI, ca = Math.cos(fa), sa = Math.sin(fa), streaks = Array.from({ length: 6 }, () => [r() * TAU, 2 + r() * 6]);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const dx = (x + .5) / n * 2 - 1, dy = (y + .5) / n * 2 - 1, u = dx * ca + dy * sa, w = -dx * sa + dy * ca;
+    const d = Math.hypot(u * .8, w * 1.25), a = Math.atan2(dy, dx);
+    let fib = 1; for (const [ph, f] of streaks) fib += .12 * Math.sin(a * f + ph);
+    const t = clamp(1 - d / fib, 0, 1), i = (y * n + x) * 4;
+    data[i] = 52; data[i + 1] = 46; data[i + 2] = 78;                                  // the dye spreads bluish
+    data[i + 3] = Math.pow(t, 1.6) * (.6 + .4 * r()) * 255;
+  }
+});
+const tendrilSprites = spriteSet(4, 990, 64, (data, n, r) => {
+  // a hairline wicked along one fibre: thin, wavy, fading from the dot outward
+  const wav = 1 + r() * 2, ph = r() * TAU;
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const u = x / n, cy = .5 + .06 * Math.sin(u * wav * TAU + ph), w = Math.abs(y / n - cy);
+    const t = clamp(1 - w / .035, 0, 1) * (1 - u) * (u > .05 ? 1 : u / .05), i = (y * n + x) * 4;
+    data[i] = 40; data[i + 1] = 36; data[i + 2] = 62;
+    data[i + 3] = t * (.5 + .5 * r()) * 255;
+  }
 });
 
 // Paint the paper itself for the region whose top-left is (x0, y0) inches, at S pixels per inch.
@@ -831,17 +870,49 @@ function paintPaper(ctx, S, x0, y0, w, h) {
 
 // Stamp the dots of `list` (strikes) into ctx, for a region whose top-left is (x0, y0) inches.
 // A fresh ribbon makes big soft blots that merge; a worn one small, faint, separate dots.
+// Stamp the dots of `list` (strikes) into ctx, for a region whose top-left is (x0, y0) inches.
+// Every value below comes from hash(strike id, pin, …), so page caches, the loupe and the PNG agree.
+//  - placement: each column lands a little early or late (head timing), each pin sits a hair off its
+//    height, plus a little scatter per dot;
+//  - pressure: per strike and pin, drifting along the line, with each pin's habit; hard hits are big and
+//    dark, light ones small and pale, the lightest only a partial ring;
+//  - ribbon drag stretches dots along the head's direction of travel;
+//  - leaking: a faint halo wicks into the paper (more on aged or recycled paper and with a fresh ribbon),
+//    and now and then a hairline tendril.
+// A fresh ribbon makes big soft blots that merge; a worn one small, faint, separate dots.
 function drawDots(ctx, S, x0, y0, list) {
   const wear = settings.wear, dia = PIN_IN * (1.45 - .7 * wear), base = 1 - .45 * wear, minD = 2.2 * (1 - .3 * wear);
+  const bleed = (.35 + (settings.paper === "recycled" ? .3 : 0) + settings.aging * .35) * (1 - .55 * wear);
   ctx.save();
   ctx.globalCompositeOperation = "multiply";
-  for (const st of list) for (let r = 0; r < 9; r++) {
-    if (!(st.pins & (1 << r))) continue;
-    const h1 = hash(st.id, r, 7), h2 = hash(st.id, r, 13), h3 = hash(st.id, r, 29);
-    const d = Math.max(dia * (.82 + .32 * h1) * S, minD * (.85 + .3 * h1));
-    const x = (MARGIN_X + st.x * UNIT_IN - x0 + (h2 - .5) * .0016) * S, y = (st.y + r * PIN_IN + st.pass / 216 - y0 + (h3 - .5) * .0016) * S;
-    ctx.globalAlpha = clamp(.18 + base * st.ink * PIN_WEAR[r] * (.78 + .3 * h2) * .9, 0, 1);
-    ctx.drawImage(inkSprites[(st.id * 9 + r) & 15], x - d / 2, y - d / 2, d, d);
+  for (const st of list) {
+    const colDx = (hash(st.id, 0, 41) - .5) * .004 + Math.sin(st.x * .013 + st.y * 7.1) * .0012;   // head timing
+    const drift = Math.sin(st.x * .0045 + st.y * 3.3) * .12;                                       // force drifts along the line
+    const drag = st.dir || 0;
+    for (let r = 0; r < 9; r++) {
+      if (!(st.pins & (1 << r))) continue;
+      const h1 = hash(st.id, r, 7), h2 = hash(st.id, r, 13), h3 = hash(st.id, r, 29), h4 = hash(st.id, r, 53), h5 = hash(st.id, r, 71);
+      const force = clamp(.72 + (h1 + h2 - 1) * .42 + PIN_FORCE[r] + drift, .12, 1.35);
+      const d = Math.max(dia * (.62 + .42 * force) * S, minD * (.75 + .3 * force));
+      const cx = MARGIN_X + st.x * UNIT_IN + colDx + (h3 - .5) * .0022 + drag * d / S * .07;
+      const cy = st.y + r * PIN_IN + st.pass / 216 + PIN_DY[r] + (h4 - .5) * .0022;
+      const x = (cx - x0) * S, y = (cy - y0) * S, wDot = d * (1 + .16 * Math.abs(drag)), ink = st.ink * base;
+      if (bleed > .02) {                                   // ink wicking into the fibres, under the dot
+        const hd = d * (1.8 + 1.4 * bleed * force);
+        ctx.globalAlpha = clamp(.62 * bleed * ink * force, 0, .6);
+        ctx.drawImage(haloSprites[(st.id + r * 3) & 7], x - hd / 2, y - hd / 2, hd, hd);
+        if (h5 < .05 * bleed * force) {                    // a hairline tendril along one fibre
+          const len = d * (1.2 + 2 * h2), ang = h3 * TAU;
+          ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+          ctx.globalAlpha = clamp(.35 * ink, 0, .6);
+          ctx.drawImage(tendrilSprites[(st.id + r) & 3], 0, -len * .08, len, len * .16);
+          ctx.restore();
+        }
+      }
+      const light = force < .3;
+      ctx.globalAlpha = clamp(.14 + ink * (.45 + .55 * force) * .95, 0, 1);
+      ctx.drawImage(light ? ringSprites[(st.id * 9 + r) & 7] : inkSprites[(st.id * 9 + r) & 15], x - wDot / 2, y - d / 2, wDot, d);
+    }
   }
   ctx.restore();
 }
@@ -855,11 +926,12 @@ function strikesInRange(y0, y1) {
 }
 function addPrintedStrike(x, pins, pass, lineY) {
   // Ribbon model: the fabric is inked unevenly, so its darkness drifts as the head travels.
+  const dir = Math.sign(x - printed.lastX);          // the head's direction of travel, for ribbon drag
   printed.ribbonPos += Math.abs(x - printed.lastX); printed.lastX = x;
   const rp = printed.ribbonPos, band = .8 + .2 * (.5 + .5 * Math.sin(rp * .0021)) * (.55 + .45 * Math.sin(rp * .00077 + 1.3));
   let row = printed.rows[printed.rows.length - 1];
   if (!row || row.y !== lineY) printed.rows.push(row = { y: lineY, strikes: [] });
-  const st = { id: printed.strikes.length, x, y: lineY, pins, pass, ink: band };
+  const st = { id: printed.strikes.length, x, y: lineY, pins, pass, ink: band, dir };
   row.strikes.push(st); printed.strikes.push(st);
 }
 
