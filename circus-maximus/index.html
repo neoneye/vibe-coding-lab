@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Circus Maximus</title>
+<style></style>
+</head>
+<body>
+<script id="shared-code">
+const Circus = (() => {
+  // ---- seeded randomness ----------------------------------------------------------------------------
+  function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+  // ---- the track ------------------------------------------------------------------------------------
+  // World metres: x along the circus (starting gates at the west end, x < 0; the curved end east, x > 0),
+  // z across it (Aventine side z > 0, Palatine side z < 0), y up. The barrier lies on z = 0 between the
+  // two sets of turning posts. Chariots run counter-clockwise with the barrier on their left: east along
+  // the Aventine side, round the east posts, west along the Palatine side, round the west posts.
+  //
+  // Course frame: s = distance along the innermost line (radius R0 round each turning post), d = how far
+  // outside that line (d = 0 grazes the posts). Before the race the chariots are behind s = 0, in the
+  // open run-up between the gates and the west posts, where d may be negative (the Palatine half).
+  const TRACK = {
+    westPost: -130, eastPost: 210,          // x of the turning-post centres (barrier 340 m)
+    R0: 6,                                  // closest wheel line to a post centre
+    dMax: 34,                               // outer wall of the track
+    gatesX: -268,                           // the starting gates (carceres)
+    arenaHalfWidth: 40,
+  };
+  TRACK.straight = TRACK.eastPost - TRACK.westPost;
+  TRACK.turn = Math.PI * TRACK.R0;
+  TRACK.lap = 2 * TRACK.straight + 2 * TRACK.turn;
+  TRACK.runUp = TRACK.westPost - TRACK.gatesX;                    // s of the gates is -runUp
+  TRACK.line = 170;                                               // the finish line, mid Aventine straight
+  TRACK.laps = 7;
+  // the twelve gates across the west end, with the wide procession gate (porta pompae) in the middle
+  TRACK.gateZ = (g) => -33 + g * 5.2 + (g >= 6 ? 6 : 0);
+  TRACK.finishS = TRACK.line + TRACK.laps * TRACK.lap;
+
+  // (s, d) → world position and heading (radians, 0 = +x, increasing towards +z)
+  function toWorld(s, d) {
+    const T = TRACK, r = T.R0 + d;
+    if (s < 0) return { x: T.westPost + s, z: r, heading: 0 };
+    let u = s % T.lap;
+    if (u < T.straight) return { x: T.westPost + u, z: r, heading: 0 };
+    u -= T.straight;
+    if (u < T.turn) { const th = u / T.R0; return { x: T.eastPost + r * Math.sin(th), z: r * Math.cos(th), heading: -th }; }
+    u -= T.turn;
+    if (u < T.straight) return { x: T.eastPost - u, z: -r, heading: -Math.PI };
+    u -= T.straight;
+    const th = u / T.R0;
+    return { x: T.westPost - r * Math.sin(th), z: -r * Math.cos(th), heading: -Math.PI - th };
+  }
+  // world → (s, d) near a given s (used by tests and by the page to place wrecks); search within a lap
+  function inTurn(s) { if (s < 0) return false; const u = s % TRACK.lap; return (u >= TRACK.straight && u < TRACK.straight + TRACK.turn) || u >= 2 * TRACK.straight + TRACK.turn; }
+  // ds per metre travelled at offset d (outside lines cover turns more slowly in s)
+  const sRate = (s, d) => (inTurn(s) ? TRACK.R0 / (TRACK.R0 + Math.max(d, -TRACK.R0 + .5)) : 1);
+  // distance (s) to the start of the next turn, Infinity if in a turn
+  function toNextTurn(s) {
+    if (s < 0) return -s + TRACK.straight;
+    const u = s % TRACK.lap, T = TRACK;
+    if (u < T.straight) return T.straight - u;
+    if (u < T.straight + T.turn) return 0;
+    if (u < 2 * T.straight + T.turn) return 2 * T.straight + T.turn - u;
+    return 0;
+  }
+
+  // ---- the race -------------------------------------------------------------------------------------
+  const FACTIONS = [
+    { id: "red", name: "Reds", latin: "Russata", color: "#b8332a" },
+    { id: "white", name: "Whites", latin: "Albata", color: "#e9e4d6" },
+    { id: "blue", name: "Blues", latin: "Veneta", color: "#2f5d9a" },
+    { id: "green", name: "Greens", latin: "Prasina", color: "#3f7d3a" },
+  ];
+  const NAMES = ["Felix", "Fuscus", "Celer", "Victor", "Aquilo", "Ingenuus", "Hilarus", "Pompeianus", "Callidromus", "Lucidus",
+    "Superbus", "Crispus", "Avitus", "Sabinus", "Florus", "Tatianus", "Rusticus", "Docilis", "Gaetulus", "Maurus"];
+  const HORSES = ["Victor", "Aura", "Ferox", "Candidus", "Rapax", "Pinna", "Lucifer", "Hirundo", "Tigris", "Cupido", "Leo", "Ventus",
+    "Corax", "Gemma", "Delicatus", "Arion", "Hilarus", "Sagitta", "Fulgur", "Glauca"];
+  const PHYS = {
+    accel: 2.6, brake: 4.5, drag: .5,          // m/s² at full effort; drag towards the cruising speed
+    aSafe: 5.2,                                // lateral acceleration a team and car take in a turn (m/s²)
+    steer: 5,                                  // lateral speed at full steer (m/s)
+    whipBoost: .09, whipTime: 1.6, whipCost: .035,
+    length: 7.5, width: 3.2,                   // footprint of a team and car
+  };
+  const DT = 1 / 30;
+  const MODES = {
+    cautious: { line: 14, margin: .86, whip: 0, block: false },
+    steady: { line: 8, margin: .95, whip: .25, block: false },
+    blocker: { line: 6, margin: .95, whip: .2, block: true },
+    reckless: { line: 2.5, margin: 1.02, whip: .7, block: false },
+  };
+
+  function createRace({ seed = 1, player = -1, playerFaction = null } = {}) {
+    const r = rng(seed);
+    const order = [...Array(12).keys()];
+    for (let i = 11; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }   // the gate lottery
+    const names = NAMES.slice(); const horses = HORSES.slice();
+    const pick = (arr) => arr.splice(Math.floor(r() * arr.length), 1)[0];
+    const cars = [];
+    for (let i = 0; i < 12; i++) {
+      const faction = FACTIONS[i % 4], gate = order[i];
+      const mode = ["steady", "blocker", "reckless", "cautious", "steady"][Math.floor(r() * 5)];
+      const lead = Math.floor(i / 4) === 0;          // the first of each faction is its leader
+      cars.push({
+        id: i, faction: faction.id, name: pick(names), horses: [0, 1, 2, 3].map(() => pick(horses)), gate,
+        mode: lead ? (r() < .5 ? "steady" : "reckless") : mode, leader: lead,
+        top: 16.2 + r() * 1.6, accel: PHYS.accel * (.92 + r() * .16), endurance: .85 + r() * .3,
+        s: -TRACK.runUp - 5, d: TRACK.gateZ(gate) - TRACK.R0,       // the team waits inside its stall
+        v: 0, stamina: 1, whipT: 0, lap: 0, finished: false, place: 0, crashed: false, crashT: 0, crashCause: "",
+        x: 0, z: 0, heading: 0, steer: 0, dist: 0,
+      });
+    }
+    if (player >= 0 && playerFaction) {             // the visitor drives the leader of their faction
+      const c = cars.find((c) => c.faction === playerFaction && c.leader); player = c.id; c.player = true;
+    }
+    for (const c of cars) Object.assign(c, toWorld(c.s, c.d));
+    return { seed, rand: r, t: 0, started: false, cars, player, finishOrder: [], leaderLap: 0, events: [], done: false };
+  }
+
+  // safe turning speed on a line d (from the lateral acceleration the car can take)
+  const safeSpeed = (d) => Math.sqrt(PHYS.aSafe * (TRACK.R0 + Math.max(0, d)));
+
+  function aiInput(race, c) {
+    const M = MODES[c.mode] || MODES.steady, ahead = toNextTurn(c.s);
+    let target = c.s < 0 ? M.line + 4 : (ahead < 60 || inTurn(c.s) ? M.line : M.line + 10);
+    // block: on straights, move into the line of the nearest rival close behind
+    if (M.block && c.s > 0 && !inTurn(c.s)) {
+      let best = null;
+      for (const o of race.cars) if (!o.crashed && o.faction !== c.faction && c.s - o.s > 0 && c.s - o.s < 18) if (!best || o.s > best.s) best = o;
+      if (best) target = best.d;
+    }
+    // keep clear of wrecks and slower cars directly ahead
+    for (const o of race.cars) {
+      if (o === c) continue;
+      const gap = o.s - c.s;
+      if ((o.crashed && o.d < TRACK.dMax + 1 && gap > -6 && gap < 70 && Math.abs(o.d - c.d) < 7.5) || (!o.crashed && gap > 0 && gap < 12 && Math.abs(o.d - c.d) < 3.6 && o.v < c.v))
+        target = o.d > c.d - .01 && o.d > 7.5 ? o.d - 7 : Math.min(TRACK.dMax - 1, o.d + 7);
+    }
+    if (c.s < 0 && c.s > -40) target = Math.max(target, 1.5);       // be on the right side of the posts by the barrier
+    const steer = Math.max(-1, Math.min(1, (target - c.d) / 3));
+    // speed: brake for the coming turn so as to enter it at margin × the safe speed of the planned line
+    const vTurn = safeSpeed(Math.min(target, c.d + 3)) * M.margin;
+    const need = c.v > vTurn && ahead < Infinity ? (c.v * c.v - vTurn * vTurn) / (2 * PHYS.brake * .8) : 0;
+    const inT = inTurn(c.s);
+    const rein = (ahead <= need + 4 && c.v > vTurn) || (inT && c.v > safeSpeed(c.d) * M.margin);
+    const whip = !rein && !inT && c.stamina > .45 && race.rand() < M.whip * DT * 2.2;
+    return { steer, whip, rein };
+  }
+
+  function crash(race, c, cause) {
+    if (c.crashed || c.finished) return;
+    c.crashed = true; c.crashT = 0; c.crashCause = cause;
+    race.events.push({ t: race.t, type: "crash", car: c.id, cause });
+  }
+
+  // one fixed step; inputs[id] = { steer -1..1, whip bool (edge), rein bool } overrides the AI for that car
+  function step(race, inputs = {}) {
+    if (race.done) return;
+    race.t += DT;
+    if (!race.started) return;
+    for (const c of race.cars) {
+      if (c.finished) { c.v = Math.max(0, c.v - 2 * DT); advance(c); continue; }
+      if (c.crashed) {              // the wreck slides to a stop and is dragged to the outer wall by attendants
+        c.crashT += DT; c.v = Math.max(0, c.v - 9 * DT);
+        if (c.crashT > 1.5 && c.d < TRACK.dMax + 4) c.d = Math.min(TRACK.dMax + 4, c.d + 5 * DT);
+        advance(c); continue;
+      }
+      const inp = inputs[c.id] || aiInput(race, c);
+      // speed
+      if (inp.whip && c.stamina > .05) { c.whipT = PHYS.whipTime; c.stamina = Math.max(0, c.stamina - PHYS.whipCost); race.events.push({ t: race.t, type: "whip", car: c.id }); }
+      c.whipT = Math.max(0, c.whipT - DT);
+      const tired = c.stamina < .3 ? .78 + c.stamina * .73 : 1;
+      const cruise = c.top * tired * (1 + (c.whipT > 0 ? PHYS.whipBoost : 0));
+      if (inp.rein) c.v = Math.max(0, c.v - PHYS.brake * DT);
+      else if (c.v < cruise) c.v = Math.min(cruise, c.v + c.accel * (1 - c.v / (cruise * 1.25)) * DT * 1.9);
+      else c.v = Math.max(cruise, c.v - PHYS.drag * DT);
+      c.stamina = Math.max(0, Math.min(1, c.stamina - DT * (.0016 * Math.pow(c.v / 16, 3) / c.endurance) + (c.v < 9 ? DT * .004 : 0)));
+      // steering
+      c.steer = inp.steer;
+      c.d += inp.steer * PHYS.steer * Math.min(1, c.v / 6) * DT;
+      if (c.d > TRACK.dMax) { c.d = TRACK.dMax; c.v *= 1 - .5 * DT; }              // scraping the outer wall
+      if (c.s < 0) c.d = Math.max(-TRACK.R0 - TRACK.arenaHalfWidth + 2, c.d);
+      advance(c);
+      // turning-post and turn checks
+      if (c.s >= 0 && c.d < 0) { crash(race, c, c.d < -1.2 ? "barrier" : "post"); continue; }
+      if (inTurn(c.s)) {
+        const over = c.v * c.v / (TRACK.R0 + c.d) / PHYS.aSafe;
+        if (over > 1.35 || (over > 1.08 && race.rand() < (over - 1.08) * 6 * DT)) { crash(race, c, "overturned in the turn"); continue; }
+        if (c.d < .8 && race.rand() < (.8 - c.d) * 2.5 * DT) { crash(race, c, "clipped the turning post"); continue; }
+      }
+      // laps
+      const lap = c.s < TRACK.line ? 0 : 1 + Math.floor((c.s - TRACK.line) / TRACK.lap);
+      if (lap > c.lap) {
+        c.lap = lap;
+        if (lap > race.leaderLap) { race.leaderLap = lap; if (lap > 1) race.events.push({ t: race.t, type: "lap", lap: lap - 1, car: c.id }); }
+      }
+      if (c.s >= TRACK.finishS) {
+        c.finished = true; c.place = race.finishOrder.length + 1; race.finishOrder.push(c.id);
+        race.events.push({ t: race.t, type: "finish", car: c.id, place: c.place });
+      }
+    }
+    collide(race);
+    if (race.cars.every((c) => c.finished || c.crashed)) { race.done = true; race.events.push({ t: race.t, type: "done" }); }
+  }
+  function advance(c) {
+    const ds = c.v * DT * sRate(c.s, c.d);
+    c.s += ds; c.dist += c.v * DT;
+    Object.assign(c, toWorld(c.s, c.d));
+  }
+  // contact: chariots that overlap are pushed apart and lose speed; a deep overlap locks wheels and the
+  // one that steered into the other goes over (or the slower one, if neither steered)
+  function collide(race) {
+    const cs = race.cars;
+    for (let i = 0; i < cs.length; i++) for (let j = i + 1; j < cs.length; j++) {
+      const a = cs[i], b = cs[j];
+      if (a.finished || b.finished) continue;
+      const dx = a.x - b.x, dz = a.z - b.z;
+      if (dx * dx + dz * dz > 100) continue;
+      const along = Math.abs(dx * Math.cos(a.heading) + dz * Math.sin(a.heading)), across = Math.abs(-dx * Math.sin(a.heading) + dz * Math.cos(a.heading));
+      if (along > PHYS.length || across > PHYS.width) continue;
+      if (a.crashed !== b.crashed) {                    // running into a wreck (still on the track)
+        const live = a.crashed ? b : a, wreck = a.crashed ? a : b;
+        if (wreck.d > TRACK.dMax + 1) continue;
+        if (race.rand() < .25 * live.v / 16) crash(race, live, "ran into a wreck"); else live.v *= .6;
+        continue;
+      }
+      if (a.crashed) continue;
+      const depth = Math.min(1 - along / PHYS.length, 1 - across / PHYS.width);
+      const push = (PHYS.width - across) / 2 + .05, sgn = a.d >= b.d ? 1 : -1;
+      if (depth > .45 && race.started) {
+        const culprit = Math.abs(a.steer) > Math.abs(b.steer) ? a : Math.abs(b.steer) > Math.abs(a.steer) ? b : (a.v < b.v ? a : b);
+        crash(race, culprit, "locked wheels with " + (culprit === a ? b : a).name);
+      } else {
+        // pushed apart; the barrier does not give, so the outer car takes the whole push there
+        let pa = sgn * push, pb = -sgn * push;
+        const inner = sgn > 0 ? b : a, outer = sgn > 0 ? a : b;
+        if (inner.s >= 0 && inner.d - push < .3) { const room = Math.max(0, inner.d - .3); if (inner === a) { pa = -room; pb = 2 * push - room; } else { pb = -room; pa = 2 * push - room; } }
+        a.d += pa; b.d += pb; a.v *= .985; b.v *= .985;
+      }
+    }
+  }
+  function start(race) { if (!race.started) { race.started = true; race.events.push({ t: race.t, type: "start" }); } }
+  // the running order: finished first by place, then by distance; wrecks last
+  function standings(race) {
+    return race.cars.slice().sort((a, b) => (a.finished !== b.finished ? (a.finished ? -1 : 1) : a.finished ? a.place - b.place : a.crashed !== b.crashed ? (a.crashed ? 1 : -1) : b.s - a.s));
+  }
+  const lapsLeft = (race) => Math.max(0, TRACK.laps - Math.max(0, race.leaderLap - 1));
+
+  // ---- history ------------------------------------------------------------------------------------
+  const ERAS = [
+    { id: "regal", name: "Regal", span: "c. 753–509 BC" },
+    { id: "republic", name: "Republic", span: "509–27 BC" },
+    { id: "imperial", name: "Imperial", span: "27 BC–476 AD" },
+    { id: "late", name: "Late and after", span: "476 AD–today" },
+  ];
+  // year < 0 is BC. Regal entries are tradition (Livy and others writing centuries later), not record.
+  const TIMELINE = [
+    { era: "regal", year: -753, tradition: true, text: "Races in the valley", detail: "The Murcia valley between the Palatine and the Aventine is said to have held races from Rome's beginning; the abduction of the Sabine women is set at Consus's festival here." },
+    { era: "regal", year: -600, tradition: true, text: "Tarquinius Priscus builds seating", detail: "The Etruscan king gives the patricians and knights raised wooden stands." },
+    { era: "regal", year: -520, tradition: true, text: "Tarquinius Superbus seats the people", detail: "The last king adds the first seating for the plebs and vows games to Jupiter." },
+    { era: "republic", year: -494, text: "A chair at the turn", detail: "Manius Valerius Maximus and his descendants are granted a curule chair at the south-east turn." },
+    { era: "republic", year: -366, text: "The Ludi Romani", detail: "The earliest securely dated Roman Games at the Circus, in honour of Jupiter, put on by magistrates." },
+    { era: "republic", year: -329, text: "Starting gates", detail: "The first permanent wooden starting gates (carceres)." },
+    { era: "republic", year: -194, text: "Stone seats for senators", detail: "Senators get their own seats in stone, apart from the crowd." },
+    { era: "republic", year: -174, text: "Egg lap counters", detail: "Large sculpted eggs on the barrier are taken down one per lap." },
+    { era: "republic", year: -169, text: "A great beast hunt", detail: "63 leopards, 40 bears and elephants are shown in the arena." },
+    { era: "republic", year: -65, text: "Caesar's lavish games", detail: "As aedile, Julius Caesar spends far beyond his means on games to win the people's favour." },
+    { era: "republic", year: -55, text: "Pompey's elephants", detail: "Pompey's elephant hunt; the panicking animals try to break through the barriers into the crowd." },
+    { era: "republic", year: -50, text: "Caesar rebuilds", detail: "Seating is extended almost all the way round, and a water channel (euripus) protects the crowd from the beasts." },
+    { era: "republic", year: -46, text: "Caesar's triumph", detail: "Triumphal games: chariot races, a staged battle between two armies with elephants." },
+    { era: "republic", year: -33, text: "Bronze dolphins", detail: "Dolphin lap counters join the eggs on the barrier." },
+    { era: "republic", year: -31, text: "Fire", detail: "Fire damages the wooden stands." },
+    { era: "imperial", year: -10, text: "Augustus's obelisk", detail: "An obelisk of Seti I from Heliopolis is raised on the barrier, Rome's first; Augustus also builds the pulvinar, the box of the gods, where he watches." },
+    { era: "imperial", year: 36, text: "Fire", detail: "A fire starting in a basket-maker's shop burns part of the circus; Tiberius compensates the owners." },
+    { era: "imperial", year: 41, text: "Claudius's marble gates", detail: "Claudius replaces the tufa starting gates with marble and gilds the turning posts." },
+    { era: "imperial", year: 64, text: "The Great Fire", detail: "Under Nero the Great Fire of Rome starts in the shops along the circus; it is rebuilt on the same footprint." },
+    { era: "imperial", year: 81, text: "The arch of Titus", detail: "The Senate raises a triple arch to Titus at the curved end." },
+    { era: "imperial", year: 90, text: "Purple and Gold", detail: "Domitian adds two factions, the Purples and the Golds; they vanish after his death." },
+    { era: "imperial", year: 103, text: "Trajan's stone circus", detail: "Trajan rebuilds in stone, adds about 5,000 seats and a new pulvinar; a coin of 103 shows it. This page shows the circus about now." },
+    { era: "imperial", year: 300, text: "A stand collapses", detail: "Under Diocletian a section of seating gives way and about 13,000 people are said to have died." },
+    { era: "imperial", year: 357, text: "A second obelisk", detail: "Constantius II brings an obelisk of Thutmose III from Karnak and raises it on the barrier; today it stands at the Lateran." },
+    { era: "late", year: 523, text: "The last beast hunt", detail: "The last known venatio at the circus." },
+    { era: "late", year: 549, text: "The last races", detail: "The Gothic king Totila holds the last recorded races (Procopius)." },
+    { era: "late", year: 1100, text: "Buried and flooded", detail: "Silt and rubble bury the track; houses, a drainage channel and later the Torre della Moletta occupy the site. The track lies about 6 m below today's ground." },
+    { era: "late", year: 1587, text: "The obelisks leave", detail: "Pope Sixtus V has the two fallen obelisks dug up and raised at Piazza del Popolo and the Lateran." },
+    { era: "late", year: 1852, text: "A gasworks", detail: "A gasworks occupies the site until 1910; digging uncovers seating and the outer portico." },
+    { era: "late", year: 2006, text: "A park", detail: "Today a grassy park for concerts and celebrations, such as Italy's 2006 World Cup victory." },
+  ];
+  // Race days: who presided and paid, the occasion, what the visitor hears; obelisks on the barrier.
+  const RACE_DAYS = [
+    { id: "caesar", year: -46, sponsor: "Julius Caesar", title: "Caesar's triumphal games", obelisks: 0, anachronism: true,
+      occasion: "Caesar celebrates his triumphs with races, a staged battle and beast hunts, paid from the spoils of his wars.",
+      narration: ["Caesar has paid for all of this.", "They say he has spread awnings over half the city.", "The Greens again? Caesar likes the Reds."] },
+    { id: "augustus", year: -10, sponsor: "Augustus", title: "The obelisk is dedicated", obelisks: 1,
+      occasion: "Augustus dedicates the obelisk from Heliopolis to the Sun, marking the conquest of Egypt.",
+      narration: ["An obelisk from Egypt! Taller than ten men.", "Augustus watches from the pulvinar with the gods.", "Twelve gates, and every one by lot."] },
+    { id: "nero", year: 64, sponsor: "Nero", title: "Nero's games", obelisks: 1,
+      occasion: "Nero, who drove chariots himself, gives games in the summer of 64, weeks before the Great Fire starts in the shops below these stands.",
+      narration: ["Nero wears Green today.", "He drove a ten-horse team at Olympia, they say.", "Mind the cookshops under the stands, they never put their fires out."] },
+    { id: "trajan", year: 103, sponsor: "Trajan", title: "The rebuilt circus reopens", obelisks: 1, default: true,
+      occasion: "Trajan opens the circus rebuilt in stone, with five thousand more seats and a new box for the emperor, among the people.",
+      narration: ["Stone everywhere now, no more fires.", "Trajan sits where we can see him, not hidden away.", "Five thousand more seats and still no room."] },
+    { id: "constantius", year: 357, sponsor: "Constantius II", title: "The second obelisk", obelisks: 2,
+      occasion: "Constantius II visits Rome for the first time and raises a second, taller obelisk, brought from Karnak by river and sea.",
+      narration: ["The emperor came all the way from Milan.", "Two obelisks now. Nowhere else has two.", "The Blues paid off the gatekeeper, I'm sure of it."] },
+    { id: "totila", year: 549, sponsor: "Totila", title: "The last races", obelisks: 2, anachronism: true,
+      occasion: "The Gothic king Totila, holding a half-empty Rome, gives races as the emperors did; they are the last ever recorded here.",
+      narration: ["A Goth in the emperor's box.", "Half the stands are empty these days.", "Enjoy it. Who knows when there will be another."] },
+  ];
+
+  return { rng, TRACK, PHYS, DT, MODES, FACTIONS, toWorld, inTurn, sRate, toNextTurn, safeSpeed, createRace, start, step, standings, lapsLeft, crash, ERAS, TIMELINE, RACE_DAYS };
+})();
+
+const CircusTests = {
+  run(log = (m) => console.log(m)) {
+    const C = Circus, T = C.TRACK;
+    let failures = 0;
+    const check = (name, ok, detail = "") => { if (!ok) failures++; log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`); };
+    // track
+    check("a lap is two 340 m straights and two half-turns round the posts", Math.abs(T.lap - (2 * 340 + 2 * Math.PI * T.R0)) < 1e-9, T.lap.toFixed(1));
+    const p0 = C.toWorld(0, 0);
+    check("s = 0 grazes the west turning post on the Aventine side", Math.abs(p0.x - T.westPost) < 1e-9 && Math.abs(p0.z - T.R0) < 1e-9);
+    let maxJump = 0, maxTurn = 0, prev = C.toWorld(-T.runUp, 5);
+    for (let s = -T.runUp + .05; s < 2 * T.lap; s += .05) {
+      const p = C.toWorld(s, 5);
+      maxJump = Math.max(maxJump, Math.hypot(p.x - prev.x, p.z - prev.z));
+      let dh = Math.abs(p.heading - prev.heading) % (2 * Math.PI); maxTurn = Math.max(maxTurn, Math.min(dh, 2 * Math.PI - dh));
+      prev = p;
+    }
+    check("the course is continuous in position and heading", maxJump < .1 && maxTurn < .01, `${maxJump.toFixed(3)} m, ${maxTurn.toFixed(4)} rad`);
+    const half = C.toWorld(T.straight + T.turn / 2, 10);
+    check("half way round the east turn the chariot is on the axis, past the post", Math.abs(half.z) < 1e-9 && Math.abs(half.x - (T.eastPost + T.R0 + 10)) < 1e-9);
+    check("running wider covers a turn more slowly in s", C.sRate(T.straight + 1, 20) < C.sRate(T.straight + 1, 2) && C.sRate(10, 20) === 1);
+    // races
+    const run = (seed) => { const r = C.createRace({ seed }); C.start(r); while (!r.done) C.step(r); return r; };
+    const a = run(7), b = run(7);
+    check("the same seed gives the same race", a.finishOrder.join() === b.finishOrder.join() && a.t === b.t && a.cars.map((c) => c.crashCause).join() === b.cars.map((c) => c.crashCause).join());
+    check("twelve chariots, three for each faction, gates by lot", a.cars.length === 12 && C.FACTIONS.every((f) => a.cars.filter((c) => c.faction === f.id).length === 3) && new Set(a.cars.map((c) => c.gate)).size === 12);
+    let finishers = 0, complete = true;
+    for (let seed = 1; seed <= 10; seed++) {
+      const r = run(seed); finishers += r.finishOrder.length;
+      complete = complete && r.cars.every((c) => c.crashed || (c.finished && c.s >= T.finishS && c.lap === T.laps + 1));
+    }
+    check("every chariot that does not crash finishes seven laps", complete);
+    check("most chariots finish (crashes are the exception)", finishers / 10 >= 7, (finishers / 10).toFixed(1));
+    check("lap counters stop at zero laps left", C.lapsLeft(a) === 0);
+    // one chariot alone on the track, driven by a script
+    const solo = (line, margin) => {
+      const r = C.createRace({ seed: 3, player: 0, playerFaction: "blue" }), me = r.cars[r.player];
+      r.cars = [me]; C.start(r);
+      while (!r.done && me.lap < 3) {
+        const ahead = C.toNextTurn(me.s), inT = C.inTurn(me.s), vT = C.safeSpeed(line) * margin;
+        const need = me.v > vT ? (me.v * me.v - vT * vT) / (2 * C.PHYS.brake * .8) : 0;
+        C.step(r, { [me.id]: { steer: Math.max(-1, Math.min(1, ((me.s < 0 ? line + 3 : line) - me.d) / 3)), rein: (ahead <= need + 4 && me.v > vT) || (inT && me.v > C.safeSpeed(me.d) * margin), whip: false } });
+      }
+      return me;
+    };
+    check("taking a turn far too fast overturns the chariot", solo(8, 1.25).crashCause === "overturned in the turn");
+    check("a steady line at a safe speed gets round", !solo(8, .95).crashed);
+    check("grazing the turning post wrecks the chariot", /post/.test(solo(.2, .95).crashCause));
+    // the whip
+    const w = C.createRace({ seed: 2, player: 0, playerFaction: "red" }), me = w.cars[w.player]; C.start(w);
+    for (let i = 0; i < 60; i++) C.step(w, { [me.id]: { steer: 0, rein: false, whip: false } });
+    const st = me.stamina; C.step(w, { [me.id]: { steer: 0, rein: false, whip: true } });
+    check("the whip costs stamina and gives a burst", me.stamina < st - .03 && me.whipT > 0);
+    // a wreck in the lane
+    const k = C.createRace({ seed: 4, player: 0, playerFaction: "white" }), runner = k.cars[k.player], wreck = k.cars.find((c) => c !== runner);
+    k.cars = [runner, wreck]; C.start(k);
+    Object.assign(runner, { s: 40, d: 10, v: 16 }); Object.assign(wreck, { s: 75, d: 10, v: 0 }); C.crash(k, wreck, "test");
+    for (const c of k.cars) Object.assign(c, C.toWorld(c.s, c.d));
+    let slowed = false;
+    for (let i = 0; i < 90; i++) { C.step(k, { [runner.id]: { steer: 0, rein: false, whip: false } }); if (runner.v < 11) slowed = true; }
+    check("a wreck in the lane stops or slows whoever runs into it", runner.crashed || slowed);
+    // history
+    const sorted = C.ERAS.every((e) => { const ys = C.TIMELINE.filter((t) => t.era === e.id).map((t) => t.year); return ys.length > 0 && ys.every((y, i) => i === 0 || y >= ys[i - 1]); });
+    check("each era's timeline is in order", sorted);
+    check("Regal entries are marked as tradition", C.TIMELINE.filter((t) => t.era === "regal").every((t) => t.tradition) && C.TIMELINE.filter((t) => t.era !== "regal").every((t) => !t.tradition));
+    check("every race day has a presider, occasion and narration", C.RACE_DAYS.every((d) => d.sponsor && d.occasion && d.narration.length >= 3 && d.title));
+    check("two obelisks only from 357, none before 10 BC", C.RACE_DAYS.every((d) => d.obelisks === (d.year >= 357 ? 2 : d.year >= -10 ? 1 : 0)));
+    check("exactly one default race day (Trajan)", C.RACE_DAYS.filter((d) => d.default).map((d) => d.id).join() === "trajan");
+    log(failures ? `${failures} failure(s)` : "all Circus tests passed");
+    return failures === 0;
+  }
+};
+</script>
+</body>
+</html>
