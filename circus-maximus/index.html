@@ -1160,6 +1160,155 @@ crowdMat.uniforms.hot.value = CROWD.hot;          // merge() cloned the array; k
 })();
 function crowdFrame(t) { crowdMat.uniforms.time.value = t; crowdMat.uniforms.excite.value = CROWD.excite; }
 
+// ---- chariots, horses and drivers -----------------------------------------------------------------------
+// Each team is a hidden rig of Object3Ds (car, wheels, driver, four horses with legs) posed every frame from
+// the race state; the rigs' world matrices are copied into a handful of instanced meshes, so twelve teams
+// cost a few draw calls. Local frame: +x forward, +z to the team's right, y up; the axle is at the origin.
+const TEAMS = { rigs: [], parts: {}, race: null };
+(function chariotParts() {
+  const N = 12, lam = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: .7, ...o });
+  const inst = (name, geo, material, count) => { const m = new THREE.InstancedMesh(geo, material, count); m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); ancient.add(m); TEAMS.parts[name] = m; return m; };
+  const body = new THREE.SphereGeometry(1, 14, 10); body.scale(.86, .4, .3);
+  const neck = new THREE.CylinderGeometry(.13, .22, .85, 8); neck.translate(0, .42, 0);
+  const head = new THREE.CylinderGeometry(.09, .15, .62, 8); head.rotateZ(Math.PI / 2); head.translate(.2, 0, 0);
+  const leg = new THREE.CylinderGeometry(.065, .045, 1.1, 6); leg.translate(0, -.55, 0);
+  const tail = new THREE.CylinderGeometry(.03, .1, .7, 6); tail.translate(0, -.35, 0);
+  const coat = lam("#ffffff", { roughness: .62 });
+  inst("horseBody", body, coat, N * 4); inst("horseNeck", neck, coat, N * 4); inst("horseHead", head, coat, N * 4);
+  inst("horseLeg", leg, lam("#3a2a1e"), N * 16); inst("horseTail", tail, lam("#241a12"), N * 4);
+  const shell = new THREE.CylinderGeometry(.62, .62, .95, 14, 1, true, -Math.PI / 2, Math.PI); shell.rotateY(Math.PI / 2); shell.translate(.1, .95, 0);
+  inst("carShell", shell, lam("#ffffff", { side: THREE.DoubleSide, roughness: .5 }), N);
+  const floor = new THREE.BoxGeometry(.9, .08, 1.2); floor.translate(0, .5, 0); inst("carFloor", floor, lam("#5a3d22"), N);
+  const pole = new THREE.CylinderGeometry(.05, .05, 3.4, 6); pole.rotateZ(Math.PI / 2); pole.translate(2.05, .95, 0); inst("carPole", pole, lam("#4a3220"), N);
+  const yoke = new THREE.BoxGeometry(.12, .1, 2.2); yoke.translate(3.55, 1.35, 0); inst("carYoke", yoke, lam("#4a3220"), N);
+  const rim = new THREE.TorusGeometry(.6, .045, 6, 18); inst("wheelRim", rim, lam("#3b2a1a"), N * 2);
+  const spoke = new THREE.BoxGeometry(1.15, .04, .04); inst("wheelSpoke", spoke, lam("#5a3d22"), N * 6);
+  const torso = new THREE.CylinderGeometry(.2, .26, .78, 10); torso.translate(0, .39, 0); inst("driverBody", torso, lam("#ffffff"), N);
+  const helm = new THREE.SphereGeometry(.17, 10, 8); inst("driverHead", helm, lam("#8a6a3a", { metalness: .5, roughness: .4 }), N);
+  // colours: coats, faction tunics and the painted cars
+  const r = Circus.rng(99), c = new THREE.Color();
+  const COATS = ["#5a3a24", "#7a4a2a", "#3a2a20", "#9a8f84", "#d9d2c4", "#2a221c", "#8a5a34"];
+  for (let i = 0; i < N * 4; i++) { c.set(COATS[Math.floor(r() * COATS.length)]).multiplyScalar(.85 + r() * .3); TEAMS.parts.horseBody.setColorAt(i, c); TEAMS.parts.horseNeck.setColorAt(i, c); TEAMS.parts.horseHead.setColorAt(i, c); }
+})();
+function setTeamColors(race) {
+  const c = new THREE.Color();
+  race.cars.forEach((car, i) => {
+    const f = Circus.FACTIONS.find((f) => f.id === car.faction);
+    TEAMS.parts.driverBody.setColorAt(i, c.set(f.color)); TEAMS.parts.carShell.setColorAt(i, c.set(f.color).multiplyScalar(.8));
+  });
+  TEAMS.parts.driverBody.instanceColor.needsUpdate = true; TEAMS.parts.carShell.instanceColor.needsUpdate = true;
+}
+function makeRig(i) {
+  const root = new THREE.Object3D(), car = new THREE.Object3D(), team = new THREE.Object3D(); root.add(car, team);
+  const o = (parent, x = 0, y = 0, z = 0) => { const n = new THREE.Object3D(); n.position.set(x, y, z); parent.add(n); return n; };
+  const rig = { root, car, team, shell: o(car), floor: o(car), pole: o(car), yoke: o(car), wheels: [o(car, 0, .62, -.82), o(car, 0, .62, .82)], driver: o(car, -.1, .54, 0), horses: [] };
+  rig.head = o(rig.driver, .08, .95, 0);
+  [-1.32, -.44, .44, 1.32].forEach((hz, k) => {
+    const h = o(team, 3.55, 1.28, hz), b = o(h);
+    const neck = o(h, .62, .1, 0); neck.rotation.z = -.62;
+    const head = o(neck, 0, .82, 0); head.rotation.z = -.15;
+    const legs = [[.5, -.13], [.5, .13], [-.55, -.13], [-.55, .13]].map(([lx, lz]) => o(h, lx, -.15, lz));
+    const tail = o(h, -.82, .15, 0); tail.rotation.z = -.5;
+    rig.horses.push({ h, b, neck, head, legs, tail, phase: k * .37 + i * .21, scatter: (k - 1.5) * .9 });
+  });
+  return rig;
+}
+for (let i = 0; i < 12; i++) TEAMS.rigs.push(makeRig(i));
+
+// ---- dust and ruts --------------------------------------------------------------------------------------
+const DUST = (() => {
+  const N = 2400, pos = new Float32Array(N * 3), age = new Float32Array(N).fill(99), vel = new Float32Array(N * 3), size = new Float32Array(N);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute("age", new THREE.BufferAttribute(age, 1).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute("size", new THREE.BufferAttribute(size, 1));
+  const m = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, fog: true,
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { life: { value: 2.6 }, scale: { value: 600 } }]),
+    vertexShader: `attribute float age; attribute float size; uniform float life, scale; varying float vA;
+      #include <fog_pars_vertex>
+      void main() { vA = clamp(age / life, 0.0, 1.0); vec4 mvPosition = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = age > life ? 0.0 : size * (0.6 + 2.2 * vA) * scale / -mvPosition.z;
+        #include <fog_vertex>
+      }`,
+    fragmentShader: `varying float vA;
+      #include <common>
+      #include <fog_pars_fragment>
+      void main() { vec2 p = gl_PointCoord - 0.5; float d = dot(p, p) * 4.0; if (d > 1.0) discard;
+        gl_FragColor = vec4(vec3(0.80, 0.69, 0.50), (1.0 - d) * 0.32 * (1.0 - vA));
+        #include <colorspace_fragment>
+        #include <fog_fragment>
+      }`,
+  });
+  const pts = new THREE.Points(g, m); pts.frustumCulled = false; ancient.add(pts);
+  let next = 0;
+  return {
+    emit(x, y, z, vx, vy, vz, s) { const i = next; next = (next + 1) % N; pos.set([x, y, z], i * 3); vel.set([vx, vy, vz], i * 3); age[i] = 0; size[i] = s; },
+    update(dt) {
+      for (let i = 0; i < N; i++) { if (age[i] > 3) continue; age[i] += dt; const k = i * 3; pos[k] += vel[k] * dt; pos[k + 1] += vel[k + 1] * dt; pos[k + 2] += vel[k + 2] * dt; vel[k] *= .97; vel[k + 1] = vel[k + 1] * .97 + .15 * dt; vel[k + 2] *= .97; }
+      g.attributes.position.needsUpdate = true; g.attributes.age.needsUpdate = true;
+    },
+    clear() { age.fill(99); g.attributes.age.needsUpdate = true; },
+    setScale(px) { m.uniforms.scale.value = px; },
+  };
+})();
+let rutFrames = 0;
+function stampRut(x, z, alpha, w = 2) {
+  const px = (x - SAND.x0) * SAND.pxPerM, py = (z - SAND.z0) * SAND.pxPerM;
+  sandCtx.fillStyle = `rgba(92,66,38,${alpha})`; sandCtx.fillRect(px - w / 2, py - w / 2, w, w);
+}
+
+// ---- posing -----------------------------------------------------------------------------------------------
+const _m = new THREE.Matrix4();
+function poseTeams(race, dt, t) {
+  const P = TEAMS.parts, cnt = { body: 0, leg: 0, wheel: 0, spoke: 0 };
+  const put = (mesh, idx, node) => mesh.setMatrixAt(idx, node.matrixWorld);
+  race.cars.forEach((carState, i) => {
+    const rig = TEAMS.rigs[i], c = carState;
+    rig.root.position.set(c.x, 0, c.z); rig.root.rotation.set(0, -c.heading, 0);
+    const v = c.v, stride = (c.dist / 3.3) * Math.PI * 2;
+    // a crash: the car rolls over and slides, the horses bolt on and spread out
+    const ct = c.crashed ? c.crashT : 0, roll = c.crashed ? Math.min(Math.PI * .55, ct * 5) + Math.sin(i) * .2 : 0;
+    rig.car.rotation.set(roll, 0, c.crashed ? Math.min(.5, ct * 2) * (i % 2 ? 1 : -1) : -Math.min(.12, v * .004));
+    rig.car.position.y = c.crashed ? Math.max(0, Math.sin(Math.min(ct * 4, Math.PI)) * .9) : 0;
+    rig.team.position.set(c.crashed ? 10 * (1 - Math.exp(-ct * 1.4)) : 0, 0, 0);
+    rig.wheels.forEach((w, k) => { w.rotation.set(0, 0, -c.dist / .62); });
+    rig.driver.rotation.z = -.22 - Math.min(.2, v * .01) + (c.whipT > 0 ? Math.sin(t * 18) * .08 : 0);
+    rig.horses.forEach((hs, k) => {
+      const gal = Math.min(1, v / 9), ph = stride + hs.phase;
+      hs.h.position.y = 1.28 + Math.abs(Math.sin(ph)) * .09 * gal;
+      hs.h.rotation.z = Math.sin(ph) * .05 * gal;
+      if (c.crashed) { hs.h.position.z = [-1.32, -.44, .44, 1.32][k] + hs.scatter * Math.min(1, ct * .6) * 3; hs.h.rotation.y = hs.scatter * .25 * Math.min(1, ct); }
+      else { hs.h.position.z = [-1.32, -.44, .44, 1.32][k]; hs.h.rotation.y = 0; }
+      // a rotary gallop: the legs swing in a staggered sequence
+      hs.legs.forEach((lg, j) => { lg.rotation.z = Math.sin(ph + [0, .5, 2.4, 2.9][j]) * (.15 + .55 * gal); });
+      hs.neck.rotation.z = -.62 + Math.sin(ph * 2) * .06 * gal;
+      hs.tail.rotation.z = -.5 - .6 * gal + Math.sin(ph) * .1;
+    });
+    rig.root.updateMatrixWorld(true);
+    put(P.carShell, i, rig.shell); put(P.carFloor, i, rig.floor); put(P.carPole, i, rig.pole); put(P.carYoke, i, rig.yoke);
+    put(P.driverBody, i, rig.driver); put(P.driverHead, i, rig.head);
+    rig.wheels.forEach((w) => { put(P.wheelRim, cnt.wheel++, w); for (let s = 0; s < 3; s++) { _m.makeRotationZ(s * Math.PI / 3); P.wheelSpoke.setMatrixAt(cnt.spoke++, _m.premultiply(w.matrixWorld)); } });
+    rig.horses.forEach((hs) => {
+      put(P.horseBody, cnt.body, hs.b); put(P.horseNeck, cnt.body, hs.neck); put(P.horseHead, cnt.body, hs.head); put(P.horseTail, cnt.body, hs.tail); cnt.body++;
+      hs.legs.forEach((lg) => put(P.horseLeg, cnt.leg++, lg));
+    });
+    // dust from the hooves and wheels, ruts in the sand
+    if (v > 2 && race.started) {
+      const fx = Math.cos(c.heading), fz = Math.sin(c.heading), n = Math.random() < v * dt * 1.1 ? 1 : 0;
+      for (let e = 0; e < n + (c.crashed && ct < .6 ? 6 : 0); e++) {
+        const back = 2.6 + Math.random() * 1.6, side = (Math.random() - .5) * 3;
+        DUST.emit(c.x + fx * back - fz * side, .3, c.z + fz * back + fx * side, -fx * v * .15 + (Math.random() - .5), .6 + Math.random() * .8, -fz * v * .15 + (Math.random() - .5), 1.2 + Math.random() * 1.2);
+      }
+      if (!c.crashed) for (const s of [-.82, .82]) stampRut(c.x - fz * s, c.z + fx * s, .05);
+    }
+  });
+  for (const m of Object.values(P)) m.instanceMatrix.needsUpdate = true;
+  DUST.update(dt);
+  if (++rutFrames % 5 === 0) sandTex.needsUpdate = true;
+}
+function openGates(f) { GATE_DOORS.forEach((d) => { d.rotation.y = -f * 1.75; }); }
+
 // TEMPORARY still for headless checks (Tasks 3–7) — removed in Task 8.
 // Query: ?yaw=&pitch=&hfov=&mix=&ob=&excite=&race=SECONDS&seed=&chase=CAR
 {
