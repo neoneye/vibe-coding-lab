@@ -52,11 +52,10 @@ const Circus = (() => {
     const th = u / T.R0;
     return { x: T.westPost - r * Math.sin(th), z: -r * Math.cos(th), heading: -Math.PI - th };
   }
-  // world → (s, d) near a given s (used by tests and by the page to place wrecks); search within a lap
   function inTurn(s) { if (s < 0) return false; const u = s % TRACK.lap; return (u >= TRACK.straight && u < TRACK.straight + TRACK.turn) || u >= 2 * TRACK.straight + TRACK.turn; }
   // ds per metre travelled at offset d (outside lines cover turns more slowly in s)
   const sRate = (s, d) => (inTurn(s) ? TRACK.R0 / (TRACK.R0 + Math.max(d, -TRACK.R0 + .5)) : 1);
-  // distance (s) to the start of the next turn, Infinity if in a turn
+  // distance (s) to the start of the next turn, 0 while in a turn
   function toNextTurn(s) {
     if (s < 0) return -s + TRACK.straight;
     const u = s % TRACK.lap, T = TRACK;
@@ -96,15 +95,16 @@ const Circus = (() => {
     const r = rng(seed);
     const order = [...Array(12).keys()];
     for (let i = 11; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }   // the gate lottery
-    const names = NAMES.slice(); const horses = HORSES.slice();
+    const names = NAMES.slice();
     const pick = (arr) => arr.splice(Math.floor(r() * arr.length), 1)[0];
+    const pickHorses = () => { const pool = HORSES.slice(); return [0, 1, 2, 3].map(() => pool.splice(Math.floor(r() * pool.length), 1)[0]); };
     const cars = [];
     for (let i = 0; i < 12; i++) {
       const faction = FACTIONS[i % 4], gate = order[i];
       const mode = ["steady", "blocker", "reckless", "cautious", "steady"][Math.floor(r() * 5)];
       const lead = Math.floor(i / 4) === 0;          // the first of each faction is its leader
       cars.push({
-        id: i, faction: faction.id, name: pick(names), horses: [0, 1, 2, 3].map(() => pick(horses)), gate,
+        id: i, faction: faction.id, name: pick(names), horses: pickHorses(), gate,
         mode: lead ? (r() < .5 ? "steady" : "reckless") : mode, leader: lead,
         top: 16.2 + r() * 1.6, accel: PHYS.accel * (.92 + r() * .16), endurance: .85 + r() * .3,
         s: -TRACK.runUp - 5, d: TRACK.gateZ(gate) - TRACK.R0,       // the team waits inside its stall
@@ -126,7 +126,8 @@ const Circus = (() => {
     const M = MODES[c.mode] || MODES.steady, ahead = toNextTurn(c.s);
     let target = c.s < 0 ? M.line + 4 : (ahead < 60 || inTurn(c.s) ? M.line : M.line + 10);
     // block: on straights, move into the line of the nearest rival close behind
-    if (M.block && c.s > 0 && !inTurn(c.s)) {
+    const leader = race.cars.find((o) => o.faction === c.faction && o.leader);
+    if (M.block && c.s > 0 && !inTurn(c.s) && leader && leader !== c && !leader.crashed && leader.s > c.s) {      // shield the faction's leader from rivals behind
       let best = null;
       for (const o of race.cars) if (!o.crashed && o.faction !== c.faction && c.s - o.s > 0 && c.s - o.s < 18) if (!best || o.s > best.s) best = o;
       if (best) target = best.d;
@@ -184,7 +185,7 @@ const Circus = (() => {
       if (c.s < 0) c.d = Math.max(-TRACK.R0 - TRACK.arenaHalfWidth + 2, c.d);
       advance(c);
       // turning-post and turn checks
-      if (c.s >= 0 && c.d < 0) { crash(race, c, c.d < -1.2 ? "barrier" : "post"); continue; }
+      if (c.s >= 0 && c.d < 0) { crash(race, c, inTurn(c.s) ? "clipped the turning post" : "hit the barrier"); continue; }
       if (inTurn(c.s)) {
         const over = c.v * c.v / (TRACK.R0 + c.d) / PHYS.aSafe;
         if (over > 1.35 || (over > 1.08 && race.rand() < (over - 1.08) * 6 * DT)) { crash(race, c, "overturned in the turn"); continue; }
@@ -272,19 +273,20 @@ const Circus = (() => {
     { era: "republic", year: -46, text: "Caesar's triumph", detail: "Triumphal games: chariot races, a staged battle between two armies with elephants." },
     { era: "republic", year: -33, text: "Bronze dolphins", detail: "Dolphin lap counters join the eggs on the barrier." },
     { era: "republic", year: -31, text: "Fire", detail: "Fire damages the wooden stands." },
-    { era: "imperial", year: -10, text: "Augustus's obelisk", detail: "An obelisk of Seti I from Heliopolis is raised on the barrier, Rome's first; Augustus also builds the pulvinar, the box of the gods, where he watches." },
-    { era: "imperial", year: 36, text: "Fire", detail: "A fire starting in a basket-maker's shop burns part of the circus; Tiberius compensates the owners." },
+    { era: "imperial", year: -10, text: "Augustus's obelisk", detail: "An obelisk of Seti I from Heliopolis is raised on the barrier, one of the first two in Rome; Augustus also builds the pulvinar, the box of the gods, where he watches." },
+    { era: "imperial", year: 36, text: "Fire", detail: "A fire, probably starting in a basket-maker's shop, burns the part of the circus next to the Aventine; Tiberius compensates the owners." },
     { era: "imperial", year: 41, text: "Claudius's marble gates", detail: "Claudius replaces the tufa starting gates with marble and gilds the turning posts." },
     { era: "imperial", year: 64, text: "The Great Fire", detail: "Under Nero the Great Fire of Rome starts in the shops along the circus; it is rebuilt on the same footprint." },
     { era: "imperial", year: 81, text: "The arch of Titus", detail: "The Senate raises a triple arch to Titus at the curved end." },
     { era: "imperial", year: 90, text: "Purple and Gold", detail: "Domitian adds two factions, the Purples and the Golds; they vanish after his death." },
     { era: "imperial", year: 103, text: "Trajan's stone circus", detail: "Trajan rebuilds in stone, adds about 5,000 seats and a new pulvinar; a coin of 103 shows it. This page shows the circus about now." },
+    { era: "imperial", year: 280, text: "A forest in the arena", detail: "Probus stages a beast hunt among trees planted in the arena." },
     { era: "imperial", year: 300, text: "A stand collapses", detail: "Under Diocletian a section of seating gives way and about 13,000 people are said to have died." },
     { era: "imperial", year: 357, text: "A second obelisk", detail: "Constantius II brings an obelisk of Thutmose III from Karnak and raises it on the barrier; today it stands at the Lateran." },
     { era: "late", year: 523, text: "The last beast hunt", detail: "The last known venatio at the circus." },
     { era: "late", year: 549, text: "The last races", detail: "The Gothic king Totila holds the last recorded races (Procopius)." },
     { era: "late", year: 1100, text: "Buried and flooded", detail: "Silt and rubble bury the track; houses, a drainage channel and later the Torre della Moletta occupy the site. The track lies about 6 m below today's ground." },
-    { era: "late", year: 1587, text: "The obelisks leave", detail: "Pope Sixtus V has the two fallen obelisks dug up and raised at Piazza del Popolo and the Lateran." },
+    { era: "late", year: 1587, text: "The obelisks leave", detail: "Pope Sixtus V has the two fallen obelisks dug up (1587) and raised at Piazza del Popolo and the Lateran." },
     { era: "late", year: 1852, text: "A gasworks", detail: "A gasworks occupies the site until 1910; digging uncovers seating and the outer portico." },
     { era: "late", year: 2006, text: "A park", detail: "Today a grassy park for concerts and celebrations, such as Italy's 2006 World Cup victory." },
   ];
@@ -292,19 +294,19 @@ const Circus = (() => {
   const RACE_DAYS = [
     { id: "caesar", year: -46, sponsor: "Julius Caesar", title: "Caesar's triumphal games", obelisks: 0, anachronism: true,
       occasion: "Caesar celebrates his triumphs with races, a staged battle and beast hunts, paid from the spoils of his wars.",
-      narration: ["Caesar has paid for all of this.", "They say he has spread awnings over half the city.", "The Greens again? Caesar likes the Reds."] },
+      narration: ["Caesar has paid for all of this.", "They say he has spread awnings over half the city.", "Reds against Whites, as in our grandfathers' day."] },
     { id: "augustus", year: -10, sponsor: "Augustus", title: "The obelisk is dedicated", obelisks: 1,
       occasion: "Augustus dedicates the obelisk from Heliopolis to the Sun, marking the conquest of Egypt.",
-      narration: ["An obelisk from Egypt! Taller than ten men.", "Augustus watches from the pulvinar with the gods.", "Twelve gates, and every one by lot."] },
+      narration: ["An obelisk from Egypt! Taller than ten men.", "Augustus watches from the pulvinar with the gods.", "The starting gates are drawn by lot."] },
     { id: "nero", year: 64, sponsor: "Nero", title: "Nero's games", obelisks: 1,
-      occasion: "Nero, who drove chariots himself, gives games in the summer of 64, weeks before the Great Fire starts in the shops below these stands.",
-      narration: ["Nero wears Green today.", "He drove a ten-horse team at Olympia, they say.", "Mind the cookshops under the stands, they never put their fires out."] },
+      occasion: "Nero, who drives chariots himself, gives games in AD 64; that summer the Great Fire starts in the shops below these stands.",
+      narration: ["Nero wears Green today.", "He favours the Greens, everyone knows it.", "Mind the cookshops under the stands, they never put their fires out."] },
     { id: "trajan", year: 103, sponsor: "Trajan", title: "The rebuilt circus reopens", obelisks: 1, default: true,
       occasion: "Trajan opens the circus rebuilt in stone, with five thousand more seats and a new box for the emperor, among the people.",
-      narration: ["Stone everywhere now, no more fires.", "Trajan sits where we can see him, not hidden away.", "Five thousand more seats and still no room."] },
+      narration: ["Stone stands now, where there was wood.", "Trajan sits where we can see him, not hidden away.", "Five thousand more seats and still no room."] },
     { id: "constantius", year: 357, sponsor: "Constantius II", title: "The second obelisk", obelisks: 2,
       occasion: "Constantius II visits Rome for the first time and raises a second, taller obelisk, brought from Karnak by river and sea.",
-      narration: ["The emperor came all the way from Milan.", "Two obelisks now. Nowhere else has two.", "The Blues paid off the gatekeeper, I'm sure of it."] },
+      narration: ["The emperor came all the way from Milan.", "Two obelisks on one barrier now.", "The Blues paid off the gatekeeper, I'm sure of it."] },
     { id: "totila", year: 549, sponsor: "Totila", title: "The last races", obelisks: 2, anachronism: true,
       occasion: "The Gothic king Totila, holding a half-empty Rome, gives races as the emperors did; they are the last ever recorded here.",
       narration: ["A Goth in the emperor's box.", "Half the stands are empty these days.", "Enjoy it. Who knows when there will be another."] },
@@ -334,7 +336,7 @@ const CircusTests = {
     check("half way round the east turn the chariot is on the axis, past the post", Math.abs(half.z) < 1e-9 && Math.abs(half.x - (T.eastPost + T.R0 + 10)) < 1e-9);
     check("running wider covers a turn more slowly in s", C.sRate(T.straight + 1, 20) < C.sRate(T.straight + 1, 2) && C.sRate(10, 20) === 1);
     // races
-    const run = (seed) => { const r = C.createRace({ seed }); C.start(r); while (!r.done) C.step(r); return r; };
+    const run = (seed) => { const r = C.createRace({ seed }); C.start(r); for (let i = 0; i < 30 * 1200 && !r.done; i++) C.step(r); return r; };
     const a = run(7), b = run(7);
     check("the same seed gives the same race", a.finishOrder.join() === b.finishOrder.join() && a.t === b.t && a.cars.map((c) => c.crashCause).join() === b.cars.map((c) => c.crashCause).join());
     check("twelve chariots, three for each faction, gates by lot", a.cars.length === 12 && C.FACTIONS.every((f) => a.cars.filter((c) => c.faction === f.id).length === 3) && new Set(a.cars.map((c) => c.gate)).size === 12);
@@ -345,12 +347,14 @@ const CircusTests = {
     }
     check("every chariot that does not crash finishes seven laps", complete);
     check("most chariots finish (crashes are the exception)", finishers / 10 >= 7, (finishers / 10).toFixed(1));
+    const full = run(11); check("the finishing order and the wrecks account for all twelve, places unique", full.done && full.finishOrder.length + full.cars.filter((c) => c.crashed).length === 12 && new Set(full.cars.filter((c) => c.finished).map((c) => c.place)).size === full.finishOrder.length);
     check("lap counters stop at zero laps left", C.lapsLeft(a) === 0);
+    check("every horse has a name", a.cars.every((c) => c.horses.length === 4 && c.horses.every((h) => typeof h === "string" && h.length > 0)));
     // one chariot alone on the track, driven by a script
     const solo = (line, margin) => {
       const r = C.createRace({ seed: 3, player: 0, playerFaction: "blue" }), me = r.cars[r.player];
       r.cars = [me]; C.start(r);
-      while (!r.done && me.lap < 3) {
+      for (let i = 0; i < 30 * 600 && !r.done && me.lap < 3; i++) {
         const ahead = C.toNextTurn(me.s), inT = C.inTurn(me.s), vT = C.safeSpeed(line) * margin;
         const need = me.v > vT ? (me.v * me.v - vT * vT) / (2 * C.PHYS.brake * .8) : 0;
         C.step(r, { [me.id]: { steer: Math.max(-1, Math.min(1, ((me.s < 0 ? line + 3 : line) - me.d) / 3)), rein: (ahead <= need + 4 && me.v > vT) || (inT && me.v > C.safeSpeed(me.d) * margin), whip: false } });
@@ -359,7 +363,7 @@ const CircusTests = {
     };
     check("taking a turn far too fast overturns the chariot", solo(8, 1.25).crashCause === "overturned in the turn");
     check("a steady line at a safe speed gets round", !solo(8, .95).crashed);
-    check("grazing the turning post wrecks the chariot", /post/.test(solo(.2, .95).crashCause));
+    check("grazing the turning post wrecks the chariot", /post|barrier/.test(solo(.2, .95).crashCause));
     // the whip
     const w = C.createRace({ seed: 2, player: 0, playerFaction: "red" }), me = w.cars[w.player]; C.start(w);
     for (let i = 0; i < 60; i++) C.step(w, { [me.id]: { steer: 0, rein: false, whip: false } });
@@ -380,6 +384,7 @@ const CircusTests = {
     check("every race day has a presider, occasion and narration", C.RACE_DAYS.every((d) => d.sponsor && d.occasion && d.narration.length >= 3 && d.title));
     check("two obelisks only from 357, none before 10 BC", C.RACE_DAYS.every((d) => d.obelisks === (d.year >= 357 ? 2 : d.year >= -10 ? 1 : 0)));
     check("exactly one default race day (Trajan)", C.RACE_DAYS.filter((d) => d.default).map((d) => d.id).join() === "trajan");
+    check("only the 46 BC and AD 549 days are marked anachronistic", C.RACE_DAYS.filter((d) => d.anachronism).map((d) => d.id).join() === "caesar,totila");
     log(failures ? `${failures} failure(s)` : "all Circus tests passed");
     return failures === 0;
   }
