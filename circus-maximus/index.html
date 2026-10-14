@@ -1424,6 +1424,134 @@ function modernFrame(dt) {
   for (const c of MODERN.cars) { c.x += c.v * c.lane * dt; if (c.x > 290) c.x = -290; if (c.x < -290) c.x = 290; c.m.position.set(c.x, 6 + 8.7 + .7, c.z + c.lane * 2.4); c.m.rotation.y = c.lane > 0 ? 0 : Math.PI; }
 }
 
+// ---- sound: synthesized, off until the first race -------------------------------------------------------------
+// The ancient circus: a crowd murmur that swells into a roar, hoofbeats in the four-beat gallop of each nearby
+// team, wheel rumble, the whip, trumpets, the starting gates and crashes. The 1998 site: traffic, a passing car
+// now and then, birds. The then/now slider crossfades the two.
+const sound = {
+  ctx: null, out: null, ancientBus: null, nowBus: null, analyser: null, noise: null, on: false, volume: .7, mixNow: 0,
+  beds: null, hoofNext: new Map(), nextCar: 0, nextBird: 0, last: {},
+  ensure() {
+    if (this.ctx) return;
+    const ctx = this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 3.5;
+    this.out = ctx.createGain(); this.out.gain.value = 0; this.out.connect(comp); comp.connect(ctx.destination);
+    this.analyser = ctx.createAnalyser(); this.analyser.fftSize = 2048; comp.connect(this.analyser);
+    this.ancientBus = ctx.createGain(); this.nowBus = ctx.createGain(); this.nowBus.gain.value = 0;
+    this.ancientBus.connect(this.out); this.nowBus.connect(this.out);
+    const len = ctx.sampleRate * 3, buf = this.noise = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0), r = Circus.rng(7);
+    let b = 0; for (let i = 0; i < len; i++) { const w = r() * 2 - 1; b = .985 * b + .15 * w; d[i] = w * .5 + b * .5; }   // part white, part brown
+    const loop = (to) => { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.connect(to); s.start(0, r() * 3); return s; };
+    const filt = (type, f, q, to) => { const n = ctx.createBiquadFilter(); n.type = type; n.frequency.value = f; n.Q.value = q; n.connect(to); return n; };
+    const gain = (v, to) => { const g = ctx.createGain(); g.gain.value = v; g.connect(to); return g; };
+    const beds = this.beds = {};
+    // crowd: several bands of murmur, each slowly breathing, and a brighter roar band
+    beds.murmur = gain(0, this.ancientBus);
+    for (const [f, q] of [[320, .8], [620, 1.1], [980, 1.4], [1500, 1.6]]) {
+      const g = gain(.25, beds.murmur); loop(filt("bandpass", f, q, g));
+      const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = .15 + r() * .5; lg.gain.value = .12; lfo.connect(lg); lg.connect(g.gain); lfo.start();
+    }
+    beds.roar = gain(0, this.ancientBus); loop(filt("bandpass", 1100, .5, filt("highshelf", 2500, -6, beds.roar)));
+    beds.rumble = gain(0, this.ancientBus); loop(filt("lowpass", 160, .7, beds.rumble));
+    // 1998: traffic hiss and the city's low roar
+    beds.traffic = gain(.11, this.nowBus); loop(filt("lowpass", 700, .5, beds.traffic));
+    beds.city = gain(.06, this.nowBus); loop(filt("bandpass", 220, .6, beds.city));
+  },
+  setEnabled(on) {
+    this.on = on; if (on) { this.ensure(); this.ctx.resume(); }
+    if (this.ctx) {
+      this.out.gain.setTargetAtTime(on ? this.volume : 0, this.ctx.currentTime, .1);
+      if (!on) setTimeout(() => { if (!this.on && this.ctx.state === "running") this.ctx.suspend(); }, 500);
+    }
+  },
+  setVolume(v) { this.volume = v; if (this.ctx && this.on) this.out.gain.setTargetAtTime(v, this.ctx.currentTime, .05); },
+  setNow(mix) { this.mixNow = mix; if (!this.ctx) return; const t = this.ctx.currentTime; this.ancientBus.gain.setTargetAtTime(1 - mix, t, .1); this.nowBus.gain.setTargetAtTime(mix, t, .1); },
+  ready(name, gap) { if (!this.on || !this.ctx) return false; const t = this.ctx.currentTime; if (t - (this.last[name] ?? -9) < gap) return false; this.last[name] = t; return true; },
+  burst(t, dur, f, q, g, type = "bandpass", bus = this.ancientBus, pan = 0) {
+    const ctx = this.ctx, s = ctx.createBufferSource(), fl = ctx.createBiquadFilter(), e = ctx.createGain(), p = ctx.createStereoPanner();
+    s.buffer = this.noise; fl.type = type; fl.frequency.value = f; fl.Q.value = q; p.pan.value = pan;
+    e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(g, t + .004); e.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    s.connect(fl); fl.connect(e); e.connect(p); p.connect(bus); s.start(t, Math.random() * 2.5); s.stop(t + dur + .05);
+  },
+  tone(t, dur, f, g, type = "sine", bus = this.ancientBus, f1 = f, pan = 0) {
+    const ctx = this.ctx, o = ctx.createOscillator(), e = ctx.createGain(), p = ctx.createStereoPanner();
+    o.type = type; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur); p.pan.value = pan;
+    e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(g, t + .01); e.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(e); e.connect(p); p.connect(bus); o.start(t); o.stop(t + dur + .05);
+  },
+  // where the listener is and where a point lies relative to the view (for loudness and panning)
+  listener() { return view.mode === "chase" ? chaseCam.position : view.pos; },
+  hear(x, z) {
+    const L = this.listener(), dx = x - L.x, dz = z - L.z, dist = Math.hypot(dx, dz);
+    const yaw = view.mode === "chase" ? Math.atan2(-(chase.look.x - L.x), -(chase.look.z - L.z)) : view.yaw;
+    const fwdX = -Math.sin(yaw), fwdZ = -Math.cos(yaw), rightX = Math.cos(yaw), rightZ = -Math.sin(yaw);
+    const pan = Math.max(-1, Math.min(1, (dx * rightX + dz * rightZ) / Math.max(1, dist)));
+    return { g: 1 / (1 + dist / 25), pan, dist, front: dx * fwdX + dz * fwdZ };
+  },
+  update(dt, app) {
+    if (!this.ctx || !this.on) return;
+    const t = this.ctx.currentTime, b = this.beds;
+    b.murmur.gain.setTargetAtTime(.05 + .1 * Math.min(1, CROWD.excite * 1.5), t, .3);
+    b.roar.gain.setTargetAtTime(Math.max(0, CROWD.excite - .15) * .22, t, .25);
+    const race = app.race;
+    let rumble = 0;
+    if (race && race.started) {
+      // hoofbeats: each team within earshot gallops in four beats per stride, slightly uneven
+      for (const c of race.cars) {
+        if (c.v < 1.5 || (c.crashed && c.crashT > 2)) continue;
+        const h = this.hear(c.x, c.z); if (h.g < .06) continue;
+        rumble += h.g * c.v / 17;
+        let next = this.hoofNext.get(c.id) ?? t;
+        const stride = 3.3 / Math.max(2, c.v);
+        while (next < t + .12) {
+          if (next >= t - .02) for (const off of [0, .11, .43, .53]) {
+            const at = Math.max(t, next + off * stride + (Math.random() - .5) * .012);
+            this.burst(at, .07, 140 + Math.random() * 60, 1.2, .35 * h.g * (.8 + Math.random() * .4), "bandpass", this.ancientBus, h.pan);
+          }
+          next += stride;
+        }
+        this.hoofNext.set(c.id, next);
+      }
+    }
+    b.rumble.gain.setTargetAtTime(Math.min(.4, rumble * .25), t, .15);
+    // 1998: a passing car now and then, birds
+    if (this.mixNow > .02) {
+      if (t > this.nextCar) { this.nextCar = t + 3 + Math.random() * 6; const d = 2.5 + Math.random() * 2, pan = Math.random() < .5 ? -.8 : .8;
+        const s = this.ctx.createBufferSource(), f = this.ctx.createBiquadFilter(), e = this.ctx.createGain(), p = this.ctx.createStereoPanner();
+        s.buffer = this.noise; f.type = "bandpass"; f.Q.value = .8; f.frequency.setValueAtTime(500, t); f.frequency.linearRampToValueAtTime(900, t + d / 2); f.frequency.linearRampToValueAtTime(420, t + d);
+        e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(.18, t + d / 2); e.gain.linearRampToValueAtTime(0, t + d);
+        p.pan.setValueAtTime(pan, t); p.pan.linearRampToValueAtTime(-pan, t + d);
+        s.connect(f); f.connect(e); e.connect(p); p.connect(this.nowBus); s.start(t); s.stop(t + d + .1); }
+      if (t > this.nextBird) { this.nextBird = t + .8 + Math.random() * 3; const f0 = 3000 + Math.random() * 2500, pan = Math.random() * 2 - 1;
+        for (let i = 0; i < 2 + Math.floor(Math.random() * 4); i++) this.tone(t + i * .11, .07, f0 * (1 + Math.random() * .1), .025, "sine", this.nowBus, f0 * 1.35, pan); }
+    }
+  },
+  roar(level) { if (!this.ready("roar", .3)) return; const t = this.ctx.currentTime; for (let i = 0; i < 18; i++) this.burst(t + Math.random() * .8, .6 + Math.random() * .9, 500 + Math.random() * 1600, 2.5, .05 * level); },
+  whip() { if (!this.ready("whip", .2)) return; const t = this.ctx.currentTime; this.burst(t, .05, 3200, .8, .5, "highpass"); this.burst(t + .01, .12, 1800, 1.5, .2); },
+  gates() { if (!this.ready("gates", 1)) return; const t = this.ctx.currentTime; for (let i = 0; i < 12; i++) { this.burst(t + i * .012 + Math.random() * .02, .16, 380 + Math.random() * 200, 3, .4); this.tone(t + i * .012, .12, 220 + Math.random() * 60, .08, "triangle"); } },
+  crash(car) {
+    if (!this.ready("crash", .25)) return;
+    const t = this.ctx.currentTime, h = this.hear(car.x, car.z), g = Math.max(.15, h.g * 2);
+    this.burst(t, .7, 260, .9, .9 * g, "lowpass", this.ancientBus, h.pan); this.tone(t, .4, 85, .5 * g, "sine", this.ancientBus, 40, h.pan);
+    for (let i = 0; i < 14; i++) this.burst(t + Math.random() * .5, .05 + Math.random() * .08, 2000 + Math.random() * 3000, 4, .25 * g, "bandpass", this.ancientBus, h.pan);
+  },
+  // a fanfare for the procession on long bronze horns (a made-up call, not a known tune)
+  trumpets() {
+    if (!this.ready("trumpets", 2)) return;
+    const t = this.ctx.currentTime, notes = [[0, 196, .5], [.55, 262, .35], [.95, 262, .35], [1.35, 330, .8], [2.3, 294, .4], [2.8, 392, 1.4]];
+    for (const [at, f, dur] of notes) for (const [det, pan] of [[1, -.4], [1.006, .4], [.497, 0]]) {
+      const o = this.ctx.createOscillator(), fl = this.ctx.createBiquadFilter(), e = this.ctx.createGain(), p = this.ctx.createStereoPanner();
+      o.type = "sawtooth"; o.frequency.setValueAtTime(f * det * .97, t + at); o.frequency.linearRampToValueAtTime(f * det, t + at + .06);
+      fl.type = "bandpass"; fl.frequency.value = 1100; fl.Q.value = 1.2; p.pan.value = pan;
+      e.gain.setValueAtTime(0, t + at); e.gain.linearRampToValueAtTime(.09, t + at + .05); e.gain.setValueAtTime(.08, t + at + dur * .8); e.gain.linearRampToValueAtTime(0, t + at + dur);
+      o.connect(fl); fl.connect(e); e.connect(p); p.connect(this.ancientBus); o.start(t + at); o.stop(t + at + dur + .05);
+    }
+  },
+  level() { if (!this.analyser) return 0; const a = new Float32Array(this.analyser.fftSize); this.analyser.getFloatTimeDomainData(a); return Math.sqrt(a.reduce((s, x) => s + x * x, 0) / a.length); },
+};
+document.addEventListener("visibilitychange", () => { if (!sound.ctx) return; if (document.hidden) sound.ctx.suspend(); else if (sound.on) sound.ctx.resume(); });
+for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => { if (sound.on && sound.ctx && sound.ctx.state === "suspended" && !document.hidden) sound.ctx.resume(); }, true);
+
 // TEMPORARY still for headless checks (Tasks 3–7) — removed in Task 8.
 // Query: ?yaw=&pitch=&hfov=&mix=&ob=&excite=&race=SECONDS&seed=&chase=CAR
 {
