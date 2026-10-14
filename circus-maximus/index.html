@@ -1023,6 +1023,143 @@ const PULVINAR = { x: 22, z: -ARENA.halfWidth - 8 };
   for (let i = 0; i < 220; i++) { const x = -260 + r() * 560, z = (r() < .5 ? -1 : 1) * (100 + r() * 90), y = ARENA.height(x, z) - 1; const s = .7 + r() * .6; m5.compose(new THREE.Vector3(x, y + 6 * s, z), q.identity(), new THREE.Vector3(s, s, s)); tree.setMatrixAt(i, m5); }
   tree.castShadow = true; g.add(tree);
 })();
+// ---- the crowd ---------------------------------------------------------------------------------------
+// About a hundred thousand spectators as camera-facing figures drawn by a shader: a head, shoulders and a
+// tunic in its own colour, seen from the front or the back. They bob, and stand with their arms up when
+// the race excites them (a general level plus "hot spots" where the chariots are).
+const CROWD = { excite: 0, hot: [new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0)], count: 0, meshes: [] };
+const crowdMat = new THREE.ShaderMaterial({
+  fog: true, transparent: false, side: THREE.DoubleSide,
+  uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { time: { value: 0 }, excite: { value: 0 }, hot: { value: CROWD.hot }, sunDir: { value: SUN_DIR } }]),
+  vertexShader: `
+    attribute vec3 offset; attribute vec2 facing; attribute vec3 tunic; attribute vec3 skin; attribute float rnd;
+    uniform float time, excite; uniform vec4 hot[3]; uniform vec3 sunDir;
+    varying vec2 vUv; varying vec3 vTunic; varying vec3 vSkin; varying float vFront; varying float vStand; varying float vLight; varying float vRnd;
+    #include <fog_pars_vertex>
+    void main() {
+      float heat = excite;
+      for (int i = 0; i < 3; i++) { vec2 dd = offset.xz - hot[i].xy; heat += hot[i].w * exp(-dot(dd, dd) / (hot[i].z * hot[i].z)); }
+      float stand = smoothstep(rnd * 0.9 + 0.05, rnd * 0.9 + 0.2, heat);
+      vStand = stand; vRnd = rnd;
+      float h = mix(1.0, 1.62, stand), w = 0.52;
+      vec3 toCam = cameraPosition - offset; toCam.y = 0.0;
+      vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), normalize(toCam + vec3(1e-4, 0.0, 0.0))));
+      float bob = sin(time * (2.0 + rnd * 3.0) + rnd * 40.0) * 0.025 * (1.0 + 5.0 * stand);
+      vec3 p = offset + right * (position.x * w) + vec3(0.0, (position.y + 0.5) * h + bob, 0.0);
+      vUv = vec2(position.x + 0.5, position.y + 0.5);
+      vFront = step(0.0, dot(vec3(facing.x, 0.0, facing.y), toCam));
+      vTunic = tunic; vSkin = skin;
+      // seats facing the sun are lit; the stands' own slope shades the side that faces away
+      vec3 n = normalize(vec3(facing.x * 0.56, 0.83, facing.y * 0.56));
+      vLight = 0.52 + 0.62 * clamp(dot(n, sunDir) * 2.5 + 0.25, 0.0, 1.0);
+      vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mvPosition;
+      #include <fog_vertex>
+    }`,
+  fragmentShader: `
+    varying vec2 vUv; varying vec3 vTunic; varying vec3 vSkin; varying float vFront; varying float vStand; varying float vLight; varying float vRnd;
+    #include <common>
+    #include <fog_pars_fragment>
+    void main() {
+      // the figure in a unit box: head at the top, a neck, rounded shoulders, a body that narrows a little
+      // towards the seat; standing figures raise their arms
+      vec2 u = vUv;
+      float headY = mix(0.82, 0.78, vStand), headR = mix(0.16, 0.115, vStand);
+      vec2 hp = vec2((u.x - 0.5), (u.y - headY) * mix(0.82, 1.35, vStand));
+      float head = step(length(hp), headR);
+      float shoulder = mix(0.62, 0.60, vStand);
+      float neck = step(abs(u.x - 0.5), 0.07) * step(shoulder - 0.02, u.y) * step(u.y, headY - headR * 0.6);
+      vec2 sp = vec2((u.x - 0.5) / 0.42, (u.y - (shoulder - 0.07)) / 0.11);
+      float shoulders = step(length(sp), 1.0);
+      float torso = step(u.y, shoulder - 0.07) * step(abs(u.x - 0.5), 0.42 - (shoulder - 0.07 - u.y) * 0.18);
+      float body = max(shoulders, torso);
+      // raised arms: forearms angled outwards, ending in a hand a little above the head
+      float armL = step(abs(u.x - 0.12 - (u.y - shoulder) * 0.22), 0.05), armR = step(abs(u.x - 0.88 + (u.y - shoulder) * 0.22), 0.05);
+      float hands = step(length(vec2(abs(u.x - 0.5) - 0.32, (u.y - 0.92) * 1.6)), 0.06);
+      float arms = vStand * step(0.3, fract(vRnd * 7.0)) * max(step(shoulder - 0.08, u.y) * step(u.y, 0.9) * max(armL, armR), hands);
+      if (head + body + arms + neck < 0.5) discard;
+      vec3 hair = vSkin * 0.26;
+      vec3 col = vTunic;
+      // cloth: rounded shading across the body and a diagonal fold, as in a draped toga or cloak
+      float round = 0.72 + 0.28 * sin(3.14159 * clamp((u.x - 0.08) / 0.84, 0.0, 1.0));
+      float fold = 1.0 - 0.13 * smoothstep(0.02, 0.0, abs(u.y - 0.25 - (u.x - 0.2) * (fract(vRnd * 13.0) > 0.5 ? 0.6 : -0.6)));
+      col *= round * fold;
+      if (head > 0.5) col = vFront > 0.5 ? mix(vSkin * (0.85 + 0.15 * round), hair, step(headY + headR * 0.4, u.y)) : hair * (0.8 + 0.4 * round);
+      else if (neck > 0.5 || arms > 0.5) col = vSkin * 0.9;
+      col *= mix(0.78, 1.0, u.y) * vLight;          // a little darker towards the seat
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+      #include <fog_fragment>
+    }`,
+});
+crowdMat.uniforms.hot.value = CROWD.hot;          // merge() cloned the array; keep the live one
+(function seatTheCrowd() {
+  const r = Circus.rng(2024);
+  const FACTION_RGB = Circus.FACTIONS.map((f) => new THREE.Color(f.color));
+  const tunicColor = (c) => {
+    const x = r();
+    if (x < .42) return c.setHSL(.1, .15 + r() * .15, .78 + r() * .14);            // undyed and white wool, togas
+    if (x < .62) return c.setHSL(.07 + r() * .05, .3 + r() * .2, .45 + r() * .2);   // browns and ochres
+    if (x < .9) return c.copy(FACTION_RGB[Math.floor(r() * 4)]).multiplyScalar(.85 + r() * .3);   // faction colours
+    return c.setHSL(r(), .45, .35 + r() * .25);                                      // other dyes
+  };
+  const skinColor = (c) => c.setHSL(.06 + r() * .03, .35 + r() * .2, .32 + r() * .32);
+  const camSeat = new THREE.Vector2(SEAT.x, SEAT.z);
+  // gather seats by stretches of path, so each stretch is its own mesh and can be culled
+  const chunks = [];
+  for (let pi = 0; pi < PATH.length; pi++) {
+    const piece = PATH[pi], pieceChunks = piece.n === 2 ? 10 : 4;
+    for (let c = 0; c < pieceChunks; c++) chunks.push({ pi, k0: c / pieceChunks, k1: (c + 1) / pieceChunks, seats: [] });
+  }
+  for (const ch of chunks) {
+    const piece = PATH[ch.pi];
+    for (const row of SEAT_ROWS) {
+      const a = piece.at(ch.k0, row.o), b = piece.at(ch.k1, row.o);
+      // approximate the chunk's length along this row
+      let len = 0, prev = a; for (let i = 1; i <= 8; i++) { const p = piece.at(ch.k0 + (ch.k1 - ch.k0) * i / 8, row.o); len += Math.hypot(p[0] - prev[0], p[1] - prev[1]); prev = p; }
+      const n = Math.floor(len / .48);
+      for (let i = 0; i < n; i++) {
+        const k = ch.k0 + (ch.k1 - ch.k0) * (i + .5) / n, [x, z, nx, nz] = piece.at(k, row.o);
+        if ((Math.abs(x) + Math.abs(z) * 1.3) % 26 < 1.4) continue;                 // aisles and stairways
+        if (Math.abs(x - PULVINAR.x) < 15 && z < 0 && row.o < 15) continue;          // the pulvinar
+        if (Math.hypot(x - camSeat.x, z - camSeat.y) < (row.o > SEAT_ROWS[SEAT.row].o - .1 ? 3.2 : 1.6)) continue;   // room around your own seat
+        if (r() > (row.tier === 0 ? .96 : .88)) continue;                            // a few empty places
+        ch.seats.push([x + (r() - .5) * .12, row.y + .02, z + (r() - .5) * .1, -nx, -nz]);
+      }
+    }
+    // people standing in the portico at the top
+    for (let i = 0; i < 2; i++) {
+      const o = ARENA.porticoO + 1.2 + i * 1.4, a = piece.at(ch.k0, o), b = piece.at(ch.k1, o), len = Math.hypot(b[0] - a[0], b[1] - a[1]) * (piece.n === 2 ? 1 : 1.1);
+      const n = Math.floor(len / .9);
+      for (let j = 0; j < n; j++) { if (r() > .6) continue; const [x, z, nx, nz] = piece.at(ch.k0 + (ch.k1 - ch.k0) * (j + r()) / n, o); ch.seats.push([x, ARENA.porticoY + .45, z, -nx, -nz]); }
+    }
+  }
+  const plane = new THREE.PlaneGeometry(1, 1);
+  const c = new THREE.Color();
+  for (const ch of chunks) {
+    const n = ch.seats.length; if (!n) continue;
+    const g = new THREE.InstancedBufferGeometry();
+    g.index = plane.index; g.setAttribute("position", plane.attributes.position);
+    const off = new Float32Array(n * 3), fac = new Float32Array(n * 2), tun = new Float32Array(n * 3), sk = new Float32Array(n * 3), rn = new Float32Array(n);
+    ch.seats.forEach(([x, y, z, fx, fz], i) => {
+      off.set([x, y, z], i * 3); fac.set([fx, fz], i * 2);
+      tunicColor(c); tun.set([c.r, c.g, c.b], i * 3); skinColor(c); sk.set([c.r, c.g, c.b], i * 3); rn[i] = r();
+    });
+    g.setAttribute("offset", new THREE.InstancedBufferAttribute(off, 3));
+    g.setAttribute("facing", new THREE.InstancedBufferAttribute(fac, 2));
+    g.setAttribute("tunic", new THREE.InstancedBufferAttribute(tun, 3));
+    g.setAttribute("skin", new THREE.InstancedBufferAttribute(sk, 3));
+    g.setAttribute("rnd", new THREE.InstancedBufferAttribute(rn, 1));
+    g.instanceCount = n;
+    const box3 = new THREE.Box3(); for (const [x, y, z] of ch.seats) box3.expandByPoint(new THREE.Vector3(x, y, z));
+    box3.expandByScalar(2); g.boundingBox = box3; g.boundingSphere = box3.getBoundingSphere(new THREE.Sphere());
+    const mesh = new THREE.Mesh(g, crowdMat); mesh.frustumCulled = true;
+    ancient.add(mesh); CROWD.meshes.push(mesh); CROWD.count += n;
+  }
+})();
+function crowdFrame(t) { crowdMat.uniforms.time.value = t; crowdMat.uniforms.excite.value = CROWD.excite; }
+
 // TEMPORARY still for headless checks (Tasks 3–7) — removed in Task 8.
 // Query: ?yaw=&pitch=&hfov=&mix=&ob=&excite=&race=SECONDS&seed=&chase=CAR
 {
