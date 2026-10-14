@@ -1456,6 +1456,7 @@ const sound = {
     // 1998: traffic hiss and the city's low roar
     beds.traffic = gain(.11, this.nowBus); loop(filt("lowpass", 700, .5, beds.traffic));
     beds.city = gain(.06, this.nowBus); loop(filt("bandpass", 220, .6, beds.city));
+    this.ancientBus.gain.value = 1 - this.mixNow; this.nowBus.gain.value = this.mixNow;      // the slider may have moved before the sound existed
   },
   setEnabled(on) {
     this.on = on; if (on) { this.ensure(); this.ctx.resume(); }
@@ -1499,7 +1500,7 @@ const sound = {
       // hoofbeats: each team within earshot gallops in four beats per stride, slightly uneven
       for (const c of race.cars) {
         if (c.v < 1.5 || (c.crashed && c.crashT > 2)) continue;
-        const h = this.hear(c.x, c.z); if (h.g < .06) continue;
+        const h = this.hear(c.x, c.z); if (h.g < .15 || this.mixNow > .98) continue;
         rumble += h.g * c.v / 17;
         let next = this.hoofNext.get(c.id) ?? t;
         const stride = 3.3 / Math.max(2, c.v);
@@ -1642,7 +1643,7 @@ function newRace() {
   const seed = (Date.now() ^ (APP.raceNo * 7919)) >>> 0;
   const driving = APP.role === "charioteer";
   APP.race = Circus.createRace({ seed, player: driving ? 0 : -1, playerFaction: driving ? $("faction").value : null });
-  APP.evIndex = 0; APP.acc = 0; APP.finishT = 0; APP.crashHot = 0;
+  APP.evIndex = 0; APP.acc = 0; APP.finishT = 0; APP.crashHot = 0; APP.keys = {}; APP.whipEdge = false;
   setTeamColors(APP.race); DUST.clear(); paintSand(); sandTex.needsUpdate = true; openGates(0); setLapCounters(7);
   if (APP.role === "ride") applyTactic(null);
   poseTeams(APP.race, 0, 0);
@@ -1665,6 +1666,7 @@ function startDay() {
 function dropMappa() {
   if (APP.phase !== "ready") return;
   APP.phase = "racing"; APP.phaseT = 0; Circus.start(APP.race); CROWD.excite = .95;
+  APP.whipEdge = false;
   if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();   // Space whips; it must not press a button
   banner("The cloth falls!", 1.6); sound.gates(); sound.roar(1);
   renderStatus();
@@ -1774,23 +1776,29 @@ function cameraFrame(dt) {
 }
 
 // ---- input --------------------------------------------------------------------------------------------------------
-const KEYMAP = { ArrowLeft: "left", ArrowRight: "right", ArrowDown: "rein", a: "left", d: "right", s: "rein" };
+const KEYMAP = { ArrowLeft: "left", ArrowRight: "right", ArrowDown: "rein", KeyA: "left", KeyD: "right", KeyS: "rein" };
+const driving = () => APP.role === "charioteer" && (APP.phase === "racing" || APP.phase === "ready");
+// While you drive, the arrows, A/D/S and Space drive the team (not the focused button, select or slider);
+// otherwise the keyboard works the page as usual.
 addEventListener("keydown", (e) => {
-  if (e.target.closest && e.target.closest("input, select")) return;
-  if (KEYMAP[e.key]) { APP.keys[KEYMAP[e.key]] = true; e.preventDefault(); }
-  if (e.key === " " || e.key === "ArrowUp") { if (!e.repeat) APP.whipEdge = true; e.preventDefault(); }
+  if (!driving() || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = KEYMAP[e.code];
+  if (!k && e.code !== "Space" && e.code !== "ArrowUp") return;
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  if (k) APP.keys[k] = true; else if (!e.repeat) APP.whipEdge = true;
+  e.preventDefault();
 });
-addEventListener("keyup", (e) => { if (KEYMAP[e.key]) APP.keys[KEYMAP[e.key]] = false; });
+addEventListener("keyup", (e) => { const k = KEYMAP[e.code]; if (k) APP.keys[k] = false; });
 addEventListener("blur", () => { APP.keys = {}; });
 $("touch").addEventListener("pointerdown", (e) => { const k = e.target.dataset.key; if (!k) return; if (k === "whip") APP.whipEdge = true; else APP.keys[k] = true; });
-for (const ev of ["pointerup", "pointercancel", "pointerleave"]) $("touch").addEventListener(ev, (e) => { const k = e.target.dataset.key; if (k && k !== "whip") APP.keys[k] = false; });
+for (const ev of ["pointerup", "pointercancel"]) addEventListener(ev, () => { if ($("touch").classList.contains("show")) { APP.keys.left = APP.keys.right = APP.keys.rein = false; } });
 document.querySelectorAll("[data-role]").forEach((b) => b.addEventListener("click", () => {
   APP.role = b.dataset.role; if (APP.phase !== "idle") endDay();
   view.yaw = APP.role === "sponsor" ? Math.PI : 0; view.hfov = THREE.MathUtils.degToRad(158); view.userTurned = false;
   renderRole();
 }));
 document.querySelectorAll("[data-tactic]").forEach((b) => b.addEventListener("click", () => applyTactic(b.dataset.tactic)));
-daySel.addEventListener("change", () => { APP.day = Circus.RACE_DAYS.find((d) => d.id === daySel.value); APP.narrIdx = 0; renderDay(); });
+daySel.addEventListener("change", () => { if (APP.phase !== "idle") endDay(); APP.day = Circus.RACE_DAYS.find((d) => d.id === daySel.value); APP.narrIdx = 0; renderDay(); });
 $("go").addEventListener("click", startDay);
 $("mappa").addEventListener("click", dropMappa);
 $("stop").addEventListener("click", endDay);
