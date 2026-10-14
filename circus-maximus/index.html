@@ -669,14 +669,380 @@ function draw() {
   stage.addEventListener("wheel", (e) => { e.preventDefault(); view.hfov = THREE.MathUtils.clamp(view.hfov * Math.exp(e.deltaY * .0012), .6, 2.85); }, { passive: false });
 })();
 
-// TEMPORARY orientation check (Task 2) — replaced in Task 3
-{
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.MeshStandardMaterial({ color: "#c9b48a" }));
-  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; ancient.add(ground);
-  for (const [x, z, c] of [[200, 0, "red"], [-200, 0, "blue"], [0, -100, "green"], [0, 150, "yellow"]]) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(20, 30, 20), new THREE.MeshStandardMaterial({ color: c })); b.position.set(x, 15, z); b.castShadow = true; ancient.add(b);
+// ---- the ancient circus (about 103 AD) ----------------------------------------------------------------
+// An illustrative composite: arena, three tiers of seating with walkways and a portico, the twelve
+// starting gates, the barrier with its turning posts, lap counters, shrines and obelisks, the pulvinar,
+// the arch of Titus, the Palatine palace above and the city in the haze.
+const T = Circus.TRACK;
+const ARENA = { halfWidth: 42, gatesX: -268, curveX: 228 };
+// noise canvas used to weather every stone surface
+function noiseCanvas(size, seed, base, spread, blotch) {
+  const r = Circus.rng(seed), cv = document.createElement("canvas"); cv.width = cv.height = size;
+  const g = cv.getContext("2d"), img = g.createImageData(size, size);
+  // value noise at a few octaves, tileable by wrapping the lattice
+  const lat = (n) => Array.from({ length: n * n }, () => r());
+  const octs = [[8, .45], [32, .3], [128, .25]].map(([n, w]) => ({ n, w, v: lat(n) }));
+  const sample = (o, x, y) => { const fx = x * o.n / size, fy = y * o.n / size, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+    const at = (i, j) => o.v[((j % o.n) * o.n) + (i % o.n)];
+    const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
+    return (at(x0, y0) * (1 - sx) + at(x0 + 1, y0) * sx) * (1 - sy) + (at(x0, y0 + 1) * (1 - sx) + at(x0 + 1, y0 + 1) * sx) * sy; };
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let v = 0; for (const o of octs) v += sample(o, x, y) * o.w;
+    const b = blotch ? Math.max(0, sample(octs[0], x * 1.7 + 50, y * 1.7) - .62) * 2.2 : 0;
+    const k = (i) => Math.max(0, Math.min(255, base[i] * (1 + (v - .5) * spread - b * .35) + (r() - .5) * 10));
+    const p = (y * size + x) * 4; img.data[p] = k(0); img.data[p + 1] = k(1); img.data[p + 2] = k(2); img.data[p + 3] = 255;
   }
-  view.pos.set(20, 18, 61);
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+  return tex;
+}
+const TEX = {
+  travertine: noiseCanvas(256, 11, [214, 202, 176], .5, true),
+  marble: noiseCanvas(256, 12, [236, 230, 218], .25, false),
+  brick: noiseCanvas(256, 13, [168, 96, 70], .45, true),
+  plaster: noiseCanvas(256, 14, [222, 208, 184], .4, true),
+};
+const mat = (opts) => new THREE.MeshStandardMaterial({ roughness: .88, metalness: 0, ...opts });
+const M = {
+  stone: mat({ map: TEX.travertine }),
+  marble: mat({ map: TEX.marble, roughness: .6 }),
+  red: mat({ color: "#8e3324", map: TEX.plaster }),
+  ochre: mat({ color: "#c9a25a", map: TEX.plaster }),
+  roof: mat({ color: "#a65538", map: TEX.plaster }),
+  brick: mat({ map: TEX.brick }),
+  gold: mat({ color: "#d4a849", metalness: .85, roughness: .32 }),
+  bronze: mat({ color: "#7a5a32", metalness: .7, roughness: .45 }),
+  water: mat({ color: "#46707c", roughness: .12, metalness: .1 }),
+  dark: mat({ color: "#2b241c" }),
+  wood: mat({ color: "#6a4a2c" }),
+  green: mat({ color: "#5f6f3a", roughness: 1 }),
+};
+function addMesh(geo, material, parent, { x = 0, y = 0, z = 0, ry = 0, cast = true, receive = true } = {}) {
+  const m = new THREE.Mesh(geo, material); m.position.set(x, y, z); m.rotation.y = ry; m.castShadow = cast; m.receiveShadow = receive; parent.add(m); return m;
+}
+// world-space UVs (metres / scale) so the weathering texture has the same grain everywhere
+function worldUV(geo, scale = 6) {
+  geo.computeVertexNormals();
+  const p = geo.attributes.position, n = geo.attributes.normal, uv = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) {
+    const ax = Math.abs(n.getX(i)), ay = Math.abs(n.getY(i));
+    const [a, b] = ay > .7 ? [p.getX(i), p.getZ(i)] : ax > .7 ? [p.getZ(i), p.getY(i)] : [p.getX(i), p.getY(i)];
+    uv[2 * i] = a / scale; uv[2 * i + 1] = b / scale;
+  }
+  geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  return geo;
+}
+const box = (w, h, d) => worldUV(new THREE.BoxGeometry(w, h, d).toNonIndexed());
+
+// ---- the seating -------------------------------------------------------------------------------------
+// The cross-section of the stands, measured outward (o) from the arena wall, with height y.
+const ROW = { depth: .66, rise: .45, perTier: 14 };
+const PROFILE = [];          // [o, y]
+const SEAT_ROWS = [];        // { o, y } of each row of seats (the tread centre and seat height)
+(function buildProfile() {
+  let o = 0, y = 0;
+  PROFILE.push([0, 0]); y = 3.4; PROFILE.push([0, y]);        // the podium wall facing the arena
+  o = 1.8; PROFILE.push([o, y]);                               // front walkway with the best seats
+  for (let tier = 0; tier < 3; tier++) {
+    if (tier > 0) { o += 1.5; PROFILE.push([o, y]); y += 1.05; PROFILE.push([o, y]); }   // walkway and parapet
+    for (let k = 0; k < ROW.perTier; k++) {
+      y += ROW.rise; PROFILE.push([o, y]);
+      SEAT_ROWS.push({ o: o + ROW.depth * .45, y, tier });
+      o += ROW.depth; PROFILE.push([o, y]);
+    }
+  }
+  o += .4; PROFILE.push([o, y]);
+  ARENA.porticoO = o; ARENA.porticoY = y;
+  o += 4.2; PROFILE.push([o, y]);
+  y += 5.2; PROFILE.push([o, y]);                              // the portico's back wall
+  ARENA.outerO = o; ARENA.outerY = y;
+})();
+// Your seat in the spectator view: the middle of the Aventine stands, two-thirds of the way up.
+const SEAT = (() => { const row = SEAT_ROWS[24]; return { x: 20, y: row.y + 1.15, z: ARENA.halfWidth + row.o, row: 24 }; })();
+// The path the stands follow: along the Aventine side, round the curved end (with a gap for the arch of
+// Titus) and back along the Palatine side. Each piece gives n samples of [x, z, nx, nz] at offset o.
+const ARCH_GAP = .13;                                          // radians either side of the axis
+const PATH = [
+  { n: 2, at: (k, o) => { const x = ARENA.gatesX + 10 + k * (ARENA.curveX - ARENA.gatesX - 10); return [x, ARENA.halfWidth + o, 0, 1]; } },
+  { n: 22, at: (k, o) => { const a = Math.PI / 2 - k * (Math.PI / 2 - ARCH_GAP), R = ARENA.halfWidth + o; return [ARENA.curveX + R * Math.cos(a), R * Math.sin(a), Math.cos(a), Math.sin(a)]; } },
+  { n: 22, at: (k, o) => { const a = -ARCH_GAP - k * (Math.PI / 2 - ARCH_GAP), R = ARENA.halfWidth + o; return [ARENA.curveX + R * Math.cos(a), R * Math.sin(a), Math.cos(a), Math.sin(a)]; } },
+  { n: 2, at: (k, o) => { const x = ARENA.curveX - k * (ARENA.curveX - ARENA.gatesX - 10); return [x, -ARENA.halfWidth - o, 0, -1]; } },
+];
+function sweep(profile, pieces) {
+  const pos = [], uv = [], col = [];
+  for (const piece of pieces) {
+    const n = piece.n;
+    for (let i = 0; i + 1 < profile.length; i++) {
+      const [o0, y0] = profile[i], [o1, y1] = profile[i + 1];
+      const vlen = Math.hypot(o1 - o0, y1 - y0);
+      if (vlen < 1e-6) continue;
+      const shade = Math.abs(o1 - o0) < 1e-6 ? .68 : Math.abs(y1 - y0) < 1e-6 ? 1 : .86;   // risers darker than treads
+      let u0 = 0;
+      for (let k = 0; k < n - 1 + (n === 2 ? 0 : 0); k++) {
+        const ka = k / (n - 1), kb = (k + 1) / (n - 1);
+        const A0 = piece.at(ka, o0), B0 = piece.at(kb, o0), A1 = piece.at(ka, o1), B1 = piece.at(kb, o1);
+        const seg = Math.hypot(B0[0] - A0[0], B0[1] - A0[1]);
+        const P = [[A0[0], y0, A0[1]], [B0[0], y0, B0[1]], [B1[0], y1, B1[1]], [A1[0], y1, A1[1]]];
+        for (const idx of [0, 1, 2, 0, 2, 3]) pos.push(...P[idx]);
+        const U = [[u0, y0], [u0 + seg, y0], [u0 + seg, y0 + vlen], [u0, y0 + vlen]];
+        for (const idx of [0, 1, 2, 0, 2, 3]) { uv.push(U[idx][0] / 5, (U[idx][1] + o0) / 5); col.push(shade, shade * .98, shade * .95); }
+        u0 += seg;
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  return g;
+}
+const cavea = addMesh(sweep(PROFILE, PATH), M.stone, ancient);
+cavea.material = M.stone.clone(); cavea.material.side = THREE.DoubleSide; cavea.material.vertexColors = true;
+// the outer façade: three storeys of arcades, a painted canvas on the outside of the back wall
+function arcadeTexture() {
+  const cv = document.createElement("canvas"); cv.width = 512; cv.height = 256; const g = cv.getContext("2d");
+  g.drawImage(TEX.travertine.image, 0, 0, 512, 256);
+  for (let s = 0; s < 3; s++) for (let i = 0; i < 4; i++) {
+    const x = 16 + i * 128, y = 18 + s * 80, w = 96, h = 62;
+    g.fillStyle = s === 0 ? "#3a2c20" : "#4a3a2a"; g.beginPath(); g.moveTo(x, y + h); g.lineTo(x, y + w / 2); g.arc(x + w / 2, y + w / 2, w / 2, Math.PI, 0); g.lineTo(x + w, y + h); g.fill();
+    g.fillStyle = "rgba(255,240,210,.35)"; g.fillRect(x - 12, y - 6, 8, h + 6);
+  }
+  for (let s = 0; s <= 3; s++) { g.fillStyle = "rgba(90,70,50,.35)"; g.fillRect(0, 10 + s * 80, 512, 5); }
+  const t = new THREE.CanvasTexture(cv); t.wrapS = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const FACADE = mat({ map: arcadeTexture() });
+(function facade() {
+  const pieces = PATH.map((p) => ({ n: p.n, at: (k) => p.at(k, ARENA.outerO) }));
+  const pos = [], uv = [];
+  for (const piece of pieces) { let u = 0; for (let k = 0; k + 1 < piece.n; k++) {
+    const a = piece.at(k / (piece.n - 1)), b = piece.at((k + 1) / (piece.n - 1)), seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const P = [[a[0], 0, a[1]], [b[0], 0, b[1]], [b[0], ARENA.outerY, b[1]], [a[0], ARENA.outerY, a[1]]];
+    for (const i of [0, 1, 2, 0, 2, 3]) pos.push(...P[i]);
+    const U = [[u, 0], [u + seg, 0], [u + seg, 1], [u, 1]]; for (const i of [0, 1, 2, 0, 2, 3]) uv.push(U[i][0] / 16, U[i][1]);
+    u += seg; } }
+  const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); g.computeVertexNormals();
+  const m = addMesh(g, FACADE, ancient); m.material.side = THREE.DoubleSide;
+})();
+// portico columns and roof along the top of the stands
+(function portico() {
+  const col = new THREE.CylinderGeometry(.32, .38, 5, 8);
+  const pts = [];
+  for (const piece of PATH) {
+    const n = piece.n === 2 ? 90 : 14;
+    for (let k = 0; k < n; k++) { const [x, z] = piece.at(k / n, ARENA.porticoO + .5); pts.push([x, z]); }
+  }
+  const cols = new THREE.InstancedMesh(col, M.marble, pts.length);
+  const m4 = new THREE.Matrix4();
+  pts.forEach(([x, z], i) => { m4.makeTranslation(x, ARENA.porticoY + 2.5, z); cols.setMatrixAt(i, m4); });
+  cols.castShadow = true; cols.receiveShadow = true; ancient.add(cols);
+  const roofProfile = [[ARENA.porticoO, ARENA.porticoY + 5], [ARENA.outerO + .6, ARENA.porticoY + 5.6]];
+  const roof = addMesh(sweep(roofProfile, PATH), M.roof, ancient); roof.material = M.roof.clone(); roof.material.side = THREE.DoubleSide;
+})();
+
+// ---- the arena floor ---------------------------------------------------------------------------------
+// Sand on a canvas that the chariots' wheels and hooves mark as they run (see the race view).
+const SAND = { x0: ARENA.gatesX, x1: ARENA.curveX + ARENA.halfWidth, z0: -ARENA.halfWidth, z1: ARENA.halfWidth, pxPerM: 3.6 };
+const sandCanvas = document.createElement("canvas");
+sandCanvas.width = Math.round((SAND.x1 - SAND.x0) * SAND.pxPerM); sandCanvas.height = Math.round((SAND.z1 - SAND.z0) * SAND.pxPerM);
+const sandCtx = sandCanvas.getContext("2d");
+function paintSand() {
+  const g = sandCtx, r = Circus.rng(5);
+  g.fillStyle = "#cdb07a"; g.fillRect(0, 0, sandCanvas.width, sandCanvas.height);
+  for (let i = 0; i < 26000; i++) { const x = r() * sandCanvas.width, y = r() * sandCanvas.height; g.fillStyle = `rgba(${r() < .5 ? "120,90,50" : "245,225,180"},${.05 + r() * .12})`; g.fillRect(x, y, 1 + r() * 3, 1 + r() * 3); }
+  // raked arcs, old hoof scuffs round the turns
+  g.strokeStyle = "rgba(110,80,45,.08)"; g.lineWidth = 2;
+  for (let i = 0; i < 160; i++) { const s = r() * T.lap, d = r() * T.dMax, p = Circus.toWorld(s, d); g.beginPath(); g.arc((p.x - SAND.x0) * SAND.pxPerM, (p.z - SAND.z0) * SAND.pxPerM, 2 + r() * 6, 0, 6.28); g.stroke(); }
+}
+paintSand();
+const sandTex = new THREE.CanvasTexture(sandCanvas); sandTex.colorSpace = THREE.SRGBColorSpace; sandTex.anisotropy = 8;
+(function arenaFloor() {
+  // the arena outline: straight sides, the curved east end, closed by the gates in the west
+  const sh = new THREE.Shape();
+  sh.moveTo(ARENA.gatesX, -ARENA.halfWidth); sh.lineTo(ARENA.curveX, -ARENA.halfWidth);
+  sh.absarc(ARENA.curveX, 0, ARENA.halfWidth, -Math.PI / 2, Math.PI / 2, false);
+  sh.lineTo(ARENA.gatesX, ARENA.halfWidth); sh.lineTo(ARENA.gatesX, -ARENA.halfWidth);
+  const g = new THREE.ShapeGeometry(sh, 48); g.rotateX(Math.PI / 2);         // shape y → world z
+  const p = g.attributes.position, uv = g.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) - SAND.x0) / (SAND.x1 - SAND.x0), 1 - (p.getZ(i) - SAND.z0) / (SAND.z1 - SAND.z0));
+  g.computeVertexNormals();
+  const m = addMesh(g, mat({ map: sandTex, roughness: 1 }), ancient, { cast: false });
+  m.material.side = THREE.DoubleSide;
+})();
+// ground beyond the building, sloping up into the hills
+(function hills() {
+  const g = new THREE.PlaneGeometry(2600, 2000, 130, 100); g.rotateX(-Math.PI / 2);
+  const p = g.attributes.position, r = Circus.rng(21);
+  const height = (x, z) => {
+    const pal = Math.max(0, -z - 95) , av = Math.max(0, z - 95);
+    let h = Math.min(36, pal * .55) + Math.min(30, av * .42);              // the Palatine rises steeply, the Aventine more gently
+    h *= 1 / (1 + Math.max(0, Math.abs(x - 30) - 380) / 160);              // the valley opens east and west
+    const away = Math.min(1, Math.max(0, Math.abs(z) - 85) / 40);             // flat valley floor under the building
+    return h + Math.sin(x * .013) * Math.cos(z * .011) * 3 * away - .4;
+  };
+  for (let i = 0; i < p.count; i++) p.setY(i, height(p.getX(i), p.getZ(i)));
+  worldUV(g, 18);
+  addMesh(g, mat({ color: "#a39168", map: TEX.plaster }), ancient, { cast: false });
+  ARENA.height = height;
+})();
+
+// ---- the starting gates (carceres) ---------------------------------------------------------------------
+const GATE_DOORS = [];
+(function gates() {
+  const g = new THREE.Group(); ancient.add(g);
+  const x = ARENA.gatesX;
+  // the stalls: a back wall, a roof over the twelve stalls and an upper storey; open at the front
+  addMesh(box(2, 14, 2 * ARENA.halfWidth + 8), M.stone, g, { x: x - 13, y: 7 });
+  addMesh(box(13, .8, 2 * ARENA.halfWidth + 8), M.stone, g, { x: x - 6.5, y: 6.6 });
+  addMesh(box(4, 5.6, 2 * ARENA.halfWidth + 8), M.stone, g, { x: x - 10, y: 9.8 });
+  addMesh(box(13.4, .7, 2 * ARENA.halfWidth + 8.4), M.marble, g, { x: x - 6.5, y: 12.95 });
+  for (let i = 0; i <= 12; i++) { const z = i < 12 ? T.gateZ(i) - 2.6 : T.gateZ(11) + 2.6; addMesh(box(11, 6.2, .5), M.stone, g, { x: x - 6, y: 3.1, z }); }
+  for (const z of [-ARENA.halfWidth - 6, ARENA.halfWidth + 6]) addMesh(box(14, 22, 14), M.stone, g, { x: x - 6, y: 11, z }); // towers (oppida)
+  addMesh(box(10, 6, 14), M.red, g, { x: x - 2, y: 15.6, z: 0 });                                           // the magistrates' tribunal above the gates
+  for (let i = 0; i < 12; i++) {
+    const z = T.gateZ(i);
+    addMesh(box(1.2, 9, 1.2), M.marble, g, { x: x + .4, y: 4.5, z: z + 2.6 });                              // herm pillars between gates
+    const door = new THREE.Group(); door.position.set(x + .3, 0, z - 2.2); g.add(door);
+    addMesh(box(.25, 5, 4.4), M.wood, door, { y: 2.5, z: 2.2 });                                            // lattice door, hinged at its edge
+    for (let k = 0; k < 5; k++) addMesh(box(.32, 4.6, .12), M.dark, door, { y: 2.5, z: .5 + k * .9, cast: false });
+    GATE_DOORS.push(door);
+  }
+  addMesh(box(1.2, 9, 1.2), M.marble, g, { x: x + .4, y: 4.5, z: T.gateZ(0) - 2.6 });
+  addMesh(box(.6, 10, 6), M.dark, g, { x: x + .1, y: 5, z: (T.gateZ(5) + T.gateZ(6)) / 2, cast: false });  // the procession gate
+})();
+
+// ---- the barrier (euripus) ------------------------------------------------------------------------------
+const OBELISKS = [];
+const LAP_EGGS = [], LAP_DOLPHINS = [];
+(function barrier() {
+  const g = new THREE.Group(); ancient.add(g);
+  const x0 = T.westPost + 4.5, x1 = T.eastPost - 4.5, len = x1 - x0, cx = (x0 + x1) / 2;
+  addMesh(box(len, 1.3, 6.4), M.marble, g, { x: cx, y: .65 });
+  addMesh(box(len - .6, .1, 5.4), M.water, g, { x: cx, y: 1.32, cast: false });
+  // the turning posts: three gilded cones on a semicircular base at each end
+  for (const [px, dir] of [[T.westPost, -1], [T.eastPost, 1]]) {
+    addMesh(worldUV(new THREE.CylinderGeometry(4.5, 4.7, 2.2, 24, 1, false, 0, Math.PI).toNonIndexed()), M.marble, g, { x: px, y: 1.1, ry: dir > 0 ? 0 : Math.PI });
+    for (const a of [-.9, 0, .9]) {
+      const cone = addMesh(new THREE.ConeGeometry(.9, 7.5, 16), M.gold, g, { x: px + dir * 2.6 * Math.cos(a), y: 2.2 + 3.75, z: 2.6 * Math.sin(a) });
+      cone.userData.post = true;
+    }
+  }
+  // lap counters: seven eggs near the west end, seven dolphins near the east end, on frames of columns
+  const frame = (fx) => { for (const dz of [-2, 2]) addMesh(box(.5, 6, .5), M.marble, g, { x: fx - 6, y: 4, z: dz }), addMesh(box(.5, 6, .5), M.marble, g, { x: fx + 6, y: 4, z: dz }); addMesh(box(13, .5, 4.6), M.marble, g, { x: fx, y: 7.2 }); };
+  frame(T.westPost + 25); frame(T.eastPost - 25);
+  for (let i = 0; i < 7; i++) {
+    const egg = addMesh(new THREE.SphereGeometry(.55, 12, 10), M.marble, g, { x: T.westPost + 25 - 5.1 + i * 1.7, y: 8.1 }); egg.scale.y = 1.4; LAP_EGGS.push(egg);
+    const dol = new THREE.Group(); dol.position.set(T.eastPost - 25 - 5.1 + i * 1.7, 8.2, 0); g.add(dol);
+    const body = addMesh(new THREE.SphereGeometry(.45, 10, 8), M.bronze, dol); body.scale.set(1, 1, 2.4); body.rotation.x = .9;
+    addMesh(new THREE.ConeGeometry(.35, .7, 6), M.bronze, dol, { y: -.7 });
+    LAP_DOLPHINS.push(dol);
+  }
+  // obelisks on pedestals: Augustus's (10 BC) mid-barrier, Constantius II's (357 AD) further east
+  const obelisk = (ox, h) => {
+    const o = new THREE.Group(); o.position.x = ox; g.add(o);
+    addMesh(box(4.2, 4, 4.2), M.marble, o, { y: 3.3 });
+    const shaft = new THREE.CylinderGeometry(.95 * h / 24, 1.4 * h / 24, h, 4, 1); shaft.rotateY(Math.PI / 4);
+    addMesh(worldUV(shaft.toNonIndexed(), 3), mat({ color: "#b98a6a", map: TEX.plaster }), o, { y: 5.3 + h / 2 });
+    addMesh(new THREE.ConeGeometry(.95 * h / 24 * 1.05, 1.6, 4).rotateY(Math.PI / 4), M.gold, o, { y: 5.3 + h + .8 });
+    OBELISKS.push(o); return o;
+  };
+  obelisk(T.westPost + 170, 23.7);
+  obelisk(T.westPost + 238, 32.2);
+  // shrines, statues and a fountain along the barrier
+  const shrine = (sx) => { addMesh(box(5, .6, 4), M.marble, g, { x: sx, y: 1.6 }); for (const dx of [-2, 2]) for (const dz of [-1.5, 1.5]) addMesh(new THREE.CylinderGeometry(.22, .25, 3.6, 8), M.marble, g, { x: sx + dx, y: 3.7, z: dz }); addMesh(box(5.4, .6, 4.4), M.marble, g, { x: sx, y: 5.8 }); const roof = addMesh(new THREE.ConeGeometry(3.6, 1.6, 4).rotateY(Math.PI / 4), M.roof, g, { x: sx, y: 6.9 }); roof.scale.z = .8; addMesh(new THREE.SphereGeometry(.6, 10, 8), M.gold, g, { x: sx, y: 2.6 }); };
+  const statue = (sx, h) => { addMesh(new THREE.CylinderGeometry(.6, .6, h, 10), M.marble, g, { x: sx, y: 1.3 + h / 2 }); addMesh(new THREE.CylinderGeometry(.35, .45, 2, 8), M.gold, g, { x: sx, y: 1.3 + h + 1 }); addMesh(new THREE.SphereGeometry(.3, 8, 6), M.gold, g, { x: sx, y: 1.3 + h + 2.2 }); };
+  shrine(T.westPost + 60); shrine(T.westPost + 120); shrine(T.westPost + 205); shrine(T.westPost + 280);
+  for (const sx of [T.westPost + 90, T.westPost + 150, T.westPost + 190, T.westPost + 260, T.westPost + 300]) statue(sx, 6 + (sx % 3));
+  addMesh(new THREE.CylinderGeometry(2.2, 2.6, 1.2, 16), M.marble, g, { x: T.westPost + 225, y: 1.9 });
+})();
+function setObelisks(n) { OBELISKS.forEach((o, i) => { o.visible = i < n; }); }
+function setLapCounters(left) { LAP_EGGS.forEach((e, i) => { e.visible = i < left; }); LAP_DOLPHINS.forEach((d, i) => { d.rotation.z = i < left ? 0 : Math.PI / 2 * .95; d.position.y = i < left ? 8.2 : 7.6; }); }
+
+// ---- the pulvinar, the arch of Titus and the gates' surroundings -----------------------------------------
+const PULVINAR = { x: 22, z: -ARENA.halfWidth - 8 };
+(function pulvinar() {
+  const g = new THREE.Group(); g.position.set(PULVINAR.x, 0, -ARENA.halfWidth); ancient.add(g);
+  addMesh(box(26, 13, 14), M.stone, g, { y: 6.5, z: -6 });
+  addMesh(box(26.6, 1, 15), M.marble, g, { y: 13.4, z: -6 });
+  for (let i = 0; i < 6; i++) addMesh(new THREE.CylinderGeometry(.55, .6, 7, 12), M.marble, g, { x: -11 + i * 4.4, y: 17.4, z: -.6 });
+  addMesh(box(26, 1.2, 12), M.marble, g, { y: 21.5, z: -6 });
+  const ped = new THREE.CylinderGeometry(1, 1, 26, 3); ped.rotateZ(Math.PI / 2); ped.scale(1, 3.2, 6.8);
+  addMesh(ped, M.roof, g, { y: 23.7, z: -6 });
+  addMesh(box(18, 3, 1), M.red, g, { y: 15.5, z: -6.9 + 0 });
+  for (const x of [-12, 0, 12]) addMesh(new THREE.SphereGeometry(.8, 10, 8), M.gold, g, { x, y: 27.2, z: -6 });
+  // purple awning and the box seats
+  addMesh(box(18, .2, 6), mat({ color: "#5e2a4a" }), g, { y: 20.2, z: -3, cast: false });
+  addMesh(box(18, 1, 4), M.red, g, { y: 13.9, z: -2 });
+})();
+(function archOfTitus() {
+  const g = new THREE.Group(); g.position.set(ARENA.curveX + ARENA.halfWidth + ARENA.outerO * .55, 0, 0); ancient.add(g);
+  const w = 20, h = 22, d = ARENA.outerO * 1.1;
+  addMesh(box(d, h, w), M.marble, g, { y: h / 2 });
+  for (const [z, ww, hh] of [[0, 6, 13], [-6.6, 3, 8.5], [6.6, 3, 8.5]]) addMesh(box(d + .4, hh, ww), M.dark, g, { y: hh / 2, z, cast: false });
+  addMesh(box(d + 1, 5, w + 1), M.marble, g, { y: h + 2.5 });
+  // a gilded four-horse chariot group on top
+  addMesh(box(4, 3, 7), M.gold, g, { y: h + 6.5 });
+})();
+
+// ---- the Palatine palace, the Aventine and the city ---------------------------------------------------
+(function surroundings() {
+  const g = new THREE.Group(); ancient.add(g);
+  const r = Circus.rng(77);
+  // Domus Augustana: a great curved exedra facing the circus, palace blocks behind it
+  const ex = new THREE.Group(); ex.position.set(30, 30, -126); g.add(ex);
+  const exG = new THREE.CylinderGeometry(42, 42, 22, 40, 1, true, Math.PI * .62, Math.PI * .76).toNonIndexed();
+  const e = addMesh(worldUV(exG, 8), M.ochre, ex, { y: 11 }); e.material = M.ochre.clone(); e.material.side = THREE.DoubleSide;
+  for (let i = 0; i < 26; i++) { const a = Math.PI * .62 + i / 25 * Math.PI * .76 - Math.PI / 2; addMesh(new THREE.CylinderGeometry(.7, .8, 10, 8), M.marble, ex, { x: Math.sin(a + Math.PI / 2) * 43.5, y: 5, z: Math.cos(a + Math.PI / 2) * 43.5 }); }
+  const PALACE = [mat({ map: arcadeTexture(), color: "#e8d2a8" }), mat({ map: arcadeTexture(), color: "#c98f6e" })];
+  PALACE.forEach((m) => { m.map.wrapT = THREE.RepeatWrapping; });
+  const palaceBox = (w, h, d) => { const b = new THREE.BoxGeometry(w, h, d), uv = b.attributes.uv, nrm = b.attributes.normal;
+    for (let i = 0; i < uv.count; i++) { const side = Math.abs(nrm.getX(i)) > .5 ? d : w; uv.setXY(i, uv.getX(i) * side / 14, uv.getY(i) * h / 24); } return b; };
+  const block = (x, z, w, h, d, m = PALACE[0]) => { addMesh(palaceBox(w, h, d), m, g, { x, y: ARENA.height(x, z) - 1 + h / 2, z }); addMesh(new THREE.ConeGeometry(Math.max(w, d) * .62, 3.5, 4).rotateY(Math.PI / 4).scale(w / Math.max(w, d), 1, d / Math.max(w, d)), M.roof, g, { x, y: ARENA.height(x, z) - 1 + h + 1.7, z }); };
+  for (let i = 0; i < 26; i++) block(-160 + r() * 360, -140 - r() * 120, 14 + r() * 26, 10 + r() * 22, 14 + r() * 24, PALACE[r() < .3 ? 1 : 0]);
+  // temples on the Aventine (seen from the pulvinar)
+  for (let i = 0; i < 4; i++) { const tx = -150 + i * 90 + r() * 30, tz = 150 + r() * 40; const ty = ARENA.height(tx, tz) - 1;
+    addMesh(box(14, 3, 24), M.marble, g, { x: tx, y: ty + 1.5, z: tz }); for (let c = 0; c < 6; c++) addMesh(new THREE.CylinderGeometry(.5, .55, 9, 8), M.marble, g, { x: tx - 5 + (c % 2) * 10, y: ty + 7.5, z: tz - 10 + Math.floor(c / 2) * 10 });
+    addMesh(new THREE.ConeGeometry(10, 3.5, 4).rotateY(Math.PI / 4).scale(.75, 1, 1.25), M.roof, g, { x: tx, y: ty + 13.5, z: tz }); }
+  // the city: houses and apartment blocks fading into the haze
+  const city = new THREE.InstancedMesh(box(1, 1, 1), mat({ map: TEX.plaster }), 1400), roofs = new THREE.InstancedMesh(new THREE.ConeGeometry(.75, 1, 4).rotateY(Math.PI / 4), M.roof, 1400);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color();
+  let n = 0;
+  while (n < 1400) {
+    const a = r() * Math.PI * 2, dist = 230 + Math.pow(r(), .7) * 900, x = 30 + Math.cos(a) * dist * 1.25, z = Math.sin(a) * dist;
+    if (Math.abs(z) < 120 && x > -320 && x < 330) continue;                 // not inside the circus
+    if (z < -95 && z > -260 && x > -180 && x < 240) continue;               // not on the palace
+    const w = 8 + r() * 16, h = 6 + r() * 16, d = 8 + r() * 16, y = ARENA.height(x, z) - 1;
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), r() * .4 - .2 + (Math.abs(z) > Math.abs(x) ? 0 : Math.PI / 2));
+    m4.compose(new THREE.Vector3(x, y + h / 2, z), q, new THREE.Vector3(w, h, d)); city.setMatrixAt(n, m4);
+    m4.compose(new THREE.Vector3(x, y + h + 1.2, z), q, new THREE.Vector3(w, 2.4, d)); roofs.setMatrixAt(n, m4);
+    city.setColorAt(n, c.setHSL(.08 + r() * .04, .25 + r() * .2, .62 + r() * .2)); n++;
+  }
+  city.receiveShadow = roofs.receiveShadow = true; g.add(city, roofs);
+  // cypresses and umbrella pines on the slopes
+  const tree = new THREE.InstancedMesh(new THREE.ConeGeometry(2.2, 12, 7), M.green, 220), m5 = new THREE.Matrix4();
+  for (let i = 0; i < 220; i++) { const x = -260 + r() * 560, z = (r() < .5 ? -1 : 1) * (100 + r() * 90), y = ARENA.height(x, z) - 1; const s = .7 + r() * .6; m5.compose(new THREE.Vector3(x, y + 6 * s, z), q.identity(), new THREE.Vector3(s, s, s)); tree.setMatrixAt(i, m5); }
+  tree.castShadow = true; g.add(tree);
+})();
+// TEMPORARY still for headless checks (Tasks 3–7) — removed in Task 8.
+// Query: ?yaw=&pitch=&hfov=&mix=&ob=&excite=&race=SECONDS&seed=&chase=CAR
+{
+  const q = new URLSearchParams(location.search);
+  view.pos.set(SEAT.x, SEAT.y, SEAT.z);
+  view.yaw = +(q.get("yaw") ?? 0); view.pitch = +(q.get("pitch") ?? -.1); view.mix = +(q.get("mix") ?? 0);
+  if (q.get("hfov")) view.hfov = +q.get("hfov");
+  setObelisks(+(q.get("ob") ?? 1));
+  if (typeof crowdFrame === "function") { CROWD.excite = +(q.get("excite") ?? .1); crowdFrame(3); }
+  if (typeof poseTeams === "function" && q.get("race") != null) {
+    const race = Circus.createRace({ seed: +(q.get("seed") ?? 3) }); setTeamColors(race); Circus.start(race);
+    const secs = +q.get("race");
+    for (let i = 0; i < secs * 30; i++) { Circus.step(race); if (i % 2 === 0) poseTeams(race, 1 / 15, i / 30); }
+    poseTeams(race, 1 / 30, secs); openGates(1);
+    if (q.get("chase") != null) {
+      const c = race.cars[+q.get("chase")], fx = Math.cos(c.heading), fz = Math.sin(c.heading);
+      view.mode = "chase"; chaseCam.position.set(c.x - fx * 11, 4.2, c.z - fz * 11); chaseCam.lookAt(c.x + fx * 8, 1.5, c.z + fz * 8);
+    }
+  }
+  if (typeof modernFrame === "function") modernFrame(0);
   draw();
   const im = new Image(); im.src = renderer.domElement.toDataURL(); im.style.cssText = "position:absolute;inset:0;width:100%;height:100%"; stage.appendChild(im);
 }
