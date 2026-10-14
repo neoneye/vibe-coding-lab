@@ -59,7 +59,7 @@ summary { cursor: pointer; color: var(--accent); }
 #touch { position: absolute; inset: auto 0 64px 0; display: none; justify-content: space-between; padding: 0 16px; pointer-events: none; }
 #touch button { pointer-events: auto; width: 64px; height: 64px; border-radius: 50%; font-size: 20px; background: rgba(25,20,15,.6); }
 #touch.show { display: flex; }
-@media (max-width: 800px) { body { grid-template-columns: 1fr; grid-template-rows: 58vh auto; overflow: auto; } #stage { order: -1; } }
+@media (max-width: 800px) { body { grid-template-columns: 1fr; grid-template-rows: 58vh auto; overflow: auto; } #stage { order: -1; } #standings { top: 54px; min-width: 130px; font-size: 11px; } }
 </style>
 </head>
 <body>
@@ -1270,7 +1270,7 @@ function poseTeams(race, dt, t) {
     // a crash: the car rolls over and slides, the horses bolt on and spread out
     const ct = c.crashed ? c.crashT : 0, roll = c.crashed ? Math.min(Math.PI * .55, ct * 5) + Math.sin(i) * .2 * Math.min(1, ct * 5) : 0;
     rig.car.rotation.set(roll, 0, c.crashed ? Math.min(.5, ct * 2) * (i % 2 ? 1 : -1) : -Math.min(.12, v * .004));
-    rig.car.position.y = c.crashed ? .75 * Math.min(1, ct * 3) + Math.max(0, Math.sin(Math.min(ct * 4, Math.PI)) * .9) : 0;   // on its side, wheels above the sand
+    rig.car.position.y = c.crashed ? 1.15 * Math.min(1, ct * 3) + Math.max(0, Math.sin(Math.min(ct * 4, Math.PI)) * .9) : 0;   // on its side, wheels above the sand
     rig.team.position.set(c.crashed ? 10 * (1 - Math.exp(-ct * 1.4)) : 0, 0, 0);
     rig.wheels.forEach((w, k) => { w.rotation.set(0, 0, -c.dist / .62); });
     rig.driver.rotation.z = -.22 - Math.min(.2, v * .01) + (c.whipT > 0 ? Math.sin(t * 18) * .08 : 0);
@@ -1329,7 +1329,7 @@ const MODERN = { cars: [] };
     if (x < ARENA.gatesX) h = Math.max(h, LEVEL + Math.min(8.5, (ARENA.gatesX - x) * .3));
     const pal = Math.max(0, -z - 95), av = Math.max(0, z - 95);
     h += Math.min(34, pal * .6) + Math.min(24, av * .35);
-    return h + (inside ? 0 : Math.sin(x * .02) * Math.cos(z * .017) * .6);      // the hollow's floor is level
+    return h + (inside ? 0 : Math.sin(x * .02) * Math.cos(z * .017) * .6 * Math.min(1, Math.max(0, edge - 42) / 34));      // the hollow's floor is level
   };
   MODERN.ground = ground;
   const geo = new THREE.PlaneGeometry(2600, 2000, 260, 200); geo.rotateX(-Math.PI / 2);
@@ -1552,29 +1552,277 @@ const sound = {
 document.addEventListener("visibilitychange", () => { if (!sound.ctx) return; if (document.hidden) sound.ctx.suspend(); else if (sound.on) sound.ctx.resume(); });
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => { if (sound.on && sound.ctx && sound.ctx.state === "suspended" && !document.hidden) sound.ctx.resume(); }, true);
 
-// TEMPORARY still for headless checks (Tasks 3–7) — removed in Task 8.
-// Query: ?yaw=&pitch=&hfov=&mix=&ob=&excite=&race=SECONDS&seed=&chase=CAR
-{
-  const q = new URLSearchParams(location.search);
-  view.pos.set(SEAT.x, SEAT.y, SEAT.z);
-  view.yaw = +(q.get("yaw") ?? 0); view.pitch = +(q.get("pitch") ?? -.1); view.mix = +(q.get("mix") ?? 0);
-  if (q.get("hfov")) view.hfov = +q.get("hfov");
-  setObelisks(+(q.get("ob") ?? 1));
-  if (typeof crowdFrame === "function") { CROWD.excite = +(q.get("excite") ?? .1); crowdFrame(3); }
-  if (typeof poseTeams === "function" && q.get("race") != null) {
-    const race = Circus.createRace({ seed: +(q.get("seed") ?? 3) }); setTeamColors(race); Circus.start(race);
-    const secs = +q.get("race");
-    for (let i = 0; i < secs * 30; i++) { Circus.step(race); if (i % 2 === 0) poseTeams(race, 1 / 15, i / 30); }
-    poseTeams(race, 1 / 30, secs); openGates(1);
-    if (q.get("chase") != null) {
-      const c = race.cars[+q.get("chase")], fx = Math.cos(c.heading), fz = Math.sin(c.heading);
-      view.mode = "chase"; chaseCam.position.set(c.x - fx * 11, 4.2, c.z - fz * 11); chaseCam.lookAt(c.x + fx * 8, 1.5, c.z + fz * 8);
+// ---- the day at the circus: roles, race days, procession, races, cameras and the panel ------------------
+const FACTION = Object.fromEntries(Circus.FACTIONS.map((f) => [f.id, f]));
+const yearLabel = (y) => (y < 0 ? `${-y} BC` : y < 1000 ? `AD ${y}` : `${y}`);
+const NUM = ["no", "one", "two", "three", "four", "five", "six", "seven"];
+const APP = {
+  role: "spectator", day: Circus.RACE_DAYS.find((d) => d.default), phase: "idle", race: null, raceNo: 0, races: 1,
+  acc: 0, t: 0, phaseT: 0, evIndex: 0, keys: {}, whipEdge: false, soundTouched: false, crashHot: 0, finishT: 0, narrIdx: 0, narrT: 6,
+};
+const ROLE_HINTS = {
+  spectator: "Your seat is in the middle of the Aventine stands, two-thirds of the way up. Drag to look around.",
+  charioteer: "You drive your faction's leading team. ← → steer (left is towards the barrier), Space cracks the whip, ↓ reins in. Cut close round the turning posts, but not too close.",
+  ride: "Ride behind a team; you call the tactics, its driver does the driving.",
+  sponsor: "You preside over the games and pay for them. Choose the program, then drop the white cloth (the mappa) to start each race. You watch from the pulvinar.",
+};
+
+// ---- panel ------------------------------------------------------------------------------------------------
+const daySel = $("day");
+for (const d of Circus.RACE_DAYS) daySel.add(new Option(`${yearLabel(d.year)} · ${d.title}`, d.id, d.default, d.default));
+function renderDay() {
+  const d = APP.day;
+  $("dayCard").innerHTML = `<b>${d.sponsor}</b> presides · ${yearLabel(d.year)}<br>${d.occasion}` +
+    (d.anachronism ? `<div class="anachronism">The circus shown is the one of about AD 103; in ${yearLabel(d.year)} it looked different.</div>` : "") +
+    (APP.role === "sponsor" ? `<div class="hint">You are ${d.sponsor}. The winner's prize is up to 60,000 sesterces; you pay for prizes, horses, the procession and the gifts to the crowd.</div>` : "");
+  setObelisks(d.obelisks);
+}
+function renderRole() {
+  document.querySelectorAll("[data-role]").forEach((b) => b.classList.toggle("on", b.dataset.role === APP.role));
+  $("roleHint").textContent = ROLE_HINTS[APP.role];
+  $("factionRow").hidden = !(APP.role === "charioteer" || APP.role === "ride");
+  $("tactics").hidden = APP.role !== "ride";
+  $("program").hidden = APP.role !== "sponsor";
+  $("touch").classList.toggle("show", APP.role === "charioteer" && matchMedia("(pointer: coarse)").matches);
+  renderDay(); renderStatus();
+}
+let eraShown = "imperial";
+function renderTimeline() {
+  $("eraTabs").innerHTML = Circus.ERAS.map((e) => `<button data-era="${e.id}" class="${e.id === eraShown ? "on" : ""}" title="${e.span}">${e.name}</button>`).join("");
+  $("timeline").innerHTML = Circus.TIMELINE.filter((t) => t.era === eraShown).map((t) =>
+    `<li><span class="yr">${yearLabel(t.year)}</span>${t.text}${t.tradition ? ` <span class="trad">tradition</span>` : ""}<p>${t.detail}</p></li>`).join("");
+}
+$("eraTabs").addEventListener("click", (e) => { const b = e.target.closest("[data-era]"); if (b) { eraShown = b.dataset.era; renderTimeline(); } });
+function renderStatus() {
+  const go = $("go"), mappa = $("mappa");
+  const msg = { idle: "The teams wait in their stalls.", procession: "The procession enters the circus (shown faster than life).", ready: APP.role === "sponsor" ? "The teams are in their stalls. Drop the white cloth when you are ready." : "The presider raises the white cloth…", racing: `Race ${APP.raceNo} of ${APP.races}: seven laps, counter-clockwise.`, finished: "" }[APP.phase];
+  if (msg !== "") $("status").textContent = msg;
+  go.textContent = APP.phase === "idle" || APP.phase === "finished" ? (APP.phase === "finished" && APP.raceNo < APP.races ? "Next race" : "Start the day") : APP.phase === "procession" ? "Skip the procession" : "Start the day";
+  go.disabled = APP.phase === "racing" || APP.phase === "ready";
+  mappa.hidden = !(APP.role === "sponsor" && APP.phase === "ready");
+}
+
+// ---- the crowd's voice and banners ------------------------------------------------------------------------
+function say(text) {
+  const box = $("crowd"), d = document.createElement("div"); d.textContent = text; box.appendChild(d);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => d.remove(), 5600);
+}
+let bannerTimer = 0;
+function banner(text, secs = 3) { const b = $("banner"); b.textContent = text; b.classList.add("show"); clearTimeout(bannerTimer); bannerTimer = setTimeout(() => b.classList.remove("show"), secs * 1000); }
+const CHANTS = { red: "Russata!", white: "Albata!", blue: "Veneta! Veneta!", green: "Prasina! Prasina!" };
+
+// ---- the procession -----------------------------------------------------------------------------------------
+// A column of musicians, bearers with the images of the gods on litters, and the presider in a gilded car,
+// entering through the procession gate and walking down the Aventine side.
+const PARADE = (() => {
+  const g = new THREE.Group(); g.visible = false; ancient.add(g);
+  const people = new THREE.InstancedMesh(new THREE.CylinderGeometry(.22, .28, 1.7, 8).translate(0, .85, 0), mat({ color: "#ffffff" }), 60);
+  const c = new THREE.Color(), r = Circus.rng(64), m4 = new THREE.Matrix4(), slots = [];
+  for (let i = 0; i < 60; i++) { people.setColorAt(i, c.setHSL(r() < .5 ? .1 : r(), r() < .5 ? .1 : .5, .55 + r() * .35)); slots.push([-Math.floor(i / 4) * 2.4, ((i % 4) - 1.5) * 1.3]); }
+  people.castShadow = true; people.frustumCulled = false; g.add(people);   // its bounds would be computed while every figure is still at the origin
+  const litters = [];
+  for (let i = 0; i < 3; i++) { const l = new THREE.Group(); addMesh(box(3, .3, 2), M.wood, l, { y: 1.3 }); addMesh(new THREE.CylinderGeometry(.35, .45, 1.6, 8), M.gold, l, { y: 2.3 }); g.add(l); litters.push(l); }
+  const presider = new THREE.Group(); addMesh(box(1.8, 1.1, 1.4), M.gold, presider, { y: 1 }); addMesh(new THREE.CylinderGeometry(.25, .3, 1.4, 8), mat({ color: "#5e2a4a" }), presider, { y: 2.2 }); g.add(presider);
+  return {
+    g, start: -230, speed: 7,
+    update(t) {
+      const head = this.start + t * this.speed, z = 16;
+      slots.forEach(([dx, dz], i) => { m4.makeTranslation(head + dx + Math.sin(t * 6 + i) * .05, Math.abs(Math.sin(t * 8 + i)) * .06, z + dz); people.setMatrixAt(i, m4); });
+      people.instanceMatrix.needsUpdate = true;
+      litters.forEach((l, i) => l.position.set(head - 38 - i * 9, Math.abs(Math.sin(t * 7 + i)) * .05, z));
+      presider.position.set(head - 70, 0, z);
+      return head - 70 > 60;                                     // done when the presider has passed the middle
+    },
+  };
+})();
+
+// ---- races ----------------------------------------------------------------------------------------------------
+function newRace() {
+  const seed = (Date.now() ^ (APP.raceNo * 7919)) >>> 0;
+  const driving = APP.role === "charioteer";
+  APP.race = Circus.createRace({ seed, player: driving ? 0 : -1, playerFaction: driving ? $("faction").value : null });
+  APP.evIndex = 0; APP.acc = 0; APP.finishT = 0; APP.crashHot = 0;
+  setTeamColors(APP.race); DUST.clear(); paintSand(); sandTex.needsUpdate = true; openGates(0); setLapCounters(7);
+  if (APP.role === "ride") applyTactic(null);
+  poseTeams(APP.race, 0, 0);
+}
+function rideCar() { const race = APP.race; return race && race.cars.find((c) => c.faction === $("faction").value && c.leader); }
+function applyTactic(mode) {
+  document.querySelectorAll("[data-tactic]").forEach((b) => b.classList.toggle("on", b.dataset.tactic === mode));
+  const c = rideCar(); if (c && mode) { c.mode = mode; say(mode === "cautious" ? "Easy now, save the team!" : mode === "blocker" ? "Hold the inside, keep them out!" : "Now! Let them run!"); }
+}
+function startDay() {
+  if (APP.phase === "procession") { APP.phase = "ready"; PARADE.g.visible = false; APP.phaseT = 0; renderStatus(); return; }
+  if (APP.phase === "finished" && APP.raceNo < APP.races) { APP.raceNo++; newRace(); APP.phase = "ready"; APP.phaseT = 0; renderStatus(); return; }
+  APP.races = APP.role === "sponsor" ? +$("raceCount").value : 1; APP.raceNo = 1;
+  ensureSound();
+  newRace();
+  if (APP.role === "sponsor" && $("pompa").checked) { APP.phase = "procession"; APP.phaseT = 0; PARADE.g.visible = true; sound.trumpets(); banner("The procession", 2.5); say("Here come the gods!"); }
+  else { APP.phase = "ready"; APP.phaseT = 0; }
+  renderStatus();
+}
+function dropMappa() {
+  if (APP.phase !== "ready") return;
+  APP.phase = "racing"; APP.phaseT = 0; Circus.start(APP.race); CROWD.excite = .95;
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();   // Space whips; it must not press a button
+  banner("The cloth falls!", 1.6); sound.gates(); sound.roar(1);
+  renderStatus();
+}
+function endDay() {
+  APP.phase = "idle"; PARADE.g.visible = false; APP.race = null; newRace(); renderStatus();
+  $("hud").hidden = true; $("standings").hidden = true;
+}
+// events from the engine: crashes, laps, the finish
+function handleEvents() {
+  const race = APP.race;
+  for (; APP.evIndex < race.events.length; APP.evIndex++) {
+    const e = race.events[APP.evIndex], car = e.car != null ? race.cars[e.car] : null, f = car && FACTION[car.faction];
+    if (e.type === "crash") {
+      banner(`Naufragium! ${car.name} (${f.name})`, 2.4); say(car.player ? "Your team is down!" : ["Naufragium!", "He's under the wheels!", "Clear the track!"][e.car % 3]);
+      APP.crashHot = 1; CROWD.hot[1].set(car.x, car.z, 90, 1.2); sound.crash(car); sound.roar(.9);
+    } else if (e.type === "lap") {
+      const left = Circus.lapsLeft(race); setLapCounters(left);
+      if (left > 0) say(left === 1 ? "Last lap!" : `${NUM[left][0].toUpperCase() + NUM[left].slice(1)} laps to go!`);
+      sound.roar(.4);
+    } else if (e.type === "finish" && e.place === 1) {
+      banner(`${car.name} of the ${f.name} wins!`, 4); say(car.player ? "The palm is yours!" : CHANTS[car.faction]); sound.roar(1); CROWD.excite = 1;
+      APP.finishT = .001; setLapCounters(0);
+    } else if (e.type === "whip" && car.player) sound.whip();
+  }
+}
+function playerInput() {
+  const race = APP.race;
+  if (APP.role !== "charioteer" || race.player < 0) return {};
+  const k = APP.keys, whip = APP.whipEdge; APP.whipEdge = false;
+  return { [race.player]: { steer: (k.right ? 1 : 0) - (k.left ? 1 : 0), whip, rein: !!k.rein } };
+}
+function raceFrame(dt) {
+  const race = APP.race; if (!race) return;
+  const speed = +$("speed").value;
+  if (APP.phase === "racing") {
+    APP.acc += dt * speed;
+    while (APP.acc >= Circus.DT) { Circus.step(race, playerInput()); APP.acc -= Circus.DT; }
+    handleEvents();
+    if (APP.finishT > 0) APP.finishT += dt;
+    if (race.done || APP.finishT > 25) {
+      APP.phase = "finished";
+      const w = race.cars[race.finishOrder[0]];
+      $("status").textContent = w ? `Race ${APP.raceNo}: ${w.name} of the ${FACTION[w.faction].name} won; ${race.cars.filter((c) => c.crashed).length} wrecks.` : "Every team wrecked. The crowd will talk of it for years.";
+      if (APP.raceNo < APP.races) setTimeout(() => { if (APP.phase === "finished") startDay(); }, 6000);
+      renderStatus();
     }
   }
-  if (typeof modernFrame === "function") modernFrame(0);
-  draw();
-  const im = new Image(); im.src = renderer.domElement.toDataURL(); im.style.cssText = "position:absolute;inset:0;width:100%;height:100%"; stage.appendChild(im);
+  poseTeams(race, dt * speed, APP.t);
+  openGates(APP.phase === "racing" ? Math.min(1, APP.phaseT * 2.5) : 0);
+  // the crowd: excitement decays, hot spots follow the leader and the last crash
+  CROWD.excite += ((APP.phase === "racing" ? .14 : .06) - CROWD.excite) * Math.min(1, dt * .35);
+  const lead = Circus.standings(race).find((c) => !c.crashed && !c.finished) || race.cars[0];
+  CROWD.hot[0].set(lead.x, lead.z, 75, APP.phase === "racing" ? .55 : 0);
+  APP.crashHot = Math.max(0, APP.crashHot - dt * .25); CROWD.hot[1].w = APP.crashHot * 1.2;
+  CROWD.hot[2].set(Circus.TRACK.westPost + Circus.TRACK.line, 20, 60, APP.finishT > 0 && APP.finishT < 8 ? .8 : 0);
 }
+function renderHud() {
+  const race = APP.race, me = race && (APP.role === "charioteer" ? race.cars[race.player] : APP.role === "ride" ? rideCar() : null);
+  const racing = race && (APP.phase === "racing" || APP.phase === "finished" || APP.phase === "ready");
+  $("hud").hidden = !(me && racing);
+  if (me && racing) {
+    const left = Circus.lapsLeft(race);
+    $("hudLaps").innerHTML = Array.from({ length: 7 }, (_, i) => `<span class="${i < left ? "" : "gone"}"></span>`).join("");
+    const order = Circus.standings(race), place = order.indexOf(me) + 1;
+    $("hudPlace").textContent = me.crashed ? "Wrecked" : me.finished ? `Finished ${me.place}${["st", "nd", "rd"][me.place - 1] || "th"}` : `${place} of 12`;
+    $("hudStamina").style.width = `${Math.round(me.stamina * 100)}%`;
+    $("hudSpeed").textContent = `${Math.round(me.v * 3.6)} km/h`;
+  }
+  $("standings").hidden = !(race && (APP.phase === "racing" || APP.phase === "finished"));
+  if (!$("standings").hidden) {
+    const html = Circus.standings(race).map((c, i) => `<div class="${c.crashed ? "out" : ""} ${c === me ? "me" : ""}"><span class="sw" style="background:${FACTION[c.faction].color}"></span>${i + 1}. ${c.name}</div>`).join("");
+    if (html !== APP.lastStandings) { $("standings").innerHTML = html; APP.lastStandings = html; }
+  }
+}
+
+// ---- cameras ---------------------------------------------------------------------------------------------------
+const chase = { pos: new THREE.Vector3(-290, 6, 10), look: new THREE.Vector3() };
+function cameraFrame(dt) {
+  const race = APP.race;
+  const chaseCar = APP.role === "charioteer" && race ? race.cars[race.player] : APP.role === "ride" ? rideCar() : null;
+  if (chaseCar) {
+    view.mode = "chase";
+    const c = chaseCar, fx = Math.cos(c.heading), fz = Math.sin(c.heading);
+    const want = new THREE.Vector3(c.x - fx * 10.5, 4.3, c.z - fz * 10.5), look = new THREE.Vector3(c.x + fx * 9, 1.6, c.z + fz * 9);
+    const k = 1 - Math.exp(-dt * (c.crashed ? 1.5 : 6));
+    chase.pos.lerp(want, k); chase.look.lerp(look, k);
+    const shake = c.crashed ? 0 : Math.min(.06, c.v * .003);
+    chaseCam.position.copy(chase.pos).add(new THREE.Vector3((Math.random() - .5) * shake, (Math.random() - .5) * shake, 0));
+    chaseCam.lookAt(chase.look);
+    DUST.setScale(stage.clientHeight * renderer.getPixelRatio() * .9);
+    return;
+  }
+  view.mode = "panorama";
+  DUST.setScale(CUBE_SIZE * .5);
+  if (APP.role === "sponsor") view.pos.set(PULVINAR.x, 15.8, -ARENA.halfWidth + 1);      // the front of the pulvinar, before its columns
+  else view.pos.set(SEAT.x, SEAT.y, SEAT.z);
+  // until the visitor looks around themselves, tilt so a tall window shows sky rather than the backs of heads
+  if (!view.userTurned) { const halfV = view.hfov / (stage.clientWidth / Math.max(1, stage.clientHeight)) / 2; view.pitch = Math.atan(THREE.MathUtils.clamp(halfV - 1.05, -.13, .12)); }
+  if ($("follow").checked && race && (APP.phase === "racing" || APP.phase === "finished")) {
+    const lead = Circus.standings(race).find((c) => !c.crashed) || race.cars[0];
+    const want = Math.atan2(-(lead.x - view.pos.x), -(lead.z - view.pos.z));
+    let dy = want - view.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    view.yaw += dy * Math.min(1, dt * 2.5);
+    view.hfov += (1.35 - view.hfov) * Math.min(1, dt * 1.5);
+  }
+}
+
+// ---- input --------------------------------------------------------------------------------------------------------
+const KEYMAP = { ArrowLeft: "left", ArrowRight: "right", ArrowDown: "rein", a: "left", d: "right", s: "rein" };
+addEventListener("keydown", (e) => {
+  if (e.target.closest && e.target.closest("input, select")) return;
+  if (KEYMAP[e.key]) { APP.keys[KEYMAP[e.key]] = true; e.preventDefault(); }
+  if (e.key === " " || e.key === "ArrowUp") { if (!e.repeat) APP.whipEdge = true; e.preventDefault(); }
+});
+addEventListener("keyup", (e) => { if (KEYMAP[e.key]) APP.keys[KEYMAP[e.key]] = false; });
+addEventListener("blur", () => { APP.keys = {}; });
+$("touch").addEventListener("pointerdown", (e) => { const k = e.target.dataset.key; if (!k) return; if (k === "whip") APP.whipEdge = true; else APP.keys[k] = true; });
+for (const ev of ["pointerup", "pointercancel", "pointerleave"]) $("touch").addEventListener(ev, (e) => { const k = e.target.dataset.key; if (k && k !== "whip") APP.keys[k] = false; });
+document.querySelectorAll("[data-role]").forEach((b) => b.addEventListener("click", () => {
+  APP.role = b.dataset.role; if (APP.phase !== "idle") endDay();
+  view.yaw = APP.role === "sponsor" ? Math.PI : 0; view.hfov = THREE.MathUtils.degToRad(158); view.userTurned = false;
+  renderRole();
+}));
+document.querySelectorAll("[data-tactic]").forEach((b) => b.addEventListener("click", () => applyTactic(b.dataset.tactic)));
+daySel.addEventListener("change", () => { APP.day = Circus.RACE_DAYS.find((d) => d.id === daySel.value); APP.narrIdx = 0; renderDay(); });
+$("go").addEventListener("click", startDay);
+$("mappa").addEventListener("click", dropMappa);
+$("stop").addEventListener("click", endDay);
+$("faction").addEventListener("change", () => { if (APP.phase === "idle") newRace(); });
+$("thenNow").addEventListener("input", () => { view.mix = +$("thenNow").value; sound.setNow(view.mix); });
+$("sound").addEventListener("change", () => { APP.soundTouched = true; sound.setEnabled($("sound").checked); });
+$("volume").addEventListener("input", () => sound.setVolume(+$("volume").value));
+function ensureSound() { if (!APP.soundTouched) { APP.soundTouched = true; $("sound").checked = true; sound.setEnabled(true); } }
+
+// ---- the loop -------------------------------------------------------------------------------------------------------
+function frame(dt) {
+  APP.t += dt; APP.phaseT += dt;
+  if (APP.phase === "procession") { if (PARADE.update(APP.phaseT)) { PARADE.g.visible = false; APP.phase = "ready"; APP.phaseT = 0; renderStatus(); } CROWD.excite = Math.max(CROWD.excite, .5); }
+  if (APP.phase === "ready" && APP.role !== "sponsor" && APP.phaseT > 4) dropMappa();
+  raceFrame(dt);
+  // the day's talk in the stands
+  if ((APP.narrT -= dt) < 0) { APP.narrT = 11 + Math.random() * 8; const lines = APP.day.narration; if (APP.phase !== "racing" || Math.random() < .5) say(lines[APP.narrIdx++ % lines.length]); else { const f = Circus.FACTIONS[Math.floor(Math.random() * 4)]; say(CHANTS[f.id]); } }
+  crowdFrame(APP.t); modernFrame(dt); cameraFrame(dt);
+  $("thenNow").disabled = view.mode === "chase";
+  draw();
+  renderHud();
+  sound.update(dt, APP);
+}
+let lastT = performance.now();
+function loop(now) { const dt = Math.min(.1, Math.max(0, (now - lastT) / 1000)); lastT = now; frame(dt); requestAnimationFrame(loop); }
+renderRole(); renderTimeline(); newRace();
+requestAnimationFrame(loop);
+window.__circus = { APP, view, CROWD, frame, draw, startDay, dropMappa, endDay, newRace, applyTactic,
+  stepRace(seconds) { const r = APP.race; for (let i = 0; i < seconds / Circus.DT; i++) { Circus.step(r, playerInput()); } handleEvents(); poseTeams(r, 1 / 30, APP.t); },
+  level: () => sound.level(),
+  // for headless screenshots, which do not show a live WebGL canvas: draw once and lay the picture over it
+  shot() { draw(); const im = new Image(); im.src = renderer.domElement.toDataURL(); im.style.cssText = "position:absolute;inset:0;width:100%;height:100%"; renderer.domElement.after(im); } };   // under the HUD
 </script>
 </body>
 </html>
