@@ -1,0 +1,2202 @@
+# Circus Maximus Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A self-contained `circus-maximus/index.html`: a 3D rebuild of the Circus Maximus about AD 103 where the visitor watches (cylindrical panorama from the Aventine stands), drives a chariot, rides along with tactics, or presides as sponsor, on six historical race days, with a timeline from the kings to 549 AD and a then/now crossfade to the site as it looked in 1998.
+
+**Architecture:** A pure engine in `<script id="shared-code">` (track frame, seeded race simulation with AI and crashes, history data) is unit-tested in Node via `test.mjs`. A module script imports three.js 0.170.0 and builds, in order: renderer and panorama (scene rendered into the needed cube-map faces, reprojected cylindrically), the ancient circus, the crowd (instanced shader billboards), the chariots (instanced parts posed from rigs, dust, ruts), the 1998 site, the sound engine, and the controller (roles, race days, procession, races, cameras, HUD, panel, debug handle).
+
+**Tech Stack:** Vanilla HTML/CSS/JS, three.js 0.170.0 (`https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js`), Web Audio. Node for `test.mjs`; headless Chrome and the Browser pane for checks.
+
+**Spec:** `docs/superpowers/specs/2026-10-14-circus-maximus-design.md`
+
+**Pre-validated:** every code block in this plan was assembled into a working prototype before the plan was written: 20/20 engine tests pass, AI races average about 2 crashes and 9–10 finishers, the full page runs at about 120 fps in the Browser pane with about 86,000 spectators, and every role was exercised. Transcribe the code exactly; deviations need a reason.
+
+## Global Constraints
+
+- One self-contained `circus-maximus/index.html` + `circus-maximus/test.mjs` + `circus-maximus/screenshot1.jpg` (1600×1000). No asset files; the only external resource is three.js 0.170.0 from jsdelivr (as the repo's other 3D pages).
+- Engine in `<script id="shared-code">` exposing `Circus` and `CircusTests.run()`; `test.mjs` extracts it by regex (pattern of `colossus/test.mjs`).
+- World metres: x along the circus (gates west at x = −268, curved end east), z across (Aventine z > 0, Palatine z < 0), y up, arena floor y = 0. Chariots run counter-clockwise, barrier on their left; 7 laps; 12 chariots, 3 per faction (Reds, Whites, Blues, Greens).
+- The building is the Trajanic circus (about AD 103) on every race day; only the obelisks change (0 before 10 BC, 1 from 10 BC, 2 from AD 357).
+- Six race days: Caesar 46 BC, Augustus 10 BC, Nero AD 64, Trajan AD 103 (default), Constantius II AD 357, Totila AD 549; 46 BC and 549 AD carry an anachronism note.
+- Regal timeline entries are flagged as tradition. Honesty panel per the spec.
+- Sound off until the first "Start the day" (unless the visitor touched the toggle); volume slider; sounds synthesized.
+- Headless screenshots: WebGL canvases are not composited by headless Chrome here, so stills are made by drawing once and laying `canvas.toDataURL()` over the canvas (the TEMPORARY still block in Tasks 2–7, `__circus.shot()` from Task 8). Serve the repo over http (`python3 -m http.server 8765` from the repo root, or the Browser pane's `static` launch config) — the module import needs http.
+- Commit to `main`; end commit messages with your own model's `Co-Authored-By:` line.
+
+## Review Focus
+
+- Switching role, race day, or pressing Stop during a race or the procession → the race ends cleanly: phase idle, HUD and standings hidden, teams back in their stalls, no console errors (Task 8 checks).
+- The tab is hidden mid-race (rAF stops) or a frame is long → dt is clamped to 0.1 s so the race does not jump; sound suspends while hidden (Task 7 + Task 8 checks).
+- A narrow or tall window (390×844, stacked layout) → the panorama recomputes its aspect and default tilt and the whole track stays in view; touch buttons appear for the charioteer on coarse pointers; no horizontal page scroll (Task 8 + Task 9 checks).
+- Keyboard focus: Space (whip) and arrows while a button or select has focus must not press the button or change the select during driving (Task 8 check).
+- The player crashes early, or every team wrecks → HUD shows "Wrecked", the race still ends with a status line, and "Start the day" works again (Task 8 check).
+
+---
+
+### Task 1: Engine (track, race, history) with tests
+
+**Files:**
+- Create: `circus-maximus/index.html` (skeleton with the shared-code block)
+- Create: `circus-maximus/test.mjs`
+
+**Interfaces:**
+- Produces `Circus = { rng, TRACK, PHYS, DT, MODES, FACTIONS, toWorld, inTurn, sRate, toNextTurn, safeSpeed, createRace, start, step, standings, lapsLeft, crash, ERAS, TIMELINE, RACE_DAYS }`:
+  - `TRACK` = { westPost: −130, eastPost: 210, R0: 6, dMax: 34, gatesX: −268, arenaHalfWidth: 40, straight, turn, lap, runUp, line: 170, laps: 7, finishS, gateZ(g) }.
+  - `toWorld(s, d) → { x, z, heading }` (heading radians, 0 = +x, increasing towards +z).
+  - `createRace({ seed, player = −1, playerFaction = null }) → race` with `race.cars[12]` (each: `id, faction, name, horses[4], gate, mode, leader, top, accel, endurance, s, d, v, stamina, whipT, lap, finished, place, crashed, crashT, crashCause, x, z, heading, steer, dist, player?`), `race.player` (car id or −1), `race.events[]` ({ t, type: "start"|"whip"|"crash"|"lap"|"finish"|"done", car?, cause?, lap?, place? }), `race.finishOrder`, `race.started`, `race.done`, `race.t`.
+  - `start(race)`, `step(race, inputs = { [carId]: { steer −1..1, whip bool, rein bool } })` (fixed `DT` = 1/30 s), `standings(race)`, `lapsLeft(race)`, `crash(race, car, cause)`.
+  - `ERAS` (4), `TIMELINE` ({ era, year, text, detail, tradition? }; year < 0 is BC), `RACE_DAYS` ({ id, year, sponsor, title, obelisks, occasion, narration[3], anachronism?, default? }).
+- `CircusTests.run(log) → boolean`.
+
+- [ ] **Step 1: Skeleton and test runner**
+
+`circus-maximus/test.mjs`:
+
+```js
+// Runs the CircusTests embedded in index.html's shared-code script block.
+// Usage: node test.mjs
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.html"), "utf8");
+const m = html.match(/<script id="shared-code">([\s\S]*?)<\/script>/);
+if (!m) {
+  console.error("shared-code block not found");
+  process.exit(1);
+}
+const ok = new Function(`${m[1]}; return CircusTests.run();`)();
+process.exit(ok ? 0 : 1);
+```
+
+`circus-maximus/index.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Circus Maximus</title>
+<style></style>
+</head>
+<body>
+<script id="shared-code">
+const Circus = (() => {
+  return {};
+})();
+
+// TESTS
+</script>
+</body>
+</html>
+```
+
+- [ ] **Step 2: Add the tests (replace the `// TESTS` line) and run them red**
+
+```js
+const CircusTests = {
+  run(log = (m) => console.log(m)) {
+    const C = Circus, T = C.TRACK;
+    let failures = 0;
+    const check = (name, ok, detail = "") => { if (!ok) failures++; log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`); };
+    // track
+    check("a lap is two 340 m straights and two half-turns round the posts", Math.abs(T.lap - (2 * 340 + 2 * Math.PI * T.R0)) < 1e-9, T.lap.toFixed(1));
+    const p0 = C.toWorld(0, 0);
+    check("s = 0 grazes the west turning post on the Aventine side", Math.abs(p0.x - T.westPost) < 1e-9 && Math.abs(p0.z - T.R0) < 1e-9);
+    let maxJump = 0, maxTurn = 0, prev = C.toWorld(-T.runUp, 5);
+    for (let s = -T.runUp + .05; s < 2 * T.lap; s += .05) {
+      const p = C.toWorld(s, 5);
+      maxJump = Math.max(maxJump, Math.hypot(p.x - prev.x, p.z - prev.z));
+      let dh = Math.abs(p.heading - prev.heading) % (2 * Math.PI); maxTurn = Math.max(maxTurn, Math.min(dh, 2 * Math.PI - dh));
+      prev = p;
+    }
+    check("the course is continuous in position and heading", maxJump < .1 && maxTurn < .01, `${maxJump.toFixed(3)} m, ${maxTurn.toFixed(4)} rad`);
+    const half = C.toWorld(T.straight + T.turn / 2, 10);
+    check("half way round the east turn the chariot is on the axis, past the post", Math.abs(half.z) < 1e-9 && Math.abs(half.x - (T.eastPost + T.R0 + 10)) < 1e-9);
+    check("running wider covers a turn more slowly in s", C.sRate(T.straight + 1, 20) < C.sRate(T.straight + 1, 2) && C.sRate(10, 20) === 1);
+    // races
+    const run = (seed) => { const r = C.createRace({ seed }); C.start(r); while (!r.done) C.step(r); return r; };
+    const a = run(7), b = run(7);
+    check("the same seed gives the same race", a.finishOrder.join() === b.finishOrder.join() && a.t === b.t && a.cars.map((c) => c.crashCause).join() === b.cars.map((c) => c.crashCause).join());
+    check("twelve chariots, three for each faction, gates by lot", a.cars.length === 12 && C.FACTIONS.every((f) => a.cars.filter((c) => c.faction === f.id).length === 3) && new Set(a.cars.map((c) => c.gate)).size === 12);
+    let finishers = 0, complete = true;
+    for (let seed = 1; seed <= 10; seed++) {
+      const r = run(seed); finishers += r.finishOrder.length;
+      complete = complete && r.cars.every((c) => c.crashed || (c.finished && c.s >= T.finishS && c.lap === T.laps + 1));
+    }
+    check("every chariot that does not crash finishes seven laps", complete);
+    check("most chariots finish (crashes are the exception)", finishers / 10 >= 7, (finishers / 10).toFixed(1));
+    check("lap counters stop at zero laps left", C.lapsLeft(a) === 0);
+    // one chariot alone on the track, driven by a script
+    const solo = (line, margin) => {
+      const r = C.createRace({ seed: 3, player: 0, playerFaction: "blue" }), me = r.cars[r.player];
+      r.cars = [me]; C.start(r);
+      while (!r.done && me.lap < 3) {
+        const ahead = C.toNextTurn(me.s), inT = C.inTurn(me.s), vT = C.safeSpeed(line) * margin;
+        const need = me.v > vT ? (me.v * me.v - vT * vT) / (2 * C.PHYS.brake * .8) : 0;
+        C.step(r, { [me.id]: { steer: Math.max(-1, Math.min(1, ((me.s < 0 ? line + 3 : line) - me.d) / 3)), rein: (ahead <= need + 4 && me.v > vT) || (inT && me.v > C.safeSpeed(me.d) * margin), whip: false } });
+      }
+      return me;
+    };
+    check("taking a turn far too fast overturns the chariot", solo(8, 1.25).crashCause === "overturned in the turn");
+    check("a steady line at a safe speed gets round", !solo(8, .95).crashed);
+    check("grazing the turning post wrecks the chariot", /post/.test(solo(.2, .95).crashCause));
+    // the whip
+    const w = C.createRace({ seed: 2, player: 0, playerFaction: "red" }), me = w.cars[w.player]; C.start(w);
+    for (let i = 0; i < 60; i++) C.step(w, { [me.id]: { steer: 0, rein: false, whip: false } });
+    const st = me.stamina; C.step(w, { [me.id]: { steer: 0, rein: false, whip: true } });
+    check("the whip costs stamina and gives a burst", me.stamina < st - .03 && me.whipT > 0);
+    // a wreck in the lane
+    const k = C.createRace({ seed: 4, player: 0, playerFaction: "white" }), runner = k.cars[k.player], wreck = k.cars.find((c) => c !== runner);
+    k.cars = [runner, wreck]; C.start(k);
+    Object.assign(runner, { s: 40, d: 10, v: 16 }); Object.assign(wreck, { s: 75, d: 10, v: 0 }); C.crash(k, wreck, "test");
+    for (const c of k.cars) Object.assign(c, C.toWorld(c.s, c.d));
+    let slowed = false;
+    for (let i = 0; i < 90; i++) { C.step(k, { [runner.id]: { steer: 0, rein: false, whip: false } }); if (runner.v < 11) slowed = true; }
+    check("a wreck in the lane stops or slows whoever runs into it", runner.crashed || slowed);
+    // history
+    const sorted = C.ERAS.every((e) => { const ys = C.TIMELINE.filter((t) => t.era === e.id).map((t) => t.year); return ys.length > 0 && ys.every((y, i) => i === 0 || y >= ys[i - 1]); });
+    check("each era's timeline is in order", sorted);
+    check("Regal entries are marked as tradition", C.TIMELINE.filter((t) => t.era === "regal").every((t) => t.tradition) && C.TIMELINE.filter((t) => t.era !== "regal").every((t) => !t.tradition));
+    check("every race day has a presider, occasion and narration", C.RACE_DAYS.every((d) => d.sponsor && d.occasion && d.narration.length >= 3 && d.title));
+    check("two obelisks only from 357, none before 10 BC", C.RACE_DAYS.every((d) => d.obelisks === (d.year >= 357 ? 2 : d.year >= -10 ? 1 : 0)));
+    check("exactly one default race day (Trajan)", C.RACE_DAYS.filter((d) => d.default).map((d) => d.id).join() === "trajan");
+    log(failures ? `${failures} failure(s)` : "all Circus tests passed");
+    return failures === 0;
+  }
+};
+```
+
+Run: `node circus-maximus/test.mjs` → fails (TypeError on the empty engine), exit 1.
+
+- [ ] **Step 3: Implement the engine** — replace the `Circus` IIFE with exactly:
+
+```js
+const Circus = (() => {
+  // ---- seeded randomness ----------------------------------------------------------------------------
+  function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+  // ---- the track ------------------------------------------------------------------------------------
+  // World metres: x along the circus (starting gates at the west end, x < 0; the curved end east, x > 0),
+  // z across it (Aventine side z > 0, Palatine side z < 0), y up. The barrier lies on z = 0 between the
+  // two sets of turning posts. Chariots run counter-clockwise with the barrier on their left: east along
+  // the Aventine side, round the east posts, west along the Palatine side, round the west posts.
+  //
+  // Course frame: s = distance along the innermost line (radius R0 round each turning post), d = how far
+  // outside that line (d = 0 grazes the posts). Before the race the chariots are behind s = 0, in the
+  // open run-up between the gates and the west posts, where d may be negative (the Palatine half).
+  const TRACK = {
+    westPost: -130, eastPost: 210,          // x of the turning-post centres (barrier 340 m)
+    R0: 6,                                  // closest wheel line to a post centre
+    dMax: 34,                               // outer wall of the track
+    gatesX: -268,                           // the starting gates (carceres)
+    arenaHalfWidth: 40,
+  };
+  TRACK.straight = TRACK.eastPost - TRACK.westPost;
+  TRACK.turn = Math.PI * TRACK.R0;
+  TRACK.lap = 2 * TRACK.straight + 2 * TRACK.turn;
+  TRACK.runUp = TRACK.westPost - TRACK.gatesX;                    // s of the gates is -runUp
+  TRACK.line = 170;                                               // the finish line, mid Aventine straight
+  TRACK.laps = 7;
+  // the twelve gates across the west end, with the wide procession gate (porta pompae) in the middle
+  TRACK.gateZ = (g) => -33 + g * 5.2 + (g >= 6 ? 6 : 0);
+  TRACK.finishS = TRACK.line + TRACK.laps * TRACK.lap;
+
+  // (s, d) → world position and heading (radians, 0 = +x, increasing towards +z)
+  function toWorld(s, d) {
+    const T = TRACK, r = T.R0 + d;
+    if (s < 0) return { x: T.westPost + s, z: r, heading: 0 };
+    let u = s % T.lap;
+    if (u < T.straight) return { x: T.westPost + u, z: r, heading: 0 };
+    u -= T.straight;
+    if (u < T.turn) { const th = u / T.R0; return { x: T.eastPost + r * Math.sin(th), z: r * Math.cos(th), heading: -th }; }
+    u -= T.turn;
+    if (u < T.straight) return { x: T.eastPost - u, z: -r, heading: -Math.PI };
+    u -= T.straight;
+    const th = u / T.R0;
+    return { x: T.westPost - r * Math.sin(th), z: -r * Math.cos(th), heading: -Math.PI - th };
+  }
+  // world → (s, d) near a given s (used by tests and by the page to place wrecks); search within a lap
+  function inTurn(s) { if (s < 0) return false; const u = s % TRACK.lap; return (u >= TRACK.straight && u < TRACK.straight + TRACK.turn) || u >= 2 * TRACK.straight + TRACK.turn; }
+  // ds per metre travelled at offset d (outside lines cover turns more slowly in s)
+  const sRate = (s, d) => (inTurn(s) ? TRACK.R0 / (TRACK.R0 + Math.max(d, -TRACK.R0 + .5)) : 1);
+  // distance (s) to the start of the next turn, Infinity if in a turn
+  function toNextTurn(s) {
+    if (s < 0) return -s + TRACK.straight;
+    const u = s % TRACK.lap, T = TRACK;
+    if (u < T.straight) return T.straight - u;
+    if (u < T.straight + T.turn) return 0;
+    if (u < 2 * T.straight + T.turn) return 2 * T.straight + T.turn - u;
+    return 0;
+  }
+
+  // ---- the race -------------------------------------------------------------------------------------
+  const FACTIONS = [
+    { id: "red", name: "Reds", latin: "Russata", color: "#b8332a" },
+    { id: "white", name: "Whites", latin: "Albata", color: "#e9e4d6" },
+    { id: "blue", name: "Blues", latin: "Veneta", color: "#2f5d9a" },
+    { id: "green", name: "Greens", latin: "Prasina", color: "#3f7d3a" },
+  ];
+  const NAMES = ["Felix", "Fuscus", "Celer", "Victor", "Aquilo", "Ingenuus", "Hilarus", "Pompeianus", "Callidromus", "Lucidus",
+    "Superbus", "Crispus", "Avitus", "Sabinus", "Florus", "Tatianus", "Rusticus", "Docilis", "Gaetulus", "Maurus"];
+  const HORSES = ["Victor", "Aura", "Ferox", "Candidus", "Rapax", "Pinna", "Lucifer", "Hirundo", "Tigris", "Cupido", "Leo", "Ventus",
+    "Corax", "Gemma", "Delicatus", "Arion", "Hilarus", "Sagitta", "Fulgur", "Glauca"];
+  const PHYS = {
+    accel: 2.6, brake: 4.5, drag: .5,          // m/s² at full effort; drag towards the cruising speed
+    aSafe: 5.2,                                // lateral acceleration a team and car take in a turn (m/s²)
+    steer: 5,                                  // lateral speed at full steer (m/s)
+    whipBoost: .09, whipTime: 1.6, whipCost: .035,
+    length: 7.5, width: 3.2,                   // footprint of a team and car
+  };
+  const DT = 1 / 30;
+  const MODES = {
+    cautious: { line: 14, margin: .86, whip: 0, block: false },
+    steady: { line: 8, margin: .95, whip: .25, block: false },
+    blocker: { line: 6, margin: .95, whip: .2, block: true },
+    reckless: { line: 2.5, margin: 1.02, whip: .7, block: false },
+  };
+
+  function createRace({ seed = 1, player = -1, playerFaction = null } = {}) {
+    const r = rng(seed);
+    const order = [...Array(12).keys()];
+    for (let i = 11; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }   // the gate lottery
+    const names = NAMES.slice(); const horses = HORSES.slice();
+    const pick = (arr) => arr.splice(Math.floor(r() * arr.length), 1)[0];
+    const cars = [];
+    for (let i = 0; i < 12; i++) {
+      const faction = FACTIONS[i % 4], gate = order[i];
+      const mode = ["steady", "blocker", "reckless", "cautious", "steady"][Math.floor(r() * 5)];
+      const lead = Math.floor(i / 4) === 0;          // the first of each faction is its leader
+      cars.push({
+        id: i, faction: faction.id, name: pick(names), horses: [0, 1, 2, 3].map(() => pick(horses)), gate,
+        mode: lead ? (r() < .5 ? "steady" : "reckless") : mode, leader: lead,
+        top: 16.2 + r() * 1.6, accel: PHYS.accel * (.92 + r() * .16), endurance: .85 + r() * .3,
+        s: -TRACK.runUp - 5, d: TRACK.gateZ(gate) - TRACK.R0,       // the team waits inside its stall
+        v: 0, stamina: 1, whipT: 0, lap: 0, finished: false, place: 0, crashed: false, crashT: 0, crashCause: "",
+        x: 0, z: 0, heading: 0, steer: 0, dist: 0,
+      });
+    }
+    if (player >= 0 && playerFaction) {             // the visitor drives the leader of their faction
+      const c = cars.find((c) => c.faction === playerFaction && c.leader); player = c.id; c.player = true;
+    }
+    for (const c of cars) Object.assign(c, toWorld(c.s, c.d));
+    return { seed, rand: r, t: 0, started: false, cars, player, finishOrder: [], leaderLap: 0, events: [], done: false };
+  }
+
+  // safe turning speed on a line d (from the lateral acceleration the car can take)
+  const safeSpeed = (d) => Math.sqrt(PHYS.aSafe * (TRACK.R0 + Math.max(0, d)));
+
+  function aiInput(race, c) {
+    const M = MODES[c.mode] || MODES.steady, ahead = toNextTurn(c.s);
+    let target = c.s < 0 ? M.line + 4 : (ahead < 60 || inTurn(c.s) ? M.line : M.line + 10);
+    // block: on straights, move into the line of the nearest rival close behind
+    if (M.block && c.s > 0 && !inTurn(c.s)) {
+      let best = null;
+      for (const o of race.cars) if (!o.crashed && o.faction !== c.faction && c.s - o.s > 0 && c.s - o.s < 18) if (!best || o.s > best.s) best = o;
+      if (best) target = best.d;
+    }
+    // keep clear of wrecks and slower cars directly ahead
+    for (const o of race.cars) {
+      if (o === c) continue;
+      const gap = o.s - c.s;
+      if ((o.crashed && o.d < TRACK.dMax + 1 && gap > -6 && gap < 70 && Math.abs(o.d - c.d) < 7.5) || (!o.crashed && gap > 0 && gap < 12 && Math.abs(o.d - c.d) < 3.6 && o.v < c.v))
+        target = o.d > c.d - .01 && o.d > 7.5 ? o.d - 7 : Math.min(TRACK.dMax - 1, o.d + 7);
+    }
+    if (c.s < 0 && c.s > -40) target = Math.max(target, 1.5);       // be on the right side of the posts by the barrier
+    const steer = Math.max(-1, Math.min(1, (target - c.d) / 3));
+    // speed: brake for the coming turn so as to enter it at margin × the safe speed of the planned line
+    const vTurn = safeSpeed(Math.min(target, c.d + 3)) * M.margin;
+    const need = c.v > vTurn && ahead < Infinity ? (c.v * c.v - vTurn * vTurn) / (2 * PHYS.brake * .8) : 0;
+    const inT = inTurn(c.s);
+    const rein = (ahead <= need + 4 && c.v > vTurn) || (inT && c.v > safeSpeed(c.d) * M.margin);
+    const whip = !rein && !inT && c.stamina > .45 && race.rand() < M.whip * DT * 2.2;
+    return { steer, whip, rein };
+  }
+
+  function crash(race, c, cause) {
+    if (c.crashed || c.finished) return;
+    c.crashed = true; c.crashT = 0; c.crashCause = cause;
+    race.events.push({ t: race.t, type: "crash", car: c.id, cause });
+  }
+
+  // one fixed step; inputs[id] = { steer -1..1, whip bool (edge), rein bool } overrides the AI for that car
+  function step(race, inputs = {}) {
+    if (race.done) return;
+    race.t += DT;
+    if (!race.started) return;
+    for (const c of race.cars) {
+      if (c.finished) { c.v = Math.max(0, c.v - 2 * DT); advance(c); continue; }
+      if (c.crashed) {              // the wreck slides to a stop and is dragged to the outer wall by attendants
+        c.crashT += DT; c.v = Math.max(0, c.v - 9 * DT);
+        if (c.crashT > 1.5 && c.d < TRACK.dMax + 4) c.d = Math.min(TRACK.dMax + 4, c.d + 5 * DT);
+        advance(c); continue;
+      }
+      const inp = inputs[c.id] || aiInput(race, c);
+      // speed
+      if (inp.whip && c.stamina > .05) { c.whipT = PHYS.whipTime; c.stamina = Math.max(0, c.stamina - PHYS.whipCost); race.events.push({ t: race.t, type: "whip", car: c.id }); }
+      c.whipT = Math.max(0, c.whipT - DT);
+      const tired = c.stamina < .3 ? .78 + c.stamina * .73 : 1;
+      const cruise = c.top * tired * (1 + (c.whipT > 0 ? PHYS.whipBoost : 0));
+      if (inp.rein) c.v = Math.max(0, c.v - PHYS.brake * DT);
+      else if (c.v < cruise) c.v = Math.min(cruise, c.v + c.accel * (1 - c.v / (cruise * 1.25)) * DT * 1.9);
+      else c.v = Math.max(cruise, c.v - PHYS.drag * DT);
+      c.stamina = Math.max(0, Math.min(1, c.stamina - DT * (.0016 * Math.pow(c.v / 16, 3) / c.endurance) + (c.v < 9 ? DT * .004 : 0)));
+      // steering
+      c.steer = inp.steer;
+      c.d += inp.steer * PHYS.steer * Math.min(1, c.v / 6) * DT;
+      if (c.d > TRACK.dMax) { c.d = TRACK.dMax; c.v *= 1 - .5 * DT; }              // scraping the outer wall
+      if (c.s < 0) c.d = Math.max(-TRACK.R0 - TRACK.arenaHalfWidth + 2, c.d);
+      advance(c);
+      // turning-post and turn checks
+      if (c.s >= 0 && c.d < 0) { crash(race, c, c.d < -1.2 ? "barrier" : "post"); continue; }
+      if (inTurn(c.s)) {
+        const over = c.v * c.v / (TRACK.R0 + c.d) / PHYS.aSafe;
+        if (over > 1.35 || (over > 1.08 && race.rand() < (over - 1.08) * 6 * DT)) { crash(race, c, "overturned in the turn"); continue; }
+        if (c.d < .8 && race.rand() < (.8 - c.d) * 2.5 * DT) { crash(race, c, "clipped the turning post"); continue; }
+      }
+      // laps
+      const lap = c.s < TRACK.line ? 0 : 1 + Math.floor((c.s - TRACK.line) / TRACK.lap);
+      if (lap > c.lap) {
+        c.lap = lap;
+        if (lap > race.leaderLap) { race.leaderLap = lap; if (lap > 1) race.events.push({ t: race.t, type: "lap", lap: lap - 1, car: c.id }); }
+      }
+      if (c.s >= TRACK.finishS) {
+        c.finished = true; c.place = race.finishOrder.length + 1; race.finishOrder.push(c.id);
+        race.events.push({ t: race.t, type: "finish", car: c.id, place: c.place });
+      }
+    }
+    collide(race);
+    if (race.cars.every((c) => c.finished || c.crashed)) { race.done = true; race.events.push({ t: race.t, type: "done" }); }
+  }
+  function advance(c) {
+    const ds = c.v * DT * sRate(c.s, c.d);
+    c.s += ds; c.dist += c.v * DT;
+    Object.assign(c, toWorld(c.s, c.d));
+  }
+  // contact: chariots that overlap are pushed apart and lose speed; a deep overlap locks wheels and the
+  // one that steered into the other goes over (or the slower one, if neither steered)
+  function collide(race) {
+    const cs = race.cars;
+    for (let i = 0; i < cs.length; i++) for (let j = i + 1; j < cs.length; j++) {
+      const a = cs[i], b = cs[j];
+      if (a.finished || b.finished) continue;
+      const dx = a.x - b.x, dz = a.z - b.z;
+      if (dx * dx + dz * dz > 100) continue;
+      const along = Math.abs(dx * Math.cos(a.heading) + dz * Math.sin(a.heading)), across = Math.abs(-dx * Math.sin(a.heading) + dz * Math.cos(a.heading));
+      if (along > PHYS.length || across > PHYS.width) continue;
+      if (a.crashed !== b.crashed) {                    // running into a wreck (still on the track)
+        const live = a.crashed ? b : a, wreck = a.crashed ? a : b;
+        if (wreck.d > TRACK.dMax + 1) continue;
+        if (race.rand() < .25 * live.v / 16) crash(race, live, "ran into a wreck"); else live.v *= .6;
+        continue;
+      }
+      if (a.crashed) continue;
+      const depth = Math.min(1 - along / PHYS.length, 1 - across / PHYS.width);
+      const push = (PHYS.width - across) / 2 + .05, sgn = a.d >= b.d ? 1 : -1;
+      if (depth > .45 && race.started) {
+        const culprit = Math.abs(a.steer) > Math.abs(b.steer) ? a : Math.abs(b.steer) > Math.abs(a.steer) ? b : (a.v < b.v ? a : b);
+        crash(race, culprit, "locked wheels with " + (culprit === a ? b : a).name);
+      } else {
+        // pushed apart; the barrier does not give, so the outer car takes the whole push there
+        let pa = sgn * push, pb = -sgn * push;
+        const inner = sgn > 0 ? b : a, outer = sgn > 0 ? a : b;
+        if (inner.s >= 0 && inner.d - push < .3) { const room = Math.max(0, inner.d - .3); if (inner === a) { pa = -room; pb = 2 * push - room; } else { pb = -room; pa = 2 * push - room; } }
+        a.d += pa; b.d += pb; a.v *= .985; b.v *= .985;
+      }
+    }
+  }
+  function start(race) { if (!race.started) { race.started = true; race.events.push({ t: race.t, type: "start" }); } }
+  // the running order: finished first by place, then by distance; wrecks last
+  function standings(race) {
+    return race.cars.slice().sort((a, b) => (a.finished !== b.finished ? (a.finished ? -1 : 1) : a.finished ? a.place - b.place : a.crashed !== b.crashed ? (a.crashed ? 1 : -1) : b.s - a.s));
+  }
+  const lapsLeft = (race) => Math.max(0, TRACK.laps - Math.max(0, race.leaderLap - 1));
+
+  // ---- history ------------------------------------------------------------------------------------
+  const ERAS = [
+    { id: "regal", name: "Regal", span: "c. 753–509 BC" },
+    { id: "republic", name: "Republic", span: "509–27 BC" },
+    { id: "imperial", name: "Imperial", span: "27 BC–476 AD" },
+    { id: "late", name: "Late and after", span: "476 AD–today" },
+  ];
+  // year < 0 is BC. Regal entries are tradition (Livy and others writing centuries later), not record.
+  const TIMELINE = [
+    { era: "regal", year: -753, tradition: true, text: "Races in the valley", detail: "The Murcia valley between the Palatine and the Aventine is said to have held races from Rome's beginning; the abduction of the Sabine women is set at Consus's festival here." },
+    { era: "regal", year: -600, tradition: true, text: "Tarquinius Priscus builds seating", detail: "The Etruscan king gives the patricians and knights raised wooden stands." },
+    { era: "regal", year: -520, tradition: true, text: "Tarquinius Superbus seats the people", detail: "The last king adds the first seating for the plebs and vows games to Jupiter." },
+    { era: "republic", year: -494, text: "A chair at the turn", detail: "Manius Valerius Maximus and his descendants are granted a curule chair at the south-east turn." },
+    { era: "republic", year: -366, text: "The Ludi Romani", detail: "The earliest securely dated Roman Games at the Circus, in honour of Jupiter, put on by magistrates." },
+    { era: "republic", year: -329, text: "Starting gates", detail: "The first permanent wooden starting gates (carceres)." },
+    { era: "republic", year: -194, text: "Stone seats for senators", detail: "Senators get their own seats in stone, apart from the crowd." },
+    { era: "republic", year: -174, text: "Egg lap counters", detail: "Large sculpted eggs on the barrier are taken down one per lap." },
+    { era: "republic", year: -169, text: "A great beast hunt", detail: "63 leopards, 40 bears and elephants are shown in the arena." },
+    { era: "republic", year: -65, text: "Caesar's lavish games", detail: "As aedile, Julius Caesar spends far beyond his means on games to win the people's favour." },
+    { era: "republic", year: -55, text: "Pompey's elephants", detail: "Pompey's elephant hunt; the panicking animals try to break through the barriers into the crowd." },
+    { era: "republic", year: -50, text: "Caesar rebuilds", detail: "Seating is extended almost all the way round, and a water channel (euripus) protects the crowd from the beasts." },
+    { era: "republic", year: -46, text: "Caesar's triumph", detail: "Triumphal games: chariot races, a staged battle between two armies with elephants." },
+    { era: "republic", year: -33, text: "Bronze dolphins", detail: "Dolphin lap counters join the eggs on the barrier." },
+    { era: "republic", year: -31, text: "Fire", detail: "Fire damages the wooden stands." },
+    { era: "imperial", year: -10, text: "Augustus's obelisk", detail: "An obelisk of Seti I from Heliopolis is raised on the barrier, Rome's first; Augustus also builds the pulvinar, the box of the gods, where he watches." },
+    { era: "imperial", year: 36, text: "Fire", detail: "A fire starting in a basket-maker's shop burns part of the circus; Tiberius compensates the owners." },
+    { era: "imperial", year: 41, text: "Claudius's marble gates", detail: "Claudius replaces the tufa starting gates with marble and gilds the turning posts." },
+    { era: "imperial", year: 64, text: "The Great Fire", detail: "Under Nero the Great Fire of Rome starts in the shops along the circus; it is rebuilt on the same footprint." },
+    { era: "imperial", year: 81, text: "The arch of Titus", detail: "The Senate raises a triple arch to Titus at the curved end." },
+    { era: "imperial", year: 90, text: "Purple and Gold", detail: "Domitian adds two factions, the Purples and the Golds; they vanish after his death." },
+    { era: "imperial", year: 103, text: "Trajan's stone circus", detail: "Trajan rebuilds in stone, adds about 5,000 seats and a new pulvinar; a coin of 103 shows it. This page shows the circus about now." },
+    { era: "imperial", year: 300, text: "A stand collapses", detail: "Under Diocletian a section of seating gives way and about 13,000 people are said to have died." },
+    { era: "imperial", year: 357, text: "A second obelisk", detail: "Constantius II brings an obelisk of Thutmose III from Karnak and raises it on the barrier; today it stands at the Lateran." },
+    { era: "late", year: 523, text: "The last beast hunt", detail: "The last known venatio at the circus." },
+    { era: "late", year: 549, text: "The last races", detail: "The Gothic king Totila holds the last recorded races (Procopius)." },
+    { era: "late", year: 1100, text: "Buried and flooded", detail: "Silt and rubble bury the track; houses, a drainage channel and later the Torre della Moletta occupy the site. The track lies about 6 m below today's ground." },
+    { era: "late", year: 1587, text: "The obelisks leave", detail: "Pope Sixtus V has the two fallen obelisks dug up and raised at Piazza del Popolo and the Lateran." },
+    { era: "late", year: 1852, text: "A gasworks", detail: "A gasworks occupies the site until 1910; digging uncovers seating and the outer portico." },
+    { era: "late", year: 2006, text: "A park", detail: "Today a grassy park for concerts and celebrations, such as Italy's 2006 World Cup victory." },
+  ];
+  // Race days: who presided and paid, the occasion, what the visitor hears; obelisks on the barrier.
+  const RACE_DAYS = [
+    { id: "caesar", year: -46, sponsor: "Julius Caesar", title: "Caesar's triumphal games", obelisks: 0, anachronism: true,
+      occasion: "Caesar celebrates his triumphs with races, a staged battle and beast hunts, paid from the spoils of his wars.",
+      narration: ["Caesar has paid for all of this.", "They say he has spread awnings over half the city.", "The Greens again? Caesar likes the Reds."] },
+    { id: "augustus", year: -10, sponsor: "Augustus", title: "The obelisk is dedicated", obelisks: 1,
+      occasion: "Augustus dedicates the obelisk from Heliopolis to the Sun, marking the conquest of Egypt.",
+      narration: ["An obelisk from Egypt! Taller than ten men.", "Augustus watches from the pulvinar with the gods.", "Twelve gates, and every one by lot."] },
+    { id: "nero", year: 64, sponsor: "Nero", title: "Nero's games", obelisks: 1,
+      occasion: "Nero, who drove chariots himself, gives games in the summer of 64, weeks before the Great Fire starts in the shops below these stands.",
+      narration: ["Nero wears Green today.", "He drove a ten-horse team at Olympia, they say.", "Mind the cookshops under the stands, they never put their fires out."] },
+    { id: "trajan", year: 103, sponsor: "Trajan", title: "The rebuilt circus reopens", obelisks: 1, default: true,
+      occasion: "Trajan opens the circus rebuilt in stone, with five thousand more seats and a new box for the emperor, among the people.",
+      narration: ["Stone everywhere now, no more fires.", "Trajan sits where we can see him, not hidden away.", "Five thousand more seats and still no room."] },
+    { id: "constantius", year: 357, sponsor: "Constantius II", title: "The second obelisk", obelisks: 2,
+      occasion: "Constantius II visits Rome for the first time and raises a second, taller obelisk, brought from Karnak by river and sea.",
+      narration: ["The emperor came all the way from Milan.", "Two obelisks now. Nowhere else has two.", "The Blues paid off the gatekeeper, I'm sure of it."] },
+    { id: "totila", year: 549, sponsor: "Totila", title: "The last races", obelisks: 2, anachronism: true,
+      occasion: "The Gothic king Totila, holding a half-empty Rome, gives races as the emperors did; they are the last ever recorded here.",
+      narration: ["A Goth in the emperor's box.", "Half the stands are empty these days.", "Enjoy it. Who knows when there will be another."] },
+  ];
+
+  return { rng, TRACK, PHYS, DT, MODES, FACTIONS, toWorld, inTurn, sRate, toNextTurn, safeSpeed, createRace, start, step, standings, lapsLeft, crash, ERAS, TIMELINE, RACE_DAYS };
+})();
+```
+
+- [ ] **Step 4: Run green** — `node circus-maximus/test.mjs` → 20 ok lines, "all Circus tests passed", exit 0.
+
+- [ ] **Step 5: Commit** — `git add circus-maximus && git commit -m "circus-maximus: engine — track, race simulation, history"`
+
+---
+
+### Task 2: Page shell, renderer and the panorama
+
+**Files:**
+- Modify: `circus-maximus/index.html`
+
+**Interfaces:**
+- Produces DOM ids (see markup) and module-scope names: `$`, `stage`, `renderer`, `scene`, `SUN_DIR`, `sun`, `CUBE_SIZE`, `cubes`, `view` ({ mode: "panorama"|"chase", yaw, pitch, hfov, pos: Vector3, mix, userTurned? }), `panoDir`, `facesNeeded`, `renderCubeFaces`, `chaseCam`, `ancient`, `modern` (Groups), `resize`, `draw()`.
+
+- [ ] **Step 1: CSS** — put this inside `<style>`:
+
+```css
+:root { color-scheme: dark; --bg: #1d1a16; --panel: #27231d; --ink: #efe6d2; --muted: #b0a58e; --line: rgba(239,230,210,.13); --accent: #d9a441; --red: #b8332a; --white: #e9e4d6; --blue: #2f5d9a; --green: #3f7d3a; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { display: grid; grid-template-columns: 340px 1fr; overflow: hidden; }
+#panel { overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); padding: 14px 16px 24px; }
+h1 { margin: 0; font: 600 22px/1.2 Georgia, "Times New Roman", serif; letter-spacing: .04em; }
+h2 { margin: 16px 0 6px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.sub { margin: 2px 0 10px; color: var(--muted); font-size: 12px; }
+button, select, input { font: inherit; color: var(--ink); background: #37312a; border: 1px solid var(--line); border-radius: 6px; }
+button { padding: 6px 10px; cursor: pointer; }
+button:hover:not(:disabled) { background: #453d33; }
+button:disabled { opacity: .45; cursor: default; }
+button.on, button.primary { border-color: var(--accent); color: var(--accent); }
+.row { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.roles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+label { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px; margin: 6px 0; color: var(--muted); }
+label.check { grid-template-columns: auto 1fr; }
+label select { width: 100%; min-width: 0; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; background: rgba(0,0,0,.15); }
+.card b { color: var(--accent); }
+.hint { color: var(--muted); font-size: 12px; }
+.anachronism { color: #e6a06a; font-size: 12px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs button { padding: 3px 8px; font-size: 12px; }
+#timeline { list-style: none; margin: 6px 0 0; padding: 0; max-height: 260px; overflow-y: auto; }
+#timeline li { padding: 5px 0; border-bottom: 1px solid var(--line); }
+#timeline .yr { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+#timeline .trad { color: var(--muted); font-style: italic; font-size: 11px; }
+#timeline p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+details { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+summary { cursor: pointer; color: var(--accent); }
+#stage { position: relative; overflow: hidden; background: #9fb4c4; touch-action: none; }
+#stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#hud { white-space: nowrap; position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; padding: 6px 12px; border-radius: 8px; background: rgba(25,20,15,.72); border: 1px solid var(--line); font-variant-numeric: tabular-nums; pointer-events: none; }
+#hud[hidden] { display: none; }
+#hud .laps span { display: inline-block; width: 10px; height: 14px; margin: 0 1px; border-radius: 50%; background: var(--accent); }
+#hud .laps span.gone { opacity: .2; }
+#hud .bar { width: 90px; height: 8px; border-radius: 4px; background: rgba(255,255,255,.15); overflow: hidden; }
+#hud .bar i { display: block; height: 100%; background: #7fb36a; }
+#standings { position: absolute; right: 12px; top: 12px; padding: 6px 8px; border-radius: 8px; background: rgba(25,20,15,.72); border: 1px solid var(--line); font-size: 12px; line-height: 1.45; pointer-events: none; min-width: 150px; }
+#standings[hidden] { display: none; }
+#standings .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+#standings .me { color: var(--accent); }
+#standings .out { opacity: .45; text-decoration: line-through; }
+#crowd { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); max-width: min(640px, calc(100% - 32px)); text-align: center; pointer-events: none; }
+#crowd div { display: inline-block; margin: 3px; padding: 5px 12px; border-radius: 16px; background: rgba(25,20,15,.78); border: 1px solid var(--line); font-style: italic; animation: fade 5.5s forwards; }
+@keyframes fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
+#banner { position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); font: 600 34px Georgia, serif; letter-spacing: .06em; text-shadow: 0 2px 12px rgba(0,0,0,.7); pointer-events: none; opacity: 0; transition: opacity .4s; text-align: center; }
+#banner.show { opacity: 1; }
+#touch { position: absolute; inset: auto 0 64px 0; display: none; justify-content: space-between; padding: 0 16px; pointer-events: none; }
+#touch button { pointer-events: auto; width: 64px; height: 64px; border-radius: 50%; font-size: 20px; background: rgba(25,20,15,.6); }
+#touch.show { display: flex; }
+@media (max-width: 800px) { body { grid-template-columns: 1fr; grid-template-rows: 58vh auto; overflow: auto; } #stage { order: -1; } }
+```
+
+- [ ] **Step 2: Markup** — insert before `<script id="shared-code">`:
+
+```html
+<aside id="panel">
+  <h1>Circus Maximus</h1>
+  <p class="sub">Rome · the valley between the Palatine and the Aventine · races from the kings to 549 AD</p>
+  <h2>You are</h2>
+  <div class="roles">
+    <button data-role="spectator" class="on">Spectator</button>
+    <button data-role="charioteer">Charioteer</button>
+    <button data-role="ride">Ride along</button>
+    <button data-role="sponsor">Sponsor</button>
+  </div>
+  <p id="roleHint" class="hint"></p>
+  <label id="factionRow">Faction <select id="faction" autocomplete="off"><option value="red">Reds (Russata)</option><option value="white">Whites (Albata)</option><option value="blue">Blues (Veneta)</option><option value="green" selected>Greens (Prasina)</option></select></label>
+  <div id="tactics" class="row" hidden>
+    <button data-tactic="cautious">Save the team</button><button data-tactic="blocker">Hold the inside</button><button data-tactic="reckless">Go now</button>
+  </div>
+  <h2>Race day</h2>
+  <label>Day <select id="day" autocomplete="off"></select></label>
+  <div id="dayCard" class="card"></div>
+  <div id="program" class="row" hidden>
+    <label class="check"><input type="checkbox" id="pompa" checked autocomplete="off"> Opening procession</label>
+    <label>Races <select id="raceCount" autocomplete="off"><option>1</option><option selected>2</option><option>3</option></select></label>
+  </div>
+  <div class="row"><button id="go" class="primary">Start the day</button><button id="mappa" hidden>Drop the white cloth</button><button id="stop">Stop</button></div>
+  <p id="status" class="hint"></p>
+  <h2>View</h2>
+  <label>Then / now <input type="range" id="thenNow" min="0" max="1" step="0.01" value="0" autocomplete="off"></label>
+  <p class="hint" id="thenNowHint">Slide right to see the site as it looked in 1998.</p>
+  <label class="check"><input type="checkbox" id="follow" autocomplete="off"> Follow the leader</label>
+  <label>Speed <select id="speed" autocomplete="off"><option value="1" selected>Real</option><option value="2">2×</option></select></label>
+  <label class="check"><input type="checkbox" id="sound" autocomplete="off"> Sound</label>
+  <label>Volume <input type="range" id="volume" min="0" max="1" step="0.05" value="0.7" autocomplete="off"></label>
+  <p class="hint">Drag to look around, wheel or pinch to zoom.</p>
+  <h2>Timeline</h2>
+  <div class="tabs" id="eraTabs"></div>
+  <ul id="timeline"></ul>
+  <details>
+    <summary>About this simulation</summary>
+    <p>The building is an illustrative reconstruction of the circus about 103 AD, after Trajan's rebuilding, based on published plans and descriptions; its details are not a measured survey. Every race day uses this building, so Caesar's games (46 BC) and Totila's (549 AD) are shown in a circus they never saw; only the obelisks change with the day.</p>
+    <p>The racing is a game, not a measured simulation: speeds, turning limits and crash odds are plausible guesses, the finish line is placed in front of the Aventine stands for the view, and the rule that drivers kept to their lanes at first is left out. The crowd is drawn as simple figures, fewer than the 150,000 the circus held.</p>
+    <p>The 1998 view is reconstructed from photographs and general knowledge of the site, not surveyed. Entries from the time of the kings are Roman tradition, written down centuries later. Sounds are synthesized.</p>
+  </details>
+</aside>
+<main id="stage">
+  <div id="hud" hidden>
+    <div class="laps" id="hudLaps"></div>
+    <div id="hudPlace"></div>
+    <div><div class="bar"><i id="hudStamina"></i></div></div>
+    <div id="hudSpeed"></div>
+  </div>
+  <div id="standings" hidden></div>
+  <div id="banner"></div>
+  <div id="crowd" aria-live="polite"></div>
+  <div id="touch"><div><button data-key="left">◀</button> <button data-key="right">▶</button></div><div><button data-key="rein">✋</button> <button data-key="whip">⟋</button></div></div>
+</main>
+```
+
+- [ ] **Step 3: The module script** — after the shared-code `</script>`, add:
+
+```html
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js";
+// PAGE
+</script>
+```
+
+and replace `// PAGE` with the renderer and panorama code:
+
+```js
+// ---- renderer, light, sky and the panorama --------------------------------------------------------------
+// World metres as in the engine: x along the circus (gates west, x < 0), z across (Aventine z > 0,
+// Palatine z < 0), y up, arena floor at y = 0.
+const $ = (id) => document.getElementById(id);
+const stage = $("stage");
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = false;                       // shadows render once per frame, not once per cube face
+stage.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const HAZE = new THREE.Color("#d9c7a6");
+scene.fog = new THREE.FogExp2(HAZE, .00105);
+// late afternoon: the sun low in the west-south-west, behind the Aventine stands
+const SUN_DIR = new THREE.Vector3(-.36, .42, .83).normalize();
+const sun = new THREE.DirectionalLight("#ffe2b0", 3.1);
+sun.position.copy(SUN_DIR).multiplyScalar(500);
+sun.target.position.set(40, 0, 0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -330, right: 330, top: 160, bottom: -160, near: 50, far: 1100 });
+sun.shadow.bias = -.0004; sun.shadow.normalBias = .6;
+scene.add(sun, sun.target);
+scene.add(new THREE.HemisphereLight("#bcd0e6", "#9a7a52", 1.05));
+
+// Sky: a gradient dome with a soft sun glow; it ignores the fog
+const sky = new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 16), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { sunDir: { value: SUN_DIR } },
+  vertexShader: `varying vec3 vDir; void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `varying vec3 vDir; uniform vec3 sunDir;
+    void main() {
+      float h = clamp(vDir.y, -0.1, 1.0);
+      vec3 col = mix(vec3(0.86, 0.80, 0.68), vec3(0.42, 0.60, 0.82), pow(max(h, 0.0), 0.55));
+      float s = max(dot(normalize(vDir), sunDir), 0.0);
+      col += vec3(1.0, 0.78, 0.45) * (pow(s, 12.0) * 0.35 + pow(s, 400.0) * 2.5);
+      gl_FragColor = vec4(col, 1.0);
+      #include <colorspace_fragment>
+    }`,
+}));
+sky.renderOrder = -1;
+scene.add(sky);
+
+// ---- cameras --------------------------------------------------------------------------------------------
+// The spectator panorama: the scene is rendered into the faces of a cube map (only the faces the view
+// needs), then a full-screen shader reprojects them cylindrically, the way a panoramic photograph keeps
+// vertical lines straight at 160 degrees.
+const CUBE_SIZE = 1280;
+function makeCube() {
+  const rt = new THREE.WebGLCubeRenderTarget(CUBE_SIZE, { type: THREE.HalfFloatType, generateMipmaps: false, minFilter: THREE.LinearFilter });
+  const cam = new THREE.CubeCamera(.5, 4000, rt);
+  scene.add(cam);
+  return { rt, cam };
+}
+const cubes = [makeCube(), makeCube()];                     // [ancient, modern]
+const view = { mode: "panorama", yaw: 0, pitch: -.13, hfov: THREE.MathUtils.degToRad(158), pos: new THREE.Vector3(), mix: 0 };
+const panoMat = new THREE.ShaderMaterial({
+  depthTest: false, depthWrite: false,
+  uniforms: { thenMap: { value: cubes[0].rt.texture }, nowMap: { value: cubes[1].rt.texture }, mixNow: { value: 0 },
+    yaw: { value: 0 }, pitch: { value: 0 }, hfov: { value: 2.7 }, aspect: { value: 1 } },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `varying vec2 vUv; uniform samplerCube thenMap; uniform samplerCube nowMap; uniform float mixNow, yaw, pitch, hfov, aspect;
+    void main() {
+      float a = (vUv.x - 0.5) * hfov;
+      // tan(elevation): cylindrical, so vertical lines stay straight; looking up or down shifts the
+      // image rather than tilting the cylinder, which keeps the horizon level
+      float y = (vUv.y - 0.5) * hfov / aspect + tan(pitch);
+      vec3 d = normalize(vec3(sin(a), y, -cos(a)));
+      float cy = cos(yaw), sy = sin(yaw);
+      d = vec3(d.x * cy + d.z * sy, d.y, -d.x * sy + d.z * cy);
+      vec3 then = texture(thenMap, d).rgb, now = texture(nowMap, d).rgb;
+      gl_FragColor = vec4(mix(then, now, mixNow), 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+});
+const panoScene = new THREE.Scene(), panoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+panoScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), panoMat));
+// the same direction math in JS, to know which cube faces the view touches
+function panoDir(u, v, aspect) {
+  const a = (u - .5) * view.hfov, y = (v - .5) * view.hfov / aspect + Math.tan(view.pitch);
+  const d = new THREE.Vector3(Math.sin(a), y, -Math.cos(a)).normalize();
+  const cy = Math.cos(view.yaw), sy = Math.sin(view.yaw);
+  return d.set(d.x * cy + d.z * sy, d.y, -d.x * sy + d.z * cy);
+}
+function facesNeeded(aspect) {
+  const faces = new Set();
+  for (let i = 0; i <= 24; i++) for (let j = 0; j <= 12; j++) for (const [du, dv] of [[0, 0], [.02, .02], [-.02, -.02]]) {
+    const d = panoDir(i / 24 + du, j / 12 + dv, aspect), ax = Math.abs(d.x), ay = Math.abs(d.y), az = Math.abs(d.z);
+    faces.add(ax >= ay && ax >= az ? (d.x > 0 ? 0 : 1) : ay >= az ? (d.y > 0 ? 2 : 3) : (d.z > 0 ? 4 : 5));
+  }
+  return [...faces];
+}
+function renderCubeFaces(cube, faces) {
+  const cam = cube.cam;
+  if (cam.coordinateSystem !== renderer.coordinateSystem) { cam.coordinateSystem = renderer.coordinateSystem; cam.updateCoordinateSystem(); }
+  cam.position.copy(view.pos); cam.updateMatrixWorld(true);
+  for (const f of faces) { renderer.setRenderTarget(cube.rt, f); renderer.render(scene, cam.children[f]); }
+  renderer.setRenderTarget(null);
+}
+// the chase camera: an ordinary perspective view
+const chaseCam = new THREE.PerspectiveCamera(62, 1, .3, 4000);
+scene.add(chaseCam);
+
+// layers of the world that the then/now mix switches between
+const ancient = new THREE.Group(), modern = new THREE.Group();
+scene.add(ancient, modern);
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  chaseCam.aspect = w / h; chaseCam.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize);
+resize();
+
+// One frame of drawing. In the panorama the ancient and/or modern circus are rendered into their cubes
+// and mixed; in the chase view the ancient circus is drawn directly.
+function draw() {
+  const w = stage.clientWidth || 1, h = stage.clientHeight || 1, aspect = w / h;
+  renderer.shadowMap.needsUpdate = true;
+  if (view.mode === "chase") {
+    ancient.visible = true; modern.visible = false;
+    renderer.render(scene, chaseCam);
+    return;
+  }
+  const faces = facesNeeded(aspect);
+  for (const [i, group] of [[0, ancient], [1, modern]]) {
+    if ((i === 0 && view.mix >= .999) || (i === 1 && view.mix <= .001)) continue;
+    ancient.visible = i === 0; modern.visible = i === 1;
+    renderer.shadowMap.needsUpdate = true;                   // each world casts its own shadows
+    renderCubeFaces(cubes[i], faces);
+  }
+  panoMat.uniforms.mixNow.value = view.mix; panoMat.uniforms.yaw.value = view.yaw; panoMat.uniforms.pitch.value = view.pitch;
+  panoMat.uniforms.hfov.value = view.hfov; panoMat.uniforms.aspect.value = aspect;
+  renderer.render(panoScene, panoCam);
+}
+
+// look around: drag to turn, wheel / pinch to zoom
+(function lookControls() {
+  let drag = null; const pts = new Map();
+  stage.addEventListener("pointerdown", (e) => { if (e.target.closest("button")) return; pts.set(e.pointerId, [e.clientX, e.clientY]); drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, hfov: view.hfov, dist: null }; stage.setPointerCapture(e.pointerId); });
+  stage.addEventListener("pointermove", (e) => {
+    if (!drag || !pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pts.size === 2) {
+      const [[x1, y1], [x2, y2]] = [...pts.values()], dist = Math.hypot(x1 - x2, y1 - y2);
+      if (drag.dist == null) drag.dist = dist;
+      view.hfov = THREE.MathUtils.clamp(drag.hfov * drag.dist / dist, .6, 2.85);
+      return;
+    }
+    const k = view.hfov / Math.max(1, stage.clientWidth);
+    view.yaw = drag.yaw - (e.clientX - drag.x) * k;
+    view.pitch = THREE.MathUtils.clamp(drag.pitch + (e.clientY - drag.y) * k, -.7, .5);
+    view.userTurned = true;
+  });
+  const end = (e) => { pts.delete(e.pointerId); if (!pts.size) drag = null; };
+  stage.addEventListener("pointerup", end); stage.addEventListener("pointercancel", end);
+  stage.addEventListener("wheel", (e) => { e.preventDefault(); view.hfov = THREE.MathUtils.clamp(view.hfov * Math.exp(e.deltaY * .0012), .6, 2.85); }, { passive: false });
+})();
+```
+
+- [ ] **Step 4: Temporary orientation check** — append at the end of the module (replaced in Task 3):
+
+```js
+// TEMPORARY orientation check (Task 2) — replaced in Task 3
+{
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.MeshStandardMaterial({ color: "#c9b48a" }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; ancient.add(ground);
+  for (const [x, z, c] of [[200, 0, "red"], [-200, 0, "blue"], [0, -100, "green"], [0, 150, "yellow"]]) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(20, 30, 20), new THREE.MeshStandardMaterial({ color: c })); b.position.set(x, 15, z); b.castShadow = true; ancient.add(b);
+  }
+  view.pos.set(20, 18, 61);
+  draw();
+  const im = new Image(); im.src = renderer.domElement.toDataURL(); im.style.cssText = "position:absolute;inset:0;width:100%;height:100%"; stage.appendChild(im);
+}
+```
+
+Start a server if none runs on 8765 (`python3 -m http.server 8765` from the repo root, in the background), then:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t2.png "http://localhost:8765/circus-maximus/index.html?"
+```
+
+Read the image: a sand plane, blue box at the left edge (−x), green ahead (−z), red at the right edge (+x), shadows falling towards −z/+x, a level horizon. `node circus-maximus/test.mjs` still passes.
+
+- [ ] **Step 5: Commit** — `git add circus-maximus/index.html && git commit -m "circus-maximus: page shell, renderer and cylindrical panorama"`
+
+---
+
+### Task 3: The ancient circus
+
+**Files:**
+- Modify: `circus-maximus/index.html` (module script: replace the Task 2 TEMPORARY block with the code below, then the still block)
+
+**Interfaces:**
+- Consumes: Task 2 names; `Circus.TRACK`, `Circus.rng`, `Circus.toWorld`.
+- Produces: `T` (= Circus.TRACK), `ARENA` ({ halfWidth: 42, gatesX: −268, curveX: 228, porticoO, porticoY, outerO, outerY, height(x, z) }), `noiseCanvas`, `TEX`, `mat`, `M`, `addMesh`, `worldUV`, `box`, `ROW`, `PROFILE`, `SEAT_ROWS` ([{ o, y, tier }]), `SEAT` ({ x, y, z, row }), `ARCH_GAP`, `PATH` (pieces { n, at(k, o) → [x, z, nx, nz] }), `sweep`, `arcadeTexture`, `SAND`, `sandCanvas`, `sandCtx`, `sandTex`, `GATE_DOORS`, `OBELISKS`, `LAP_EGGS`, `LAP_DOLPHINS`, `setObelisks(n)`, `setLapCounters(left)`, `PULVINAR` ({ x, z }).
+
+- [ ] **Step 1: Delete the Task 2 TEMPORARY block and add the architecture**
+
+```js
+// ---- the ancient circus (about 103 AD) ----------------------------------------------------------------
+// An illustrative composite: arena, three tiers of seating with walkways and a portico, the twelve
+// starting gates, the barrier with its turning posts, lap counters, shrines and obelisks, the pulvinar,
+// the arch of Titus, the Palatine palace above and the city in the haze.
+const T = Circus.TRACK;
+const ARENA = { halfWidth: 42, gatesX: -268, curveX: 228 };
+// noise canvas used to weather every stone surface
+function noiseCanvas(size, seed, base, spread, blotch) {
+  const r = Circus.rng(seed), cv = document.createElement("canvas"); cv.width = cv.height = size;
+  const g = cv.getContext("2d"), img = g.createImageData(size, size);
+  // value noise at a few octaves, tileable by wrapping the lattice
+  const lat = (n) => Array.from({ length: n * n }, () => r());
+  const octs = [[8, .45], [32, .3], [128, .25]].map(([n, w]) => ({ n, w, v: lat(n) }));
+  const sample = (o, x, y) => { const fx = x * o.n / size, fy = y * o.n / size, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+    const at = (i, j) => o.v[((j % o.n) * o.n) + (i % o.n)];
+    const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
+    return (at(x0, y0) * (1 - sx) + at(x0 + 1, y0) * sx) * (1 - sy) + (at(x0, y0 + 1) * (1 - sx) + at(x0 + 1, y0 + 1) * sx) * sy; };
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let v = 0; for (const o of octs) v += sample(o, x, y) * o.w;
+    const b = blotch ? Math.max(0, sample(octs[0], x * 1.7 + 50, y * 1.7) - .62) * 2.2 : 0;
+    const k = (i) => Math.max(0, Math.min(255, base[i] * (1 + (v - .5) * spread - b * .35) + (r() - .5) * 10));
+    const p = (y * size + x) * 4; img.data[p] = k(0); img.data[p + 1] = k(1); img.data[p + 2] = k(2); img.data[p + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+  return tex;
+}
+const TEX = {
+  travertine: noiseCanvas(256, 11, [214, 202, 176], .5, true),
+  marble: noiseCanvas(256, 12, [236, 230, 218], .25, false),
+  brick: noiseCanvas(256, 13, [168, 96, 70], .45, true),
+  plaster: noiseCanvas(256, 14, [222, 208, 184], .4, true),
+};
+const mat = (opts) => new THREE.MeshStandardMaterial({ roughness: .88, metalness: 0, ...opts });
+const M = {
+  stone: mat({ map: TEX.travertine }),
+  marble: mat({ map: TEX.marble, roughness: .6 }),
+  red: mat({ color: "#8e3324", map: TEX.plaster }),
+  ochre: mat({ color: "#c9a25a", map: TEX.plaster }),
+  roof: mat({ color: "#a65538", map: TEX.plaster }),
+  brick: mat({ map: TEX.brick }),
+  gold: mat({ color: "#d4a849", metalness: .85, roughness: .32 }),
+  bronze: mat({ color: "#7a5a32", metalness: .7, roughness: .45 }),
+  water: mat({ color: "#46707c", roughness: .12, metalness: .1 }),
+  dark: mat({ color: "#2b241c" }),
+  wood: mat({ color: "#6a4a2c" }),
+  green: mat({ color: "#5f6f3a", roughness: 1 }),
+};
+function addMesh(geo, material, parent, { x = 0, y = 0, z = 0, ry = 0, cast = true, receive = true } = {}) {
+  const m = new THREE.Mesh(geo, material); m.position.set(x, y, z); m.rotation.y = ry; m.castShadow = cast; m.receiveShadow = receive; parent.add(m); return m;
+}
+// world-space UVs (metres / scale) so the weathering texture has the same grain everywhere
+function worldUV(geo, scale = 6) {
+  geo.computeVertexNormals();
+  const p = geo.attributes.position, n = geo.attributes.normal, uv = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) {
+    const ax = Math.abs(n.getX(i)), ay = Math.abs(n.getY(i));
+    const [a, b] = ay > .7 ? [p.getX(i), p.getZ(i)] : ax > .7 ? [p.getZ(i), p.getY(i)] : [p.getX(i), p.getY(i)];
+    uv[2 * i] = a / scale; uv[2 * i + 1] = b / scale;
+  }
+  geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  return geo;
+}
+const box = (w, h, d) => worldUV(new THREE.BoxGeometry(w, h, d).toNonIndexed());
+
+// ---- the seating -------------------------------------------------------------------------------------
+// The cross-section of the stands, measured outward (o) from the arena wall, with height y.
+const ROW = { depth: .66, rise: .45, perTier: 14 };
+const PROFILE = [];          // [o, y]
+const SEAT_ROWS = [];        // { o, y } of each row of seats (the tread centre and seat height)
+(function buildProfile() {
+  let o = 0, y = 0;
+  PROFILE.push([0, 0]); y = 3.4; PROFILE.push([0, y]);        // the podium wall facing the arena
+  o = 1.8; PROFILE.push([o, y]);                               // front walkway with the best seats
+  for (let tier = 0; tier < 3; tier++) {
+    if (tier > 0) { o += 1.5; PROFILE.push([o, y]); y += 1.05; PROFILE.push([o, y]); }   // walkway and parapet
+    for (let k = 0; k < ROW.perTier; k++) {
+      y += ROW.rise; PROFILE.push([o, y]);
+      SEAT_ROWS.push({ o: o + ROW.depth * .45, y, tier });
+      o += ROW.depth; PROFILE.push([o, y]);
+    }
+  }
+  o += .4; PROFILE.push([o, y]);
+  ARENA.porticoO = o; ARENA.porticoY = y;
+  o += 4.2; PROFILE.push([o, y]);
+  y += 5.2; PROFILE.push([o, y]);                              // the portico's back wall
+  ARENA.outerO = o; ARENA.outerY = y;
+})();
+// Your seat in the spectator view: the middle of the Aventine stands, two-thirds of the way up.
+const SEAT = (() => { const row = SEAT_ROWS[24]; return { x: 20, y: row.y + 1.15, z: ARENA.halfWidth + row.o, row: 24 }; })();
+// The path the stands follow: along the Aventine side, round the curved end (with a gap for the arch of
+// Titus) and back along the Palatine side. Each piece gives n samples of [x, z, nx, nz] at offset o.
+const ARCH_GAP = .13;                                          // radians either side of the axis
+const PATH = [
+  { n: 2, at: (k, o) => { const x = ARENA.gatesX + 10 + k * (ARENA.curveX - ARENA.gatesX - 10); return [x, ARENA.halfWidth + o, 0, 1]; } },
+  { n: 22, at: (k, o) => { const a = Math.PI / 2 - k * (Math.PI / 2 - ARCH_GAP), R = ARENA.halfWidth + o; return [ARENA.curveX + R * Math.cos(a), R * Math.sin(a), Math.cos(a), Math.sin(a)]; } },
+  { n: 22, at: (k, o) => { const a = -ARCH_GAP - k * (Math.PI / 2 - ARCH_GAP), R = ARENA.halfWidth + o; return [ARENA.curveX + R * Math.cos(a), R * Math.sin(a), Math.cos(a), Math.sin(a)]; } },
+  { n: 2, at: (k, o) => { const x = ARENA.curveX - k * (ARENA.curveX - ARENA.gatesX - 10); return [x, -ARENA.halfWidth - o, 0, -1]; } },
+];
+function sweep(profile, pieces) {
+  const pos = [], uv = [], col = [];
+  for (const piece of pieces) {
+    const n = piece.n;
+    for (let i = 0; i + 1 < profile.length; i++) {
+      const [o0, y0] = profile[i], [o1, y1] = profile[i + 1];
+      const vlen = Math.hypot(o1 - o0, y1 - y0);
+      if (vlen < 1e-6) continue;
+      const shade = Math.abs(o1 - o0) < 1e-6 ? .68 : Math.abs(y1 - y0) < 1e-6 ? 1 : .86;   // risers darker than treads
+      let u0 = 0;
+      for (let k = 0; k < n - 1 + (n === 2 ? 0 : 0); k++) {
+        const ka = k / (n - 1), kb = (k + 1) / (n - 1);
+        const A0 = piece.at(ka, o0), B0 = piece.at(kb, o0), A1 = piece.at(ka, o1), B1 = piece.at(kb, o1);
+        const seg = Math.hypot(B0[0] - A0[0], B0[1] - A0[1]);
+        const P = [[A0[0], y0, A0[1]], [B0[0], y0, B0[1]], [B1[0], y1, B1[1]], [A1[0], y1, A1[1]]];
+        for (const idx of [0, 1, 2, 0, 2, 3]) pos.push(...P[idx]);
+        const U = [[u0, y0], [u0 + seg, y0], [u0 + seg, y0 + vlen], [u0, y0 + vlen]];
+        for (const idx of [0, 1, 2, 0, 2, 3]) { uv.push(U[idx][0] / 5, (U[idx][1] + o0) / 5); col.push(shade, shade * .98, shade * .95); }
+        u0 += seg;
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  return g;
+}
+const cavea = addMesh(sweep(PROFILE, PATH), M.stone, ancient);
+cavea.material = M.stone.clone(); cavea.material.side = THREE.DoubleSide; cavea.material.vertexColors = true;
+// the outer façade: three storeys of arcades, a painted canvas on the outside of the back wall
+function arcadeTexture() {
+  const cv = document.createElement("canvas"); cv.width = 512; cv.height = 256; const g = cv.getContext("2d");
+  g.drawImage(TEX.travertine.image, 0, 0, 512, 256);
+  for (let s = 0; s < 3; s++) for (let i = 0; i < 4; i++) {
+    const x = 16 + i * 128, y = 18 + s * 80, w = 96, h = 62;
+    g.fillStyle = s === 0 ? "#3a2c20" : "#4a3a2a"; g.beginPath(); g.moveTo(x, y + h); g.lineTo(x, y + w / 2); g.arc(x + w / 2, y + w / 2, w / 2, Math.PI, 0); g.lineTo(x + w, y + h); g.fill();
+    g.fillStyle = "rgba(255,240,210,.35)"; g.fillRect(x - 12, y - 6, 8, h + 6);
+  }
+  for (let s = 0; s <= 3; s++) { g.fillStyle = "rgba(90,70,50,.35)"; g.fillRect(0, 10 + s * 80, 512, 5); }
+  const t = new THREE.CanvasTexture(cv); t.wrapS = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const FACADE = mat({ map: arcadeTexture() });
+(function facade() {
+  const pieces = PATH.map((p) => ({ n: p.n, at: (k) => p.at(k, ARENA.outerO) }));
+  const pos = [], uv = [];
+  for (const piece of pieces) { let u = 0; for (let k = 0; k + 1 < piece.n; k++) {
+    const a = piece.at(k / (piece.n - 1)), b = piece.at((k + 1) / (piece.n - 1)), seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const P = [[a[0], 0, a[1]], [b[0], 0, b[1]], [b[0], ARENA.outerY, b[1]], [a[0], ARENA.outerY, a[1]]];
+    for (const i of [0, 1, 2, 0, 2, 3]) pos.push(...P[i]);
+    const U = [[u, 0], [u + seg, 0], [u + seg, 1], [u, 1]]; for (const i of [0, 1, 2, 0, 2, 3]) uv.push(U[i][0] / 16, U[i][1]);
+    u += seg; } }
+  const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); g.computeVertexNormals();
+  const m = addMesh(g, FACADE, ancient); m.material.side = THREE.DoubleSide;
+})();
+// portico columns and roof along the top of the stands
+(function portico() {
+  const col = new THREE.CylinderGeometry(.32, .38, 5, 8);
+  const pts = [];
+  for (const piece of PATH) {
+    const n = piece.n === 2 ? 90 : 14;
+    for (let k = 0; k < n; k++) { const [x, z] = piece.at(k / n, ARENA.porticoO + .5); pts.push([x, z]); }
+  }
+  const cols = new THREE.InstancedMesh(col, M.marble, pts.length);
+  const m4 = new THREE.Matrix4();
+  pts.forEach(([x, z], i) => { m4.makeTranslation(x, ARENA.porticoY + 2.5, z); cols.setMatrixAt(i, m4); });
+  cols.castShadow = true; cols.receiveShadow = true; ancient.add(cols);
+  const roofProfile = [[ARENA.porticoO, ARENA.porticoY + 5], [ARENA.outerO + .6, ARENA.porticoY + 5.6]];
+  const roof = addMesh(sweep(roofProfile, PATH), M.roof, ancient); roof.material = M.roof.clone(); roof.material.side = THREE.DoubleSide;
+})();
+
+// ---- the arena floor ---------------------------------------------------------------------------------
+// Sand on a canvas that the chariots' wheels and hooves mark as they run (see the race view).
+const SAND = { x0: ARENA.gatesX, x1: ARENA.curveX + ARENA.halfWidth, z0: -ARENA.halfWidth, z1: ARENA.halfWidth, pxPerM: 3.6 };
+const sandCanvas = document.createElement("canvas");
+sandCanvas.width = Math.round((SAND.x1 - SAND.x0) * SAND.pxPerM); sandCanvas.height = Math.round((SAND.z1 - SAND.z0) * SAND.pxPerM);
+const sandCtx = sandCanvas.getContext("2d");
+function paintSand() {
+  const g = sandCtx, r = Circus.rng(5);
+  g.fillStyle = "#cdb07a"; g.fillRect(0, 0, sandCanvas.width, sandCanvas.height);
+  for (let i = 0; i < 26000; i++) { const x = r() * sandCanvas.width, y = r() * sandCanvas.height; g.fillStyle = `rgba(${r() < .5 ? "120,90,50" : "245,225,180"},${.05 + r() * .12})`; g.fillRect(x, y, 1 + r() * 3, 1 + r() * 3); }
+  // raked arcs, old hoof scuffs round the turns
+  g.strokeStyle = "rgba(110,80,45,.08)"; g.lineWidth = 2;
+  for (let i = 0; i < 160; i++) { const s = r() * T.lap, d = r() * T.dMax, p = Circus.toWorld(s, d); g.beginPath(); g.arc((p.x - SAND.x0) * SAND.pxPerM, (p.z - SAND.z0) * SAND.pxPerM, 2 + r() * 6, 0, 6.28); g.stroke(); }
+}
+paintSand();
+const sandTex = new THREE.CanvasTexture(sandCanvas); sandTex.colorSpace = THREE.SRGBColorSpace; sandTex.anisotropy = 8;
+(function arenaFloor() {
+  // the arena outline: straight sides, the curved east end, closed by the gates in the west
+  const sh = new THREE.Shape();
+  sh.moveTo(ARENA.gatesX, -ARENA.halfWidth); sh.lineTo(ARENA.curveX, -ARENA.halfWidth);
+  sh.absarc(ARENA.curveX, 0, ARENA.halfWidth, -Math.PI / 2, Math.PI / 2, false);
+  sh.lineTo(ARENA.gatesX, ARENA.halfWidth); sh.lineTo(ARENA.gatesX, -ARENA.halfWidth);
+  const g = new THREE.ShapeGeometry(sh, 48); g.rotateX(Math.PI / 2);         // shape y → world z
+  const p = g.attributes.position, uv = g.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) - SAND.x0) / (SAND.x1 - SAND.x0), 1 - (p.getZ(i) - SAND.z0) / (SAND.z1 - SAND.z0));
+  g.computeVertexNormals();
+  const m = addMesh(g, mat({ map: sandTex, roughness: 1 }), ancient, { cast: false });
+  m.material.side = THREE.DoubleSide;
+})();
+// ground beyond the building, sloping up into the hills
+(function hills() {
+  const g = new THREE.PlaneGeometry(2600, 2000, 130, 100); g.rotateX(-Math.PI / 2);
+  const p = g.attributes.position, r = Circus.rng(21);
+  const height = (x, z) => {
+    const pal = Math.max(0, -z - 95) , av = Math.max(0, z - 95);
+    let h = Math.min(36, pal * .55) + Math.min(30, av * .42);              // the Palatine rises steeply, the Aventine more gently
+    h *= 1 / (1 + Math.max(0, Math.abs(x - 30) - 380) / 160);              // the valley opens east and west
+    const away = Math.min(1, Math.max(0, Math.abs(z) - 85) / 40);             // flat valley floor under the building
+    return h + Math.sin(x * .013) * Math.cos(z * .011) * 3 * away - .4;
+  };
+  for (let i = 0; i < p.count; i++) p.setY(i, height(p.getX(i), p.getZ(i)));
+  worldUV(g, 18);
+  addMesh(g, mat({ color: "#a39168", map: TEX.plaster }), ancient, { cast: false });
+  ARENA.height = height;
+})();
+
+// ---- the starting gates (carceres) ---------------------------------------------------------------------
+const GATE_DOORS = [];
+(function gates() {
+  const g = new THREE.Group(); ancient.add(g);
+  const x = ARENA.gatesX;
+  // the stalls: a back wall, a roof over the twelve stalls and an upper storey; open at the front
+  addMesh(box(2, 14, 2 * ARENA.halfWidth + 8), M.stone, g, { x: x - 13, y: 7 });
+  addMesh(box(13, .8, 2 * ARENA.halfWidth + 8), M.stone, g, { x: x - 6.5, y: 6.6 });
+  addMesh(box(4, 5.6, 2 * ARENA.halfWidth + 8), M.stone, g, { x: x - 10, y: 9.8 });
+  addMesh(box(13.4, .7, 2 * ARENA.halfWidth + 8.4), M.marble, g, { x: x - 6.5, y: 12.95 });
+  for (let i = 0; i <= 12; i++) { const z = i < 12 ? T.gateZ(i) - 2.6 : T.gateZ(11) + 2.6; addMesh(box(11, 6.2, .5), M.stone, g, { x: x - 6, y: 3.1, z }); }
+  for (const z of [-ARENA.halfWidth - 6, ARENA.halfWidth + 6]) addMesh(box(14, 22, 14), M.stone, g, { x: x - 6, y: 11, z }); // towers (oppida)
+  addMesh(box(10, 6, 14), M.red, g, { x: x - 2, y: 15.6, z: 0 });                                           // the magistrates' tribunal above the gates
+  for (let i = 0; i < 12; i++) {
+    const z = T.gateZ(i);
+    addMesh(box(1.2, 9, 1.2), M.marble, g, { x: x + .4, y: 4.5, z: z + 2.6 });                              // herm pillars between gates
+    const door = new THREE.Group(); door.position.set(x + .3, 0, z - 2.2); g.add(door);
+    addMesh(box(.25, 5, 4.4), M.wood, door, { y: 2.5, z: 2.2 });                                            // lattice door, hinged at its edge
+    for (let k = 0; k < 5; k++) addMesh(box(.32, 4.6, .12), M.dark, door, { y: 2.5, z: .5 + k * .9, cast: false });
+    GATE_DOORS.push(door);
+  }
+  addMesh(box(1.2, 9, 1.2), M.marble, g, { x: x + .4, y: 4.5, z: T.gateZ(0) - 2.6 });
+  addMesh(box(.6, 10, 6), M.dark, g, { x: x + .1, y: 5, z: (T.gateZ(5) + T.gateZ(6)) / 2, cast: false });  // the procession gate
+})();
+
+// ---- the barrier (euripus) ------------------------------------------------------------------------------
+const OBELISKS = [];
+const LAP_EGGS = [], LAP_DOLPHINS = [];
+(function barrier() {
+  const g = new THREE.Group(); ancient.add(g);
+  const x0 = T.westPost + 4.5, x1 = T.eastPost - 4.5, len = x1 - x0, cx = (x0 + x1) / 2;
+  addMesh(box(len, 1.3, 6.4), M.marble, g, { x: cx, y: .65 });
+  addMesh(box(len - .6, .1, 5.4), M.water, g, { x: cx, y: 1.32, cast: false });
+  // the turning posts: three gilded cones on a semicircular base at each end
+  for (const [px, dir] of [[T.westPost, -1], [T.eastPost, 1]]) {
+    addMesh(worldUV(new THREE.CylinderGeometry(4.5, 4.7, 2.2, 24, 1, false, 0, Math.PI).toNonIndexed()), M.marble, g, { x: px, y: 1.1, ry: dir > 0 ? 0 : Math.PI });
+    for (const a of [-.9, 0, .9]) {
+      const cone = addMesh(new THREE.ConeGeometry(.9, 7.5, 16), M.gold, g, { x: px + dir * 2.6 * Math.cos(a), y: 2.2 + 3.75, z: 2.6 * Math.sin(a) });
+      cone.userData.post = true;
+    }
+  }
+  // lap counters: seven eggs near the west end, seven dolphins near the east end, on frames of columns
+  const frame = (fx) => { for (const dz of [-2, 2]) addMesh(box(.5, 6, .5), M.marble, g, { x: fx - 6, y: 4, z: dz }), addMesh(box(.5, 6, .5), M.marble, g, { x: fx + 6, y: 4, z: dz }); addMesh(box(13, .5, 4.6), M.marble, g, { x: fx, y: 7.2 }); };
+  frame(T.westPost + 25); frame(T.eastPost - 25);
+  for (let i = 0; i < 7; i++) {
+    const egg = addMesh(new THREE.SphereGeometry(.55, 12, 10), M.marble, g, { x: T.westPost + 25 - 5.1 + i * 1.7, y: 8.1 }); egg.scale.y = 1.4; LAP_EGGS.push(egg);
+    const dol = new THREE.Group(); dol.position.set(T.eastPost - 25 - 5.1 + i * 1.7, 8.2, 0); g.add(dol);
+    const body = addMesh(new THREE.SphereGeometry(.45, 10, 8), M.bronze, dol); body.scale.set(1, 1, 2.4); body.rotation.x = .9;
+    addMesh(new THREE.ConeGeometry(.35, .7, 6), M.bronze, dol, { y: -.7 });
+    LAP_DOLPHINS.push(dol);
+  }
+  // obelisks on pedestals: Augustus's (10 BC) mid-barrier, Constantius II's (357 AD) further east
+  const obelisk = (ox, h) => {
+    const o = new THREE.Group(); o.position.x = ox; g.add(o);
+    addMesh(box(4.2, 4, 4.2), M.marble, o, { y: 3.3 });
+    const shaft = new THREE.CylinderGeometry(.95 * h / 24, 1.4 * h / 24, h, 4, 1); shaft.rotateY(Math.PI / 4);
+    addMesh(worldUV(shaft.toNonIndexed(), 3), mat({ color: "#b98a6a", map: TEX.plaster }), o, { y: 5.3 + h / 2 });
+    addMesh(new THREE.ConeGeometry(.95 * h / 24 * 1.05, 1.6, 4).rotateY(Math.PI / 4), M.gold, o, { y: 5.3 + h + .8 });
+    OBELISKS.push(o); return o;
+  };
+  obelisk(T.westPost + 170, 23.7);
+  obelisk(T.westPost + 238, 32.2);
+  // shrines, statues and a fountain along the barrier
+  const shrine = (sx) => { addMesh(box(5, .6, 4), M.marble, g, { x: sx, y: 1.6 }); for (const dx of [-2, 2]) for (const dz of [-1.5, 1.5]) addMesh(new THREE.CylinderGeometry(.22, .25, 3.6, 8), M.marble, g, { x: sx + dx, y: 3.7, z: dz }); addMesh(box(5.4, .6, 4.4), M.marble, g, { x: sx, y: 5.8 }); const roof = addMesh(new THREE.ConeGeometry(3.6, 1.6, 4).rotateY(Math.PI / 4), M.roof, g, { x: sx, y: 6.9 }); roof.scale.z = .8; addMesh(new THREE.SphereGeometry(.6, 10, 8), M.gold, g, { x: sx, y: 2.6 }); };
+  const statue = (sx, h) => { addMesh(new THREE.CylinderGeometry(.6, .6, h, 10), M.marble, g, { x: sx, y: 1.3 + h / 2 }); addMesh(new THREE.CylinderGeometry(.35, .45, 2, 8), M.gold, g, { x: sx, y: 1.3 + h + 1 }); addMesh(new THREE.SphereGeometry(.3, 8, 6), M.gold, g, { x: sx, y: 1.3 + h + 2.2 }); };
+  shrine(T.westPost + 60); shrine(T.westPost + 120); shrine(T.westPost + 205); shrine(T.westPost + 280);
+  for (const sx of [T.westPost + 90, T.westPost + 150, T.westPost + 190, T.westPost + 260, T.westPost + 300]) statue(sx, 6 + (sx % 3));
+  addMesh(new THREE.CylinderGeometry(2.2, 2.6, 1.2, 16), M.marble, g, { x: T.westPost + 225, y: 1.9 });
+})();
+function setObelisks(n) { OBELISKS.forEach((o, i) => { o.visible = i < n; }); }
+function setLapCounters(left) { LAP_EGGS.forEach((e, i) => { e.visible = i < left; }); LAP_DOLPHINS.forEach((d, i) => { d.rotation.z = i < left ? 0 : Math.PI / 2 * .95; d.position.y = i < left ? 8.2 : 7.6; }); }
+
+// ---- the pulvinar, the arch of Titus and the gates' surroundings -----------------------------------------
+const PULVINAR = { x: 22, z: -ARENA.halfWidth - 8 };
+(function pulvinar() {
+  const g = new THREE.Group(); g.position.set(PULVINAR.x, 0, -ARENA.halfWidth); ancient.add(g);
+  addMesh(box(26, 13, 14), M.stone, g, { y: 6.5, z: -6 });
+  addMesh(box(26.6, 1, 15), M.marble, g, { y: 13.4, z: -6 });
+  for (let i = 0; i < 6; i++) addMesh(new THREE.CylinderGeometry(.55, .6, 7, 12), M.marble, g, { x: -11 + i * 4.4, y: 17.4, z: -.6 });
+  addMesh(box(26, 1.2, 12), M.marble, g, { y: 21.5, z: -6 });
+  const ped = new THREE.CylinderGeometry(1, 1, 26, 3); ped.rotateZ(Math.PI / 2); ped.scale(1, 3.2, 6.8);
+  addMesh(ped, M.roof, g, { y: 23.7, z: -6 });
+  addMesh(box(18, 3, 1), M.red, g, { y: 15.5, z: -6.9 + 0 });
+  for (const x of [-12, 0, 12]) addMesh(new THREE.SphereGeometry(.8, 10, 8), M.gold, g, { x, y: 27.2, z: -6 });
+  // purple awning and the box seats
+  addMesh(box(18, .2, 6), mat({ color: "#5e2a4a" }), g, { y: 20.2, z: -3, cast: false });
+  addMesh(box(18, 1, 4), M.red, g, { y: 13.9, z: -2 });
+})();
+(function archOfTitus() {
+  const g = new THREE.Group(); g.position.set(ARENA.curveX + ARENA.halfWidth + ARENA.outerO * .55, 0, 0); ancient.add(g);
+  const w = 20, h = 22, d = ARENA.outerO * 1.1;
+  addMesh(box(d, h, w), M.marble, g, { y: h / 2 });
+  for (const [z, ww, hh] of [[0, 6, 13], [-6.6, 3, 8.5], [6.6, 3, 8.5]]) addMesh(box(d + .4, hh, ww), M.dark, g, { y: hh / 2, z, cast: false });
+  addMesh(box(d + 1, 5, w + 1), M.marble, g, { y: h + 2.5 });
+  // a gilded four-horse chariot group on top
+  addMesh(box(4, 3, 7), M.gold, g, { y: h + 6.5 });
+})();
+
+// ---- the Palatine palace, the Aventine and the city ---------------------------------------------------
+(function surroundings() {
+  const g = new THREE.Group(); ancient.add(g);
+  const r = Circus.rng(77);
+  // Domus Augustana: a great curved exedra facing the circus, palace blocks behind it
+  const ex = new THREE.Group(); ex.position.set(30, 30, -126); g.add(ex);
+  const exG = new THREE.CylinderGeometry(42, 42, 22, 40, 1, true, Math.PI * .62, Math.PI * .76).toNonIndexed();
+  const e = addMesh(worldUV(exG, 8), M.ochre, ex, { y: 11 }); e.material = M.ochre.clone(); e.material.side = THREE.DoubleSide;
+  for (let i = 0; i < 26; i++) { const a = Math.PI * .62 + i / 25 * Math.PI * .76 - Math.PI / 2; addMesh(new THREE.CylinderGeometry(.7, .8, 10, 8), M.marble, ex, { x: Math.sin(a + Math.PI / 2) * 43.5, y: 5, z: Math.cos(a + Math.PI / 2) * 43.5 }); }
+  const PALACE = [mat({ map: arcadeTexture(), color: "#e8d2a8" }), mat({ map: arcadeTexture(), color: "#c98f6e" })];
+  PALACE.forEach((m) => { m.map.wrapT = THREE.RepeatWrapping; });
+  const palaceBox = (w, h, d) => { const b = new THREE.BoxGeometry(w, h, d), uv = b.attributes.uv, nrm = b.attributes.normal;
+    for (let i = 0; i < uv.count; i++) { const side = Math.abs(nrm.getX(i)) > .5 ? d : w; uv.setXY(i, uv.getX(i) * side / 14, uv.getY(i) * h / 24); } return b; };
+  const block = (x, z, w, h, d, m = PALACE[0]) => { addMesh(palaceBox(w, h, d), m, g, { x, y: ARENA.height(x, z) - 1 + h / 2, z }); addMesh(new THREE.ConeGeometry(Math.max(w, d) * .62, 3.5, 4).rotateY(Math.PI / 4).scale(w / Math.max(w, d), 1, d / Math.max(w, d)), M.roof, g, { x, y: ARENA.height(x, z) - 1 + h + 1.7, z }); };
+  for (let i = 0; i < 26; i++) block(-160 + r() * 360, -140 - r() * 120, 14 + r() * 26, 10 + r() * 22, 14 + r() * 24, PALACE[r() < .3 ? 1 : 0]);
+  // temples on the Aventine (seen from the pulvinar)
+  for (let i = 0; i < 4; i++) { const tx = -150 + i * 90 + r() * 30, tz = 150 + r() * 40; const ty = ARENA.height(tx, tz) - 1;
+    addMesh(box(14, 3, 24), M.marble, g, { x: tx, y: ty + 1.5, z: tz }); for (let c = 0; c < 6; c++) addMesh(new THREE.CylinderGeometry(.5, .55, 9, 8), M.marble, g, { x: tx - 5 + (c % 2) * 10, y: ty + 7.5, z: tz - 10 + Math.floor(c / 2) * 10 });
+    addMesh(new THREE.ConeGeometry(10, 3.5, 4).rotateY(Math.PI / 4).scale(.75, 1, 1.25), M.roof, g, { x: tx, y: ty + 13.5, z: tz }); }
+  // the city: houses and apartment blocks fading into the haze
+  const city = new THREE.InstancedMesh(box(1, 1, 1), mat({ map: TEX.plaster }), 1400), roofs = new THREE.InstancedMesh(new THREE.ConeGeometry(.75, 1, 4).rotateY(Math.PI / 4), M.roof, 1400);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color();
+  let n = 0;
+  while (n < 1400) {
+    const a = r() * Math.PI * 2, dist = 230 + Math.pow(r(), .7) * 900, x = 30 + Math.cos(a) * dist * 1.25, z = Math.sin(a) * dist;
+    if (Math.abs(z) < 120 && x > -320 && x < 330) continue;                 // not inside the circus
+    if (z < -95 && z > -260 && x > -180 && x < 240) continue;               // not on the palace
+    const w = 8 + r() * 16, h = 6 + r() * 16, d = 8 + r() * 16, y = ARENA.height(x, z) - 1;
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), r() * .4 - .2 + (Math.abs(z) > Math.abs(x) ? 0 : Math.PI / 2));
+    m4.compose(new THREE.Vector3(x, y + h / 2, z), q, new THREE.Vector3(w, h, d)); city.setMatrixAt(n, m4);
+    m4.compose(new THREE.Vector3(x, y + h + 1.2, z), q, new THREE.Vector3(w, 2.4, d)); roofs.setMatrixAt(n, m4);
+    city.setColorAt(n, c.setHSL(.08 + r() * .04, .25 + r() * .2, .62 + r() * .2)); n++;
+  }
+  city.receiveShadow = roofs.receiveShadow = true; g.add(city, roofs);
+  // cypresses and umbrella pines on the slopes
+  const tree = new THREE.InstancedMesh(new THREE.ConeGeometry(2.2, 12, 7), M.green, 220), m5 = new THREE.Matrix4();
+  for (let i = 0; i < 220; i++) { const x = -260 + r() * 560, z = (r() < .5 ? -1 : 1) * (100 + r() * 90), y = ARENA.height(x, z) - 1; const s = .7 + r() * .6; m5.compose(new THREE.Vector3(x, y + 6 * s, z), q.identity(), new THREE.Vector3(s, s, s)); tree.setMatrixAt(i, m5); }
+  tree.castShadow = true; g.add(tree);
+})();
+```
+
+- [ ] **Step 2: The still block** — append at the end of the module (used by Tasks 3–7, removed in Task 8):
+
+```js
+// TEMPORARY still for headless checks (Tasks 3–7) — removed in Task 8.
+// Query: ?yaw=&pitch=&hfov=&mix=&ob=&excite=&race=SECONDS&seed=&chase=CAR
+{
+  const q = new URLSearchParams(location.search);
+  view.pos.set(SEAT.x, SEAT.y, SEAT.z);
+  view.yaw = +(q.get("yaw") ?? 0); view.pitch = +(q.get("pitch") ?? -.1); view.mix = +(q.get("mix") ?? 0);
+  if (q.get("hfov")) view.hfov = +q.get("hfov");
+  setObelisks(+(q.get("ob") ?? 1));
+  if (typeof crowdFrame === "function") { CROWD.excite = +(q.get("excite") ?? .1); crowdFrame(3); }
+  if (typeof poseTeams === "function" && q.get("race") != null) {
+    const race = Circus.createRace({ seed: +(q.get("seed") ?? 3) }); setTeamColors(race); Circus.start(race);
+    const secs = +q.get("race");
+    for (let i = 0; i < secs * 30; i++) { Circus.step(race); if (i % 2 === 0) poseTeams(race, 1 / 15, i / 30); }
+    poseTeams(race, 1 / 30, secs); openGates(1);
+    if (q.get("chase") != null) {
+      const c = race.cars[+q.get("chase")], fx = Math.cos(c.heading), fz = Math.sin(c.heading);
+      view.mode = "chase"; chaseCam.position.set(c.x - fx * 11, 4.2, c.z - fz * 11); chaseCam.lookAt(c.x + fx * 8, 1.5, c.z + fz * 8);
+    }
+  }
+  if (typeof modernFrame === "function") modernFrame(0);
+  draw();
+  const im = new Image(); im.src = renderer.domElement.toDataURL(); im.style.cssText = "position:absolute;inset:0;width:100%;height:100%"; stage.appendChild(im);
+}
+```
+
+- [ ] **Step 3: Check**
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t3a.png "http://localhost:8765/circus-maximus/index.html?"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t3b.png "http://localhost:8765/circus-maximus/index.html?yaw=1.25&hfov=0.9&pitch=-0.12"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t3c.png "http://localhost:8765/circus-maximus/index.html?yaw=-1.2&hfov=0.9&pitch=-0.1&ob=2"
+```
+
+Read each: (a) the whole arena across about 158°: stands in three tiers with walkways, the barrier with water channel, shrines, statues, one obelisk mid-barrier, the pulvinar with columns straight ahead, palace blocks with arcades on the Palatine above; (b) the twelve open stalls at the west end with herms and the tribunal above, the egg lap counter and gilded turning posts; (c) the curved end with the arch of Titus and, with `ob=2`, a second taller obelisk east of the first. Steps look like steps (darker risers). No console errors (Browser pane).
+
+- [ ] **Step 4: Commit** — `git add circus-maximus/index.html && git commit -m "circus-maximus: the ancient circus — stands, gates, barrier, pulvinar, palace, city"`
+
+---
+
+### Task 4: The crowd
+
+**Files:**
+- Modify: `circus-maximus/index.html` (module script, after the architecture and before the still block)
+
+**Interfaces:**
+- Consumes: `SEAT_ROWS`, `PATH`, `PULVINAR`, `SEAT`, `ARENA`, `SUN_DIR`, `ancient`.
+- Produces: `CROWD` ({ excite 0..1, hot: Vector4[3] (x, z, radius, strength), count, meshes }), `crowdMat`, `crowdFrame(t)`.
+
+- [ ] **Step 1: Add the crowd**
+
+```js
+// ---- the crowd ---------------------------------------------------------------------------------------
+// About a hundred thousand spectators as camera-facing figures drawn by a shader: a head, shoulders and a
+// tunic in its own colour, seen from the front or the back. They bob, and stand with their arms up when
+// the race excites them (a general level plus "hot spots" where the chariots are).
+const CROWD = { excite: 0, hot: [new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0)], count: 0, meshes: [] };
+const crowdMat = new THREE.ShaderMaterial({
+  fog: true, transparent: false, side: THREE.DoubleSide,
+  uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { time: { value: 0 }, excite: { value: 0 }, hot: { value: CROWD.hot }, sunDir: { value: SUN_DIR } }]),
+  vertexShader: `
+    attribute vec3 offset; attribute vec2 facing; attribute vec3 tunic; attribute vec3 skin; attribute float rnd;
+    uniform float time, excite; uniform vec4 hot[3]; uniform vec3 sunDir;
+    varying vec2 vUv; varying vec3 vTunic; varying vec3 vSkin; varying float vFront; varying float vStand; varying float vLight; varying float vRnd;
+    #include <fog_pars_vertex>
+    void main() {
+      float heat = excite;
+      for (int i = 0; i < 3; i++) { vec2 dd = offset.xz - hot[i].xy; heat += hot[i].w * exp(-dot(dd, dd) / (hot[i].z * hot[i].z)); }
+      float stand = smoothstep(rnd * 0.9 + 0.05, rnd * 0.9 + 0.2, heat);
+      vStand = stand; vRnd = rnd;
+      float h = mix(1.0, 1.62, stand), w = 0.52;
+      vec3 toCam = cameraPosition - offset; toCam.y = 0.0;
+      vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), normalize(toCam + vec3(1e-4, 0.0, 0.0))));
+      float bob = sin(time * (2.0 + rnd * 3.0) + rnd * 40.0) * 0.025 * (1.0 + 5.0 * stand);
+      vec3 p = offset + right * (position.x * w) + vec3(0.0, (position.y + 0.5) * h + bob, 0.0);
+      vUv = vec2(position.x + 0.5, position.y + 0.5);
+      vFront = step(0.0, dot(vec3(facing.x, 0.0, facing.y), toCam));
+      vTunic = tunic; vSkin = skin;
+      // seats facing the sun are lit; the stands' own slope shades the side that faces away
+      vec3 n = normalize(vec3(facing.x * 0.56, 0.83, facing.y * 0.56));
+      vLight = 0.52 + 0.62 * clamp(dot(n, sunDir) * 2.5 + 0.25, 0.0, 1.0);
+      vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mvPosition;
+      #include <fog_vertex>
+    }`,
+  fragmentShader: `
+    varying vec2 vUv; varying vec3 vTunic; varying vec3 vSkin; varying float vFront; varying float vStand; varying float vLight; varying float vRnd;
+    #include <common>
+    #include <fog_pars_fragment>
+    void main() {
+      // the figure in a unit box: head at the top, a neck, rounded shoulders, a body that narrows a little
+      // towards the seat; standing figures raise their arms
+      vec2 u = vUv;
+      float headY = mix(0.82, 0.78, vStand), headR = mix(0.16, 0.115, vStand);
+      vec2 hp = vec2((u.x - 0.5), (u.y - headY) * mix(0.82, 1.35, vStand));
+      float head = step(length(hp), headR);
+      float shoulder = mix(0.62, 0.60, vStand);
+      float neck = step(abs(u.x - 0.5), 0.07) * step(shoulder - 0.02, u.y) * step(u.y, headY - headR * 0.6);
+      vec2 sp = vec2((u.x - 0.5) / 0.42, (u.y - (shoulder - 0.07)) / 0.11);
+      float shoulders = step(length(sp), 1.0);
+      float torso = step(u.y, shoulder - 0.07) * step(abs(u.x - 0.5), 0.42 - (shoulder - 0.07 - u.y) * 0.18);
+      float body = max(shoulders, torso);
+      // raised arms: forearms angled outwards, ending in a hand a little above the head
+      float armL = step(abs(u.x - 0.12 - (u.y - shoulder) * 0.22), 0.05), armR = step(abs(u.x - 0.88 + (u.y - shoulder) * 0.22), 0.05);
+      float hands = step(length(vec2(abs(u.x - 0.5) - 0.32, (u.y - 0.92) * 1.6)), 0.06);
+      float arms = vStand * step(0.3, fract(vRnd * 7.0)) * max(step(shoulder - 0.08, u.y) * step(u.y, 0.9) * max(armL, armR), hands);
+      if (head + body + arms + neck < 0.5) discard;
+      vec3 hair = vSkin * 0.26;
+      vec3 col = vTunic;
+      // cloth: rounded shading across the body and a diagonal fold, as in a draped toga or cloak
+      float round = 0.72 + 0.28 * sin(3.14159 * clamp((u.x - 0.08) / 0.84, 0.0, 1.0));
+      float fold = 1.0 - 0.13 * smoothstep(0.02, 0.0, abs(u.y - 0.25 - (u.x - 0.2) * (fract(vRnd * 13.0) > 0.5 ? 0.6 : -0.6)));
+      col *= round * fold;
+      if (head > 0.5) col = vFront > 0.5 ? mix(vSkin * (0.85 + 0.15 * round), hair, step(headY + headR * 0.4, u.y)) : hair * (0.8 + 0.4 * round);
+      else if (neck > 0.5 || arms > 0.5) col = vSkin * 0.9;
+      col *= mix(0.78, 1.0, u.y) * vLight;          // a little darker towards the seat
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+      #include <fog_fragment>
+    }`,
+});
+crowdMat.uniforms.hot.value = CROWD.hot;          // merge() cloned the array; keep the live one
+(function seatTheCrowd() {
+  const r = Circus.rng(2024);
+  const FACTION_RGB = Circus.FACTIONS.map((f) => new THREE.Color(f.color));
+  const tunicColor = (c) => {
+    const x = r();
+    if (x < .42) return c.setHSL(.1, .15 + r() * .15, .78 + r() * .14);            // undyed and white wool, togas
+    if (x < .62) return c.setHSL(.07 + r() * .05, .3 + r() * .2, .45 + r() * .2);   // browns and ochres
+    if (x < .9) return c.copy(FACTION_RGB[Math.floor(r() * 4)]).multiplyScalar(.85 + r() * .3);   // faction colours
+    return c.setHSL(r(), .45, .35 + r() * .25);                                      // other dyes
+  };
+  const skinColor = (c) => c.setHSL(.06 + r() * .03, .35 + r() * .2, .32 + r() * .32);
+  const camSeat = new THREE.Vector2(SEAT.x, SEAT.z);
+  // gather seats by stretches of path, so each stretch is its own mesh and can be culled
+  const chunks = [];
+  for (let pi = 0; pi < PATH.length; pi++) {
+    const piece = PATH[pi], pieceChunks = piece.n === 2 ? 10 : 4;
+    for (let c = 0; c < pieceChunks; c++) chunks.push({ pi, k0: c / pieceChunks, k1: (c + 1) / pieceChunks, seats: [] });
+  }
+  for (const ch of chunks) {
+    const piece = PATH[ch.pi];
+    for (const row of SEAT_ROWS) {
+      const a = piece.at(ch.k0, row.o), b = piece.at(ch.k1, row.o);
+      // approximate the chunk's length along this row
+      let len = 0, prev = a; for (let i = 1; i <= 8; i++) { const p = piece.at(ch.k0 + (ch.k1 - ch.k0) * i / 8, row.o); len += Math.hypot(p[0] - prev[0], p[1] - prev[1]); prev = p; }
+      const n = Math.floor(len / .48);
+      for (let i = 0; i < n; i++) {
+        const k = ch.k0 + (ch.k1 - ch.k0) * (i + .5) / n, [x, z, nx, nz] = piece.at(k, row.o);
+        if ((Math.abs(x) + Math.abs(z) * 1.3) % 26 < 1.4) continue;                 // aisles and stairways
+        if (Math.abs(x - PULVINAR.x) < 15 && z < 0 && row.o < 15) continue;          // the pulvinar
+        if (Math.hypot(x - camSeat.x, z - camSeat.y) < (row.o > SEAT_ROWS[SEAT.row].o - .1 ? 3.2 : 1.6)) continue;   // room around your own seat
+        if (r() > (row.tier === 0 ? .96 : .88)) continue;                            // a few empty places
+        ch.seats.push([x + (r() - .5) * .12, row.y + .02, z + (r() - .5) * .1, -nx, -nz]);
+      }
+    }
+    // people standing in the portico at the top
+    for (let i = 0; i < 2; i++) {
+      const o = ARENA.porticoO + 1.2 + i * 1.4, a = piece.at(ch.k0, o), b = piece.at(ch.k1, o), len = Math.hypot(b[0] - a[0], b[1] - a[1]) * (piece.n === 2 ? 1 : 1.1);
+      const n = Math.floor(len / .9);
+      for (let j = 0; j < n; j++) { if (r() > .6) continue; const [x, z, nx, nz] = piece.at(ch.k0 + (ch.k1 - ch.k0) * (j + r()) / n, o); ch.seats.push([x, ARENA.porticoY + .45, z, -nx, -nz]); }
+    }
+  }
+  const plane = new THREE.PlaneGeometry(1, 1);
+  const c = new THREE.Color();
+  for (const ch of chunks) {
+    const n = ch.seats.length; if (!n) continue;
+    const g = new THREE.InstancedBufferGeometry();
+    g.index = plane.index; g.setAttribute("position", plane.attributes.position);
+    const off = new Float32Array(n * 3), fac = new Float32Array(n * 2), tun = new Float32Array(n * 3), sk = new Float32Array(n * 3), rn = new Float32Array(n);
+    ch.seats.forEach(([x, y, z, fx, fz], i) => {
+      off.set([x, y, z], i * 3); fac.set([fx, fz], i * 2);
+      tunicColor(c); tun.set([c.r, c.g, c.b], i * 3); skinColor(c); sk.set([c.r, c.g, c.b], i * 3); rn[i] = r();
+    });
+    g.setAttribute("offset", new THREE.InstancedBufferAttribute(off, 3));
+    g.setAttribute("facing", new THREE.InstancedBufferAttribute(fac, 2));
+    g.setAttribute("tunic", new THREE.InstancedBufferAttribute(tun, 3));
+    g.setAttribute("skin", new THREE.InstancedBufferAttribute(sk, 3));
+    g.setAttribute("rnd", new THREE.InstancedBufferAttribute(rn, 1));
+    g.instanceCount = n;
+    const box3 = new THREE.Box3(); for (const [x, y, z] of ch.seats) box3.expandByPoint(new THREE.Vector3(x, y, z));
+    box3.expandByScalar(2); g.boundingBox = box3; g.boundingSphere = box3.getBoundingSphere(new THREE.Sphere());
+    const mesh = new THREE.Mesh(g, crowdMat); mesh.frustumCulled = true;
+    ancient.add(mesh); CROWD.meshes.push(mesh); CROWD.count += n;
+  }
+})();
+function crowdFrame(t) { crowdMat.uniforms.time.value = t; crowdMat.uniforms.excite.value = CROWD.excite; }
+```
+
+- [ ] **Step 2: Check**
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t4a.png "http://localhost:8765/circus-maximus/index.html?"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t4b.png "http://localhost:8765/circus-maximus/index.html?excite=0.6"
+```
+
+Read: (a) far stands densely filled with small coloured figures, near rows below the camera seen from behind (heads, shoulders, tunics with a fold), a gap round your own seat, the pulvinar's front free of people; (b) many figures standing with arms raised. The crowd holds about 86,000 figures (`CROWD.count`; Task 8 exposes it as `__circus.CROWD.count`).
+
+- [ ] **Step 3: Commit** — `git add circus-maximus/index.html && git commit -m "circus-maximus: the crowd, about 86,000 figures"`
+
+---
+
+### Task 5: Chariots, horses, dust and ruts
+
+**Files:**
+- Modify: `circus-maximus/index.html` (module script, after the crowd and before the still block)
+
+**Interfaces:**
+- Consumes: `ancient`, `GATE_DOORS`, `SAND`, `sandCtx`, `sandTex`, `Circus.FACTIONS`, race objects from `Circus.createRace`.
+- Produces: `TEAMS` ({ rigs[12], parts }), `setTeamColors(race)`, `makeRig(i)`, `DUST` ({ emit, update(dt), clear(), setScale(px) }), `stampRut`, `poseTeams(race, dt, t)`, `openGates(f 0..1)`.
+
+- [ ] **Step 1: Add the chariots**
+
+```js
+// ---- chariots, horses and drivers -----------------------------------------------------------------------
+// Each team is a hidden rig of Object3Ds (car, wheels, driver, four horses with legs) posed every frame from
+// the race state; the rigs' world matrices are copied into a handful of instanced meshes, so twelve teams
+// cost a few draw calls. Local frame: +x forward, +z to the team's right, y up; the axle is at the origin.
+const TEAMS = { rigs: [], parts: {}, race: null };
+(function chariotParts() {
+  const N = 12, lam = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: .7, ...o });
+  const inst = (name, geo, material, count) => { const m = new THREE.InstancedMesh(geo, material, count); m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); ancient.add(m); TEAMS.parts[name] = m; return m; };
+  const body = new THREE.SphereGeometry(1, 14, 10); body.scale(.86, .4, .3);
+  const neck = new THREE.CylinderGeometry(.13, .22, .85, 8); neck.translate(0, .42, 0);
+  const head = new THREE.CylinderGeometry(.09, .15, .62, 8); head.rotateZ(Math.PI / 2); head.translate(.2, 0, 0);
+  const leg = new THREE.CylinderGeometry(.065, .045, 1.1, 6); leg.translate(0, -.55, 0);
+  const tail = new THREE.CylinderGeometry(.03, .1, .7, 6); tail.translate(0, -.35, 0);
+  const coat = lam("#ffffff", { roughness: .62 });
+  inst("horseBody", body, coat, N * 4); inst("horseNeck", neck, coat, N * 4); inst("horseHead", head, coat, N * 4);
+  inst("horseLeg", leg, lam("#3a2a1e"), N * 16); inst("horseTail", tail, lam("#241a12"), N * 4);
+  const shell = new THREE.CylinderGeometry(.62, .62, .95, 14, 1, true, -Math.PI / 2, Math.PI); shell.rotateY(Math.PI / 2); shell.translate(.1, .95, 0);
+  inst("carShell", shell, lam("#ffffff", { side: THREE.DoubleSide, roughness: .5 }), N);
+  const floor = new THREE.BoxGeometry(.9, .08, 1.2); floor.translate(0, .5, 0); inst("carFloor", floor, lam("#5a3d22"), N);
+  const pole = new THREE.CylinderGeometry(.05, .05, 3.4, 6); pole.rotateZ(Math.PI / 2); pole.translate(2.05, .95, 0); inst("carPole", pole, lam("#4a3220"), N);
+  const yoke = new THREE.BoxGeometry(.12, .1, 2.2); yoke.translate(3.55, 1.35, 0); inst("carYoke", yoke, lam("#4a3220"), N);
+  const rim = new THREE.TorusGeometry(.6, .045, 6, 18); inst("wheelRim", rim, lam("#3b2a1a"), N * 2);
+  const spoke = new THREE.BoxGeometry(1.15, .04, .04); inst("wheelSpoke", spoke, lam("#5a3d22"), N * 6);
+  const torso = new THREE.CylinderGeometry(.2, .26, .78, 10); torso.translate(0, .39, 0); inst("driverBody", torso, lam("#ffffff"), N);
+  const helm = new THREE.SphereGeometry(.17, 10, 8); inst("driverHead", helm, lam("#8a6a3a", { metalness: .5, roughness: .4 }), N);
+  // colours: coats, faction tunics and the painted cars
+  const r = Circus.rng(99), c = new THREE.Color();
+  const COATS = ["#5a3a24", "#7a4a2a", "#3a2a20", "#9a8f84", "#d9d2c4", "#2a221c", "#8a5a34"];
+  for (let i = 0; i < N * 4; i++) { c.set(COATS[Math.floor(r() * COATS.length)]).multiplyScalar(.85 + r() * .3); TEAMS.parts.horseBody.setColorAt(i, c); TEAMS.parts.horseNeck.setColorAt(i, c); TEAMS.parts.horseHead.setColorAt(i, c); }
+})();
+function setTeamColors(race) {
+  const c = new THREE.Color();
+  race.cars.forEach((car, i) => {
+    const f = Circus.FACTIONS.find((f) => f.id === car.faction);
+    TEAMS.parts.driverBody.setColorAt(i, c.set(f.color)); TEAMS.parts.carShell.setColorAt(i, c.set(f.color).multiplyScalar(.8));
+  });
+  TEAMS.parts.driverBody.instanceColor.needsUpdate = true; TEAMS.parts.carShell.instanceColor.needsUpdate = true;
+}
+function makeRig(i) {
+  const root = new THREE.Object3D(), car = new THREE.Object3D(), team = new THREE.Object3D(); root.add(car, team);
+  const o = (parent, x = 0, y = 0, z = 0) => { const n = new THREE.Object3D(); n.position.set(x, y, z); parent.add(n); return n; };
+  const rig = { root, car, team, shell: o(car), floor: o(car), pole: o(car), yoke: o(car), wheels: [o(car, 0, .62, -.82), o(car, 0, .62, .82)], driver: o(car, -.1, .54, 0), horses: [] };
+  rig.head = o(rig.driver, .08, .95, 0);
+  [-1.32, -.44, .44, 1.32].forEach((hz, k) => {
+    const h = o(team, 3.55, 1.28, hz), b = o(h);
+    const neck = o(h, .62, .1, 0); neck.rotation.z = -.62;
+    const head = o(neck, 0, .82, 0); head.rotation.z = -.15;
+    const legs = [[.5, -.13], [.5, .13], [-.55, -.13], [-.55, .13]].map(([lx, lz]) => o(h, lx, -.15, lz));
+    const tail = o(h, -.82, .15, 0); tail.rotation.z = -.5;
+    rig.horses.push({ h, b, neck, head, legs, tail, phase: k * .37 + i * .21, scatter: (k - 1.5) * .9 });
+  });
+  return rig;
+}
+for (let i = 0; i < 12; i++) TEAMS.rigs.push(makeRig(i));
+
+// ---- dust and ruts --------------------------------------------------------------------------------------
+const DUST = (() => {
+  const N = 2400, pos = new Float32Array(N * 3), age = new Float32Array(N).fill(99), vel = new Float32Array(N * 3), size = new Float32Array(N);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute("age", new THREE.BufferAttribute(age, 1).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute("size", new THREE.BufferAttribute(size, 1));
+  const m = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, fog: true,
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { life: { value: 2.6 }, scale: { value: 600 } }]),
+    vertexShader: `attribute float age; attribute float size; uniform float life, scale; varying float vA;
+      #include <fog_pars_vertex>
+      void main() { vA = clamp(age / life, 0.0, 1.0); vec4 mvPosition = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = age > life ? 0.0 : size * (0.6 + 2.2 * vA) * scale / -mvPosition.z;
+        #include <fog_vertex>
+      }`,
+    fragmentShader: `varying float vA;
+      #include <common>
+      #include <fog_pars_fragment>
+      void main() { vec2 p = gl_PointCoord - 0.5; float d = dot(p, p) * 4.0; if (d > 1.0) discard;
+        gl_FragColor = vec4(vec3(0.80, 0.69, 0.50), (1.0 - d) * 0.32 * (1.0 - vA));
+        #include <colorspace_fragment>
+        #include <fog_fragment>
+      }`,
+  });
+  const pts = new THREE.Points(g, m); pts.frustumCulled = false; ancient.add(pts);
+  let next = 0;
+  return {
+    emit(x, y, z, vx, vy, vz, s) { const i = next; next = (next + 1) % N; pos.set([x, y, z], i * 3); vel.set([vx, vy, vz], i * 3); age[i] = 0; size[i] = s; },
+    update(dt) {
+      for (let i = 0; i < N; i++) { if (age[i] > 3) continue; age[i] += dt; const k = i * 3; pos[k] += vel[k] * dt; pos[k + 1] += vel[k + 1] * dt; pos[k + 2] += vel[k + 2] * dt; vel[k] *= .97; vel[k + 1] = vel[k + 1] * .97 + .15 * dt; vel[k + 2] *= .97; }
+      g.attributes.position.needsUpdate = true; g.attributes.age.needsUpdate = true;
+    },
+    clear() { age.fill(99); g.attributes.age.needsUpdate = true; },
+    setScale(px) { m.uniforms.scale.value = px; },
+  };
+})();
+let rutFrames = 0;
+function stampRut(x, z, alpha, w = 2) {
+  const px = (x - SAND.x0) * SAND.pxPerM, py = (z - SAND.z0) * SAND.pxPerM;
+  sandCtx.fillStyle = `rgba(92,66,38,${alpha})`; sandCtx.fillRect(px - w / 2, py - w / 2, w, w);
+}
+
+// ---- posing -----------------------------------------------------------------------------------------------
+const _m = new THREE.Matrix4();
+function poseTeams(race, dt, t) {
+  const P = TEAMS.parts, cnt = { body: 0, leg: 0, wheel: 0, spoke: 0 };
+  const put = (mesh, idx, node) => mesh.setMatrixAt(idx, node.matrixWorld);
+  race.cars.forEach((carState, i) => {
+    const rig = TEAMS.rigs[i], c = carState;
+    rig.root.position.set(c.x, 0, c.z); rig.root.rotation.set(0, -c.heading, 0);
+    const v = c.v, stride = (c.dist / 3.3) * Math.PI * 2;
+    // a crash: the car rolls over and slides, the horses bolt on and spread out
+    const ct = c.crashed ? c.crashT : 0, roll = c.crashed ? Math.min(Math.PI * .55, ct * 5) + Math.sin(i) * .2 : 0;
+    rig.car.rotation.set(roll, 0, c.crashed ? Math.min(.5, ct * 2) * (i % 2 ? 1 : -1) : -Math.min(.12, v * .004));
+    rig.car.position.y = c.crashed ? Math.max(0, Math.sin(Math.min(ct * 4, Math.PI)) * .9) : 0;
+    rig.team.position.set(c.crashed ? 10 * (1 - Math.exp(-ct * 1.4)) : 0, 0, 0);
+    rig.wheels.forEach((w, k) => { w.rotation.set(0, 0, -c.dist / .62); });
+    rig.driver.rotation.z = -.22 - Math.min(.2, v * .01) + (c.whipT > 0 ? Math.sin(t * 18) * .08 : 0);
+    rig.horses.forEach((hs, k) => {
+      const gal = Math.min(1, v / 9), ph = stride + hs.phase;
+      hs.h.position.y = 1.28 + Math.abs(Math.sin(ph)) * .09 * gal;
+      hs.h.rotation.z = Math.sin(ph) * .05 * gal;
+      if (c.crashed) { hs.h.position.z = [-1.32, -.44, .44, 1.32][k] + hs.scatter * Math.min(1, ct * .6) * 3; hs.h.rotation.y = hs.scatter * .25 * Math.min(1, ct); }
+      else { hs.h.position.z = [-1.32, -.44, .44, 1.32][k]; hs.h.rotation.y = 0; }
+      // a rotary gallop: the legs swing in a staggered sequence
+      hs.legs.forEach((lg, j) => { lg.rotation.z = Math.sin(ph + [0, .5, 2.4, 2.9][j]) * (.15 + .55 * gal); });
+      hs.neck.rotation.z = -.62 + Math.sin(ph * 2) * .06 * gal;
+      hs.tail.rotation.z = -.5 - .6 * gal + Math.sin(ph) * .1;
+    });
+    rig.root.updateMatrixWorld(true);
+    put(P.carShell, i, rig.shell); put(P.carFloor, i, rig.floor); put(P.carPole, i, rig.pole); put(P.carYoke, i, rig.yoke);
+    put(P.driverBody, i, rig.driver); put(P.driverHead, i, rig.head);
+    rig.wheels.forEach((w) => { put(P.wheelRim, cnt.wheel++, w); for (let s = 0; s < 3; s++) { _m.makeRotationZ(s * Math.PI / 3); P.wheelSpoke.setMatrixAt(cnt.spoke++, _m.premultiply(w.matrixWorld)); } });
+    rig.horses.forEach((hs) => {
+      put(P.horseBody, cnt.body, hs.b); put(P.horseNeck, cnt.body, hs.neck); put(P.horseHead, cnt.body, hs.head); put(P.horseTail, cnt.body, hs.tail); cnt.body++;
+      hs.legs.forEach((lg) => put(P.horseLeg, cnt.leg++, lg));
+    });
+    // dust from the hooves and wheels, ruts in the sand
+    if (v > 2 && race.started) {
+      const fx = Math.cos(c.heading), fz = Math.sin(c.heading), n = Math.random() < v * dt * 1.1 ? 1 : 0;
+      for (let e = 0; e < n + (c.crashed && ct < .6 ? 6 : 0); e++) {
+        const back = 2.6 + Math.random() * 1.6, side = (Math.random() - .5) * 3;
+        DUST.emit(c.x + fx * back - fz * side, .3, c.z + fz * back + fx * side, -fx * v * .15 + (Math.random() - .5), .6 + Math.random() * .8, -fz * v * .15 + (Math.random() - .5), 1.2 + Math.random() * 1.2);
+      }
+      if (!c.crashed) for (const s of [-.82, .82]) stampRut(c.x - fz * s, c.z + fx * s, .05);
+    }
+  });
+  for (const m of Object.values(P)) m.instanceMatrix.needsUpdate = true;
+  DUST.update(dt);
+  if (++rutFrames % 5 === 0) sandTex.needsUpdate = true;
+}
+function openGates(f) { GATE_DOORS.forEach((d) => { d.rotation.y = -f * 1.75; }); }
+```
+
+- [ ] **Step 2: Check**
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t5a.png "http://localhost:8765/circus-maximus/index.html?race=12&chase=0"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t5b.png "http://localhost:8765/circus-maximus/index.html?race=40&chase=4&excite=0.4"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t5c.png "http://localhost:8765/circus-maximus/index.html?race=14"
+```
+
+Read: (a)(b) chase views: four horses abreast with galloping legs, a painted car with spoked wheels and a driver in faction colour, dust plumes behind the teams, the gilded turning posts and stands beyond; (c) the panorama with teams on the track. `node circus-maximus/test.mjs` still passes.
+
+- [ ] **Step 3: Commit** — `git add circus-maximus/index.html && git commit -m "circus-maximus: chariots, horses, dust and wheel ruts"`
+
+---
+
+### Task 6: The site in 1998 and the then/now crossfade
+
+**Files:**
+- Modify: `circus-maximus/index.html` (module script, after the chariots and before the still block)
+
+**Interfaces:**
+- Consumes: `modern` (Group), `noiseCanvas`, `worldUV`, `box`, `mat`, `M`, `TEX`, `addMesh`, `ARENA`, `T`, `Circus.toWorld`.
+- Produces: `MODERN` ({ cars, ground(x, z) }), `modernFrame(dt)`. The panorama mixes the two worlds by `view.mix` (already in `draw()`; each world renders its own shadow map).
+
+- [ ] **Step 1: Add the modern site**
+
+```js
+// ---- the site in 1998 -----------------------------------------------------------------------------------
+// The circus is buried about 6 m deep. Today's park is a long grass hollow on top of it, with a worn dirt
+// path where the track was, grass banks where the stands were, Via del Circo Massimo along the Aventine and
+// Via dei Cerchi below the Palatine, whose brick ruins rise above. At the curved end the excavated remains
+// of the stands and the medieval Torre della Moletta. Reconstructed from photographs, not surveyed.
+const MODERN = { cars: [] };
+(function modernSite() {
+  const g = modern, r = Circus.rng(1998);
+  const LEVEL = 6;                                             // today's park floor above the Roman track
+  const grassTex = noiseCanvas(256, 31, [128, 138, 78], .55, true), dirtTex = noiseCanvas(256, 32, [176, 150, 112], .4, false);
+  const asphalt = noiseCanvas(128, 33, [92, 90, 86], .25, false);
+  // the ground: hollow floor, banks rising to the streets, then the hills
+  const ground = (x, z) => {
+    const inside = (Math.abs(z) < 42 && x > ARENA.gatesX && x < ARENA.curveX) || Math.hypot(x - ARENA.curveX, z) < 42;
+    const edge = x <= ARENA.curveX ? Math.abs(z) : Math.hypot(Math.max(0, x - ARENA.curveX), z);
+    let h = LEVEL;
+    if (!inside) h = LEVEL + Math.min(1, (edge - 42) / 34) * 8.5;                      // grass banks where the seats were
+    if (x < ARENA.gatesX) h = Math.max(h, LEVEL + Math.min(8.5, (ARENA.gatesX - x) * .3));
+    const pal = Math.max(0, -z - 95), av = Math.max(0, z - 95);
+    h += Math.min(34, pal * .6) + Math.min(24, av * .35);
+    return h + Math.sin(x * .02) * Math.cos(z * .017) * .6;
+  };
+  MODERN.ground = ground;
+  const geo = new THREE.PlaneGeometry(2600, 2000, 260, 200); geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++) p.setY(i, ground(p.getX(i), p.getZ(i)));
+  worldUV(geo, 14);
+  // grass inside the hollow and on the banks, paler on the hills; colour by vertex
+  const col = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i), dry = .5 + .5 * Math.sin(x * .05 + z * .03) * Math.cos(z * .07);
+    const hill = Math.abs(z) > 92 ? 1 : 0;
+    col.set(hill ? [.92, .86, .74] : [.86 + dry * .2, .9 + dry * .1, .7 + dry * .15], i * 3);
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  addMesh(geo, mat({ map: grassTex, vertexColors: true, roughness: 1 }), g, { cast: false });
+  // the worn path round the old track
+  const path = new THREE.BufferGeometry(), pp = [], pu = [];
+  for (let s = 0; s < T.lap; s += 4) {
+    const a = Circus.toWorld(s, 11), b = Circus.toWorld(s + 4, 11), A = Circus.toWorld(s, 19), B = Circus.toWorld(s + 4, 19);
+    const P = [[a.x, LEVEL + .06, a.z], [b.x, LEVEL + .06, b.z], [B.x, LEVEL + .06, B.z], [A.x, LEVEL + .06, A.z]];
+    for (const k of [0, 2, 1, 0, 3, 2]) { pp.push(...P[k]); pu.push(P[k][0] / 8, P[k][2] / 8); }
+  }
+  path.setAttribute("position", new THREE.Float32BufferAttribute(pp, 3)); path.setAttribute("uv", new THREE.Float32BufferAttribute(pu, 2)); path.computeVertexNormals();
+  const pm = addMesh(path, mat({ map: dirtTex, roughness: 1 }), g, { cast: false }); pm.material.side = THREE.DoubleSide;
+  // the two streets along the top of the banks
+  for (const z of [80, -80]) {
+    const road = addMesh(box(560, .2, 11), mat({ map: asphalt }), g, { x: -10, y: ground(-10, z) + .1, z, cast: false });
+    road.position.y = LEVEL + 8.6;
+    addMesh(box(560, .25, 2.4), mat({ color: "#bdb4a4" }), g, { x: -10, y: LEVEL + 8.75, z: z - Math.sign(z) * 6.5, cast: false });   // pavement
+  }
+  // passing cars (small, boxy, 1998)
+  const carGeo = box(4.2, 1.4, 1.8), carColors = ["#c8c4bc", "#7a1f1f", "#2a3a5a", "#d9d6cf", "#3a3a3a", "#b88a2a", "#5a6a4a"];
+  for (let i = 0; i < 14; i++) {
+    const m = addMesh(carGeo, mat({ color: carColors[i % carColors.length], roughness: .4, metalness: .3 }), g, { y: LEVEL + 9.4 });
+    MODERN.cars.push({ m, z: i % 2 ? 78 : -78, lane: i % 2 ? 1 : -1, x: -280 + r() * 560, v: 9 + r() * 6 });
+  }
+  // umbrella pines and a few cypresses along the streets and on the slopes
+  const pineN = 120, trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(.35, .5, 1, 6), mat({ color: "#5a4632" }), pineN);
+  const crownGeo = new THREE.SphereGeometry(1, 12, 6); crownGeo.scale(1, .32, 1);
+  const crown = new THREE.InstancedMesh(crownGeo, mat({ color: "#41552e", roughness: 1 }), pineN);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v3 = new THREE.Vector3(), s3 = new THREE.Vector3();
+  for (let i = 0; i < pineN; i++) {
+    const side = i % 3 === 0 ? 0 : i % 3 === 1 ? 1 : -1;
+    const x = side === 0 ? -320 + r() * 680 : -280 + r() * 560, z = side === 0 ? (r() < .5 ? 1 : -1) * (100 + r() * 70) : side * (88 + r() * 8);
+    const y = ground(x, z), h = 11 + r() * 7, w = 5 + r() * 3;
+    m4.compose(v3.set(x, y + h / 2, z), q.identity(), s3.set(1, h, 1)); trunk.setMatrixAt(i, m4);
+    m4.compose(v3.set(x, y + h, z), q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), r() * 6), s3.set(w, w * (.8 + r() * .5), w * (.8 + r() * .4))); crown.setMatrixAt(i, m4);
+  }
+  trunk.castShadow = crown.castShadow = true; g.add(trunk, crown);
+  // the Palatine: brick substructures and arches of the imperial palaces, broken and overgrown
+  const brickArch = (() => {
+    const cv = document.createElement("canvas"); cv.width = 256; cv.height = 256; const c = cv.getContext("2d");
+    c.drawImage(TEX.brick.image, 0, 0);
+    for (let s = 0; s < 2; s++) for (let i = 0; i < 2; i++) { const x = 22 + i * 120, y = 30 + s * 120, w = 90; c.fillStyle = "#2a1c14"; c.beginPath(); c.moveTo(x, y + 100); c.lineTo(x, y + w / 2); c.arc(x + w / 2, y + w / 2, w / 2, Math.PI, 0); c.lineTo(x + w, y + 100); c.fill(); }
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
+  })();
+  const ruin = mat({ map: brickArch });
+  for (let i = 0; i < 34; i++) {
+    const x = -150 + r() * 330, z = -100 - r() * 70, w = 10 + r() * 26, h = 8 + r() * 26, d = 6 + r() * 14, y = ground(x, z);
+    const b = new THREE.BoxGeometry(w, h, d), uv = b.attributes.uv; for (let k = 0; k < uv.count; k++) uv.setXY(k, uv.getX(k) * w / 18, uv.getY(k) * h / 18);
+    const m = addMesh(b, ruin, g, { x, y: y + h / 2 - 2, z }); m.rotation.y = (r() - .5) * .3;
+  }
+  // the excavated curved end: low broken walls of the seating, and the Torre della Moletta
+  const stone = M.stone;
+  for (let k = 0; k < 9; k++) {
+    const R = 46 + k * 3.2, a0 = -1.1 + r() * .3, a1 = 1.1 - r() * .3;
+    const arc = new THREE.CylinderGeometry(R, R, 1.2 + r() * 2.2, 40, 1, true, Math.PI / 2 + a0, a1 - a0);
+    const m = addMesh(worldUV(arc.toNonIndexed(), 5), stone, g, { x: ARENA.curveX, y: LEVEL - 1 + k * .25, z: 0 }); m.material = stone.clone(); m.material.side = THREE.DoubleSide;
+  }
+  const tower = new THREE.Group(); tower.position.set(ARENA.curveX + 18, ground(ARENA.curveX + 18, -26) - 3, -26); g.add(tower);
+  addMesh(box(8, 22, 8), M.brick, tower, { y: 11 });
+  for (let side = 0; side < 4; side++) for (let j = 0; j < 3; j++) {                 // battlements
+    const along = (j - 1) * 3, edge = side < 2 ? (side ? 3.3 : -3.3) : (side === 2 ? -3.3 : 3.3);
+    addMesh(box(1.4, 1.4, 1.4), M.brick, tower, side < 2 ? { x: along, y: 22.7, z: edge } : { x: edge, y: 22.7, z: along });
+  }
+  // the modern city round about: apartment blocks in Roman ochres, a large office block at the east end
+  const blocks = new THREE.InstancedMesh(box(1, 1, 1), mat({ map: TEX.plaster }), 900), c = new THREE.Color();
+  let n = 0;
+  while (n < 900) {
+    const a = r() * Math.PI * 2, dist = 230 + Math.pow(r(), .7) * 900, x = 30 + Math.cos(a) * dist * 1.25, z = Math.sin(a) * dist;
+    if (Math.abs(z) < 100 && x > -330 && x < 340) continue;
+    if (z < -92 && z > -260 && x > -180 && x < 240) continue;
+    const w = 14 + r() * 22, h = 14 + r() * 14, d = 12 + r() * 18, y = ground(x, z);
+    m4.compose(v3.set(x, y + h / 2, z), q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), (r() - .5) * .3), s3.set(w, h, d)); blocks.setMatrixAt(n, m4);
+    blocks.setColorAt(n, c.setHSL(.06 + r() * .05, .35 + r() * .25, .55 + r() * .2)); n++;
+  }
+  blocks.receiveShadow = true; g.add(blocks);
+  addMesh(box(140, 34, 40), mat({ color: "#e4e0d6", map: TEX.marble }), g, { x: ARENA.curveX + 150, y: ground(ARENA.curveX + 150, 130) + 17, z: 130 });
+})();
+function modernFrame(dt) {
+  for (const c of MODERN.cars) { c.x += c.v * c.lane * dt; if (c.x > 290) c.x = -290; if (c.x < -290) c.x = 290; c.m.position.set(c.x, 6 + 8.7 + .7, c.z + c.lane * 2.4); c.m.rotation.y = c.lane > 0 ? 0 : Math.PI; }
+}
+```
+
+- [ ] **Step 2: Check**
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t6a.png "http://localhost:8765/circus-maximus/index.html?mix=1"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=15000 --screenshot=<scratchpad>/t6b.png "http://localhost:8765/circus-maximus/index.html?mix=0.5"
+```
+
+Read: (a) a grass hollow with a worn dirt path where the track was, grass banks, the Palatine brick ruins with umbrella pines below them, Via dei Cerchi along their foot, the Torre della Moletta at the curved end, modern blocks in the haze; (b) the ancient circus and the modern site superimposed.
+
+- [ ] **Step 3: Commit** — `git add circus-maximus/index.html && git commit -m "circus-maximus: the site in 1998 and the then/now crossfade"`
+
+---
+
+### Task 7: Sound
+
+**Files:**
+- Modify: `circus-maximus/index.html` (module script, after the modern site and before the still block)
+
+**Interfaces:**
+- Consumes: `view`, `chaseCam`, `CROWD`, `Circus.rng`; at runtime also `chase` (defined by the controller in Task 8; only used inside `update`/`hear`, which the controller calls).
+- Produces: `sound` = { ensure, setEnabled(on), setVolume(v), setNow(mix), update(dt, app), roar(level), whip(), gates(), crash(car), trumpets(), level() }; visibility and gesture listeners.
+
+- [ ] **Step 1: Add the sound engine**
+
+```js
+// ---- sound: synthesized, off until the first race -------------------------------------------------------------
+// The ancient circus: a crowd murmur that swells into a roar, hoofbeats in the four-beat gallop of each nearby
+// team, wheel rumble, the whip, trumpets, the starting gates and crashes. The 1998 site: traffic, a passing car
+// now and then, birds. The then/now slider crossfades the two.
+const sound = {
+  ctx: null, out: null, ancientBus: null, nowBus: null, analyser: null, noise: null, on: false, volume: .7, mixNow: 0,
+  beds: null, hoofNext: new Map(), nextCar: 0, nextBird: 0, last: {},
+  ensure() {
+    if (this.ctx) return;
+    const ctx = this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 3.5;
+    this.out = ctx.createGain(); this.out.gain.value = 0; this.out.connect(comp); comp.connect(ctx.destination);
+    this.analyser = ctx.createAnalyser(); this.analyser.fftSize = 2048; comp.connect(this.analyser);
+    this.ancientBus = ctx.createGain(); this.nowBus = ctx.createGain(); this.nowBus.gain.value = 0;
+    this.ancientBus.connect(this.out); this.nowBus.connect(this.out);
+    const len = ctx.sampleRate * 3, buf = this.noise = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0), r = Circus.rng(7);
+    let b = 0; for (let i = 0; i < len; i++) { const w = r() * 2 - 1; b = .985 * b + .15 * w; d[i] = w * .5 + b * .5; }   // part white, part brown
+    const loop = (to) => { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.connect(to); s.start(0, r() * 3); return s; };
+    const filt = (type, f, q, to) => { const n = ctx.createBiquadFilter(); n.type = type; n.frequency.value = f; n.Q.value = q; n.connect(to); return n; };
+    const gain = (v, to) => { const g = ctx.createGain(); g.gain.value = v; g.connect(to); return g; };
+    const beds = this.beds = {};
+    // crowd: several bands of murmur, each slowly breathing, and a brighter roar band
+    beds.murmur = gain(0, this.ancientBus);
+    for (const [f, q] of [[320, .8], [620, 1.1], [980, 1.4], [1500, 1.6]]) {
+      const g = gain(.25, beds.murmur); loop(filt("bandpass", f, q, g));
+      const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = .15 + r() * .5; lg.gain.value = .12; lfo.connect(lg); lg.connect(g.gain); lfo.start();
+    }
+    beds.roar = gain(0, this.ancientBus); loop(filt("bandpass", 1100, .5, filt("highshelf", 2500, -6, beds.roar)));
+    beds.rumble = gain(0, this.ancientBus); loop(filt("lowpass", 160, .7, beds.rumble));
+    // 1998: traffic hiss and the city's low roar
+    beds.traffic = gain(.11, this.nowBus); loop(filt("lowpass", 700, .5, beds.traffic));
+    beds.city = gain(.06, this.nowBus); loop(filt("bandpass", 220, .6, beds.city));
+  },
+  setEnabled(on) {
+    this.on = on; if (on) { this.ensure(); this.ctx.resume(); }
+    if (this.ctx) {
+      this.out.gain.setTargetAtTime(on ? this.volume : 0, this.ctx.currentTime, .1);
+      if (!on) setTimeout(() => { if (!this.on && this.ctx.state === "running") this.ctx.suspend(); }, 500);
+    }
+  },
+  setVolume(v) { this.volume = v; if (this.ctx && this.on) this.out.gain.setTargetAtTime(v, this.ctx.currentTime, .05); },
+  setNow(mix) { this.mixNow = mix; if (!this.ctx) return; const t = this.ctx.currentTime; this.ancientBus.gain.setTargetAtTime(1 - mix, t, .1); this.nowBus.gain.setTargetAtTime(mix, t, .1); },
+  ready(name, gap) { if (!this.on || !this.ctx) return false; const t = this.ctx.currentTime; if (t - (this.last[name] ?? -9) < gap) return false; this.last[name] = t; return true; },
+  burst(t, dur, f, q, g, type = "bandpass", bus = this.ancientBus, pan = 0) {
+    const ctx = this.ctx, s = ctx.createBufferSource(), fl = ctx.createBiquadFilter(), e = ctx.createGain(), p = ctx.createStereoPanner();
+    s.buffer = this.noise; fl.type = type; fl.frequency.value = f; fl.Q.value = q; p.pan.value = pan;
+    e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(g, t + .004); e.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    s.connect(fl); fl.connect(e); e.connect(p); p.connect(bus); s.start(t, Math.random() * 2.5); s.stop(t + dur + .05);
+  },
+  tone(t, dur, f, g, type = "sine", bus = this.ancientBus, f1 = f, pan = 0) {
+    const ctx = this.ctx, o = ctx.createOscillator(), e = ctx.createGain(), p = ctx.createStereoPanner();
+    o.type = type; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur); p.pan.value = pan;
+    e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(g, t + .01); e.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(e); e.connect(p); p.connect(bus); o.start(t); o.stop(t + dur + .05);
+  },
+  // where the listener is and where a point lies relative to the view (for loudness and panning)
+  listener() { return view.mode === "chase" ? chaseCam.position : view.pos; },
+  hear(x, z) {
+    const L = this.listener(), dx = x - L.x, dz = z - L.z, dist = Math.hypot(dx, dz);
+    const yaw = view.mode === "chase" ? Math.atan2(-(chase.look.x - L.x), -(chase.look.z - L.z)) : view.yaw;
+    const fwdX = -Math.sin(yaw), fwdZ = -Math.cos(yaw), rightX = Math.cos(yaw), rightZ = -Math.sin(yaw);
+    const pan = Math.max(-1, Math.min(1, (dx * rightX + dz * rightZ) / Math.max(1, dist)));
+    return { g: 1 / (1 + dist / 25), pan, dist, front: dx * fwdX + dz * fwdZ };
+  },
+  update(dt, app) {
+    if (!this.ctx || !this.on) return;
+    const t = this.ctx.currentTime, b = this.beds;
+    b.murmur.gain.setTargetAtTime(.05 + .1 * Math.min(1, CROWD.excite * 1.5), t, .3);
+    b.roar.gain.setTargetAtTime(Math.max(0, CROWD.excite - .15) * .22, t, .25);
+    const race = app.race;
+    let rumble = 0;
+    if (race && race.started) {
+      // hoofbeats: each team within earshot gallops in four beats per stride, slightly uneven
+      for (const c of race.cars) {
+        if (c.v < 1.5 || (c.crashed && c.crashT > 2)) continue;
+        const h = this.hear(c.x, c.z); if (h.g < .06) continue;
+        rumble += h.g * c.v / 17;
+        let next = this.hoofNext.get(c.id) ?? t;
+        const stride = 3.3 / Math.max(2, c.v);
+        while (next < t + .12) {
+          if (next >= t - .02) for (const off of [0, .11, .43, .53]) {
+            const at = Math.max(t, next + off * stride + (Math.random() - .5) * .012);
+            this.burst(at, .07, 140 + Math.random() * 60, 1.2, .35 * h.g * (.8 + Math.random() * .4), "bandpass", this.ancientBus, h.pan);
+          }
+          next += stride;
+        }
+        this.hoofNext.set(c.id, next);
+      }
+    }
+    b.rumble.gain.setTargetAtTime(Math.min(.4, rumble * .25), t, .15);
+    // 1998: a passing car now and then, birds
+    if (this.mixNow > .02) {
+      if (t > this.nextCar) { this.nextCar = t + 3 + Math.random() * 6; const d = 2.5 + Math.random() * 2, pan = Math.random() < .5 ? -.8 : .8;
+        const s = this.ctx.createBufferSource(), f = this.ctx.createBiquadFilter(), e = this.ctx.createGain(), p = this.ctx.createStereoPanner();
+        s.buffer = this.noise; f.type = "bandpass"; f.Q.value = .8; f.frequency.setValueAtTime(500, t); f.frequency.linearRampToValueAtTime(900, t + d / 2); f.frequency.linearRampToValueAtTime(420, t + d);
+        e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(.18, t + d / 2); e.gain.linearRampToValueAtTime(0, t + d);
+        p.pan.setValueAtTime(pan, t); p.pan.linearRampToValueAtTime(-pan, t + d);
+        s.connect(f); f.connect(e); e.connect(p); p.connect(this.nowBus); s.start(t); s.stop(t + d + .1); }
+      if (t > this.nextBird) { this.nextBird = t + .8 + Math.random() * 3; const f0 = 3000 + Math.random() * 2500, pan = Math.random() * 2 - 1;
+        for (let i = 0; i < 2 + Math.floor(Math.random() * 4); i++) this.tone(t + i * .11, .07, f0 * (1 + Math.random() * .1), .025, "sine", this.nowBus, f0 * 1.35, pan); }
+    }
+  },
+  roar(level) { if (!this.ready("roar", .3)) return; const t = this.ctx.currentTime; for (let i = 0; i < 18; i++) this.burst(t + Math.random() * .8, .6 + Math.random() * .9, 500 + Math.random() * 1600, 2.5, .05 * level); },
+  whip() { if (!this.ready("whip", .2)) return; const t = this.ctx.currentTime; this.burst(t, .05, 3200, .8, .5, "highpass"); this.burst(t + .01, .12, 1800, 1.5, .2); },
+  gates() { if (!this.ready("gates", 1)) return; const t = this.ctx.currentTime; for (let i = 0; i < 12; i++) { this.burst(t + i * .012 + Math.random() * .02, .16, 380 + Math.random() * 200, 3, .4); this.tone(t + i * .012, .12, 220 + Math.random() * 60, .08, "triangle"); } },
+  crash(car) {
+    if (!this.ready("crash", .25)) return;
+    const t = this.ctx.currentTime, h = this.hear(car.x, car.z), g = Math.max(.15, h.g * 2);
+    this.burst(t, .7, 260, .9, .9 * g, "lowpass", this.ancientBus, h.pan); this.tone(t, .4, 85, .5 * g, "sine", this.ancientBus, 40, h.pan);
+    for (let i = 0; i < 14; i++) this.burst(t + Math.random() * .5, .05 + Math.random() * .08, 2000 + Math.random() * 3000, 4, .25 * g, "bandpass", this.ancientBus, h.pan);
+  },
+  // a fanfare for the procession on long bronze horns (a made-up call, not a known tune)
+  trumpets() {
+    if (!this.ready("trumpets", 2)) return;
+    const t = this.ctx.currentTime, notes = [[0, 196, .5], [.55, 262, .35], [.95, 262, .35], [1.35, 330, .8], [2.3, 294, .4], [2.8, 392, 1.4]];
+    for (const [at, f, dur] of notes) for (const [det, pan] of [[1, -.4], [1.006, .4], [.497, 0]]) {
+      const o = this.ctx.createOscillator(), fl = this.ctx.createBiquadFilter(), e = this.ctx.createGain(), p = this.ctx.createStereoPanner();
+      o.type = "sawtooth"; o.frequency.setValueAtTime(f * det * .97, t + at); o.frequency.linearRampToValueAtTime(f * det, t + at + .06);
+      fl.type = "bandpass"; fl.frequency.value = 1100; fl.Q.value = 1.2; p.pan.value = pan;
+      e.gain.setValueAtTime(0, t + at); e.gain.linearRampToValueAtTime(.09, t + at + .05); e.gain.setValueAtTime(.08, t + at + dur * .8); e.gain.linearRampToValueAtTime(0, t + at + dur);
+      o.connect(fl); fl.connect(e); e.connect(p); p.connect(this.ancientBus); o.start(t + at); o.stop(t + at + dur + .05);
+    }
+  },
+  level() { if (!this.analyser) return 0; const a = new Float32Array(this.analyser.fftSize); this.analyser.getFloatTimeDomainData(a); return Math.sqrt(a.reduce((s, x) => s + x * x, 0) / a.length); },
+};
+document.addEventListener("visibilitychange", () => { if (!sound.ctx) return; if (document.hidden) sound.ctx.suspend(); else if (sound.on) sound.ctx.resume(); });
+for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => { if (sound.on && sound.ctx && sound.ctx.state === "suspended" && !document.hidden) sound.ctx.resume(); }, true);
+```
+
+- [ ] **Step 2: Check** — headless with autoplay allowed: add `--autoplay-policy=no-user-gesture-required` to the screenshot command and append `&soundcheck` to the URL, with this temporary line at the end of the still block (remove it after the check): `if (q.has("soundcheck")) { sound.setEnabled(true); sound.trumpets(); sound.roar(1); setTimeout(() => { document.title = "level " + sound.level().toFixed(3); document.body.insertAdjacentHTML("afterbegin", `<pre style="position:fixed;z-index:9;right:0;top:0;background:#000;color:#0f0">${document.title}</pre>`); }, 1200); }`. Read the image: level > 0.01. No console errors.
+
+- [ ] **Step 3: Commit** — `git add circus-maximus/index.html && git commit -m "circus-maximus: synthesized sound — crowd, hooves, wheels, trumpets, 1998 traffic"`
+
+---
+
+### Task 8: The controller — roles, race days, procession, races, cameras, panel
+
+**Files:**
+- Modify: `circus-maximus/index.html` (module script: delete the TEMPORARY still block, append the controller at the end)
+
+**Interfaces:**
+- Consumes: everything above.
+- Produces: `APP`, `PARADE`, `chase`, `newRace`, `startDay`, `dropMappa`, `endDay`, `handleEvents`, `raceFrame`, `cameraFrame`, `frame(dt)`, the rAF loop, and `window.__circus` = { APP, view, CROWD, frame, draw, startDay, dropMappa, endDay, newRace, applyTactic, stepRace(seconds), level(), shot() }.
+
+- [ ] **Step 1: Delete the still block and add the controller**
+
+```js
+// ---- the day at the circus: roles, race days, procession, races, cameras and the panel ------------------
+const FACTION = Object.fromEntries(Circus.FACTIONS.map((f) => [f.id, f]));
+const yearLabel = (y) => (y < 0 ? `${-y} BC` : y < 1000 ? `AD ${y}` : `${y}`);
+const NUM = ["no", "one", "two", "three", "four", "five", "six", "seven"];
+const APP = {
+  role: "spectator", day: Circus.RACE_DAYS.find((d) => d.default), phase: "idle", race: null, raceNo: 0, races: 1,
+  acc: 0, t: 0, phaseT: 0, evIndex: 0, keys: {}, whipEdge: false, soundTouched: false, crashHot: 0, finishT: 0, narrIdx: 0, narrT: 6,
+};
+const ROLE_HINTS = {
+  spectator: "Your seat is in the middle of the Aventine stands, two-thirds of the way up. Drag to look around.",
+  charioteer: "You drive your faction's leading team. ← → steer (left is towards the barrier), Space cracks the whip, ↓ reins in. Cut close round the turning posts, but not too close.",
+  ride: "Ride behind a team; you call the tactics, its driver does the driving.",
+  sponsor: "You preside over the games and pay for them. Choose the program, then drop the white cloth (the mappa) to start each race. You watch from the pulvinar.",
+};
+
+// ---- panel ------------------------------------------------------------------------------------------------
+const daySel = $("day");
+for (const d of Circus.RACE_DAYS) daySel.add(new Option(`${yearLabel(d.year)} · ${d.title}`, d.id, d.default, d.default));
+function renderDay() {
+  const d = APP.day;
+  $("dayCard").innerHTML = `<b>${d.sponsor}</b> presides · ${yearLabel(d.year)}<br>${d.occasion}` +
+    (d.anachronism ? `<div class="anachronism">The circus shown is the one of about AD 103; in ${yearLabel(d.year)} it looked different.</div>` : "") +
+    (APP.role === "sponsor" ? `<div class="hint">You are ${d.sponsor}. The winner's prize is up to 60,000 sesterces; you pay for prizes, horses, the procession and the gifts to the crowd.</div>` : "");
+  setObelisks(d.obelisks);
+}
+function renderRole() {
+  document.querySelectorAll("[data-role]").forEach((b) => b.classList.toggle("on", b.dataset.role === APP.role));
+  $("roleHint").textContent = ROLE_HINTS[APP.role];
+  $("factionRow").hidden = !(APP.role === "charioteer" || APP.role === "ride");
+  $("tactics").hidden = APP.role !== "ride";
+  $("program").hidden = APP.role !== "sponsor";
+  $("touch").classList.toggle("show", APP.role === "charioteer" && matchMedia("(pointer: coarse)").matches);
+  renderDay(); renderStatus();
+}
+let eraShown = "imperial";
+function renderTimeline() {
+  $("eraTabs").innerHTML = Circus.ERAS.map((e) => `<button data-era="${e.id}" class="${e.id === eraShown ? "on" : ""}" title="${e.span}">${e.name}</button>`).join("");
+  $("timeline").innerHTML = Circus.TIMELINE.filter((t) => t.era === eraShown).map((t) =>
+    `<li><span class="yr">${yearLabel(t.year)}</span>${t.text}${t.tradition ? ` <span class="trad">tradition</span>` : ""}<p>${t.detail}</p></li>`).join("");
+}
+$("eraTabs").addEventListener("click", (e) => { const b = e.target.closest("[data-era]"); if (b) { eraShown = b.dataset.era; renderTimeline(); } });
+function renderStatus() {
+  const go = $("go"), mappa = $("mappa");
+  const msg = { idle: "The teams wait in their stalls.", procession: "The procession enters the circus (shown faster than life).", ready: APP.role === "sponsor" ? "The teams are in their stalls. Drop the white cloth when you are ready." : "The presider raises the white cloth…", racing: `Race ${APP.raceNo} of ${APP.races}: seven laps, counter-clockwise.`, finished: "" }[APP.phase];
+  if (msg !== "") $("status").textContent = msg;
+  go.textContent = APP.phase === "idle" || APP.phase === "finished" ? (APP.phase === "finished" && APP.raceNo < APP.races ? "Next race" : "Start the day") : APP.phase === "procession" ? "Skip the procession" : "Start the day";
+  go.disabled = APP.phase === "racing" || APP.phase === "ready";
+  mappa.hidden = !(APP.role === "sponsor" && APP.phase === "ready");
+}
+
+// ---- the crowd's voice and banners ------------------------------------------------------------------------
+function say(text) {
+  const box = $("crowd"), d = document.createElement("div"); d.textContent = text; box.appendChild(d);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => d.remove(), 5600);
+}
+let bannerTimer = 0;
+function banner(text, secs = 3) { const b = $("banner"); b.textContent = text; b.classList.add("show"); clearTimeout(bannerTimer); bannerTimer = setTimeout(() => b.classList.remove("show"), secs * 1000); }
+const CHANTS = { red: "Russata!", white: "Albata!", blue: "Veneta! Veneta!", green: "Prasina! Prasina!" };
+
+// ---- the procession -----------------------------------------------------------------------------------------
+// A column of musicians, bearers with the images of the gods on litters, and the presider in a gilded car,
+// entering through the procession gate and walking down the Aventine side.
+const PARADE = (() => {
+  const g = new THREE.Group(); g.visible = false; ancient.add(g);
+  const people = new THREE.InstancedMesh(new THREE.CylinderGeometry(.22, .28, 1.7, 8).translate(0, .85, 0), mat({ color: "#ffffff" }), 60);
+  const c = new THREE.Color(), r = Circus.rng(64), m4 = new THREE.Matrix4(), slots = [];
+  for (let i = 0; i < 60; i++) { people.setColorAt(i, c.setHSL(r() < .5 ? .1 : r(), r() < .5 ? .1 : .5, .55 + r() * .35)); slots.push([-Math.floor(i / 4) * 2.4, ((i % 4) - 1.5) * 1.3]); }
+  people.castShadow = true; g.add(people);
+  const litters = [];
+  for (let i = 0; i < 3; i++) { const l = new THREE.Group(); addMesh(box(3, .3, 2), M.wood, l, { y: 1.3 }); addMesh(new THREE.CylinderGeometry(.35, .45, 1.6, 8), M.gold, l, { y: 2.3 }); g.add(l); litters.push(l); }
+  const presider = new THREE.Group(); addMesh(box(1.8, 1.1, 1.4), M.gold, presider, { y: 1 }); addMesh(new THREE.CylinderGeometry(.25, .3, 1.4, 8), mat({ color: "#5e2a4a" }), presider, { y: 2.2 }); g.add(presider);
+  return {
+    g, start: -230, speed: 7,
+    update(t) {
+      const head = this.start + t * this.speed, z = 16;
+      slots.forEach(([dx, dz], i) => { m4.makeTranslation(head + dx + Math.sin(t * 6 + i) * .05, Math.abs(Math.sin(t * 8 + i)) * .06, z + dz); people.setMatrixAt(i, m4); });
+      people.instanceMatrix.needsUpdate = true;
+      litters.forEach((l, i) => l.position.set(head - 38 - i * 9, Math.abs(Math.sin(t * 7 + i)) * .05, z));
+      presider.position.set(head - 70, 0, z);
+      return head - 70 > 60;                                     // done when the presider has passed the middle
+    },
+  };
+})();
+
+// ---- races ----------------------------------------------------------------------------------------------------
+function newRace() {
+  const seed = (Date.now() ^ (APP.raceNo * 7919)) >>> 0;
+  const driving = APP.role === "charioteer";
+  APP.race = Circus.createRace({ seed, player: driving ? 0 : -1, playerFaction: driving ? $("faction").value : null });
+  APP.evIndex = 0; APP.acc = 0; APP.finishT = 0; APP.crashHot = 0;
+  setTeamColors(APP.race); DUST.clear(); openGates(0); setLapCounters(7);
+  if (APP.role === "ride") applyTactic(null);
+  poseTeams(APP.race, 0, 0);
+}
+function rideCar() { const race = APP.race; return race && race.cars.find((c) => c.faction === $("faction").value && c.leader); }
+function applyTactic(mode) {
+  document.querySelectorAll("[data-tactic]").forEach((b) => b.classList.toggle("on", b.dataset.tactic === mode));
+  const c = rideCar(); if (c && mode) { c.mode = mode; say(mode === "cautious" ? "Easy now, save the team!" : mode === "blocker" ? "Hold the inside, keep them out!" : "Now! Let them run!"); }
+}
+function startDay() {
+  if (APP.phase === "procession") { APP.phase = "ready"; PARADE.g.visible = false; APP.phaseT = 0; renderStatus(); return; }
+  if (APP.phase === "finished" && APP.raceNo < APP.races) { APP.raceNo++; newRace(); APP.phase = "ready"; APP.phaseT = 0; renderStatus(); return; }
+  APP.races = APP.role === "sponsor" ? +$("raceCount").value : 1; APP.raceNo = 1;
+  ensureSound();
+  newRace();
+  if (APP.role === "sponsor" && $("pompa").checked) { APP.phase = "procession"; APP.phaseT = 0; PARADE.g.visible = true; sound.trumpets(); banner("The procession", 2.5); say("Here come the gods!"); }
+  else { APP.phase = "ready"; APP.phaseT = 0; }
+  renderStatus();
+}
+function dropMappa() {
+  if (APP.phase !== "ready") return;
+  APP.phase = "racing"; APP.phaseT = 0; Circus.start(APP.race); CROWD.excite = .95;
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();   // Space whips; it must not press a button
+  banner("The cloth falls!", 1.6); sound.gates(); sound.roar(1);
+  renderStatus();
+}
+function endDay() {
+  APP.phase = "idle"; PARADE.g.visible = false; APP.race = null; newRace(); renderStatus();
+  $("hud").hidden = true; $("standings").hidden = true;
+}
+// events from the engine: crashes, laps, the finish
+function handleEvents() {
+  const race = APP.race;
+  for (; APP.evIndex < race.events.length; APP.evIndex++) {
+    const e = race.events[APP.evIndex], car = e.car != null ? race.cars[e.car] : null, f = car && FACTION[car.faction];
+    if (e.type === "crash") {
+      banner(`Naufragium! ${car.name} (${f.name})`, 2.4); say(car.player ? "Your team is down!" : ["Naufragium!", "He's under the wheels!", "Clear the track!"][e.car % 3]);
+      APP.crashHot = 1; CROWD.hot[1].set(car.x, car.z, 90, 1.2); sound.crash(car); sound.roar(.9);
+    } else if (e.type === "lap") {
+      const left = Circus.lapsLeft(race); setLapCounters(left);
+      if (left > 0) say(left === 1 ? "Last lap!" : `${NUM[left][0].toUpperCase() + NUM[left].slice(1)} laps to go!`);
+      sound.roar(.4);
+    } else if (e.type === "finish" && e.place === 1) {
+      banner(`${car.name} of the ${f.name} wins!`, 4); say(car.player ? "The palm is yours!" : CHANTS[car.faction]); sound.roar(1); CROWD.excite = 1;
+      APP.finishT = .001; setLapCounters(0);
+    } else if (e.type === "whip" && car.player) sound.whip();
+  }
+}
+function playerInput() {
+  const race = APP.race;
+  if (APP.role !== "charioteer" || race.player < 0) return {};
+  const k = APP.keys, whip = APP.whipEdge; APP.whipEdge = false;
+  return { [race.player]: { steer: (k.right ? 1 : 0) - (k.left ? 1 : 0), whip, rein: !!k.rein } };
+}
+function raceFrame(dt) {
+  const race = APP.race; if (!race) return;
+  const speed = +$("speed").value;
+  if (APP.phase === "racing") {
+    APP.acc += dt * speed;
+    while (APP.acc >= Circus.DT) { Circus.step(race, playerInput()); APP.acc -= Circus.DT; }
+    handleEvents();
+    if (APP.finishT > 0) APP.finishT += dt;
+    if (race.done || APP.finishT > 25) {
+      APP.phase = "finished";
+      const w = race.cars[race.finishOrder[0]];
+      $("status").textContent = w ? `Race ${APP.raceNo}: ${w.name} of the ${FACTION[w.faction].name} won; ${race.cars.filter((c) => c.crashed).length} wrecks.` : "Every team wrecked. The crowd will talk of it for years.";
+      if (APP.raceNo < APP.races) setTimeout(() => { if (APP.phase === "finished") startDay(); }, 6000);
+      renderStatus();
+    }
+  }
+  poseTeams(race, dt * speed, APP.t);
+  openGates(APP.phase === "racing" ? Math.min(1, APP.phaseT * 2.5) : 0);
+  // the crowd: excitement decays, hot spots follow the leader and the last crash
+  CROWD.excite += ((APP.phase === "racing" ? .14 : .06) - CROWD.excite) * Math.min(1, dt * .35);
+  const lead = Circus.standings(race).find((c) => !c.crashed && !c.finished) || race.cars[0];
+  CROWD.hot[0].set(lead.x, lead.z, 75, APP.phase === "racing" ? .55 : 0);
+  APP.crashHot = Math.max(0, APP.crashHot - dt * .25); CROWD.hot[1].w = APP.crashHot * 1.2;
+  CROWD.hot[2].set(Circus.TRACK.westPost + Circus.TRACK.line, 20, 60, APP.finishT > 0 && APP.finishT < 8 ? .8 : 0);
+}
+function renderHud() {
+  const race = APP.race, me = race && (APP.role === "charioteer" ? race.cars[race.player] : APP.role === "ride" ? rideCar() : null);
+  const racing = race && (APP.phase === "racing" || APP.phase === "finished" || APP.phase === "ready");
+  $("hud").hidden = !(me && racing);
+  if (me && racing) {
+    const left = Circus.lapsLeft(race);
+    $("hudLaps").innerHTML = Array.from({ length: 7 }, (_, i) => `<span class="${i < left ? "" : "gone"}"></span>`).join("");
+    const order = Circus.standings(race), place = order.indexOf(me) + 1;
+    $("hudPlace").textContent = me.crashed ? "Wrecked" : me.finished ? `Finished ${me.place}${["st", "nd", "rd"][me.place - 1] || "th"}` : `${place} of 12`;
+    $("hudStamina").style.width = `${Math.round(me.stamina * 100)}%`;
+    $("hudSpeed").textContent = `${Math.round(me.v * 3.6)} km/h`;
+  }
+  $("standings").hidden = !(race && (APP.phase === "racing" || APP.phase === "finished"));
+  if (!$("standings").hidden) {
+    const html = Circus.standings(race).map((c, i) => `<div class="${c.crashed ? "out" : ""} ${c === me ? "me" : ""}"><span class="sw" style="background:${FACTION[c.faction].color}"></span>${i + 1}. ${c.name}</div>`).join("");
+    if (html !== APP.lastStandings) { $("standings").innerHTML = html; APP.lastStandings = html; }
+  }
+}
+
+// ---- cameras ---------------------------------------------------------------------------------------------------
+const chase = { pos: new THREE.Vector3(-290, 6, 10), look: new THREE.Vector3() };
+function cameraFrame(dt) {
+  const race = APP.race;
+  const chaseCar = APP.role === "charioteer" && race ? race.cars[race.player] : APP.role === "ride" ? rideCar() : null;
+  if (chaseCar) {
+    view.mode = "chase";
+    const c = chaseCar, fx = Math.cos(c.heading), fz = Math.sin(c.heading);
+    const want = new THREE.Vector3(c.x - fx * 10.5, 4.3, c.z - fz * 10.5), look = new THREE.Vector3(c.x + fx * 9, 1.6, c.z + fz * 9);
+    const k = 1 - Math.exp(-dt * (c.crashed ? 1.5 : 6));
+    chase.pos.lerp(want, k); chase.look.lerp(look, k);
+    const shake = c.crashed ? 0 : Math.min(.06, c.v * .003);
+    chaseCam.position.copy(chase.pos).add(new THREE.Vector3((Math.random() - .5) * shake, (Math.random() - .5) * shake, 0));
+    chaseCam.lookAt(chase.look);
+    DUST.setScale(stage.clientHeight * .9);
+    return;
+  }
+  view.mode = "panorama";
+  DUST.setScale(CUBE_SIZE * .5);
+  if (APP.role === "sponsor") view.pos.set(PULVINAR.x, 15.8, -ARENA.halfWidth + 1);      // the front of the pulvinar, before its columns
+  else view.pos.set(SEAT.x, SEAT.y, SEAT.z);
+  // until the visitor looks around themselves, tilt so a tall window shows sky rather than the backs of heads
+  if (!view.userTurned) { const halfV = view.hfov / (stage.clientWidth / Math.max(1, stage.clientHeight)) / 2; view.pitch = Math.atan(THREE.MathUtils.clamp(halfV - 1.05, -.13, .12)); }
+  if ($("follow").checked && race && (APP.phase === "racing" || APP.phase === "finished")) {
+    const lead = Circus.standings(race).find((c) => !c.crashed) || race.cars[0];
+    const want = Math.atan2(-(lead.x - view.pos.x), -(lead.z - view.pos.z));
+    let dy = want - view.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    view.yaw += dy * Math.min(1, dt * 2.5);
+    view.hfov += (1.35 - view.hfov) * Math.min(1, dt * 1.5);
+  }
+}
+
+// ---- input --------------------------------------------------------------------------------------------------------
+const KEYMAP = { ArrowLeft: "left", ArrowRight: "right", ArrowDown: "rein", a: "left", d: "right", s: "rein" };
+addEventListener("keydown", (e) => {
+  if (e.target.closest && e.target.closest("input, select")) return;
+  if (KEYMAP[e.key]) { APP.keys[KEYMAP[e.key]] = true; e.preventDefault(); }
+  if (e.key === " " || e.key === "ArrowUp") { if (!e.repeat) APP.whipEdge = true; e.preventDefault(); }
+});
+addEventListener("keyup", (e) => { if (KEYMAP[e.key]) APP.keys[KEYMAP[e.key]] = false; });
+addEventListener("blur", () => { APP.keys = {}; });
+$("touch").addEventListener("pointerdown", (e) => { const k = e.target.dataset.key; if (!k) return; if (k === "whip") APP.whipEdge = true; else APP.keys[k] = true; });
+for (const ev of ["pointerup", "pointercancel", "pointerleave"]) $("touch").addEventListener(ev, (e) => { const k = e.target.dataset.key; if (k && k !== "whip") APP.keys[k] = false; });
+document.querySelectorAll("[data-role]").forEach((b) => b.addEventListener("click", () => {
+  APP.role = b.dataset.role; if (APP.phase !== "idle") endDay();
+  view.yaw = APP.role === "sponsor" ? Math.PI : 0; view.hfov = THREE.MathUtils.degToRad(158); view.userTurned = false;
+  renderRole();
+}));
+document.querySelectorAll("[data-tactic]").forEach((b) => b.addEventListener("click", () => applyTactic(b.dataset.tactic)));
+daySel.addEventListener("change", () => { APP.day = Circus.RACE_DAYS.find((d) => d.id === daySel.value); APP.narrIdx = 0; renderDay(); });
+$("go").addEventListener("click", startDay);
+$("mappa").addEventListener("click", dropMappa);
+$("stop").addEventListener("click", endDay);
+$("faction").addEventListener("change", () => { if (APP.phase === "idle") newRace(); });
+$("thenNow").addEventListener("input", () => { view.mix = +$("thenNow").value; sound.setNow(view.mix); });
+$("sound").addEventListener("change", () => { APP.soundTouched = true; sound.setEnabled($("sound").checked); });
+$("volume").addEventListener("input", () => sound.setVolume(+$("volume").value));
+function ensureSound() { if (!APP.soundTouched) { APP.soundTouched = true; $("sound").checked = true; sound.setEnabled(true); } }
+
+// ---- the loop -------------------------------------------------------------------------------------------------------
+function frame(dt) {
+  APP.t += dt; APP.phaseT += dt;
+  if (APP.phase === "procession") { if (PARADE.update(APP.phaseT)) { PARADE.g.visible = false; APP.phase = "ready"; APP.phaseT = 0; renderStatus(); } CROWD.excite = Math.max(CROWD.excite, .5); }
+  if (APP.phase === "ready" && APP.role !== "sponsor" && APP.phaseT > 4) dropMappa();
+  raceFrame(dt);
+  // the day's talk in the stands
+  if ((APP.narrT -= dt) < 0) { APP.narrT = 11 + Math.random() * 8; const lines = APP.day.narration; if (APP.phase !== "racing" || Math.random() < .5) say(lines[APP.narrIdx++ % lines.length]); else { const f = Circus.FACTIONS[Math.floor(Math.random() * 4)]; say(CHANTS[f.id]); } }
+  crowdFrame(APP.t); modernFrame(dt); cameraFrame(dt);
+  $("thenNow").disabled = view.mode === "chase";
+  draw();
+  renderHud();
+  sound.update(dt, APP);
+}
+let lastT = performance.now();
+function loop(now) { const dt = Math.min(.1, Math.max(0, (now - lastT) / 1000)); lastT = now; frame(dt); requestAnimationFrame(loop); }
+renderRole(); renderTimeline(); newRace();
+requestAnimationFrame(loop);
+window.__circus = { APP, view, CROWD, frame, draw, startDay, dropMappa, endDay, newRace, applyTactic,
+  stepRace(seconds) { const r = APP.race; for (let i = 0; i < seconds / Circus.DT; i++) { Circus.step(r, playerInput()); } handleEvents(); poseTeams(r, 1 / 30, APP.t); },
+  level: () => sound.level(),
+  // for headless screenshots, which do not show a live WebGL canvas: draw once and lay the picture over it
+  shot() { draw(); const im = new Image(); im.src = renderer.domElement.toDataURL(); im.style.cssText = "position:absolute;inset:0;width:100%;height:100%"; renderer.domElement.after(im); } };   // under the HUD
+```
+
+- [ ] **Step 2: Check in the Browser pane** (`preview_start {name: "static"}`, open `http://localhost:8765/circus-maximus/index.html?v=1`; if the pane is hidden rAF pauses — drive `__circus.frame(1/30)` in loops from `javascript_tool`):
+
+- Spectator: "Start the day" → after about 4 s the gates open and the race runs; standings appear; the crowd stands as the leaders pass; lap counters drop one per lap; Sound ticks itself on.
+- Charioteer (Greens): HUD shows 7 eggs, place, stamina, km/h; holding ArrowRight moves the car outward (`d` grows); Space whips (stamina drops); with focus on a panel button, Space does not click it once the race is on.
+- Ride along: the chase camera follows the faction leader; "Go now" sets its mode to `reckless`.
+- Sponsor with procession and 2 races: the column of figures, litters and the gilded car walks down the Aventine side; "Skip the procession" works; "Drop the white cloth" starts each race; the next race starts by itself 6 s after the first ends; the view is from the front of the pulvinar.
+- Race day Constantius II → two obelisks; Caesar → none, and the day card shows the anachronism note.
+- Timeline tabs switch eras; Regal entries are marked "tradition".
+- Then/now slider crossfades in the panorama and is disabled in chase views.
+- Stop mid-race and switching role mid-race → phase `idle`, HUD and standings hidden, teams back in the stalls, no errors.
+- Force a wreck: `__circus.APP.race.cars.forEach(c => Circus.crash(__circus.APP.race, c, "test"))` during a race → the race ends with a status line; "Start the day" works again.
+- At 390×844 (`resize_window`): stacked layout, no horizontal scroll, the panorama still shows both ends of the arena.
+- No console errors throughout. Measure fps over 2 s (expect well above 30 on this Mac).
+
+- [ ] **Step 3: Commit** — `git add circus-maximus/index.html && git commit -m "circus-maximus: roles, race days, procession, races, cameras and panel"`
+
+---
+
+### Task 9: Verification, screenshot, gallery, sound for the owner
+
+**Files:**
+- Create: `circus-maximus/screenshot1.jpg`
+- Modify: `index.html` (rebuilt by `build_gallery.py`); `gallery.yaml` only if the auto title is not "Circus Maximus"
+
+- [ ] **Step 1: Unit tests** — `node circus-maximus/test.mjs` → all ok.
+
+- [ ] **Step 2: Review-focus pass** — repeat the Task 8 checks that cover the Review Focus list, with sound on; confirm `__circus.level()` > 0.01 during a race and about 0 after unticking Sound.
+
+- [ ] **Step 3: Screenshot (1600×1000)**
+
+```bash
+SP=<scratchpad>; cd circus-maximus
+python3 - <<'PY'
+s = open("index.html").read()
+setup = """<script>addEventListener("load", () => { const c = window.__circus; document.getElementById("speed").value = "2";
+  c.startDay(); for (let i = 0; i < 30 * 5; i++) c.frame(1 / 30); c.stepRace(52); c.CROWD.excite = .35;
+  for (let i = 0; i < 20; i++) c.frame(1 / 30); c.shot(); });</script></body>"""
+open("_shot.html", "w").write(s.replace("</body>", setup, 1))
+PY
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=20000 --screenshot="$SP/circus.png" "http://localhost:8765/circus-maximus/_shot.html"
+sips -s format jpeg -s formatOptions 85 "$SP/circus.png" --out screenshot1.jpg
+rm _shot.html
+```
+
+Read the image: the panel, the full arena in the panorama with the race under way, the crowd, the Palatine palace. Adjust `stepRace` seconds if no team is in view.
+
+- [ ] **Step 4: Gallery** — `python3 build_gallery.py`; `git diff index.html` adds one card for `circus-maximus` titled "Circus Maximus" (add `circus-maximus: Circus Maximus` to `gallery.yaml` only if not).
+
+- [ ] **Step 5: Sound for the owner** — in the Browser pane, during a 2× race with sound on, tap `sound.out` with a ScriptProcessorNode for about 12 s, encode a 16-bit stereo WAV in JS, POST it to a scratch receiver on 127.0.0.1:8766 (a few lines of Python `http.server` in the scratchpad), and hand the file to the controller (the owner judges sound by ear). Do not commit it.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add circus-maximus/screenshot1.jpg index.html
+git commit -m "circus-maximus: screenshot and gallery entry"
+```
+
+(Every commit message ends with a blank line and your model's `Co-Authored-By:` line.)
