@@ -8,7 +8,10 @@ and if it passes the track.*
 - **Garage:** 11 sliders. Wheel sizes front and rear, wheel type, motor speed and torque, leg length,
   chassis width and height, suspension, cargo, booster fuel.
 - **Run:** Enter or click Start/Stop. Hold Space for the booster and use ← → to tilt.
-  M mutes, R restarts a run, 1–5 picks an unlocked level.
+  M mutes (the help line shows "sound on" or "muted"), R restarts a run (also during the brief game-over
+  pause), 1–5 picks an unlocked level. Stop and R keep the best score reached so far. Sound is suspended
+  while the tab is hidden. The win flash is fast, like the 2016 prototype's; with the system setting
+  "reduce motion" it is three slow flashes (200 ms each) instead.
 - **Levels:** Bumps, Steep places, Pitfalls, Rope bridge, Friction varies. Every level can be cleared
   with sliders alone; `test.mjs` checks one solution per level headless.
 

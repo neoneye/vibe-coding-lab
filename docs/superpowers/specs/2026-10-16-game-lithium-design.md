@@ -102,11 +102,13 @@ Every track has an 8 m flat run-up before score 0 and a flat 10 m run-out after 
 ## Sound (Web Audio, created on first user gesture)
 
 - Motor hum: a sawtooth + lowpass whose pitch follows mean wheel angular speed; quiet.
-- Thumps: short filtered noise burst when a wheel or the chassis lands with impact speed > 2 m/s
-  (from planck `post-solve` impulses), volume scaled by impulse.
+- Thumps: short filtered noise burst when a car part (wheel, chassis, cargo) touches the ground or a plank
+  at `begin-contact` with approach speed > 2 m/s, volume scaled by speed. (Implemented from approach speed
+  rather than `post-solve` impulses, because the wheel suspension absorbs the impulse.)
 - Booster: band-passed noise while Space thrust is active.
 - Win: a short rising arpeggio during the flash.
-- **M** toggles mute; a small speaker hint in the corner.
+- **M** toggles mute; the help line in the corner shows "sound on" / "muted".
+- The AudioContext is suspended while the tab is hidden.
 
 ## Architecture (inside one `index.html`)
 

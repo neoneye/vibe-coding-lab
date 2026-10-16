@@ -20,7 +20,7 @@
   #go:focus-visible { outline: 3px solid #fff; }
   #panel { position: fixed; top: 0; left: 0; bottom: 0; width: 300px; padding: 18px 20px; box-sizing: border-box;
     background: rgba(0, 0, 90, 0.35); overflow-y: auto; }
-  #panel.hidden, #help.hidden { display: none; }
+  #panel.hidden { display: none; }
   #levels { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
   #levels button { flex: 1 1 100%; text-align: left; background: none; border: 1px solid rgba(255,255,255,0.35);
     color: #fff; font: 13px "Helvetica Neue", Helvetica, Arial, sans-serif; padding: 5px 8px; cursor: pointer; }
@@ -56,7 +56,7 @@
   <button id="reset" type="button">reset car</button>
 </div>
 <button id="go" type="button">Start</button>
-<div id="help">Enter start/stop · Space booster · ← → tilt · 1–5 level · M mute</div>
+<div id="help">Enter start/stop · Space booster · ← → tilt · R restart · 1–5 level · M mute</div>
 <div id="stats"></div>
 <script id="shared-code">
 // ---- Lithium shared code: pure logic, no DOM, no three.js. planck is injected where needed. ----
@@ -902,12 +902,23 @@ function startRun() {
   updateHud();
 }
 function stopRun() {
+  if (document.activeElement) document.activeElement.blur();
   mode = "garage"; monitor = null;
   rebuild(); renderLevels(); updateHud();
 }
 function recordBest(score) {
   if (score > save.best[level]) save.best[level] = score;
   persist();
+}
+// Player-initiated Stop / restart keep the score reached so far.
+function playerStop() {
+  if (mode === "run" && monitor) recordBest(monitor.score);
+  stopRun();
+}
+function playerRestart() {
+  if (mode === "run" && monitor) recordBest(monitor.score);
+  clearTimeout(overTimer);
+  startRun();
 }
 let overTimer = 0;
 function endRun(reason) {
@@ -926,13 +937,15 @@ function winRun() {
   lastScore = 10;
   updateHud();
   sound.win();
-  const seq = [1, 0, 1, 0, 1, 0, 1, 0, 1];
+  // Default is the prototype's fast sequence; reduced-motion users get three slow (>= 150 ms) flashes.
+  const calm = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const seq = calm ? [1, 0, 1, 0, 1, 0] : [1, 0, 1, 0, 1, 0, 1, 0, 1];
   let i = 0;
   const flash = () => {
     renderer.setClearColor(seq[i] ? 0xffffff : 0x000000);
     render();
     i++;
-    if (i < seq.length) { setTimeout(flash, i < 2 ? 50 : 30); return; }
+    if (i < seq.length) { setTimeout(flash, calm ? 200 : i < 2 ? 50 : 30); return; }
     setTimeout(() => {
       renderer.setClearColor(C.sky);
       const next = level + 1;
@@ -957,11 +970,13 @@ addEventListener("keydown", e => {
   if (e.code === "Enter" || e.code === "NumpadEnter") {
     e.preventDefault();
     if (e.repeat) return;
-    if (mode === "garage") startRun(); else if (mode === "run") stopRun();
+    if (mode === "garage") startRun(); else if (mode === "run") playerStop();
     return;
   }
-  if (e.code === "KeyM") { if (!e.repeat) { sound.toggleMute(); save.muted = sound.muted; persist(); } return; }
-  if (e.code === "KeyR" && mode === "run") { if (!e.repeat) startRun(); return; }
+  // Space must not re-press a focused button (Stop leaves #go focused in some browsers).
+  if (e.code === "Space" && e.target && e.target.tagName === "BUTTON") e.preventDefault();
+  if (e.code === "KeyM") { if (!e.repeat) { sound.toggleMute(); save.muted = sound.muted; persist(); updateHelp(); } return; }
+  if (e.code === "KeyR" && (mode === "run" || mode === "over")) { if (!e.repeat) playerRestart(); return; }
   if (mode === "garage" && /^Digit[1-5]$/.test(e.code)) { setLevel(Number(e.code.slice(5)) - 1); return; }
   if (mode === "run" && ["Space", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.code)) {
     e.preventDefault();
@@ -969,8 +984,17 @@ addEventListener("keydown", e => {
   }
 });
 addEventListener("keyup", e => keys.delete(e.code));
-addEventListener("blur", () => keys.clear());
-ui.go.addEventListener("click", () => { sound.ensure(); if (mode === "garage") startRun(); else if (mode === "run") stopRun(); });
+addEventListener("blur", () => { keys.clear(); sound.update(false, 0, false); });
+// A hidden tab stops rAF, so sound.update never runs: suspend the context so the hum cannot drone on.
+document.addEventListener("visibilitychange", () => {
+  if (!sound.ctx) return;
+  if (document.hidden) sound.ctx.suspend(); else sound.ctx.resume();
+});
+ui.go.addEventListener("click", e => {
+  if (e.detail > 1) return;  // a double-click on Start must not immediately Stop
+  sound.ensure();
+  if (mode === "garage") startRun(); else if (mode === "run") playerStop();
+});
 
 // ---- loop ----
 // ---- effects ----
@@ -1096,6 +1120,9 @@ class Sound {
   }
 }
 const sound = new Sound(save.muted);
+const HELP_KEYS = ui.help.textContent;
+function updateHelp() { ui.help.textContent = HELP_KEYS + (sound.muted ? " · muted" : " · sound on"); }
+updateHelp();
 
 function tick() {
   if (mode === "garage") { sim.step(); return; }
