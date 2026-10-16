@@ -212,6 +212,145 @@ const Save = {
   },
 };
 
+// Builds the planck world for one level and one slider set. Wheel motors start braked (speed 0):
+// the garage shows the car resting on its suspension; start() releases them.
+function createSim(pl, levelIndex, values, opts = {}) {
+  const geom = Tracks.build(levelIndex);
+  const spec = VehicleConfig.toPhysicsSpec(values);
+  const world = new pl.World({ gravity: pl.Vec2(0, -10) });
+
+  const ground = world.createBody({ type: "static" });
+  ground.setUserData({ kind: "ground" });
+  for (const run of geom.runs) {
+    ground.createFixture(new pl.Chain(run.points.map(p => pl.Vec2(p.x, p.y)), false), { friction: FRICTION[run.kind] });
+  }
+  for (const wl of geom.walls) ground.createFixture(new pl.Edge(pl.Vec2(wl.x0, wl.y0), pl.Vec2(wl.x1, wl.y1)), { friction: 0.5 });
+
+  const planks = [];
+  for (const b of geom.bridges) {
+    const pts = Tracks.bridgePlanks(b);
+    let prev = ground;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i], p1 = pts[i + 1];
+      const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+      const body = world.createDynamicBody({ position: pl.Vec2((p0.x + p1.x) / 2, (p0.y + p1.y) / 2), angle: Math.atan2(p1.y - p0.y, p1.x - p0.x) });
+      body.createFixture(new pl.Box(len / 2, 0.1, pl.Vec2(0, -0.1), 0), { density: 20, friction: 0.9 });
+      body.setUserData({ kind: "plank", len });
+      world.createJoint(new pl.RevoluteJoint({}, prev, body, pl.Vec2(p0.x, p0.y)));
+      prev = body;
+      planks.push(body);
+    }
+    world.createJoint(new pl.RevoluteJoint({}, prev, ground, pl.Vec2(b.x1, b.y1)));
+  }
+
+  // The car. The run-up is flat at y = 0; lift the chassis so the lower wheel just clears it.
+  const x0 = geom.spawnX;
+  const lift = Math.max(...spec.wheels.map(w => w.r - w.y)) + 0.05;
+  const chassis = world.createDynamicBody({ position: pl.Vec2(x0, lift) });
+  chassis.setUserData({ kind: "chassis" });
+  chassis.createFixture(new pl.Box(spec.chassis.w / 2, spec.chassis.h / 2), { density: 20, friction: 0.6 });
+  for (const p of spec.posts) chassis.createFixture(new pl.Box(p.hx, p.hy, pl.Vec2(p.x, p.y), 0), { density: 20, friction: 0.6 });
+  // Legs add mass but never collide (filterMaskBits 0); they are drawn to the axle.
+  for (const l of spec.legs) {
+    chassis.createFixture(new pl.Box(l.hw, (l.top - l.bottom) / 2, pl.Vec2(l.x, (l.top + l.bottom) / 2), 0), { density: 10, filterMaskBits: 0 });
+  }
+  const wheels = [], joints = [];
+  for (const w of spec.wheels) {
+    const wb = world.createDynamicBody({ position: pl.Vec2(x0 + w.x, lift + w.y) });
+    wb.createFixture(new pl.Circle(w.r), { density: 6, friction: w.friction, filterGroupIndex: -1 });
+    wb.setUserData({ kind: "wheel", type: w.type, r: w.r });
+    joints.push(world.createJoint(new pl.WheelJoint({
+      enableMotor: true, motorSpeed: 0, maxMotorTorque: spec.motor.torque,
+      frequencyHz: spec.spring.hz, dampingRatio: spec.spring.damping,
+    }, chassis, wb, wb.getPosition(), pl.Vec2(0, 1))));
+    wheels.push(wb);
+  }
+  const cargo = spec.cargo.map(c => {
+    const b = world.createDynamicBody({ position: pl.Vec2(x0 + c.x, lift + c.y) });
+    b.createFixture(new pl.Box(c.w / 2, c.h / 2), { density: 8, friction: 0.7 });
+    b.setUserData({ kind: "cargo" });
+    return b;
+  });
+  const mass = [chassis, ...wheels, ...cargo].reduce((s, b) => s + b.getMass(), 0);
+
+  // Strongest contact impulse on the car during the last step, for the thump sound.
+  let impact = 0;
+  const carKinds = new Set(["chassis", "wheel", "cargo"]);
+  world.on("post-solve", (contact, imp) => {
+    const ka = contact.getFixtureA().getBody().getUserData()?.kind;
+    const kb = contact.getFixtureB().getBody().getUserData()?.kind;
+    if (!carKinds.has(ka) && !carKinds.has(kb)) return;
+    const n = (imp.normalImpulses[0] || 0) + (imp.normalImpulses[1] || 0);
+    if (n > impact) impact = n;
+  });
+
+  let fuel = spec.fuel, running = false;
+  const BOOST_ACC = 18;  // m/s² of booster thrust per kg of car
+  const TILT_ACC = 6;    // N·m of tilt torque per kg of car
+  const sim = {
+    geom, spec, world, chassis, wheels, cargo, planks, mass, t: 0,
+    get fuel() { return fuel; },
+    get running() { return running; },
+    start() {
+      running = true;
+      const speed = opts.motorSpeed ?? spec.motor.speed;
+      for (const j of joints) j.setMotorSpeed(-speed);  // negative = clockwise = drive right
+    },
+    stop() {
+      running = false;
+      for (const j of joints) j.setMotorSpeed(0);
+    },
+    step(input = {}) {
+      impact = 0;
+      let boosting = false;
+      if (running && input.boost && fuel > 0) {
+        const f = chassis.getWorldVector(pl.Vec2(1, 0));
+        chassis.applyForceToCenter(pl.Vec2(f.x * BOOST_ACC * mass, f.y * BOOST_ACC * mass), true);
+        fuel = Math.max(0, fuel - 1 / 60);
+        boosting = true;
+      }
+      if (running && input.tilt) chassis.applyTorque(-input.tilt * TILT_ACC * mass, true);
+      world.step(1 / 60, 10, 8);
+      sim.t += 1 / 60;
+      return { boosting, impact: impact / mass };
+    },
+    state() {
+      const p = chassis.getPosition();
+      return { x: p.x, y: p.y, angle: chassis.getAngle() };
+    },
+    wheelSpeed() {
+      return wheels.reduce((s, w) => s + Math.abs(w.getAngularVelocity()), 0) / wheels.length;
+    },
+  };
+  return sim;
+}
+
+const Sim = {
+  // Runs one level without rendering: settle 1 s braked, then drive until the monitor ends the run.
+  runHeadless(pl, level, values, { maxT = 90, input = () => ({}), opts = {} } = {}) {
+    const sim = createSim(pl, level, values, opts);
+    for (let k = 0; k < 60; k++) sim.step();
+    sim.start();
+    const mon = new RunMonitor(sim.geom);
+    let result = null;
+    while (!result && mon.t < maxT) {
+      sim.step(input(mon.t, sim));
+      result = mon.update(1 / 60, sim.state());
+    }
+    return { result: result || "timeout", score: mon.score, t: Math.round(mon.t * 10) / 10 };
+  },
+};
+
+// One known-passing slider set per level, sliders only (no booster or tilt input). Level 1 is the
+// default car. Task 6 tunes these by search; the test proves every level is passable.
+const SOLUTIONS = [
+  { note: "the Car6 default car", values: VehicleConfig.defaults() },
+  { note: "big grippy wheels, no cargo", values: { ...VehicleConfig.defaults(), rearRadius: 8, frontRadius: 8, wheelType: 2, motorTorque: 8, cargo: 0, chassisWidth: 5, suspension: 3 } },
+  { note: "a long chassis spans the pits", values: { ...VehicleConfig.defaults(), chassisWidth: 6, rearRadius: 7, frontRadius: 7, motorSpeed: 10, motorTorque: 6, wheelType: 2 } },
+  { note: "slow and grippy over the bridges", values: { ...VehicleConfig.defaults(), motorSpeed: 5, wheelType: 2 } },
+  { note: "heavy and fast on ice", values: { ...VehicleConfig.defaults(), wheelType: 2, motorSpeed: 12, motorTorque: 8, cargo: 6 } },
+];
+
 const LithiumTests = {
   run(planck) {
     let pass = 0, fail = 0;
@@ -375,7 +514,56 @@ const LithiumTests = {
     console.log(`${pass} passed, ${fail} failed`);
     return fail === 0;
   },
-  physics() {},
+  physics(pl, test, ok) {
+    test("sim builds every level and the car settles on the run-up", () => {
+      for (let i = 0; i < Tracks.count; i++) {
+        const sim = createSim(pl, i, VehicleConfig.defaults());
+        for (let k = 0; k < 120; k++) sim.step();
+        const s = sim.state();
+        ok(Math.abs(s.x - sim.geom.spawnX) < 0.5 && s.y > 0.3 && s.y < 3 && Math.abs(s.angle) < 0.2,
+          `level ${i} settled at ${JSON.stringify(s)}`);
+      }
+    });
+    test("bridges hold their planks", () => {
+      const sim = createSim(pl, 3, VehicleConfig.defaults());
+      ok(sim.planks.length === 16 + 24, "planks " + sim.planks.length);
+      for (let k = 0; k < 120; k++) sim.step();
+      const lowest = Math.min(...sim.planks.map(b => b.getPosition().y));
+      ok(lowest > sim.geom.minY - 3, "planks fell: " + lowest);
+    });
+    test("zero motor speed ends stuck", () => {
+      const r = Sim.runHeadless(pl, 0, VehicleConfig.defaults(), { maxT: 10, opts: { motorSpeed: 0 } });
+      ok(r.result === "stuck", JSON.stringify(r));
+    });
+    test("every level has a known slider solution", () => {
+      ok(SOLUTIONS.length === Tracks.count, "one per level");
+      ok(JSON.stringify(VehicleConfig.clamp(SOLUTIONS[0].values)) === JSON.stringify(VehicleConfig.defaults()), "level 1 = defaults");
+      for (let i = 0; i < Tracks.count; i++) {
+        const r = Sim.runHeadless(pl, i, SOLUTIONS[i].values, { maxT: 120 });
+        ok(r.result === "win", `level ${i + 1}: ${JSON.stringify(r)}`);
+        if (i > 0) {
+          const d = Sim.runHeadless(pl, i, VehicleConfig.defaults(), { maxT: 120 });
+          ok(d.result !== "win", `level ${i + 1} is too easy: the default car wins`);
+        }
+      }
+    });
+    test("extreme sliders stay finite", () => {
+      const S = VehicleConfig.SLIDERS, lo = {}, hi = {};
+      for (const s of S) { lo[s.key] = s.min; hi[s.key] = s.max; }
+      const combos = [lo, hi,
+        { ...hi, legLength: 1, chassisWidth: 2, chassisHeight: 1 },
+        { ...lo, legLength: 8, chassisWidth: 6, cargo: 6, motorTorque: 10, motorSpeed: 14 },
+        { ...hi, rearRadius: 3, frontRadius: 12, suspension: 1 }];
+      for (const v of combos) for (const lvl of [1, 3]) {
+        const sim = createSim(pl, lvl, v);
+        sim.start();
+        for (let k = 0; k < 600; k++) sim.step({ boost: k % 120 < 30, tilt: k % 200 < 50 ? 1 : 0 });
+        const s = sim.state(), vel = sim.chassis.getLinearVelocity();
+        ok([s.x, s.y, s.angle, vel.x, vel.y].every(Number.isFinite), "NaN " + JSON.stringify(v));
+        ok(Math.hypot(vel.x, vel.y) < 60, "exploded " + JSON.stringify(v));
+      }
+    });
+  },
 };
 </script>
 </body>
