@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lithium</title>
+</head>
+<body>
+<script id="shared-code">
+// ---- Lithium shared code: pure logic, no DOM, no three.js. planck is injected where needed. ----
+const RUNUP = 8;     // flat metres before score 0
+const RUNOUT = 10;   // flat metres after score 10, then a wall
+const WALL_H = 8;
+const BAND = 0.6;    // drawn thickness of the yellow track band
+const FRICTION = { normal: 0.9, ice: 0.05, grip: 1.6 };
+
+// Each level is the 2016 prototype's `slopes` format: segment angles in degrees, each segment segLen
+// metres wide. Objects add features: {a, f} friction kind, {gap: w} a pit, {bridge: w} a rope bridge.
+const LEVELS = [
+  { name: "Bumps", segLen: 3,
+    slopes: [0, 5, -5, 0, 8, 4, -6, -8, 0, 6, 10, 0, -10, -4, 0, 5, 8, -3, -8, 0, 6, -6, 0, 10, 0, -8, 0, 4, 0, 0] },
+  { name: "Steep places", segLen: 3,
+    slopes: [0, 10, 20, 30, 20, 0, -20, -30, 0, 0, 15, 25, 35, 35, 10, 0, -25, -35, -20, 0, 10, 30, 35, 20, 0, -30, -15, 0, 0, 0] },
+  { name: "Pitfalls", segLen: 3,
+    slopes: [0, 5, 0, { gap: 1.5 }, 0, -5, 5, 0, { gap: 2.5 }, 0, 10, 0, -10, { gap: 2 }, 0, 0, 15, 0, { gap: 3.5 }, -10, 0, 5, 0, { gap: 2.5 }, 0, 0] },
+  { name: "Rope bridge", segLen: 3,
+    slopes: [0, 0, 5, 0, { bridge: 8 }, 0, -5, 10, 15, 0, { bridge: 12 }, 0, -10, 0, 5, 0, 0] },
+  { name: "Friction varies", segLen: 3,
+    slopes: [0, 0, { a: 10, f: "ice" }, { a: 15, f: "ice" }, 0, { a: 20, f: "grip" }, { a: 30, f: "grip" }, 0, -10,
+      { a: -20, f: "ice" }, 0, { a: 15, f: "ice" }, 25, 0, { a: 30, f: "grip" }, { a: 35, f: "grip" }, 0,
+      { a: -15, f: "ice" }, { a: 20, f: "ice" }, 0, 0] },
+];
+
+const Tracks = {
+  count: LEVELS.length,
+  name(i) { return LEVELS[i].name; },
+
+  build(i) {
+    const L = LEVELS[i];
+    const segments = [], runs = [], gaps = [], bridges = [];
+    let cur = null, x = 0, y = 0;
+    const addSeg = (x0, y0, x1, y1, kind) => {
+      segments.push({ x0, y0, x1, y1, kind });
+      if (!cur || cur.kind !== kind) { cur = { kind, points: [{ x: x0, y: y0 }] }; runs.push(cur); }
+      cur.points.push({ x: x1, y: y1 });
+    };
+    addSeg(-RUNUP, 0, 0, 0, "normal");
+    for (const e of L.slopes) {
+      if (typeof e === "object" && (e.gap || e.bridge)) {
+        const w = e.gap || e.bridge;
+        const drop = e.gap ? (e.drop ?? 0.3) : 0;
+        (e.gap ? gaps : bridges).push({ x0: x, x1: x + w, y0: y, y1: y - drop });
+        x += w; y -= drop; cur = null;
+        continue;
+      }
+      const a = typeof e === "number" ? e : e.a;
+      const kind = (typeof e === "object" && e.f) || "normal";
+      const dy = Math.tan(a * Math.PI / 180) * L.segLen;
+      addSeg(x, y, x + L.segLen, y + dy, kind);
+      x += L.segLen; y += dy;
+    }
+    const scoreEndX = x;
+    addSeg(x, y, x + RUNOUT, y, "normal");
+    const walls = [
+      { x0: -RUNUP, y0: 0, x1: -RUNUP, y1: WALL_H },
+      { x0: x + RUNOUT, y0: y, x1: x + RUNOUT, y1: y + WALL_H },
+    ];
+    const minY = Math.min(...segments.map(s => Math.min(s.y0, s.y1)));
+    return { name: L.name, segments, runs, gaps, bridges, walls,
+      spawnX: -RUNUP / 2, scoreStartX: 0, scoreEndX, endX: x + RUNOUT, minY };
+  },
+
+  // Plank joint points along a sagging parabola (sag 6% of span), ~0.5 m planks of equal chord length.
+  bridgePlanks(b) {
+    const w = b.x1 - b.x0, sag = 0.06 * w, N = 400;
+    const pts = [], cum = [0];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      pts.push({ x: b.x0 + w * t, y: b.y0 + (b.y1 - b.y0) * t - 4 * sag * t * (1 - t) });
+      if (i > 0) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+    }
+    const n = Math.ceil(w / 0.5 - 1e-9), total = cum[N], out = [];
+    let j = 0;
+    for (let k = 0; k <= n; k++) {
+      const s = total * k / n;
+      while (j < N - 1 && cum[j + 1] < s) j++;
+      const f = Math.min(1, (s - cum[j]) / (cum[j + 1] - cum[j]));
+      out.push({ x: pts[j].x + (pts[j + 1].x - pts[j].x) * f, y: pts[j].y + (pts[j + 1].y - pts[j].y) * f });
+    }
+    return out;
+  },
+
+  // Track surface height under x. Over a gap or bridge: the lower rim. Outside the track: nearest end.
+  groundYAt(geom, x) {
+    for (const s of geom.segments) if (x >= s.x0 && x <= s.x1) return s.y0 + (s.y1 - s.y0) * (x - s.x0) / (s.x1 - s.x0);
+    for (const h of [...geom.gaps, ...geom.bridges]) if (x > h.x0 && x < h.x1) return Math.min(h.y0, h.y1);
+    const first = geom.segments[0], last = geom.segments[geom.segments.length - 1];
+    return x < first.x0 ? first.y0 : last.y1;
+  },
+};
+
+const Score = {
+  scoreFor(x, geom) {
+    const f = (x - geom.scoreStartX) / (geom.scoreEndX - geom.scoreStartX);
+    return Math.max(0, Math.min(10, Math.floor(10 * f + 1e-9)));
+  },
+};
+
+// Watches one run. Ends it as stuck (< 0.3 m new progress in 3 s), flipped (|angle| > 120° for 1.5 s),
+// fell (4 m under the track surface, or 5 m under its lowest point), or win (score 10).
+class RunMonitor {
+  constructor(geom) {
+    this.geom = geom; this.t = 0; this.score = 0;
+    this.bestX = -Infinity; this.gainX = null; this.gainT = 0; this.flipT = 0;
+  }
+  update(dt, s) {
+    this.t += dt;
+    if (this.gainX === null) { this.gainX = s.x; this.gainT = this.t; }
+    if (s.x > this.bestX) this.bestX = s.x;
+    if (this.bestX > this.gainX + 0.3) { this.gainX = this.bestX; this.gainT = this.t; }
+    this.score = Math.max(this.score, Score.scoreFor(this.bestX, this.geom));
+    if (this.score >= 10) return "win";
+    if (s.y < this.geom.minY - 5 || s.y < Tracks.groundYAt(this.geom, s.x) - 4) return "fell";
+    const a = Math.atan2(Math.sin(s.angle), Math.cos(s.angle));
+    this.flipT = Math.abs(a) > 2 * Math.PI / 3 ? this.flipT + dt : 0;
+    if (this.flipT > 1.5 + 1e-9) return "flipped";
+    if (this.t - this.gainT > 3) return "stuck";
+    return null;
+  }
+}
+
+const WHEEL_TYPES = [
+  { name: "smooth", friction: 0.6 },
+  { name: "hex", friction: 0.9 },
+  { name: "gear", friction: 1.4 },
+];
+const SLIDERS = [
+  { key: "rearRadius", label: "Rear wheel", min: 3, max: 12, def: 5, show: v => (v / 10).toFixed(1) + " m" },
+  { key: "frontRadius", label: "Front wheel", min: 3, max: 12, def: 5, show: v => (v / 10).toFixed(1) + " m" },
+  { key: "wheelType", label: "Wheel type", min: 0, max: 2, def: 1, show: v => WHEEL_TYPES[v].name },
+  { key: "motorSpeed", label: "Motor speed", min: 2, max: 14, def: 6, show: v => v + " rad/s" },
+  { key: "motorTorque", label: "Motor torque", min: 1, max: 10, def: 4, show: v => v * 20 + " N·m" },
+  { key: "legLength", label: "Leg length", min: 1, max: 8, def: 4, show: v => (v * 0.2).toFixed(1) + " m" },
+  { key: "chassisWidth", label: "Chassis width", min: 2, max: 6, def: 4, show: v => v + " m" },
+  { key: "chassisHeight", label: "Chassis height", min: 1, max: 5, def: 2, show: v => (v * 0.2).toFixed(1) + " m" },
+  { key: "suspension", label: "Suspension", min: 1, max: 10, def: 4, show: v => v + " Hz" },
+  { key: "cargo", label: "Cargo", min: 0, max: 6, def: 4, show: v => v + (v === 1 ? " block" : " blocks") },
+  { key: "fuel", label: "Booster fuel", min: 0, max: 5, def: 2, show: v => v + " s" },
+];
+// Cargo block sizes (w, h) in metres; the first four are the Car6 blocks (15x10, 20x40, 25x30, 15x20 px at 50 px/m).
+const CARGO_BLOCKS = [[0.3, 0.2], [0.4, 0.8], [0.5, 0.6], [0.3, 0.4], [0.3, 0.3], [0.25, 0.5]];
+
+const VehicleConfig = {
+  SLIDERS, WHEEL_TYPES,
+  defaults() {
+    const v = {};
+    for (const s of SLIDERS) v[s.key] = s.def;
+    return v;
+  },
+  clamp(values) {
+    const out = {};
+    for (const s of SLIDERS) {
+      let x = Math.round(Number(values == null ? NaN : values[s.key]));
+      if (!Number.isFinite(x)) x = s.def;
+      out[s.key] = Math.max(s.min, Math.min(s.max, x));
+    }
+    return out;
+  },
+  toPhysicsSpec(values) {
+    const v = VehicleConfig.clamp(values);
+    const w = v.chassisWidth, h = v.chassisHeight * 0.2, leg = v.legLength * 0.2;
+    const wx = Math.max(w / 2 - 0.8, 0.3 * w);
+    const wt = WHEEL_TYPES[v.wheelType];
+    const axleY = -h / 2 - leg;
+    const wheels = [
+      { x: -wx, y: axleY, r: v.rearRadius / 10, friction: wt.friction, type: wt.name },
+      { x: wx, y: axleY, r: v.frontRadius / 10, friction: wt.friction, type: wt.name },
+    ];
+    const posts = [-1, 1].map(sx => ({ x: sx * (w / 2 - 0.1), y: h / 2 + 0.15, hx: 0.1, hy: 0.15 }));
+    const legs = wheels.map(wh => ({ x: wh.x, top: -h / 2, bottom: axleY, hw: 0.1 }));
+    // Cargo packed left to right, centred on the bed, squeezed to fit between the posts.
+    const blocks = CARGO_BLOCKS.slice(0, v.cargo), gap = 0.04, room = w - 0.5;
+    const total = blocks.reduce((s, b) => s + b[0], 0) + gap * Math.max(0, blocks.length - 1);
+    const k = total > room ? room / total : 1;
+    const cargo = [];
+    let x = -total * k / 2;
+    for (const [bw, bh] of blocks) {
+      cargo.push({ x: x + bw * k / 2, y: h / 2 + 0.01 + bh / 2, w: bw * k, h: bh });
+      x += (bw + gap) * k;
+    }
+    return { chassis: { w, h }, posts, legs, wheels, cargo,
+      motor: { speed: v.motorSpeed, torque: v.motorTorque * 20 },
+      spring: { hz: v.suspension, damping: 0.7 }, fuel: v.fuel };
+  },
+};
+
+const Save = {
+  KEY: "lithium.v1",
+  fresh() {
+    return { values: VehicleConfig.defaults(), unlocked: 1, best: [0, 0, 0, 0, 0], level: 0, muted: false };
+  },
+  sanitize(raw) {
+    const s = Save.fresh();
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return s;
+    s.values = VehicleConfig.clamp(raw.values);
+    const int = (x, lo, hi, d) => { const n = Math.round(Number(x)); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
+    s.unlocked = int(raw.unlocked, 1, Tracks.count, 1);
+    if (Array.isArray(raw.best)) s.best = s.best.map((_, i) => int(raw.best[i], 0, 10, 0));
+    s.level = int(raw.level, 0, s.unlocked - 1, 0);
+    s.muted = !!raw.muted;
+    return s;
+  },
+};
+
+const LithiumTests = {
+  run(planck) {
+    let pass = 0, fail = 0;
+    const test = (name, fn) => {
+      try { fn(); pass++; } catch (e) { fail++; console.log("FAIL " + name + ": " + e.message); }
+    };
+    const ok = (c, msg) => { if (!c) throw new Error(msg || "assertion failed"); };
+    const near = (a, b, eps, msg) => ok(Math.abs(a - b) <= eps, (msg || "") + ` expected ${b} got ${a}`);
+
+    test("five levels build", () => {
+      ok(Tracks.count === 5, "count " + Tracks.count);
+      for (let i = 0; i < Tracks.count; i++) {
+        const g = Tracks.build(i);
+        ok(typeof Tracks.name(i) === "string" && Tracks.name(i).length > 0, "name");
+        ok(g.scoreEndX > g.scoreStartX + 30, "level " + i + " too short");
+        ok(g.spawnX < g.scoreStartX && g.spawnX > -RUNUP, "spawn inside run-up");
+        ok(g.endX === g.scoreEndX + RUNOUT, "run-out");
+        ok(g.walls.length === 2, "walls");
+      }
+    });
+    test("runs are continuous polylines", () => {
+      for (let i = 0; i < Tracks.count; i++) {
+        const g = Tracks.build(i);
+        for (const r of g.runs) {
+          ok(r.points.length >= 2, "run too short");
+          for (let k = 1; k < r.points.length; k++) ok(r.points[k].x > r.points[k - 1].x, "x increases");
+        }
+      }
+    });
+    test("segments chain except at gaps and bridges", () => {
+      for (let i = 0; i < Tracks.count; i++) {
+        const g = Tracks.build(i);
+        const holes = g.gaps.length + g.bridges.length;
+        let breaks = 0;
+        for (let k = 1; k < g.segments.length; k++) {
+          const a = g.segments[k - 1], b = g.segments[k];
+          if (Math.abs(a.x1 - b.x0) > 1e-9 || Math.abs(a.y1 - b.y0) > 1e-9) breaks++;
+        }
+        ok(breaks === holes, `level ${i}: ${breaks} breaks, ${holes} holes`);
+      }
+    });
+    test("level features", () => {
+      ok(Tracks.build(2).gaps.length >= 3, "pitfalls has gaps");
+      ok(Tracks.build(3).bridges.length === 2, "two bridges");
+      const kinds = new Set(Tracks.build(4).segments.map(s => s.kind));
+      ok(kinds.has("ice") && kinds.has("grip"), "friction kinds");
+      const steep = Math.max(...Tracks.build(1).segments.map(s => Math.abs(Math.atan2(s.y1 - s.y0, s.x1 - s.x0))));
+      near(steep * 180 / Math.PI, 35, 0.01, "steepest slope");
+    });
+    test("bridge planks span the gap with a sag", () => {
+      const b = { x0: 10, x1: 18, y0: 2, y1: 2 };
+      const p = Tracks.bridgePlanks(b);
+      ok(p.length === 17, "16 planks -> 17 points, got " + p.length);
+      near(p[0].x, 10, 1e-9); near(p[0].y, 2, 1e-9);
+      near(p[p.length - 1].x, 18, 1e-6); near(p[p.length - 1].y, 2, 1e-6);
+      ok(Math.min(...p.map(q => q.y)) < 2 - 0.3, "sags");
+      const lens = [];
+      for (let k = 1; k < p.length; k++) lens.push(Math.hypot(p[k].x - p[k - 1].x, p[k].y - p[k - 1].y));
+      ok(Math.max(...lens) - Math.min(...lens) < 0.01, "even planks");
+    });
+    test("groundYAt interpolates and covers gaps", () => {
+      const g = Tracks.build(0);
+      near(Tracks.groundYAt(g, -5), 0, 1e-9, "run-up");
+      const s = g.segments[3];
+      near(Tracks.groundYAt(g, (s.x0 + s.x1) / 2), (s.y0 + s.y1) / 2, 1e-9, "mid segment");
+      const gp = Tracks.build(2).gaps[0];
+      near(Tracks.groundYAt(Tracks.build(2), (gp.x0 + gp.x1) / 2), Math.min(gp.y0, gp.y1), 1e-9, "gap");
+      near(Tracks.groundYAt(g, 1e6), g.segments[g.segments.length - 1].y1, 1e-9, "beyond end");
+    });
+    test("scoreFor maps 0..10 and clamps", () => {
+      const g = { scoreStartX: 0, scoreEndX: 100 };
+      ok(Score.scoreFor(-50, g) === 0, "before");
+      ok(Score.scoreFor(0, g) === 0, "start");
+      ok(Score.scoreFor(9.99, g) === 0, "just under 1");
+      ok(Score.scoreFor(10, g) === 1, "exactly 1");
+      ok(Score.scoreFor(55, g) === 5, "mid");
+      ok(Score.scoreFor(100, g) === 10, "end");
+      ok(Score.scoreFor(500, g) === 10, "after");
+    });
+    const flatGeom = () => ({ scoreStartX: 0, scoreEndX: 100, minY: 0,
+      segments: [{ x0: -10, y0: 0, x1: 200, y1: 0, kind: "normal" }], gaps: [], bridges: [] });
+    test("monitor: steady progress is fine, score never drops", () => {
+      const m = new RunMonitor(flatGeom());
+      let r = null;
+      for (let i = 0; i < 600 && !r; i++) r = m.update(1 / 60, { x: i * 0.05, y: 1, angle: 0 });
+      ok(r === null, "got " + r);
+      const s = m.score;
+      m.update(1 / 60, { x: 0, y: 1, angle: 0 });
+      ok(m.score === s && s === 2, "score kept " + m.score);
+    });
+    test("monitor: no progress for 3 s is stuck", () => {
+      const m = new RunMonitor(flatGeom());
+      let r = null, t = 0;
+      while (!r && t < 10) { r = m.update(1 / 60, { x: 5 + 0.1 * Math.sin(t * 5), y: 1, angle: 0 }); t += 1 / 60; }
+      ok(r === "stuck", "got " + r);
+      near(t, 3, 0.1, "after ~3 s");
+    });
+    test("monitor: upside down 1.5 s is flipped, brief flip is not", () => {
+      let m = new RunMonitor(flatGeom()), r = null;
+      for (let i = 0; i < 60; i++) r = r || m.update(1 / 60, { x: i * 0.1, y: 1, angle: Math.PI });
+      for (let i = 0; i < 60; i++) r = r || m.update(1 / 60, { x: 6 + i * 0.1, y: 1, angle: 0 });
+      ok(r === null, "brief flip " + r);
+      m = new RunMonitor(flatGeom()); r = null;
+      let i = 0;
+      while (!r && i < 300) { r = m.update(1 / 60, { x: i * 0.1, y: 1, angle: -3 }); i++; }
+      ok(r === "flipped" && i >= 90 && i <= 92, "flipped at " + i + " " + r);
+    });
+    test("monitor: falling into a pit, and win at 10", () => {
+      const g = Tracks.build(2), gp = g.gaps[0];
+      const m = new RunMonitor(g);
+      ok(m.update(1 / 60, { x: (gp.x0 + gp.x1) / 2, y: Math.min(gp.y0, gp.y1) - 4.5, angle: 0 }) === "fell", "pit");
+      const m2 = new RunMonitor(flatGeom());
+      ok(m2.update(1 / 60, { x: -100, y: -6, angle: 0 }) === "fell", "below minY");
+      const m3 = new RunMonitor(flatGeom());
+      ok(m3.update(1 / 60, { x: 100, y: 1, angle: 0 }) === "win", "win");
+    });
+    test("sliders: defaults in range, clamp handles junk", () => {
+      const d = VehicleConfig.defaults();
+      ok(VehicleConfig.SLIDERS.length === 11, "11 sliders");
+      for (const s of VehicleConfig.SLIDERS) ok(d[s.key] >= s.min && d[s.key] <= s.max && Number.isInteger(d[s.key]), s.key);
+      const c = VehicleConfig.clamp({ rearRadius: 99, frontRadius: -4, motorSpeed: "7", cargo: NaN, fuel: 2.6, bogus: 1 });
+      ok(c.rearRadius === 12 && c.frontRadius === 3 && c.motorSpeed === 7, "clamped");
+      ok(c.cargo === d.cargo && c.fuel === 3 && !("bogus" in c), "junk");
+      ok(JSON.stringify(VehicleConfig.clamp(null)) === JSON.stringify(d), "null -> defaults");
+    });
+    test("default spec reproduces the Car6 vehicle", () => {
+      const s = VehicleConfig.toPhysicsSpec(VehicleConfig.defaults());
+      near(s.chassis.w, 4, 1e-9); near(s.chassis.h, 0.4, 1e-9);
+      near(s.wheels[0].x, -1.2, 1e-9); near(s.wheels[1].x, 1.2, 1e-9);
+      near(s.wheels[0].r, 0.5, 1e-9); near(s.wheels[0].y, -0.2 - 0.8, 1e-9);
+      ok(s.wheels[0].type === "hex" && s.cargo.length === 4, "hex wheels, 4 cargo");
+      near(s.motor.torque, 80, 1e-9);
+    });
+    test("cargo never overlaps and stays between the posts", () => {
+      for (let w = 2; w <= 6; w++) for (let n = 0; n <= 6; n++) {
+        const s = VehicleConfig.toPhysicsSpec({ ...VehicleConfig.defaults(), chassisWidth: w, cargo: n });
+        ok(s.cargo.length === n, "count");
+        const inner = w / 2 - 0.2;
+        for (let k = 0; k < n; k++) {
+          const c = s.cargo[k];
+          ok(c.x - c.w / 2 >= -inner - 1e-9 && c.x + c.w / 2 <= inner + 1e-9, `w${w} n${n} block ${k} out`);
+          if (k > 0) { const p = s.cargo[k - 1]; ok(p.x + p.w / 2 <= c.x - c.w / 2 + 1e-9, "overlap"); }
+          near(c.y - c.h / 2, s.chassis.h / 2 + 0.01, 1e-9, "rests on bed");
+        }
+      }
+    });
+    test("save sanitize survives junk", () => {
+      const f = Save.fresh();
+      ok(f.unlocked === 1 && f.level === 0 && f.best.length === 5 && f.muted === false, "fresh");
+      const s = Save.sanitize({ values: { cargo: 99 }, unlocked: 42, best: [3, "x", 99], level: 7, muted: 1 });
+      ok(s.values.cargo === 6 && s.unlocked === 5, "values/unlocked");
+      ok(JSON.stringify(s.best) === "[3,0,10,0,0]", "best " + JSON.stringify(s.best));
+      ok(s.level === 4 && s.muted === true, "level/muted");
+      for (const junk of [null, 5, "x", [], { unlocked: -3, level: -1 }]) {
+        const j = Save.sanitize(junk);
+        ok(j.unlocked === 1 && j.level === 0 && j.best.length === 5, "junk " + JSON.stringify(junk));
+      }
+    });
+
+    if (planck) LithiumTests.physics(planck, test, ok);
+    console.log(`${pass} passed, ${fail} failed`);
+    return fail === 0;
+  },
+  physics() {},
+};
+</script>
+</body>
+</html>
