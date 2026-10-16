@@ -546,6 +546,10 @@ mkdir -p "$SCRATCH/planck" && curl -s -o "$SCRATCH/planck/planck.mjs" https://cd
       for (let i = 0; i < Tracks.count; i++) {
         const r = Sim.runHeadless(pl, i, SOLUTIONS[i].values, { maxT: 120 });
         ok(r.result === "win", `level ${i + 1}: ${JSON.stringify(r)}`);
+        if (i > 0) {
+          const d = Sim.runHeadless(pl, i, VehicleConfig.defaults(), { maxT: 120 });
+          ok(d.result !== "win", `level ${i + 1} is too easy: the default car wins`);
+        }
       }
     });
     test("extreme sliders stay finite", () => {
@@ -1501,7 +1505,7 @@ Run for each level that failed in Task 2 Step 5:
 
 - If winners exist: put one (prefer one that differs from the defaults in only a few sliders — readable as a "lesson", e.g. "gear wheels and low speed") into `SOLUTIONS[level]` with a short `note`.
 - If no winner in 300 tries: the level is too hard. Soften it in `LEVELS` (lower the steepest angles by 5°, shorten the widest gap by 0.5 m, or shorten an ice stretch) and rerun. Keep each level's character (steep stays steep, pits stay pits, two bridges, ice + grip). Keep the 35° steepest slope test in sync if the max angle changes.
-- Also check difficulty from the other side: the default car must **not** win levels 2–5 (`Sim.runHeadless(pl, i, VehicleConfig.defaults())`); otherwise the slider puzzle is empty. Make the level harder if the default car wins it.
+- The same test also asserts the default car does **not** win levels 2–5; otherwise the slider puzzle is empty. If it fails that way, make the level harder.
 
 - [ ] **Step 2: Run the full suite with physics**
 
