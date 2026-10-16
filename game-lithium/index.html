@@ -4,8 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lithium</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0000ff; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #fff; user-select: none; }
+  #view { position: fixed; inset: 0; display: block; }
+</style>
 </head>
 <body>
+<canvas id="view"></canvas>
 <script id="shared-code">
 // ---- Lithium shared code: pure logic, no DOM, no three.js. planck is injected where needed. ----
 const RUNUP = 8;     // flat metres before score 0
@@ -565,6 +571,192 @@ const LithiumTests = {
     });
   },
 };
+</script>
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js";
+import * as planck from "https://cdn.jsdelivr.net/npm/planck@1.5.1/dist/planck.mjs";
+
+const C = {
+  sky: 0x0000ff, track: 0xffff00, ice: 0xffff99, grip: 0xffcc00, black: 0x000000,
+  tyre: 0x5a5a5a, hub: 0xe0e0e0, gearRing: 0x6e6e6e, gearDisc: 0x9a9a9a, cargo: 0x00ff00,
+  red: 0xff0000, green: 0x00ff00, spark: 0xffff00,
+};
+const KIND_COLOR = { normal: C.track, ice: C.ice, grip: C.grip };
+const MIN_VIEW_H = 9, VIEW_W = 18;
+
+const canvas = document.getElementById("view");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+renderer.setClearColor(C.sky);
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
+
+// At least VIEW_W metres wide and MIN_VIEW_H metres tall, whatever the window shape.
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(w, h);
+  let halfW = VIEW_W / 2, halfH = halfW * h / w;
+  if (halfH * 2 < MIN_VIEW_H) { halfH = MIN_VIEW_H / 2; halfW = halfH * w / h; }
+  camera.left = -halfW; camera.right = halfW; camera.top = halfH; camera.bottom = -halfH;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", () => { resize(); updateCamera(0, true); render(); });
+
+const materials = new Map();
+function M(color) {
+  if (!materials.has(color)) materials.set(color, new THREE.MeshBasicMaterial({ color }));
+  return materials.get(color);
+}
+function polyMesh(points, color, z) {
+  const shape = new THREE.Shape(points.map(p => new THREE.Vector2(p.x, p.y)));
+  const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), M(color));
+  m.position.z = z;
+  return m;
+}
+function rectPts(cx, cy, hx, hy) {
+  return [{ x: cx - hx, y: cy - hy }, { x: cx + hx, y: cy - hy }, { x: cx + hx, y: cy + hy }, { x: cx - hx, y: cy + hy }];
+}
+function circleMesh(r, color, z) {
+  const m = new THREE.Mesh(new THREE.CircleGeometry(r, 48), M(color));
+  m.position.z = z;
+  return m;
+}
+function ngonPts(r, n, rot = 0) {
+  const pts = [];
+  for (let i = 0; i < n; i++) { const a = rot + i * 2 * Math.PI / n; pts.push({ x: r * Math.cos(a), y: r * Math.sin(a) }); }
+  return pts;
+}
+// Gear outline like the prototype's cog wheels: flat-topped teeth around a disc.
+function gearPts(rOut, rIn, teeth) {
+  const pts = [], step = 2 * Math.PI / teeth;
+  for (let i = 0; i < teeth; i++) {
+    const a = i * step;
+    for (const [f, r] of [[0, rIn], [0.15, rOut], [0.5, rOut], [0.65, rIn]]) {
+      pts.push({ x: r * Math.cos(a + f * step), y: r * Math.sin(a + f * step) });
+    }
+  }
+  return pts;
+}
+function spoke(r, z) { return polyMesh([{ x: 0, y: -0.03 }, { x: r, y: -0.03 }, { x: r, y: 0.03 }, { x: 0, y: 0.03 }], C.black, z); }
+
+function wheelObject(w) {
+  const g = new THREE.Group();
+  if (w.type === "gear") {
+    g.add(polyMesh(gearPts(w.r, w.r * 0.86, Math.max(8, Math.round(w.r * 20))), C.gearRing, 2));
+    g.add(circleMesh(w.r * 0.78, C.gearDisc, 2.1));
+    g.add(spoke(w.r * 0.75, 2.2));
+  } else if (w.type === "hex") {
+    g.add(circleMesh(w.r, C.tyre, 2));
+    g.add(polyMesh(ngonPts(w.r * 0.42, 6, 0.3), C.hub, 2.1));
+  } else {
+    g.add(circleMesh(w.r, C.tyre, 2));
+    g.add(circleMesh(w.r * 0.35, C.hub, 2.1));
+    g.add(spoke(w.r * 0.9, 2.2));
+  }
+  return g;
+}
+
+// Scene objects: `static` never moves (track, walls); `dynamic` follows a planck body.
+const world = { static: [], dynamic: [] };
+let chassisGroup = null, flameGroup = null;
+
+function buildWorld() {
+  const geom = sim.geom, spec = sim.spec;
+  for (const s of geom.segments) {
+    // Adjacent quads at different angles leave the small notches the SpriteKit track showed.
+    const m = polyMesh([{ x: s.x0, y: s.y0 }, { x: s.x1, y: s.y1 }, { x: s.x1, y: s.y1 - BAND }, { x: s.x0, y: s.y0 - BAND }], KIND_COLOR[s.kind], 0);
+    world.static.push(m);
+  }
+  for (const wl of geom.walls) {
+    const dir = wl.x0 < 0 ? -1 : 1;
+    world.static.push(polyMesh(rectPts(wl.x0 + dir * BAND / 2, (wl.y0 + wl.y1) / 2 - BAND / 2, BAND / 2, (wl.y1 - wl.y0) / 2 + BAND / 2), C.track, 0));
+  }
+  for (const o of world.static) scene.add(o);
+
+  chassisGroup = new THREE.Group();
+  chassisGroup.add(polyMesh(rectPts(0, 0, spec.chassis.w / 2, spec.chassis.h / 2), C.black, 1));
+  for (const p of spec.posts) chassisGroup.add(polyMesh(rectPts(p.x, p.y, p.hx, p.hy), C.black, 1));
+  for (const l of spec.legs) chassisGroup.add(polyMesh(rectPts(l.x, (l.top + l.bottom) / 2, l.hw, (l.top - l.bottom) / 2), C.black, 0.9));
+  flameGroup = new THREE.Group();
+  flameGroup.visible = false;
+  chassisGroup.add(flameGroup);
+  world.dynamic.push({ body: sim.chassis, obj: chassisGroup });
+  sim.wheels.forEach((b, i) => world.dynamic.push({ body: b, obj: wheelObject(spec.wheels[i]) }));
+  sim.cargo.forEach((b, i) => {
+    const c = spec.cargo[i];
+    world.dynamic.push({ body: b, obj: polyMesh(rectPts(0, 0, c.w / 2, c.h / 2), C.cargo, 1.5) });
+  });
+  for (const b of sim.planks) {
+    const len = b.getUserData().len;
+    world.dynamic.push({ body: b, obj: polyMesh(rectPts(0, -0.1, len / 2 - 0.02, 0.1), C.track, 0.2) });
+  }
+  for (const d of world.dynamic) scene.add(d.obj);
+  syncBodies();
+}
+
+function disposeWorld() {
+  const all = [...world.static, ...world.dynamic.map(d => d.obj)];
+  for (const o of all) {
+    scene.remove(o);
+    o.traverse(n => { if (n.geometry) n.geometry.dispose(); });  // materials are shared, kept
+  }
+  world.static = []; world.dynamic = [];
+}
+
+function syncBodies() {
+  for (const d of world.dynamic) {
+    const p = d.body.getPosition();
+    d.obj.position.set(p.x, p.y, 0);
+    d.obj.rotation.z = d.body.getAngle();
+  }
+}
+
+const cam = { x: 0, y: 0 };
+function panelWorldWidth() {
+  const panel = document.getElementById("panel");
+  if (!panel || mode !== "garage") return 0;
+  return panel.getBoundingClientRect().right / innerWidth * (camera.right - camera.left);
+}
+function updateCamera(dt, snap) {
+  const s = sim.state();
+  const tx = mode === "garage" ? s.x - panelWorldWidth() / 2 : s.x + 2;
+  const ty = Math.max(s.y + 0.5, sim.geom.minY - 2);
+  if (snap) { cam.x = tx; cam.y = ty; }
+  else { const k = 1 - Math.exp(-dt * 4); cam.x += (tx - cam.x) * k; cam.y += (ty - cam.y) * k; }
+  camera.position.set(cam.x, cam.y, 5);
+}
+
+function render() {
+  syncBodies();
+  renderer.render(scene, camera);
+}
+
+// ---- state (Task 4 replaces the bootstrap below with the game flow) ----
+let level = 0, values = VehicleConfig.defaults(), mode = "garage", sim = null;
+function rebuild() {
+  if (sim) disposeWorld();
+  sim = createSim(planck, level, values);
+  buildWorld();
+  updateCamera(0, true);
+}
+resize();
+rebuild();
+const STEP = 1 / 60;
+let acc = 0, last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  acc += dt;
+  let n = 0;
+  while (acc >= STEP && n < 5) { sim.step(); acc -= STEP; n++; }
+  if (n === 5) acc = 0;  // drop the backlog after a stall instead of catching up
+  updateCamera(dt, false);
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.__lithium = { get sim() { return sim; }, render, THREE, planck };
 </script>
 </body>
 </html>
