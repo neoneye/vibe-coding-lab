@@ -8,10 +8,56 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0000ff; }
   body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #fff; user-select: none; }
   #view { position: fixed; inset: 0; display: block; }
+  #score { position: fixed; top: 3vh; left: 0; right: 0; text-align: center; color: #ff0; font-weight: 700;
+    font-size: clamp(56px, 13vh, 150px); line-height: 1; pointer-events: none; }
+  #caption { position: fixed; top: calc(3vh + clamp(56px, 13vh, 150px) + 6px); left: 0; right: 0; text-align: center;
+    color: #ff0; font-weight: 700; font-size: clamp(16px, 2.6vh, 26px); pointer-events: none; }
+  #fuel { position: fixed; top: calc(3vh + clamp(56px, 13vh, 150px) + 44px); left: 50%; width: 160px; margin-left: -80px;
+    height: 6px; background: rgba(255,255,255,0.25); display: none; pointer-events: none; }
+  #fuelFill { height: 100%; width: 100%; background: #ff0; }
+  #go { position: fixed; bottom: 4vh; left: 50%; transform: translateX(-50%); background: none; border: 0; padding: 0 0.2em;
+    color: #ff0; font: 700 clamp(56px, 12vh, 140px)/1 "Helvetica Neue", Helvetica, Arial, sans-serif; cursor: pointer; }
+  #go:focus-visible { outline: 3px solid #fff; }
+  #panel { position: fixed; top: 0; left: 0; bottom: 0; width: 300px; padding: 18px 20px; box-sizing: border-box;
+    background: rgba(0, 0, 90, 0.35); overflow-y: auto; }
+  #panel.hidden, #help.hidden { display: none; }
+  #levels { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  #levels button { flex: 1 1 100%; text-align: left; background: none; border: 1px solid rgba(255,255,255,0.35);
+    color: #fff; font: 13px "Helvetica Neue", Helvetica, Arial, sans-serif; padding: 5px 8px; cursor: pointer; }
+  #levels button.current { border-color: #ff0; color: #ff0; }
+  #levels button:disabled { opacity: 0.35; cursor: default; }
+  .row { margin: 0 0 10px; font-size: 13px; }
+  .row .top { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .row .val { color: #ff0; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: none; margin: 0; }
+  input[type=range]::-webkit-slider-runnable-track { height: 2px;
+    background: linear-gradient(to right, #3d8bff 0 var(--p), #c8c8c8 var(--p) 100%); }
+  input[type=range]::-moz-range-track { height: 2px; background: #c8c8c8; }
+  input[type=range]::-moz-range-progress { height: 2px; background: #3d8bff; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -9px;
+    border-radius: 50%; background: #fff; border: 0; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+  input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 0; }
+  #reset { background: none; border: 0; color: rgba(255,255,255,0.7); font-size: 12px; text-decoration: underline;
+    cursor: pointer; padding: 0; }
+  #help { position: fixed; left: 12px; bottom: 8px; font-size: 12px; color: rgba(255,255,255,0.75); pointer-events: none; }
+  #panel:not(.hidden) ~ #help { left: 312px; }
+  #stats { position: fixed; right: 6px; bottom: 6px; padding: 2px 6px; background: rgba(0,0,0,0.25);
+    font: 11px Menlo, Monaco, monospace; color: #fff; pointer-events: none; }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
+<div id="score">0</div>
+<div id="caption"></div>
+<div id="fuel"><div id="fuelFill"></div></div>
+<div id="panel">
+  <div id="levels"></div>
+  <div id="sliders"></div>
+  <button id="reset" type="button">reset car</button>
+</div>
+<button id="go" type="button">Start</button>
+<div id="help">Enter start/stop · Space booster · ← → tilt · 1–5 level · M mute</div>
+<div id="stats"></div>
 <script id="shared-code">
 // ---- Lithium shared code: pure logic, no DOM, no three.js. planck is injected where needed. ----
 const RUNUP = 8;     // flat metres before score 0
@@ -732,31 +778,226 @@ function render() {
   renderer.render(scene, camera);
 }
 
-// ---- state (Task 4 replaces the bootstrap below with the game flow) ----
-let level = 0, values = VehicleConfig.defaults(), mode = "garage", sim = null;
+// ---- state ----
+let save = Save.fresh();
+try { save = Save.sanitize(JSON.parse(localStorage.getItem(Save.KEY) || "null")); } catch (e) { /* no storage */ }
+function persist() {
+  save.values = values; save.level = level;
+  try { localStorage.setItem(Save.KEY, JSON.stringify(save)); } catch (e) { /* no storage */ }
+}
+let level = save.level, values = save.values, mode = "garage", sim = null, monitor = null;
+let lastResult = "", lastScore = 0;
+
+const ui = {
+  score: document.getElementById("score"), caption: document.getElementById("caption"),
+  fuel: document.getElementById("fuel"), fuelFill: document.getElementById("fuelFill"),
+  panel: document.getElementById("panel"), levels: document.getElementById("levels"),
+  sliders: document.getElementById("sliders"), reset: document.getElementById("reset"),
+  go: document.getElementById("go"), help: document.getElementById("help"), stats: document.getElementById("stats"),
+};
+
 function rebuild() {
   if (sim) disposeWorld();
   sim = createSim(planck, level, values);
   buildWorld();
   updateCamera(0, true);
 }
-resize();
-rebuild();
+
+// Sliders: one row per VehicleConfig.SLIDERS entry; any change rebuilds the preview car.
+const sliderInputs = {};
+for (const s of VehicleConfig.SLIDERS) {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `<div class="top"><span>${s.label}</span><span class="val"></span></div>`;
+  const input = document.createElement("input");
+  Object.assign(input, { type: "range", min: s.min, max: s.max, step: 1 });
+  input.setAttribute("aria-label", s.label);
+  input.addEventListener("input", () => {
+    values = { ...values, [s.key]: Number(input.value) };
+    syncSliders(); persist(); rebuild();
+  });
+  row.appendChild(input);
+  ui.sliders.appendChild(row);
+  sliderInputs[s.key] = { input, val: row.querySelector(".val"), s };
+}
+function syncSliders() {
+  for (const { input, val, s } of Object.values(sliderInputs)) {
+    input.value = values[s.key];
+    input.style.setProperty("--p", ((values[s.key] - s.min) / (s.max - s.min) * 100) + "%");
+    val.textContent = s.show(values[s.key]);
+  }
+}
+ui.reset.addEventListener("click", () => { values = VehicleConfig.defaults(); syncSliders(); persist(); rebuild(); });
+
+function renderLevels() {
+  ui.levels.innerHTML = "";
+  for (let i = 0; i < Tracks.count; i++) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = `${i + 1}  ${Tracks.name(i)}` + (i < save.unlocked ? `  ·  best ${save.best[i]}` : "");
+    b.disabled = i >= save.unlocked;
+    if (i === level) b.classList.add("current");
+    b.addEventListener("click", () => setLevel(i));
+    ui.levels.appendChild(b);
+  }
+}
+function setLevel(i) {
+  if (mode !== "garage" || i < 0 || i >= save.unlocked) return;
+  level = i; lastResult = ""; lastScore = 0;
+  persist(); renderLevels(); rebuild(); updateHud();
+}
+
+function updateHud() {
+  ui.score.textContent = mode === "garage" ? lastScore : monitor ? monitor.score : 0;
+  ui.caption.textContent = mode === "garage"
+    ? (lastResult || `level ${level + 1} · ${Tracks.name(level)}` + (save.best[level] ? ` · best ${save.best[level]}` : ""))
+    : mode === "over" ? lastResult : "";
+  const showFuel = mode === "run" && sim.spec.fuel > 0;
+  ui.fuel.style.display = showFuel ? "block" : "none";
+  if (showFuel) ui.fuelFill.style.width = (sim.fuel / sim.spec.fuel * 100) + "%";
+  ui.go.textContent = mode === "run" ? "Stop" : "Start";
+  ui.go.style.visibility = mode === "over" || mode === "win" ? "hidden" : "visible";
+  ui.panel.classList.toggle("hidden", mode !== "garage");
+}
+
+function startRun() {
+  if (document.activeElement) document.activeElement.blur();
+  rebuild();
+  sim.start();
+  monitor = new RunMonitor(sim.geom);
+  mode = "run";
+  sound.ensure();
+  updateHud();
+}
+function stopRun() {
+  mode = "garage"; monitor = null;
+  rebuild(); renderLevels(); updateHud();
+}
+function recordBest(score) {
+  if (score > save.best[level]) save.best[level] = score;
+  persist();
+}
+let overTimer = 0;
+function endRun(reason) {
+  mode = "over";
+  lastScore = monitor.score;
+  lastResult = `out at ${monitor.score} · ${reason}`;
+  recordBest(monitor.score);
+  updateHud();
+  clearTimeout(overTimer);
+  overTimer = setTimeout(() => { if (mode === "over") stopRun(); }, 1500);
+}
+// The prototype's winnerSequence: the background flashes white/black, then the next level opens.
+function winRun() {
+  mode = "win";
+  recordBest(10);
+  lastScore = 10;
+  updateHud();
+  sound.win();
+  const seq = [1, 0, 1, 0, 1, 0, 1, 0, 1];
+  let i = 0;
+  const flash = () => {
+    renderer.setClearColor(seq[i] ? 0xffffff : 0x000000);
+    render();
+    i++;
+    if (i < seq.length) { setTimeout(flash, i < 2 ? 50 : 30); return; }
+    setTimeout(() => {
+      renderer.setClearColor(C.sky);
+      const next = level + 1;
+      if (next < Tracks.count) {
+        save.unlocked = Math.max(save.unlocked, next + 1);
+        level = next; lastScore = 0; lastResult = `level ${next} cleared!`;
+      } else {
+        lastResult = "all tracks done!";
+      }
+      persist();
+      stopRun();
+    }, 300);
+  };
+  flash();
+}
+
+// ---- input ----
+const keys = new Set();
+addEventListener("keydown", e => {
+  if (e.code === "Enter" || e.code === "NumpadEnter") {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (mode === "garage") startRun(); else if (mode === "run") stopRun();
+    return;
+  }
+  if (e.code === "KeyM") { sound.toggleMute(); save.muted = sound.muted; persist(); return; }
+  if (e.code === "KeyR" && mode === "run") { startRun(); return; }
+  if (mode === "garage" && /^Digit[1-5]$/.test(e.code)) { setLevel(Number(e.code.slice(5)) - 1); return; }
+  if (mode === "run" && ["Space", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.code)) {
+    e.preventDefault();
+    keys.add(e.code);
+  }
+});
+addEventListener("keyup", e => keys.delete(e.code));
+addEventListener("blur", () => keys.clear());
+ui.go.addEventListener("click", () => { if (mode === "garage") startRun(); else if (mode === "run") stopRun(); });
+
+// ---- loop ----
+function afterStep(r) { /* Task 5: sound and sparks */ }
+function drawEffects(dt) { /* Task 5: flame and sparks */ }
+const sound = { ensure() {}, win() {}, toggleMute() {}, muted: save.muted, update() {} };  // Task 5 replaces
+
+function tick() {
+  if (mode === "garage") { sim.step(); return; }
+  if (mode !== "run") return;  // over / win: the car is frozen
+  const input = { boost: keys.has("Space"), tilt: (keys.has("ArrowRight") ? 1 : 0) - (keys.has("ArrowLeft") ? 1 : 0) };
+  const r = sim.step(input);
+  afterStep(r);
+  const res = monitor.update(1 / 60, sim.state());
+  if (res === "win") winRun(); else if (res) endRun(res);
+}
+
 const STEP = 1 / 60;
-let acc = 0, last = performance.now();
+let acc = 0, last = performance.now(), fps = 60, statT = 0;
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   acc += dt;
   let n = 0;
-  while (acc >= STEP && n < 5) { sim.step(); acc -= STEP; n++; }
+  while (acc >= STEP && n < 5) { tick(); acc -= STEP; n++; }
   if (n === 5) acc = 0;  // drop the backlog after a stall instead of catching up
   updateCamera(dt, false);
+  drawEffects(dt);
   render();
+  if (mode === "run") updateHud();
+  if (dt > 0) fps += (1 / dt - fps) * 0.05;
+  statT += dt;
+  if (statT > 0.25) {
+    statT = 0;
+    let nodes = 0;
+    scene.traverse(() => nodes++);
+    ui.stats.textContent = `nodes:${nodes} draws:${renderer.info.render.calls}  ${fps.toFixed(1)} fps`;
+  }
   requestAnimationFrame(frame);
 }
+
+resize();
+syncSliders();
+renderLevels();
+rebuild();
+updateHud();
 requestAnimationFrame(frame);
-window.__lithium = { get sim() { return sim; }, render, scene, camera, THREE, planck };
+
+// Debug handle for headless screenshots (rAF does not advance under virtual time).
+window.__lithium = {
+  get sim() { return sim; }, get mode() { return mode; }, scene, camera, THREE, planck,
+  start: startRun, setLevel, render,
+  setValues(v) { values = VehicleConfig.clamp(v); syncSliders(); rebuild(); },
+  step(n, input = {}) {
+    for (let i = 0; i < n; i++) {
+      if (mode === "run") { const r = sim.step(input); afterStep(r); const res = monitor.update(1 / 60, sim.state()); if (res) { if (res === "win") winRun(); else endRun(res); break; } }
+      else sim.step();
+      updateCamera(1 / 60, false);
+    }
+    updateHud(); drawEffects(0); render();
+  },
+};
 </script>
 </body>
 </html>
