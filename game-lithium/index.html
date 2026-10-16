@@ -67,7 +67,8 @@ const BAND = 0.6;    // drawn thickness of the yellow track band
 const FRICTION = { normal: 0.9, ice: 0.05, grip: 1.6 };
 
 // Each level is the 2016 prototype's `slopes` format: segment angles in degrees, each segment segLen
-// metres wide. Objects add features: {a, f} friction kind, {gap: w} a pit, {bridge: w} a rope bridge.
+// metres wide. Objects add features: {a, f} friction kind, {gap: w} a pit, {bridge: w, sag} a rope bridge
+// (sag = depth of its middle as a fraction of the span, default 0.06).
 const LEVELS = [
   { name: "Bumps", segLen: 3,
     slopes: [0, 5, -5, 0, 8, 4, -6, -8, 0, 6, 10, 0, -10, -4, 0, 5, 8, -3, -8, 0, 6, -6, 0, 10, 0, -8, 0, 4, 0, 0] },
@@ -76,7 +77,7 @@ const LEVELS = [
   { name: "Pitfalls", segLen: 3,
     slopes: [0, 5, 0, { gap: 1.5 }, 0, -5, 5, 0, { gap: 2.5 }, 0, 10, 0, -10, { gap: 2 }, 0, 0, 15, 0, { gap: 3.5 }, -10, 0, 5, 0, { gap: 2.5 }, 0, 0] },
   { name: "Rope bridge", segLen: 3,
-    slopes: [0, 0, 5, 0, { bridge: 8 }, 0, -5, 10, 15, 0, { bridge: 12 }, 0, -10, 0, 5, 0, 0] },
+    slopes: [0, 0, 5, 0, { bridge: 8, sag: 0.1 }, 0, -5, 10, 15, 0, { bridge: 12, sag: 0.15 }, 0, -10, 0, 5, 0, 0] },
   { name: "Friction varies", segLen: 3,
     slopes: [0, 0, { a: 10, f: "ice" }, { a: 15, f: "ice" }, 0, { a: 20, f: "grip" }, { a: 30, f: "grip" }, 0, -10,
       { a: -20, f: "ice" }, 0, { a: 15, f: "ice" }, 25, 0, { a: 30, f: "grip" }, { a: 35, f: "grip" }, 0,
@@ -101,7 +102,8 @@ const Tracks = {
       if (typeof e === "object" && (e.gap || e.bridge)) {
         const w = e.gap || e.bridge;
         const drop = e.gap ? (e.drop ?? 0.3) : 0;
-        (e.gap ? gaps : bridges).push({ x0: x, x1: x + w, y0: y, y1: y - drop });
+        if (e.gap) gaps.push({ x0: x, x1: x + w, y0: y, y1: y - drop });
+        else bridges.push({ x0: x, x1: x + w, y0: y, y1: y, sag: e.sag ?? 0.06 });
         x += w; y -= drop; cur = null;
         continue;
       }
@@ -122,9 +124,9 @@ const Tracks = {
       spawnX: -RUNUP / 2, scoreStartX: 0, scoreEndX, endX: x + RUNOUT, minY };
   },
 
-  // Plank joint points along a sagging parabola (sag 6% of span), ~0.5 m planks of equal chord length.
+  // Plank joint points along a sagging parabola (sag b.sag of span, default 6%), ~0.5 m planks of equal chord length.
   bridgePlanks(b) {
-    const w = b.x1 - b.x0, sag = 0.06 * w, N = 400;
+    const w = b.x1 - b.x0, sag = (b.sag ?? 0.06) * w, N = 400;
     const pts = [], cum = [0];
     for (let i = 0; i <= N; i++) {
       const t = i / N;
@@ -324,21 +326,34 @@ function createSim(pl, levelIndex, values, opts = {}) {
     return b;
   });
   const mass = [chassis, ...wheels, ...cargo].reduce((s, b) => s + b.getMass(), 0);
+  // Rotational inertia of the whole car about the chassis origin, so tilt turns big and small cars alike.
+  const inertia = [chassis, ...wheels, ...cargo].reduce((s, b) => {
+    const d = pl.Vec2.sub(b.getPosition(), chassis.getPosition());
+    return s + b.getInertia() + (b === chassis ? 0 : b.getMass() * pl.Vec2.dot(d, d));
+  }, 0);
 
-  // Strongest contact impulse on the car during the last step, for the thump sound.
+  // Fastest approach speed (m/s) of a car part (chassis, wheel, cargo) hitting the world (ground or
+  // plank) during the last step, for the thump sound. Car-internal contacts (cargo on the chassis) do
+  // not count. Measured when a contact begins, before the solver, so the suspension cannot hide it.
   let impact = 0;
   const carKinds = new Set(["chassis", "wheel", "cargo"]);
-  world.on("post-solve", (contact, imp) => {
-    const ka = contact.getFixtureA().getBody().getUserData()?.kind;
-    const kb = contact.getFixtureB().getBody().getUserData()?.kind;
-    if (!carKinds.has(ka) && !carKinds.has(kb)) return;
-    const n = (imp.normalImpulses[0] || 0) + (imp.normalImpulses[1] || 0);
-    if (n > impact) impact = n;
+  world.on("begin-contact", contact => {
+    const ba = contact.getFixtureA().getBody(), bb = contact.getFixtureB().getBody();
+    if (carKinds.has(ba.getUserData()?.kind) === carKinds.has(bb.getUserData()?.kind)) return;
+    const wm = contact.getWorldManifold(null);
+    if (!wm) return;
+    for (let i = 0; i < (wm.pointCount || 0); i++) {
+      const p = wm.points[i];
+      const va = ba.getLinearVelocityFromWorldPoint(p), vb = bb.getLinearVelocityFromWorldPoint(p);
+      const approach = -((vb.x - va.x) * wm.normal.x + (vb.y - va.y) * wm.normal.y);  // normal points A -> B
+      if (approach > impact) impact = approach;
+    }
   });
 
   let fuel = spec.fuel, running = false;
   const BOOST_ACC = 18;  // m/s² of booster thrust per kg of car
-  const TILT_ACC = 6;    // N·m of tilt torque per kg of car
+  const TILT_ACC = 3;    // rad/s² of tilt (torque = TILT_ACC × car inertia): about a quarter turn in 1 s in the air
+  const TILT_MAX_W = 2;  // rad/s: no more tilt torque once the chassis spins this fast in the tilt direction
   const sim = {
     geom, spec, world, chassis, wheels, cargo, planks, mass, t: 0,
     get fuel() { return fuel; },
@@ -361,10 +376,13 @@ function createSim(pl, levelIndex, values, opts = {}) {
         fuel = Math.max(0, fuel - 1 / 60);
         boosting = true;
       }
-      if (running && input.tilt) chassis.applyTorque(-input.tilt * TILT_ACC * mass, true);
+      if (running && input.tilt) {
+        const dir = -Math.sign(input.tilt);  // +tilt (→) = clockwise = nose down
+        if (dir * chassis.getAngularVelocity() < TILT_MAX_W) chassis.applyTorque(dir * TILT_ACC * inertia, true);
+      }
       world.step(1 / 60, 10, 8);
       sim.t += 1 / 60;
-      return { boosting, impact: impact / mass };
+      return { boosting, impact };
     },
     state() {
       const p = chassis.getPosition();
@@ -393,14 +411,15 @@ const Sim = {
   },
 };
 
-// One known-passing slider set per level, sliders only (no booster or tilt input). Level 1 is the
-// default car. Task 6 tunes these by search; the test proves every level is passable.
+// One known-passing slider set per level, sliders only (no booster or tilt input), each a small change
+// from the default car that reads as the level's lesson. Level 1 is the default car. The test proves
+// every level is passable; the default fuel (2 s) is unused by the headless runs.
 const SOLUTIONS = [
   { note: "the Car6 default car", values: VehicleConfig.defaults() },
-  { note: "big grippy wheels, no cargo", values: { ...VehicleConfig.defaults(), rearRadius: 8, frontRadius: 8, wheelType: 2, motorTorque: 8, cargo: 0, chassisWidth: 5, suspension: 3 } },
-  { note: "a long chassis spans the pits", values: { ...VehicleConfig.defaults(), chassisWidth: 6, rearRadius: 7, frontRadius: 7, motorSpeed: 10, motorTorque: 6, wheelType: 2 } },
-  { note: "slow and grippy over the bridges", values: { ...VehicleConfig.defaults(), motorSpeed: 5, wheelType: 2 } },
-  { note: "heavy and fast on ice", values: { ...VehicleConfig.defaults(), wheelType: 2, motorSpeed: 12, motorTorque: 8, cargo: 6 } },
+  { note: "a fast motor charges the 35° climbs", values: { ...VehicleConfig.defaults(), motorSpeed: 13 } },
+  { note: "big wheels at high speed jump the pits", values: { ...VehicleConfig.defaults(), rearRadius: 10, frontRadius: 10, motorSpeed: 12 } },
+  { note: "a long chassis rides over the sagging planks", values: { ...VehicleConfig.defaults(), chassisWidth: 6 } },
+  { note: "gear wheels and more torque on the ice", values: { ...VehicleConfig.defaults(), wheelType: 2, motorTorque: 6 } },
 ];
 
 const LithiumTests = {
@@ -874,6 +893,7 @@ function updateHud() {
 
 function startRun() {
   if (document.activeElement) document.activeElement.blur();
+  lastResult = ""; lastScore = 0;
   rebuild();
   sim.start();
   monitor = new RunMonitor(sim.geom);
@@ -933,14 +953,15 @@ function winRun() {
 const keys = new Set();
 addEventListener("keydown", e => {
   sound.ensure();
+  if (e.metaKey || e.ctrlKey || e.altKey) return;  // leave browser shortcuts (Cmd+R, Cmd+1) alone
   if (e.code === "Enter" || e.code === "NumpadEnter") {
     e.preventDefault();
     if (e.repeat) return;
     if (mode === "garage") startRun(); else if (mode === "run") stopRun();
     return;
   }
-  if (e.code === "KeyM") { sound.toggleMute(); save.muted = sound.muted; persist(); return; }
-  if (e.code === "KeyR" && mode === "run") { startRun(); return; }
+  if (e.code === "KeyM") { if (!e.repeat) { sound.toggleMute(); save.muted = sound.muted; persist(); } return; }
+  if (e.code === "KeyR" && mode === "run") { if (!e.repeat) startRun(); return; }
   if (mode === "garage" && /^Digit[1-5]$/.test(e.code)) { setLevel(Number(e.code.slice(5)) - 1); return; }
   if (mode === "run" && ["Space", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.code)) {
     e.preventDefault();
@@ -980,7 +1001,7 @@ function emitSpark() {
 function afterStep(r) {
   boosting = r.boosting;
   if (boosting && Math.random() < 0.5) emitSpark();
-  if (r.impact > 1.2) sound.thump(r.impact);
+  if (r.impact > 2) sound.thump(r.impact);  // landing faster than 2 m/s
 }
 function drawEffects(dt) {
   if (flameGroup) {
@@ -1131,6 +1152,18 @@ window.__lithium = {
     updateHud(); drawEffects(0); render();
   },
 };
+
+// ?shot=1&level=N&t=SECONDS : start a run on level N and advance it synchronously t seconds (for headless screenshots).
+const q = new URLSearchParams(location.search);
+if (q.has("shot")) {
+  const lv = Math.max(0, Math.min(Tracks.count - 1, Number(q.get("level")) || 0));
+  save.unlocked = Math.max(save.unlocked, lv + 1);
+  level = lv;
+  values = VehicleConfig.clamp(SOLUTIONS[lv].values);
+  syncSliders(); renderLevels();
+  startRun();
+  window.__lithium.step(Math.round((Number(q.get("t")) || 6) * 60), { boost: q.has("boost") });
+}
 </script>
 </body>
 </html>
