@@ -40,7 +40,7 @@ Owner choices:
 ## Game flow
 
 1. **Garage** (initial state). The car stands at the start of the current level's track. Sliders on the
-   left; moving any slider rebuilds the preview car immediately (physics paused, car resting). Level
+   left; moving any slider rebuilds the preview car immediately (physics keeps running with the wheel motors braked, so the new car drops in and settles on its suspension). Level
    picker shows unlocked levels and best score per level. Big "Start" at the bottom (click or Enter).
 2. **Run.** Physics runs at fixed 60 Hz. The wheel motors spin at the slider speed. The camera follows
    the chassis with smoothing; orthographic zoom fits ~20 m of track horizontally. The big number shows
@@ -48,9 +48,10 @@ Owner choices:
 3. **Run ends** when any of:
    - **stuck:** score-distance progress < 0.3 m over the last 3 s;
    - **flipped:** chassis upside down (|angle| > 120°) for 1.5 s;
-   - **fell:** chassis below the track's lowest point minus 5 m.
+   - **fell:** chassis more than 4 m below the track surface at its x (pits), or below the lowest point minus 5 m.
    The car freezes, a small yellow caption ("stuck" / "flipped" / "fell") appears under the number, the
-   best score for the level updates. Start/Enter returns to the garage.
+   best score for the level updates. After 1.5 s the game returns to the garage by itself, keeping the
+   result caption, so the tweak → Start loop stays quick.
 4. **Reaching 10** triggers the win flash, unlocks the next level, and returns to the garage on that
    next level. After level 5 a "all tracks done" caption shows; levels stay replayable.
 
@@ -68,7 +69,7 @@ legs 0.8 m, wheel radius 0.5 m, wheels at ±1.2 m) and can finish level 1.
 | Motor speed | 2–14 rad/s | wheel joint motor speed (both wheels) |
 | Motor torque | 20–200 N·m | wheel joint max motor torque |
 | Leg length | 0.2–1.6 m | distance chassis → wheel axle |
-| Chassis width | 2–6 m | bar length; wheels sit at ±(width/2 − 0.8) m |
+| Chassis width | 2–6 m | bar length; wheels sit at ±max(width/2 − 0.8, 0.3·width) m |
 | Chassis height | 0.2–1.0 m | bar thickness (also mass) |
 | Suspension | 1–10 | WheelJoint spring frequency 1–10 Hz, damping ratio 0.7 |
 | Cargo | 0–6 blocks | loose green blocks on the bed (more weight, more grip, can fall off) |
@@ -96,7 +97,7 @@ to 0..10, and it never decreases within a run (as `updateDistance` did).
 5. **Friction varies** — slippery stretches (friction 0.05) drawn in pale yellow `#ffff99`, plus a
    high-grip stretch drawn in orange `#ffcc00`, on steep sections.
 
-Every track has a 6 m flat run-up before score 0 and a flat 10 m run-out after score 10, then a wall.
+Every track has an 8 m flat run-up before score 0 and a flat 10 m run-out after score 10, then a wall.
 
 ## Sound (Web Audio, created on first user gesture)
 
@@ -129,8 +130,9 @@ Every track has a 6 m flat run-up before score 0 and a flat 10 m run-out after s
 - `node game-lithium/test.mjs` runs `LithiumTests` (track geometry continuity, score mapping and
   monotonicity, RunMonitor end conditions, slider clamping/defaults).
 - If `PLANCK_PATH` points at a local `planck.mjs`, the physics tests also run: the default car
-  finishes level 1 headless (score 10 within 60 s of sim time); a car with zero motor speed ends
-  "stuck"; a car driven into level 3 with too-small wheels falls into the first pit.
+  finishes level 1 headless; every level has one known slider-only solution (`SOLUTIONS`) that wins
+  headless, and the default car does not win levels 2–5; zero motor speed ends "stuck"; extreme slider
+  combinations stay finite.
 - Browser: Browser pane check of garage → run → end → win flow, retina sharpness, console clean.
 - Screenshot via headless Chrome using `__lithium.step` for a mid-run state.
 
