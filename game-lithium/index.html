@@ -727,6 +727,18 @@ function buildWorld() {
   flameGroup = new THREE.Group();
   flameGroup.visible = false;
   chassisGroup.add(flameGroup);
+  // Booster flame (screenshot 1): a red triangle at the rear of the chassis, a long green one behind it,
+  // a small yellow square at its tip.
+  const rx = -spec.chassis.w / 2, hy = spec.chassis.h / 2;
+  flameGroup.add(polyMesh([{ x: rx, y: hy * 0.8 }, { x: rx, y: -hy }, { x: rx - 0.55, y: -hy - 0.35 }], C.red, 0.8));
+  const green = polyMesh([{ x: 0, y: 0 }, { x: 0.12, y: -0.22 }, { x: -1.1, y: -0.75 }], C.green, 0.7);
+  green.position.set(rx - 0.5, -hy - 0.28, 0.7);
+  green.name = "greenFlame";
+  flameGroup.add(green);
+  const tip = polyMesh(rectPts(0, 0, 0.07, 0.07), C.spark, 0.75);
+  tip.name = "flameTip";
+  tip.position.set(rx - 0.5 - 1.1, -hy - 0.28 - 0.75, 0.75);
+  flameGroup.add(tip);
   world.dynamic.push({ body: sim.chassis, obj: chassisGroup });
   sim.wheels.forEach((b, i) => world.dynamic.push({ body: b, obj: wheelObject(spec.wheels[i]) }));
   sim.cargo.forEach((b, i) => {
@@ -920,6 +932,7 @@ function winRun() {
 // ---- input ----
 const keys = new Set();
 addEventListener("keydown", e => {
+  sound.ensure();
   if (e.code === "Enter" || e.code === "NumpadEnter") {
     e.preventDefault();
     if (e.repeat) return;
@@ -936,12 +949,132 @@ addEventListener("keydown", e => {
 });
 addEventListener("keyup", e => keys.delete(e.code));
 addEventListener("blur", () => keys.clear());
-ui.go.addEventListener("click", () => { if (mode === "garage") startRun(); else if (mode === "run") stopRun(); });
+ui.go.addEventListener("click", () => { sound.ensure(); if (mode === "garage") startRun(); else if (mode === "run") stopRun(); });
 
 // ---- loop ----
-function afterStep(r) { /* Task 5: sound and sparks */ }
-function drawEffects(dt) { /* Task 5: flame and sparks */ }
-const sound = { ensure() {}, win() {}, toggleMute() {}, muted: save.muted, update() {} };  // Task 5 replaces
+// ---- effects ----
+let boosting = false;
+const sparks = [];
+const sparkGeo = new THREE.PlaneGeometry(0.07, 0.07);
+for (let i = 0; i < 40; i++) {
+  const m = new THREE.Mesh(sparkGeo, M(C.spark));
+  m.visible = false;
+  m.position.z = 0.6;
+  scene.add(m);
+  sparks.push({ m, vx: 0, vy: 0, life: 0 });
+}
+let sparkIx = 0;
+function emitSpark() {
+  const tip = flameGroup.getObjectByName("flameTip");
+  if (!tip) return;
+  const p = new THREE.Vector3();
+  tip.getWorldPosition(p);
+  const back = sim.chassis.getWorldVector(planck.Vec2(-1, 0));
+  const s = sparks[sparkIx++ % sparks.length];
+  s.m.position.set(p.x, p.y, 0.6);
+  s.vx = back.x * (2 + Math.random() * 2) + (Math.random() - 0.5);
+  s.vy = back.y * (2 + Math.random() * 2) - Math.random();
+  s.life = 0.5 + Math.random() * 0.3;
+  s.m.visible = true;
+}
+function afterStep(r) {
+  boosting = r.boosting;
+  if (boosting && Math.random() < 0.5) emitSpark();
+  if (r.impact > 1.2) sound.thump(r.impact);
+}
+function drawEffects(dt) {
+  if (flameGroup) {
+    flameGroup.visible = boosting && mode === "run";
+    const g = flameGroup.getObjectByName("greenFlame");
+    if (g) g.scale.set(0.8 + Math.random() * 0.4, 1, 1);
+  }
+  for (const s of sparks) {
+    if (!s.m.visible) continue;
+    s.life -= dt;
+    if (s.life <= 0) { s.m.visible = false; continue; }
+    s.vy -= 6 * dt;
+    s.m.position.x += s.vx * dt;
+    s.m.position.y += s.vy * dt;
+  }
+  sound.update(mode === "run", sim ? sim.wheelSpeed() : 0, boosting && mode === "run");
+  if (mode !== "run") boosting = false;
+}
+
+// ---- sound ----
+class Sound {
+  constructor(muted) { this.ctx = null; this.muted = muted; this.lastThump = 0; }
+  ensure() {
+    if (this.ctx) { if (this.ctx.state === "suspended") this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = this.ctx = new AC();
+    this.master = ctx.createGain();
+    this.master.gain.value = this.muted ? 0 : 0.6;
+    this.master.connect(ctx.destination);
+    // Motor hum: sawtooth through a lowpass, pitch follows wheel speed.
+    this.motor = ctx.createOscillator();
+    this.motor.type = "sawtooth";
+    this.motor.frequency.value = 45;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 380;
+    this.motorGain = ctx.createGain();
+    this.motorGain.gain.value = 0;
+    this.motor.connect(lp).connect(this.motorGain).connect(this.master);
+    this.motor.start();
+    // One second of white noise, shared by the booster hiss and the thumps.
+    this.noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = this.noise.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const hiss = ctx.createBufferSource();
+    hiss.buffer = this.noise; hiss.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 900; bp.Q.value = 0.8;
+    this.boostGain = ctx.createGain();
+    this.boostGain.gain.value = 0;
+    hiss.connect(bp).connect(this.boostGain).connect(this.master);
+    hiss.start();
+  }
+  update(running, wheelSpeed, boost) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.motor.frequency.setTargetAtTime(45 + wheelSpeed * 9, t, 0.05);
+    this.motorGain.gain.setTargetAtTime(running ? 0.05 : 0, t, 0.1);
+    this.boostGain.gain.setTargetAtTime(boost ? 0.2 : 0, t, 0.03);
+  }
+  thump(strength) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    if (t - this.lastThump < 0.08) return;
+    this.lastThump = t;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noise;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 260;
+    const g = this.ctx.createGain();
+    const v = 0.5 * Math.min(1, strength / 4);
+    g.gain.setValueAtTime(v, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    src.connect(lp).connect(g).connect(this.master);
+    src.start(t, Math.random() * 0.8, 0.2);
+  }
+  win() {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+      const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+      o.type = "square"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.08, t0 + i * 0.09);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + i * 0.09 + 0.12);
+      o.connect(g).connect(this.master);
+      o.start(t0 + i * 0.09); o.stop(t0 + i * 0.09 + 0.13);
+    });
+  }
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.master) this.master.gain.setTargetAtTime(this.muted ? 0 : 0.6, this.ctx.currentTime, 0.02);
+  }
+}
+const sound = new Sound(save.muted);
 
 function tick() {
   if (mode === "garage") { sim.step(); return; }
@@ -986,7 +1119,7 @@ requestAnimationFrame(frame);
 
 // Debug handle for headless screenshots (rAF does not advance under virtual time).
 window.__lithium = {
-  get sim() { return sim; }, get mode() { return mode; }, scene, camera, THREE, planck,
+  get sim() { return sim; }, get mode() { return mode; }, get audio() { return sound; }, scene, camera, THREE, planck,
   start: startRun, setLevel, render,
   setValues(v) { values = VehicleConfig.clamp(v); syncSliders(); rebuild(); },
   step(n, input = {}) {
