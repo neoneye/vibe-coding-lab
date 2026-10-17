@@ -149,11 +149,23 @@ table.mat th { color: var(--muted); font-weight: 600; }
   <table class="mat" id="mattable"></table>
   <p>Quartz and ice are birefringent too, but only slightly. You'll only see their doubling with a thick crystal and a fine pattern, so try 80 mm and the single-dot background. Glass is the control: it bends light but never splits it.</p>
 
-  <h3>10. A little history</h3>
+  <h3>10. Stacking crystals: 1, 2, 3 or 4 images</h3>
+  <p>Each beam that leaves a calcite crystal is fully polarized: the <span class="o">ordinary</span> one wiggles one way, the <span class="e">extraordinary</span> one at right angles to it. Put a second crystal on top and each beam splits again, but not always evenly. Malus's law from section 7 decides the split, with the second crystal acting as the filter:</p>
+  <div class="formula">share that stays ordinary = cos²(angle between the arriving wiggle and the second crystal's ordinary wiggle)<small>The rest goes extraordinary. Right now the second crystal is <span class="live" data-live="s_rel"></span>. So of the light arriving as the first crystal's ordinary beam, <span class="live" data-live="s_split"></span>.</small></div>
+  <p>Tick <em>Stack a second crystal on top</em> in the panel, or use the four preset buttons there. With two crystals of the same thickness:</p>
+  <ul>
+    <li><b>Same way round:</b> the wiggles already match, so ordinary stays ordinary and extraordinary stays extraordinary. The extraordinary beam gets pushed sideways twice, as if through one crystal of double thickness. You see <b>2 images</b>, each half as bright, twice as far apart.</li>
+    <li><b>Turned 180°:</b> the wiggles still match, but now the second crystal's grain leans the other way. It pushes the extraordinary beam back by exactly the amount the first one pushed it out. Both beams land in the same place, and you see <b>1 image</b>, as if there were no crystal at all.</li>
+    <li><b>Turned 45°:</b> every beam arrives at 45° to the second crystal's wiggles, and cos²45° = ½, so each splits in half again. That makes four beams, each a quarter as bright. They form <b>4 images</b> at the corners of a parallelogram, with sides along the two crystals' grains.</li>
+    <li><b>Same way round, with a half-wave plate in between:</b> a half-wave plate is a thin clear sheet that flips each wiggle around its own "fast" direction. Set at 22.5° to the grain, it turns both wiggles by 45°. So each beam splits in half again, as in the 45° case. But because the crystals line up, two of the four paths ("ordinary below, extraordinary above" and the reverse) get pushed by the same amount and land in the same place. You see <b>3 images in a row</b>, with brightness ¼, ½, ¼.</li>
+  </ul>
+  <p>The two beams that share the middle image wiggle at right angles to each other. Light like that can't interfere, so the brightnesses simply add. With the current settings, looking straight down, you get <span class="live" data-live="s_count"></span> with brightness <span class="live" data-live="s_list"></span>. Turn on <em>Colour-code the two images</em> to see which path made which image, and turn the polarizer on the three images: the outer two fade in turn, while the middle one stays steady because it holds both wiggles.</p>
+
+  <h3>11. A little history</h3>
   <p>Rasmus Bartholin described the double image in 1669, using clear calcite from Iceland ("Iceland spar"). Huygens explained it with his ellipsoid ripples in 1690. Étienne-Louis Malus discovered polarization by reflection in 1808 while looking through a calcite crystal at sunlight bouncing off a window. Some historians think Viking navigators used a calcite "sunstone" to find the sun through clouds by watching how the two images changed in brightness.</p>
 
-  <h3>11. What the simulation does (and doesn't do)</h3>
-  <p>Every pixel sends a ray from the camera into the scene on the graphics card. Where it hits the crystal, it splits into an ordinary ray (Snell's law) and an extraordinary ray. For the extraordinary ray, the program keeps the wave's direction along the surface and solves the tilted-ellipsoid equation, then walks off along the energy direction. Rays that reach the bottom face read the paper right there, because the crystal touches it. Rays that hit a side face either leave, or bounce back in if the angle is too steep (total internal reflection). Surface reflections use a standard approximation. The optional dispersion traces red, green and blue separately with slightly different indices, which gives the colour fringes. Left out: partial reflections inside the crystal, light focusing into bright patterns (caustics) on the paper, and crystals with two optic axes.</p>
+  <h3>12. What the simulation does (and doesn't do)</h3>
+  <p>Every pixel sends a ray from the camera into the scene on the graphics card. Where it hits the crystal, it splits into an ordinary ray (Snell's law) and an extraordinary ray. For the extraordinary ray, the program keeps the wave's direction along the surface and solves the tilted-ellipsoid equation, then walks off along the energy direction. Rays that reach the bottom face read the paper right there, because the crystal touches it. Rays that hit a side face either leave, or bounce back in if the angle is too steep (total internal reflection). Surface reflections use a standard approximation. The optional dispersion traces red, green and blue separately with slightly different indices, which gives the colour fringes. With a second crystal, each beam that leaves one crystal through the thin gap is traced into the other and split again, weighted by Malus's law; a ray passes through each crystal at most once. The half-wave plate and rotator are idealised: they have no thickness, work the same for every colour, and act only on the flat part of the wiggle. Left out: partial reflections inside the crystal, light focusing into bright patterns (caustics) on the paper, and crystals with two optic axes.</p>
 </article>
 
 <script id="physics-core">
@@ -308,8 +320,9 @@ table.mat th { color: var(--muted); font-weight: 600; }
   };
 
   // Trace one mode backwards from the eye: air ray dAir enters at p through face `face`.
-  // Returns { kind: 'paper', xy, path, k0 } when it reaches the bottom face, { kind: 'out', p, dir, face }
-  // when it leaves elsewhere, or { kind: 'lost' } after too many internal reflections.
+  // Returns { kind: 'paper', xy, path, k0, k } when it reaches the bottom face of a crystal lying on the
+  // table, { kind: 'out', p, dir, face, k0, k } when it leaves elsewhere (k0 = first, k = last wave vector),
+  // or { kind: 'lost' } after too many internal reflections.
   BF.traceMode = (cr, p, dAir, face, mode, no, ne, maxBounce = 6) => {
     const a = cr.axis;
     let N = cr.planes[face].N;
@@ -321,15 +334,98 @@ table.mat th { color: var(--muted); font-weight: 600; }
       const s = BF.rayDir(k, mode, a, no, ne);
       const ex = BF.exitFace(cr, p, s);
       p = add(p, mul(s, ex.t)); path += ex.t;
-      if (ex.face === 0) return { kind: 'paper', xy: [p[0], p[1]], path, k0, bounces: b };
+      if (ex.face === 0 && cr.onTable !== false) return { kind: 'paper', xy: [p[0], p[1]], path, k0, k, bounces: b };
       N = cr.planes[ex.face].N;
       const out = BF.exitDir(k, N);
-      if (out) return { kind: 'out', p, dir: out, face: ex.face, path, k0, bounces: b };
+      if (out) return { kind: 'out', p, dir: out, face: ex.face, path, k0, k, bounces: b };
       const k2 = BF.insideK(sub(k, mul(N, dot(k, N))), mul(N, -1), mode, a, no, ne);
       if (!k2) return { kind: 'lost' };
       k = k2;
     }
     return { kind: 'lost' };
+  };
+
+  // ---- Two stacked crystals. Crystal 2 rests on crystal 1's top face, centred on it, turned by
+  // rotation2 relative to crystal 1, with thickness2. Same material, shape and optic-axis setting.
+  BF.moveCrystal = (cr, T) => Object.assign({}, cr, {
+    O: add(cr.O, T), center: add(cr.center, T), onTable: false,
+    planes: cr.planes.map(({ N, D }) => ({ N, D: D + dot(N, T) })),
+    foot: cr.foot.map(f => [f[0] + T[0], f[1] + T[1]]),
+  });
+  // p = buildCrystal params + { stack, rotation2, thickness2, plate: 'none'|'hwp'|'rot', plateAngle (deg) }
+  BF.buildStack = p => {
+    const c1 = BF.buildCrystal(p);
+    if (!p.stack) return { c1, c2: null, plate: null };
+    const c2 = BF.buildCrystal(Object.assign({}, p, { thickness: p.thickness2, rotation: (p.rotation || 0) + (p.rotation2 || 0), x: 0, y: 0 }));
+    const top1 = add(add(c1.O, mul(add(c1.e1, c1.e2), 0.5)), c1.e3);
+    const bot2 = add(c2.O, mul(add(c2.e1, c2.e2), 0.5));
+    // Half-wave plate: fast axis at plateAngle from crystal 1's grain direction on the table.
+    // Rotator: turns every polarization by plateAngle.
+    const g = Math.atan2(c1.axis[1], c1.axis[0]);
+    const ang = p.plate === 'hwp' ? g + p.plateAngle * deg : (p.plateAngle || 0) * deg;
+    const plate = { type: p.plate || 'none', c: Math.cos(ang), s: Math.sin(ang) };
+    return { c1, c2: BF.moveCrystal(c2, sub(top1, bot2)), plate };
+  };
+
+  const perp = (v, d) => { const u = sub(v, mul(d, dot(v, d))), l = len(u); return l < 1e-9 ? null : mul(u, 1 / l); };
+  // A thin plate lying flat between the crystals acts on the horizontal part of the polarization.
+  // Half-wave plate: mirrors it about the fast axis. Rotator: turns it.
+  BF.applyPlate = (p, pl) => {
+    if (!pl || pl.type === 'none') return p;
+    if (pl.type === 'hwp') { const f = [pl.c, pl.s, 0]; return add(sub(mul(f, 2 * dot(p, f)), p), [0, 0, 2 * p[2]]); }
+    return [pl.c * p[0] - pl.s * p[1], pl.s * p[0] + pl.c * p[1], p[2]];
+  };
+  // Malus's law between crystals: light polarized along pol, crossing the gap along d, enters the next
+  // crystal; the fraction that goes into mode m (whose wave vector at that face is k) is cos^2.
+  BF.linkWeight = (pol, k, a, m, d, plate) => {
+    const p = perp(BF.applyPlate(perp(pol, d) || pol, plate), d);
+    const q = perp(BF.polarization(k, 0, a), d);
+    if (!p || !q) return 0.5;
+    const wo = dot(p, q) ** 2;
+    return m === 0 ? wo : 1 - wo;
+  };
+
+  const airEnd = (q, d) => d[2] < -1e-4 ? { kind: 'paper', xy: [q[0] - d[0] * q[2] / d[2], q[1] - d[1] * q[2] / d[2]] } : { kind: 'sky', dir: d };
+
+  // Backward trace of an eye ray through the stack (at most one pass through each crystal, like the shader).
+  // Returns every light path: { kind: 'paper', xy } or { kind: 'sky', dir }, its share w of the eye ray's
+  // brightness (unpolarized paper: 1/2 per mode in the first crystal, then cos^2 at the gap), and
+  // modes = [mode in crystal 1, mode in crystal 2] (0 = o, 1 = e; one entry if it met only one crystal).
+  BF.traceStack = (st, ro, rd, no, ne) => {
+    const cs = [st.c1, st.c2].filter(Boolean);
+    let h = null, ci = -1;
+    cs.forEach((c, i) => { const t = BF.intersect(c, ro, rd); if (t && (!h || t.t < h.t)) { h = t; ci = i; } });
+    if (!h) return [Object.assign(airEnd(ro, rd), { w: 1, modes: [] })];
+    const A = cs[ci], p = add(ro, mul(rd, h.t)), paths = [];
+    for (const m1 of [0, 1]) {
+      const r = BF.traceMode(A, p, rd, h.face, m1, no, ne);
+      if (r.kind === 'lost') continue;
+      if (r.kind === 'paper') { paths.push({ kind: 'paper', xy: r.xy, w: 0.5, modes: [m1] }); continue; }
+      const B = cs.length > 1 ? cs[1 - ci] : null, ro2 = sub(r.p, mul(r.dir, 1e-3));
+      const h2 = B && BF.intersect(B, ro2, r.dir);
+      if (!h2) { paths.push(Object.assign(airEnd(r.p, r.dir), { w: 0.5, modes: [m1] })); continue; }
+      const p2 = add(ro2, mul(r.dir, h2.t));
+      for (const m2 of [0, 1]) {
+        const r2 = BF.traceMode(B, p2, r.dir, h2.face, m2, no, ne);
+        if (r2.kind === 'lost') continue;
+        const wl = BF.linkWeight(BF.polarization(r2.k0, m2, B.axis), r.k, A.axis, m1, r.dir, st.plate);
+        const end = r2.kind === 'paper' ? { kind: 'paper', xy: r2.xy } : airEnd(r2.p, r2.dir);
+        paths.push(Object.assign(end, { w: 0.5 * wl, modes: ci === 0 ? [m1, m2] : [m2, m1] }));
+      }
+    }
+    return paths;
+  };
+
+  // Group paths that land on the same spot of paper into images (their brightness adds: the beams that
+  // meet are polarized at right angles, so they don't interfere). Faint paths below minW are dropped.
+  BF.images = (paths, tol = 0.05, minW = 1e-3) => {
+    const out = [];
+    for (const q of paths) {
+      if (q.kind !== 'paper' || q.w < minW) continue;
+      const im = out.find(o => Math.hypot(o.xy[0] - q.xy[0], o.xy[1] - q.xy[1]) < tol);
+      if (im) { im.w += q.w; im.paths.push(q.modes); } else out.push({ xy: q.xy.slice(), w: q.w, paths: [q.modes] });
+    }
+    return out;
   };
 
   // Huygens construction in the principal section (2D): a flat wavefront enters straight down.
@@ -362,6 +458,7 @@ const DEFAULTS = {
   pattern: 'label', text: 'Calcite', font: 'sans', paperW: 170, bgRot: 0, bgX: 0, bgY: 0,
   ink: '#151515', paper: '#f4f2ec', table: '#8d8a84',
   pol: false, polAngle: 0, polSpin: false,
+  stack: false, rotation2: 45, thickness2: 30, plate: 'none', plateAngle: 22.5,
   show: 'both', code: false, spin: false, spinSpeed: 20, aa: true, light: 1,
 };
 const S = Object.assign({}, DEFAULTS);
@@ -531,16 +628,17 @@ out vec4 fragColor;
 uniform vec2 uRes;
 uniform vec3 uCamPos, uCamF, uCamR, uCamU;
 uniform float uTanHalf;
-uniform vec3 uPN[6];
-uniform float uPD[6];
-uniform vec3 uAxis;
+uniform vec3 uPN[12];   // crystal 1 planes 0..5, crystal 2 planes 6..11 (0 bottom, 1 top, 2..5 sides)
+uniform float uPD[12];
+uniform vec3 uAxis[2];
 uniform vec3 uNo, uNe;
-uniform int uDisp, uShow, uCode, uPol, uSamples;
+uniform int uDisp, uShow, uCode, uPol, uSamples, uStack, uPlate;
+uniform vec2 uPlateCS;
 uniform vec3 uPolAxis;
 uniform sampler2D uPaper;
 uniform vec2 uPaperC, uPaperHalf, uPaperRot;
 uniform float uTexPxPerMm;
-uniform vec2 uFoot[4];
+uniform vec2 uFoot[8];
 uniform vec2 uShadowOff;
 uniform float uFrost, uAmber, uRefl, uLight;
 uniform vec3 uTable;
@@ -549,11 +647,11 @@ float gLod = 0.0;
 
 vec3 toLin(vec3 c){ return pow(c, vec3(2.2)); }
 
-float sdFoot(vec2 p){
-  float d = dot(p - uFoot[0], p - uFoot[0]);
+float sdFoot(vec2 p, int o){
+  float d = dot(p - uFoot[o], p - uFoot[o]);
   float s = 1.0;
-  for (int i = 0; i < 4; i++) {
-    int j = (i + 3) % 4;
+  for (int i0 = 0; i0 < 4; i0++) {
+    int i = o + i0, j = o + (i0 + 3) % 4;
     vec2 e = uFoot[j] - uFoot[i], w = p - uFoot[i];
     vec2 b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
     d = min(d, dot(b, b));
@@ -583,14 +681,15 @@ vec3 paperAt(vec2 xy){
   vec3 c;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) c = toLin(uTable);
   else c = toLin(textureLod(uPaper, vec2(uv.x, 1.0 - uv.y), gLod).rgb);
-  float sd = sdFoot(xy - uShadowOff);
+  float sd = sdFoot(xy - uShadowOff, 0);
+  if (uStack == 1) sd = min(sd, sdFoot(xy - uShadowOff, 4));
   c *= 1.0 - 0.22 * exp(-max(sd, 0.0) / 6.0);
   return c * 0.92 * uLight;
 }
 
-float bil(vec3 u, vec3 v, float ne, float dl){ return dot(u, v) / (ne * ne) + dot(u, uAxis) * dot(v, uAxis) * dl; }
+float bil(vec3 u, vec3 v, vec3 a, float ne, float dl){ return dot(u, v) / (ne * ne) + dot(u, a) * dot(v, a) * dl; }
 
-bool insideK(vec3 kt, vec3 m, int mode, float no, float ne, out vec3 k){
+bool insideK(vec3 kt, vec3 m, int mode, vec3 a, float no, float ne, out vec3 k){
   k = vec3(0.0);
   if (mode == 0) {
     float q2 = no * no - dot(kt, kt);
@@ -599,17 +698,25 @@ bool insideK(vec3 kt, vec3 m, int mode, float no, float ne, out vec3 k){
     return true;
   }
   float dl = 1.0 / (no * no) - 1.0 / (ne * ne);
-  float A = bil(m, m, ne, dl), B = bil(kt, m, ne, dl), C = bil(kt, kt, ne, dl) - 1.0;
+  float A = bil(m, m, a, ne, dl), B = bil(kt, m, a, ne, dl), C = bil(kt, kt, a, ne, dl) - 1.0;
   float disc = B * B - A * C;
   if (disc < 0.0) return false;
   k = kt + m * ((-B + sqrt(disc)) / A);
   return true;
 }
 
-vec3 rayDir(vec3 k, int mode, float no, float ne){
+vec3 rayDir(vec3 k, int mode, vec3 a, float no, float ne){
   if (mode == 0) return normalize(k);
   float dl = 1.0 / (no * no) - 1.0 / (ne * ne);
-  return normalize(k / (ne * ne) + uAxis * (dot(k, uAxis) * dl));
+  return normalize(k / (ne * ne) + a * (dot(k, a) * dl));
+}
+
+// Polarization (E-field direction) of a mode, as BF.polarization.
+vec3 polVec(vec3 k, int mode, vec3 a){
+  vec3 o = cross(k, a);
+  if (dot(o, o) < 1e-12) o = cross(k, abs(k.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0));
+  o = normalize(o);
+  return mode == 0 ? o : normalize(cross(k, o));
 }
 
 float schlick(float c, float n){
@@ -617,49 +724,99 @@ float schlick(float c, float n){
   return r0 + (1.0 - r0) * pow(1.0 - clamp(c, 0.0, 1.0), 5.0);
 }
 
-// Backwards trace of one polarization mode. p: entry point, d: camera ray, face: entry face.
-vec3 traceMode(vec3 p, vec3 d, int face, int mode, float no, float ne, out vec3 pol){
-  vec3 N = uPN[face];
-  vec3 k;
-  pol = vec3(0.0);
-  if (!insideK(d - N * dot(d, N), -N, mode, no, ne, k)) return vec3(0.0);
-  vec3 o = cross(k, uAxis);
-  if (dot(o, o) < 1e-8) o = cross(k, vec3(1.0, 0.0, 0.0));
-  o = normalize(o);
-  pol = mode == 0 ? o : normalize(cross(k, o));
-  float path = 0.0;
+// Ray vs crystal ci (convex polyhedron): entry distance and face, as BF.intersect.
+bool hitCrystal(int ci, vec3 ro, vec3 rd, out float tHit, out int face){
+  int o6 = ci * 6;
+  float tN = -1e9, tF = 1e9;
+  face = -1; tHit = 0.0;
+  for (int i = 0; i < 6; i++) {
+    float den = dot(uPN[o6 + i], rd), num = uPD[o6 + i] - dot(uPN[o6 + i], ro);
+    if (abs(den) < 1e-9) { if (num < 0.0) return false; continue; }
+    float t = num / den;
+    if (den < 0.0) { if (t > tN) { tN = t; face = i; } } else tF = min(tF, t);
+  }
+  tHit = tN;
+  return tN < tF && tN > 0.0;
+}
+
+// Backwards trace of one polarization mode inside crystal ci, as BF.traceMode. p: entry point, d: air ray,
+// face: entry face. Returns 1 if the ray leaves into the air at q along od: the colour is then
+// (whatever lies along od) * thr + col. Returns 0 when col is already final (paper under crystal 1, or lost).
+// k0/k: first and last wave vector inside.
+int traceIn(int ci, vec3 p, vec3 d, int face, int mode, float no, float ne,
+            out vec3 k0, out vec3 k, out vec3 q, out vec3 od, out vec3 thr, out vec3 col){
+  vec3 a = uAxis[ci];
+  int o6 = ci * 6;
+  vec3 N = uPN[o6 + face];
+  k = vec3(0.0, 0.0, -1.0); k0 = k; q = p; od = d; thr = vec3(0.0); col = vec3(0.0);
+  if (!insideK(d - N * dot(d, N), -N, mode, a, no, ne, k)) return 0;
+  k0 = k;
+  float path = 0.0, T = 0.0;
   float frost = face >= 2 ? uFrost : 0.0;
-  vec3 col = vec3(0.03);
+  int status = 0;
+  col = vec3(0.03);
   for (int b = 0; b < 7; b++) {
-    vec3 s = rayDir(k, mode, no, ne);
+    vec3 s = rayDir(k, mode, a, no, ne);
     float best = 1e9; int ef = -1;
     for (int i = 0; i < 6; i++) {
-      float den = dot(uPN[i], s);
+      float den = dot(uPN[o6 + i], s);
       if (den > 1e-6) {
-        float t = (uPD[i] - dot(uPN[i], p)) / den;
+        float t = (uPD[o6 + i] - dot(uPN[o6 + i], p)) / den;
         if (t < best) { best = t; ef = i; }
       }
     }
     if (ef < 0) break;
     p += s * best; path += best;
-    if (ef == 0) { col = paperAt(p.xy); break; }
-    N = uPN[ef];
+    if (ef == 0 && ci == 0) { col = paperAt(p.xy); break; }
+    N = uPN[o6 + ef];
     vec3 kt = k - N * dot(k, N);
     float q2 = 1.0 - dot(kt, kt);
     if (q2 >= 0.0) {
-      vec3 od = kt + N * sqrt(q2);
-      float T = 1.0 - schlick(sqrt(q2), length(k));
-      col = (od.z < -1e-4 ? paperAt((p + od * (-p.z / od.z)).xy) : env(od)) * T;
+      od = kt + N * sqrt(q2); q = p;
+      T = 1.0 - schlick(sqrt(q2), length(k));
       if (ef >= 2) frost = max(frost, uFrost);
+      status = 1;
       break;
     }
     vec3 k2;
-    if (!insideK(kt, -N, mode, no, ne, k2)) break;
+    if (!insideK(kt, -N, mode, a, no, ne, k2)) break;
     k = k2;
   }
-  col = mix(col, vec3(0.62) * uLight, frost * 0.75);
-  col *= exp(-uAmber * path * vec3(0.0008, 0.0035, 0.0110));
-  return col;
+  vec3 att = exp(-uAmber * path * vec3(0.0008, 0.0035, 0.0110));
+  float f = frost * 0.75;
+  if (status == 1) { thr = att * T * (1.0 - f); col = vec3(0.62) * uLight * f * att; }
+  else col = mix(col, vec3(0.62) * uLight, f) * att;
+  return status;
+}
+
+// What the air ray from q along od sees when it meets no other crystal.
+vec3 airCol(vec3 q, vec3 od){ return od.z < -1e-4 ? paperAt((q + od * (-q.z / od.z)).xy) : env(od); }
+
+vec3 perpTo(vec3 v, vec3 d){ vec3 u = v - d * dot(v, d); float l = dot(u, u); return l > 1e-18 ? u / sqrt(l) : vec3(0.0); }
+
+// Malus's law across the gap (with the optional plate), as BF.linkWeight.
+float linkWeight(vec3 pol, vec3 k, vec3 a, int m, vec3 d){
+  vec3 p = perpTo(pol, d);
+  if (uPlate == 1) { vec3 f = vec3(uPlateCS, 0.0); p = 2.0 * dot(p, f) * f - p + vec3(0.0, 0.0, 2.0 * p.z); }
+  else if (uPlate == 2) p = vec3(uPlateCS.x * p.x - uPlateCS.y * p.y, uPlateCS.y * p.x + uPlateCS.x * p.y, p.z);
+  p = perpTo(p, d);
+  vec3 qo = perpTo(polVec(k, 0, a), d);
+  if (dot(p, p) < 0.5 || dot(qo, qo) < 0.5) return 0.5;
+  float wo = dot(p, qo) * dot(p, qo);
+  return m == 0 ? wo : 1.0 - wo;
+}
+
+// Colour-coding: one crystal o red, e blue. Two crystals by (mode in crystal 1, mode in crystal 2):
+// o-o red, e-e blue, o-e amber, e-o green.
+vec3 codeTint(int m1, int m2){
+  if (m1 == 0 && m2 == 0) return vec3(0.90, 0.10, 0.05);
+  if (m1 == 1 && m2 == 1) return vec3(0.05, 0.30, 0.95);
+  return m1 == 0 ? vec3(0.95, 0.62, 0.02) : vec3(0.08, 0.72, 0.20);
+}
+vec3 coded(vec3 c, int m1, int m2){
+  if (uCode != 1) return c;
+  float L = dot(c, vec3(0.3, 0.6, 0.1)) / uLight;
+  return mix(codeTint(m1, m2) * 0.8 * uLight, c, smoothstep(0.08, 0.45, L));
 }
 
 vec3 shade(vec2 pix){
@@ -667,14 +824,13 @@ vec3 shade(vec2 pix){
   vec3 rd = normalize(uCamF + ndc.x * uTanHalf * (uRes.x / uRes.y) * uCamR + ndc.y * uTanHalf * uCamU);
   vec3 ro = uCamPos;
   float pixAng = 2.0 * uTanHalf / uRes.y;
-  float tN = -1e9, tF = 1e9; int face = -1; bool miss = false;
-  for (int i = 0; i < 6; i++) {
-    float den = dot(uPN[i], rd), num = uPD[i] - dot(uPN[i], ro);
-    if (abs(den) < 1e-9) { if (num < 0.0) miss = true; continue; }
-    float t = num / den;
-    if (den < 0.0) { if (t > tN) { tN = t; face = i; } } else tF = min(tF, t);
+  float tN; int face, ci = 0;
+  bool hit = hitCrystal(0, ro, rd, tN, face);
+  if (uStack == 1) {
+    float t2; int f2;
+    if (hitCrystal(1, ro, rd, t2, f2) && (!hit || t2 < tN)) { hit = true; tN = t2; face = f2; ci = 1; }
   }
-  if (miss || !(tN < tF && tN > 0.0)) {
+  if (!hit) {
     if (rd.z < 0.0) {
       float t = -ro.z / rd.z;
       gLod = log2(max(t * pixAng * uTexPxPerMm / sqrt(max(-rd.z, 0.05)), 1.0));
@@ -682,8 +838,9 @@ vec3 shade(vec2 pix){
     }
     return env(rd);
   }
+  int cj = 1 - ci;
   vec3 p = ro + rd * tN;
-  vec3 N = uPN[face];
+  vec3 N = uPN[ci * 6 + face];
   gLod = log2(max(tN * 1.2 * pixAng * uTexPxPerMm, 1.0));
   float R = schlick(-dot(rd, N), 0.5 * (uNo.y + uNe.y));
   vec3 P = normalize(uPolAxis - rd * dot(uPolAxis, rd));
@@ -691,23 +848,37 @@ vec3 shade(vec2 pix){
   int nch = uDisp == 1 ? 3 : 1;
   for (int ch = 0; ch < 3; ch++) {
     if (ch >= nch) break;
-    int ci = uDisp == 1 ? ch : 1;
-    float no = uNo[ci], ne = uNe[ci];
+    int chi = uDisp == 1 ? ch : 1;
+    float no = uNo[chi], ne = uNe[chi];
     for (int mode = 0; mode < 2; mode++) {
       if ((uShow == 1 && mode == 1) || (uShow == 2 && mode == 0)) continue;
-      vec3 pol;
-      vec3 c = traceMode(p, rd, face, mode, no, ne, pol);
-      if (uCode == 1) {
-        vec3 tint = mode == 0 ? vec3(0.90, 0.10, 0.05) : vec3(0.05, 0.30, 0.95);
-        float L = dot(c, vec3(0.3, 0.6, 0.1)) / uLight;
-        c = mix(tint * 0.8 * uLight, c, smoothstep(0.08, 0.45, L));
-      }
-      float w = uShow == 0 ? 0.5 : 1.0;
+      vec3 k0, kL, q, od, thr, col;
+      int st = traceIn(ci, p, rd, face, mode, no, ne, k0, kL, q, od, thr, col);
+      // brightness share at the eye: 1/2 per mode (unpolarized paper), or Malus through the polarizer
+      vec3 pol = polVec(k0, mode, uAxis[ci]);
+      float w = 0.5;
       if (uPol == 1) {
         vec3 pp = pol - rd * dot(pol, rd);
         float l2 = dot(pp, pp);
         w = l2 > 1e-8 ? dot(pp, P) * dot(pp, P) / l2 : 0.5;
       }
+      vec3 c = vec3(0.0);
+      float t2; int f2;
+      vec3 ro2 = q - od * 1e-3;
+      if (st == 1 && uStack == 1 && hitCrystal(cj, ro2, od, t2, f2)) {
+        // into the other crystal: split again, each part weighted by Malus's law across the gap
+        vec3 p2 = ro2 + od * t2;
+        for (int m2 = 0; m2 < 2; m2++) {
+          vec3 k0b, kLb, qb, odb, thrb, colb;
+          int stb = traceIn(cj, p2, od, f2, m2, no, ne, k0b, kLb, qb, odb, thrb, colb);
+          vec3 cb = stb == 1 ? airCol(qb, odb) * thrb + colb : colb;
+          float wl = linkWeight(polVec(k0b, m2, uAxis[cj]), kL, uAxis[ci], mode, od);
+          c += coded(cb * thr + col, ci == 0 ? mode : m2, ci == 0 ? m2 : mode) * wl;
+        }
+      } else {
+        c = coded(st == 1 ? airCol(q, od) * thr + col : col, mode, mode);
+      }
+      if (uShow != 0 && uPol == 0) w = 1.0;
       if (uDisp == 1) sum[ch] += c[ch] * w; else sum += c * w;
     }
   }
@@ -773,10 +944,17 @@ function updatePaper() {
 const hexToRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
 
 function crystal() { return BF.buildCrystal(S); }
+function stack() { return BF.buildStack(S); }
+const stackHeight = () => S.thickness + (S.stack ? S.thickness2 : 0);
+// The crystal (if any) an eye ray meets first.
+function pickCrystal(ro, rd) {
+  const st = stack();
+  return [st.c1, st.c2].filter(Boolean).map(c => BF.intersect(c, ro, rd)).filter(Boolean).sort((a, b) => a.t - b.t)[0] || null;
+}
 
 function camBasis() {
   const cr = crystal();
-  const tgt = [cr.center[0], cr.center[1], S.thickness * 0.25];
+  const tgt = [cr.center[0], cr.center[1], stackHeight() * 0.25];
   const y = cam.yaw * deg, p = cam.pitch * deg;
   const pos = V.add(tgt, V.mul([Math.cos(p) * Math.cos(y), Math.cos(p) * Math.sin(y), Math.sin(p)], cam.dist));
   const F = V.norm(V.sub(tgt, pos));
@@ -799,27 +977,31 @@ function render() {
   const w = Math.round(cssW * dpr), h = Math.round(cssH * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   gl.viewport(0, 0, w, h);
-  const cr = crystal(), cb = camBasis(), ix = indices();
+  const st = stack(), cr = st.c1, c2 = st.c2 || cr, cb = camBasis(), ix = indices();
   gl.uniform2f(U.uRes, w, h);
   gl.uniform3fv(U.uCamPos, cb.pos); gl.uniform3fv(U.uCamF, cb.F); gl.uniform3fv(U.uCamR, cb.R); gl.uniform3fv(U.uCamU, cb.U);
   gl.uniform1f(U.uTanHalf, cb.tanHalf);
-  gl.uniform3fv(U.uPN, cr.planes.flatMap(p => p.N));
-  gl.uniform1fv(U.uPD, cr.planes.map(p => p.D));
-  gl.uniform3fv(U.uAxis, cr.axis);
+  gl.uniform3fv(U.uPN, cr.planes.concat(c2.planes).flatMap(p => p.N));
+  gl.uniform1fv(U.uPD, cr.planes.concat(c2.planes).map(p => p.D));
+  gl.uniform3fv(U.uAxis, cr.axis.concat(c2.axis));
+  gl.uniform1i(U.uStack, st.c2 ? 1 : 0);
+  gl.uniform1i(U.uPlate, st.plate ? { none: 0, hwp: 1, rot: 2 }[st.plate.type] : 0);
+  gl.uniform2f(U.uPlateCS, st.plate ? st.plate.c : 1, st.plate ? st.plate.s : 0);
   gl.uniform3fv(U.uNo, ix.no); gl.uniform3fv(U.uNe, ix.ne);
   gl.uniform1i(U.uDisp, S.dispersion > 0.001 ? 1 : 0);
   gl.uniform1i(U.uShow, { both: 0, o: 1, e: 2 }[S.show]);
   gl.uniform1i(U.uCode, S.code ? 1 : 0);
   gl.uniform1i(U.uPol, S.pol ? 1 : 0);
-  gl.uniform1i(U.uSamples, S.aa && !interactive ? 4 : 1);
+  // a stack traces up to 6 paths per colour channel, so stacking + dispersion keeps 1 sample per pixel
+  gl.uniform1i(U.uSamples, S.aa && !interactive && !(st.c2 && S.dispersion > 0.001) ? 4 : 1);
   const pa = S.polAngle * deg;
   gl.uniform3fv(U.uPolAxis, V.add(V.mul(cb.R, Math.cos(pa)), V.mul(cb.U, Math.sin(pa))));
   gl.uniform2f(U.uPaperC, S.bgX, S.bgY);
   gl.uniform2f(U.uPaperHalf, paperInfo.Wmm / 2, paperInfo.Hmm / 2);
   gl.uniform2f(U.uPaperRot, Math.cos(S.bgRot * deg), Math.sin(S.bgRot * deg));
   gl.uniform1f(U.uTexPxPerMm, patternCanvas.width / paperInfo.Wmm);
-  gl.uniform2fv(U.uFoot, cr.foot.flat());
-  gl.uniform2f(U.uShadowOff, 0.25 * S.thickness, -0.22 * S.thickness); // soft shadow cast away from the main softbox
+  gl.uniform2fv(U.uFoot, cr.foot.concat(c2.foot).flat());
+  gl.uniform2f(U.uShadowOff, 0.25 * stackHeight(), -0.22 * stackHeight()); // soft shadow cast away from the main softbox
   gl.uniform1f(U.uFrost, S.frost); gl.uniform1f(U.uAmber, S.amber); gl.uniform1f(U.uRefl, S.refl); gl.uniform1f(U.uLight, S.light);
   gl.uniform3fv(U.uTable, hexToRgb(S.table));
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, paperTex);
@@ -884,6 +1066,16 @@ const SCHEMA = [
     { id: 'paper', type: 'color', label: 'Paper' },
     { id: 'table', type: 'color', label: 'Table' },
   ]],
+  ['Second crystal', [
+    { id: 'stack', type: 'check', label: 'Stack a second crystal on top' },
+    { id: 'rotation2', label: 'Turned by', min: -180, max: 180, step: 0.5, unit: '°' },
+    { id: 'thickness2', label: 'Thickness', min: 2, max: 90, step: 1, unit: 'mm' },
+    { id: 'plate', type: 'select', label: 'In between', options: [['none', 'Nothing (thin air gap)'], ['hwp', 'Half-wave plate'], ['rot', 'Polarization rotator']] },
+    { id: 'plateAngle', label: 'Plate angle', min: -90, max: 90, step: 0.5, unit: '°' },
+    { type: 'buttons', buttons: [['Same way → 2', () => experiment(0, 'none')], ['Turned 180° → 1', () => experiment(180, 'none')],
+      ['Turned 45° → 4', () => experiment(45, 'none')], ['Half-wave plate → 3', () => experiment(0, 'hwp', 22.5)]] },
+    { type: 'note', text: 'The presets use equal thicknesses, the single dot and the top view. "Turned by" is measured from the first crystal. The half-wave plate angle is between its fast axis and the first crystal\'s grain; the rotator turns every wiggle by that angle. Colour-coding: o then o red, e then e blue, o then e amber, e then o green (bottom crystal first).' },
+  ]],
   ['Polarizer', [
     { id: 'pol', type: 'check', label: 'Look through a polarizing filter' },
     { id: 'polAngle', label: 'Filter angle', min: 0, max: 180, step: 1, unit: '°' },
@@ -906,7 +1098,7 @@ function buildPanel() {
   const panel = document.getElementById('panel');
   SCHEMA.forEach(([title, items], si) => {
     const det = document.createElement('details');
-    if (si < 3) det.open = true;
+    if (si < 4) det.open = true;
     det.innerHTML = `<summary>${title}</summary>`;
     for (const it of items) {
       const row = document.createElement('div');
@@ -976,6 +1168,8 @@ function updateVisibility() {
   ctl.font.row.style.display = textish ? '' : 'none';
   ctl.upload.row.style.display = S.pattern === 'upload' ? '' : 'none';
   ctl.polAngle.el.disabled = !S.pol; ctl.polSpin.el.disabled = !S.pol;
+  for (const id of ['rotation2', 'thickness2', 'plate']) ctl[id].el.disabled = !S.stack;
+  ctl.plateAngle.el.disabled = !S.stack || S.plate === 'none';
   document.getElementById('btnSpin').textContent = S.spin ? 'Stop spinning' : 'Spin crystal';
 }
 
@@ -985,6 +1179,15 @@ function naturalAxis(quiet) {
     setValue('tilt', Math.round(a.tilt * 10) / 10); setValue('azimuth', Math.round(a.az));
   } else { setValue('tilt', 44.6); setValue('azimuth', 0); }
   if (!quiet) { updateReadouts(); poke(); }
+}
+
+// The classic two-crystal experiments.
+function experiment(rot2, plate, angle) {
+  setValue('stack', true); setValue('rotation2', rot2); setValue('thickness2', S.thickness);
+  setValue('plate', plate); if (angle !== undefined) setValue('plateAngle', angle);
+  if (S.pattern !== 'dot') { setValue('pattern', 'dot'); updatePaper(); }
+  Object.assign(cam, CAM_TOP, { dist: 150 });
+  updateVisibility(); updateReadouts(); poke();
 }
 
 function onUpload(ev) {
@@ -1017,14 +1220,54 @@ function updateReadouts() {
     [(S.thickness * (1 - 1 / S.no)).toFixed(1) + ' mm', 'o-image looks raised by'],
     [(Math.asin(1 / S.no) / deg).toFixed(1) + '°', 'critical angle (ordinary)'],
   ];
+  const sim = stackImages();
+  if (sim) items.push([sim.images.length + (sim.images.length === 1 ? ' image' : ' images'), 'through both crystals: ' + sim.list]);
   document.getElementById('readouts').innerHTML = items.map(([b, s]) => `<div><b>${b}</b><span>${s}</span></div>`).join('');
   const live = {
     no: S.no.toFixed(3), ne: S.ne.toFixed(3), dn: dn.toFixed(3), tilt: S.tilt.toFixed(1) + '°',
     rho: (rho / deg).toFixed(2) + '°', H: S.thickness + ' mm', tanrho: Math.tan(rho).toFixed(3),
     shift: shift.toFixed(2) + ' mm', raise: (S.thickness * (1 - 1 / S.no)).toFixed(1) + ' mm',
   };
+  Object.assign(live, stackLive(sim, rho));
   document.querySelectorAll('[data-live]').forEach(el => { el.textContent = live[el.dataset.live]; });
   drawDiagram();
+}
+
+// What a straight-down look through the middle of the stack sees: the images and their brightness.
+const pct = w => Math.round(w * 100) + '%';
+function stackImages() {
+  if (!S.stack) return null;
+  const st = stack(), c2 = st.c2, top = V.add(V.add(c2.O, V.mul(V.add(c2.e1, c2.e2), 0.5)), c2.e3);
+  const paths = BF.traceStack(st, [top[0], top[1], 400], [0, 0, -1], S.no, S.ne);
+  const images = BF.images(paths, 0.02, 0.005);
+  // list them in order along the line between the two images furthest apart (so a row reads ¼ · ½ · ¼)
+  let far = [0, 0, -1];
+  images.forEach((a, i) => images.forEach((b, j) => { const d = Math.hypot(a.xy[0] - b.xy[0], a.xy[1] - b.xy[1]); if (d > far[2]) far = [i, j, d]; }));
+  const o = images[far[0]].xy, u = [images[far[1]].xy[0] - o[0], images[far[1]].xy[1] - o[1]];
+  images.sort((a, b) => (a.xy[0] - b.xy[0]) * u[0] + (a.xy[1] - b.xy[1]) * u[1]);
+  return { st, paths, images, list: images.map(i => pct(i.w)).join(' · ') };
+}
+const fracText = w => {
+  const f = [[1, '1'], [0.5, '½'], [0.25, '¼'], [0.75, '¾'], [0, '0']].find(([v]) => Math.abs(v - w) < 0.004);
+  return f ? f[1] : w.toFixed(2);
+};
+function stackLive(sim, rho) {
+  if (!sim) {
+    const off = 'off — tick “Stack a second crystal on top” in the panel';
+    return { s_rel: off, s_split: '–', s_count: '–', s_list: '–' };
+  }
+  // the angle between the wiggle arriving from crystal 1 (o) and crystal 2's o-wiggle, straight down
+  const w = sim.paths.find(q => q.modes.length === 2 && q.modes[0] === 0 && q.modes[1] === 0);
+  const oo = w ? 2 * w.w : 0;
+  const angle = Math.acos(Math.sqrt(Math.min(1, Math.max(0, oo)))) / deg;
+  const plateText = S.plate === 'hwp' ? `, with a half-wave plate at ${S.plateAngle}° (it turns the wiggles by ${(2 * Math.abs(S.plateAngle)).toFixed(1)}°)`
+    : S.plate === 'rot' ? `, with a rotator turning the wiggles by ${S.plateAngle}°` : '';
+  return {
+    s_rel: `turned ${S.rotation2}° relative to the first${plateText}`,
+    s_split: `cos²(${angle.toFixed(1)}°) = ${fracText(oo)} stays ordinary and ${fracText(1 - oo)} turns extraordinary`,
+    s_count: sim.images.length + (sim.images.length === 1 ? ' image' : ' images'),
+    s_list: sim.images.map(i => fracText(i.w)).join(', '),
+  };
 }
 
 function buildMatTable() {
@@ -1127,7 +1370,7 @@ canvas.addEventListener('pointerdown', ev => {
   canvas.setPointerCapture(ev.pointerId);
   canvas.classList.add('dragging');
   const ray = pickRay(ev);
-  const hit = BF.intersect(crystal(), ray.ro, ray.rd);
+  const hit = pickCrystal(ray.ro, ray.rd);
   const p = hit && tableHit(ray, S.thickness * 0.5);
   drag = p ? { mode: 'move', start: p, sx: S.x, sy: S.y } : { mode: 'orbit', lx: ev.clientX, ly: ev.clientY };
 });
