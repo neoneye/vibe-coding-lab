@@ -1,0 +1,165 @@
+// Runs the scanning pipeline embedded in index.html (<script id="shared-code">) in Node.
+// Usage: node test.mjs
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+
+const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+const m = html.match(/<script id="shared-code">([\s\S]*?)<\/script>/);
+assert.ok(m, 'shared-code script block found');
+const module = { exports: {} };
+new Function('module', m[1])(module);
+const H = module.exports;
+let n = 0;
+const test = (name, fn) => { const t0 = Date.now(); fn(); n++; console.log('ok', name, `(${Date.now() - t0} ms)`); };
+const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg ?? ''} ${a} vs ${b}`);
+const rng = (seed) => () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+
+test('angle helpers', () => {
+  assert.equal(H.wrap360(-30), 330); assert.equal(H.angDiff(10, 350), 20); assert.equal(H.angDiff(350, 10), -20);
+  near(H.circMean([350, 10], [1, 1]), 0, 1e-9);
+});
+
+test('yaw from pose landmarks matches the turning convention, all the way round', () => {
+  for (let th = 0; th < 360; th += 15) {
+    const { lm2, lm3 } = H.syntheticPose(th);
+    const y = H.yawFromPose(lm2, lm3);
+    near(H.angDiff(y.shoulder, th), 0, 1e-6, 'shoulder ' + th);
+    near(H.angDiff(y.ear, th), 0, 1e-6, 'ear ' + th);
+    near(H.angDiff(y.nose, th), 0, 1e-6, 'nose ' + th);
+    assert.equal(y.frontal, H.angDiff(th, 0) === 0 || Math.abs(H.angDiff(th, 0)) < 5, 'frontal only facing the camera at ' + th);
+  }
+  // A nose turned to image right is positive yaw.
+  assert.ok(H.syntheticPose(30).lm2[0].x > 0.5);
+});
+
+// A realistic two-turn spin: uneven speed, noisy estimates, left/right swaps seen from behind,
+// dropped frames. Returns the tracker plus the true yaw per record.
+function simulateSpin({ seed = 1, dur = 32, flipRate = 0.25, noise = 7 } = {}) {
+  const r = rng(seed), tr = new H.YawTracker(), truth = [];
+  for (let t = 0; t <= dur; t += 1 / 30) {
+    const u = t / dur, th = 720 * (u - Math.sin(2 * Math.PI * u) * 0.08 / Math.PI) + 4 * Math.sin(t * 3);  // speed varies
+    let meas = null;
+    if (r() > 0.08) {
+      const back = Math.cos(th * Math.PI / 180) < -0.2;
+      const { lm2, lm3 } = H.syntheticPose(th, { flipLR: back && r() < flipRate });
+      const y = H.yawFromPose(lm2, lm3);
+      meas = { est: H.wrap360(y.est + (r() - 0.5) * 2 * noise), frontal: y.frontal };
+    }
+    tr.update(t, meas);
+    truth.push(th);
+  }
+  return { tr, truth };
+}
+
+test('yaw tracker + frontal anchors follow a noisy 720° spin', () => {
+  for (const seed of [1, 2, 3]) {
+    const { tr, truth } = simulateSpin({ seed });
+    const corr = H.anchorCorrection(tr.records);
+    assert.ok(corr.anchors.length >= 3, 'anchors at 0, 360 and 720: ' + corr.anchors.map((a) => a.target));
+    let maxErr = 0;
+    tr.records.forEach((rec, i) => { maxErr = Math.max(maxErr, Math.abs(corr.yaw(rec.t, rec.U) - truth[i])); });
+    assert.ok(maxErr < 12, `seed ${seed}: max yaw error ${maxErr.toFixed(1)}°`);
+    near(corr.yaw(tr.records.at(-1).t, tr.records.at(-1).U), truth.at(-1), 6, 'ends facing forward after two turns');
+    near(truth.at(-1), 720, 5);
+  }
+});
+
+test('the tracker learns either spin direction', () => {
+  const tr = new H.YawTracker();
+  for (let t = 0; t <= 10; t += 1 / 30) { const th = -36 * t; const { lm2, lm3 } = H.syntheticPose(th); tr.update(t, { est: H.yawFromPose(lm2, lm3).est }); }
+  near(tr.U, -360, 6); assert.equal(tr.dir, -1);
+});
+
+test('view selection keeps the steadiest frame per bin and pass', () => {
+  const frames = [{ yaw: 10.5, speed: 30 }, { yaw: 11, speed: 10 }, { yaw: 371, speed: 50 }, { yaw: 2, speed: 5 }, { yaw: null, speed: 0 }];
+  const v = H.selectViews(frames, 2);
+  assert.deepEqual(v.map((f) => f.yaw), [2, 11, 371]);
+  // Counter-clockwise spins have negative yaw; passes still split at one turn.
+  assert.deepEqual(H.selectViews([{ yaw: -11, speed: 1 }, { yaw: -370, speed: 1 }, { yaw: -11.5, speed: 0 }], 2).map((f) => f.yaw), [-11.5, -370]);
+});
+
+test('mask clean-up keeps the head blob only', () => {
+  const S2 = 20, m = new Uint8Array(S2 * S2);
+  for (let y = 2; y < 12; y++) for (let x = 6; x < 14; x++) m[y * S2 + x] = 1;  // head
+  m[18 * S2 + 1] = m[18 * S2 + 2] = 1;                                        // a hand in the corner
+  const k = H.keepComponent(m, S2, 10, 5);
+  assert.equal(k.reduce((s, x) => s + x, 0), 80); assert.equal(k[18 * S2 + 1], 0);
+  assert.equal(H.keepComponent(new Uint8Array(4), 2, 0, 0).reduce((s, x) => s + x, 0), 0);
+});
+
+const S = 96;
+const synViews = (count, jitter = 0, seed = 7) => {
+  const r = rng(seed), views = [];
+  for (let k = 0; k < count; k++) {
+    const theta = (720 * k) / count, err = (r() - 0.5) * 2 * jitter;
+    // The crop drifts: axis anywhere near the middle, crown a few pixels down.
+    const img = H.renderSynthetic(theta + err, S, { cx: S / 2 + (r() - 0.5) * 10, top: (r() - 0.5) * 4 + 2 });
+    views.push({ theta, ...img });
+  }
+  return views;
+};
+
+test('synthetic render: nose to image right at +90°, silhouettes align on the cranium', () => {
+  const front = H.renderSynthetic(0, S), side = H.renderSynthetic(90, S);
+  const extent = (mask, row) => { let lo = S, hi = -1; for (let u = 0; u < S; u++) if (mask[row * S + u]) { lo = Math.min(lo, u); hi = Math.max(hi, u); } return [lo, hi]; };
+  const noseRow = Math.round(80 * S / 160);
+  const [l, r] = extent(side.mask, noseRow);
+  assert.ok(r - S / 2 > S / 2 - l, 'profile sticks out to the right');
+  const ref = H.silhouetteRef(front.mask, S);
+  near(ref.cx, S / 2, 1); near(ref.top, 2 * S / 160, 2);
+  const ref2 = H.silhouetteRef(H.renderSynthetic(90, S, { cx: 40 }).mask, S);
+  // The cranium sits 6/160 of the crop behind the turning axis, so in profile its centre is that far off.
+  near(ref2.cx, 40 - 6 * S / 160, 1.5, 'cranium centre in profile');
+});
+
+test('carving the synthetic head reproduces its volume (two passes, drifting crops)', () => {
+  const views = synViews(180, 0);
+  const rec = H.reconstruct(views, { S, N: 64 });
+  const { N, step, origin } = rec.carved;
+  let inter = 0, uni = 0;
+  for (let iy = 0; iy < N; iy++) for (let iz = 0; iz < N; iz++) for (let ix = 0; ix < N; ix++) {
+    const X = origin.x + ix * step, Y = origin.y + iy * step, Z = origin.z + iz * step;
+    // The reconstruction is centred on the cranium (Z offset) with Y = 0 at the crown.
+    const k = S / 160, Yt = Y + 2 * k, Zt = Z - 6 * k;
+    const a = rec.occ[(iy * N + iz) * N + ix] === 1, b = H.synInside(X, Yt, Zt, S) && Yt < S - 4;
+    if (a && b) inter++; if (a || b) uni++;
+  }
+  const iou = inter / uni;
+  assert.ok(iou > 0.85, 'IoU ' + iou.toFixed(3));
+  assert.ok(rec.indices.length > 3000, 'a real mesh: ' + rec.indices.length / 3 + ' triangles');
+  assert.ok(H.meshVolume(rec.positions, rec.indices) > 0, 'triangles face outward');
+});
+
+test('colour lands on the right side (left hair green, right hair purple, face skin)', () => {
+  const rec = H.reconstruct(synViews(120, 0), { S, N: 56 });
+  let gL = 0, pL = 0, gR = 0, pR = 0, skin = 0, skinN = 0;
+  const p = rec.positions, c = rec.colors;
+  for (let i = 0; i < p.length / 3; i++) {
+    const X = p[3 * i], Y = p[3 * i + 1], Z = p[3 * i + 2], r = c[3 * i], g = c[3 * i + 1], b = c[3 * i + 2];
+    if (Y < 0.3 * S && Z < 0) { if (X > 0.15 * S) { gL += g; pL += (r + b) / 2; } if (X < -0.15 * S) { gR += g; pR += (r + b) / 2; } }
+    if (Z > 0.18 * S && Y > 0.5 * S && Y < 0.62 * S) { skin += r - b; skinN++; }
+  }
+  assert.ok(gL > pL, 'left side hair is green'); assert.ok(pR > gR, 'right side hair is purple');
+  assert.ok(skinN > 0 && skin / skinN > 0.15, 'face is skin coloured');
+});
+
+test('redundancy: a few broken masks do not dent the head', () => {
+  const views = synViews(180, 0);
+  for (const k of [10, 50, 90, 130]) views[k].mask.fill(0, 0, (S * S) >> 1);  // top half missing
+  views.forEach((v) => { v.top = undefined; });
+  const good = H.reconstruct(synViews(180, 0), { S, N: 48 }), bad = H.reconstruct(views, { S, N: 48 });
+  const count = (o) => o.reduce((s, x) => s + x, 0);
+  near(count(bad.occ) / count(good.occ), 1, 0.03);
+});
+
+test('exports', () => {
+  const rec = H.reconstruct(synViews(60, 0), { S, N: 32 });
+  const obj = H.toOBJ(rec, 2), ply = H.toPLY(rec, 2);
+  const nv = rec.positions.length / 3, nf = rec.indices.length / 3;
+  assert.equal(obj.split('\n').filter((l) => l.startsWith('v ')).length, nv);
+  assert.equal(obj.split('\n').filter((l) => l.startsWith('f ')).length, nf);
+  assert.match(ply, new RegExp(`element vertex ${nv}\\n`)); assert.match(ply, new RegExp(`element face ${nf}\\n`));
+  assert.equal(obj.split('\n').find((l) => l.startsWith('v ')).split(' ').length, 7, 'x y z r g b');
+});
+
+console.log(`${n} tests passed`);
