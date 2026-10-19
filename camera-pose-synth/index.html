@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera Pose Synth</title>
+<style>
+:root {
+  --bg: #0b0d12;
+  --panel: #12151d;
+  --line: #242a38;
+  --text: #e8eaf0;
+  --dim: #8b92a5;
+  --accent: #7cf29c;
+  --left: #ff9f43;
+  --right: #4cc9f0;
+  --btn: #1c2130;
+  --btn-hover: #262c3f;
+  --warn: #ffcf5c;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { display: flex; flex-direction: column; }
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 15px; margin: 0 6px 0 0; font-weight: 650; letter-spacing: .2px; }
+.group { display: flex; align-items: center; gap: 6px; }
+button, select, .filebtn {
+  font: inherit; color: var(--text); background: var(--btn); border: 1px solid var(--line);
+  border-radius: 7px; padding: 5px 11px; cursor: pointer;
+}
+button:hover, select:hover, .filebtn:hover { background: var(--btn-hover); }
+button.active { border-color: var(--accent); color: var(--accent); }
+#btnSound { font-weight: 650; }
+#btnSound.on { background: rgba(124, 242, 156, .16); border-color: var(--accent); color: var(--accent); }
+.filebtn input { display: none; }
+label.tog { display: flex; align-items: center; gap: 5px; color: var(--dim); cursor: pointer; user-select: none; }
+label.tog input { accent-color: var(--accent); margin: 0; }
+main { flex: 1; display: flex; min-height: 0; }
+#stage { position: relative; flex: 1; min-width: 0; min-height: 240px; overflow: hidden; }
+#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#bigLabel {
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  font-size: clamp(22px, 4.2vw, 46px); font-weight: 750; letter-spacing: .3px; font-variant-numeric: tabular-nums;
+  padding: 6px 20px; border-radius: 14px; white-space: nowrap; pointer-events: none;
+  background: rgba(8, 10, 14, .62); border: 1px solid rgba(255,255,255,.08);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+#bigLabel small { font-size: .5em; font-weight: 500; color: var(--dim); margin-left: .5em; }
+#bigLabel.none { color: var(--dim); font-weight: 500; font-size: clamp(16px, 2.4vw, 24px); }
+#status {
+  position: absolute; top: 12px; left: 12px; max-width: calc(100% - 24px);
+  padding: 6px 10px; border-radius: 8px; font-size: 13px; color: var(--dim);
+  background: rgba(8, 10, 14, .7); pointer-events: none;
+}
+#status:empty { display: none; }
+#status.err { color: #ff8a80; }
+#status.hint { color: var(--warn); }
+aside {
+  width: 300px; flex: none; overflow: auto; padding: 12px 14px 18px;
+  background: var(--panel); border-left: 1px solid var(--line);
+}
+aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--dim); margin: 16px 0 8px; font-weight: 600; }
+aside h2:first-child { margin-top: 0; }
+.row { display: grid; grid-template-columns: 62px 1fr; align-items: center; gap: 6px 8px; margin-bottom: 7px; }
+.row > span { color: var(--dim); }
+.row select, .row input[type=range] { width: 100%; min-width: 0; }
+.row select { padding: 4px 6px; }
+input[type=range] { accent-color: var(--accent); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button { font-size: 12px; padding: 4px 9px; }
+.meter { display: grid; grid-template-columns: 112px 1fr 52px; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 5px; }
+.meter > span:first-child { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meter .bar { height: 7px; border-radius: 4px; background: #1d2230; position: relative; overflow: hidden; }
+.meter .bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 4px; background: var(--dim); }
+.meter.used .bar i { background: var(--accent); }
+.meter.used > span:first-child { color: var(--text); }
+.meter .val { text-align: right; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
+.meter .bar b { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,.25); }
+.note { font-size: 12px; color: var(--dim); }
+kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+@media (max-width: 760px) {
+  main { flex-direction: column; }
+  aside { width: auto; max-height: 40vh; border-left: 0; border-top: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pose Synth</h1>
+  <div class="group">
+    <button id="btnSound" title="Sound on/off (M)">Sound off</button>
+  </div>
+  <div class="group">
+    <button id="btnCamera">Camera</button>
+    <button id="btnDemo">Demo</button>
+    <label class="filebtn" id="btnFile">Video file<input type="file" id="fileInput" accept="video/*"></label>
+  </div>
+  <div class="group">
+    <label class="tog"><input type="checkbox" id="optMirror" checked>Mirror</label>
+    <label class="tog"><input type="checkbox" id="optVideo" checked>Video</label>
+    <select id="optModel" title="Pose model">
+      <option value="lite">Lite model</option>
+      <option value="full" selected>Full model</option>
+      <option value="heavy">Heavy model</option>
+    </select>
+  </div>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="view"></canvas>
+    <div id="status"></div>
+    <div id="bigLabel" class="none">Starting…</div>
+  </div>
+  <aside>
+    <h2>Mapping</h2>
+    <div id="mapRows"></div>
+    <div class="presets" id="presets"></div>
+    <h2>Pitch</h2>
+    <div class="row"><span>T-pose</span><select id="optBase"></select></div>
+    <div class="row"><span>Range</span><select id="optRange">
+      <option value="7">± a fifth</option>
+      <option value="12" selected>± 1 octave</option>
+      <option value="24">± 2 octaves</option>
+    </select></div>
+    <div class="row"><span>Scale</span><select id="optScale">
+      <option value="continuous" selected>Continuous (theremin)</option>
+      <option value="chromatic">Chromatic</option>
+      <option value="major">Major</option>
+      <option value="minor">Natural minor</option>
+      <option value="majorPenta">Major pentatonic</option>
+      <option value="minorPenta">Minor pentatonic</option>
+    </select></div>
+    <h2>Sound</h2>
+    <div class="row"><span>Wave</span><select id="optWave">
+      <option value="sawtooth" selected>Sawtooth</option>
+      <option value="square">Square</option>
+      <option value="triangle">Triangle</option>
+      <option value="sine">Sine</option>
+    </select></div>
+    <div class="row"><span>Volume</span><input type="range" id="optVolume" min="0" max="1" step="0.01" value="0.6"></div>
+    <div class="row"><span>Glide</span><input type="range" id="optGlide" min="0" max="0.4" step="0.01" value="0.05"></div>
+    <h2>Body parameters</h2>
+    <div id="meters"></div>
+    <p class="note">Shoulder angle is measured between the spine and the upper arm in MediaPipe's 3D landmarks: 0° hanging down, 90° in a T-pose, 180° straight up. <kbd>M</kbd> toggles sound. Everything runs in the browser.</p>
+  </aside>
+</main>
+<video id="video" playsinline muted hidden></video>
+
+<script id="shared-code">
+// Body measurements, the body -> synth mapping and a synthetic skeleton for the demo.
+// Pure functions, also run by test.mjs in Node.
+const PoseSynth = (() => {
+  // Stick-figure bones: [from, to, side] with side 'L', 'R' or 'C'. Landmark indices are MediaPipe
+  // BlazePose; "left" is the person's own left.
+  const BONES = [
+    [11, 12, 'C'], [11, 23, 'L'], [12, 24, 'R'], [23, 24, 'C'],
+    [11, 13, 'L'], [13, 15, 'L'], [15, 19, 'L'], [15, 17, 'L'], [15, 21, 'L'],
+    [12, 14, 'R'], [14, 16, 'R'], [16, 20, 'R'], [16, 18, 'R'], [16, 22, 'R'],
+    [23, 25, 'L'], [25, 27, 'L'], [27, 29, 'L'], [29, 31, 'L'], [27, 31, 'L'],
+    [24, 26, 'R'], [26, 28, 'R'], [28, 30, 'R'], [30, 32, 'R'], [28, 32, 'R'],
+  ];
+
+  const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: (a.z || 0) - (b.z || 0) });
+  const add = (a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: (a.z || 0) + (b.z || 0) });
+  const scale = (a, s) => ({ x: a.x * s, y: a.y * s, z: (a.z || 0) * s });
+  const dot = (a, b) => a.x * b.x + a.y * b.y + (a.z || 0) * (b.z || 0);
+  const len = (a) => Math.sqrt(dot(a, a));
+  const norm = (a) => scale(a, 1 / (len(a) || 1e-9));
+  const mid = (a, b) => scale(add(a, b), 0.5);
+  const dist = (a, b) => len(sub(a, b));
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const DEG = 180 / Math.PI;
+  const angle = (a, b) => Math.acos(clamp(dot(a, b) / ((len(a) * len(b)) || 1e-9), -1, 1)) * DEG;
+  const jointAngle = (a, b, c) => angle(sub(a, b), sub(c, b));  // 180 = straight
+
+  const visible = (lm2, i) => {
+    const p = lm2[i];
+    if (!p) return false;
+    return (p.visibility ?? 1) >= 0.5 && p.x > -0.05 && p.x < 1.05 && p.y > -0.05 && p.y < 1.05;
+  };
+  const allVis = (lm2, ids) => ids.every((i) => visible(lm2, i));
+
+  // lm2: normalized image landmarks (x, y in 0..1, visibility). lm3: world landmarks in meters, or
+  // null to fall back on the image landmarks. aspect: image width / height.
+  function measure(lm2, lm3, aspect = 1) {
+    if (!lm2 || lm2.length < 33 || !allVis(lm2, [11, 12])) return null;
+    const W = lm3 && lm3.length >= 33 ? lm3 : lm2.map((p) => ({ x: p.x * aspect, y: p.y, z: (p.z || 0) * aspect }));
+    const mS = mid(W[11], W[12]), mH = mid(W[23], W[24]);
+    const T = len(sub(mH, mS)) || 1e-6;
+    const down = sub(mH, mS);  // along the spine
+    const arm = (sh, el, wr) => ({
+      vis: allVis(lm2, [sh, el]),
+      handVis: allVis(lm2, [sh, el, wr]),
+      shoulder: angle(sub(W[el], W[sh]), down),  // 0 hanging, 90 T-pose, 180 straight up
+      elbow: jointAngle(W[sh], W[el], W[wr]),
+    });
+    // Signed torso lean in the image (assumes a level camera); positive = toward image right.
+    const s2 = mid(lm2[11], lm2[12]), h2 = mid(lm2[23], lm2[24]);
+    const lean = Math.atan2((s2.x - h2.x) * aspect, h2.y - s2.y) * DEG;
+    return {
+      T,
+      left: arm(11, 13, 15),
+      right: arm(12, 14, 16),
+      handGap: dist(W[15], W[16]) / T,
+      lean,
+      hipsVis: allVis(lm2, [23, 24]),
+    };
+  }
+
+  // Body parameters the synth can listen to. get() returns natural units or null when not visible;
+  // [min, max] is the span mapped onto 0..1.
+  const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const SOURCES = {
+    shoulders: { label: 'Shoulders (avg)', unit: '°', min: 0, max: 180,
+      get: (m) => avg([m.left, m.right].filter((a) => a.vis).map((a) => a.shoulder)) },
+    leftShoulder: { label: 'Left shoulder', unit: '°', min: 0, max: 180, get: (m) => (m.left.vis ? m.left.shoulder : null) },
+    rightShoulder: { label: 'Right shoulder', unit: '°', min: 0, max: 180, get: (m) => (m.right.vis ? m.right.shoulder : null) },
+    leftElbow: { label: 'Left elbow', unit: '°', min: 30, max: 180, get: (m) => (m.left.handVis ? m.left.elbow : null) },
+    rightElbow: { label: 'Right elbow', unit: '°', min: 30, max: 180, get: (m) => (m.right.handVis ? m.right.elbow : null) },
+    handGap: { label: 'Hand distance', unit: '', min: 0, max: 3, get: (m) => (m.left.handVis && m.right.handVis ? m.handGap : null) },
+    lean: { label: 'Torso lean', unit: '°', min: -40, max: 40, get: (m) => (m.hipsVis ? m.lean : null) },
+  };
+  const unit01 = (key, v) => { const s = SOURCES[key]; return clamp((v - s.min) / (s.max - s.min), 0, 1); };
+
+  // Synth parameters. A target with source 'none' sits at its idle value.
+  const TARGETS = [
+    { key: 'pitch', label: 'Pitch' },
+    { key: 'volume', label: 'Volume' },
+    { key: 'cutoff', label: 'Filter' },
+    { key: 'vibrato', label: 'Vibrato' },
+  ];
+  const PRESETS = [
+    { name: 'Both arms → pitch', map: { pitch: 'shoulders', volume: 'none', cutoff: 'none', vibrato: 'none' } },
+    { name: 'Theremin', hint: 'right arm pitch, left arm volume', map: { pitch: 'rightShoulder', volume: 'leftShoulder', cutoff: 'none', vibrato: 'none' } },
+    { name: 'Filter sweep', hint: 'left arm pitch, right arm filter', map: { pitch: 'leftShoulder', volume: 'none', cutoff: 'rightShoulder', vibrato: 'none' } },
+    { name: 'Wobble', hint: 'arms pitch, lean vibrato', map: { pitch: 'shoulders', volume: 'none', cutoff: 'handGap', vibrato: 'lean' } },
+  ];
+
+  const SCALES = {
+    continuous: null,
+    chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    major: [0, 2, 4, 5, 7, 9, 11],
+    minor: [0, 2, 3, 5, 7, 8, 10],
+    majorPenta: [0, 2, 4, 7, 9],
+    minorPenta: [0, 3, 5, 7, 10],
+  };
+  const inScale = (semi, sc) => sc.includes(((semi % 12) + 12) % 12);
+  function nearestInScale(semis, sc) {
+    let best = 0, bestD = Infinity;
+    const o = Math.floor(semis / 12);
+    for (let oct = o - 1; oct <= o + 1; oct++) {
+      for (const d of sc) {
+        const n = oct * 12 + d, dd = Math.abs(n - semis);
+        if (dd < bestD) { bestD = dd; best = n; }
+      }
+    }
+    return best;
+  }
+  // Snap a continuous offset (semitones from the T-pose note) to the scale, holding the previous
+  // note until the arm has clearly moved on (hysteresis) so jitter at a boundary doesn't warble.
+  function snap(semis, scaleKey, prev = null, hyst = 0.3) {
+    const sc = SCALES[scaleKey];
+    if (!sc) return semis;
+    const n = nearestInScale(semis, sc);
+    if (prev !== null && Number.isInteger(prev) && inScale(prev, sc) &&
+        Math.abs(semis - prev) <= Math.abs(semis - n) + hyst) return prev;
+    return n;
+  }
+  // Shoulder angle -> semitones: 90° (T-pose) is the base note, 0° and 180° are -range / +range.
+  const pitchOffset = (u, range) => (u - 0.5) * 2 * range;
+
+  // Values that target synth parameters. u is 0..1 or null (source 'none' or not visible).
+  const TARGET_VALUE = {
+    volume: (u) => (u === null ? 1 : u),
+    cutoff: (u) => (u === null ? 2600 : 120 * Math.pow(12000 / 120, u)),  // Hz, exponential
+    vibrato: (u) => (u === null ? 0 : u * 70),                              // cents
+  };
+
+  const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const midiToFreq = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  const noteName = (m) => { const r = Math.round(m); return NAMES[((r % 12) + 12) % 12] + (Math.floor(r / 12) - 1); };
+
+  // One Euro filter (Casiez et al. 2012): smooths jitter when still, follows quickly when moving.
+  class OneEuro {
+    constructor(minCutoff = 1.2, beta = 0.015, dCutoff = 1) { Object.assign(this, { minCutoff, beta, dCutoff }); this.reset(); }
+    reset() { this.x = null; this.dx = 0; this.t = null; }
+    static alpha(cutoff, dt) { const r = 2 * Math.PI * cutoff * dt; return r / (r + 1); }
+    filter(x, t) {
+      if (this.x === null || this.t === null || t <= this.t) { this.x = x; this.t = t; return x; }
+      const dt = t - this.t; this.t = t;
+      const dx = (x - this.x) / dt;
+      this.dx += OneEuro.alpha(this.dCutoff, dt) * (dx - this.dx);
+      const cutoff = this.minCutoff + this.beta * Math.abs(this.dx);
+      this.x += OneEuro.alpha(cutoff, dt) * (x - this.x);
+      return this.x;
+    }
+  }
+
+  // ---- Synthetic skeleton for the demo ----
+  // Segment directions are [out, down, forward] in the person's frame. Torso length = 1.
+  const DEFAULT_SPEC = {
+    lUpper: [0.08, 1, 0], lFore: [0.05, 1, 0.08], rUpper: [0.08, 1, 0], rFore: [0.05, 1, 0.08],
+    lThigh: [0.04, 1, 0], lShin: [0, 1, 0], rThigh: [0.04, 1, 0], rShin: [0, 1, 0],
+  };
+  // Direction of a straight arm at shoulder angle a (degrees from hanging).
+  const armDir = (a) => [Math.sin(a / DEG), Math.cos(a / DEG), 0];
+  function buildPose(specIn, opt = {}) {
+    const s = { ...DEFAULT_SPEC, ...specIn };
+    const v = (x, y, z) => ({ x, y, z });
+    const P = new Array(33);
+    P[11] = v(0.4, 0, 0); P[12] = v(-0.4, 0, 0); P[23] = v(0.25, 1, 0); P[24] = v(-0.25, 1, 0);
+    P[0] = v(0, -0.45, 0.15);
+    P[1] = v(0.04, -0.52, 0.13); P[2] = v(0.07, -0.52, 0.12); P[3] = v(0.1, -0.52, 0.1);
+    P[4] = v(-0.04, -0.52, 0.13); P[5] = v(-0.07, -0.52, 0.12); P[6] = v(-0.1, -0.52, 0.1);
+    P[7] = v(0.16, -0.49, 0); P[8] = v(-0.16, -0.49, 0);
+    P[9] = v(0.04, -0.37, 0.13); P[10] = v(-0.04, -0.37, 0.13);
+    const seg = (from, dir, sign, length) => add(from, scale(norm(v(dir[0] * sign, dir[1], dir[2])), length));
+    for (const [sh, el, wr, up, fo, sign, fingers] of [
+      [11, 13, 15, s.lUpper, s.lFore, 1, [17, 19, 21]], [12, 14, 16, s.rUpper, s.rFore, -1, [18, 20, 22]]]) {
+      P[el] = seg(P[sh], up, sign, 0.6);
+      P[wr] = seg(P[el], fo, sign, 0.5);
+      const d = norm(sub(P[wr], P[el]));
+      fingers.forEach((i, k) => { P[i] = add(add(P[wr], scale(d, 0.13 - k * 0.025)), v(sign * (k - 1) * 0.03, 0, 0)); });
+    }
+    for (const [hip, kn, an, heel, foot, th, sh, sign] of [
+      [23, 25, 27, 29, 31, s.lThigh, s.lShin, 1], [24, 26, 28, 30, 32, s.rThigh, s.rShin, -1]]) {
+      P[kn] = seg(P[hip], th, sign, 0.9);
+      P[an] = seg(P[kn], sh, sign, 0.9);
+      P[heel] = add(P[an], v(0, 0.06, -0.06));
+      P[foot] = add(P[an], v(sign * 0.04, 0.08, 0.2));
+    }
+    const k = opt.k ?? 0.15, aspect = opt.aspect ?? 1, cx = opt.cx ?? 0.5, cy = opt.cy ?? 0.3;
+    const lm3 = P.map((p) => v(p.x * 0.5, (p.y - 1) * 0.5, -p.z * 0.5));
+    const lm2 = P.map((p) => ({ x: cx + p.x * k / aspect, y: cy + p.y * k, z: -p.z * k, visibility: 0.99 }));
+    return { lm2, lm3 };
+  }
+
+  return {
+    BONES, measure, SOURCES, unit01, TARGETS, PRESETS, SCALES, snap, pitchOffset, TARGET_VALUE,
+    midiToFreq, noteName, OneEuro, buildPose, armDir, util: { mid, dist },
+  };
+})();
+if (typeof module !== 'undefined') module.exports = PoseSynth;
+</script>
+
+<script type="module">
+const { BONES, measure, SOURCES, unit01, TARGETS, PRESETS, snap, pitchOffset, TARGET_VALUE,
+  midiToFreq, noteName, OneEuro, buildPose, armDir } = PoseSynth;
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('view'), ctx = canvas.getContext('2d');
+const video = $('video'), statusEl = $('status'), bigLabel = $('bigLabel');
+const params = new URLSearchParams(location.search);
+
+// ---- Mapping UI ----
+const mapping = { ...PRESETS[0].map };
+const mapSelects = {};
+for (const t of TARGETS) {
+  const row = document.createElement('div'); row.className = 'row';
+  const label = document.createElement('span'); label.textContent = t.label;
+  const sel = document.createElement('select');
+  sel.add(new Option('—', 'none'));
+  for (const [key, s] of Object.entries(SOURCES)) sel.add(new Option(s.label, key));
+  sel.value = mapping[t.key];
+  sel.onchange = () => { mapping[t.key] = sel.value; prevNote = null; markUsed(); };
+  row.append(label, sel); $('mapRows').appendChild(row);
+  mapSelects[t.key] = sel;
+}
+for (const p of PRESETS) {
+  const b = document.createElement('button');
+  b.textContent = p.name; if (p.hint) b.title = p.hint;
+  b.onclick = () => { Object.assign(mapping, p.map); for (const t of TARGETS) mapSelects[t.key].value = mapping[t.key]; prevNote = null; markUsed(); };
+  $('presets').appendChild(b);
+}
+for (let m = 45; m <= 72; m++) $('optBase').add(new Option(`${noteName(m)} · ${midiToFreq(m).toFixed(1)} Hz`, m));
+$('optBase').value = 57;  // A3, 220 Hz
+
+const meters = {};
+for (const [key, s] of Object.entries(SOURCES)) {
+  const el = document.createElement('div'); el.className = 'meter';
+  el.innerHTML = '<span></span><div class="bar"><i></i><b></b></div><span class="val">–</span>';
+  el.firstChild.textContent = s.label;
+  $('meters').appendChild(el);
+  meters[key] = { el, bar: el.querySelector('i'), val: el.querySelector('.val') };
+}
+function markUsed() {
+  const used = new Set(Object.values(mapping));
+  for (const [key, m] of Object.entries(meters)) m.el.classList.toggle('used', used.has(key));
+}
+markUsed();
+
+// ---- Audio: two detuned oscillators -> lowpass -> amp -> master ----
+let audio = null, soundOn = false;
+function buildAudio() {
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const osc1 = ac.createOscillator(), osc2 = ac.createOscillator();
+  const mix = ac.createGain(); mix.gain.value = 0.5;
+  osc2.detune.value = 8;
+  const filter = ac.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 2600; filter.Q.value = 3;
+  const amp = ac.createGain(); amp.gain.value = 0;
+  const master = ac.createGain(); master.gain.value = +$('optVolume').value;
+  const comp = ac.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 6;
+  const analyser = ac.createAnalyser(); analyser.fftSize = 2048;
+  const lfo = ac.createOscillator(), lfoGain = ac.createGain();
+  lfo.frequency.value = 5.6; lfoGain.gain.value = 0;
+  lfo.connect(lfoGain); lfoGain.connect(osc1.detune); lfoGain.connect(osc2.detune);
+  osc1.connect(mix); osc2.connect(mix); mix.connect(filter); filter.connect(amp); amp.connect(master);
+  master.connect(comp); comp.connect(analyser); analyser.connect(ac.destination);
+  for (const o of [osc1, osc2]) { o.type = $('optWave').value; o.frequency.value = midiToFreq(+$('optBase').value); o.start(); }
+  lfo.start();
+  return { ac, osc1, osc2, filter, amp, master, analyser, lfoGain, buf: new Float32Array(analyser.fftSize) };
+}
+async function setSound(on) {
+  soundOn = on;
+  if (on && !audio) audio = buildAudio();
+  if (audio) { if (on) await audio.ac.resume(); else audio.amp.gain.setTargetAtTime(0, audio.ac.currentTime, 0.03); }
+  $('btnSound').classList.toggle('on', on);
+  $('btnSound').textContent = on ? 'Sound on' : 'Sound off';
+  if (on && statusEl.classList.contains('hint')) setStatus('');
+}
+$('btnSound').onclick = () => setSound(!soundOn);
+$('optWave').onchange = () => { if (audio) for (const o of [audio.osc1, audio.osc2]) o.type = $('optWave').value; };
+$('optVolume').oninput = () => { if (audio) audio.master.gain.setTargetAtTime(+$('optVolume').value, audio.ac.currentTime, 0.02); };
+for (const id of ['optBase', 'optRange', 'optScale']) $(id).onchange = () => { prevNote = null; };
+window.addEventListener('keydown', (e) => { if (e.key === 'm' || e.key === 'M') { if (!e.repeat && !e.metaKey && !e.ctrlKey) setSound(!soundOn); } });
+
+// Push one frame of synth state into the audio graph.
+function drive(state) {
+  if (!audio) return;
+  const t = audio.ac.currentTime, glide = Math.max(0.005, +$('optGlide').value / 3);
+  const gate = soundOn && state.gate;
+  audio.amp.gain.setTargetAtTime(gate ? 0.5 * state.volume : 0, t, gate ? 0.04 : 0.08);
+  if (state.freq) for (const o of [audio.osc1, audio.osc2]) o.frequency.setTargetAtTime(state.freq, t, glide);
+  audio.filter.frequency.setTargetAtTime(state.cutoff, t, 0.04);
+  audio.lfoGain.gain.setTargetAtTime(state.vibrato, t, 0.08);
+}
+
+// ---- Body -> synth ----
+const filters = Object.fromEntries(Object.keys(SOURCES).map((k) => [k, new OneEuro()]));
+let prevNote = null;
+function synthState(m, tSec) {
+  const raw = {}, u = {};
+  for (const [key, s] of Object.entries(SOURCES)) {
+    const v = m ? s.get(m) : null;
+    if (v === null) { filters[key].reset(); raw[key] = null; u[key] = null; continue; }
+    raw[key] = filters[key].filter(v, tSec);
+    u[key] = unit01(key, raw[key]);
+  }
+  const src = (target) => (mapping[target] === 'none' ? null : u[mapping[target]]);
+  const base = +$('optBase').value, range = +$('optRange').value, scaleKey = $('optScale').value;
+  const pu = src('pitch');
+  // Sound needs a person, and a visible pitch source when pitch is mapped.
+  const gate = !!m && (mapping.pitch === 'none' || pu !== null);
+  let offset = 0;
+  if (pu !== null) { offset = snap(pitchOffset(pu, range), scaleKey, prevNote); prevNote = offset; }
+  const midi = base + offset;
+  return {
+    raw, u, gate, midi, freq: midiToFreq(midi),
+    volume: TARGET_VALUE.volume(src('volume')),
+    cutoff: TARGET_VALUE.cutoff(src('cutoff')),
+    vibrato: TARGET_VALUE.vibrato(src('vibrato')),
+    base, range,
+  };
+}
+
+function showMeters(state) {
+  for (const [key, mt] of Object.entries(meters)) {
+    const v = state.raw[key], s = SOURCES[key];
+    mt.bar.style.width = v === null ? '0' : (state.u[key] * 100).toFixed(1) + '%';
+    mt.val.textContent = v === null ? '–' : (s.unit === '°' ? Math.round(v) + '°' : v.toFixed(2));
+  }
+}
+
+// ---- Canvas ----
+let dpr = 1;
+function fitCanvas() {
+  dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+function containRect(srcW, srcH) {
+  const W = canvas.width, H = canvas.height, s = Math.min(W / srcW, H / srcH);
+  return { x: (W - srcW * s) / 2, y: (H - srcH * s) / 2, w: srcW * s, h: srcH * s };
+}
+
+const COLORS = { L: '#ff9f43', R: '#4cc9f0', C: '#f1f3f8' };
+function drawPerson(lm2, rect, mirror, m) {
+  const P = (p) => ({ x: rect.x + (mirror ? 1 - p.x : p.x) * rect.w, y: rect.y + p.y * rect.h });
+  const vis = (i) => (lm2[i].visibility ?? 1) >= 0.5;
+  const lw = Math.max(2.5 * dpr, rect.h / 110);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const pass of [0, 1]) {
+    for (const [a, b, side] of BONES) {
+      if (!vis(a) || !vis(b)) continue;
+      const pa = P(lm2[a]), pb = P(lm2[b]);
+      ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
+      ctx.lineWidth = (a === 15 || a === 16 ? lw * 0.5 : lw) + (pass ? 0 : lw * 0.9);
+      ctx.strokeStyle = pass ? COLORS[side] : 'rgba(0,0,0,0.45)';
+      ctx.stroke();
+    }
+  }
+  const { mid, dist } = PoseSynth.util;
+  if (vis(0)) {
+    const ears = vis(7) && vis(8), nose = P(lm2[0]), sh = mid(P(lm2[11]), P(lm2[12]));
+    const c = ears ? mid(P(lm2[7]), P(lm2[8])) : nose;
+    const r = Math.max(ears ? dist(P(lm2[7]), P(lm2[8])) * 0.62 : 0, dist(P(lm2[11]), P(lm2[12])) * 0.22, lw * 2);
+    const dx = sh.x - c.x, dy = sh.y - c.y, d = Math.hypot(dx, dy) || 1;
+    ctx.beginPath(); ctx.moveTo(c.x + dx / d * r, c.y + dy / d * r); ctx.lineTo(sh.x, sh.y);
+    ctx.lineWidth = lw; ctx.strokeStyle = COLORS.C; ctx.stroke();
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.lineWidth = lw * 1.9; ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.stroke();
+    ctx.lineWidth = lw; ctx.strokeStyle = COLORS.C; ctx.stroke();
+  }
+  // Shoulder angle arcs, from "hanging down" (along the torso) to the upper arm.
+  if (m && vis(23) && vis(24)) {
+    const used = new Set(Object.values(mapping));
+    const sMid = mid(P(lm2[11]), P(lm2[12])), hMid = mid(P(lm2[23]), P(lm2[24]));
+    const downA = Math.atan2(hMid.y - sMid.y, hMid.x - sMid.x);
+    for (const [sh, el, side, arm, keys] of [[11, 13, 'L', m.left, ['leftShoulder', 'shoulders']], [12, 14, 'R', m.right, ['rightShoulder', 'shoulders']]]) {
+      if (!arm.vis) continue;
+      const ps = P(lm2[sh]), pe = P(lm2[el]);
+      const armA = Math.atan2(pe.y - ps.y, pe.x - ps.x);
+      let delta = armA - downA;
+      while (delta > Math.PI) delta -= 2 * Math.PI;
+      while (delta < -Math.PI) delta += 2 * Math.PI;
+      const r = Math.max(dist(ps, pe) * 0.42, 18 * dpr), hot = keys.some((k) => used.has(k));
+      ctx.beginPath(); ctx.moveTo(ps.x, ps.y); ctx.arc(ps.x, ps.y, r, downA, armA, delta < 0); ctx.closePath();
+      ctx.fillStyle = (side === 'L' ? 'rgba(255,159,67,' : 'rgba(76,201,240,') + (hot ? '0.28)' : '0.12)');
+      ctx.fill();
+      ctx.beginPath(); ctx.arc(ps.x, ps.y, r, downA, armA, delta < 0);
+      ctx.lineWidth = lw * 0.5; ctx.strokeStyle = COLORS[side]; ctx.stroke();
+      const midA = downA + delta / 2, fs = Math.round(Math.max(12 * dpr, rect.h / 42));
+      ctx.font = `700 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const tx = ps.x + Math.cos(midA) * (r + fs * 1.3), ty = ps.y + Math.sin(midA) * (r + fs * 1.3);
+      ctx.lineWidth = 4 * dpr; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(Math.round(arm.shoulder) + '°', tx, ty);
+      ctx.fillStyle = COLORS[side]; ctx.fillText(Math.round(arm.shoulder) + '°', tx, ty);
+    }
+  }
+  for (const i of [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) {
+    if (!vis(i)) continue;
+    const p = P(lm2[i]);
+    ctx.beginPath(); ctx.arc(p.x, p.y, lw * 0.95, 0, Math.PI * 2);
+    ctx.fillStyle = '#0b0d12'; ctx.fill();
+    ctx.lineWidth = lw * 0.55; ctx.strokeStyle = COLORS[i % 2 ? 'L' : 'R']; ctx.stroke();
+  }
+}
+
+// Vertical pitch ladder on the right edge: the mapped range with the T-pose note in the middle.
+function drawLadder(state) {
+  const W = canvas.width, H = canvas.height;
+  const x = W - 74 * dpr, top = 56 * dpr, bot = H - 96 * dpr, w = 54 * dpr;
+  if (bot - top < 80 * dpr) return;
+  const lo = state.base - state.range, hi = state.base + state.range;
+  const Y = (midi) => bot - (midi - lo) / (hi - lo) * (bot - top);
+  ctx.fillStyle = 'rgba(8,10,14,0.6)';
+  ctx.beginPath(); ctx.roundRect(x - 8 * dpr, top - 14 * dpr, w + 16 * dpr, bot - top + 28 * dpr, 10 * dpr); ctx.fill();
+  const sc = PoseSynth.SCALES[$('optScale').value];
+  ctx.font = `${Math.round(10 * dpr)}px ui-monospace, Menlo, monospace`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const every = state.range > 12 ? 2 : 1;
+  for (let n = lo; n <= hi; n++) {
+    const y = Y(n), off = n - state.base, black = [1, 3, 6, 8, 10].includes(((n % 12) + 12) % 12);
+    const inSc = !sc || sc.includes(((off % 12) + 12) % 12);
+    ctx.fillStyle = off === 0 ? '#7cf29c' : inSc ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.1)';
+    ctx.fillRect(x, y - 0.5 * dpr, black ? w * 0.35 : w * 0.55, Math.max(1, dpr));
+    if (!black && (n % every === 0 || off === 0)) ctx.fillText(noteName(n), x + w * 0.62, y);
+  }
+  if (state.gate) {
+    const y = Y(Math.max(lo, Math.min(hi, state.midi)));
+    ctx.fillStyle = '#7cf29c';
+    ctx.beginPath(); ctx.moveTo(x - 6 * dpr, y); ctx.lineTo(x + 6 * dpr, y - 6 * dpr); ctx.lineTo(x + 6 * dpr, y + 6 * dpr); ctx.fill();
+    ctx.fillRect(x + 6 * dpr, y - 1.5 * dpr, w * 0.55, 3 * dpr);
+  }
+}
+
+// Oscilloscope strip along the top of the stage.
+function drawScope() {
+  if (!audio || !soundOn) return;
+  const W = canvas.width, h = 46 * dpr, y0 = 50 * dpr, x0 = 14 * dpr, w = Math.min(320 * dpr, W * 0.4);
+  audio.analyser.getFloatTimeDomainData(audio.buf);
+  const b = audio.buf;
+  let start = 0;
+  for (let i = 1; i < b.length / 2; i++) if (b[i - 1] < 0 && b[i] >= 0) { start = i; break; }
+  ctx.fillStyle = 'rgba(8,10,14,0.55)'; ctx.fillRect(x0, y0, w, h);
+  ctx.beginPath();
+  const n = 600;
+  for (let i = 0; i < n; i++) {
+    const v = b[start + i] || 0, px = x0 + i / n * w, py = y0 + h / 2 - v * h * 0.9;
+    i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  }
+  ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = '#7cf29c'; ctx.stroke();
+}
+
+function setBig(state, msg) {
+  if (msg) { bigLabel.className = 'none'; bigLabel.textContent = msg; return; }
+  bigLabel.className = '';
+  const cents = Math.round((state.midi - Math.round(state.midi)) * 100);
+  bigLabel.innerHTML = `${noteName(state.midi)}<small>${state.freq.toFixed(1)} Hz${cents ? ` · ${cents > 0 ? '+' : ''}${cents}¢` : ''}</small>`;
+}
+
+// ---- Sources ----
+let mode = 'none', stream = null, fileURL = null;
+function setStatus(msg, cls = '') { statusEl.textContent = msg; statusEl.className = cls; }
+function setMode(m) {
+  mode = m; prevNote = null;
+  for (const f of Object.values(filters)) f.reset();
+  $('btnCamera').classList.toggle('active', m === 'camera');
+  $('btnDemo').classList.toggle('active', m === 'demo');
+  $('btnFile').classList.toggle('active', m === 'file');
+}
+function stopSources() {
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  video.pause(); video.srcObject = null; video.removeAttribute('src');
+  if (fileURL) { URL.revokeObjectURL(fileURL); fileURL = null; }
+}
+function soundHint() { if (!soundOn) setStatus('Sound is off. Click the Sound button or press M.', 'hint'); }
+async function startCamera() {
+  stopSources();
+  setStatus('Requesting camera…');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false });
+  } catch (e) {
+    setStatus(`Camera unavailable (${e.name || e}). Showing the demo instead.`, 'err');
+    startDemo(false);
+    return;
+  }
+  video.srcObject = stream;
+  await video.play().catch(() => {});
+  $('optMirror').checked = true;
+  setMode('camera');
+  ensureModel().then(() => { if (landmarker) soundHint(); });
+}
+function startFile(file) {
+  stopSources();
+  fileURL = URL.createObjectURL(file);
+  video.src = fileURL; video.loop = true;
+  video.play().catch(() => {});
+  $('optMirror').checked = false;
+  setMode('file');
+  ensureModel();
+}
+let demoStart = 0;
+function startDemo(clear = true) {
+  stopSources(); setMode('demo'); demoStart = performance.now();
+  if (clear) { setStatus(''); soundHint(); }
+}
+
+// ---- MediaPipe ----
+const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL_URL = (v) => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${v}/float16/1/pose_landmarker_${v}.task`;
+let landmarker = null, loading = null, vision = null, PoseLandmarker = null;
+function ensureModel() {
+  if (landmarker) return Promise.resolve();
+  if (loading) return loading;
+  const variant = $('optModel').value;
+  setStatus(`Loading ${variant} pose model…`);
+  loading = (async () => {
+    try {
+      if (!vision) {
+        const mod = await import(`${MP}/vision_bundle.mjs`);
+        PoseLandmarker = mod.PoseLandmarker;
+        vision = await mod.FilesetResolver.forVisionTasks(`${MP}/wasm`);
+      }
+      const opts = (delegate) => ({ baseOptions: { modelAssetPath: MODEL_URL(variant), delegate }, runningMode: 'VIDEO', numPoses: 1 });
+      try { landmarker = await PoseLandmarker.createFromOptions(vision, opts('GPU')); }
+      catch { landmarker = await PoseLandmarker.createFromOptions(vision, opts('CPU')); }
+      if (mode !== 'demo') setStatus('');
+    } catch (e) {
+      console.error(e);
+      setStatus('Could not load the pose model (needs internet once): ' + (e.message || e), 'err');
+    } finally { loading = null; }
+  })();
+  return loading;
+}
+$('optModel').onchange = () => { if (landmarker) { landmarker.close(); landmarker = null; } if (mode === 'camera' || mode === 'file') ensureModel(); };
+
+// ---- Demo: a synthetic body sweeping its arms ----
+const FLOOR = 0.8;
+function demoPose(t) {
+  const fixed = params.get('demo');
+  const both = fixed && !isNaN(+fixed) ? +fixed : null;  // ?demo=135 holds both shoulders at 135°
+  const aL = both ?? 90 + 78 * Math.sin(t * 0.9);
+  const aR = both ?? 90 + 78 * Math.sin(t * 0.9 + 0.7 * Math.sin(t * 0.31));
+  const spec = { lUpper: armDir(aL), lFore: armDir(aL + 6), rUpper: armDir(aR), rFore: armDir(aR + 6) };
+  const W = canvas.width, H = canvas.height, aspect = W / H;
+  const pose = buildPose(spec, { k: 0.16, aspect, cx: 0.45, cy: 0 });
+  const feet = Math.max(...[27, 28, 29, 30, 31, 32].map((i) => pose.lm2[i].y));
+  for (const p of pose.lm2) p.y += FLOOR - feet;
+  return { pose, aspect };
+}
+function drawBackdrop() {
+  const W = canvas.width, H = canvas.height;
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#141a26'); g.addColorStop(1, '#0b0d12');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.045)'; ctx.lineWidth = dpr;
+  const step = 40 * dpr;
+  ctx.beginPath();
+  for (let x = (W / 2) % step; x < W; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  for (let y = (H * FLOOR) % step; y < H; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 2 * dpr;
+  ctx.beginPath(); ctx.moveTo(0, H * FLOOR + 8 * dpr); ctx.lineTo(W, H * FLOOR + 8 * dpr); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = `${Math.round(12 * dpr)}px system-ui, sans-serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText('DEMO · synthetic body playing the synth', 14 * dpr, H * FLOOR + 18 * dpr);
+}
+
+// ---- Main loop ----
+let lastVideoTime = -1, lastTs = 0, lastResult = null, lastState = null;
+function frame(now) {
+  fitCanvas();
+  const W = canvas.width, H = canvas.height, mirror = $('optMirror').checked, tSec = now / 1000;
+  let lm2 = null, lm3 = null, aspect = 1, rect = null, msg = null;
+  if (mode === 'demo') {
+    drawBackdrop();
+    const d = demoPose((now - demoStart) / 1000);
+    ({ lm2, lm3 } = d.pose); aspect = d.aspect; rect = { x: 0, y: 0, w: W, h: H };
+  } else {
+    ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H);
+    if ((mode === 'camera' || mode === 'file') && video.videoWidth) {
+      rect = containRect(video.videoWidth, video.videoHeight);
+      aspect = video.videoWidth / video.videoHeight;
+      if ($('optVideo').checked) {
+        ctx.save();
+        if (mirror) { ctx.translate(rect.x * 2 + rect.w, 0); ctx.scale(-1, 1); }
+        ctx.drawImage(video, rect.x, rect.y, rect.w, rect.h);
+        ctx.restore();
+      } else { ctx.fillStyle = '#10131b'; ctx.fillRect(rect.x, rect.y, rect.w, rect.h); }
+      if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        lastTs = Math.max(lastTs + 1, Math.round(now));
+        try { lastResult = landmarker.detectForVideo(video, lastTs); } catch (e) { console.error(e); lastResult = null; }
+      }
+      if (landmarker && lastResult?.landmarks?.length) { lm2 = lastResult.landmarks[0]; lm3 = lastResult.worldLandmarks?.[0]; }
+      else msg = landmarker ? 'No person in view' : 'Loading model…';
+    } else msg = 'Starting…';
+  }
+  const m = lm2 ? measure(lm2, lm3, aspect) : null;
+  const state = synthState(m, tSec);
+  lastState = state;
+  drive(state);
+  if (lm2 && rect) drawPerson(lm2, rect, mirror, m);
+  drawLadder(state);
+  drawScope();
+  showMeters(state);
+  if (!msg && !state.gate) msg = m ? 'Show your arms' : 'No person in view';
+  setBig(state, msg);
+}
+function loop(now) { requestAnimationFrame(loop); frame(now); }
+
+$('btnCamera').onclick = startCamera;
+$('btnDemo').onclick = () => startDemo();
+$('fileInput').onchange = (e) => { const f = e.target.files[0]; if (f) startFile(f); e.target.value = ''; };
+
+window.__synth = { PoseSynth, state: () => lastState, mode: () => mode, model: () => !!landmarker, audio: () => audio, setSound, mapping };
+
+if (params.has('demo')) startDemo();
+else if (!navigator.mediaDevices?.getUserMedia) { setStatus('This browser has no camera API. Showing the demo.', 'err'); startDemo(false); }
+else startCamera();
+frame(performance.now());
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
