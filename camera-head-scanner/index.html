@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Head Scanner 360</title>
+<title>360 Scanner</title>
 <style>
 :root {
   --bg: #0b0d12;
@@ -61,7 +61,7 @@ ol.steps li.done { color: var(--accent); }
 .row > span { color: var(--dim); }
 .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .stats { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); white-space: pre-wrap; }
-#photo { width: 100%; aspect-ratio: 1; border-radius: 8px; background: #000; display: block; image-rendering: auto; }
+#photo { width: 100%; height: auto; max-height: 340px; object-fit: contain; border-radius: 8px; background: #000; display: block; }
 .note { font-size: 12px; color: var(--dim); }
 kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--dim); }
@@ -80,7 +80,7 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
 </head>
 <body>
 <header>
-  <h1>Head Scanner 360</h1>
+  <h1>360° Scanner</h1>
   <div class="group">
     <button id="btnCamera">Camera</button>
     <button id="btnScan" class="primary" disabled>Start scan</button>
@@ -100,6 +100,10 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
     <div id="instruction"></div>
   </div>
   <aside>
+    <div class="row"><span>Scan</span><select id="optMode">
+      <option value="head" selected>Head</option>
+      <option value="body">Full body</option>
+    </select></div>
     <h2>How to scan</h2>
     <ol class="steps" id="steps">
       <li>Sit on a swivel chair (or stand) with your head and shoulders in view, good light, plain background helps.</li>
@@ -110,9 +114,10 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
     <div class="legend" style="margin-top:8px"><span><b style="background:var(--pass1)"></b>turn 1</span><span><b style="background:var(--pass2)"></b>turn 2</span></div>
     <h2>Quality</h2>
     <div class="row"><span>Resolution</span><select id="optRes">
-      <option value="64">64³ (fast)</option>
-      <option value="96" selected>96³</option>
-      <option value="128">128³ (slow)</option>
+      <option value="64">64 (fast)</option>
+      <option value="96" selected>96</option>
+      <option value="128">128</option>
+      <option value="160">160 (slow)</option>
     </select></div>
     <label class="tog"><input type="checkbox" id="optMirror" checked>Mirror the camera view</label>
     <h2>Result</h2>
@@ -127,18 +132,18 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
     <p class="note">Left: the captured photo nearest to the 3D view's angle.</p>
     <div class="stats" id="stats"></div>
     <h2>How it works</h2>
-    <p class="note">MediaPipe's pose model tracks how far you have turned from your shoulders, ears and nose, and every time your face looks straight at the camera the count is pinned to 0°, 360° or 720°. Its multiclass segmenter cuts out hair, face and neck in every frame. The steadiest frame per 2° of each turn is kept, so every angle is seen twice. Space carving keeps the voxels that (almost) every silhouette agrees on, surface nets turn them into a mesh, and each vertex takes its colour from the photos that look at it most squarely.</p>
-    <p class="note">Limits: silhouettes cannot see hollows (eye sockets, the gap behind the ears are filled in), the size in millimetres assumes a 63 mm eye distance, and the camera is treated as orthographic. Nothing leaves the browser.</p>
+    <p class="note">MediaPipe's pose model tracks how far you have turned from your shoulders, ears and nose, and every time your face looks straight at the camera the count is pinned to 0°, 360° or 720°. Its multiclass segmenter cuts out hair, face and neck (head) or the whole person (body) in every frame; a body is centred on the pose model's hip and shoulder midline. The steadiest frame per 2° of each turn is kept, so every angle is seen twice. Space carving keeps the voxels that (almost) every silhouette agrees on, surface nets turn them into a mesh, and each vertex takes its colour from the photos that look at it most squarely.</p>
+    <p class="note">Limits: silhouettes cannot see hollows (eye sockets, armpits and the gap between the legs fill in), so keep arms a little away from the body. Head size assumes a 63 mm eye distance, body size comes from MediaPipe's metric landmarks; the camera is treated as orthographic. Nothing leaves the browser.</p>
   </aside>
 </main>
 <video id="video" playsinline muted hidden></video>
 <script id="shared-code">
-// 360° head scanning: yaw tracking from pose landmarks, view selection, silhouette carving, surface
+// 360° head and body scanning: yaw tracking from pose landmarks, view selection, silhouette carving, surface
 // extraction, colouring and export, plus a synthetic head for the demo and the tests.
 // Pure functions, also run by test.mjs in Node.
 //
-// Conventions. Object frame (the head): X to the person's left, Y down from the crown, Z out of the
-// face, all in crop pixels. Yaw θ turns the person about the vertical axis, counter-clockwise seen
+// Conventions. Object frame (head or body): X to the person's left, Y down from the crown, Z out of
+// the face, all in crop pixels. Yaw θ turns the person about the vertical axis, counter-clockwise seen
 // from above, so at θ = +90° the nose points to image right (unmirrored camera) and the camera sees
 // the person's right side. A head point appears at u = cx + X cos θ + Z sin θ, v = top + Y.
 const HeadScan = (() => {
@@ -258,71 +263,144 @@ const HeadScan = (() => {
 
   // Keep only the 4-connected blob of the mask nearest to (u, v): drops hands and background specks
   // the segmenter mislabels as hair or skin.
-  function keepComponent(mask, S, u, v) {
+  function keepComponent(mask, W, u, v) {
+    const H = mask.length / W;
     let seed = -1, bestD = Infinity;
-    for (let i = 0; i < mask.length; i++) if (mask[i]) { const d = (i % S - u) ** 2 + ((i / S | 0) - v) ** 2; if (d < bestD) { bestD = d; seed = i; } }
+    for (let i = 0; i < mask.length; i++) if (mask[i]) { const d = (i % W - u) ** 2 + ((i / W | 0) - v) ** 2; if (d < bestD) { bestD = d; seed = i; } }
     const out = new Uint8Array(mask.length);
     if (seed < 0) return out;
     const stack = [seed]; out[seed] = 1;
     while (stack.length) {
-      const i = stack.pop(), x = i % S, y = (i / S) | 0;
-      for (const j of [x > 0 ? i - 1 : -1, x < S - 1 ? i + 1 : -1, y > 0 ? i - S : -1, y < S - 1 ? i + S : -1]) {
+      const i = stack.pop(), x = i % W, y = (i / W) | 0;
+      for (const j of [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, y > 0 ? i - W : -1, y < H - 1 ? i + W : -1]) {
         if (j >= 0 && mask[j] && !out[j]) { out[j] = 1; stack.push(j); }
       }
     }
     return out;
   }
 
-  // Alignment reference of one silhouette: the crown (first row with head pixels) and the centre of
-  // the cranium (column centroid of the top `capFrac` of the crop), which sits on the turning axis.
-  function silhouetteRef(mask, S, capFrac = 0.22) {
-    let top = -1;
-    for (let v = 0; v < S && top < 0; v++) { let n = 0; for (let u = 0; u < S; u++) n += mask[v * S + u] ? 1 : 0; if (n >= 2) top = v; }
+  // Alignment reference of one silhouette (width W, height H): the crown (first row with subject
+  // pixels) and the column on the turning axis. Head: the centre of the cranium (the top 22% of the
+  // crop). Body: the centre of the torso band (20-45% down the silhouette), unless the caller knows
+  // the axis already (cxHint, e.g. the pose model's hip/shoulder midline).
+  function silhouetteRef(mask, W, H, { mode = 'head', cxHint = null } = {}) {
+    let top = -1, bottom = -1;
+    for (let v = 0; v < H; v++) {
+      let n = 0; for (let u = 0; u < W; u++) n += mask[v * W + u] ? 1 : 0;
+      if (n >= 2) { if (top < 0) top = v; bottom = v; }
+    }
     if (top < 0) return null;
+    const [r0, r1] = mode === 'body'
+      ? [top + Math.round(0.2 * (bottom - top)), top + Math.round(0.45 * (bottom - top))]
+      : [top, Math.min(H, top + Math.round(0.22 * H))];
     let sum = 0, n = 0;
-    const end = Math.min(S, top + Math.round(capFrac * S));
-    for (let v = top; v < end; v++) for (let u = 0; u < S; u++) if (mask[v * S + u]) { sum += u + 0.5; n++; }
-    return { top, cx: sum / n, area: n };
+    for (let v = r0; v < r1; v++) for (let u = 0; u < W; u++) if (mask[v * W + u]) { sum += u + 0.5; n++; }
+    return { top, bottom, cx: cxHint ?? (n ? sum / n : W / 2), area: n };
   }
 
   // ---- Space carving ----
   // A voxel survives when at most `tol` views see background where it projects: the redundancy
-  // forgives a few bad masks. Grid: X, Z in [-S/2, S/2], Y in [-pad, S - pad] (crop pixels).
-  function carve(views, { N = 96, S, tol = 2, pad = 0.04 } = {}) {
-    const step = S / N, x0 = -S / 2 + step / 2, y0 = -pad * S + step / 2;
-    const out = new Uint16Array(N * N * N);
+  // forgives a few bad masks. Crops are W x H pixels; the grid has NY cells over the crop height and
+  // as many cells of the same size across, so a tall body crop gets a tall grid.
+  // X, Z in [-W/2, W/2], Y in [-pad H, H - pad H] (crop pixels). Index: (y * nz + z) * nx + x.
+  function gridFor({ NY, W, H, pad = 0.04 }) {
+    const step = H / NY, nx = Math.max(8, Math.round(W / step));
+    return { dims: { nx, ny: NY, nz: nx }, step, origin: { x: -nx * step / 2 + step / 2, y: -pad * H + step / 2, z: -nx * step / 2 + step / 2 } };
+  }
+  function carve(views, { NY = 96, W, H, tol = 2, pad = 0.04 } = {}) {
+    const g = gridFor({ NY, W, H, pad }), { nx, ny, nz } = g.dims, step = g.step, { x: x0, y: y0, z: z0 } = g.origin;
+    const out = new Uint16Array(nx * ny * nz), slice = nx * nz;
     for (const vw of views) {
       const c = Math.cos(vw.theta * RAD), s = Math.sin(vw.theta * RAD), m = vw.mask;
-      for (let iy = 0; iy < N; iy++) {
-        const v = Math.floor(vw.top + y0 + iy * step);
-        const base = iy * N * N;
-        if (v < 0 || v >= S) { for (let k = 0; k < N * N; k++) out[base + k]++; continue; }
-        const row = v * S;
-        for (let iz = 0; iz < N; iz++) {
-          const zs = vw.cx + (x0 + iz * step) * s, o = base + iz * N;
-          for (let ix = 0; ix < N; ix++) {
+      for (let iy = 0; iy < ny; iy++) {
+        const v = Math.floor(vw.top + y0 + iy * step), base = iy * slice;
+        if (v < 0 || v >= H) { for (let k = 0; k < slice; k++) out[base + k]++; continue; }
+        const row = v * W;
+        for (let iz = 0; iz < nz; iz++) {
+          const zs = vw.cx + (z0 + iz * step) * s, o = base + iz * nx;
+          for (let ix = 0; ix < nx; ix++) {
             const u = Math.floor(zs + (x0 + ix * step) * c);
-            if (u < 0 || u >= S || !m[row + u]) out[o + ix]++;
+            if (u < 0 || u >= W || !m[row + u]) out[o + ix]++;
           }
         }
       }
     }
-    const occ = new Uint8Array(N * N * N);
+    const occ = new Uint8Array(out.length);
     for (let i = 0; i < occ.length; i++) occ[i] = out[i] <= tol ? 1 : 0;
-    return { occ, N, step, origin: { x: x0, y: y0, z: x0 } };
+    return { occ, ...g };
+  }
+
+  // ---- Yaw refinement from the silhouettes ----
+  // Tracking drifts a few degrees mid-turn, which shaves off whatever is far from the axis (hands,
+  // ears). Given a loose first carve, each view tries yaw offsets within ±range and keeps the one
+  // whose projected outline (per row: leftmost and rightmost point of that layer of the carved
+  // shape) best matches its own silhouette's outline. The outermost points of a layer are those of
+  // its convex hull, so each layer is reduced to its hull first. Offsets are then smoothed over
+  // neighbouring views (drift is slow) and applied.
+  function hull2(pts) {
+    if (pts.length <= 3) return pts;
+    pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lo = [], up = [];
+    for (const p of pts) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+    for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+    return lo.slice(0, -1).concat(up.slice(0, -1));
+  }
+  function refineYaw(views, carved, { W, H, range = 10, stepDeg = 1, smooth = 4, minGain = 0.08 } = {}) {
+    const { occ, dims: { nx, ny, nz }, step, origin } = carved;
+    const layers = [];
+    for (let y = 0; y < ny; y++) {
+      const pts = [];
+      for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) if (occ[(y * nz + z) * nx + x]) pts.push([origin.x + x * step, origin.z + z * step]);
+      if (pts.length) layers.push({ Y: origin.y + y * step, hull: hull2(pts) });
+    }
+    const offsets = views.map((v) => {
+      // The silhouette's outline: first and last head/body pixel of every row.
+      const rowMin = new Float32Array(H).fill(NaN), rowMax = new Float32Array(H).fill(NaN);
+      for (let r = 0; r < H; r++) for (let u = 0; u < W; u++) if (v.mask[r * W + u]) { if (Number.isNaN(rowMin[r])) rowMin[r] = u; rowMax[r] = u + 1; }
+      let best = 0, bestErr = Infinity, err0 = Infinity;
+      for (let d = -range; d <= range + 1e-9; d += stepDeg) {
+        const th = (v.theta + d) * RAD, c = Math.cos(th), s = Math.sin(th);
+        let err = 0, rows = 0;
+        for (const L of layers) {
+          const r = Math.floor(v.top + L.Y);
+          if (r < 0 || r >= H) continue;
+          let mn = Infinity, mx = -Infinity;
+          for (const [X, Z] of L.hull) { const u = X * c + Z * s; if (u < mn) mn = u; if (u > mx) mx = u; }
+          if (Number.isNaN(rowMin[r])) { err += W / 4; rows++; continue; }
+          err += Math.abs(v.cx + mn - rowMin[r]) + Math.abs(v.cx + mx + step - rowMax[r]); rows++;
+        }
+        const e = err / Math.max(1, rows);
+        if (Math.abs(d) < 1e-9) err0 = e;
+        if (e < bestErr) { bestErr = e; best = d; }
+      }
+      // Only move when the outline clearly fits better; a nearly round outline (a head seen from
+      // above the ears) cannot tell yaws apart and must keep the tracked value.
+      return bestErr < err0 * (1 - minGain) ? best : 0;
+    });
+    // Median over neighbouring views in turn order.
+    const order = views.map((v, i) => i).sort((a, b) => Math.abs(views[a].theta) - Math.abs(views[b].theta));
+    const smoothed = new Array(views.length);
+    order.forEach((vi, k) => {
+      const win = [];
+      for (let j = Math.max(0, k - smooth); j <= Math.min(order.length - 1, k + smooth); j++) win.push(offsets[order[j]]);
+      win.sort((a, b) => a - b);
+      smoothed[vi] = win[win.length >> 1];
+    });
+    return views.map((v, i) => ({ ...v, theta: v.theta + smoothed[i], yawFix: (v.yawFix || 0) + smoothed[i] }));
   }
 
   // Keep only the largest 6-connected blob (drops specks that a few bad masks leave behind).
-  function largestComponent(occ, N) {
-    const label = new Int32Array(occ.length), stack = new Int32Array(occ.length);
+  function largestComponent(occ, { nx, ny, nz }) {
+    const label = new Int32Array(occ.length), stack = new Int32Array(occ.length), sl = nx * nz;
     let best = 0, bestSize = 0, next = 0;
     for (let i = 0; i < occ.length; i++) {
       if (!occ[i] || label[i]) continue;
       next++; let sp = 0, size = 0; stack[sp++] = i; label[i] = next;
       while (sp) {
         const j = stack[--sp]; size++;
-        const x = j % N, z = ((j / N) | 0) % N, y = (j / (N * N)) | 0;
-        const nb = [x > 0 ? j - 1 : -1, x < N - 1 ? j + 1 : -1, z > 0 ? j - N : -1, z < N - 1 ? j + N : -1, y > 0 ? j - N * N : -1, y < N - 1 ? j + N * N : -1];
+        const x = j % nx, z = ((j / nx) | 0) % nz, y = (j / sl) | 0;
+        const nb = [x > 0 ? j - 1 : -1, x < nx - 1 ? j + 1 : -1, z > 0 ? j - nx : -1, z < nz - 1 ? j + nx : -1, y > 0 ? j - sl : -1, y < ny - 1 ? j + sl : -1];
         for (const k of nb) if (k >= 0 && occ[k] && !label[k]) { label[k] = next; stack[sp++] = k; }
       }
       if (size > bestSize) { bestSize = size; best = next; }
@@ -333,15 +411,14 @@ const HeadScan = (() => {
   }
 
   // Separable 3-tap box blur of a 0/1 grid into a smooth field (iterations blur more).
-  function blur3(occ, N, iterations = 2) {
+  function blur3(occ, { nx, ny, nz }, iterations = 2) {
     let a = Float32Array.from(occ), b = new Float32Array(a.length);
-    const strides = [1, N, N * N];
+    const axes = [[1, nx, (i) => i % nx], [nx, nz, (i) => ((i / nx) | 0) % nz], [nx * nz, ny, (i) => (i / (nx * nz)) | 0]];
     for (let it = 0; it < iterations; it++) {
-      for (const st of strides) {
+      for (const [st, len, coordOf] of axes) {
         for (let i = 0; i < a.length; i++) {
-          const coord = st === 1 ? i % N : st === N ? ((i / N) | 0) % N : (i / (N * N)) | 0;
-          const l = coord > 0 ? a[i - st] : 0, r = coord < N - 1 ? a[i + st] : 0;
-          b[i] = (l + a[i] + r) / 3;
+          const coord = coordOf(i);
+          b[i] = ((coord > 0 ? a[i - st] : 0) + a[i] + (coord < len - 1 ? a[i + st] : 0)) / 3;
         }
         [a, b] = [b, a];
       }
@@ -351,15 +428,16 @@ const HeadScan = (() => {
 
   // ---- Surface nets ----
   // One vertex per cell that straddles the iso level (at the mean of its edge crossings), one quad
-  // per crossing grid edge. Field layout: f[(y * N + z) * N + x]. Inside is f > iso.
-  function surfaceNets(f, N, iso = 0.5) {
-    const at = (x, y, z) => f[(y * N + z) * N + x];
-    const cellIdx = new Int32Array((N - 1) * (N - 1) * (N - 1)).fill(-1);
-    const cid = (x, y, z) => (y * (N - 1) + z) * (N - 1) + x;
+  // per crossing grid edge. Field layout: f[(y * nz + z) * nx + x]. Inside is f > iso.
+  function surfaceNets(f, { nx, ny, nz }, iso = 0.5) {
+    const at = (x, y, z) => f[(y * nz + z) * nx + x];
+    const cx = nx - 1, cy = ny - 1, cz = nz - 1;
+    const cellIdx = new Int32Array(cx * cy * cz).fill(-1);
+    const cid = (x, y, z) => (y * cz + z) * cx + x;
     const pos = [], CORN = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
     const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
     const val = new Float64Array(8);
-    for (let y = 0; y < N - 1; y++) for (let z = 0; z < N - 1; z++) for (let x = 0; x < N - 1; x++) {
+    for (let y = 0; y < cy; y++) for (let z = 0; z < cz; z++) for (let x = 0; x < cx; x++) {
       let mask = 0;
       for (let k = 0; k < 8; k++) { val[k] = at(x + CORN[k][0], y + CORN[k][1], z + CORN[k][2]); if (val[k] > iso) mask |= 1 << k; }
       if (mask === 0 || mask === 255) continue;
@@ -375,12 +453,12 @@ const HeadScan = (() => {
     // Quads: for an edge along axis a from p, the four cells around it, counter-clockwise in the
     // (b, c) plane (cyclic axes), face +a; flip when the inside is at the far end.
     const tri = [], AX = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-    const get = (x, y, z) => (x < 0 || y < 0 || z < 0 || x > N - 2 || y > N - 2 || z > N - 2 ? -1 : cellIdx[cid(x, y, z)]);
-    for (let y = 0; y < N; y++) for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+    const get = (x, y, z) => (x < 0 || y < 0 || z < 0 || x >= cx || y >= cy || z >= cz ? -1 : cellIdx[cid(x, y, z)]);
+    for (let y = 0; y < ny; y++) for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) {
       const inside0 = at(x, y, z) > iso;
       for (let a = 0; a < 3; a++) {
         const e = AX[a], x1 = x + e[0], y1 = y + e[1], z1 = z + e[2];
-        if (x1 >= N || y1 >= N || z1 >= N) continue;
+        if (x1 >= nx || y1 >= ny || z1 >= nz) continue;
         if (inside0 === (at(x1, y1, z1) > iso)) continue;
         const B = AX[(a + 1) % 3], C = AX[(a + 2) % 3];
         const q = [
@@ -397,20 +475,13 @@ const HeadScan = (() => {
     return { positions: Float32Array.from(pos), indices: Uint32Array.from(tri) };
   }
 
-  // Grid-space vertices -> object coordinates, normals from the field gradient (pointing outward).
-  function toObject(mesh, field, carved) {
-    const { N, step, origin } = carved, p = mesh.positions, n = p.length / 3;
-    const out = new Float32Array(n * 3), nrm = new Float32Array(n * 3);
-    const at = (x, y, z) => field[(clamp(y, 0, N - 1) * N + clamp(z, 0, N - 1)) * N + clamp(x, 0, N - 1)];
-    for (let i = 0; i < n; i++) {
-      const gx = p[3 * i], gy = p[3 * i + 1], gz = p[3 * i + 2];
-      out[3 * i] = origin.x + gx * step; out[3 * i + 1] = origin.y + gy * step; out[3 * i + 2] = origin.z + gz * step;
-      const x = Math.round(gx), y = Math.round(gy), z = Math.round(gz);
-      let dx = at(x + 1, y, z) - at(x - 1, y, z), dy = at(x, y + 1, z) - at(x, y - 1, z), dz = at(x, y, z + 1) - at(x, y, z - 1);
-      const l = Math.hypot(dx, dy, dz) || 1;
-      nrm[3 * i] = -dx / l; nrm[3 * i + 1] = -dy / l; nrm[3 * i + 2] = -dz / l;
+  // Grid-space vertices -> object coordinates.
+  function toObject(mesh, carved) {
+    const { step, origin } = carved, p = mesh.positions, out = new Float32Array(p.length);
+    for (let i = 0; i < p.length; i += 3) {
+      out[i] = origin.x + p[i] * step; out[i + 1] = origin.y + p[i + 1] * step; out[i + 2] = origin.z + p[i + 2] * step;
     }
-    return { positions: out, normals: nrm, indices: mesh.indices };
+    return { positions: out, indices: mesh.indices };
   }
 
   // Signed volume (positive when the triangles face outward).
@@ -461,13 +532,13 @@ const HeadScan = (() => {
   // ---- Colour ----
   // Each vertex averages the views that look at it most squarely (weight cos^4 of the angle between
   // its normal and the view direction) and that see head pixels where it projects.
-  function colorize(positions, normals, views, S) {
+  function colorize(positions, normals, views, W, H) {
     const n = positions.length / 3, col = new Float32Array(n * 3);
     const vs = views.map((v) => ({ ...v, c: Math.cos(v.theta * RAD), s: Math.sin(v.theta * RAD) }));
     const sample = (rgba, u, v, k) => {
-      const x = clamp(u - 0.5, 0, S - 1.001), y = clamp(v - 0.5, 0, S - 1.001), x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
-      const i = (y0 * S + x0) * 4 + k;
-      return (rgba[i] * (1 - fx) + rgba[i + 4] * fx) * (1 - fy) + (rgba[i + S * 4] * (1 - fx) + rgba[i + S * 4 + 4] * fx) * fy;
+      const x = clamp(u - 0.5, 0, W - 1.001), y = clamp(v - 0.5, 0, H - 1.001), x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+      const i = (y0 * W + x0) * 4 + k;
+      return (rgba[i] * (1 - fx) + rgba[i + 4] * fx) * (1 - fy) + (rgba[i + W * 4] * (1 - fx) + rgba[i + W * 4 + 4] * fx) * fy;
     };
     for (let i = 0; i < n; i++) {
       const X = positions[3 * i], Y = positions[3 * i + 1], Z = positions[3 * i + 2];
@@ -475,7 +546,7 @@ const HeadScan = (() => {
       let r = 0, g = 0, b = 0, w = 0, r2 = 0, g2 = 0, b2 = 0, w2 = 0;
       for (const v of vs) {
         const u = v.cx + X * v.c + Z * v.s, vv = v.top + Y;
-        if (u < 0 || u >= S || vv < 0 || vv >= S || !v.mask[Math.floor(vv) * S + Math.floor(u)]) continue;
+        if (u < 0 || u >= W || vv < 0 || vv >= H || !v.mask[Math.floor(vv) * W + Math.floor(u)]) continue;
         const facing = -nx * v.s + nz * v.c;  // dot(normal, direction to the camera)
         const R = sample(v.rgba, u, vv, 0), G = sample(v.rgba, u, vv, 1), B = sample(v.rgba, u, vv, 2);
         r2 += R; g2 += G; b2 += B; w2++;
@@ -490,18 +561,25 @@ const HeadScan = (() => {
     return col;
   }
 
-  // The whole reconstruction: views ({theta, mask, rgba}) -> coloured mesh in object coordinates.
-  function reconstruct(views, { S, N = 96, tol = null } = {}) {
-    const aligned = views.map((v) => ({ ...v, ...silhouetteRef(v.mask, S) })).filter((v) => v.top !== undefined);
+  // The whole reconstruction: views ({theta, mask, rgba, cxHint?}) of W x H crops -> coloured mesh in
+  // object coordinates. N is the vertical grid resolution.
+  function reconstruct(views, { W, H, N = 96, tol = null, mode = 'head', refine = mode === 'body' } = {}) {
+    let aligned = views.map((v) => ({ ...v, ...silhouetteRef(v.mask, W, H, { mode, cxHint: v.cxHint ?? null }) })).filter((v) => v.top !== undefined);
     const t = tol ?? Math.max(1, Math.round(aligned.length * 0.03));
-    const carved = carve(aligned, { N, S, tol: t });
-    const occ = largestComponent(carved.occ, N);
-    const field = blur3(occ, N, 2);
-    const raw = surfaceNets(field, N, 0.5);
-    let mesh = toObject(raw, field, carved);
+    if (refine) {
+      // Loose, coarse first carve, refine every view's yaw against it, then carve for real. Only
+      // for bodies: a head's outline hardly changes with yaw, so there it would add noise.
+      const rough = carve(aligned, { NY: Math.min(N, 80), W, H, tol: Math.round(aligned.length * 0.12) });
+      rough.occ = largestComponent(rough.occ, rough.dims);
+      aligned = refineYaw(aligned, rough, { W, H });
+    }
+    const carved = carve(aligned, { NY: N, W, H, tol: t });
+    const occ = largestComponent(carved.occ, carved.dims);
+    const field = blur3(occ, carved.dims, 2);
+    const mesh = toObject(surfaceNets(field, carved.dims, 0.5), carved);
     const smooth = smoothMesh(mesh.positions, mesh.indices);
     const normals = triNormals(smooth, mesh.indices);
-    const colors = colorize(smooth, normals, aligned, S);
+    const colors = colorize(smooth, normals, aligned, W, H);
     return { positions: smooth, normals, indices: mesh.indices, colors, occ, carved, views: aligned, tol: t };
   }
 
@@ -523,9 +601,10 @@ const HeadScan = (() => {
     return out.join('\n') + '\n';
   }
 
-  // ---- Synthetic head (demo and tests) ----
-  // Ellipsoids in object coordinates for a crop of size 160; `size` rescales. Hair is tinted green
-  // on the person's left (X > 0) and purple on the right, so mirror mistakes show up in colour.
+  // ---- Synthetic subjects (demo and tests) ----
+  // Ellipsoids in object coordinates. Hair and shirt are tinted green on the person's left (X > 0)
+  // and purple on the right, so mirror mistakes show up in colour.
+  // Head: crop pixels for a 160 x 160 crop (rescaled to the crop width).
   const SYN = [
     { c: [0, 52, -6], r: [40, 50, 47], kind: 'hair' },
     { c: [0, 82, 6], r: [33, 36, 34], kind: 'skin' },
@@ -537,31 +616,76 @@ const HeadScan = (() => {
     { c: [0, 100, 33], r: [10, 4, 5], kind: 'lips' },
     { c: [0, 125, -6], r: [21, 40, 21], kind: 'skin' },
   ];
-  function synInside(X, Y, Z, size = 160) {
-    const k = size / 160;
-    return SYN.some((e) => ((X - e.c[0] * k) / (e.r[0] * k)) ** 2 + ((Y - e.c[1] * k) / (e.r[1] * k)) ** 2 + ((Z - e.c[2] * k) / (e.r[2] * k)) ** 2 <= 1);
+  // Body in A-pose: units of body height, crown at Y = 0, feet at Y = 1.
+  const SYN_BODY = (() => {
+    const e = (c, r, kind) => ({ c, r, kind });
+    const list = [
+      e([0, 0.058, -0.008], [0.058, 0.058, 0.062], 'hair'),
+      e([0, 0.075, 0.008], [0.052, 0.062, 0.058], 'skin'),
+      e([0, 0.08, 0.062], [0.01, 0.016, 0.016], 'skin'),
+      e([0, 0.15, 0], [0.032, 0.045, 0.032], 'skin'),
+      e([0, 0.27, 0], [0.13, 0.12, 0.075], 'shirt'),
+      e([0, 0.205, 0], [0.19, 0.04, 0.06], 'shirt'),  // shoulder girdle: the arms hang from it
+      e([0, 0.26, 0.068], [0.045, 0.035, 0.014], 'logo'),
+      e([0, 0.42, 0], [0.115, 0.1, 0.07], 'shirt'),
+      e([0, 0.52, 0], [0.125, 0.07, 0.075], 'pants'),
+    ];
+    for (const sx of [1, -1]) {
+      // Arm: a chain of spheres from the shoulder, 25° away from the body, ending in a hand.
+      const a = 25 * RAD, sh = [0.165 * sx, 0.2];
+      for (let k = 0; k <= 8; k++) {
+        const d = 0.04 * k, r = 0.034 - 0.001 * k;
+        list.push(e([sh[0] + sx * Math.sin(a) * d, sh[1] + Math.cos(a) * d, 0], [r, r, r], 'shirt'));
+      }
+      list.push(e([sh[0] + sx * Math.sin(a) * 0.36, sh[1] + Math.cos(a) * 0.36 + 0.02, 0.005], [0.024, 0.04, 0.03], 'skin'));
+      list.push(e([0.062 * sx, 0.68, 0], [0.058, 0.14, 0.062], 'pants'));
+      list.push(e([0.066 * sx, 0.86, 0], [0.042, 0.11, 0.045], 'pants'));
+      list.push(e([0.066 * sx, 0.97, 0.03], [0.036, 0.026, 0.075], 'shoe'));
+    }
+    return list;
+  })();
+  // A model placed in a W x H crop: ellipsoids in crop pixels with the crown `crownY` below the top.
+  function synModel(model, W, H) {
+    if (model === 'body') {
+      const s = H / 1.12, yOff = 0.04 * H;
+      return { list: SYN_BODY.map((e) => ({ kind: e.kind, c: [e.c[0] * s, e.c[1] * s + yOff, e.c[2] * s], r: e.r.map((x) => x * s) })), crownY: yOff };
+    }
+    const k = W / 160;
+    return { list: SYN.map((e) => ({ kind: e.kind, c: e.c.map((x) => x * k), r: e.r.map((x) => x * k) })), crownY: 2 * k };
+  }
+  function synInside(X, Y, Z, W, H, model = 'head') {
+    return synModel(model, W, H).list.some((e) => ((X - e.c[0]) / e.r[0]) ** 2 + ((Y - e.c[1]) / e.r[1]) ** 2 + ((Z - e.c[2]) / e.r[2]) ** 2 <= 1);
   }
   function synColor(kind, X, shade) {
     let c;
     if (kind === 'hair') c = X > 6 ? [70, 120, 60] : X < -6 ? [110, 60, 120] : [80, 60, 45];
+    else if (kind === 'shirt') c = X > 0 ? [80, 150, 90] : [130, 80, 150];
+    else if (kind === 'logo') c = [240, 210, 60];
+    else if (kind === 'pants') c = [50, 70, 120];
+    else if (kind === 'shoe') c = [40, 35, 35];
     else if (kind === 'eye') c = [30, 30, 40];
     else if (kind === 'lips') c = [190, 70, 80];
     else c = [225, 180, 150];
     return c.map((x) => Math.round(x * shade));
   }
-  // Orthographic render of the synthetic head at yaw theta, with the turning axis at column cx.
-  function renderSynthetic(theta, S, { cx = S / 2, top = 0 } = {}) {
-    const rgba = new Uint8ClampedArray(S * S * 4), mask = new Uint8Array(S * S);
-    const c = Math.cos(theta * RAD), s = Math.sin(theta * RAD), k = S / 160;
+  // Orthographic render of a synthetic subject at yaw theta, turning axis at column cx.
+  function renderSynthetic(theta, W, H, { cx = W / 2, top = 0, model = 'head' } = {}) {
+    const rgba = new Uint8ClampedArray(W * H * 4), mask = new Uint8Array(W * H);
+    const c = Math.cos(theta * RAD), s = Math.sin(theta * RAD), list = synModel(model, W, H).list;
     // Ray toward the scene: world direction (0, 0, -1) is (sin θ, 0, -cos θ) in the object frame.
     const dX = s, dZ = -c;
-    for (let v = 0; v < S; v++) for (let u = 0; u < S; u++) {
-      const xw = u + 0.5 - cx, Y = v + 0.5 - top, zw = 1000;
+    // Screen-space bounds of each ellipsoid (its centre's column ± its widest radius) skip most tests.
+    const bounds = list.map((e) => ({ e, u: cx + e.c[0] * c + e.c[2] * s, half: Math.max(e.r[0], e.r[2]) + 1 }));
+    for (let v = 0; v < H; v++) for (let u = 0; u < W; u++) {
+      const xw = u + 0.5 - cx, Y = v + 0.5 - top, zw = 1e4;
       const oX = xw * c - zw * s, oZ = xw * s + zw * c;
       let best = Infinity, hit = null;
-      for (const e of SYN) {
-        const ex = e.c[0] * k, ey = e.c[1] * k, ez = e.c[2] * k, rx = e.r[0] * k, ry = e.r[1] * k, rz = e.r[2] * k;
-        const px = (oX - ex) / rx, py = (Y - ey) / ry, pz = (oZ - ez) / rz, qx = dX / rx, qz = dZ / rz;
+      for (const b of bounds) {
+        if (Math.abs(u + 0.5 - b.u) > b.half) continue;
+        const e = b.e, [ex, ey, ez] = e.c, [rx, ry, rz] = e.r;
+        const py = (Y - ey) / ry;
+        if (py > 1 || py < -1) continue;
+        const px = (oX - ex) / rx, pz = (oZ - ez) / rz, qx = dX / rx, qz = dZ / rz;
         const A = qx * qx + qz * qz, B = 2 * (px * qx + pz * qz), C = px * px + py * py + pz * pz - 1, disc = B * B - 4 * A * C;
         if (disc < 0) continue;
         const t = (-B - Math.sqrt(disc)) / (2 * A);
@@ -570,7 +694,7 @@ const HeadScan = (() => {
       if (!hit) continue;
       const l = Math.hypot(hit.nx, hit.ny, hit.nz) || 1, facing = Math.max(0, -(hit.nx * dX + hit.nz * dZ) / l);
       const col = synColor(hit.e.kind, hit.X, 0.45 + 0.55 * facing);
-      const i = v * S + u;
+      const i = v * W + u;
       mask[i] = 1; rgba[4 * i] = col[0]; rgba[4 * i + 1] = col[1]; rgba[4 * i + 2] = col[2]; rgba[4 * i + 3] = 255;
     }
     return { rgba, mask };
@@ -593,9 +717,9 @@ const HeadScan = (() => {
   }
 
   return {
-    wrap360, angDiff, circMean, yawFromPose, YawTracker, anchorCorrection, selectViews, keepComponent, silhouetteRef, carve, largestComponent,
-    blur3, surfaceNets, toObject, meshVolume, smoothMesh, triNormals, colorize, reconstruct, toOBJ, toPLY,
-    SYN, synInside, renderSynthetic, syntheticPose,
+    wrap360, angDiff, circMean, yawFromPose, YawTracker, anchorCorrection, selectViews, keepComponent, silhouetteRef, gridFor, carve, refineYaw,
+    largestComponent, blur3, surfaceNets, toObject, meshVolume, smoothMesh, triNormals, colorize, reconstruct, toOBJ, toPLY,
+    SYN, SYN_BODY, synModel, synInside, renderSynthetic, syntheticPose,
   };
 })();
 if (typeof module !== 'undefined') module.exports = HeadScan;
@@ -610,11 +734,41 @@ const canvas = $('view'), ctx = canvas.getContext('2d');
 const video = $('video'), statusEl = $('status'), instr = $('instruction');
 const params = new URLSearchParams(location.search);
 
-const S = 160;            // head crop size in pixels
-const STORE_DEG = 1.5;    // keep the steadiest frame per 1.5° of turning
 const BIN_DEG = 2;        // views used for carving: one per 2° per turn
-const IPD_MM = 63;        // average adult eye distance, for the millimetre scale
-const HEAD_CLASSES = new Set([1, 2, 3, 5]);  // hair, body skin (neck), face skin, accessories
+const IPD_MM = 63;        // average adult eye distance, for the head's millimetre scale
+
+// What can be scanned. Crops are W x H pixels; `classes` are the segmenter categories kept
+// (0 background, 1 hair, 2 body skin, 3 face skin, 4 clothes, 5 accessories).
+const MODES = {
+  head: {
+    W: 160, H: 160, storeDeg: 1.5, res: 96, classes: new Set([1, 2, 3, 5]), file: 'head-scan', noun: 'head',
+    ready: ['Head and shoulders in view', 'then press Start scan'],
+    steps: [
+      'Sit on a swivel chair (or stand) with your head and shoulders in view, good light, plain background helps.',
+      'Face the camera and hold still for a second.',
+      'Turn slowly, about 20° a second, in either direction. Two full turns, ending facing the camera.',
+      'The head is rebuilt and shown in 3D.',
+    ],
+  },
+  body: {
+    W: 160, H: 224, storeDeg: 2, res: 128, classes: new Set([1, 2, 3, 4, 5]), file: 'body-scan', noun: 'body',
+    ready: ['Whole body in view, head to feet', 'then press Start scan'],
+    steps: [
+      'Stand about 3 m from the camera so your whole body, head to feet, is in view. Plain background and even light help.',
+      'Face the camera with your arms slightly away from your sides (an A-pose) and hold still for a second.',
+      'Turn slowly on the spot, about 20° a second, in either direction, keeping the A-pose. Two full turns, ending facing the camera.',
+      'The body is rebuilt and shown in 3D.',
+    ],
+  },
+};
+let scanMode = 'head', cfg = MODES.head;
+function setScanMode(m) {
+  scanMode = m; cfg = MODES[m];
+  $('optMode').value = m; $('optRes').value = cfg.res;
+  $('steps').replaceChildren(...cfg.steps.map((text) => { const li = document.createElement('li'); li.textContent = text; return li; }));
+  cropCanvas.width = cfg.W; cropCanvas.height = cfg.H;
+  if (source === 'camera' && phase === 'idle') say(...cfg.ready);
+}
 
 let dpr = 1;
 function fitCanvas(c) {
@@ -631,6 +785,8 @@ function say(main, sub = '', warn = false) {
   if (sub) { const s = document.createElement('small'); s.textContent = sub; instr.append(s); }
   instr.classList.toggle('warn', warn);
 }
+const cropCanvas = document.createElement('canvas');
+const cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
 function setStep(k) { [...$('steps').children].forEach((li, i) => { li.classList.toggle('on', i === k); li.classList.toggle('done', i < k); }); }
 
 // ---- MediaPipe ----
@@ -675,28 +831,30 @@ async function startCamera() {
   $('btnCamera').classList.add('active');
   showTab('cam');
   setStep(0);
-  say('Head and shoulders in view', 'then press Start scan');
+  say(...cfg.ready);
   await ensureModels();
   $('btnScan').disabled = !(pose && seg);
 }
 
 // ---- Scan state ----
 let phase = 'idle', tracker = null, frames = new Map(), coverage = [new Set(), new Set()];
-let alignHeld = 0, calib = null, head = null, speed = 0, scanStart = 0, lastPerson = 0, frontalRun = 0;
+// follow: the smoothed point the crop box rides on (ear midpoint for a head, hip midpoint for a body).
+let alignHeld = 0, calib = null, follow = null, speed = 0, scanStart = 0, lastPerson = 0, frontalRun = 0;
 function resetScan() {
   tracker = new H.YawTracker(); frames = new Map(); coverage = [new Set(), new Set()];
-  alignHeld = 0; head = null; speed = 0; speedHist = []; lastPerson = 0; frontalRun = 0;
+  alignHeld = 0; follow = null; speed = 0; speedHist = []; lastPerson = 0; frontalRun = 0;
 }
+function lockMode(locked) { $('optMode').disabled = locked; }
 function startScan() {
   if (source !== 'camera') return;
-  resetScan(); calib = null; phase = 'align'; setStep(1);
+  resetScan(); calib = null; phase = 'align'; setStep(1); lockMode(true);
   $('btnStop').disabled = false;
 }
 
 // Store the current frame for this angle unless a steadier one is already kept.
 function maybeStore(t, U, getCrop) {
   if (U === null) return;
-  const key = Math.round(Math.abs(U) / STORE_DEG), cur = frames.get(key);
+  const key = Math.round(Math.abs(U) / cfg.storeDeg), cur = frames.get(key);
   if (cur && speed >= cur.speed - 1) return;
   const crop = getCrop();
   if (!crop) return;
@@ -717,31 +875,47 @@ function trackSpeed(t, U) {
 
 // ---- Camera frame processing ----
 let lastVideoTime = -1, lastTs = 0;
-const cropCanvas = document.createElement('canvas'); cropCanvas.width = cropCanvas.height = S;
-const cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
-function cameraCrop(ts, box, shoulderY) {
-  const vw = video.videoWidth, vh = video.videoHeight;
+function cameraCrop(ts, box, shoulderY, cxHint) {
+  const vw = video.videoWidth, vh = video.videoHeight, W = cfg.W, Hc = cfg.H;
   let res;
   try { res = seg.segmentForVideo(video, ts); } catch (e) { console.error(e); return null; }
   const cm = res.categoryMask, mw = cm.width, mh = cm.height, cats = cm.getAsUint8Array();
-  cropCtx.drawImage(video, box.x, box.y, box.size, box.size, 0, 0, S, S);
-  const rgba = new Uint8ClampedArray(cropCtx.getImageData(0, 0, S, S).data);
-  let mask = new Uint8Array(S * S);
-  const cut = shoulderY - 0.03 * box.size;
-  for (let v = 0; v < S; v++) {
-    const vy = box.y + (v + 0.5) * box.size / S;
+  cropCtx.clearRect(0, 0, W, Hc);
+  cropCtx.drawImage(video, box.x, box.y, box.w, box.h, 0, 0, W, Hc);
+  const rgba = new Uint8ClampedArray(cropCtx.getImageData(0, 0, W, Hc).data);
+  let mask = new Uint8Array(W * Hc);
+  const cut = scanMode === 'head' ? shoulderY - 0.03 * box.h : Infinity;  // a head stops at the shoulders
+  for (let v = 0; v < Hc; v++) {
+    const vy = box.y + (v + 0.5) * box.h / Hc;
     if (vy < 0 || vy >= vh || vy > cut) continue;
     const my = Math.min(mh - 1, Math.floor(vy * mh / vh));
-    for (let u = 0; u < S; u++) {
-      const vx = box.x + (u + 0.5) * box.size / S;
+    for (let u = 0; u < W; u++) {
+      const vx = box.x + (u + 0.5) * box.w / W;
       if (vx < 0 || vx >= vw) continue;
-      if (HEAD_CLASSES.has(cats[my * mw + Math.min(mw - 1, Math.floor(vx * mw / vw))])) mask[v * S + u] = 1;
+      if (cfg.classes.has(cats[my * mw + Math.min(mw - 1, Math.floor(vx * mw / vw))])) mask[v * W + u] = 1;
     }
   }
   res.close();
-  mask = H.keepComponent(mask, S, S / 2, 0.3 * S);
-  return { rgba, mask };
+  mask = H.keepComponent(mask, W, W / 2, (scanMode === 'head' ? 0.3 : 0.4) * Hc);
+  return { rgba, mask, cxHint };
 }
+// Crop box from the first frontal frame. Head: a square about one shoulder width, scaled to mm by
+// the eye distance. Body: head to feet plus margins, scaled by MediaPipe's (roughly metric) world
+// landmarks. dy places the box's top relative to the follow point.
+function calibrate(px, lm3) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (scanMode === 'head') {
+    const sw = Math.hypot(px(11).x - px(12).x, px(11).y - px(12).y), eye = Math.hypot(px(2).x - px(5).x, px(2).y - px(5).y);
+    const size = Math.max(120, Math.min(Math.min(vw, vh), 1.05 * sw));
+    return { w: size, h: size, dy: -0.45 * size, mmPerCropPx: (IPD_MM / Math.max(eye, 1)) * size / cfg.W };
+  }
+  const ankleY = (px(27).y + px(28).y) / 2, noseY = px(0).y, hipY = (px(23).y + px(24).y) / 2;
+  const hPx = (ankleY - noseY) / 0.9;  // the nose sits about 90% of the height above the ankles
+  const h = 1.12 * hPx, w = h * cfg.W / cfg.H;
+  const heightM = Math.abs(lm3[0].y - (lm3[27].y + lm3[28].y) / 2) / 0.9;
+  return { w, h, dy: noseY - 0.115 * hPx - hipY, mmPerCropPx: (heightM * 1000 / hPx) * h / cfg.H };
+}
+const boxAt = (f) => ({ x: f.x - calib.w / 2, y: f.y + calib.dy, w: calib.w, h: calib.h });
 function processCamera(t, now) {
   if (!pose || video.readyState < 2 || video.currentTime === lastVideoTime) return null;
   lastVideoTime = video.currentTime;
@@ -753,37 +927,41 @@ function processCamera(t, now) {
   if (!lm2 || !lm3) { if (phase === 'spin') tracker.update(t, null); return { person: false }; }
   lastPerson = t;
   const px = (i) => ({ x: lm2[i].x * vw, y: lm2[i].y * vh });
+  const mid = (a, b) => ({ x: (px(a).x + px(b).x) / 2, y: (px(a).y + px(b).y) / 2 });
+  const vis = (i) => (lm2[i].visibility ?? 1) > 0.5 && lm2[i].y > 0 && lm2[i].y < 1;
   const y = H.yawFromPose(lm2, lm3);
-  const ears = { x: (px(7).x + px(8).x) / 2, y: (px(7).y + px(8).y) / 2 };
-  head = head ? { x: head.x + 0.5 * (ears.x - head.x), y: head.y + 0.5 * (ears.y - head.y) } : ears;
-  const shoulderY = (px(11).y + px(12).y) / 2;
+  const target = scanMode === 'head' ? mid(7, 8) : mid(23, 24);
+  follow = follow ? { x: follow.x + 0.5 * (target.x - follow.x), y: follow.y + 0.5 * (target.y - follow.y) } : target;
+  const shoulderY = mid(11, 12).y;
+  const fullBody = vis(0) && vis(27) && vis(28);
   if (phase === 'align') {
-    alignHeld = y.frontal ? alignHeld + 1 / 30 : 0;
+    alignHeld = y.frontal && (scanMode === 'head' || fullBody) ? alignHeld + 1 / 30 : 0;
     if (alignHeld >= 1) {
-      const sw = Math.hypot(px(11).x - px(12).x, px(11).y - px(12).y), eye = Math.hypot(px(2).x - px(5).x, px(2).y - px(5).y);
-      const size = Math.max(120, Math.min(Math.min(vw, vh), 1.05 * sw));
-      calib = { size, mmPerCropPx: (IPD_MM / Math.max(eye, 1)) * size / S };
+      calib = calibrate(px, lm3);
       phase = 'spin'; scanStart = t; setStep(2);
       tracker.update(t, { est: y.est, frontal: y.frontal });
     }
   } else if (phase === 'spin') {
     const U = tracker.update(t, { est: y.est, frontal: y.frontal });
     trackSpeed(t, U);
-    const box = { x: head.x - calib.size / 2, y: head.y - 0.45 * calib.size, size: calib.size };
-    maybeStore(t, U, () => cameraCrop(lastTs, box, shoulderY));
+    const box = boxAt(follow);
+    // For a body the turning axis is the pose midline (hips and shoulders), known in crop pixels.
+    const cxHint = scanMode === 'body' ? ((mid(23, 24).x + mid(11, 12).x) / 2 - box.x) * cfg.W / box.w : null;
+    maybeStore(t, U, () => cameraCrop(lastTs, box, shoulderY, cxHint));
     checkDone(U, y.frontal);
   }
-  return { person: true, lm2, y, shoulderY };
+  return { person: true, lm2, y, fullBody };
 }
 
-// ---- Demo: a synthetic head turning twice in front of a virtual camera ----
+// ---- Demo: a synthetic head or body turning twice in front of a virtual camera ----
 let demo = null;
 function startDemo() {
   stopCamera();
-  source = 'demo'; resetScan(); phase = 'spin'; setStep(2);
+  source = 'demo'; resetScan(); phase = 'spin'; setStep(2); lockMode(true);
   const rate = params.get('demo') === 'fast' ? 120 : 36;
   demo = { t0: performance.now() / 1000, rate, seed: 7, last: null };
-  calib = { size: S, mmPerCropPx: 1.45 };
+  // A 1.75 m body fills H / 1.12 crop pixels; the synthetic head is about 23 cm tall.
+  calib = { w: cfg.W, h: cfg.H, dy: 0, mmPerCropPx: scanMode === 'head' ? 1.45 : 1750 / (cfg.H / 1.12) };
   $('btnStop').disabled = false; $('btnDemo').classList.add('active');
   showTab('cam');
   setStatus('');
@@ -798,8 +976,9 @@ function demoRand() { demo.seed = (demo.seed * 1664525 + 1013904223) >>> 0; retu
 function processDemo(t) {
   const dt = t - demo.t0;
   const th = demo.rate * dt + 6 * Math.sin(dt * 1.7);                 // uneven turning
-  const cx = S / 2 + 6 * Math.sin(dt * 0.9), top = 8 + 2 * Math.sin(dt * 1.3);  // wandering crop
-  const img = H.renderSynthetic(th, S, { cx, top });
+  const cx = cfg.W / 2 + 6 * Math.sin(dt * 0.9);                      // wandering crop
+  const top = scanMode === 'head' ? 8 + 2 * Math.sin(dt * 1.3) : Math.sin(dt * 1.3);
+  const img = H.renderSynthetic(th, cfg.W, cfg.H, { cx, top, model: scanMode });
   demo.last = img;
   if (phase !== 'spin') return;
   const back = Math.cos(th * Math.PI / 180) < -0.2;
@@ -823,22 +1002,22 @@ function finishScan() {
   if (phase !== 'spin' && phase !== 'align') return;
   phase = 'build'; setStep(3);
   $('btnStop').disabled = true;
-  say('Building your head…', 'carving, meshing and colouring');
+  say(`Building your ${cfg.noun}…`, 'carving, meshing and colouring');
   setTimeout(build, 60);
 }
 function build() {
   const t0 = performance.now();
   const corr = H.anchorCorrection(tracker.records);
   const all = [...frames.values()].map((f) => ({ ...f, yaw: corr.yaw(f.t, f.U) }));
-  const views = H.selectViews(all, BIN_DEG).map((f) => ({ theta: f.yaw, mask: f.mask, rgba: f.rgba, yaw: f.yaw }));
+  const views = H.selectViews(all, BIN_DEG).map((f) => ({ theta: f.yaw, mask: f.mask, rgba: f.rgba, yaw: f.yaw, cxHint: f.cxHint ?? null }));
   if (views.length < 60) {
-    phase = source === 'camera' ? 'idle' : 'done';
+    phase = source === 'camera' ? 'idle' : 'done'; lockMode(false);
     say('Not enough angles captured', `${views.length} views; turn slower and complete both turns`, true);
     return;
   }
   const N = +$('optRes').value;
-  try { result = { ...H.reconstruct(views, { S, N }), scale: calib.mmPerCropPx, anchors: corr.anchors }; }
-  catch (e) { console.error(e); say('Reconstruction failed', String(e.message || e), true); phase = 'idle'; return; }
+  try { result = { ...H.reconstruct(views, { W: cfg.W, H: cfg.H, N, mode: scanMode }), scale: calib.mmPerCropPx, anchors: corr.anchors, cfg }; }
+  catch (e) { console.error(e); say('Reconstruction failed', String(e.message || e), true); phase = 'idle'; lockMode(false); return; }
   const ms = performance.now() - t0;
   const p = result.positions, lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < p.length; i++) { lo[i % 3] = Math.min(lo[i % 3], p[i]); hi[i % 3] = Math.max(hi[i % 3], p[i]); }
@@ -851,7 +1030,7 @@ function build() {
     `mesh       ${(result.indices.length / 3).toLocaleString()} triangles\n` +
     `size       ${mm(0)} × ${mm(1)} × ${mm(2)} mm (w × h × d)\n` +
     `built in   ${(ms / 1000).toFixed(1)} s`;
-  phase = 'done'; setStep(4);
+  phase = 'done'; setStep(4); lockMode(false);
   say('');
   $('btnObj').disabled = $('btnPly').disabled = false;
   $('btnTabResult').disabled = false;
@@ -921,7 +1100,9 @@ function renderThree() {
     for (const v of result.views) { const d = Math.abs(H.angDiff(v.theta, want)); if (d < bestD) { bestD = d; best = v; } }
     if (best && best !== lastPhotoKey) {
       lastPhotoKey = best;
-      $('photo').getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(best.rgba), S, S), 0, 0);
+      const pc = $('photo'), { W, H: Hc } = result.cfg;
+      if (pc.width !== W || pc.height !== Hc) { pc.width = W; pc.height = Hc; }
+      pc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(best.rgba), W, Hc), 0, 0);
     }
   }
 }
@@ -933,8 +1114,8 @@ function download(name, text) {
   a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
-$('btnObj').onclick = () => result && download('head-scan.obj', H.toOBJ(result, result.scale));
-$('btnPly').onclick = () => result && download('head-scan.ply', H.toPLY(result, result.scale));
+$('btnObj').onclick = () => result && download(result.cfg.file + '.obj', H.toOBJ(result, result.scale));
+$('btnPly').onclick = () => result && download(result.cfg.file + '.ply', H.toPLY(result, result.scale));
 
 // ---- Tabs ----
 let tab = 'cam';
@@ -957,8 +1138,8 @@ function containRect(w, h) {
 function drawRing(cx, cy, r, U) {
   const seg = 360 / BIN_DEG;
   for (let pass = 0; pass < 2; pass++) {
-    const rr = r + pass * 9 * dpr;
-    ctx.lineWidth = 6 * dpr;
+    const rr = r + pass * 8 * dpr;
+    ctx.lineWidth = 5 * dpr;
     for (let b = 0; b < seg; b++) {
       // Angle 0 at the top, clockwise; yaw direction does not matter for the display.
       const a0 = -Math.PI / 2 + (b * BIN_DEG) * Math.PI / 180, a1 = a0 + BIN_DEG * Math.PI / 180;
@@ -974,15 +1155,16 @@ function drawRing(cx, cy, r, U) {
 }
 function guidance(info) {
   if (phase === 'align') {
-    if (!info?.person) say('Step into view', 'head and shoulders visible');
+    if (!info?.person) say('Step into view', scanMode === 'head' ? 'head and shoulders visible' : 'head to feet visible');
+    else if (scanMode === 'body' && !info.fullBody) say('Step back', 'your feet must be in the picture');
     else if (alignHeld > 0) say('Hold still…', `facing the camera ${Math.round(alignHeld * 100)}%`);
-    else say('Face the camera', 'look straight into the lens');
+    else say('Face the camera', scanMode === 'head' ? 'look straight into the lens' : 'arms slightly out from your sides');
   } else if (phase === 'spin') {
     const U = tracker.U ?? 0, turn = Math.min(2, Math.floor(Math.abs(U) / 360) + 1);
     const t = performance.now() / 1000;
     if (source === 'camera' && t - lastPerson > 1) say('Lost you', 'keep head and shoulders in view', true);
     else if (speed > 50) say('Slower, please', `${Math.round(speed)}°/s; about 20°/s is ideal`, true);
-    else say(`Turn ${turn} of 2 · ${Math.round(Math.abs(U))}°`, Math.abs(U) > 690 ? 'finish facing the camera' : 'keep turning slowly, same direction');
+    else say(`Turn ${turn} of 2 · ${Math.round(Math.abs(U))}°`, Math.abs(U) > 690 ? 'finish facing the camera' : scanMode === 'body' ? 'keep turning slowly, arms slightly out' : 'keep turning slowly, same direction');
   }
 }
 
@@ -1003,31 +1185,28 @@ function frame(now) {
     ctx.restore();
     info = processCamera(t, now);
     const toD = (x, y) => ({ x: mirror ? r.x + r.w - x * r.s : r.x + x * r.s, y: r.y + y * r.s });
-    if (head) {
-      const size = calib ? calib.size : 260 * (video.videoHeight / 720);
-      const a = toD(head.x - size / 2, head.y - 0.45 * size), b = toD(head.x + size / 2, head.y + 0.55 * size);
-      const x0 = Math.min(a.x, b.x), w = Math.abs(b.x - a.x);
+    if (follow && calib) {
+      const box = boxAt(follow), a = toD(box.x, box.y), b = toD(box.x + box.w, box.y + box.h);
       ctx.strokeStyle = phase === 'spin' ? 'rgba(124,242,156,0.7)' : 'rgba(255,255,255,0.4)'; ctx.lineWidth = 2 * dpr;
-      ctx.setLineDash([8 * dpr, 6 * dpr]); ctx.strokeRect(x0, a.y, w, b.y - a.y); ctx.setLineDash([]);
-      if (phase === 'spin' || phase === 'build' || phase === 'done') drawRing(x0 + w / 2, a.y + w * 0.36, w * 0.62, tracker?.U);
+      ctx.setLineDash([8 * dpr, 6 * dpr]); ctx.strokeRect(Math.min(a.x, b.x), a.y, Math.abs(b.x - a.x), b.y - a.y); ctx.setLineDash([]);
     }
   } else if (source === 'demo' && demo) {
     processDemo(t);
-    const img = demo.last, r = containRect(S, S);
-    const tmp = new ImageData(new Uint8ClampedArray(img.rgba), S, S);
-    cropCtx.putImageData(tmp, 0, 0);
+    const img = demo.last;
+    cropCtx.putImageData(new ImageData(new Uint8ClampedArray(img.rgba), cfg.W, cfg.H), 0, 0);
+    const k = Math.min(W * 0.7 / cfg.W, Hh * 0.82 / cfg.H), dw = cfg.W * k, dh = cfg.H * k;
     ctx.imageSmoothingEnabled = true;
-    const side = Math.min(r.w, r.h) * 0.8;
-    ctx.drawImage(cropCanvas, W / 2 - side / 2, Hh / 2 - side / 2, side, side);
-    drawRing(W / 2, Hh / 2 - side * 0.08, side * 0.6, tracker?.U);
+    ctx.drawImage(cropCanvas, W / 2 - dw / 2, Hh / 2 - dh / 2 - Hh * 0.03, dw, dh);
     ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = `${Math.round(12 * dpr)}px system-ui, sans-serif`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillText('DEMO · a synthetic head turning twice (green hair on its left, purple on its right)', 14 * dpr, 14 * dpr);
+    ctx.fillText(`DEMO · a synthetic ${cfg.noun} turning twice (green on its left, purple on its right)`, 14 * dpr, 14 * dpr);
   } else {
     ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = `${Math.round(14 * dpr)}px system-ui, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('Press Camera to begin, or try the Demo scan', W / 2, Hh / 2);
   }
+  // Coverage ring in the corner: inner = first turn, outer = second.
+  if (phase === 'spin' || phase === 'build' || (phase === 'done' && tracker)) drawRing(W - 76 * dpr, 84 * dpr, 46 * dpr, tracker?.U);
   if (phase === 'align' || phase === 'spin') guidance(info);
 }
 
@@ -1035,9 +1214,11 @@ $('btnCamera').onclick = startCamera;
 $('btnScan').onclick = startScan;
 $('btnStop').onclick = finishScan;
 $('btnDemo').onclick = startDemo;
+$('optMode').onchange = () => setScanMode($('optMode').value);
 
-window.__scan = { H, phase: () => phase, frames: () => frames, result: () => result, tracker: () => tracker, startDemo, finishScan, showTab };
+window.__scan = { H, phase: () => phase, frames: () => frames, result: () => result, tracker: () => tracker, startDemo, finishScan, showTab, setScanMode, mode: () => scanMode };
 
+setScanMode(params.get('mode') === 'body' ? 'body' : 'head');
 if (params.has('demo')) startDemo();
 else say('Press Camera to begin', 'or try the Demo scan');
 requestAnimationFrame(frame);
