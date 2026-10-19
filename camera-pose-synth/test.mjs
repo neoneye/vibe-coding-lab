@@ -98,4 +98,62 @@ test('One Euro filter: holds still input, follows a step', () => {
   near(y, 150, 1.0, 'step followed');
 });
 
+test('elbow angle reads back from the skeleton, any shoulder angle', () => {
+  for (const [a, e] of [[90, 170], [90, 90], [150, 60], [30, 120]]) {
+    const p = S.buildPose({ lUpper: S.armDir(a), lFore: S.armDir(a + 180 - e), rUpper: S.armDir(a), rFore: S.armDir(a + 180 - e) });
+    const mm = S.measure(p.lm2, p.lm3);
+    near(mm.left.elbow, e, 0.5, 'left'); near(mm.right.elbow, e, 0.5, 'right');
+    near(mm.left.shoulder, a, 0.5, 'shoulder unaffected');
+  }
+});
+
+test('elbows set the duty cycle: straight = pure saw / 50% square, bent = triangle / thin pulse', () => {
+  const duty = (voice, elbow) => S.TARGET_VALUE[voice + 'Duty'](S.unit01('leftElbow', elbow));
+  near(duty('saw', 170), 1, 1e-9); near(duty('saw', 40), 0.5, 1e-9);
+  near(duty('square', 170), 0.5, 1e-9); near(duty('square', 40), 0.05, 1e-9);
+  near(duty('saw', 180), 1, 1e-9, 'clamped past straight');
+  assert.ok(duty('square', 100) > duty('square', 70), 'monotonic');
+  assert.equal(S.TARGET_VALUE.sawDuty(null), 1); assert.equal(S.TARGET_VALUE.squareDuty(null), 0.5);
+});
+
+test('default preset: left arm -> saw, right arm -> square, elbows -> duty', () => {
+  assert.deepEqual(S.VOICES.map((v) => v.key), ['saw', 'square']);
+  const d = S.PRESETS[0].map;
+  assert.equal(d.sawPitch, 'leftShoulder'); assert.equal(d.sawDuty, 'leftElbow');
+  assert.equal(d.squarePitch, 'rightShoulder'); assert.equal(d.squareDuty, 'rightElbow');
+});
+
+test('duty-cycle waveforms', () => {
+  const { saw, square } = S.WAVES;
+  near(saw(0.25, 1), -0.5, 1e-12); near(saw(0.999, 1), 0.998, 1e-9);        // plain rising saw
+  near(saw(0.25, 0.5), 0, 1e-12); near(saw(0.5, 0.5), 1, 1e-12);            // triangle
+  near(saw(0.75, 0.5), 0, 1e-12);
+  assert.equal(square(0.1, 0.2), 1); assert.equal(square(0.3, 0.2), -1);
+  // Mean of a d-duty pulse is 2d - 1.
+  let mean = 0; for (let i = 0; i < 1000; i++) mean += square((i + 0.5) / 1000, 0.2) / 1000;
+  near(mean, -0.6, 1e-9);
+});
+
+test('Fourier coefficients reproduce the waves (PeriodicWave input)', () => {
+  // Square with duty d: first harmonic magnitude (4/pi)|sin(pi d)|.
+  for (const d of [0.5, 0.25, 0.05]) {
+    const { real, imag } = S.waveCoeffs('square', d);
+    near(Math.hypot(real[1], imag[1]), 4 / Math.PI * Math.sin(Math.PI * d), 2e-3, 'square d=' + d);
+  }
+  // Plain saw: b_n = -2/(n pi), no cosine terms.
+  const sw = S.waveCoeffs('saw', 1);
+  for (const k of [1, 2, 5]) { near(sw.imag[k], -2 / (k * Math.PI), 2e-3, 'saw b' + k); near(sw.real[k], 0, 2e-3); }
+  // Triangle: odd harmonics only, falling as 1/n^2.
+  const tri = S.waveCoeffs('saw', 0.5);
+  near(Math.hypot(tri.real[2], tri.imag[2]), 0, 1e-3);
+  near(Math.hypot(tri.real[1], tri.imag[1]), 8 / (Math.PI ** 2), 2e-3);
+  // Resynthesis away from the edges matches the waveform.
+  const { real, imag } = S.waveCoeffs('saw', 0.7);
+  for (const p of [0.2, 0.5, 0.85]) {
+    let v = 0; for (let k = 1; k < real.length; k++) v += real[k] * Math.cos(2 * Math.PI * k * p) + imag[k] * Math.sin(2 * Math.PI * k * p);
+    near(v, S.WAVES.saw(p, 0.7), 0.01, 'p=' + p);
+  }
+  assert.equal(S.quantDuty(0.123), 0.12); assert.equal(S.quantDuty(1.3), 1);
+});
+
 console.log(`${n} tests passed`);

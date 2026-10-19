@@ -154,7 +154,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [acorn-arm1](acorn-arm1/) -- the ARM1 as Acorn built it in 1985: the whole of ARMv1 in 25,000 transistors, with no multiply instruction, conditional execution on every instruction and a barrel shifter on the way into the ALU.
 - [camera-face-manipulator](camera-face-manipulator/) -- webcam face remixer that swaps, mirrors and time-lags eyes, nose and mouth using MediaPipe landmarks.
 - [camera-pose-estimation](camera-pose-estimation/) -- webcam pose estimation with MediaPipe: a stick figure over the video and the pose's name (T-pose, squat, tree pose and 22 more) from joint-angle rules, plus a synthetic demo mode.
-- [camera-pose-synth](camera-pose-synth/) -- play a synth with your body: shoulder angle sets the pitch (T-pose is the base note, arms up go higher), with a mapping table for volume, filter and vibrato and a theremin preset.
+- [camera-pose-synth](camera-pose-synth/) -- play a synth with your body: the left arm plays a sawtooth and the right arm a square wave, shoulder angle sets each pitch (T-pose is the base note) and the elbow sets the duty cycle; a mapping table routes other body parameters to volume, filter and vibrato.
 - [cartoon-face](cartoon-face/) -- cartoon face studio with 60 expression presets and fine sliders, drawn as parameterised SVG.
 - [dag-lab](dag-lab/) -- a Werkkzeug-style DAG editor where nodes connect by adjacency on a grid instead of wires.
 - [datetime-converter](datetime-converter/) -- multi-zone time comparison grid with pinning, drag reordering and day/night tinting.
