@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera Pose Estimation</title>
+<style>
+:root {
+  --bg: #0b0d12;
+  --panel: #12151d;
+  --line: #242a38;
+  --text: #e8eaf0;
+  --dim: #8b92a5;
+  --accent: #7cf29c;
+  --left: #ff9f43;
+  --right: #4cc9f0;
+  --btn: #1c2130;
+  --btn-hover: #262c3f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { display: flex; flex-direction: column; }
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 15px; margin: 0 6px 0 0; font-weight: 650; letter-spacing: .2px; }
+.group { display: flex; align-items: center; gap: 6px; }
+button, select, .filebtn {
+  font: inherit; color: var(--text); background: var(--btn); border: 1px solid var(--line);
+  border-radius: 7px; padding: 5px 11px; cursor: pointer;
+}
+button:hover, select:hover, .filebtn:hover { background: var(--btn-hover); }
+button.active { border-color: var(--accent); color: var(--accent); }
+.filebtn input { display: none; }
+label.tog { display: flex; align-items: center; gap: 5px; color: var(--dim); cursor: pointer; user-select: none; }
+label.tog input { accent-color: var(--accent); margin: 0; }
+main { flex: 1; display: flex; min-height: 0; }
+#stage { position: relative; flex: 1; min-width: 0; min-height: 240px; overflow: hidden; }
+#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#bigLabel {
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  font-size: clamp(22px, 4.2vw, 46px); font-weight: 750; letter-spacing: .3px;
+  padding: 6px 20px; border-radius: 14px; white-space: nowrap; pointer-events: none;
+  background: rgba(8, 10, 14, .62); border: 1px solid rgba(255,255,255,.08);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  transition: color .2s;
+}
+#bigLabel.none { color: var(--dim); font-weight: 500; font-size: clamp(16px, 2.4vw, 24px); }
+#status {
+  position: absolute; top: 12px; left: 12px; max-width: calc(100% - 24px);
+  padding: 6px 10px; border-radius: 8px; font-size: 13px; color: var(--dim);
+  background: rgba(8, 10, 14, .7); pointer-events: none;
+}
+#status:empty { display: none; }
+#status.err { color: #ff8a80; }
+aside {
+  width: 270px; flex: none; overflow: auto; padding: 12px 14px 18px;
+  background: var(--panel); border-left: 1px solid var(--line);
+}
+aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--dim); margin: 14px 0 6px; font-weight: 600; }
+aside h2:first-child { margin-top: 0; }
+#poseList { list-style: none; margin: 0; padding: 0; }
+#poseList li { padding: 3px 8px; border-radius: 6px; display: flex; justify-content: space-between; gap: 8px; }
+#poseList li span { color: var(--dim); font-size: 12px; text-align: right; }
+#poseList li.on { background: rgba(124, 242, 156, .14); color: var(--accent); }
+#poseList li.on span { color: var(--accent); }
+#readout { font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); white-space: pre; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--dim); }
+.legend b { display: inline-block; width: 18px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.note { font-size: 12px; color: var(--dim); }
+@media (max-width: 760px) {
+  main { flex-direction: column; }
+  aside { width: auto; max-height: 36vh; border-left: 0; border-top: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pose Estimation</h1>
+  <div class="group">
+    <button id="btnCamera">Camera</button>
+    <button id="btnDemo">Demo</button>
+    <label class="filebtn" id="btnFile">Video file<input type="file" id="fileInput" accept="video/*"></label>
+  </div>
+  <div class="group">
+    <label class="tog"><input type="checkbox" id="optMirror" checked>Mirror</label>
+    <label class="tog"><input type="checkbox" id="optVideo" checked>Video</label>
+    <label class="tog"><input type="checkbox" id="optAngles">Angles</label>
+  </div>
+  <div class="group">
+    <select id="optModel" title="Pose model">
+      <option value="lite">Lite model</option>
+      <option value="full" selected>Full model</option>
+      <option value="heavy">Heavy model</option>
+    </select>
+    <select id="optPeople" title="Max people">
+      <option value="1">1 person</option>
+      <option value="2" selected>2 people</option>
+      <option value="4">4 people</option>
+    </select>
+  </div>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="view"></canvas>
+    <div id="status"></div>
+    <div id="bigLabel" class="none">Starting…</div>
+  </div>
+  <aside>
+    <h2>Poses it knows</h2>
+    <ul id="poseList"></ul>
+    <h2>Joints</h2>
+    <div id="readout">–</div>
+    <h2>Colors</h2>
+    <div class="legend"><span><b style="background:var(--left)"></b>left side</span><span><b style="background:var(--right)"></b>right side</span></div>
+    <p class="note">Left and right are the person's own sides. Pose names come from joint angles in MediaPipe's 3D landmarks, not from a trained classifier. Everything runs in the browser; no video leaves the machine.</p>
+  </aside>
+</main>
+<video id="video" playsinline muted hidden></video>
+
+<script id="shared-code">
+// Pose geometry and the rule-based pose classifier. Pure functions, also run by test.mjs in Node.
+const PoseLogic = (() => {
+  // MediaPipe BlazePose landmark indices. "Left" is the person's own left.
+  const LM = {
+    NOSE: 0, L_EYE: 2, R_EYE: 5, L_EAR: 7, R_EAR: 8, L_MOUTH: 9, R_MOUTH: 10,
+    L_SH: 11, R_SH: 12, L_EL: 13, R_EL: 14, L_WR: 15, R_WR: 16,
+    L_PINKY: 17, R_PINKY: 18, L_INDEX: 19, R_INDEX: 20, L_THUMB: 21, R_THUMB: 22,
+    L_HIP: 23, R_HIP: 24, L_KN: 25, R_KN: 26, L_AN: 27, R_AN: 28,
+    L_HEEL: 29, R_HEEL: 30, L_FOOT: 31, R_FOOT: 32,
+  };
+  // Stick-figure bones: [from, to, side] with side 'L', 'R' or 'C' (center).
+  const BONES = [
+    [11, 12, 'C'], [11, 23, 'L'], [12, 24, 'R'], [23, 24, 'C'],
+    [11, 13, 'L'], [13, 15, 'L'], [15, 19, 'L'], [15, 17, 'L'], [15, 21, 'L'],
+    [12, 14, 'R'], [14, 16, 'R'], [16, 20, 'R'], [16, 18, 'R'], [16, 22, 'R'],
+    [23, 25, 'L'], [25, 27, 'L'], [27, 29, 'L'], [29, 31, 'L'], [27, 31, 'L'],
+    [24, 26, 'R'], [26, 28, 'R'], [28, 30, 'R'], [30, 32, 'R'], [28, 32, 'R'],
+  ];
+
+  const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: (a.z || 0) - (b.z || 0) });
+  const add = (a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: (a.z || 0) + (b.z || 0) });
+  const scale = (a, s) => ({ x: a.x * s, y: a.y * s, z: (a.z || 0) * s });
+  const dot = (a, b) => a.x * b.x + a.y * b.y + (a.z || 0) * (b.z || 0);
+  const len = (a) => Math.sqrt(dot(a, a));
+  const norm = (a) => scale(a, 1 / (len(a) || 1e-9));
+  const mid = (a, b) => scale(add(a, b), 0.5);
+  const cross = (a, b) => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
+  const dist = (a, b) => len(sub(a, b));
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const DEG = 180 / Math.PI;
+  const angle = (a, b) => Math.acos(clamp(dot(a, b) / ((len(a) * len(b)) || 1e-9), -1, 1)) * DEG;
+  const jointAngle = (a, b, c) => angle(sub(a, b), sub(c, b));  // 180 = straight
+  const segDist = (p, a, b) => {
+    const ab = sub(b, a);
+    const t = clamp(dot(sub(p, a), ab) / (dot(ab, ab) || 1e-9), 0, 1);
+    return dist(p, add(a, scale(ab, t)));
+  };
+
+  const VIS = 0.5;
+  const visible = (lm2, i) => {
+    const p = lm2[i];
+    if (!p) return false;
+    const v = p.visibility ?? 1;
+    return v >= VIS && p.x > -0.05 && p.x < 1.05 && p.y > -0.05 && p.y < 1.05;
+  };
+  const allVis = (lm2, ids) => ids.every((i) => visible(lm2, i));
+
+  // Per-arm label from the shoulder->wrist direction measured in the torso frame.
+  function armClass(a) {
+    if (!a.vis) return 'unknown';
+    const straight = a.elbow >= 140;
+    if (a.elev >= 150 && a.elbow >= 120) return 'up';
+    if (a.elev >= 112 && straight) return 'diag';
+    if (a.elev >= 60 && straight) return a.out >= a.fwd ? 'side' : 'forward';
+    if (a.elev < 40) return 'down';
+    return 'bent';
+  }
+
+  // lm2: normalized image landmarks (x, y in 0..1, visibility). lm3: world landmarks in meters
+  // (MediaPipe: origin between the hips, y down). aspect: image width / height.
+  function features(lm2, lm3, aspect = 1) {
+    if (!lm2 || lm2.length < 33 || !allVis(lm2, [11, 12])) return null;
+    const W = lm3 && lm3.length >= 33 ? lm3 : lm2.map((p) => ({ x: p.x * aspect, y: p.y, z: (p.z || 0) * aspect }));
+    // Torso frame: D runs down the spine, L toward the person's left shoulder, F out of the chest.
+    const mS = mid(W[11], W[12]), mH = mid(W[23], W[24]);
+    const T = len(sub(mH, mS)) || 1e-6;
+    const D = norm(sub(mH, mS));
+    const lr = sub(W[11], W[12]);
+    const L = norm(sub(lr, scale(D, dot(lr, D))));
+    const F = cross(D, L);
+    const loc = (p) => { const v = sub(p, mS); return { lat: dot(v, L) / T, down: dot(v, D) / T, fwd: dot(v, F) / T }; };
+
+    // Gravity frame from the image (assumes a level camera): torso tilt and foot heights.
+    const s2 = mid(lm2[11], lm2[12]), h2 = mid(lm2[23], lm2[24]);
+    const tv = { x: (s2.x - h2.x) * aspect, y: s2.y - h2.y };
+    const T2 = Math.hypot(tv.x, tv.y) || 1e-6;
+    const tilt = Math.atan2(Math.abs(tv.x), -tv.y) * DEG;  // 0 upright, 90 horizontal, 180 upside down
+
+    const SIDES = {
+      left: { sh: 11, el: 13, wr: 15, hip: 23, kn: 25, an: 27, s: 1 },
+      right: { sh: 12, el: 14, wr: 16, hip: 24, kn: 26, an: 28, s: -1 },
+    };
+    const arms = {}, legs = {};
+    for (const [k, c] of Object.entries(SIDES)) {
+      const sh = W[c.sh], el = W[c.el], wr = W[c.wr];
+      const v = sub(wr, sh), vl = len(v) || 1e-9;
+      const a = {
+        vis: allVis(lm2, [c.sh, c.el, c.wr]),
+        elbow: jointAngle(sh, el, wr),
+        upperElev: angle(sub(el, sh), D),   // 0 = hanging down, 90 = level, 180 = straight up
+        elev: angle(v, D),
+        out: dot(v, L) * c.s / vl,          // sideways (away from the body) share of the arm direction
+        fwd: Math.abs(dot(v, F)) / vl,      // forward/backward share
+        wrist: loc(wr), elbowL: loc(el), shoulderL: loc(sh),
+        wristHip: dist(wr, W[c.hip]) / T,
+        wristNose: dist(wr, W[0]) / T,
+      };
+      a.cls = armClass(a);
+      arms[k] = a;
+      const hip = W[c.hip], kn = W[c.kn], an = W[c.an];
+      legs[k] = {
+        vis: allVis(lm2, [c.hip, c.kn, c.an]),
+        knee: jointAngle(hip, kn, an),
+        thigh: sub(kn, hip),
+        footY: (lm2[c.an].y - h2.y) / T2,  // image-space height of the ankle below the hips, torso units
+      };
+    }
+    legs.left.footToOther = Math.min(segDist(W[27], W[24], W[26]), segDist(W[27], W[26], W[28])) / T;
+    legs.right.footToOther = Math.min(segDist(W[28], W[23], W[25]), segDist(W[28], W[25], W[27])) / T;
+    return {
+      T, arms, legs, tilt,
+      legSpread: angle(legs.left.thigh, legs.right.thigh),
+      ankleGap: dist(W[27], W[28]) / T,
+      wristGap: dist(W[15], W[16]) / T,
+      hipsVis: allVis(lm2, [23, 24]),
+      legsVis: legs.left.vis && legs.right.vis,
+    };
+  }
+
+  const high = (c) => c === 'up' || c === 'diag';
+  const resting = (c) => c === 'down' || c === 'bent' || c === 'unknown';
+
+  function armPose(f) {
+    const aL = f.arms.left, aR = f.arms.right;
+    if (!aL.vis && !aR.vis) return null;
+    if (aL.vis && aR.vis) {
+      const chest = (w) => w.down > -0.15 && w.down < 0.95;
+      if (aL.wrist.lat < -0.05 && aR.wrist.lat > 0.05 && chest(aL.wrist) && chest(aR.wrist)) return 'Arms crossed';
+      if (f.wristGap < 0.32 && chest(aL.wrist) && chest(aR.wrist) &&
+          Math.abs(aL.wrist.lat + aR.wrist.lat) / 2 < 0.35 && aL.elbow < 120 && aR.elbow < 120) return 'Prayer';
+      if (aL.wrist.down < 0.05 && aR.wrist.down < 0.05 && aL.wristNose < 0.75 && aR.wristNose < 0.75 &&
+          aL.elbow < 125 && aR.elbow < 125) return 'Hands on head';
+      const onHip = (a) => a.wristHip < 0.45 && a.elbow < 150 && Math.abs(a.elbowL.lat) > Math.abs(a.shoulderL.lat) + 0.05;
+      if (onHip(aL) && onHip(aR)) return 'Hands on hips';
+      const flex = (a) => a.upperElev > 55 && a.upperElev < 130 && a.elbow > 35 && a.elbow < 120 &&
+        a.wrist.down < a.elbowL.down - 0.15;
+      if (flex(aL) && flex(aR)) return 'Flexing';
+    }
+    const nearFace = (a) => a.vis && a.wristNose < 0.6 && a.elbow < 95 && a.wrist.down < 0.15;
+    if (nearFace(aL) !== nearFace(aR)) return 'Thinking';
+    const cL = aL.cls, cR = aR.cls;
+    if (cL === 'up' && cR === 'up') return 'Hands up';
+    if (high(cL) && high(cR)) return 'Y pose';
+    if (cL === 'side' && cR === 'side') return 'T-pose';
+    if (cL === 'forward' && cR === 'forward') return 'Zombie';
+    for (const [c, o, side] of [[cL, cR, 'Left'], [cR, cL, 'Right']]) {
+      if (high(c) && resting(o)) return side + ' hand raised';
+      if (c === 'side' && resting(o)) return side + ' arm out';
+      if (c === 'forward' && resting(o)) return 'Pointing';
+    }
+    return null;
+  }
+
+  function decide(f) {
+    const gL = f.legs.left, gR = f.legs.right, aL = f.arms.left, aR = f.arms.right;
+    if (f.hipsVis && f.tilt >= 150) return 'Handstand';
+    if (f.hipsVis && f.tilt > 60) return 'Lying down';
+    if (f.legsVis) {
+      for (const [me, other] of [[gL, gR], [gR, gL]]) {
+        if (me.footY < other.footY - 0.3 && me.knee < 130 && other.knee > 145) {
+          return me.footToOther < 0.45 ? 'Tree pose' : 'Standing on one leg';
+        }
+      }
+      if (gL.knee < 120 && gR.knee < 120 && Math.abs(gL.footY - gR.footY) < 0.35) return 'Squat';
+      if (((gL.knee < 125 && gR.knee > 145) || (gR.knee < 125 && gL.knee > 145)) && f.ankleGap > 0.9) {
+        return aL.cls === 'side' && aR.cls === 'side' ? 'Warrior II' : 'Lunge';
+      }
+      if (high(aL.cls) && high(aR.cls) && f.legSpread > 28 && gL.knee > 145 && gR.knee > 145) return 'Star jump';
+    }
+    if (f.hipsVis && f.tilt > 20) return 'Side bend';
+    const upper = armPose(f);
+    if (upper) return upper;
+    if (f.legsVis) return f.legSpread > 28 ? 'Wide stance' : 'Standing';
+    return 'Arms down';
+  }
+
+  function classify(lm2, lm3, aspect = 1) {
+    const f = features(lm2, lm3, aspect);
+    return { name: f ? decide(f) : 'Unknown', f };
+  }
+
+  // The list shown in the side panel. match() tells whether a classifier output belongs to the row.
+  const CATALOG = [
+    ['Standing', 'arms at sides'], ['T-pose', 'arms out level'], ['Hands up', 'both straight up'],
+    ['Y pose', 'arms up in a V'], ['Hand raised', 'one arm up', (n) => /hand raised$/.test(n)],
+    ['Arm out', 'one arm level', (n) => /arm out$/.test(n)], ['Zombie', 'both arms forward'],
+    ['Pointing', 'one arm forward'], ['Flexing', 'double biceps'], ['Hands on hips', 'elbows out'],
+    ['Hands on head', 'elbows out'], ['Arms crossed', 'wrists cross'], ['Prayer', 'palms together'],
+    ['Thinking', 'hand to chin'], ['Squat', 'both knees bent'], ['Lunge', 'one knee bent'],
+    ['Warrior II', 'lunge + T arms'], ['Standing on one leg', 'knee up'], ['Tree pose', 'foot on leg'],
+    ['Star jump', 'arms up, legs apart'], ['Wide stance', 'legs apart'], ['Side bend', 'torso tilted'],
+    ['Lying down', 'torso level'], ['Handstand', 'upside down'], ['Arms down', 'upper body only'],
+  ].map(([name, hint, match]) => ({ name, hint, match: match || ((n) => n === name) }));
+
+  // ---- Synthetic skeleton (demo mode and tests) ----
+  // Segment directions are [out, down, forward] in the person's frame: "out" points away from the
+  // body on that side, "down" along the spine, "forward" toward the camera. Torso length = 1.
+  const BODY = { shoulder: 0.4, hip: 0.25, upper: 0.6, fore: 0.5, thigh: 0.9, shin: 0.9 };
+  const SEGMENTS = ['lUpper', 'lFore', 'rUpper', 'rFore', 'lThigh', 'lShin', 'rThigh', 'rShin'];
+  const DEFAULT_SPEC = {
+    lUpper: [0.08, 1, 0], lFore: [0.05, 1, 0.08], rUpper: [0.08, 1, 0], rFore: [0.05, 1, 0.08],
+    lThigh: [0.04, 1, 0], lShin: [0, 1, 0], rThigh: [0.04, 1, 0], rShin: [0, 1, 0],
+    tilt: 0, tiltUpper: 0,
+  };
+
+  function buildPose(specIn, opt = {}) {
+    const s = { ...DEFAULT_SPEC, ...specIn };
+    const v = (x, y, z) => ({ x, y, z });
+    const P = new Array(33);
+    // x points toward the person's left, which is image right in an unmirrored camera image.
+    P[11] = v(BODY.shoulder, 0, 0); P[12] = v(-BODY.shoulder, 0, 0);
+    P[23] = v(BODY.hip, 1, 0); P[24] = v(-BODY.hip, 1, 0);
+    P[0] = v(0, -0.45, 0.15);
+    P[1] = v(0.04, -0.52, 0.13); P[2] = v(0.07, -0.52, 0.12); P[3] = v(0.1, -0.52, 0.1);
+    P[4] = v(-0.04, -0.52, 0.13); P[5] = v(-0.07, -0.52, 0.12); P[6] = v(-0.1, -0.52, 0.1);
+    P[7] = v(0.16, -0.49, 0); P[8] = v(-0.16, -0.49, 0);
+    P[9] = v(0.04, -0.37, 0.13); P[10] = v(-0.04, -0.37, 0.13);
+    const seg = (from, dir, sign, length) => add(from, scale(norm(v(dir[0] * sign, dir[1], dir[2])), length));
+    for (const [sh, el, wr, up, fo, sign, fingers] of [
+      [11, 13, 15, s.lUpper, s.lFore, 1, [17, 19, 21]], [12, 14, 16, s.rUpper, s.rFore, -1, [18, 20, 22]]]) {
+      P[el] = seg(P[sh], up, sign, BODY.upper);
+      P[wr] = seg(P[el], fo, sign, BODY.fore);
+      const d = norm(sub(P[wr], P[el]));
+      fingers.forEach((i, k) => { P[i] = add(add(P[wr], scale(d, 0.13 - k * 0.025)), v(sign * (k - 1) * 0.03, 0, 0)); });
+    }
+    for (const [hip, kn, an, heel, foot, th, sh, sign] of [
+      [23, 25, 27, 29, 31, s.lThigh, s.lShin, 1], [24, 26, 28, 30, 32, s.rThigh, s.rShin, -1]]) {
+      P[kn] = seg(P[hip], th, sign, BODY.thigh);
+      P[an] = seg(P[kn], sh, sign, BODY.shin);
+      P[heel] = add(P[an], v(0, 0.06, -0.06));
+      P[foot] = add(P[an], v(sign * 0.04, 0.08, 0.2));
+    }
+    // Tilt: rotate everything (tilt) and the upper body only (tiltUpper) around the hip center.
+    const rot = (p, deg) => {
+      const r = deg / DEG, c = Math.cos(r), sn = Math.sin(r), q = sub(p, v(0, 1, 0));
+      return v(q.x * c - q.y * sn, q.x * sn + q.y * c + 1, q.z);
+    };
+    const lower = new Set([23, 24, 25, 26, 27, 28, 29, 30, 31, 32]);
+    for (let i = 0; i < 33; i++) {
+      if (s.tiltUpper && !lower.has(i)) P[i] = rot(P[i], s.tiltUpper);
+      if (s.tilt) P[i] = rot(P[i], s.tilt);
+    }
+    // World landmarks: meters around the hip center (torso ~0.5 m). Image landmarks: projection.
+    const k = opt.k ?? 0.15, aspect = opt.aspect ?? 1, cx = opt.cx ?? 0.5, cy = opt.cy ?? 0.3;
+    const hidden = new Set(opt.hideLegs ? [25, 26, 27, 28, 29, 30, 31, 32] : []);
+    const lm3 = P.map((p) => v(p.x * 0.5, (p.y - 1) * 0.5, -p.z * 0.5));
+    const lm2 = P.map((p, i) => ({ x: cx + p.x * k / aspect, y: cy + p.y * k, z: -p.z * k, visibility: hidden.has(i) ? 0.05 : 0.99 }));
+    return { lm2, lm3 };
+  }
+
+  function lerpSpec(a, b, t) {
+    const A = { ...DEFAULT_SPEC, ...a }, B = { ...DEFAULT_SPEC, ...b }, out = {};
+    for (const key of SEGMENTS) {
+      const na = norm({ x: A[key][0], y: A[key][1], z: A[key][2] }), nb = norm({ x: B[key][0], y: B[key][1], z: B[key][2] });
+      const m = add(scale(na, 1 - t), scale(nb, t));
+      out[key] = [m.x, m.y, m.z];
+    }
+    out.tilt = A.tilt + (B.tilt - A.tilt) * t;
+    out.tiltUpper = A.tiltUpper + (B.tiltUpper - A.tiltUpper) * t;
+    return out;
+  }
+
+  // Each entry is a pose the classifier must recognize; the demo cycles through them.
+  const H = [0, -1, 0], SIDE = [1, 0, 0], FWD = [0, 0, 1];
+  const POSES = [
+    ['Standing', {}],
+    ['T-pose', { lUpper: SIDE, lFore: SIDE, rUpper: SIDE, rFore: SIDE }],
+    ['Hands up', { lUpper: [0.1, -1, 0], lFore: H, rUpper: [0.1, -1, 0], rFore: H }],
+    ['Y pose', { lUpper: [0.7, -0.7, 0], lFore: [0.7, -0.7, 0], rUpper: [0.7, -0.7, 0], rFore: [0.7, -0.7, 0] }],
+    ['Star jump', { lUpper: [0.7, -0.7, 0], lFore: [0.7, -0.7, 0], rUpper: [0.7, -0.7, 0], rFore: [0.7, -0.7, 0],
+      lThigh: [0.42, 1, 0], lShin: [0.42, 1, 0], rThigh: [0.42, 1, 0], rShin: [0.42, 1, 0] }],
+    ['Left hand raised', { lUpper: [0.15, -1, 0], lFore: H }],
+    ['Right arm out', { rUpper: SIDE, rFore: SIDE }],
+    ['Flexing', { lUpper: [1, -0.1, 0], lFore: [-0.15, -1, 0], rUpper: [1, -0.1, 0], rFore: [-0.15, -1, 0] }],
+    ['Hands on hips', { lUpper: [0.5, 0.866, -0.1], lFore: [-0.707, 0.707, 0], rUpper: [0.5, 0.866, -0.1], rFore: [-0.707, 0.707, 0] }],
+    ['Hands on head', { lUpper: [1, -0.3, 0], lFore: [-1, -0.45, 0], rUpper: [1, -0.3, 0], rFore: [-1, -0.45, 0] }],
+    ['Arms crossed', { lUpper: [0.05, 0.85, 0.5], lFore: [-1, -0.15, 0.15], rUpper: [0.05, 0.85, 0.5], rFore: [-1, -0.05, 0.25] }],
+    ['Prayer', { lUpper: [0.2, 0.9, 0.5], lFore: [-0.9, -0.3, 0.6], rUpper: [0.2, 0.9, 0.5], rFore: [-0.9, -0.3, 0.6] }],
+    ['Thinking', { rUpper: [-0.3, 0.7, 1], rFore: [-0.6, -1, 0] }],
+    ['Zombie', { lUpper: FWD, lFore: FWD, rUpper: FWD, rFore: FWD }],
+    ['Pointing', { rUpper: [0.1, 0, 1], rFore: [0.1, 0, 1] }],
+    ['Squat', { lUpper: [0.1, 0.1, 1], lFore: [0.1, 0.1, 1], rUpper: [0.1, 0.1, 1], rFore: [0.1, 0.1, 1],
+      lThigh: [0.35, 0.15, 1], lShin: [0.05, 1, -0.25], rThigh: [0.35, 0.15, 1], rShin: [0.05, 1, -0.25] }],
+    ['Lunge', { lThigh: [0.05, 0.287, 1], lShin: [0, 1, 0], rThigh: [0.05, 0.643, -0.766], rShin: [0.05, 0.643, -0.766] }],
+    ['Warrior II', { lUpper: SIDE, lFore: SIDE, rUpper: SIDE, rFore: SIDE,
+      lThigh: [1, 0.25, 0], lShin: [0, 1, 0], rThigh: [0.784, 0.621, 0], rShin: [0.784, 0.621, 0] }],
+    ['Standing on one leg', { lThigh: [0, 0.3, 1], lShin: [0, 1, -0.1], lUpper: SIDE, lFore: SIDE, rUpper: SIDE, rFore: SIDE }],
+    ['Tree pose', { lThigh: [0.7, 0.7, 0.1], lShin: [-1, 0.1, 0], lUpper: [0.1, -1, 0], lFore: [-0.3, -1, 0], rUpper: [0.1, -1, 0], rFore: [-0.3, -1, 0] }],
+    ['Wide stance', { lThigh: [0.42, 1, 0], lShin: [0.42, 1, 0], rThigh: [0.42, 1, 0], rShin: [0.42, 1, 0] }],
+    ['Side bend', { tiltUpper: -35, rUpper: [0.25, -1, 0], rFore: [-0.5, -1, 0] }],
+    ['Lying down', { tilt: -90, lThigh: [0.02, 1, 0], rThigh: [0.02, 1, 0] }],
+    ['Handstand', { tilt: 180, lUpper: [0.15, -1, 0], lFore: H, rUpper: [0.15, -1, 0], rFore: H }],
+  ];
+
+  // In-page / Node self-test: every synthetic pose classifies as its own name.
+  const PoseTests = {
+    run() {
+      const failures = [];
+      const check = (label, got, want) => { if (got !== want) failures.push(`${label}: expected "${want}", got "${got}"`); };
+      for (const [name, spec] of POSES) {
+        const { lm2, lm3 } = buildPose(spec);
+        check(name, classify(lm2, lm3).name, name);
+        // Image landmarks only (no world landmarks) must agree for frontal poses.
+        if (!spec.lUpper || spec.lUpper[2] === 0) check(name + ' (2D only)', classify(lm2, null).name, name);
+      }
+      // Mirror images of the one-sided poses.
+      const flip = (spec) => {
+        const o = {};
+        for (const [k, val] of Object.entries(spec)) o[k[0] === 'l' ? 'r' + k.slice(1) : k[0] === 'r' ? 'l' + k.slice(1) : k] = val;
+        return o;
+      };
+      const P = Object.fromEntries(POSES);
+      check('Right hand raised', classify(...Object.values(buildPose(flip(P['Left hand raised'])))).name, 'Right hand raised');
+      check('Left arm out', classify(...Object.values(buildPose(flip(P['Right arm out'])))).name, 'Left arm out');
+      check('Thinking (left hand)', classify(...Object.values(buildPose(flip(P['Thinking'])))).name, 'Thinking');
+      check('Tree pose (right foot)', classify(...Object.values(buildPose(flip(P['Tree pose'])))).name, 'Tree pose');
+      // Webcam at a desk: legs out of frame.
+      const desk = (spec) => { const r = buildPose(spec, { hideLegs: true }); return classify(r.lm2, r.lm3).name; };
+      check('desk, arms down', desk({}), 'Arms down');
+      check('desk, T-pose', desk(P['T-pose']), 'T-pose');
+      check('desk, prayer', desk(P['Prayer']), 'Prayer');
+      check('desk, squat legs hidden', desk(P['Squat']), 'Zombie');
+      // A 16:9 image with the projection squeezed accordingly still sees the same angles.
+      const wide = buildPose(P['T-pose'], { aspect: 16 / 9 });
+      check('T-pose 16:9 (2D only)', classify(wide.lm2, null, 16 / 9).name, 'T-pose');
+      check('no shoulders', classify(buildPose({}).lm2.map((p) => ({ ...p, visibility: 0 })), null).name, 'Unknown');
+      // Every classifier output must have a row in the panel.
+      for (const [name] of POSES) if (!CATALOG.some((c) => c.match(name))) failures.push('no catalog row for ' + name);
+      return { total: POSES.length * 2 + 12, failures };
+    },
+  };
+
+  return { LM, BONES, features, classify, CATALOG, buildPose, lerpSpec, POSES, PoseTests, util: { mid, dist } };
+})();
+if (typeof module !== 'undefined') module.exports = PoseLogic;
+</script>
+
+<script type="module">
+const { BONES, classify, CATALOG, buildPose, lerpSpec, POSES, PoseTests } = PoseLogic;
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('view'), ctx = canvas.getContext('2d');
+const video = $('video'), statusEl = $('status'), bigLabel = $('bigLabel'), readout = $('readout');
+const params = new URLSearchParams(location.search);
+
+const selfTest = PoseTests.run();
+if (selfTest.failures.length) console.warn('Pose classifier self-test failures:', selfTest.failures);
+
+// ---- Side panel ----
+const poseList = $('poseList');
+const rows = CATALOG.map((c) => {
+  const li = document.createElement('li');
+  li.innerHTML = `<b></b><span></span>`;
+  li.firstChild.textContent = c.name; li.lastChild.textContent = c.hint;
+  poseList.appendChild(li);
+  return { c, li };
+});
+function highlight(name) { for (const r of rows) r.li.classList.toggle('on', !!name && r.c.match(name)); }
+
+// ---- Canvas sizing in device pixels ----
+let dpr = 1;
+function fitCanvas() {
+  dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+function containRect(srcW, srcH) {
+  const W = canvas.width, H = canvas.height, s = Math.min(W / srcW, H / srcH);
+  const w = srcW * s, h = srcH * s;
+  return { x: (W - w) / 2, y: (H - h) / 2, w, h };
+}
+
+// ---- Sources: camera, video file, demo ----
+let mode = 'none', stream = null, fileURL = null;
+function setMode(m) {
+  mode = m;
+  $('btnCamera').classList.toggle('active', m === 'camera');
+  $('btnDemo').classList.toggle('active', m === 'demo');
+  $('btnFile').classList.toggle('active', m === 'file');
+  labelHistory.length = 0;
+}
+function stopSources() {
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  video.pause(); video.srcObject = null; video.removeAttribute('src');
+  if (fileURL) { URL.revokeObjectURL(fileURL); fileURL = null; }
+}
+async function startCamera() {
+  stopSources();
+  setStatus('Requesting camera…');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false,
+    });
+  } catch (e) {
+    setStatus(`Camera unavailable (${e.name || e}). Showing the demo instead.`, true);
+    startDemo(false);
+    return;
+  }
+  video.srcObject = stream;
+  await video.play().catch(() => {});
+  $('optMirror').checked = true;
+  setMode('camera');
+  ensureModel();
+}
+function startFile(file) {
+  stopSources();
+  fileURL = URL.createObjectURL(file);
+  video.src = fileURL; video.loop = true;
+  video.play().catch(() => {});
+  $('optMirror').checked = false;
+  setMode('file');
+  ensureModel();
+}
+let demoStart = 0;
+function startDemo(clearStatus = true) {
+  stopSources();
+  setMode('demo');
+  demoStart = performance.now();
+  if (clearStatus) setStatus('');
+}
+
+// ---- MediaPipe pose landmarker ----
+const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL_URL = (v) => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${v}/float16/1/pose_landmarker_${v}.task`;
+let landmarker = null, loading = null, vision = null, PoseLandmarker = null;
+function setStatus(msg, err = false) { statusEl.textContent = msg; statusEl.classList.toggle('err', err); }
+function ensureModel() {
+  if (landmarker || loading) return loading;
+  const variant = $('optModel').value, people = +$('optPeople').value;
+  setStatus(`Loading ${variant} pose model…`);
+  loading = (async () => {
+    try {
+      if (!vision) {
+        const mod = await import(`${MP}/vision_bundle.mjs`);
+        PoseLandmarker = mod.PoseLandmarker;
+        vision = await mod.FilesetResolver.forVisionTasks(`${MP}/wasm`);
+      }
+      const opts = (delegate) => ({
+        baseOptions: { modelAssetPath: MODEL_URL(variant), delegate },
+        runningMode: 'VIDEO', numPoses: people,
+        minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+      });
+      try { landmarker = await PoseLandmarker.createFromOptions(vision, opts('GPU')); }
+      catch { landmarker = await PoseLandmarker.createFromOptions(vision, opts('CPU')); }
+      if (mode !== 'demo') setStatus('');
+    } catch (e) {
+      console.error(e);
+      setStatus('Could not load the pose model (needs internet once): ' + (e.message || e), true);
+    } finally { loading = null; }
+  })();
+  return loading;
+}
+function reloadModel() {
+  if (landmarker) { landmarker.close(); landmarker = null; }
+  if (mode === 'camera' || mode === 'file') ensureModel();
+}
+
+// ---- Label smoothing: majority vote over the last frames, per person slot ----
+const labelHistory = [];
+function smoothLabel(slot, name) {
+  const h = (labelHistory[slot] ||= []);
+  h.push(name); if (h.length > 9) h.shift();
+  const count = new Map();
+  for (const n of h) count.set(n, (count.get(n) || 0) + 1);
+  let best = name, bestN = 0;
+  for (const [n, c] of count) if (c > bestN || (c === bestN && n === name)) { best = n; bestN = c; }
+  return best;
+}
+
+// ---- Drawing ----
+const COLORS = { L: '#ff9f43', R: '#4cc9f0', C: '#f1f3f8' };
+const VIS = 0.5;
+function drawPerson(lm2, rect, mirror, label, f) {
+  const P = (p) => ({ x: rect.x + (mirror ? 1 - p.x : p.x) * rect.w, y: rect.y + p.y * rect.h });
+  const vis = (i) => (lm2[i].visibility ?? 1) >= VIS;
+  const lw = Math.max(2.5 * dpr, rect.h / 110);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // Bones, with a dark under-stroke so they read on any background.
+  for (const pass of [0, 1]) {
+    for (const [a, b, side] of BONES) {
+      if (!vis(a) || !vis(b)) continue;
+      const fingers = a === 15 || a === 16;
+      const pa = P(lm2[a]), pb = P(lm2[b]);
+      ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
+      ctx.lineWidth = (fingers ? lw * 0.5 : lw) + (pass ? 0 : lw * 0.9);
+      ctx.strokeStyle = pass ? COLORS[side] : 'rgba(0,0,0,0.45)';
+      ctx.stroke();
+    }
+  }
+  // Head and neck.
+  const ears = vis(7) && vis(8), sh = PoseLogic.util.mid(P(lm2[11]), P(lm2[12]));
+  let head = null;
+  if (vis(0)) {
+    const nose = P(lm2[0]);
+    const c = ears ? PoseLogic.util.mid(P(lm2[7]), P(lm2[8])) : nose;
+    const r = Math.max(ears ? PoseLogic.util.dist(P(lm2[7]), P(lm2[8])) * 0.62 : 0, PoseLogic.util.dist(P(lm2[11]), P(lm2[12])) * 0.22, lw * 2);
+    head = { x: c.x, y: c.y, r };
+    if (vis(11) && vis(12)) {
+      const dx = sh.x - c.x, dy = sh.y - c.y, d = Math.hypot(dx, dy) || 1;
+      ctx.beginPath(); ctx.moveTo(c.x + dx / d * r, c.y + dy / d * r); ctx.lineTo(sh.x, sh.y);
+      ctx.lineWidth = lw; ctx.strokeStyle = COLORS.C; ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.lineWidth = lw * 1.9; ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.stroke();
+    ctx.lineWidth = lw; ctx.strokeStyle = COLORS.C; ctx.stroke();
+    ctx.fillStyle = COLORS.C;
+    for (const i of [2, 5]) if (vis(i)) { const e = P(lm2[i]); ctx.beginPath(); ctx.arc(e.x, e.y, lw * 0.55, 0, 7); ctx.fill(); }
+  }
+  // Joints.
+  for (const i of [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) {
+    if (!vis(i)) continue;
+    const p = P(lm2[i]);
+    ctx.beginPath(); ctx.arc(p.x, p.y, lw * 0.95, 0, Math.PI * 2);
+    ctx.fillStyle = '#0b0d12'; ctx.fill();
+    ctx.lineWidth = lw * 0.55; ctx.strokeStyle = COLORS[i % 2 ? 'L' : 'R']; ctx.stroke();
+  }
+  // Joint angles.
+  if ($('optAngles').checked && f) {
+    ctx.font = `600 ${Math.round(11 * dpr)}px ui-monospace, Menlo, monospace`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const tag = (i, deg) => {
+      if (!vis(i)) return;
+      const p = P(lm2[i]), s = Math.round(deg) + '°';
+      const w = ctx.measureText(s).width + 8 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(p.x + 8 * dpr, p.y - 8 * dpr, w, 16 * dpr);
+      ctx.fillStyle = '#fff'; ctx.fillText(s, p.x + 12 * dpr, p.y);
+    };
+    tag(13, f.arms.left.elbow); tag(14, f.arms.right.elbow);
+    tag(25, f.legs.left.knee); tag(26, f.legs.right.knee);
+    tag(11, f.arms.left.upperElev); tag(12, f.arms.right.upperElev);
+  }
+  // Pose name above the head.
+  if (label) {
+    let ax, ay;
+    if (head) { ax = head.x; ay = head.y - head.r - lw * 2; }
+    else { const top = lm2.filter((p, i) => i <= 12 && (p.visibility ?? 1) >= VIS).map(P); if (!top.length) return; ax = top.reduce((s, p) => s + p.x, 0) / top.length; ay = Math.min(...top.map((p) => p.y)) - lw * 3; }
+    const fs = Math.round(Math.max(14 * dpr, rect.h / 30));
+    ctx.font = `700 ${fs}px system-ui, -apple-system, sans-serif`;
+    const w = ctx.measureText(label).width + fs, h = fs * 1.5;
+    const x = Math.min(Math.max(ax - w / 2, rect.x + 4), rect.x + rect.w - w - 4), y = Math.max(ay - h, rect.y + 4);
+    ctx.fillStyle = 'rgba(8,10,14,0.72)';
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, h / 2); ctx.fill();
+    ctx.fillStyle = '#7cf29c'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + w / 2, y + h / 2 + fs * 0.04);
+  }
+}
+
+function showReadout(f, name) {
+  if (!f) { readout.textContent = '–'; return; }
+  const a = f.arms, g = f.legs, r = (v) => String(Math.round(v)).padStart(4);
+  const vis = (ok, s) => (ok ? s : '   ?');
+  readout.textContent =
+    `            left right\n` +
+    `elbow      ${vis(a.left.vis, r(a.left.elbow))}  ${vis(a.right.vis, r(a.right.elbow))}\n` +
+    `arm lift   ${vis(a.left.vis, r(a.left.elev))}  ${vis(a.right.vis, r(a.right.elev))}\n` +
+    `knee       ${vis(g.left.vis, r(g.left.knee))}  ${vis(g.right.vis, r(g.right.knee))}\n` +
+    `arm        ${a.left.cls.padStart(4)}  ${a.right.cls}\n` +
+    `torso tilt ${f.hipsVis ? r(f.tilt) : '   ?'}°\n` +
+    `leg spread ${f.legsVis ? r(f.legSpread) : '   ?'}°\n` +
+    `pose       ${name}`;
+}
+
+function setBig(text, none = false) {
+  if (bigLabel.textContent !== text) bigLabel.textContent = text;
+  bigLabel.classList.toggle('none', none);
+}
+
+// ---- Demo: a synthetic skeleton cycling through every pose ----
+const HOLD = 1.5, MOVE = 0.7, FLOOR = 0.8;
+const fixedDemo = params.has('demo') && params.get('demo') !== '' ? POSES.findIndex(([n]) => n.toLowerCase() === params.get('demo').toLowerCase()) : -1;
+function demoFrame(t) {
+  const n = POSES.length, cycle = HOLD + MOVE;
+  let spec;
+  if (fixedDemo >= 0) spec = POSES[fixedDemo][1];
+  else {
+    const k = Math.floor(t / cycle) % n, u = (t % cycle) - HOLD;
+    const e = u <= 0 ? 0 : 0.5 - 0.5 * Math.cos(Math.PI * u / MOVE);
+    spec = lerpSpec(POSES[k][1], POSES[(k + 1) % n][1], e);
+  }
+  const W = canvas.width, H = canvas.height, aspect = W / H;
+  // Shrink figures that would not fit (arms overhead), then stand them on the floor.
+  const ys = (pose) => pose.lm2.map((p) => p.y);
+  let k = 0.19, pose = buildPose(spec, { k, aspect, cx: 0.5, cy: 0 });
+  let maxY = Math.max(...ys(pose)), minY = Math.min(...ys(pose));
+  if (maxY - minY > 0.66) {
+    k *= 0.66 / (maxY - minY);
+    pose = buildPose(spec, { k, aspect, cx: 0.5, cy: 0 });
+    maxY = Math.max(...ys(pose)); minY = Math.min(...ys(pose));
+  }
+  const dy = Math.min(FLOOR - maxY, 0.5 - (minY + maxY) / 2 + 0.3);
+  for (const p of pose.lm2) p.y += dy;
+  return { pose, aspect };
+}
+function drawDemoBackdrop() {
+  const W = canvas.width, H = canvas.height;
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#141a26'); g.addColorStop(1, '#0b0d12');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.045)'; ctx.lineWidth = dpr;
+  const step = 40 * dpr;
+  ctx.beginPath();
+  for (let x = (W / 2) % step; x < W; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  for (let y = (H * FLOOR) % step; y < H; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 2 * dpr;
+  ctx.beginPath(); ctx.moveTo(0, H * FLOOR + 8 * dpr); ctx.lineTo(W, H * FLOOR + 8 * dpr); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = `${Math.round(12 * dpr)}px system-ui, sans-serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText('DEMO · synthetic skeleton, classified live', 14 * dpr, 14 * dpr);
+}
+
+// ---- Main loop ----
+let lastVideoTime = -1, lastTs = 0, lastResult = null;
+function frame(now) {
+  fitCanvas();
+  const W = canvas.width, H = canvas.height;
+  const mirror = $('optMirror').checked;
+  if (mode === 'demo') {
+    drawDemoBackdrop();
+    const { pose, aspect } = demoFrame((now - demoStart) / 1000);
+    const { name, f } = classify(pose.lm2, pose.lm3, aspect);
+    const shown = smoothLabel(0, name);
+    drawPerson(pose.lm2, { x: 0, y: 0, w: W, h: H }, mirror, shown, f);
+    setBig(shown); highlight(shown); showReadout(f, shown);
+    return;
+  }
+  ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H);
+  if ((mode !== 'camera' && mode !== 'file') || !video.videoWidth) return;
+  const rect = containRect(video.videoWidth, video.videoHeight);
+  if ($('optVideo').checked) {
+    ctx.save();
+    if (mirror) { ctx.translate(rect.x * 2 + rect.w, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, rect.x, rect.y, rect.w, rect.h);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#10131b'; ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  }
+  if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const ts = Math.max(lastTs + 1, Math.round(now));
+    lastTs = ts;
+    try { lastResult = landmarker.detectForVideo(video, ts); } catch (e) { console.error(e); lastResult = null; }
+  }
+  const people = lastResult?.landmarks || [];
+  if (!landmarker) { setBig(loading ? 'Loading model…' : 'No model', true); highlight(null); return; }
+  if (!people.length) { setBig('No person in view', true); highlight(null); showReadout(null); labelHistory.length = 0; return; }
+  const aspect = video.videoWidth / video.videoHeight;
+  // Biggest person (by shoulder width) drives the big label and the readout.
+  let main = 0, best = -1;
+  people.forEach((lm, i) => {
+    const { name, f } = classify(lm, lastResult.worldLandmarks?.[i], aspect);
+    const shown = smoothLabel(i, name);
+    drawPerson(lm, rect, mirror, shown, f);
+    const size = Math.hypot((lm[11].x - lm[12].x) * aspect, lm[11].y - lm[12].y);
+    if (size > best) { best = size; main = i; lastMain = { shown, f }; }
+  });
+  setBig(lastMain.shown); highlight(lastMain.shown); showReadout(lastMain.f, lastMain.shown);
+}
+let lastMain = null;
+function loop(now) { requestAnimationFrame(loop); frame(now); }
+
+// ---- Wiring ----
+$('btnCamera').onclick = startCamera;
+$('btnDemo').onclick = () => startDemo();
+$('fileInput').onchange = (e) => { const f = e.target.files[0]; if (f) startFile(f); e.target.value = ''; };
+$('optModel').onchange = reloadModel;
+$('optPeople').onchange = reloadModel;
+window.addEventListener('resize', () => frame(performance.now()));
+
+window.__pose = { PoseLogic, selfTest, classifyCurrent: () => lastMain, mode: () => mode, model: () => !!landmarker, frame };
+
+if (params.has('demo')) startDemo();
+else if (!navigator.mediaDevices?.getUserMedia) { setStatus('This browser has no camera API. Showing the demo.', true); startDemo(false); }
+else startCamera();
+frame(performance.now());
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
