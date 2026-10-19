@@ -162,6 +162,44 @@ test('exports', () => {
   assert.equal(obj.split('\n').find((l) => l.startsWith('v ')).split(' ').length, 7, 'x y z r g b');
 });
 
+test('baked photo texture: hair green on the left, purple on the right, lips at the front', () => {
+  const rec = H.reconstruct(synViews(180, 0), { W: S, H: S, N: 64 });
+  const tex = H.bakeTexture(rec, { texW: 256 });
+  assert.equal(tex.rgba.length, tex.width * tex.height * 4);
+  assert.ok([...tex.rgba].filter((x, i) => i % 4 === 3).every((a) => a === 255), 'every texel filled');
+  const k = S / 160, at = (azDeg, Y) => {
+    const col = Math.round((azDeg / 360 + 0.5) * tex.width - 0.5), row = Math.round((Y - tex.yMin) / (tex.yMax - tex.yMin) * tex.height - 0.5);
+    const i = (row * tex.width + col) * 4; return [tex.rgba[i], tex.rgba[i + 1], tex.rgba[i + 2]];
+  };
+  // Object Y is measured from the crown (2k below the crop top in the synthetic render).
+  const hairY = 30 * k, lipsY = (100 - 2) * k;
+  const left = at(90, hairY), right = at(-90, hairY), lips = at(0, lipsY);
+  assert.ok(left[1] > left[0] && left[1] > left[2], 'left hair green ' + left);
+  assert.ok(right[0] > right[1] && right[2] > right[1], 'right hair purple ' + right);
+  assert.ok(lips[0] > lips[1] + 40, 'lips red ' + lips);
+  // texCoord agrees with the texel lookup convention.
+  const [u, v] = H.texCoord(1, hairY, 0, tex);
+  near(u, 0.75, 1e-9); near(v, (hairY - tex.yMin) / (tex.yMax - tex.yMin), 1e-12);
+});
+
+test('zip writer: stored entries with correct CRCs and directory', () => {
+  near(H.crc32(new TextEncoder().encode('123456789')), 0xCBF43926, 0);  // the standard check value
+  const files = [{ name: 'a.txt', data: new TextEncoder().encode('hello') }, { name: 'dir/b.bin', data: Uint8Array.from([0, 1, 2, 255]) }];
+  const zip = H.zipStore(files), dv = new DataView(zip.buffer);
+  assert.equal(dv.getUint32(0, true), 0x04034b50, 'local header');
+  const eocd = zip.length - 22;
+  assert.equal(dv.getUint32(eocd, true), 0x06054b50); assert.equal(dv.getUint16(eocd + 10, true), 2);
+  let p = dv.getUint32(eocd + 16, true);
+  for (const f of files) {
+    assert.equal(dv.getUint32(p, true), 0x02014b50);
+    assert.equal(dv.getUint32(p + 16, true), H.crc32(f.data));
+    const nl = dv.getUint16(p + 28, true);
+    assert.equal(new TextDecoder().decode(zip.slice(p + 46, p + 46 + nl)), f.name);
+    p += 46 + nl;
+  }
+  globalThis.__zipSample = zip;
+});
+
 // ---------------- Full body ----------------
 const BW = 120, BH = 168;
 const bodyViews = (count, seed = 11) => {
@@ -241,4 +279,5 @@ test('mask clean-up works on tall crops', () => {
   assert.equal(k.reduce((s, x) => s + x, 0), 25);
 });
 
+if (process.env.ZIP_OUT) (await import('node:fs')).writeFileSync(process.env.ZIP_OUT, globalThis.__zipSample);
 console.log(`${n} tests passed`);
