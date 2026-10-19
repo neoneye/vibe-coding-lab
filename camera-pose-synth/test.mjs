@@ -107,13 +107,18 @@ test('elbow angle reads back from the skeleton, any shoulder angle', () => {
   }
 });
 
-test('elbows set the duty cycle: straight = pure saw / 50% square, bent = triangle / thin pulse', () => {
+test('elbows set the duty cycle over the full 0..100%', () => {
   const duty = (voice, elbow) => S.TARGET_VALUE[voice + 'Duty'](S.unit01('leftElbow', elbow));
-  near(duty('saw', 170), 1, 1e-9); near(duty('saw', 40), 0.5, 1e-9);
-  near(duty('square', 170), 0.5, 1e-9); near(duty('square', 40), 0.05, 1e-9);
-  near(duty('saw', 180), 1, 1e-9, 'clamped past straight');
-  assert.ok(duty('square', 100) > duty('square', 70), 'monotonic');
+  for (const voice of ['saw', 'square']) {
+    near(duty(voice, 40), 0, 1e-9, voice + ' fully bent');
+    near(duty(voice, 105), 0.5, 1e-9, voice + ' half way');
+    near(duty(voice, 170), 1, 1e-9, voice + ' straight');
+    near(duty(voice, 20), 0, 1e-9, 'clamped below'); near(duty(voice, 180), 1, 1e-9, 'clamped above');
+    assert.ok(duty(voice, 100) > duty(voice, 70), 'monotonic');
+  }
   assert.equal(S.TARGET_VALUE.sawDuty(null), 1); assert.equal(S.TARGET_VALUE.squareDuty(null), 0.5);
+  // The extreme saw duties are clean ramps: 0% falls, 100% rises.
+  near(S.WAVES.saw(0.25, 0), 0.5, 1e-12); near(S.WAVES.saw(0.25, 1), -0.5, 1e-12);
 });
 
 test('default preset: left arm -> saw, right arm -> square, elbows -> duty', () => {
