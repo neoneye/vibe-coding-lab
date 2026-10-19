@@ -169,7 +169,9 @@ test('Fourier coefficients reproduce the waves (PeriodicWave input)', () => {
 test('modulation routing per mode', () => {
   const fs = 220, fq = 330;
   const mix = S.modRouting('mix', 1, fs, fq);
-  assert.deepEqual(mix, { sawBase: 1, sawByQ: 0, sqBase: 1, sqByS: 0, fmToSaw: 0, fmToSq: 0, sawOut: 1, sqOut: 1 });
+  assert.deepEqual(mix, { sawBase: 1, sawByQ: 0, sqBase: 1, sqByS: 0, fmToSaw: 0, fmToSq: 0, sawOut: 1, sqOut: 1, sync: false, syncRatio: 1 });
+  const sy = S.modRouting('sync', 0.5, fs, fq);
+  assert.equal(sy.sync, true); near(sy.syncRatio, 2, 1e-12); assert.equal(sy.sqOut, 0);
   // Depth 0 is the plain mix for every mode (apart from which voice is heard).
   for (const { key } of S.MOD_MODES) {
     const r = S.modRouting(key, 0, fs, fq, true);
@@ -218,6 +220,164 @@ test('head tilt reads the ear line against the shoulders', () => {
   };
   near(tilt(20).headTilt, 20, 1e-6); near(tilt(-15).headTilt, -15, 1e-6);
   near(S.unit01('headTilt', tilt(-30).headTilt), 0, 1e-6); near(S.unit01('headTilt', tilt(30).headTilt), 1, 1e-6);
+});
+
+// ---------------- Play logic ----------------
+
+test('clap trigger: fires once per clap, needs hands apart again', () => {
+  const g = S.GESTURES.clap();
+  const seq = [1.2, 1.0, 0.6, 0.3, 0.2, 0.25, 0.5, 0.9, 1.1, 0.4, 0.3, 0.2];
+  const fired = seq.map((v, i) => g.update(v, i * 0.05));
+  assert.deepEqual(fired.map((f, i) => (f ? i : -1)).filter((i) => i >= 0), [3, 10]);
+  // Hands held together (prayer) never re-fire.
+  const h = S.GESTURES.clap();
+  let count = 0; for (let i = 0; i < 100; i++) count += h.update(i < 5 ? 1 : 0.2, i * 0.05) ? 1 : 0;
+  assert.equal(count, 1);
+  assert.equal(S.GESTURES.clap().update(null, 0), false);
+});
+
+test('stomp trigger: foot lifted then landed', () => {
+  const g = S.GESTURES.stomp();
+  const lift = [0, 0.05, 0.1, 0.2, 0.3, 0.2, 0.1, 0.02, 0, 0];
+  assert.deepEqual(lift.map((v, i) => g.update(v, i / 30)).indexOf(true), 7);
+});
+
+test('punch: fast forward wrist movement fires, slow does not', () => {
+  const v = new S.Velocity(0.03);
+  const g = S.GESTURES.punch();
+  let fired = false;
+  for (let i = 0; i <= 60; i++) fired ||= g.update(v.update(i * 0.01, i / 30), i / 30);  // 0.3 T/s
+  assert.equal(fired, false, 'slow reach');
+  const v2 = new S.Velocity(0.03), g2 = S.GESTURES.punch();
+  let at = -1;
+  for (let i = 0; i <= 30; i++) { const x = i < 10 ? 0 : Math.min(1.2, (i - 10) * 0.15); if (g2.update(v2.update(x, i / 30), i / 30) && at < 0) at = i; }
+  assert.ok(at > 10 && at < 16, 'punch fired at frame ' + at);
+});
+
+test('freeze: still arm latches, resting keeps the note, raising releases', () => {
+  const f = new S.Freeze();
+  let r, t = 0;
+  for (; t < 0.5; t += 1 / 30) r = f.update(120, 'A', t);
+  assert.equal(r.held, false, 'not yet');
+  for (; t < 1.0; t += 1 / 30) r = f.update(120 + 0.1 * Math.sin(t * 40), 'A', t);
+  assert.equal(r.held, true, 'latched after holding still');
+  for (let a = 120; a >= 5; a -= 10, t += 1 / 30) r = f.update(a, 'other', t);
+  assert.equal(r.held, true); assert.equal(r.value, 'A', 'sustains while the arm drops');
+  r = f.update(null, 'gone', t += 1 / 30); assert.equal(r.value, 'A', 'sustains out of frame');
+  for (let a = 5; a <= 40; a += 5, t += 1 / 30) r = f.update(a, 'live', t);
+  assert.equal(r.held, false, 'raising the arm again plays live'); assert.equal(r.value, 'live');
+  // Raising the arm above the frozen angle while it is still up also releases; lowering never does.
+  const g = new S.Freeze(); t = 0;
+  for (; t < 1.2; t += 1 / 30) g.update(100, 'B', t);
+  assert.equal(g.update(104, 'x', t).held, true, 'small wobble keeps it');
+  assert.equal(g.update(70, 'x', t + 0.03).held, true, 'lowering keeps it');
+  assert.equal(g.update(112, 'x', t + 0.06).held, false, 'raising past the frozen angle releases');
+  // Arms hanging down never latch.
+  const h = new S.Freeze(); t = 0; let any = false;
+  for (; t < 3; t += 1 / 30) any ||= h.update(10, 'down', t).held;
+  assert.equal(any, false);
+});
+
+test('swell decays', () => {
+  const sw = new S.Swell(0.3);
+  assert.equal(sw.value(0), 0);
+  sw.hit(1); near(sw.value(1), 1, 1e-12); near(sw.value(1.3), Math.exp(-1), 1e-9);
+});
+
+test('arpeggiator chords and patterns', () => {
+  const major = S.SCALES.major;
+  assert.deepEqual(S.arpChord(0, major), [0, 4, 7, 12]);      // I
+  assert.deepEqual(S.arpChord(2, major), [2, 5, 9, 14]);      // ii (minor)
+  assert.deepEqual(S.arpChord(-1.2, major), [-1, 2, 5, 11]);  // vii° below the root
+  assert.deepEqual(S.arpChord(3.4, null), [3, 7, 10, 15]);    // continuous: major triad
+  const c = [0, 4, 7, 12];
+  assert.deepEqual([0, 1, 2, 3, 4].map((k) => S.arpNote(c, 'up', k)), [0, 4, 7, 12, 0]);
+  assert.deepEqual([0, 1, 2, 3].map((k) => S.arpNote(c, 'down', k)), [12, 7, 4, 0]);
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((k) => S.arpNote(c, 'upDown', k)), [0, 4, 7, 12, 7, 4, 0]);
+  assert.deepEqual([0, 1, 2].map((k) => S.arpNote(c, 'octaves', k)), [0, 12, 0]);
+  for (let k = 0; k < 50; k++) assert.ok(c.includes(S.arpNote(c, 'random', k)));
+  assert.equal(S.arpNote(c, 'random', 9), S.arpNote(c, 'random', 9), 'random is reproducible');
+  near(S.TARGET_VALUE.arpRate(0), 2, 1e-12); near(S.TARGET_VALUE.arpRate(1), 16, 1e-12);
+});
+
+test('effort meter ignores jitter, counts real movement', () => {
+  const e = new S.Effort(0.02), r = S.rng(5);
+  for (let i = 0; i < 300; i++) e.update('l', { x: (r() - 0.5) * 0.01, y: (r() - 0.5) * 0.01, z: 0 });
+  assert.equal(e.total, 0, 'jitter of ±5 mm adds nothing');
+  for (let i = 0; i <= 100; i++) e.update('l', { x: i * 0.01, y: 0, z: 0 });  // 1 m, slowly
+  near(e.total, 1, 0.03);
+});
+
+test('finger reach and piano notes', () => {
+  // A flat hand: wrist at origin, knuckles at y=-1, tips at y=-2; thumb out to the side.
+  const hand = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));
+  [[5, 8, -0.3], [9, 12, -0.1], [13, 16, 0.1], [17, 20, 0.3]].forEach(([b, t, x]) => {
+    hand[b] = { x, y: -1, z: 0 }; hand[b + 1] = { x, y: -1.4, z: 0 }; hand[b + 2] = { x, y: -1.7, z: 0 }; hand[t] = { x, y: -2, z: 0 };
+  });
+  hand[2] = { x: -0.5, y: -0.5, z: 0 }; hand[4] = { x: -1.1, y: -0.9, z: 0 };
+  const open = S.fingerReach(hand);
+  assert.ok(open.slice(1).every((r) => r > 1.7), 'fingers extended');
+  assert.ok(open[0] > 1.25, 'thumb extended ' + open[0]);
+  hand[8] = { x: -0.3, y: -0.9, z: 0.4 };  // curl the index finger
+  assert.ok(S.fingerReach(hand)[1] < 1.45, 'curled index');
+  assert.deepEqual(S.pianoNotes(null), [-12, -10, -8, -5, -3, 0, 2, 4, 7, 9]);
+  assert.deepEqual(S.pianoNotes(S.SCALES.minor).slice(0, 8), [-12, -10, -9, -7, -5, -4, -2, 0]);
+});
+
+test('loop recorder plays frames back by time, wrapping', () => {
+  const rec = new S.LoopRecorder(2);
+  for (let i = 0; i < 60; i++) rec.add(10 + i / 30, { id: i });
+  assert.equal(rec.done(11.9), false); assert.equal(rec.done(12), true);
+  assert.equal(rec.frameAt(0).id, 0); assert.equal(rec.frameAt(1.0).id, 30);
+  assert.equal(rec.frameAt(2.5).id, 15, 'wraps'); assert.equal(rec.frameAt(-0.5).id, 45);
+});
+
+test('Pose Hero: on-pitch play scores, off-pitch misses', () => {
+  const song = { bpm: 60, notes: [[0, 1], [4, 1], [7, 1]] };
+  const play = (fn) => { const g = new S.HeroGame(song, 1); for (let t = 0; t <= 4.2; t += 1 / 30) g.update(t, fn(t)); return g; };
+  const perfect = play((t) => { const n = S.songTimeline(song, 1).find((x) => t >= x.start && t < x.start + x.dur); return n ? [n.semis + 0.2] : []; });
+  assert.ok(perfect.done); near(perfect.accuracy, 1, 0.06);
+  assert.deepEqual(perfect.notes.map((x) => x.judged), ['Perfect', 'Perfect', 'Perfect']); assert.equal(perfect.best, 3);
+  const flat = play(() => [0]);  // one held note: first note hit, the others missed
+  assert.deepEqual(flat.notes.map((x) => x.judged), ['Perfect', 'Miss', 'Miss']); assert.equal(flat.streak, 0);
+  const two = play(() => [7, 0]);  // either voice may hit the note
+  assert.equal(two.notes[0].judged, 'Perfect'); assert.equal(two.notes[2].judged, 'Perfect');
+  for (const k of Object.keys(S.SONGS)) assert.ok(S.SONGS[k].notes.every(([s]) => Math.abs(s) <= 12), k + ' fits ±1 octave');
+});
+
+test('Simon says: listen, repeat, grow, and time out', () => {
+  const g = new S.SimonGame({ seed: 3, timeout: 4 });
+  g.start(0);
+  let t = 0, r;
+  const heard = [];
+  for (; t < 5; t += 1 / 30) { r = g.update(t, []); if (r.guide !== null && heard[heard.length - 1] !== r.guide) heard.push(r.guide); if (r.phase !== 'listen') break; }
+  assert.deepEqual(heard, g.seq, 'the guide plays the phrase');
+  assert.equal(r.phase, 'play');
+  // Repeat it correctly.
+  for (const target of [...g.seq]) for (let k = 0; k < 15; k++) { t += 1 / 30; r = g.update(t, [target + 0.1]); }
+  assert.equal(r.phase, 'success');
+  for (let k = 0; k < 45; k++) { t += 1 / 30; r = g.update(t, []); }
+  assert.equal(g.seq.length, 2, 'a note was added'); assert.equal(r.phase, 'listen');
+  // Now do nothing: listen, then time out.
+  let over = null;
+  for (let k = 0; k < 400 && !over; k++) { t += 1 / 30; r = g.update(t, []); over = r.events.find((e) => e.type === 'over'); }
+  assert.ok(over); assert.equal(over.score, 1);
+  assert.ok(g.seq.every((x) => Math.abs(x) <= 7 && S.SCALES.major.includes(((x % 12) + 12) % 12)));
+});
+
+test('hard sync oscillator: locks to the master period, stays bounded', () => {
+  const sr = 48000, osc = new S.SyncOsc(sr), out = new Float32Array(sr / 2);
+  osc.render(out, 100, 100 * 2.37);  // master period = 480 samples
+  let maxDiff = 0, peak = 0, mean = 0;
+  for (let i = 4800; i < out.length - 480; i++) { maxDiff = Math.max(maxDiff, Math.abs(out[i] - out[i + 480])); }
+  for (const v of out) { peak = Math.max(peak, Math.abs(v)); mean += v / out.length; }
+  assert.ok(maxDiff < 1e-3, 'periodic at the master rate: ' + maxDiff);
+  assert.ok(peak <= 1.05, 'bounded: ' + peak);
+  // Without sync (slave below master... equal) it is a plain saw at the slave rate.
+  const o2 = new S.SyncOsc(sr), b = new Float32Array(4800); o2.render(b, 10, 100);
+  near(b[240], 2 * (241 * 100 / sr % 1) - 1, 1e-6);
+  // The worklet gets the class as source text.
+  assert.ok(String(S.SyncOsc).startsWith('class SyncOsc'));
 });
 
 console.log(`${n} tests passed`);

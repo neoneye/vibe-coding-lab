@@ -38,6 +38,12 @@ button.active { border-color: var(--accent); color: var(--accent); }
 .filebtn input { display: none; }
 label.tog { display: flex; align-items: center; gap: 5px; color: var(--dim); cursor: pointer; user-select: none; }
 label.tog input { accent-color: var(--accent); margin: 0; }
+aside label.tog { margin-bottom: 6px; line-height: 1.3; }
+.btnrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 2px 0 8px; }
+.btnrow label.tog { margin: 0; }
+.btnrow select { padding: 4px 6px; }
+#btnRecord.rec { border-color: #ff5d5d; color: #ff8a80; }
+aside .note:empty { display: none; }
 main { flex: 1; display: flex; min-height: 0; }
 #stage { position: relative; flex: 1; min-width: 0; min-height: 240px; overflow: hidden; }
 #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
@@ -122,6 +128,28 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
     <h2>Mapping</h2>
     <div id="mapRows"></div>
     <div class="presets" id="presets"></div>
+    <h2>Play</h2>
+    <label class="tog"><input type="checkbox" id="optDrums" checked>Clap = snare, stomp = kick</label>
+    <label class="tog"><input type="checkbox" id="optFreeze">Freeze: hold an arm still to latch its note</label>
+    <label class="tog"><input type="checkbox" id="optPunch" checked>Punch toward the camera = filter swell</label>
+    <div class="row" style="margin-top:8px"><span>Arpeggio</span><select id="optArp"></select></div>
+    <div id="arpKnobs"></div>
+    <h2>Players</h2>
+    <label class="tog"><input type="checkbox" id="optDuet">Duet: two people, one voice each</label>
+    <label class="tog"><input type="checkbox" id="optPiano">Air piano: bend a finger to play a note</label>
+    <div class="note" id="pianoInfo"></div>
+    <h2>Games</h2>
+    <div class="row"><span>Game</span><select id="optGame"></select></div>
+    <div class="btnrow"><button id="btnGame">Start game</button><label class="tog"><input type="checkbox" id="optGuide" checked>Guide tone</label></div>
+    <div class="note" id="gameInfo"></div>
+    <h2>Loops</h2>
+    <div class="btnrow"><button id="btnRecord" title="Record a loop (R)">Record loop</button><select id="optLoopLen" title="Loop length">
+      <option value="4">4 s</option><option value="8" selected>8 s</option><option value="16">16 s</option>
+    </select><button id="btnClearLoops">Clear</button></div>
+    <div class="note" id="loopInfo">Record yourself; a ghost keeps playing it while you jam on top (up to 3).</div>
+    <h2>Visuals</h2>
+    <label class="tog"><input type="checkbox" id="optTrails" checked>Light trails from the hands</label>
+    <div class="btnrow"><label class="tog"><input type="checkbox" id="optEffort" checked>Effort meter</label><button id="btnEffortReset">Reset</button></div>
     <h2>Pitch</h2>
     <div class="row"><span>T-pose</span><select id="optBase"></select></div>
     <div class="row"><span>Range</span><select id="optRange">
@@ -140,12 +168,14 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
     <h2>Sound</h2>
     <div class="row"><span>Saw</span><input type="range" id="optSawLevel" min="0" max="1" step="0.01" value="0.8" title="Sawtooth voice level"></div>
     <div class="row"><span>Square</span><input type="range" id="optSquareLevel" min="0" max="1" step="0.01" value="0.6" title="Square voice level"></div>
+    <div class="row"><span>Drums</span><input type="range" id="optDrumLevel" min="0" max="1" step="0.01" value="0.8" title="Drum and piano level"></div>
     <div class="row"><span>Volume</span><input type="range" id="optVolume" min="0" max="1" step="0.01" value="0.6"></div>
     <div class="row"><span>Glide</span><input type="range" id="optGlide" min="0" max="0.4" step="0.01" value="0.05"></div>
     <h2>Modulation</h2>
     <div class="row"><span>Mode</span><select id="optMod"></select></div>
     <div id="modKnobs"></div>
     <label class="tog" style="margin-top:2px"><input type="checkbox" id="optHearMod">Hear the modulator too</label>
+    <div class="note" id="syncInfo"></div>
     <h2>Filter &amp; reverb</h2>
     <div id="fxKnobs"></div>
     <div class="row"><span>Room</span><select id="optRoom">
@@ -156,7 +186,7 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
     <h2>Body parameters</h2>
     <div id="meters"></div>
     <p class="note">Two voices: the <b style="color:var(--left)">left arm</b> plays a sawtooth, the <b style="color:var(--right)">right arm</b> a square wave. Shoulder angle sets the pitch: 0° hanging down, 90° in a T-pose (the base note), 180° straight up. The elbow sets the duty cycle from 0% (fully bent) to 100% (straight). Saw: 0% is a falling ramp, 50% a triangle, 100% a rising ramp. Square: 50% is a true square; toward 0% and 100% the pulse gets thin and quiet.</p>
-    <p class="note">Angles come from MediaPipe's 3D landmarks. <kbd>M</kbd> toggles sound. Everything runs in the browser.</p>
+    <p class="note">Angles come from MediaPipe's 3D landmarks. Keys: <kbd>M</kbd> sound, <kbd>R</kbd> record a loop. Everything runs in the browser.</p>
   </aside>
 </main>
 <video id="video" playsinline muted hidden></video>
@@ -182,6 +212,7 @@ const PoseSynth = (() => {
   const len = (a) => Math.sqrt(dot(a, a));
   const norm = (a) => scale(a, 1 / (len(a) || 1e-9));
   const mid = (a, b) => scale(add(a, b), 0.5);
+  const cross = (a, b) => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
   const dist = (a, b) => len(sub(a, b));
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const DEG = 180 / Math.PI;
@@ -216,7 +247,17 @@ const PoseSynth = (() => {
     const lineAngle = (a, b) => Math.atan2(lm2[a].y - lm2[b].y, (lm2[a].x - lm2[b].x) * aspect) * DEG;
     let headTilt = lineAngle(7, 8) - lineAngle(11, 12);
     headTilt = ((headTilt + 540) % 360) - 180;
+    // Torso frame for hand positions: D down the spine, L toward the left shoulder, F out of the chest.
+    const D = norm(down), lr = sub(W[11], W[12]);
+    const L = norm(sub(lr, scale(D, dot(lr, D)))), F = cross(D, L);
+    const local = (p) => { const v = sub(p, mS); return { lat: dot(v, L) / T, down: dot(v, D) / T, fwd: dot(v, F) / T }; };
+    const T2 = Math.hypot((s2.x - h2.x) * aspect, s2.y - h2.y) || 1e-6;
+    const wrist = (i, sh) => ({ vis: allVis(lm2, [sh, i]), world: W[i], loc: local(W[i]) });
+    const foot = (i) => ({ vis: allVis(lm2, [i]) && allVis(lm2, [23, 24]), y: (lm2[i].y - h2.y) / T2 });
     return {
+      wrists: { left: wrist(15, 11), right: wrist(16, 12) },
+      feet: { left: foot(27), right: foot(28) },
+      hipMid2: h2, shoulderMid2: s2, T2,
       T,
       left: arm(11, 13, 15),
       right: arm(12, 14, 16),
@@ -241,6 +282,7 @@ const PoseSynth = (() => {
     handGap: { label: 'Hand distance', unit: '', min: 0, max: 3, get: (m) => (m.left.handVis && m.right.handVis ? m.handGap : null) },
     lean: { label: 'Torso lean', unit: '°', min: -40, max: 40, get: (m) => (m.hipsVis ? m.lean : null) },
     headTilt: { label: 'Head tilt', unit: '°', min: -30, max: 30, get: (m) => (m.headVis ? m.headTilt : null) },
+    peopleGap: { label: 'People distance', unit: '', min: 0.5, max: 5, get: (m) => m.peopleGap ?? null },  // duet only
   };
   const unit01 = (key, v) => { const s = SOURCES[key]; return clamp((v - s.min) / (s.max - s.min), 0, 1); };
 
@@ -259,6 +301,7 @@ const PoseSynth = (() => {
     { key: 'cutoff', label: 'Cutoff' },
     { key: 'resonance', label: 'Resonance' },
     { key: 'reverb', label: 'Reverb' },
+    { key: 'arpRate', label: 'Arp rate' },
     { key: 'volume', label: 'Volume' },
     { key: 'vibrato', label: 'Vibrato' },
   ];
@@ -270,10 +313,11 @@ const PoseSynth = (() => {
       fmt: (v) => (v >= 1000 ? (v / 1000).toFixed(1) + ' kHz' : Math.round(v) + ' Hz') },
     resonance: { label: 'Resonance', u: 0.3, value: (u) => 0.7 * Math.pow(24 / 0.7, u), fmt: (v) => 'Q ' + v.toFixed(1) },
     reverb: { label: 'Reverb', u: 0.25, value: (u) => u, fmt: (v) => Math.round(v * 100) + '%' },
+    arpRate: { label: 'Rate', u: 0.5, value: (u) => 2 * Math.pow(8, u), fmt: (v) => v.toFixed(1) + ' /s' },  // notes per second
   };
   const ARMS = { sawPitch: 'leftShoulder', sawDuty: 'leftElbow', squarePitch: 'rightShoulder', squareDuty: 'rightElbow' };
-  const IDLE = { modDepth: 'none', cutoff: 'none', resonance: 'none', reverb: 'none', volume: 'none', vibrato: 'none' };
-  // A preset sets the whole mapping and, optionally, the modulation mode.
+  const IDLE = { modDepth: 'none', cutoff: 'none', resonance: 'none', reverb: 'none', arpRate: 'none', volume: 'none', vibrato: 'none' };
+  // A preset sets the whole mapping, the modulation mode, the arpeggiator and (if given) duet mode.
   const PRESETS = [
     { name: 'Saw left, square right', hint: 'shoulders pitch, elbows duty cycle, no modulation',
       mod: 'mix', map: { ...ARMS, ...IDLE } },
@@ -285,6 +329,12 @@ const PoseSynth = (() => {
       mod: 'crossFm', map: { ...ARMS, ...IDLE, modDepth: 'handGap', reverb: 'headTilt' } },
     { name: 'Filter dance', hint: 'hand distance opens the filter, torso lean adds resonance',
       mod: 'mix', map: { ...ARMS, ...IDLE, cutoff: 'handGap', resonance: 'lean' } },
+    { name: 'Arpeggiator', hint: 'shoulders pick the chord root, left elbow sets the speed',
+      mod: 'mix', arp: 'upDown', map: { ...ARMS, ...IDLE, sawDuty: 'none', arpRate: 'leftElbow' } },
+    { name: 'Hard sync', hint: 'square resets the saw; hand distance sweeps the sync timbre',
+      mod: 'sync', map: { ...ARMS, ...IDLE, modDepth: 'handGap' } },
+    { name: 'Duet', hint: 'two people, one voice each; the distance between them sets the ring mod',
+      mod: 'ring', duet: true, map: { ...ARMS, ...IDLE, modDepth: 'peopleGap' } },
     { name: 'Theremin', hint: 'saw only: right arm pitch, left arm volume',
       mod: 'mix', map: { ...IDLE, sawPitch: 'rightShoulder', sawDuty: 'none', squarePitch: 'none', squareDuty: 'none', volume: 'leftShoulder' } },
   ];
@@ -302,11 +352,12 @@ const PoseSynth = (() => {
     { key: 'fmSaw', label: 'FM: square → saw pitch' },
     { key: 'fmSquare', label: 'FM: saw → square pitch' },
     { key: 'crossFm', label: 'Cross FM (both ways)' },
+    { key: 'sync', label: 'Hard sync: square resets saw' },
   ];
   const FM_INDEX = 6;  // modulation index at full depth: peak deviation = index x modulator freq
   function modRouting(mode, depth, fSaw, fSq, hearMod = false) {
     const d = clamp(depth, 0, 1), mod = hearMod ? 1 : 0;
-    const r = { sawBase: 1, sawByQ: 0, sqBase: 1, sqByS: 0, fmToSaw: 0, fmToSq: 0, sawOut: 1, sqOut: 1 };
+    const r = { sawBase: 1, sawByQ: 0, sqBase: 1, sqByS: 0, fmToSaw: 0, fmToSq: 0, sawOut: 1, sqOut: 1, sync: false, syncRatio: 1 };
     switch (mode) {
       case 'ring': Object.assign(r, { sawBase: 1 - d, sawByQ: d, sqOut: mod }); break;
       case 'amSaw': Object.assign(r, { sawBase: 1 - d / 2, sawByQ: d / 2, sqOut: mod }); break;
@@ -314,6 +365,8 @@ const PoseSynth = (() => {
       case 'fmSaw': Object.assign(r, { fmToSaw: d * FM_INDEX * fSq, sqOut: mod }); break;
       case 'fmSquare': Object.assign(r, { fmToSq: d * FM_INDEX * fSaw, sawOut: mod }); break;
       case 'crossFm': Object.assign(r, { fmToSaw: d * FM_INDEX * fSq, fmToSq: d * FM_INDEX * fSaw }); break;
+      // The square (master) restarts the saw (slave); depth raises the slave up to two octaves.
+      case 'sync': Object.assign(r, { sync: true, syncRatio: Math.pow(2, 2 * d), sqOut: mod }); break;
     }
     return r;
   }
@@ -453,18 +506,307 @@ const PoseSynth = (() => {
     midiToFreq, noteName, OneEuro, buildPose, armDir, util: { mid, dist },
   };
 })();
-if (typeof module !== 'undefined') module.exports = PoseSynth;
+
+// Gestures, performance helpers and the two games. Pure, also run by test.mjs in Node.
+const PlayLogic = (() => {
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+
+  // Seeded random numbers (mulberry32), so games and arpeggios are reproducible in tests.
+  function rng(seed = 1) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // One-shot gesture trigger with hysteresis: it arms once arm(v) holds, fires once on fire(v),
+  // then must re-arm. gap is a refractory time in seconds.
+  class Trigger {
+    constructor({ arm, fire, gap = 0.12 }) { Object.assign(this, { arm, fire, gap }); this.armed = false; this.last = -Infinity; }
+    update(v, t) {
+      if (v === null || v === undefined || Number.isNaN(v)) return false;
+      if (!this.armed) { if (this.arm(v)) this.armed = true; return false; }
+      if (this.fire(v) && t - this.last >= this.gap) { this.armed = false; this.last = t; return true; }
+      return false;
+    }
+    reset() { this.armed = false; }
+  }
+  // Units: clap = wrist gap in torso lengths; stomp = how far a foot is lifted above the other foot
+  // (image, torso lengths); punch = forward wrist speed (torso lengths per second); finger = reach
+  // ratio (fingertip to wrist over knuckle to wrist), thumb = tip to little-finger knuckle ratio.
+  const GESTURES = {
+    clap: () => new Trigger({ arm: (v) => v > 0.75, fire: (v) => v < 0.35, gap: 0.15 }),
+    stomp: () => new Trigger({ arm: (v) => v > 0.14, fire: (v) => v < 0.04, gap: 0.15 }),
+    punch: () => new Trigger({ arm: (v) => v < 0.8, fire: (v) => v > 2.6, gap: 0.3 }),
+    finger: () => new Trigger({ arm: (v) => v > 1.7, fire: (v) => v < 1.45, gap: 0.12 }),
+    thumb: () => new Trigger({ arm: (v) => v > 1.25, fire: (v) => v < 0.95, gap: 0.12 }),
+  };
+
+  // Smoothed time derivative of a scalar.
+  class Velocity {
+    constructor(tau = 0.05) { this.tau = tau; this.reset(); }
+    reset() { this.x = null; this.t = null; this.v = 0; }
+    update(x, t) {
+      if (x === null || x === undefined) { this.reset(); return 0; }
+      if (this.x === null || t <= this.t) { this.x = x; this.t = t; return 0; }
+      const dt = t - this.t, raw = (x - this.x) / dt, a = dt / (this.tau + dt);
+      this.v += a * (raw - this.v); this.x = x; this.t = t;
+      return this.v;
+    }
+  }
+
+  // Freeze hold for one arm. Hold the raised arm still for `still` seconds and its note latches.
+  // Lowering the arm never releases it (that is how you rest); once rested below `rest`, raising it
+  // past `resume` plays live again. Raising the arm more than `release` degrees above the frozen
+  // angle also plays live. An arm that leaves the camera keeps its latched note.
+  class Freeze {
+    constructor({ still = 0.8, speed = 10, minAngle = 30, rest = 25, resume = 35, release = 8 } = {}) {
+      Object.assign(this, { still, speed, minAngle, rest, resume, release }); this.reset();
+    }
+    reset() { this.latched = null; this.stillFor = 0; this.prev = null; this.prevT = null; this.resting = false; }
+    update(angle, value, t) {
+      const dt = this.prevT === null ? 0 : Math.max(0, t - this.prevT);
+      this.prevT = t;
+      if (this.latched) {
+        if (angle !== null) {
+          if (angle < this.rest) this.resting = true;
+          else if (this.resting ? angle > this.resume : angle - this.latched.angle > this.release) {
+            this.latched = null; this.stillFor = 0; this.prev = angle;
+            return { held: false, value };
+          }
+        }
+        return { held: true, value: this.latched.value };
+      }
+      if (angle === null) { this.stillFor = 0; this.prev = null; return { held: false, value }; }
+      const speed = this.prev === null || dt === 0 ? Infinity : Math.abs(angle - this.prev) / dt;
+      this.prev = angle;
+      this.stillFor = angle >= this.minAngle && speed < this.speed ? this.stillFor + dt : 0;
+      if (this.stillFor >= this.still) { this.latched = { angle, value }; this.resting = false; return { held: true, value }; }
+      return { held: false, value };
+    }
+  }
+
+  // Decaying 0..1 envelope (punch filter swell).
+  class Swell {
+    constructor(tau = 0.35) { this.tau = tau; this.t0 = -Infinity; this.amount = 0; }
+    hit(t, amount = 1) { this.amount = Math.max(this.value(t), amount); this.t0 = t; }
+    value(t) { return t < this.t0 ? 0 : this.amount * Math.exp(-(t - this.t0) / this.tau); }
+  }
+
+  // ---- Arpeggiator ----
+  const ARP_PATTERNS = [
+    { key: 'up', label: 'Up' }, { key: 'down', label: 'Down' }, { key: 'upDown', label: 'Up-down' },
+    { key: 'random', label: 'Random' }, { key: 'octaves', label: 'Octaves' },
+  ];
+  // Chord on a root (semitones from the T-pose note): the diatonic triad of the scale plus the
+  // octave; a major triad for continuous and chromatic play.
+  function arpChord(root, scale) {
+    const r = Math.round(root);
+    if (!scale || scale.length >= 12) return [r, r + 4, r + 7, r + 12];
+    const n = scale.length, deg = (k) => Math.floor(k / n) * 12 + scale[((k % n) + n) % n];
+    let best = 0, bestD = Infinity;
+    for (let k = -3 * n; k <= 3 * n; k++) { const dd = Math.abs(deg(k) - root); if (dd < bestD) { bestD = dd; best = k; } }
+    return [deg(best), deg(best + 2), deg(best + 4), deg(best) + 12];
+  }
+  function arpNote(chord, pattern, step) {
+    const n = chord.length;
+    switch (pattern) {
+      case 'down': return chord[n - 1 - (step % n)];
+      case 'upDown': { const cyc = 2 * n - 2, k = step % cyc; return chord[k < n ? k : cyc - k]; }
+      case 'random': return chord[Math.floor(rng(step * 7919 + 13)() * n)];
+      case 'octaves': return chord[0] + (step % 2) * 12;
+      default: return chord[step % n];
+    }
+  }
+
+  // ---- Effort meter: how far the wrists travelled, in meters ----
+  // A wrist only counts once it has moved `step` meters from its anchor, so landmark jitter
+  // doesn't add up while slow, real movement still does.
+  class Effort {
+    constructor(step = 0.02) { this.step = step; this.reset(); }
+    reset() { this.total = 0; this.anchors = {}; }
+    update(key, p) {
+      if (!p) return this.total;
+      const a = this.anchors[key];
+      if (!a) { this.anchors[key] = { ...p }; return this.total; }
+      const dd = d3(a, p);
+      if (dd >= this.step) { this.total += dd; this.anchors[key] = { ...p }; }
+      return this.total;
+    }
+  }
+
+  // ---- Air piano ----
+  // Hand landmarks (MediaPipe HandLandmarker): 0 wrist; tips 4, 8, 12, 16, 20; knuckles 2, 5, 9, 13, 17.
+  const FINGERS = [
+    { name: 'thumb', tip: 4, base: 2 }, { name: 'index', tip: 8, base: 5 }, { name: 'middle', tip: 12, base: 9 },
+    { name: 'ring', tip: 16, base: 13 }, { name: 'pinky', tip: 20, base: 17 },
+  ];
+  function fingerReach(hand) {
+    return FINGERS.map((f, i) => (i === 0
+      ? d3(hand[4], hand[17]) / (d3(hand[2], hand[17]) || 1e-9)
+      : d3(hand[f.tip], hand[0]) / (d3(hand[f.base], hand[0]) || 1e-9)));
+  }
+  // Ten notes, low to high, from the scale (major pentatonic for continuous/chromatic), starting an
+  // octave below the T-pose note.
+  function pianoNotes(scale) {
+    const sc = !scale || scale.length >= 12 ? [0, 2, 4, 7, 9] : scale;
+    const out = [];
+    for (let k = 0; out.length < 10; k++) out.push(-12 + Math.floor(k / sc.length) * 12 + sc[k % sc.length]);
+    return out;
+  }
+
+  // ---- Loop recorder ----
+  class LoopRecorder {
+    constructor(length) { this.length = length; this.frames = []; this.start = null; }
+    add(t, frame) { if (this.start === null) this.start = t; this.frames.push({ t: t - this.start, ...frame }); }
+    done(t) { return this.start !== null && t - this.start >= this.length; }
+    frameAt(t) {
+      const f = this.frames;
+      if (!f.length) return null;
+      const x = ((t % this.length) + this.length) % this.length;
+      let lo = 0, hi = f.length - 1;
+      while (lo < hi) { const m = (lo + hi + 1) >> 1; if (f[m].t <= x) lo = m; else hi = m - 1; }
+      return f[lo];
+    }
+  }
+
+  // ---- Pose Hero ----
+  // Melodies as [semitones from the T-pose note, beats]; all public domain.
+  const SONGS = {
+    ode: { title: 'Ode to Joy', bpm: 40, notes: [[4, 1], [4, 1], [5, 1], [7, 1], [7, 1], [5, 1], [4, 1], [2, 1], [0, 1], [0, 1], [2, 1], [4, 1], [4, 1.5], [2, 0.5], [2, 2]] },
+    twinkle: { title: 'Twinkle Twinkle', bpm: 40, notes: [[0, 1], [0, 1], [7, 1], [7, 1], [9, 1], [9, 1], [7, 2], [5, 1], [5, 1], [4, 1], [4, 1], [2, 1], [2, 1], [0, 2]] },
+    jacques: { title: 'Frère Jacques', bpm: 44, notes: [[0, 1], [2, 1], [4, 1], [0, 1], [0, 1], [2, 1], [4, 1], [0, 1], [4, 1], [5, 1], [7, 2], [4, 1], [5, 1], [7, 2]] },
+    scale: { title: 'Warm-up: up and down', bpm: 46, notes: [[-5, 1], [-3, 1], [0, 1], [2, 1], [4, 1], [7, 1], [9, 1], [12, 2], [9, 1], [7, 1], [4, 1], [2, 1], [0, 1], [-3, 1], [-5, 2]] },
+  };
+  function songTimeline(song, lead = 3) {
+    const beat = 60 / song.bpm;
+    let t = lead;
+    return song.notes.map(([semis, beats]) => { const n = { start: t, dur: beats * beat, semis }; t += beats * beat; return n; });
+  }
+  const TOL = 0.6;  // semitones that count as "on the note"
+  const closest = (played, target) => played.reduce((best, p) => Math.min(best, Math.abs(p - target)), Infinity);
+  class HeroGame {
+    constructor(song, lead = 3) {
+      this.song = song; this.notes = songTimeline(song, lead).map((n) => ({ ...n, hit: 0, judged: null }));
+      this.end = this.notes.length ? this.notes[this.notes.length - 1].start + this.notes[this.notes.length - 1].dur : 0;
+      this.t = 0; this.streak = 0; this.best = 0; this.idx = 0;
+    }
+    // t: seconds since the game started; played: semitone offsets of the sounding voices.
+    update(t, played) {
+      const dt = Math.max(0, t - this.t); this.t = t;
+      const events = [];
+      for (; this.idx < this.notes.length; this.idx++) {
+        const n = this.notes[this.idx];
+        if (t < n.start) break;
+        if (t < n.start + n.dur) { if (closest(played, n.semis) <= TOL) n.hit += Math.min(dt, t - n.start); break; }
+        const acc = clamp(n.hit / n.dur, 0, 1);
+        n.judged = acc >= 0.75 ? 'Perfect' : acc >= 0.4 ? 'Good' : 'Miss';
+        this.streak = n.judged === 'Miss' ? 0 : this.streak + 1;
+        this.best = Math.max(this.best, this.streak);
+        events.push({ note: n, judged: n.judged });
+      }
+      return events;
+    }
+    current(t) { return this.notes.find((n) => t >= n.start && t < n.start + n.dur) || null; }
+    get done() { return this.t >= this.end; }
+    get accuracy() {
+      const j = this.notes.filter((n) => n.judged);
+      return j.length ? j.reduce((s, n) => s + clamp(n.hit / n.dur, 0, 1), 0) / j.length : 0;
+    }
+  }
+
+  // ---- Simon says ----
+  // The synth plays a phrase; the player repeats it note by note, holding each for `hold` seconds.
+  // Every success adds a note. A note not found within `timeout` seconds ends the game.
+  class SimonGame {
+    constructor({ scale = [0, 2, 4, 5, 7, 9, 11], span = 7, seed = 1, noteDur = 0.9, hold = 0.35, timeout = 8 } = {}) {
+      Object.assign(this, { noteDur, hold, timeout });
+      const r = rng(seed), pool = [];
+      for (let s = -span; s <= span; s++) if (scale.includes(((s % 12) + 12) % 12)) pool.push(s);
+      this.next = (prev) => { let s; do { s = pool[Math.floor(r() * pool.length)]; } while (s === prev && pool.length > 1); return s; };
+      this.seq = [this.next(null)]; this.phase = 'listen'; this.t0 = 0; this.idx = 0; this.heldFor = 0; this.t = 0; this.round = 1;
+    }
+    start(t) { this.phase = 'listen'; this.t0 = t; this.t = t; }
+    // Returns { phase, guide (semitones to sound, or null), events }.
+    update(t, played) {
+      const dt = Math.max(0, t - this.t); this.t = t;
+      const events = [];
+      if (this.phase === 'listen') {
+        const k = Math.floor((t - this.t0) / this.noteDur);
+        if (k < this.seq.length) return { phase: 'listen', guide: (t - this.t0) % this.noteDur < this.noteDur * 0.85 ? this.seq[k] : null, events };
+        this.phase = 'play'; this.idx = 0; this.heldFor = 0; this.t0 = t;
+        events.push({ type: 'yourTurn' });
+      }
+      if (this.phase === 'play') {
+        const target = this.seq[this.idx];
+        this.heldFor = closest(played, target) <= TOL ? this.heldFor + dt : 0;
+        if (this.heldFor >= this.hold) {
+          events.push({ type: 'hit', idx: this.idx }); this.idx++; this.heldFor = 0; this.t0 = t;
+          if (this.idx >= this.seq.length) { this.phase = 'success'; events.push({ type: 'success', length: this.seq.length }); }
+        } else if (t - this.t0 > this.timeout) { this.phase = 'over'; events.push({ type: 'over', score: this.seq.length - 1 }); }
+      } else if (this.phase === 'success' && t - this.t0 > 1.2) {
+        this.seq.push(this.next(this.seq[this.seq.length - 1])); this.round++; this.phase = 'listen'; this.t0 = t;
+      }
+      return { phase: this.phase, guide: null, events };
+    }
+  }
+
+  // ---- Hard sync ----
+  // Sawtooth slave whose phase restarts whenever the master completes a cycle. PolyBLEP smooths the
+  // slave's own wrap and (scaled to the jump) the sync reset, to keep aliasing down. This class is
+  // also sent as source text into the AudioWorklet.
+  class SyncOsc {
+    constructor(sampleRate) { this.sr = sampleRate; this.mp = 0; this.sp = 0; }
+    static blep(t, dt) {
+      if (t < dt) { t /= dt; return t + t - t * t - 1; }
+      if (t > 1 - dt) { t = (t - 1) / dt; return t * t + t + t + 1; }
+      return 0;
+    }
+    render(out, masterHz, slaveHz) {
+      const mdt = Math.min(0.49, masterHz / this.sr), sdt = Math.min(0.49, slaveHz / this.sr);
+      for (let i = 0; i < out.length; i++) {
+        this.mp += mdt; this.sp += sdt;
+        let jump = 2;
+        if (this.mp >= 1) {
+          this.mp -= 1;
+          const after = this.mp / mdt;               // samples since the reset (0..1)
+          let pre = this.sp - after * sdt; pre -= Math.floor(pre);
+          jump = 2 * pre;                             // from 2*pre-1 down to -1
+          this.sp = after * sdt;
+        }
+        if (this.sp >= 1) this.sp -= Math.floor(this.sp);
+        const b = SyncOsc.blep(this.sp, sdt);
+        out[i] = 2 * this.sp - 1 - (this.sp < sdt ? b * jump / 2 : b);
+      }
+    }
+  }
+
+  return {
+    rng, Trigger, GESTURES, Velocity, Freeze, Swell, ARP_PATTERNS, arpChord, arpNote, Effort, FINGERS, fingerReach,
+    pianoNotes, LoopRecorder, SONGS, songTimeline, HeroGame, SimonGame, SyncOsc, TOL,
+  };
+})();
+if (typeof module !== 'undefined') module.exports = { ...PoseSynth, ...PlayLogic };
 </script>
 
 <script type="module">
-const { BONES, measure, SOURCES, unit01, VOICES, TARGETS, KNOBS, PRESETS, MOD_MODES, modRouting, snap, pitchOffset, TARGET_VALUE,
-  WAVES, quantDuty, waveCoeffs, midiToFreq, noteName, OneEuro, buildPose, armDir } = PoseSynth;
+const { BONES, measure, SOURCES, unit01, VOICES, TARGETS, KNOBS, PRESETS, MOD_MODES, modRouting, SCALES, snap, pitchOffset,
+  TARGET_VALUE, WAVES, quantDuty, waveCoeffs, midiToFreq, noteName, OneEuro, buildPose, armDir } = PoseSynth;
+const { GESTURES, Velocity, Freeze, Swell, ARP_PATTERNS, arpChord, arpNote, Effort, FINGERS, fingerReach, pianoNotes,
+  LoopRecorder, SONGS, HeroGame, SimonGame, SyncOsc } = PlayLogic;
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view'), ctx = canvas.getContext('2d');
 const video = $('video'), statusEl = $('status'), bigLabel = $('bigLabel');
 const params = new URLSearchParams(location.search);
 const SIDE_COLOR = { L: 'var(--left)', R: 'var(--right)' };
+const COLORS = { L: '#ff9f43', R: '#4cc9f0', C: '#f1f3f8' };
+const on = (id) => $(id).checked;
 
 // ---- Mapping UI ----
 const mapping = { ...PRESETS[0].map };
@@ -486,7 +828,9 @@ for (const p of PRESETS) {
   b.textContent = p.name; if (p.hint) b.title = p.hint;
   b.onclick = () => {
     Object.assign(mapping, p.map); for (const t of TARGETS) mapSelects[t.key].value = mapping[t.key];
-    if (p.mod) $('optMod').value = p.mod;
+    $('optMod').value = p.mod || 'mix';
+    $('optArp').value = p.arp || 'off';
+    if (p.duet !== undefined) $('optDuet').checked = p.duet;
     resetNotes(); markUsed();
   };
   $('presets').appendChild(b);
@@ -494,16 +838,21 @@ for (const p of PRESETS) {
 for (let m = 45; m <= 72; m++) $('optBase').add(new Option(`${noteName(m)} · ${midiToFreq(m).toFixed(1)} Hz`, m));
 $('optBase').value = 57;  // A3, 220 Hz
 for (const mm of MOD_MODES) $('optMod').add(new Option(mm.label, mm.key));
+$('optArp').add(new Option('Off', 'off'));
+for (const ap of ARP_PATTERNS) $('optArp').add(new Option(ap.label, ap.key));
+$('optGame').add(new Option('Simon says', 'simon'));
+for (const [key, song] of Object.entries(SONGS)) $('optGame').add(new Option('Pose Hero: ' + song.title, 'hero:' + key));
 
 // Sliders for the knob targets. A mapped knob follows the body and its slider shows the live value.
 const knobs = {};
+const KNOB_HOME = { modDepth: 'modKnobs', arpRate: 'arpKnobs' };
 for (const [key, k] of Object.entries(KNOBS)) {
   const row = document.createElement('div'); row.className = 'row knob';
   row.innerHTML = '<span></span><input type="range" min="0" max="1" step="0.001"><output></output>';
   row.firstChild.textContent = k.label;
   const input = row.querySelector('input'), out = row.querySelector('output');
   input.value = k.u;
-  $(key === 'modDepth' ? 'modKnobs' : 'fxKnobs').appendChild(row);
+  $(KNOB_HOME[key] || 'fxKnobs').appendChild(row);
   knobs[key] = { row, input, out, manual: k.u };
   input.oninput = () => { knobs[key].manual = +input.value; };
 }
@@ -516,7 +865,6 @@ function showKnobs(state) {
     kn.out.textContent = KNOBS[key].fmt(state[key]);
   }
 }
-
 const meters = {};
 for (const [key, s] of Object.entries(SOURCES)) {
   const el = document.createElement('div'); el.className = 'meter';
@@ -530,15 +878,22 @@ function markUsed() {
   for (const [key, m] of Object.entries(meters)) m.el.classList.toggle('used', used.has(key));
 }
 markUsed();
+function showMeters(read) {
+  for (const [key, mt] of Object.entries(meters)) {
+    const v = read.raw[key], s = SOURCES[key];
+    mt.bar.style.width = v === null ? '0' : (read.u[key] * 100).toFixed(1) + '%';
+    mt.val.textContent = v === null ? '–' : (s.unit === '°' ? Math.round(v) + '°' : v.toFixed(2));
+  }
+}
 
 // ---- Audio ----
-//   saw osc ──► sawVca ──► sawAmp ─┐                       ┌─► dry ───────────────┐
-//   sq  osc ──► sqVca  ──► sqAmp  ─┴─► mix ─► lowpass ─────┤                       ├─► master ─► comp ─► out
-//   sq  osc ──► sawByQ ──► sawVca.gain (AM / ring)         └─► send ─► convolver ──┘
-//   saw osc ──► sqByS  ──► sqVca.gain
-//   saw osc ──► fmToSq ──► sq.frequency          sq osc ──► fmToSaw ──► delay ──► saw.frequency
-// The delay (one render quantum) is what Web Audio needs to allow the cross-FM feedback loop.
-// Each oscillator plays a PeriodicWave built for its current duty cycle.
+//   saw osc ─► sawOsc ─► sawVca ─► sawAmp ─► sawEnv ─┐                    ┌─► dry ──────────────┐
+//   sync osc ─► syncIn ─┘                             ├─► mix ─► lowpass ─┤                      ├─► master ─► comp ─► out
+//   sq  osc ─────────► sqVca ─► sqAmp ─► sqEnv ───────┘                    └─► send ─► convolver ─┘
+//   sq osc ─► sawByQ ─► sawVca.gain   saw osc ─► sqByS ─► sqVca.gain   (AM / ring)
+//   saw osc ─► fmToSq ─► sq.frequency   sq osc ─► fmToSaw ─► delay ─► saw.frequency   (FM; the delay
+//   lets Web Audio run the cross-FM feedback loop)
+//   Piano notes go into the mix; drums, ghost voices' send and the guide tone have their own paths.
 let audio = null, soundOn = false;
 function periodicWave(shape, d) {
   const key = shape + ':' + d;
@@ -558,11 +913,21 @@ function impulseResponse(ac, seconds) {
     let seed = 12345 + ch * 777;
     for (let i = 0; i < n; i++) {
       seed = (seed * 1664525 + 1013904223) >>> 0;
-      const t = i / n;
-      d[i] = (seed / 4294967296 * 2 - 1) * Math.pow(1 - t, 2.2) * (i < 80 ? i / 80 : 1);
+      d[i] = (seed / 4294967296 * 2 - 1) * Math.pow(1 - i / n, 2.2) * (i < 80 ? i / 80 : 1);
     }
   }
   return buf;
+}
+function makeVoicePair(ac, gain) {
+  const pair = {};
+  for (const v of VOICES) {
+    const osc = ac.createOscillator(), amp = gain(0);
+    osc.frequency.value = midiToFreq(+$('optBase').value);
+    const duty = quantDuty(TARGET_VALUE[v.key + 'Duty'](null));
+    osc.setPeriodicWave(periodicWave(v.key, duty));
+    pair[v.key] = { osc, amp, duty };
+  }
+  return pair;
 }
 function buildAudio() {
   const ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -581,15 +946,27 @@ function buildAudio() {
   filter.connect(dry); dry.connect(master);
   filter.connect(send); send.connect(convolver); convolver.connect(master);
   master.connect(comp); comp.connect(analyser); analyser.connect(ac.destination);
-  audio = { ac, voices: {}, filter, dry, send, convolver, master, analyser, lfoGain, waves: new Map(), buf: new Float32Array(analyser.fftSize) };
+  // Drums skip the filter but get a little reverb; the guide tone is dry.
+  const drumBus = gain(+$('optDrumLevel').value), drumSend = gain(0.25);
+  drumBus.connect(master); drumBus.connect(drumSend); drumSend.connect(convolver);
+  const guideOsc = ac.createOscillator(), guideAmp = gain(0);
+  guideOsc.type = 'sine'; guideOsc.connect(guideAmp); guideAmp.connect(master); guideOsc.start();
+  const noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+  { const d = noise.getChannelData(0); let seed = 99; for (let i = 0; i < d.length; i++) { seed = (seed * 1664525 + 1013904223) >>> 0; d[i] = seed / 2147483648 - 1; } }
+  audio = {
+    ac, gain, mix, filter, dry, send, convolver, master, analyser, lfoGain, drumBus, guideOsc, guideAmp, noise,
+    voices: {}, waves: new Map(), buf: new Float32Array(analyser.fftSize), arpNext: null, arpStep: 0, sync: null,
+  };
+  const pair = makeVoicePair(ac, gain);
   for (const v of VOICES) {
-    const osc = ac.createOscillator(), vca = gain(1), amp = gain(0);
-    osc.frequency.value = midiToFreq(+$('optBase').value);
-    const duty = quantDuty(TARGET_VALUE[v.key + 'Duty'](null));
-    osc.setPeriodicWave(periodicWave(v.key, duty));
-    lfoGain.connect(osc.detune); osc.connect(vca); vca.connect(amp); amp.connect(mix);
-    osc.start();
-    audio.voices[v.key] = { osc, vca, amp, duty };
+    const node = pair[v.key];
+    node.vca = gain(1); node.env = gain(1);
+    node.amp.connect(node.env); node.env.connect(mix); node.vca.connect(node.amp);
+    lfoGain.connect(node.osc.detune);
+    if (v.key === 'saw') { node.oscIn = gain(1); node.osc.connect(node.oscIn); node.oscIn.connect(node.vca); node.syncIn = gain(0); node.syncIn.connect(node.vca); }
+    else node.osc.connect(node.vca);
+    node.osc.start();
+    audio.voices[v.key] = node;
   }
   const S = audio.voices.saw, Q = audio.voices.square;
   audio.sawByQ = gain(0); Q.osc.connect(audio.sawByQ); audio.sawByQ.connect(S.vca.gain);
@@ -598,98 +975,479 @@ function buildAudio() {
   audio.fmToSaw = gain(0); audio.fmDelay = ac.createDelay(0.01); audio.fmDelay.delayTime.value = 0;
   Q.osc.connect(audio.fmToSaw); audio.fmToSaw.connect(audio.fmDelay); audio.fmDelay.connect(S.osc.frequency);
   lfo.start();
+  for (const g of ghosts) attachGhostAudio(g);
   return audio;
 }
-async function setSound(on) {
-  soundOn = on;
-  if (on && !audio) buildAudio();
+async function setSound(enable) {
+  soundOn = enable;
+  if (enable && !audio) buildAudio();
   if (audio) {
-    if (on) await audio.ac.resume();
-    else for (const v of Object.values(audio.voices)) v.amp.gain.setTargetAtTime(0, audio.ac.currentTime, 0.03);
+    if (enable) await audio.ac.resume();
+    else {
+      for (const v of Object.values(audio.voices)) v.amp.gain.setTargetAtTime(0, audio.ac.currentTime, 0.03);
+      for (const g of ghosts) for (const n of Object.values(g.nodes || {})) n.amp.gain.setTargetAtTime(0, audio.ac.currentTime, 0.03);
+      audio.guideAmp.gain.setTargetAtTime(0, audio.ac.currentTime, 0.03);
+    }
   }
-  $('btnSound').classList.toggle('on', on);
-  $('btnSound').textContent = on ? 'Sound on' : 'Sound off';
-  if (on && statusEl.classList.contains('hint')) setStatus('');
+  $('btnSound').classList.toggle('on', enable);
+  $('btnSound').textContent = enable ? 'Sound on' : 'Sound off';
+  if (enable && statusEl.classList.contains('hint')) setStatus('');
 }
 $('btnSound').onclick = () => setSound(!soundOn);
 $('optVolume').oninput = () => { if (audio) audio.master.gain.setTargetAtTime(+$('optVolume').value, audio.ac.currentTime, 0.02); };
+$('optDrumLevel').oninput = () => { if (audio) audio.drumBus.gain.setTargetAtTime(+$('optDrumLevel').value, audio.ac.currentTime, 0.02); };
 $('optRoom').onchange = () => { if (audio) audio.convolver.buffer = impulseResponse(audio.ac, +$('optRoom').value); };
 for (const id of ['optBase', 'optRange', 'optScale']) $(id).onchange = () => resetNotes();
-window.addEventListener('keydown', (e) => { if (e.key === 'm' || e.key === 'M') { if (!e.repeat && !e.metaKey && !e.ctrlKey) setSound(!soundOn); } });
+
+// ---- One-shot sounds: drums and air-piano notes ----
+function playDrum(kind) {
+  if (!audio || !soundOn) return;
+  const { ac, gain } = audio, t = ac.currentTime + 0.005;
+  if (kind === 'kick') {
+    const o = ac.createOscillator(), g = gain(0);
+    o.frequency.setValueAtTime(165, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.14);
+    g.gain.setValueAtTime(1, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    o.connect(g); g.connect(audio.drumBus); o.start(t); o.stop(t + 0.5);
+  } else {
+    // Hand clap: three quick noise bursts and a short tail through a band-pass.
+    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1150; bp.Q.value = 0.9;
+    bp.connect(audio.drumBus);
+    for (let k = 0; k < 4; k++) {
+      const src = ac.createBufferSource(), g = gain(0), at = t + k * 0.011, tail = k === 3 ? 0.2 : 0.025;
+      src.buffer = audio.noise; src.connect(g); g.connect(bp);
+      g.gain.setValueAtTime(0.9, at); g.gain.exponentialRampToValueAtTime(0.001, at + tail);
+      src.start(at, k * 0.1); src.stop(at + tail + 0.02);
+    }
+  }
+}
+function playPiano(midi) {
+  if (!audio || !soundOn) return;
+  const { ac, gain } = audio, t = ac.currentTime + 0.005, f = midiToFreq(midi);
+  const g = gain(0), body = ac.createOscillator(), bell = ac.createOscillator(), bellG = gain(0.25);
+  body.type = 'triangle'; body.frequency.value = f; bell.type = 'sine'; bell.frequency.value = f * 2;
+  body.connect(g); bell.connect(bellG); bellG.connect(g); g.connect(audio.mix);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.45 * +$('optDrumLevel').value, t + 0.006);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 1.6);
+  body.start(t); bell.start(t); body.stop(t + 1.7); bell.stop(t + 1.7);
+}
+function setGuide(midi) {
+  if (!audio) return;
+  const t = audio.ac.currentTime, play = soundOn && midi !== null && on('optGuide');
+  if (midi !== null) audio.guideOsc.frequency.setTargetAtTime(midiToFreq(midi + 12), t, 0.01);
+  audio.guideAmp.gain.setTargetAtTime(play ? 0.09 : 0, t, 0.03);
+}
+
+// ---- Hard sync engine: AudioWorklet when allowed, ScriptProcessor otherwise (file:// pages) ----
+function ensureSync() {
+  if (!audio || audio.sync) return;
+  audio.sync = { ready: false };
+  const { ac } = audio, freqs = { master: 220, slave: 440 };
+  const useScript = () => {
+    const osc = new SyncOsc(ac.sampleRate), sp = ac.createScriptProcessor(1024, 0, 1);
+    sp.onaudioprocess = (e) => osc.render(e.outputBuffer.getChannelData(0), freqs.master, freqs.slave);
+    sp.connect(audio.voices.saw.syncIn);
+    audio.sync = { ready: true, kind: 'ScriptProcessor', set(m, s) { freqs.master = m; freqs.slave = s; } };
+    $('syncInfo').textContent = 'Hard sync runs on the ScriptProcessor fallback (opened from a file).';
+  };
+  const src = `const SyncOsc = ${SyncOsc.toString()};
+class SyncProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() { return [{ name: 'master', defaultValue: 220 }, { name: 'slave', defaultValue: 440 }]; }
+  constructor() { super(); this.osc = new SyncOsc(sampleRate); }
+  process(inputs, outputs, p) { this.osc.render(outputs[0][0], p.master[0], p.slave[0]); return true; }
+}
+registerProcessor('sync-osc', SyncProcessor);`;
+  try {
+    const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+    ac.audioWorklet.addModule(url).then(() => {
+      const node = new AudioWorkletNode(ac, 'sync-osc', { numberOfInputs: 0, outputChannelCount: [1] });
+      node.connect(audio.voices.saw.syncIn);
+      const pm = node.parameters.get('master'), ps = node.parameters.get('slave');
+      audio.sync = { ready: true, kind: 'AudioWorklet', set(m, s, t) { pm.setTargetAtTime(m, t, 0.01); ps.setTargetAtTime(s, t, 0.01); } };
+      $('syncInfo').textContent = '';
+    }).catch(useScript);
+  } catch { useScript(); }
+}
+
+// ---- Performers: the live player and the loop ghosts share this ----
+class Performer {
+  constructor() {
+    this.filters = Object.fromEntries(Object.keys(SOURCES).map((k) => [k, new OneEuro()]));
+    this.prevNotes = { saw: null, square: null };
+    this.freeze = { saw: new Freeze(), square: new Freeze() };
+    this.trig = { clap: GESTURES.clap(), stompL: GESTURES.stomp(), stompR: GESTURES.stomp(), punchL: GESTURES.punch(), punchR: GESTURES.punch() };
+    this.vel = { left: new Velocity(), right: new Velocity() };
+  }
+  reset() {
+    for (const f of Object.values(this.filters)) f.reset();
+    this.prevNotes = { saw: null, square: null };
+    for (const f of Object.values(this.freeze)) f.reset();
+  }
+  // Smoothed body parameters: natural units (raw) and 0..1 (u) for every source.
+  read(m, t) {
+    const raw = {}, u = {};
+    for (const [key, s] of Object.entries(SOURCES)) {
+      const v = m ? s.get(m) : null;
+      if (v === null) { this.filters[key].reset(); raw[key] = null; u[key] = null; continue; }
+      raw[key] = this.filters[key].filter(v, t);
+      u[key] = unit01(key, raw[key]);
+    }
+    return { raw, u };
+  }
+}
+const main = new Performer();
+const duetPerf = [new Performer(), new Performer()];
+function resetNotes() { main.reset(); for (const g of ghosts) g.perf.reset(); }
+
+// Pitch and duty for both voices. `over` replaces the mapped u values (duet mode).
+function voiceState(perf, read, t, { over = null, freeze = false } = {}) {
+  const base = +$('optBase').value, range = +$('optRange').value, scaleKey = $('optScale').value;
+  const src = (target) => (over && target in over ? over[target] : mapping[target] === 'none' ? null : read.u[mapping[target]]);
+  const voices = {};
+  for (const v of VOICES) {
+    const pu = src(v.key + 'Pitch');
+    let gate = pu !== null, offset = 0, duty = TARGET_VALUE[v.key + 'Duty'](src(v.key + 'Duty')), held = false;
+    if (pu !== null) { offset = snap(pitchOffset(pu, range), scaleKey, perf.prevNotes[v.key]); perf.prevNotes[v.key] = offset; }
+    if (freeze) {
+      // The pitch source in pseudo-degrees (0..180); for a shoulder it is the real angle.
+      const f = perf.freeze[v.key].update(pu === null ? null : pu * 180, { offset, duty }, t);
+      if (f.held) { ({ offset, duty } = f.value); gate = true; held = true; }
+    } else perf.freeze[v.key].reset();
+    const midi = base + offset;
+    voices[v.key] = { gate, offset, midi, freq: midiToFreq(midi), duty, held };
+  }
+  return voices;
+}
+
+// Gesture events for one performer: claps and stomps play drums, punches swell the filter.
+const swell = new Swell(0.4);
+function gestures(perf, m, t, toScreen, lm2, isMain) {
+  const events = [];
+  if (!m) return events;
+  const P = (i) => toScreen(lm2[i]);
+  if (on('optDrums')) {
+    const gap = m.left.handVis && m.right.handVis ? m.handGap : null;
+    if (perf.trig.clap.update(gap, t)) { playDrum('clap'); const a = P(15), b = P(16); events.push({ text: 'CLAP', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, color: '#ffe066' }); }
+    const fl = m.feet.left, fr = m.feet.right, both = fl.vis && fr.vis;
+    if (perf.trig.stompL.update(both ? fr.y - fl.y : null, t)) { playDrum('kick'); events.push({ text: 'BOOM', ...P(27), color: COLORS.L }); }
+    if (perf.trig.stompR.update(both ? fl.y - fr.y : null, t)) { playDrum('kick'); events.push({ text: 'BOOM', ...P(28), color: COLORS.R }); }
+  }
+  if (isMain && on('optPunch')) {
+    // Hands close together is a clap, not a punch.
+    const clapping = m.left.handVis && m.right.handVis && m.handGap < 0.7;
+    for (const [side, key, i] of [['left', 'punchL', 15], ['right', 'punchR', 16]]) {
+      const w = m.wrists[side];
+      const v = perf.vel[side].update(w.vis ? w.loc.fwd : null, t);
+      if (perf.trig[key].update(w.vis ? Math.abs(v) : null, t) && !clapping) { swell.hit(t); events.push({ text: 'POW', ...P(i), color: '#ff6bd6', ring: true }); }
+    }
+  }
+  return events;
+}
+
+// The live state of the instrument for one frame.
+function synthState(m, read, t, over) {
+  const voices = voiceState(main, read, t, { over, freeze: on('optFreeze') });
+  const src = (target) => (mapping[target] === 'none' ? null : read.u[mapping[target]]);
+  const knobU = {}, knobVal = {};
+  for (const key of Object.keys(KNOBS)) {
+    knobU[key] = src(key) ?? knobs[key].manual;
+    knobVal[key] = TARGET_VALUE[key](knobU[key]);
+  }
+  const sw = swell.value(t);
+  const routing = modRouting($('optMod').value, knobVal.modDepth, voices.saw.freq, voices.square.freq, on('optHearMod'));
+  return {
+    voices, gate: VOICES.some((v) => voices[v.key].gate), routing, knobU, ...knobVal, swell: sw,
+    cutoff: Math.min(18000, knobVal.cutoff * Math.pow(2, 3.5 * sw)), resonance: knobVal.resonance + 10 * sw,
+    volume: TARGET_VALUE.volume(src('volume')), vibrato: TARGET_VALUE.vibrato(src('vibrato')),
+    base: +$('optBase').value, range: +$('optRange').value, arp: $('optArp').value,
+  };
+}
 
 const LEVEL = { saw: 'optSawLevel', square: 'optSquareLevel' };
+const arpShown = { saw: null, square: null };
 // Push one frame of synth state into the audio graph.
 function drive(state) {
   if (!audio) return;
   const t = audio.ac.currentTime, glide = Math.max(0.005, +$('optGlide').value / 3), k = 0.03;
-  const r = state.routing, out = { saw: r.sawOut, square: r.sqOut };
+  const r = state.routing, out = { saw: r.sawOut, square: r.sqOut }, arpOn = state.arp !== 'off';
   for (const v of VOICES) {
     const vs = state.voices[v.key], node = audio.voices[v.key];
-    const on = soundOn && vs.gate;
-    node.amp.gain.setTargetAtTime(on ? 0.32 * +$(LEVEL[v.key]).value * state.volume * out[v.key] : 0, t, on ? 0.04 : 0.08);
-    if (vs.gate) node.osc.frequency.setTargetAtTime(vs.freq, t, glide);
+    const play = soundOn && vs.gate;
+    node.amp.gain.setTargetAtTime(play ? 0.32 * +$(LEVEL[v.key]).value * state.volume * out[v.key] : 0, t, play ? 0.04 : 0.08);
+    if (vs.gate && !arpOn) node.osc.frequency.setTargetAtTime(vs.freq, t, glide);
+    if (!arpOn) node.env.gain.setTargetAtTime(1, t, 0.02);
     const d = quantDuty(vs.duty);
     if (d !== node.duty) { node.osc.setPeriodicWave(periodicWave(v.key, d)); node.duty = d; }
   }
+  // Arpeggiator: schedule steps slightly ahead on the audio clock.
+  if (arpOn) {
+    const step = 1 / state.arpRate, sc = SCALES[$('optScale').value];
+    if (audio.arpNext === null || audio.arpNext < t - 0.25) audio.arpNext = t + 0.02;
+    while (audio.arpNext < t + 0.08) {
+      const at = audio.arpNext, kk = audio.arpStep++;
+      for (const v of VOICES) {
+        const vs = state.voices[v.key], node = audio.voices[v.key];
+        if (!vs.gate) continue;
+        const semis = arpNote(arpChord(vs.offset, sc), state.arp, kk);
+        node.osc.frequency.cancelScheduledValues(at);
+        node.osc.frequency.setValueAtTime(midiToFreq(state.base + semis), at);
+        node.env.gain.cancelScheduledValues(at);
+        node.env.gain.setValueAtTime(1, at);
+        node.env.gain.setTargetAtTime(0.15, at + 0.015, Math.min(0.12, step * 0.35));
+        arpShown[v.key] = { at, midi: state.base + semis };
+      }
+      audio.arpNext += step;
+    }
+  } else { audio.arpNext = null; arpShown.saw = arpShown.square = null; }
+  // Hard sync swaps the saw oscillator for the sync engine.
+  if (r.sync) ensureSync();
+  const syncLive = r.sync && audio.sync?.ready;
+  audio.voices.saw.oscIn.gain.setTargetAtTime(syncLive ? 0 : 1, t, 0.01);
+  audio.voices.saw.syncIn.gain.setTargetAtTime(syncLive ? 1 : 0, t, 0.01);
+  if (syncLive) audio.sync.set(state.voices.square.freq, state.voices.saw.freq * r.syncRatio, t);
   audio.voices.saw.vca.gain.setTargetAtTime(r.sawBase, t, k);
   audio.voices.square.vca.gain.setTargetAtTime(r.sqBase, t, k);
   audio.sawByQ.gain.setTargetAtTime(r.sawByQ, t, k);
   audio.sqByS.gain.setTargetAtTime(r.sqByS, t, k);
   audio.fmToSaw.gain.setTargetAtTime(r.fmToSaw, t, k);
   audio.fmToSq.gain.setTargetAtTime(r.fmToSq, t, k);
-  audio.filter.frequency.setTargetAtTime(state.cutoff, t, 0.04);
-  audio.filter.Q.setTargetAtTime(state.resonance, t, 0.04);
+  audio.filter.frequency.setTargetAtTime(state.cutoff, t, 0.02);
+  audio.filter.Q.setTargetAtTime(state.resonance, t, 0.03);
   audio.send.gain.setTargetAtTime(state.reverb, t, 0.05);
   audio.dry.gain.setTargetAtTime(1 - 0.45 * state.reverb, t, 0.05);
   audio.lfoGain.gain.setTargetAtTime(state.vibrato, t, 0.08);
 }
 
-// ---- Body -> synth ----
-const filters = Object.fromEntries(Object.keys(SOURCES).map((k) => [k, new OneEuro()]));
-const prevNotes = {};
-function resetNotes() { for (const v of VOICES) prevNotes[v.key] = null; }
-resetNotes();
-function synthState(m, tSec) {
-  const raw = {}, u = {};
-  for (const [key, s] of Object.entries(SOURCES)) {
-    const v = m ? s.get(m) : null;
-    if (v === null) { filters[key].reset(); raw[key] = null; u[key] = null; continue; }
-    raw[key] = filters[key].filter(v, tSec);
-    u[key] = unit01(key, raw[key]);
+// ---- Loop ghosts ----
+const ghosts = [];
+let recorder = null;
+const GHOST_HUES = [280, 160, 40];
+function attachGhostAudio(g) {
+  if (!audio || g.nodes) return;
+  g.nodes = makeVoicePair(audio.ac, audio.gain);
+  for (const n of Object.values(g.nodes)) { n.osc.connect(n.amp); n.amp.connect(audio.mix); n.osc.start(); }
+}
+function removeGhost(g) {
+  if (g.nodes) for (const n of Object.values(g.nodes)) { try { n.osc.stop(); } catch {} n.amp.disconnect(); }
+  ghosts.splice(ghosts.indexOf(g), 1);
+}
+function startRecording() {
+  if (recorder) { recorder = null; updateLoopUI(); return; }
+  recorder = new LoopRecorder(+$('optLoopLen').value);
+  updateLoopUI();
+}
+function finishRecording() {
+  if (ghosts.length >= 3) removeGhost(ghosts[0]);
+  const g = { rec: recorder, perf: new Performer(), hue: GHOST_HUES[ghosts.length % 3] };
+  ghosts.push(g); attachGhostAudio(g); recorder = null; updateLoopUI();
+}
+function updateLoopUI() {
+  $('btnRecord').classList.toggle('rec', !!recorder);
+  $('btnRecord').textContent = recorder ? 'Stop recording' : 'Record loop';
+  $('loopInfo').textContent = recorder ? 'Recording… move!' : ghosts.length
+    ? `${ghosts.length} ghost${ghosts.length > 1 ? 's' : ''} playing (max 3; the oldest is replaced).`
+    : 'Record yourself; a ghost keeps playing it while you jam on top (up to 3).';
+}
+$('btnRecord').onclick = startRecording;
+$('btnClearLoops').onclick = () => { while (ghosts.length) removeGhost(ghosts[0]); recorder = null; updateLoopUI(); };
+function runGhosts(t, rect, mirror, toScreen) {
+  for (const g of ghosts) {
+    const f = g.rec.frameAt(t - g.rec.start);
+    const m = f && f.lm2 ? measure(f.lm2, f.lm3, f.aspect) : null;
+    const read = g.perf.read(m, t);
+    const voices = voiceState(g.perf, read, t);
+    g.last = { f, m, voices };
+    if (m) for (const e of gestures(g.perf, m, t, toScreen, f.lm2, false)) popups.push({ ...e, t0: t });
+    if (!audio || !g.nodes) continue;
+    const at = audio.ac.currentTime;
+    for (const v of VOICES) {
+      const vs = voices[v.key], n = g.nodes[v.key], play = soundOn && vs.gate;
+      n.amp.gain.setTargetAtTime(play ? 0.2 * +$(LEVEL[v.key]).value : 0, at, play ? 0.04 : 0.08);
+      if (vs.gate) n.osc.frequency.setTargetAtTime(vs.freq, at, 0.02);
+      const d = quantDuty(vs.duty);
+      if (d !== n.duty) { n.osc.setPeriodicWave(periodicWave(v.key, d)); n.duty = d; }
+    }
   }
-  const src = (target) => (mapping[target] === 'none' ? null : u[mapping[target]]);
-  const base = +$('optBase').value, range = +$('optRange').value, scaleKey = $('optScale').value;
-  const voices = {};
-  for (const v of VOICES) {
-    // A voice sounds when its pitch is mapped and that body part is visible.
-    const pu = src(v.key + 'Pitch');
-    const gate = !!m && pu !== null;
-    let offset = 0;
-    if (pu !== null) { offset = snap(pitchOffset(pu, range), scaleKey, prevNotes[v.key]); prevNotes[v.key] = offset; }
-    const midi = base + offset;
-    voices[v.key] = { gate, midi, freq: midiToFreq(midi), duty: TARGET_VALUE[v.key + 'Duty'](src(v.key + 'Duty')) };
-  }
-  // Knobs: the body when mapped and visible, otherwise the slider.
-  const knobU = {}, knobVal = {};
-  for (const key of Object.keys(KNOBS)) {
-    knobU[key] = src(key) ?? knobs[key].manual;
-    knobVal[key] = TARGET_VALUE[key](knobU[key]);
-  }
-  const routing = modRouting($('optMod').value, knobVal.modDepth, voices.saw.freq, voices.square.freq, $('optHearMod').checked);
-  return {
-    raw, u, voices, gate: VOICES.some((v) => voices[v.key].gate), routing, knobU, ...knobVal,
-    volume: TARGET_VALUE.volume(src('volume')),
-    vibrato: TARGET_VALUE.vibrato(src('vibrato')),
-    base, range,
-  };
 }
 
-function showMeters(state) {
-  for (const [key, mt] of Object.entries(meters)) {
-    const v = state.raw[key], s = SOURCES[key];
-    mt.bar.style.width = v === null ? '0' : (state.u[key] * 100).toFixed(1) + '%';
-    mt.val.textContent = v === null ? '–' : (s.unit === '°' ? Math.round(v) + '°' : v.toFixed(2));
+// ---- Effort meter and trails ----
+const effort = new Effort();
+let effortStart = performance.now();
+$('btnEffortReset').onclick = () => { effort.reset(); effortStart = performance.now(); };
+const particles = [];
+function spawnTrails(t, pts) {
+  if (!on('optTrails')) return;
+  for (const { p, hue, light } of pts) {
+    for (let k = 0; k < 2; k++) {
+      particles.push({ x: p.x, y: p.y, vx: (Math.random() - 0.5) * 30 * dpr, vy: (Math.random() - 0.5) * 30 * dpr - 12 * dpr, t0: t, hue, light });
+    }
   }
+  if (particles.length > 900) particles.splice(0, particles.length - 900);
+}
+function drawTrails(t, dt) {
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const q = particles[i], age = t - q.t0;
+    if (age > 1.3) { particles.splice(i, 1); continue; }
+    q.x += q.vx * dt; q.y += q.vy * dt;
+    const a = (1 - age / 1.3) * q.light;
+    ctx.fillStyle = `hsla(${q.hue}, 95%, 62%, ${a.toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(q.x, q.y, (2 + 5 * (1 - age / 1.3)) * dpr, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+const pitchHue = (state, midi) => 280 * Math.max(0, Math.min(1, (midi - state.base + state.range) / (2 * state.range)));
+
+// ---- Popups (gesture flashes, game judgements) ----
+const popups = [];
+function drawPopups(t) {
+  for (let i = popups.length - 1; i >= 0; i--) {
+    const p = popups[i], age = t - p.t0;
+    if (age > 0.8) { popups.splice(i, 1); continue; }
+    const a = 1 - age / 0.8, fs = Math.round((p.size || 22) * dpr);
+    ctx.globalAlpha = a;
+    if (p.ring) { ctx.beginPath(); ctx.arc(p.x, p.y, (14 + 60 * age) * dpr, 0, Math.PI * 2); ctx.lineWidth = 3 * dpr; ctx.strokeStyle = p.color; ctx.stroke(); }
+    ctx.font = `800 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 5 * dpr; ctx.strokeStyle = 'rgba(0,0,0,0.75)'; ctx.strokeText(p.text, p.x, p.y - 40 * dpr * age);
+    ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y - 40 * dpr * age);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---- Air piano (MediaPipe hand landmarker) ----
+const HAND_BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [0, 17], [17, 18], [18, 19], [19, 20]];
+const HAND_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+let hands = null, handsLoading = null, handResult = null;
+const pianoTrig = [0, 1].map(() => FINGERS.map((f, i) => (i === 0 ? GESTURES.thumb() : GESTURES.finger())));
+const fingerFlash = {};
+async function ensureHands() {
+  if (hands || handsLoading) return;
+  $('pianoInfo').textContent = 'Loading the hand model…';
+  handsLoading = (async () => {
+    try {
+      await ensureVision();
+      const opts = (delegate) => ({ baseOptions: { modelAssetPath: HAND_URL, delegate }, runningMode: 'VIDEO', numHands: 2 });
+      try { hands = await visionMod.HandLandmarker.createFromOptions(vision, opts('GPU')); }
+      catch { hands = await visionMod.HandLandmarker.createFromOptions(vision, opts('CPU')); }
+      $('pianoInfo').textContent = 'Ten notes across both hands, low to high from left to right. Hold your hands open toward the camera and bend a finger to strike.';
+    } catch (e) { console.error(e); $('pianoInfo').textContent = 'Could not load the hand model: ' + (e.message || e); }
+    finally { handsLoading = null; }
+  })();
+}
+$('optPiano').onchange = () => { if (on('optPiano')) ensureHands(); else $('pianoInfo').textContent = ''; };
+function runPiano(t, toScreen, state) {
+  if (!handResult?.landmarks?.length) return;
+  const sc = SCALES[$('optScale').value], notes = pianoNotes(sc);
+  const handsOnScreen = handResult.landmarks.map((lm, i) => ({ lm, world: handResult.worldLandmarks?.[i] || lm, sx: toScreen(lm[0]).x }))
+    .sort((a, b) => a.sx - b.sx);
+  handsOnScreen.forEach((h, idx) => {
+    // One hand: its side of the screen picks the octave. Two hands: left one low, right one high.
+    const slot = handsOnScreen.length === 2 ? idx : (h.sx < canvas.width / 2 ? 0 : 1);
+    const reach = fingerReach(h.world);
+    const order = FINGERS.map((f, i) => ({ i, x: toScreen(h.lm[i === 0 ? 2 : f.base]).x })).sort((a, b) => a.x - b.x);
+    order.forEach(({ i }, rank) => {
+      const noteIdx = slot * 5 + rank, midi = state.base + notes[noteIdx], tip = toScreen(h.lm[FINGERS[i].tip]);
+      if (pianoTrig[slot][i].update(reach[i], t)) { playPiano(midi); fingerFlash[noteIdx] = t; popups.push({ text: noteName(midi), x: tip.x, y: tip.y - 20 * dpr, color: '#9be7ff', size: 16, t0: t }); }
+      h[`tip${i}`] = { tip, midi, noteIdx };
+    });
+    drawHand(h, toScreen, t);
+  });
+}
+function drawHand(h, toScreen, t) {
+  const pts = h.lm.map(toScreen);
+  ctx.lineCap = 'round'; ctx.lineWidth = 2.5 * dpr; ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.beginPath();
+  for (const [a, b] of HAND_BONES) { ctx.moveTo(pts[a].x, pts[a].y); ctx.lineTo(pts[b].x, pts[b].y); }
+  ctx.stroke();
+  for (let i = 0; i < 5; i++) {
+    const d = h[`tip${i}`]; if (!d) continue;
+    const flash = Math.max(0, 1 - (t - (fingerFlash[d.noteIdx] ?? -9)) / 0.4);
+    ctx.beginPath(); ctx.arc(d.tip.x, d.tip.y, (6 + 6 * flash) * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = flash > 0 ? `rgba(155,231,255,${0.4 + 0.6 * flash})` : 'rgba(155,231,255,0.35)'; ctx.fill();
+    ctx.font = `600 ${Math.round(10 * dpr)}px ui-monospace, Menlo, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.fillStyle = '#e8f8ff'; ctx.fillText(noteName(d.midi), d.tip.x, d.tip.y - 9 * dpr);
+  }
+}
+
+// ---- Games ----
+let game = null;
+$('btnGame').onclick = () => {
+  const kind = $('optGame').value, t = performance.now() / 1000;
+  if (kind === 'simon') {
+    const sc = SCALES[$('optScale').value];
+    game = { kind: 'simon', t0: t, g: new SimonGame({ scale: !sc || sc.length >= 12 ? SCALES.major : sc, seed: Math.floor(Math.random() * 1e6) }) };
+    game.g.start(0);
+  } else game = { kind: 'hero', t0: t, g: new HeroGame(SONGS[kind.split(':')[1]]) };
+  if (!soundOn) setSound(true);
+  $('btnGame').textContent = 'Restart';
+};
+function runGame(t, state) {
+  if (!game) { setGuide(null); return; }
+  const played = VOICES.filter((v) => state.voices[v.key].gate).map((v) => state.voices[v.key].offset);
+  const gt = t - game.t0, L = ladderGeom(state);
+  if (game.kind === 'hero') {
+    const g = game.g;
+    for (const e of g.update(gt, played)) popups.push({ text: e.judged, x: L.x - 60 * dpr, y: L.Y(state.base + e.note.semis), color: e.judged === 'Miss' ? '#ff8a80' : e.judged === 'Good' ? '#ffe066' : '#7cf29c', size: 18, t0: t });
+    const cur = g.current(gt);
+    setGuide(cur && !g.done ? state.base + cur.semis : null);
+    $('gameInfo').textContent = g.done
+      ? `${g.song.title}: ${Math.round(g.accuracy * 100)}% accuracy, best streak ${g.best}. Press Restart to play again.`
+      : `${g.song.title} · ${Math.round(g.accuracy * 100)}% · streak ${g.streak}. Match the bars with your arm height.`;
+  } else {
+    const r = game.g.update(gt, played);
+    setGuide(r.guide === null ? null : state.base + r.guide);
+    for (const e of r.events) {
+      if (e.type === 'hit') popups.push({ text: '✓', x: L.x - 40 * dpr, y: L.Y(state.base + game.g.seq[e.idx]), color: '#7cf29c', size: 22, t0: t });
+      if (e.type === 'success') popups.push({ text: 'Yes!', x: canvas.width / 2, y: canvas.height * 0.3, color: '#7cf29c', size: 40, t0: t });
+      if (e.type === 'over') popups.push({ text: 'Game over', x: canvas.width / 2, y: canvas.height * 0.3, color: '#ff8a80', size: 40, t0: t });
+    }
+    const g = game.g;
+    $('gameInfo').textContent = g.phase === 'listen' ? `Round ${g.round}: listen…`
+      : g.phase === 'play' ? `Round ${g.round}: your turn, note ${g.idx + 1} of ${g.seq.length}. Hold each note.`
+      : g.phase === 'success' ? 'Yes! Next round…'
+      : `Game over: you remembered ${g.seq.length - 1} note${g.seq.length === 2 ? '' : 's'}. Press Restart.`;
+    game.last = r;
+  }
+}
+function drawGame(t, state) {
+  if (!game) return;
+  const L = ladderGeom(state), gt = t - game.t0;
+  ctx.save();
+  if (game.kind === 'hero') {
+    const g = game.g, nowX = L.x - 16 * dpr, pps = 90 * dpr, h = 9 * dpr;
+    ctx.beginPath(); ctx.rect(0, 0, nowX, canvas.height); ctx.clip();
+    for (const n of g.notes) {
+      const x0 = nowX - (n.start - gt) * pps, x1 = nowX - (n.start + n.dur - gt) * pps;
+      if (x0 < 0 || x1 > nowX) continue;
+      const y = L.Y(state.base + n.semis), cur = gt >= n.start && gt < n.start + n.dur;
+      ctx.fillStyle = n.judged === 'Miss' ? 'rgba(255,138,128,0.35)' : cur ? 'rgba(255,224,102,0.9)' : 'rgba(255,255,255,0.55)';
+      ctx.beginPath(); ctx.roundRect(x1, y - h / 2, x0 - x1, h, h / 2); ctx.fill();
+      if (n.hit > 0) { ctx.fillStyle = 'rgba(124,242,156,0.95)'; ctx.beginPath(); ctx.roundRect(x0 - n.hit * pps, y - h / 2, n.hit * pps, h, h / 2); ctx.fill(); }
+      ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.font = `${Math.round(10 * dpr)}px ui-monospace, Menlo, monospace`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText(noteName(state.base + n.semis), x1 + 4 * dpr, y - h / 2 - 2 * dpr);
+    }
+    ctx.restore(); ctx.save();
+    ctx.strokeStyle = 'rgba(255,224,102,0.8)'; ctx.lineWidth = 2 * dpr;
+    ctx.beginPath(); ctx.moveTo(nowX, L.top - 10 * dpr); ctx.lineTo(nowX, L.bot + 10 * dpr); ctx.stroke();
+    hud(`${g.song.title}  ·  ${Math.round(g.accuracy * 100)}%  ·  streak ${g.streak}`);
+  } else {
+    const g = game.g;
+    if (game.last?.guide !== null && game.last?.guide !== undefined) {
+      const y = L.Y(state.base + game.last.guide);
+      ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 3 * dpr;
+      ctx.beginPath(); ctx.roundRect(L.x - 10 * dpr, y - 9 * dpr, L.w + 20 * dpr, 18 * dpr, 9 * dpr); ctx.stroke();
+    }
+    const dots = g.seq.map((_, i) => (g.phase === 'play' ? (i < g.idx ? '●' : '○') : '○')).join(' ');
+    hud(g.phase === 'listen' ? `Simon says · round ${g.round} · listen` : g.phase === 'over' ? `Game over · ${g.seq.length - 1} remembered` : `Simon says · ${dots}`);
+  }
+  ctx.restore();
+}
+function hud(text) {
+  const fs = Math.round(16 * dpr);
+  ctx.font = `700 ${fs}px system-ui, sans-serif`;
+  const w = ctx.measureText(text).width + 28 * dpr, x = canvas.width / 2 - w / 2, y = 12 * dpr;
+  ctx.fillStyle = 'rgba(8,10,14,0.75)'; ctx.beginPath(); ctx.roundRect(x, y, w, fs * 2, fs); ctx.fill();
+  ctx.fillStyle = '#ffe066'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, canvas.width / 2, y + fs);
 }
 
 // ---- Canvas ----
@@ -704,11 +1462,12 @@ function containRect(srcW, srcH) {
   return { x: (W - srcW * s) / 2, y: (H - srcH * s) / 2, w: srcW * s, h: srcH * s };
 }
 
-const COLORS = { L: '#ff9f43', R: '#4cc9f0', C: '#f1f3f8' };
-function drawPerson(lm2, rect, mirror, m, state) {
-  const P = (p) => ({ x: rect.x + (mirror ? 1 - p.x : p.x) * rect.w, y: rect.y + p.y * rect.h });
+function drawPerson(lm2, toScreen, m, state, { alpha = 1, tag = null, tint = null } = {}) {
+  const P = (p) => toScreen(p);
   const vis = (i) => (lm2[i].visibility ?? 1) >= 0.5;
-  const lw = Math.max(2.5 * dpr, rect.h / 110);
+  const lw = Math.max(2.5 * dpr, canvas.height / 120);
+  const col = (side) => (tint ? `hsl(${tint}, 80%, ${side === 'C' ? 85 : side === 'L' ? 70 : 60}%)` : COLORS[side]);
+  ctx.save(); ctx.globalAlpha = alpha;
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   for (const pass of [0, 1]) {
     for (const [a, b, side] of BONES) {
@@ -716,28 +1475,30 @@ function drawPerson(lm2, rect, mirror, m, state) {
       const pa = P(lm2[a]), pb = P(lm2[b]);
       ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
       ctx.lineWidth = (a === 15 || a === 16 ? lw * 0.5 : lw) + (pass ? 0 : lw * 0.9);
-      ctx.strokeStyle = pass ? COLORS[side] : 'rgba(0,0,0,0.45)';
+      ctx.strokeStyle = pass ? col(side) : 'rgba(0,0,0,0.45)';
       ctx.stroke();
     }
   }
   const { mid, dist } = PoseSynth.util;
+  let head = null;
   if (vis(0)) {
     const ears = vis(7) && vis(8), nose = P(lm2[0]), sh = mid(P(lm2[11]), P(lm2[12]));
     const c = ears ? mid(P(lm2[7]), P(lm2[8])) : nose;
     const r = Math.max(ears ? dist(P(lm2[7]), P(lm2[8])) * 0.62 : 0, dist(P(lm2[11]), P(lm2[12])) * 0.22, lw * 2);
+    head = { ...c, r };
     const dx = sh.x - c.x, dy = sh.y - c.y, d = Math.hypot(dx, dy) || 1;
     ctx.beginPath(); ctx.moveTo(c.x + dx / d * r, c.y + dy / d * r); ctx.lineTo(sh.x, sh.y);
-    ctx.lineWidth = lw; ctx.strokeStyle = COLORS.C; ctx.stroke();
+    ctx.lineWidth = lw; ctx.strokeStyle = col('C'); ctx.stroke();
     ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
     ctx.lineWidth = lw * 1.9; ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.stroke();
-    ctx.lineWidth = lw; ctx.strokeStyle = COLORS.C; ctx.stroke();
+    ctx.lineWidth = lw; ctx.strokeStyle = col('C'); ctx.stroke();
   }
   // Shoulder angle arcs, from "hanging down" (along the torso) to the upper arm.
-  if (m && vis(23) && vis(24)) {
+  if (m && state && vis(23) && vis(24)) {
     const used = new Set(Object.values(mapping));
     const sMid = mid(P(lm2[11]), P(lm2[12])), hMid = mid(P(lm2[23]), P(lm2[24]));
     const downA = Math.atan2(hMid.y - sMid.y, hMid.x - sMid.x);
-    for (const [sh, el, side, arm, keys] of [[11, 13, 'L', m.left, ['leftShoulder', 'shoulders']], [12, 14, 'R', m.right, ['rightShoulder', 'shoulders']]]) {
+    for (const [sh, el, side, arm, keys, voice] of [[11, 13, 'L', m.left, ['leftShoulder', 'shoulders'], 'saw'], [12, 14, 'R', m.right, ['rightShoulder', 'shoulders'], 'square']]) {
       if (!arm.vis) continue;
       const ps = P(lm2[sh]), pe = P(lm2[el]);
       const armA = Math.atan2(pe.y - ps.y, pe.x - ps.x);
@@ -750,11 +1511,12 @@ function drawPerson(lm2, rect, mirror, m, state) {
       ctx.fill();
       ctx.beginPath(); ctx.arc(ps.x, ps.y, r, downA, armA, delta < 0);
       ctx.lineWidth = lw * 0.5; ctx.strokeStyle = COLORS[side]; ctx.stroke();
-      const midA = downA + delta / 2, fs = Math.round(Math.max(12 * dpr, rect.h / 42));
+      const midA = downA + delta / 2, fs = Math.round(Math.max(12 * dpr, canvas.height / 46));
       ctx.font = `700 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      const tx = ps.x + Math.cos(midA) * (r + fs * 1.3), ty = ps.y + Math.sin(midA) * (r + fs * 1.3);
-      ctx.lineWidth = 4 * dpr; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(Math.round(arm.shoulder) + '°', tx, ty);
-      ctx.fillStyle = COLORS[side]; ctx.fillText(Math.round(arm.shoulder) + '°', tx, ty);
+      const label = Math.round(arm.shoulder) + '°' + (state.voices[voice].held ? ' ❄' : '');
+      const tx = ps.x + Math.cos(midA) * (r + fs * 1.4), ty = ps.y + Math.sin(midA) * (r + fs * 1.4);
+      ctx.lineWidth = 4 * dpr; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(label, tx, ty);
+      ctx.fillStyle = COLORS[side]; ctx.fillText(label, tx, ty);
     }
   }
   for (const i of [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) {
@@ -762,10 +1524,10 @@ function drawPerson(lm2, rect, mirror, m, state) {
     const p = P(lm2[i]);
     ctx.beginPath(); ctx.arc(p.x, p.y, lw * 0.95, 0, Math.PI * 2);
     ctx.fillStyle = '#0b0d12'; ctx.fill();
-    ctx.lineWidth = lw * 0.55; ctx.strokeStyle = COLORS[i % 2 ? 'L' : 'R']; ctx.stroke();
+    ctx.lineWidth = lw * 0.55; ctx.strokeStyle = col(i % 2 ? 'L' : 'R'); ctx.stroke();
   }
   // Each elbow wears a little picture of its voice's current waveform and duty cycle.
-  if (m && state) {
+  if (m && state && alpha === 1) {
     const sMid = mid(P(lm2[11]), P(lm2[12]));
     for (const [el, side, voice] of [[13, 'L', 'saw'], [14, 'R', 'square']]) {
       const vs = state.voices[voice];
@@ -774,6 +1536,13 @@ function drawPerson(lm2, rect, mirror, m, state) {
       drawWaveGlyph(pe.x + out * 16 * dpr + (out < 0 ? -64 * dpr : 0), pe.y - 44 * dpr, 64 * dpr, 34 * dpr, voice, vs.duty, COLORS[side]);
     }
   }
+  if (tag && head) {
+    const fs = Math.round(12 * dpr);
+    ctx.font = `700 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.lineWidth = 4 * dpr; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(tag, head.x, head.y - head.r - 6 * dpr);
+    ctx.fillStyle = tint ? `hsl(${tint}, 80%, 75%)` : '#e8eaf0'; ctx.fillText(tag, head.x, head.y - head.r - 6 * dpr);
+  }
+  ctx.restore();
 }
 
 function drawWaveGlyph(x, y, w, h, shape, duty, color) {
@@ -783,7 +1552,7 @@ function drawWaveGlyph(x, y, w, h, shape, duty, color) {
   ctx.beginPath();
   const n = 120;
   for (let i = 0; i <= n; i++) {
-    const p = (i / n) * 2 % 1, v = PoseSynth.WAVES[shape](i === n ? 0.9999 : p, duty);
+    const p = (i / n) * 2 % 1, v = WAVES[shape](i === n ? 0.9999 : p, duty);
     const X = x + px + (i / n) * (w - 2 * px), Y = cy - v * gh / 2;
     i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y);
   }
@@ -794,15 +1563,18 @@ function drawWaveGlyph(x, y, w, h, shape, duty, color) {
 }
 
 // Vertical pitch ladder on the right edge: the mapped range with the T-pose note in the middle.
-function drawLadder(state) {
+function ladderGeom(state) {
   const W = canvas.width, H = canvas.height;
-  const x = W - 74 * dpr, top = 56 * dpr, bot = H - 96 * dpr, w = 54 * dpr;
-  if (bot - top < 80 * dpr) return;
+  const x = W - 74 * dpr, top = 64 * dpr, bot = H - 96 * dpr, w = 54 * dpr;
   const lo = state.base - state.range, hi = state.base + state.range;
-  const Y = (midi) => bot - (midi - lo) / (hi - lo) * (bot - top);
+  return { x, top, bot, w, lo, hi, Y: (midi) => bot - (midi - lo) / (hi - lo) * (bot - top) };
+}
+function drawLadder(state) {
+  const L = ladderGeom(state), { x, top, bot, w, lo, hi, Y } = L;
+  if (bot - top < 80 * dpr) return;
   ctx.fillStyle = 'rgba(8,10,14,0.6)';
   ctx.beginPath(); ctx.roundRect(x - 8 * dpr, top - 14 * dpr, w + 16 * dpr, bot - top + 28 * dpr, 10 * dpr); ctx.fill();
-  const sc = PoseSynth.SCALES[$('optScale').value];
+  const sc = SCALES[$('optScale').value];
   ctx.font = `${Math.round(10 * dpr)}px ui-monospace, Menlo, monospace`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   const every = state.range > 12 ? 2 : 1;
   for (let n = lo; n <= hi; n++) {
@@ -812,10 +1584,12 @@ function drawLadder(state) {
     ctx.fillRect(x, y - 0.5 * dpr, black ? w * 0.35 : w * 0.55, Math.max(1, dpr));
     if (!black && (n % every === 0 || off === 0)) ctx.fillText(noteName(n), x + w * 0.62, y);
   }
+  const now = audio ? audio.ac.currentTime : 0;
   for (const [voice, color, dx] of [['saw', COLORS.L, -4], ['square', COLORS.R, 4]]) {
     const vs = state.voices[voice];
     if (!vs.gate) continue;
-    const y = Y(Math.max(lo, Math.min(hi, vs.midi))), x0 = x + dx * dpr;
+    const shown = arpShown[voice] && arpShown[voice].at <= now + 0.05 ? arpShown[voice].midi : vs.midi;
+    const y = Y(Math.max(lo, Math.min(hi, shown))), x0 = x + dx * dpr;
     ctx.fillStyle = color;
     ctx.beginPath(); ctx.moveTo(x0 - 6 * dpr, y); ctx.lineTo(x0 + 6 * dpr, y - 6 * dpr); ctx.lineTo(x0 + 6 * dpr, y + 6 * dpr); ctx.fill();
     ctx.fillRect(x0 + 6 * dpr, y - 1.5 * dpr, w * 0.5, 3 * dpr);
@@ -825,7 +1599,7 @@ function drawLadder(state) {
 // Oscilloscope strip along the top of the stage.
 function drawScope() {
   if (!audio || !soundOn) return;
-  const W = canvas.width, h = 46 * dpr, y0 = 50 * dpr, x0 = 14 * dpr, w = Math.min(320 * dpr, W * 0.4);
+  const W = canvas.width, h = 46 * dpr, y0 = 50 * dpr, x0 = 14 * dpr, w = Math.min(320 * dpr, W * 0.32);
   audio.analyser.getFloatTimeDomainData(audio.buf);
   const b = audio.buf;
   let start = 0;
@@ -840,12 +1614,32 @@ function drawScope() {
   ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = '#7cf29c'; ctx.stroke();
 }
 
+function drawStatusOverlays(t) {
+  const x = 14 * dpr;
+  ctx.font = `600 ${Math.round(12 * dpr)}px system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  let y = 122 * dpr;  // under the oscilloscope
+  if (on('optEffort')) {
+    const secs = Math.floor((performance.now() - effortStart) / 1000);
+    const text = `Arms travelled ${effort.total.toFixed(1)} m · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+    ctx.fillStyle = 'rgba(8,10,14,0.65)'; ctx.fillRect(x - 6 * dpr, y - 16 * dpr, ctx.measureText(text).width + 12 * dpr, 22 * dpr);
+    ctx.fillStyle = '#c9f7d6'; ctx.fillText(text, x, y); y += 28 * dpr;
+  }
+  if (recorder) {
+    const p = recorder.start === null ? 0 : Math.min(1, (t - recorder.start) / recorder.length), w = 160 * dpr;
+    ctx.fillStyle = 'rgba(8,10,14,0.7)'; ctx.fillRect(x - 6 * dpr, y - 16 * dpr, w + 70 * dpr, 22 * dpr);
+    ctx.fillStyle = '#ff5d5d'; ctx.beginPath(); ctx.arc(x + 5 * dpr, y - 5 * dpr, 5 * dpr, 0, Math.PI * 2); ctx.fill();
+    ctx.fillText('REC', x + 14 * dpr, y);
+    ctx.fillStyle = 'rgba(255,255,255,0.2)'; ctx.fillRect(x + 50 * dpr, y - 9 * dpr, w, 6 * dpr);
+    ctx.fillStyle = '#ff5d5d'; ctx.fillRect(x + 50 * dpr, y - 9 * dpr, w * p, 6 * dpr);
+  }
+}
+
 function setBig(state, msg) {
   if (msg) { bigLabel.className = 'none'; bigLabel.textContent = msg; return; }
   bigLabel.className = '';
   bigLabel.innerHTML = VOICES.filter((v) => state.voices[v.key].gate).map((v) => {
     const vs = state.voices[v.key];
-    return `<span style="color:${SIDE_COLOR[v.side]}">${noteName(vs.midi)}</span><small>${vs.freq.toFixed(0)} Hz</small>`;
+    return `<span style="color:${SIDE_COLOR[v.side]}">${noteName(vs.midi)}</span><small>${vs.freq.toFixed(0)} Hz${vs.held ? ' ❄' : ''}</small>`;
   }).join('<small> · </small>');
 }
 
@@ -854,7 +1648,6 @@ let mode = 'none', stream = null, fileURL = null;
 function setStatus(msg, cls = '') { statusEl.textContent = msg; statusEl.className = cls; }
 function setMode(m) {
   mode = m; resetNotes();
-  for (const f of Object.values(filters)) f.reset();
   $('btnCamera').classList.toggle('active', m === 'camera');
   $('btnDemo').classList.toggle('active', m === 'demo');
   $('btnFile').classList.toggle('active', m === 'file');
@@ -899,7 +1692,12 @@ function startDemo(clear = true) {
 // ---- MediaPipe ----
 const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const MODEL_URL = (v) => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${v}/float16/1/pose_landmarker_${v}.task`;
-let landmarker = null, loading = null, vision = null, PoseLandmarker = null;
+let landmarker = null, loading = null, vision = null, visionMod = null;
+async function ensureVision() {
+  if (vision) return;
+  visionMod = await import(`${MP}/vision_bundle.mjs`);
+  vision = await visionMod.FilesetResolver.forVisionTasks(`${MP}/wasm`);
+}
 function ensureModel() {
   if (landmarker) return Promise.resolve();
   if (loading) return loading;
@@ -907,14 +1705,11 @@ function ensureModel() {
   setStatus(`Loading ${variant} pose model…`);
   loading = (async () => {
     try {
-      if (!vision) {
-        const mod = await import(`${MP}/vision_bundle.mjs`);
-        PoseLandmarker = mod.PoseLandmarker;
-        vision = await mod.FilesetResolver.forVisionTasks(`${MP}/wasm`);
-      }
-      const opts = (delegate) => ({ baseOptions: { modelAssetPath: MODEL_URL(variant), delegate }, runningMode: 'VIDEO', numPoses: 1 });
-      try { landmarker = await PoseLandmarker.createFromOptions(vision, opts('GPU')); }
-      catch { landmarker = await PoseLandmarker.createFromOptions(vision, opts('CPU')); }
+      await ensureVision();
+      // Two people are tracked so duet mode can switch on at any time.
+      const opts = (delegate) => ({ baseOptions: { modelAssetPath: MODEL_URL(variant), delegate }, runningMode: 'VIDEO', numPoses: 2 });
+      try { landmarker = await visionMod.PoseLandmarker.createFromOptions(vision, opts('GPU')); }
+      catch { landmarker = await visionMod.PoseLandmarker.createFromOptions(vision, opts('CPU')); }
       if (mode !== 'demo') setStatus('');
     } catch (e) {
       console.error(e);
@@ -925,8 +1720,10 @@ function ensureModel() {
 }
 $('optModel').onchange = () => { if (landmarker) { landmarker.close(); landmarker = null; } if (mode === 'camera' || mode === 'file') ensureModel(); };
 
-// ---- Demo: a synthetic body sweeping its arms ----
+// ---- Demo: a synthetic body sweeping its arms, clapping and stomping ----
 const FLOOR = 0.8;
+const mixDir = (a, b, w) => a.map((x, i) => x * (1 - w) + b[i] * w);
+const bump = (x, c, half) => Math.max(0, 1 - Math.abs(x - c) / half);
 function demoPose(t) {
   // ?demo=aL,aR,eL,eR holds shoulder and elbow angles (degrees); missing values keep moving.
   const fixed = (params.get('demo') || '').split(',').map((x) => (x.trim() === '' || isNaN(+x) ? null : +x));
@@ -935,9 +1732,18 @@ function demoPose(t) {
   const eL = fixed[2] ?? 118 + 52 * Math.sin(t * 0.45);
   const eR = fixed[3] ?? fixed[2] ?? 118 + 52 * Math.sin(t * 0.6 + 2);
   // Forearm turns by (180 - elbow) from the upper arm, bending up and in.
-  const spec = { lUpper: armDir(aL), lFore: armDir(aL + 180 - eL), rUpper: armDir(aR), rFore: armDir(aR + 180 - eR) };
+  let spec = { lUpper: armDir(aL), lFore: armDir(aL + 180 - eL), rUpper: armDir(aR), rFore: armDir(aR + 180 - eR) };
+  if (fixed[0] === null) {
+    // Every 6 s: two claps, then a left stomp, then a right stomp.
+    const ph = t % 6, clapW = Math.max(bump(ph, 2.0, 0.22), bump(ph, 2.5, 0.22));
+    const clap = { lUpper: [0.15, 0.55, 1], lFore: [-1, -0.25, 0.35], rUpper: [0.15, 0.55, 1], rFore: [-1, -0.25, 0.35] };
+    if (clapW > 0) spec = Object.fromEntries(Object.keys(spec).map((k) => [k, mixDir(spec[k], clap[k], clapW)]));
+    const liftL = bump(ph, 4.0, 0.3), liftR = bump(ph, 4.8, 0.3);
+    spec.lThigh = mixDir([0.04, 1, 0], [0.05, 0.35, 1], liftL); spec.lShin = mixDir([0, 1, 0], [0, 1, -0.15], liftL);
+    spec.rThigh = mixDir([0.04, 1, 0], [0.05, 0.35, 1], liftR); spec.rShin = mixDir([0, 1, 0], [0, 1, -0.15], liftR);
+  }
   const W = canvas.width, H = canvas.height, aspect = W / H;
-  const pose = buildPose(spec, { k: 0.16, aspect, cx: 0.45, cy: 0 });
+  const pose = buildPose(spec, { k: 0.16, aspect, cx: 0.42, cy: 0 });
   const feet = Math.max(...[27, 28, 29, 30, 31, 32].map((i) => pose.lm2[i].y));
   for (const p of pose.lm2) p.y += FLOOR - feet;
   return { pose, aspect };
@@ -961,15 +1767,16 @@ function drawBackdrop() {
 }
 
 // ---- Main loop ----
-let lastVideoTime = -1, lastTs = 0, lastResult = null, lastState = null;
+let lastVideoTime = -1, lastTs = 0, lastResult = null, lastState = null, lastT = 0;
 function frame(now) {
   fitCanvas();
-  const W = canvas.width, H = canvas.height, mirror = $('optMirror').checked, tSec = now / 1000;
-  let lm2 = null, lm3 = null, aspect = 1, rect = null, msg = null;
+  const W = canvas.width, H = canvas.height, mirror = $('optMirror').checked, t = now / 1000;
+  const dt = Math.min(0.1, Math.max(0, t - lastT)); lastT = t;
+  let people = [], aspect = 1, rect = null, msg = null;
   if (mode === 'demo') {
     drawBackdrop();
     const d = demoPose((now - demoStart) / 1000);
-    ({ lm2, lm3 } = d.pose); aspect = d.aspect; rect = { x: 0, y: 0, w: W, h: H };
+    people = [{ lm2: d.pose.lm2, lm3: d.pose.lm3 }]; aspect = d.aspect; rect = { x: 0, y: 0, w: W, h: H };
   } else {
     ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H);
     if ((mode === 'camera' || mode === 'file') && video.videoWidth) {
@@ -985,21 +1792,76 @@ function frame(now) {
         lastVideoTime = video.currentTime;
         lastTs = Math.max(lastTs + 1, Math.round(now));
         try { lastResult = landmarker.detectForVideo(video, lastTs); } catch (e) { console.error(e); lastResult = null; }
+        if (hands && on('optPiano')) { try { handResult = hands.detectForVideo(video, lastTs); } catch (e) { console.error(e); handResult = null; } }
       }
-      if (landmarker && lastResult?.landmarks?.length) { lm2 = lastResult.landmarks[0]; lm3 = lastResult.worldLandmarks?.[0]; }
+      if (landmarker && lastResult?.landmarks?.length) people = lastResult.landmarks.map((lm2, i) => ({ lm2, lm3: lastResult.worldLandmarks?.[i] }));
       else msg = landmarker ? 'No person in view' : 'Loading model…';
     } else msg = 'Starting…';
   }
-  const m = lm2 ? measure(lm2, lm3, aspect) : null;
-  const state = synthState(m, tSec);
+  const toScreen = rect ? (p) => ({ x: rect.x + (mirror ? 1 - p.x : p.x) * rect.w, y: rect.y + p.y * rect.h }) : null;
+  for (const p of people) {
+    p.m = measure(p.lm2, p.lm3, aspect);
+    p.size = p.m ? Math.hypot((p.lm2[11].x - p.lm2[12].x) * aspect, p.lm2[11].y - p.lm2[12].y) : 0;
+    p.sx = toScreen ? toScreen(p.lm2[0]).x : 0;
+  }
+  people = people.filter((p) => p.m).sort((a, b) => b.size - a.size);
+
+  // Duet: the two largest people, left one on screen plays the saw, right one the square.
+  let duo = null, over = null, lead = people[0] || null;
+  if (on('optDuet') && people.length >= 2) {
+    duo = people.slice(0, 2).sort((a, b) => a.sx - b.sx);
+    const r0 = duetPerf[0].read(duo[0].m, t), r1 = duetPerf[1].read(duo[1].m, t);
+    const elbows = (r) => { const xs = [r.u.leftElbow, r.u.rightElbow].filter((x) => x !== null); return xs.length ? xs.reduce((a, b) => a + b) / xs.length : null; };
+    over = { sawPitch: r0.u.shoulders, sawDuty: elbows(r0), squarePitch: r1.u.shoulders, squareDuty: elbows(r1) };
+    const h0 = duo[0].m.hipMid2, h1 = duo[1].m.hipMid2;
+    duo[0].m.peopleGap = Math.hypot((h0.x - h1.x) * aspect, h0.y - h1.y) / ((duo[0].m.T2 + duo[1].m.T2) / 2);
+    lead = duo[0];
+  }
+  const read = main.read(lead ? lead.m : null, t);
+  const state = synthState(lead ? lead.m : null, read, t, over);
   lastState = state;
   drive(state);
-  if (lm2 && rect) drawPerson(lm2, rect, mirror, m, state);
+
+  // Gestures, loops, effort.
+  if (lead && toScreen) for (const e of gestures(main, lead.m, t, toScreen, lead.lm2, true)) popups.push({ ...e, t0: t });
+  if (duo && toScreen) for (const e of gestures(duetPerf[1], duo[1].m, t, toScreen, duo[1].lm2, false)) popups.push({ ...e, t0: t });
+  if (recorder) {
+    recorder.add(t, lead ? { lm2: lead.lm2, lm3: lead.lm3, aspect } : { lm2: null });
+    if (recorder.done(t)) finishRecording();
+  }
+  if (toScreen) runGhosts(t, rect, mirror, toScreen);
+  if (lead && lead.lm3) for (const [k, i] of [['l', 15], ['r', 16]]) if ((lead.lm2[i].visibility ?? 1) >= 0.5) effort.update(k, lead.lm3[i]);
+
+  // Drawing.
+  if (toScreen) {
+    for (const g of ghosts) if (g.last?.f?.lm2) drawPerson(g.last.f.lm2, toScreen, g.last.m, null, { alpha: 0.5, tag: 'loop', tint: g.hue });
+    const trailPts = [];
+    const addTrail = (lm2, voices, light) => {
+      for (const [i, v] of [[15, 'saw'], [16, 'square']]) {
+        if ((lm2[i].visibility ?? 1) < 0.5 || !voices[v].gate) continue;
+        trailPts.push({ p: toScreen(lm2[i]), hue: pitchHue(state, voices[v].midi), light: light * (soundOn ? 1 : 0.6) });
+      }
+    };
+    if (duo) {
+      drawPerson(duo[0].lm2, toScreen, duo[0].m, state, { tag: 'P1 · saw' });
+      drawPerson(duo[1].lm2, toScreen, duo[1].m, null, { tag: 'P2 · square' });
+      addTrail(duo[0].lm2, { saw: state.voices.saw, square: state.voices.saw }, 1);
+      addTrail(duo[1].lm2, { saw: state.voices.square, square: state.voices.square }, 1);
+    } else if (lead) { drawPerson(lead.lm2, toScreen, lead.m, state); addTrail(lead.lm2, state.voices, 1); }
+    for (const g of ghosts) if (g.last?.f?.lm2) addTrail(g.last.f.lm2, g.last.voices, 0.45);
+    spawnTrails(t, trailPts);
+    drawTrails(t, dt);
+    if (on('optPiano') && mode !== 'demo') runPiano(t, toScreen, state);
+  }
   drawLadder(state);
+  runGame(t, state);
+  drawGame(t, state);
   drawScope();
-  showMeters(state);
+  drawPopups(t);
+  drawStatusOverlays(t);
+  showMeters(read);
   showKnobs(state);
-  if (!msg && !state.gate) msg = m ? 'Show your arms' : 'No person in view';
+  if (!msg && !state.gate) msg = lead ? 'Show your arms' : 'No person in view';
   setBig(state, msg);
 }
 function loop(now) { requestAnimationFrame(loop); frame(now); }
@@ -1007,8 +1869,16 @@ function loop(now) { requestAnimationFrame(loop); frame(now); }
 $('btnCamera').onclick = startCamera;
 $('btnDemo').onclick = () => startDemo();
 $('fileInput').onchange = (e) => { const f = e.target.files[0]; if (f) startFile(f); e.target.value = ''; };
+window.addEventListener('keydown', (e) => {
+  if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+  if (e.key === 'm' || e.key === 'M') setSound(!soundOn);
+  if (e.key === 'r' || e.key === 'R') startRecording();
+});
 
-window.__synth = { PoseSynth, state: () => lastState, mode: () => mode, model: () => !!landmarker, audio: () => audio, setSound, mapping };
+window.__synth = {
+  PoseSynth, PlayLogic, state: () => lastState, mode: () => mode, model: () => !!landmarker, audio: () => audio, setSound, mapping,
+  ghosts, effort: () => effort.total, game: () => game, popups, swell, playDrum,
+};
 
 if (params.has('demo')) startDemo();
 else if (!navigator.mediaDevices?.getUserMedia) { setStatus('This browser has no camera API. Showing the demo.', 'err'); startDemo(false); }
