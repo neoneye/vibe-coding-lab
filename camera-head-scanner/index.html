@@ -122,7 +122,8 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
     <label class="tog"><input type="checkbox" id="optMirror" checked>Mirror the camera view</label>
     <h2>Result</h2>
     <div class="row"><span>Colours</span><select id="optShade">
-      <option value="tex" selected>Photo texture</option>
+      <option value="views" selected>Photos (view-dependent)</option>
+      <option value="tex">Photo texture</option>
       <option value="texlit">Photo texture, lit</option>
       <option value="photo">Vertex colours</option>
       <option value="clay">Clay (shape only)</option>
@@ -135,7 +136,7 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
     <p class="note">Above: the baked texture, unrolled around the turning axis (front in the middle, the person's left to the right, crown at the top).</p>
     <div class="stats" id="stats"></div>
     <h2>How it works</h2>
-    <p class="note">MediaPipe's pose model tracks how far you have turned from your shoulders, ears and nose, and every time your face looks straight at the camera the count is pinned to 0°, 360° or 720°. Its multiclass segmenter cuts out hair, face and neck (head) or the whole person (body) in every frame; a body is centred on the pose model's hip and shoulder midline. The steadiest frame per 2° of each turn is kept, so every angle is seen twice. Space carving keeps the voxels that (almost) every silhouette agrees on, surface nets turn them into a mesh, and each vertex takes its colour from the photos that look at it most squarely.</p>
+    <p class="note">MediaPipe's pose model tracks how far you have turned from your shoulders, ears and nose, and every time your face looks straight at the camera the count is pinned to 0°, 360° or 720°. Its multiclass segmenter cuts out hair, face and neck (head) or the whole person (body) in every frame; a body is centred on the pose model's hip and shoulder midline. The steadiest frame per 2° of each turn is kept, so every angle is seen twice. Space carving keeps the voxels that (almost) every silhouette agrees on and surface nets turn them into a mesh. The default view is image-based: the two full-resolution photos taken nearest the viewing angle are projected onto that shape and cross-faded, which stays photographic even where the shape is rough; a baked cylindrical texture fills what neither photo sees.</p>
     <p class="note">Limits: silhouettes cannot see hollows (eye sockets, armpits and the gap between the legs fill in), so keep arms a little away from the body. Head size assumes a 63 mm eye distance, body size comes from MediaPipe's metric landmarks; the camera is treated as orthographic. Nothing leaves the browser.</p>
   </aside>
 </main>
@@ -532,17 +533,42 @@ const HeadScan = (() => {
     return nrm;
   }
 
+  // ---- Photos ----
+  // A view's photo may be sharper than its W x H mask: img = { data, w, h } with the same framing.
+  // Without img the W x H rgba is used. sample(u, v) takes crop coordinates and returns [r, g, b].
+  function photoSampler(v, W, H) {
+    const img = v.img || { data: v.rgba, w: W, h: H }, d = img.data, iw = img.w, ih = img.h, sx = iw / W, sy = ih / H;
+    const out = [0, 0, 0];
+    return (u, vv) => {
+      const x = clamp(u * sx - 0.5, 0, iw - 1.001), y = clamp(vv * sy - 0.5, 0, ih - 1.001), x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+      const i = (y0 * iw + x0) * 4, j = i + iw * 4;
+      for (let k = 0; k < 3; k++) out[k] = (d[i + k] * (1 - fx) + d[i + 4 + k] * fx) * (1 - fy) + (d[j + k] * (1 - fx) + d[j + 4 + k] * fx) * fy;
+      return out;
+    };
+  }
+  // Nearest-neighbour shrink of a w x h mask to W x H (pixel centres).
+  function downsampleMask(mask, w, h, W, H) {
+    const out = new Uint8Array(W * H);
+    for (let v = 0; v < H; v++) { const y = Math.min(h - 1, Math.floor((v + 0.5) * h / H)); for (let u = 0; u < W; u++) out[v * W + u] = mask[y * w + Math.min(w - 1, Math.floor((u + 0.5) * w / W))]; }
+    return out;
+  }
+  // The photos the viewer blends between: for each of `count` evenly spaced angles, the view (from
+  // either turn) closest to it. Sorted by angle 0..360.
+  function selectRenderViews(views, count = 72) {
+    const best = new Array(count).fill(null);
+    for (const v of views) {
+      const a = wrap360(v.theta), k = Math.round(a / (360 / count)) % count, d = Math.abs(angDiff(a, k * 360 / count));
+      if (!best[k] || d < best[k].d) best[k] = { v, d };
+    }
+    return best.filter(Boolean).map((b) => b.v).sort((a, b) => wrap360(a.theta) - wrap360(b.theta));
+  }
+
   // ---- Colour ----
   // Each vertex averages the views that look at it most squarely (weight cos^4 of the angle between
   // its normal and the view direction) and that see head pixels where it projects.
   function colorize(positions, normals, views, W, H) {
     const n = positions.length / 3, col = new Float32Array(n * 3);
-    const vs = views.map((v) => ({ ...v, c: Math.cos(v.theta * RAD), s: Math.sin(v.theta * RAD) }));
-    const sample = (rgba, u, v, k) => {
-      const x = clamp(u - 0.5, 0, W - 1.001), y = clamp(v - 0.5, 0, H - 1.001), x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
-      const i = (y0 * W + x0) * 4 + k;
-      return (rgba[i] * (1 - fx) + rgba[i + 4] * fx) * (1 - fy) + (rgba[i + W * 4] * (1 - fx) + rgba[i + W * 4 + 4] * fx) * fy;
-    };
+    const vs = views.map((v) => ({ ...v, c: Math.cos(v.theta * RAD), s: Math.sin(v.theta * RAD), sample: photoSampler(v, W, H) }));
     for (let i = 0; i < n; i++) {
       const X = positions[3 * i], Y = positions[3 * i + 1], Z = positions[3 * i + 2];
       const nx = normals[3 * i], nz = normals[3 * i + 2];
@@ -551,7 +577,7 @@ const HeadScan = (() => {
         const u = v.cx + X * v.c + Z * v.s, vv = v.top + Y;
         if (u < 0 || u >= W || vv < 0 || vv >= H || !v.mask[Math.floor(vv) * W + Math.floor(u)]) continue;
         const facing = -nx * v.s + nz * v.c;  // dot(normal, direction to the camera)
-        const R = sample(v.rgba, u, vv, 0), G = sample(v.rgba, u, vv, 1), B = sample(v.rgba, u, vv, 2);
+        const [R, G, B] = v.sample(u, vv);
         r2 += R; g2 += G; b2 += B; w2++;
         if (facing <= 0.2) continue;
         const k = facing ** 4;
@@ -593,9 +619,12 @@ const HeadScan = (() => {
   // most squarely (weight facing^12, about ±20° around the best view, so it stays sharp; both turns
   // contribute). Overhangs (under the chin, behind the ears, the torso behind an arm) get the colour
   // of what is in front of them. Texels no photo saw are filled from their neighbours.
-  function bakeTexture(rec, { texW = 768, texH = null, power = 12 } = {}) {
+  function bakeTexture(rec, { texW = null, texH = null, power = 12 } = {}) {
     const { field, carved, views, W, H } = rec, { dims: { nx, ny, nz }, step, origin } = carved;
-    const tH = texH ?? Math.round(H * 1.6);
+    // Sized to the photos: about 3.2 photo widths around and 1.2 photo heights tall.
+    const img = views[0]?.img || { w: W, h: H };
+    texW = texW ?? Math.max(512, Math.min(1024, Math.round(img.w * 3.2 / 32) * 32));
+    const tH = texH ?? Math.round(img.h * (img === views[0]?.img ? 1.2 : 2.4));
     const yMin = origin.y - step / 2, yMax = origin.y + (ny - 0.5) * step;
     const fAt = (x, y, z) => {  // trilinear field sample at object coordinates
       const gx = (x - origin.x) / step, gy = (y - origin.y) / step, gz = (z - origin.z) / step;
@@ -605,34 +634,47 @@ const HeadScan = (() => {
       const l = (a, b, t) => a + (b - a) * t;
       return l(l(l(F(0, 0, 0), F(1, 0, 0), fx), l(F(0, 1, 0), F(1, 1, 0), fx), fy), l(l(F(0, 0, 1), F(1, 0, 1), fx), l(F(0, 1, 1), F(1, 1, 1), fx), fy), fz);
     };
-    const vs = views.map((v) => ({ ...v, c: Math.cos(v.theta * RAD), s: Math.sin(v.theta * RAD) }));
-    const rgba = new Uint8ClampedArray(texW * tH * 4), rMax = Math.hypot(nx, nz) * step / 2;
-    const sample = (img, u, v, k) => {
-      const x = clamp(u - 0.5, 0, W - 1.001), y = clamp(v - 0.5, 0, H - 1.001), x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
-      const i = (y0 * W + x0) * 4 + k;
-      return (img[i] * (1 - fx) + img[i + 4] * fx) * (1 - fy) + (img[i + W * 4] * (1 - fx) + img[i + W * 4 + 4] * fx) * fy;
-    };
+    const vs = views.map((v) => ({ ...v, c: Math.cos(v.theta * RAD), s: Math.sin(v.theta * RAD), sample: photoSampler(v, W, H) }));
+    const rgba = new Uint8ClampedArray(texW * tH * 4);
+    // Widest occupied radius per grid layer: each texel's march starts just outside it.
+    const layerR = new Float32Array(ny);
+    for (let y = 0; y < ny; y++) for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) {
+      if (field[(y * nz + z) * nx + x] > 0.05) layerR[y] = Math.max(layerR[y], Math.hypot(origin.x + x * step, origin.z + z * step));
+    }
+    const minFacing = Math.pow(0.02, 1 / power);  // views under 2% of the best weight are not worth a sample
+    // Views bucketed by the azimuth they look from (view θ sees surface whose normal points at -θ),
+    // so a texel only visits the photos within acos(minFacing) of its normal.
+    const buckets = Array.from({ length: 360 }, () => []);
+    vs.forEach((v) => buckets[Math.floor(wrap360(-v.theta)) % 360].push(v));
+    const halfWin = Math.ceil(Math.acos(minFacing) * DEG) + 1;
     for (let row = 0; row < tH; row++) {
       const Y = yMin + (row + 0.5) / tH * (yMax - yMin);
+      const gy = Math.round((Y - origin.y) / step);
+      let rStart = 0;
+      for (let k = Math.max(0, gy - 1); k <= Math.min(ny - 1, gy + 1); k++) rStart = Math.max(rStart, layerR[k]);
+      if (rStart === 0) continue;
+      rStart += 2 * step;
       for (let col = 0; col < texW; col++) {
         const az = ((col + 0.5) / texW - 0.5) * 2 * Math.PI, dx = Math.sin(az), dz = Math.cos(az);
         // March in from outside to the first point inside the surface, then halve the step.
-        let r = rMax, inside = false;
-        for (; r > 0; r -= step * 0.5) if (fAt(r * dx, Y, r * dz) > 0.5) { inside = true; break; }
+        let r = rStart, inside = false;
+        for (; r > 0; r -= step) if (fAt(r * dx, Y, r * dz) > 0.5) { inside = true; break; }
         if (!inside) continue;
-        let lo = r, hi = r + step * 0.5;
-        for (let k = 0; k < 5; k++) { const m = (lo + hi) / 2; if (fAt(m * dx, Y, m * dz) > 0.5) lo = m; else hi = m; }
+        let lo = r, hi = r + step;
+        for (let k = 0; k < 6; k++) { const m = (lo + hi) / 2; if (fAt(m * dx, Y, m * dz) > 0.5) lo = m; else hi = m; }
         const X = lo * dx, Z = lo * dz, e = step;
         let gx = fAt(X + e, Y, Z) - fAt(X - e, Y, Z), gy = fAt(X, Y + e, Z) - fAt(X, Y - e, Z), gz = fAt(X, Y, Z + e) - fAt(X, Y, Z - e);
         const gl = Math.hypot(gx, gy, gz) || 1, nX = -gx / gl, nZ = -gz / gl;
         let R = 0, G = 0, B = 0, w = 0;
-        for (const v of vs) {
+        const nAz = Math.round(Math.atan2(nX, nZ) * DEG);
+        for (let bk = nAz - halfWin; bk <= nAz + halfWin; bk++) for (const v of buckets[((bk % 360) + 360) % 360]) {
           const facing = -nX * v.s + nZ * v.c;
-          if (facing <= 0.1) continue;
+          if (facing <= minFacing) continue;
           const u = v.cx + X * v.c + Z * v.s, vv = v.top + Y;
           if (u < 0 || u >= W || vv < 0 || vv >= H || !v.mask[Math.floor(vv) * W + Math.floor(u)]) continue;
           const k = facing ** power;
-          R += sample(v.rgba, u, vv, 0) * k; G += sample(v.rgba, u, vv, 1) * k; B += sample(v.rgba, u, vv, 2) * k; w += k;
+          const px = v.sample(u, vv);
+          R += px[0] * k; G += px[1] * k; B += px[2] * k; w += k;
         }
         if (w <= 0) continue;
         const i = (row * texW + col) * 4;
@@ -822,7 +864,7 @@ const HeadScan = (() => {
   return {
     wrap360, angDiff, circMean, yawFromPose, YawTracker, anchorCorrection, selectViews, keepComponent, silhouetteRef, gridFor, carve, refineYaw,
     largestComponent, blur3, surfaceNets, toObject, meshVolume, smoothMesh, triNormals, colorize, reconstruct, bakeTexture, texCoord,
-    crc32, zipStore, toOBJ, toPLY,
+    crc32, zipStore, toOBJ, toPLY, photoSampler, downsampleMask, selectRenderViews,
     SYN, SYN_BODY, synModel, synInside, renderSynthetic, syntheticPose,
   };
 })();
@@ -845,7 +887,7 @@ const IPD_MM = 63;        // average adult eye distance, for the head's millimet
 // (0 background, 1 hair, 2 body skin, 3 face skin, 4 clothes, 5 accessories).
 const MODES = {
   head: {
-    W: 160, H: 160, storeDeg: 1.5, res: 96, classes: new Set([1, 2, 3, 5]), file: 'head-scan', noun: 'head',
+    W: 160, H: 160, photoScale: 2, storeDeg: 1.5, res: 96, classes: new Set([1, 2, 3, 5]), file: 'head-scan', noun: 'head',
     ready: ['Head and shoulders in view', 'then press Start scan'],
     steps: [
       'Sit on a swivel chair (or stand) with your head and shoulders in view, good light, plain background helps.',
@@ -855,7 +897,7 @@ const MODES = {
     ],
   },
   body: {
-    W: 160, H: 224, storeDeg: 2, res: 128, classes: new Set([1, 2, 3, 4, 5]), file: 'body-scan', noun: 'body',
+    W: 160, H: 224, photoScale: 1.6, storeDeg: 2, res: 128, classes: new Set([1, 2, 3, 4, 5]), file: 'body-scan', noun: 'body',
     ready: ['Whole body in view, head to feet', 'then press Start scan'],
     steps: [
       'Stand about 3 m from the camera so your whole body, head to feet, is in view. Plain background and even light help.',
@@ -865,12 +907,15 @@ const MODES = {
     ],
   },
 };
+// Masks (for carving) are W x H; photos are stored photoScale times sharper, as JPEG.
+for (const m of Object.values(MODES)) { m.pW = Math.round(m.W * m.photoScale); m.pH = Math.round(m.H * m.photoScale); }
 let scanMode = 'head', cfg = MODES.head;
 function setScanMode(m) {
   scanMode = m; cfg = MODES[m];
   $('optMode').value = m; $('optRes').value = cfg.res;
   $('steps').replaceChildren(...cfg.steps.map((text) => { const li = document.createElement('li'); li.textContent = text; return li; }));
   cropCanvas.width = cfg.W; cropCanvas.height = cfg.H;
+  photoCanvas.width = cfg.pW; photoCanvas.height = cfg.pH;
   if (source === 'camera' && phase === 'idle') say(...cfg.ready);
 }
 
@@ -891,6 +936,10 @@ function say(main, sub = '', warn = false) {
 }
 const cropCanvas = document.createElement('canvas');
 const cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
+// The photo of the current frame, kept as a JPEG (toBlob snapshots the canvas when called).
+const photoCanvas = document.createElement('canvas');
+const photoCtx = photoCanvas.getContext('2d', { willReadFrequently: true });
+const snapPhoto = () => new Promise((resolve) => photoCanvas.toBlob(resolve, 'image/jpeg', 0.92));
 function setStep(k) { [...$('steps').children].forEach((li, i) => { li.classList.toggle('on', i === k); li.classList.toggle('done', i < k); }); }
 
 // ---- MediaPipe ----
@@ -943,10 +992,10 @@ async function startCamera() {
 // ---- Scan state ----
 let phase = 'idle', tracker = null, frames = new Map(), coverage = [new Set(), new Set()];
 // follow: the smoothed point the crop box rides on (ear midpoint for a head, hip midpoint for a body).
-let alignHeld = 0, calib = null, follow = null, speed = 0, scanStart = 0, lastPerson = 0, frontalRun = 0;
+let alignHeld = 0, calib = null, follow = null, speed = 0, scanStart = 0, lastPerson = 0, frontalRun = 0, bodyOk = null, alignFrames = 0;
 function resetScan() {
   tracker = new H.YawTracker(); frames = new Map(); coverage = [new Set(), new Set()];
-  alignHeld = 0; follow = null; speed = 0; speedHist = []; lastPerson = 0; frontalRun = 0;
+  alignHeld = 0; follow = null; speed = 0; speedHist = []; lastPerson = 0; frontalRun = 0; bodyOk = null; alignFrames = 0;
 }
 function lockMode(locked) { $('optMode').disabled = locked; }
 function startScan() {
@@ -984,9 +1033,9 @@ function cameraCrop(ts, box, shoulderY, cxHint) {
   let res;
   try { res = seg.segmentForVideo(video, ts); } catch (e) { console.error(e); return null; }
   const cm = res.categoryMask, mw = cm.width, mh = cm.height, cats = cm.getAsUint8Array();
-  cropCtx.clearRect(0, 0, W, Hc);
-  cropCtx.drawImage(video, box.x, box.y, box.w, box.h, 0, 0, W, Hc);
-  const rgba = new Uint8ClampedArray(cropCtx.getImageData(0, 0, W, Hc).data);
+  photoCtx.fillStyle = '#000'; photoCtx.fillRect(0, 0, cfg.pW, cfg.pH);
+  photoCtx.drawImage(video, box.x, box.y, box.w, box.h, 0, 0, cfg.pW, cfg.pH);
+  const photo = snapPhoto();
   let mask = new Uint8Array(W * Hc);
   const cut = scanMode === 'head' ? shoulderY - 0.03 * box.h : Infinity;  // a head stops at the shoulders
   for (let v = 0; v < Hc; v++) {
@@ -1001,7 +1050,33 @@ function cameraCrop(ts, box, shoulderY, cxHint) {
   }
   res.close();
   mask = H.keepComponent(mask, W, W / 2, (scanMode === 'head' ? 0.3 : 0.4) * Hc);
-  return { rgba, mask, cxHint };
+  return { photo, mask, cxHint };
+}
+// Body mode only starts when the segmented person is whole in the picture: head and feet inside
+// the frame, standing (legs as long as the torso), ideally arms clear of the body. Returns the
+// person's bounding box in video pixels.
+function bodyCheck(ts, px) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  let res;
+  try { res = seg.segmentForVideo(video, ts); } catch (e) { console.error(e); return { ok: false, reason: 'segmentation failed' }; }
+  const cm = res.categoryMask, mw = cm.width, mh = cm.height, cats = cm.getAsUint8Array();
+  let mask = new Uint8Array(mw * mh);
+  for (let i = 0; i < mask.length; i++) mask[i] = cats[i] ? 1 : 0;
+  res.close();
+  const hip = { x: (px(23).x + px(24).x) / 2, y: (px(23).y + px(24).y) / 2 };
+  mask = H.keepComponent(mask, mw, hip.x * mw / vw, hip.y * mh / vh);
+  let x0 = mw, x1 = -1, y0 = mh, y1 = -1;
+  for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) if (mask[y * mw + x]) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  if (x1 < 0) return { ok: false, reason: 'no person found' };
+  const bbox = { x: x0 * vw / mw, y: y0 * vh / mh, w: (x1 - x0 + 1) * vw / mw, h: (y1 - y0 + 1) * vh / mh };
+  if (y0 <= 1) return { ok: false, bbox, reason: 'head', say: ['Step back', 'the top of your head is cut off'] };
+  if (y1 >= mh - 2) return { ok: false, bbox, reason: 'feet', say: ['Step back', 'your feet are cut off'] };
+  const ankleY = (px(27).y + px(28).y) / 2, noseY = px(0).y;
+  if (ankleY - hip.y < 0.85 * (hip.y - noseY)) return { ok: false, bbox, reason: 'sitting', say: ['Please stand up', 'full body mode needs you standing'] };
+  // Arms clear of the body: at hip height the mask splits into arm, torso, arm.
+  const row = Math.round(hip.y * mh / vh); let runs = 0, prev = 0;
+  for (let x = 0; x < mw; x++) { const m = mask[row * mw + x]; if (m && !prev) runs++; prev = m; }
+  return { ok: true, bbox, armsClear: runs >= 3 };
 }
 // Crop box from the first frontal frame. Head: a square about one shoulder width, scaled to mm by
 // the eye distance. Body: head to feet plus margins, scaled by MediaPipe's (roughly metric) world
@@ -1013,13 +1088,22 @@ function calibrate(px, lm3) {
     const size = Math.max(120, Math.min(Math.min(vw, vh), 1.05 * sw));
     return { w: size, h: size, dy: -0.45 * size, mmPerCropPx: (IPD_MM / Math.max(eye, 1)) * size / cfg.W };
   }
-  const ankleY = (px(27).y + px(28).y) / 2, noseY = px(0).y, hipY = (px(23).y + px(24).y) / 2;
-  const hPx = (ankleY - noseY) / 0.9;  // the nose sits about 90% of the height above the ankles
-  const h = 1.12 * hPx, w = h * cfg.W / cfg.H;
-  const heightM = Math.abs(lm3[0].y - (lm3[27].y + lm3[28].y) / 2) / 0.9;
-  return { w, h, dy: noseY - 0.115 * hPx - hipY, mmPerCropPx: (heightM * 1000 / hPx) * h / cfg.H };
+  // Body: the segmented person (head to feet) plus a margin; the box's top rides on the hips.
+  const b = bodyOk.bbox, hipY = (px(23).y + px(24).y) / 2;
+  const h = Math.min(vh * 1.2, b.h * 1.08), w = h * cfg.W / cfg.H;
+  const heightM = Math.abs(lm3[0].y - (lm3[27].y + lm3[28].y) / 2) / 0.9;  // nose-to-ankle is ~90% of the height
+  return { w, h, dy: b.y - 0.035 * h - hipY, mmPerCropPx: (heightM * 1000 / b.h) * h / cfg.H };
 }
 const boxAt = (f) => ({ x: f.x - calib.w / 2, y: f.y + calib.dy, w: calib.w, h: calib.h });
+// What would be captured if the scan started now (body mode: the segmented person plus margin).
+function previewBox() {
+  if (scanMode === 'body') {
+    if (!bodyOk?.bbox) return null;
+    const b = bodyOk.bbox, h = b.h * 1.08, w = h * cfg.W / cfg.H;
+    return { x: b.x + b.w / 2 - w / 2, y: b.y - 0.035 * h, w, h };
+  }
+  return null;
+}
 function processCamera(t, now) {
   if (!pose || video.readyState < 2 || video.currentTime === lastVideoTime) return null;
   lastVideoTime = video.currentTime;
@@ -1039,7 +1123,9 @@ function processCamera(t, now) {
   const shoulderY = mid(11, 12).y;
   const fullBody = vis(0) && vis(27) && vis(28);
   if (phase === 'align') {
-    alignHeld = y.frontal && (scanMode === 'head' || fullBody) ? alignHeld + 1 / 30 : 0;
+    // Body: re-check the segmented figure every few frames (segmentation is the expensive part).
+    if (scanMode === 'body' && (alignFrames++ % 6 === 0)) bodyOk = fullBody ? bodyCheck(lastTs, px) : { ok: false, say: ['Step back', 'your feet must be in the picture'] };
+    alignHeld = y.frontal && (scanMode === 'head' || bodyOk?.ok) ? alignHeld + 1 / 30 : 0;
     if (alignHeld >= 1) {
       calib = calibrate(px, lm3);
       phase = 'spin'; scanStart = t; setStep(2);
@@ -1082,15 +1168,18 @@ function processDemo(t) {
   const th = demo.rate * dt + 6 * Math.sin(dt * 1.7);                 // uneven turning
   const cx = cfg.W / 2 + 6 * Math.sin(dt * 0.9);                      // wandering crop
   const top = scanMode === 'head' ? 8 + 2 * Math.sin(dt * 1.3) : Math.sin(dt * 1.3);
-  const img = H.renderSynthetic(th, cfg.W, cfg.H, { cx, top, model: scanMode });
-  demo.last = img;
+  const k = cfg.photoScale, hi = H.renderSynthetic(th, cfg.pW, cfg.pH, { cx: cx * k, top: top * k, model: scanMode });
+  demo.last = hi;
   if (phase !== 'spin') return;
   const back = Math.cos(th * Math.PI / 180) < -0.2;
   const { lm2, lm3 } = H.syntheticPose(th, { flipLR: back && demoRand() < 0.25 });
   const y = H.yawFromPose(lm2, lm3);
   const U = tracker.update(t, { est: H.wrap360(y.est + (demoRand() - 0.5) * 12), frontal: y.frontal });
   trackSpeed(t, U);
-  maybeStore(t, U, () => ({ rgba: img.rgba, mask: img.mask }));
+  maybeStore(t, U, () => {
+    photoCtx.putImageData(new ImageData(hi.rgba, cfg.pW, cfg.pH), 0, 0);
+    return { photo: snapPhoto(), mask: H.downsampleMask(hi.mask, cfg.pW, cfg.pH, cfg.W, cfg.H) };
+  });
   checkDone(U, y.frontal);
 }
 // Done after two turns: once the face has looked at the camera for a few frames (that forms the
@@ -1109,11 +1198,23 @@ function finishScan() {
   say(`Building your ${cfg.noun}…`, 'carving, meshing and colouring');
   setTimeout(build, 60);
 }
-function build() {
+// JPEG blob -> {data, w, h}.
+async function decodePhoto(blobPromise) {
+  const blob = await blobPromise, bmp = await createImageBitmap(blob), c = document.createElement('canvas');
+  c.width = bmp.width; c.height = bmp.height;
+  const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(bmp, 0, 0); bmp.close();
+  return { data: g.getImageData(0, 0, c.width, c.height).data, w: c.width, h: c.height };
+}
+async function build() {
   const t0 = performance.now();
   const corr = H.anchorCorrection(tracker.records);
   const all = [...frames.values()].map((f) => ({ ...f, yaw: corr.yaw(f.t, f.U) }));
-  const views = H.selectViews(all, BIN_DEG).map((f) => ({ theta: f.yaw, mask: f.mask, rgba: f.rgba, yaw: f.yaw, cxHint: f.cxHint ?? null }));
+  const picked = H.selectViews(all, BIN_DEG);
+  say(`Building your ${cfg.noun}…`, `reading ${picked.length} photos`);
+  const imgs = await Promise.all(picked.map((f) => decodePhoto(f.photo)));
+  const views = picked.map((f, i) => ({ theta: f.yaw, mask: f.mask, img: imgs[i], yaw: f.yaw, cxHint: f.cxHint ?? null }));
+  say(`Building your ${cfg.noun}…`, 'carving, meshing and colouring');
+  await new Promise((r) => setTimeout(r, 30));
   if (views.length < 60) {
     phase = source === 'camera' ? 'idle' : 'done'; lockMode(false);
     say('Not enough angles captured', `${views.length} views; turn slower and complete both turns`, true);
@@ -1124,6 +1225,7 @@ function build() {
   catch (e) { console.error(e); say('Reconstruction failed', String(e.message || e), true); phase = 'idle'; lockMode(false); return; }
   result.tex = H.bakeTexture(result);
   result.allFrames = all.sort((a, b) => Math.abs(a.yaw) - Math.abs(b.yaw));
+  result.renderViews = H.selectRenderViews(result.views, 72);
   const ms = performance.now() - t0;
   const p = result.positions, lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < p.length; i++) { lo[i % 3] = Math.min(lo[i % 3], p[i]); hi[i % 3] = Math.max(hi[i % 3], p[i]); }
@@ -1134,6 +1236,7 @@ function build() {
     `anchors    ${result.anchors.map((a) => a.target + '°').join(', ') || 'none (time-only)'}\n` +
     `vote       ≤ ${result.tol} views may disagree\n` +
     `mesh       ${(result.indices.length / 3).toLocaleString()} triangles\n` +
+    `photos     ${cfg.pW} × ${cfg.pH} px, ${result.renderViews.length} shown view-dependently\n` +
     `texture    ${result.tex.width} × ${result.tex.height} from ${result.views.length} photos\n` +
     `size       ${mm(0)} × ${mm(1)} × ${mm(2)} mm (w × h × d)\n` +
     `built in   ${(ms / 1000).toFixed(1)} s`;
@@ -1173,6 +1276,7 @@ function showResult() {
   const lin = result.colors.map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
   g.setAttribute('color', new THREE.BufferAttribute(lin, 3));
   g.setAttribute('objPos', new THREE.BufferAttribute(Float32Array.from(p), 3));  // object frame, for the texture lookup
+  g.setAttribute('objNrm', new THREE.BufferAttribute(Float32Array.from(result.normals), 3));
   g.setIndex(new THREE.BufferAttribute(tri, 1));
   g.computeVertexNormals(); g.computeBoundingBox(); g.computeBoundingSphere();
   const c = g.boundingBox.getCenter(new THREE.Vector3());
@@ -1184,6 +1288,25 @@ function showResult() {
   three.tex.wrapS = THREE.RepeatWrapping; three.tex.wrapT = THREE.ClampToEdgeWrapping;
   three.tex.magFilter = THREE.LinearFilter; three.tex.minFilter = THREE.LinearFilter; three.tex.generateMipmaps = false;
   three.tex.needsUpdate = true;
+  // The photos the viewer blends: one texture layer each, the silhouette mask in alpha.
+  if (three.photos) three.photos.dispose();
+  const rv = result.renderViews, { pW, pH, W: mW, H: mH } = result.cfg, layer = pW * pH * 4;
+  const arr = new Uint8Array(layer * rv.length);
+  rv.forEach((v, li) => {
+    const d = v.img.data, o = li * layer;
+    for (let y = 0; y < pH; y++) {
+      const my = Math.min(mH - 1, Math.floor((y + 0.5) * mH / pH));
+      for (let x = 0; x < pW; x++) {
+        const i = (y * pW + x) * 4;
+        arr[o + i] = d[i]; arr[o + i + 1] = d[i + 1]; arr[o + i + 2] = d[i + 2];
+        arr[o + i + 3] = v.mask[my * mW + Math.min(mW - 1, Math.floor((x + 0.5) * mW / pW))] ? 255 : 0;
+      }
+    }
+  });
+  three.photos = new THREE.DataArrayTexture(arr, pW, pH, rv.length);
+  three.photos.magFilter = THREE.LinearFilter; three.photos.minFilter = THREE.LinearFilter; three.photos.generateMipmaps = false;
+  three.photos.needsUpdate = true;
+  three.rawTex = three.tex.clone(); three.rawTex.colorSpace = THREE.NoColorSpace; three.rawTex.needsUpdate = true;
   three.mesh = new THREE.Mesh(g, material());
   scene.add(three.mesh);
   const r = g.boundingSphere.radius;
@@ -1210,8 +1333,63 @@ function withTexture(mat) {
   mat.customProgramCacheKey = () => 'cyl-photo-texture';
   return mat;
 }
+// View-dependent photos: the two captured photos nearest the viewing angle are projected onto
+// the shape and cross-faded. A photo projected back from its own viewpoint looks right even where
+// the carved shape is wrong (no hollow eye sockets, a flattened nose), which is where a single
+// baked texture smears. Where neither photo sees the surface (top of the head, the far side) the
+// baked texture fills in. Everything stays in sRGB (no colour conversion in this shader).
+function viewMaterial() {
+  const rv = result.renderViews;
+  return new THREE.ShaderMaterial({
+    defines: { NVIEWS: rv.length },
+    uniforms: {
+      uPhotos: { value: three.photos }, uTex: { value: three.rawTex },
+      uYRange: { value: new THREE.Vector2(result.tex.yMin, result.tex.yMax) },
+      uCrop: { value: new THREE.Vector2(result.cfg.W, result.cfg.H) },
+      uView: { value: rv.map((v) => new THREE.Vector3(v.theta, v.cx, v.top)) },
+      uI0: { value: 0 }, uI1: { value: 0 }, uW: { value: 0 },
+    },
+    vertexShader: `
+      attribute vec3 objPos; attribute vec3 objNrm;
+      varying vec3 vObj; varying vec3 vNrm;
+      void main() { vObj = objPos; vNrm = objNrm; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      precision highp sampler2DArray;
+      uniform sampler2DArray uPhotos; uniform sampler2D uTex;
+      uniform vec2 uYRange, uCrop; uniform vec3 uView[NVIEWS]; uniform int uI0, uI1; uniform float uW;
+      varying vec3 vObj; varying vec3 vNrm;
+      vec4 photo(int i) {
+        vec3 pv = uView[i];
+        float a = radians(pv.x), c = cos(a), s = sin(a);
+        vec2 uv = vec2((pv.y + vObj.x * c + vObj.z * s) / uCrop.x, (pv.z + vObj.y) / uCrop.y);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec4(0.0);
+        float facing = -normalize(vNrm).x * s + normalize(vNrm).z * c;
+        vec4 p = texture(uPhotos, vec3(uv, float(i)));
+        return vec4(p.rgb, p.a * smoothstep(0.05, 0.35, facing));
+      }
+      void main() {
+        vec2 tuv = vec2(atan(vObj.x, vObj.z) / 6.2831853 + 0.5, (vObj.y - uYRange.x) / (uYRange.y - uYRange.x));
+        vec3 base = texture2D(uTex, tuv).rgb;
+        vec4 a = photo(uI0), b = photo(uI1);
+        float wa = a.a * (1.0 - uW), wb = b.a * uW, wr = max(0.0, 1.0 - wa - wb);
+        gl_FragColor = vec4((a.rgb * wa + b.rgb * wb + base * wr) / (wa + wb + wr + 1e-5), 1.0);
+      }`,
+  });
+}
+// Which two photos bracket the viewing angle, and how far between them (eased, so most of the time
+// one photo dominates and there is little ghosting).
+function updateViewUniforms(mat, controls) {
+  const rv = result.renderViews, n = rv.length, want = H.wrap360(-controls.getAzimuthalAngle() * 180 / Math.PI);
+  let i0 = n - 1;
+  for (let k = 0; k < n; k++) if (H.wrap360(rv[k].theta) <= want) i0 = k;
+  const i1 = (i0 + 1) % n, span = H.wrap360(rv[i1].theta - rv[i0].theta) || 1;
+  const f = Math.min(1, Math.max(0, H.wrap360(want - rv[i0].theta) / span));
+  mat.uniforms.uI0.value = i0; mat.uniforms.uI1.value = i1;
+  mat.uniforms.uW.value = f * f * (3 - 2 * f);
+}
 function material() {
   const mode = $('optShade').value;
+  if (mode === 'views') return viewMaterial();
   if (mode === 'tex') return withTexture(new THREE.MeshBasicMaterial({ color: 0xffffff }));
   if (mode === 'texlit') return withTexture(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 }));
   if (mode === 'photo') return new THREE.MeshBasicMaterial({ vertexColors: true });
@@ -1234,6 +1412,7 @@ function renderThree() {
   }
   controls.autoRotate = $('optSpin').checked;
   controls.update();
+  if (three.mesh?.material?.uniforms?.uI0) updateViewUniforms(three.mesh.material, controls);
   renderer.render(scene, camera);
   // The photo taken from (nearly) where the 3D camera is: orbiting the camera by φ is the same as
   // turning the head by -φ.
@@ -1243,9 +1422,9 @@ function renderThree() {
     for (const v of result.views) { const d = Math.abs(H.angDiff(v.theta, want)); if (d < bestD) { bestD = d; best = v; } }
     if (best && best !== lastPhotoKey) {
       lastPhotoKey = best;
-      const pc = $('photo'), { W, H: Hc } = result.cfg;
-      if (pc.width !== W || pc.height !== Hc) { pc.width = W; pc.height = Hc; }
-      pc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(best.rgba), W, Hc), 0, 0);
+      const pc = $('photo'), { w, h, data } = best.img;
+      if (pc.width !== w || pc.height !== h) { pc.width = w; pc.height = h; }
+      pc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(data), w, h), 0, 0);
     }
   }
 }
@@ -1271,10 +1450,10 @@ async function downloadZip() {
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i], id = String(i + 1).padStart(4, '0'), yaw = f.yaw.toFixed(1);
     const turn = Math.min(2, Math.floor(Math.abs(f.yaw) / 360) + 1);
-    const photo = `photos/${id}_yaw${yaw}_turn${turn}.png`, maskName = `masks/${id}_yaw${yaw}_turn${turn}.png`;
+    const photo = `photos/${id}_yaw${yaw}_turn${turn}.jpg`, maskName = `masks/${id}_yaw${yaw}_turn${turn}.png`;
     const m = new Uint8ClampedArray(W * Hc * 4);
     for (let k = 0; k < W * Hc; k++) { const v = f.mask[k] ? 255 : 0; m[4 * k] = m[4 * k + 1] = m[4 * k + 2] = v; m[4 * k + 3] = 255; }
-    files.push({ name: photo, data: await pngBytes(new Uint8ClampedArray(f.rgba), W, Hc) }, { name: maskName, data: await pngBytes(m, W, Hc) });
+    files.push({ name: photo, data: new Uint8Array(await (await f.photo).arrayBuffer()) }, { name: maskName, data: await pngBytes(m, W, Hc) });
     const ref = H.silhouetteRef(f.mask, W, Hc, { mode: result.cfg === MODES.body ? 'body' : 'head', cxHint: f.cxHint ?? null });
     meta.push({ photo, mask: maskName, yawDeg: +f.yaw.toFixed(2), turn, time: +(f.t - frames[0].t).toFixed(3), turnSpeedDegPerSec: +f.speed.toFixed(1),
       axisColumn: ref ? +ref.cx.toFixed(2) : null, crownRow: ref ? ref.top : null });
@@ -1283,6 +1462,7 @@ async function downloadZip() {
   files.push({ name: 'texture.png', data: await pngBytes(new Uint8ClampedArray(result.tex.rgba), result.tex.width, result.tex.height) });
   const info = {
     generator: 'vibe-coding-lab camera-head-scanner', subject: result.cfg.noun, cropWidth: W, cropHeight: Hc, mmPerCropPixel: +result.scale.toFixed(4),
+    photoWidth: result.cfg.pW, photoHeight: result.cfg.pH, note: 'Photos are photoWidth/cropWidth times sharper than the masks; scale crop coordinates by that factor to index them.',
     conventions: 'yawDeg: the person turned counter-clockwise seen from above; 0 = facing the camera, +90 = nose toward image right. A point (X to the person\'s left, Y down from the crown, Z out of the face, crop pixels) appears at column axisColumn + X cos(yaw) + Z sin(yaw), row crownRow + Y. Photos are unmirrored.',
     anchors: result.anchors.map((a) => ({ targetDeg: a.target, correctionDeg: +a.corr.toFixed(2) })),
     views: meta,
@@ -1339,7 +1519,8 @@ function guidance(info) {
   if (phase === 'align') {
     if (!info?.person) say('Step into view', scanMode === 'head' ? 'head and shoulders visible' : 'head to feet visible');
     else if (scanMode === 'body' && !info.fullBody) say('Step back', 'your feet must be in the picture');
-    else if (alignHeld > 0) say('Hold still…', `facing the camera ${Math.round(alignHeld * 100)}%`);
+    else if (scanMode === 'body' && bodyOk && !bodyOk.ok && bodyOk.say) say(...bodyOk.say, true);
+    else if (alignHeld > 0) say('Hold still…', scanMode === 'body' && bodyOk && !bodyOk.armsClear ? 'lift your arms a little away from your body' : `facing the camera ${Math.round(alignHeld * 100)}%`);
     else say('Face the camera', scanMode === 'head' ? 'look straight into the lens' : 'arms slightly out from your sides');
   } else if (phase === 'spin') {
     const U = tracker.U ?? 0, turn = Math.min(2, Math.floor(Math.abs(U) / 360) + 1);
@@ -1350,11 +1531,14 @@ function guidance(info) {
   }
 }
 
+const demoCanvas = document.createElement('canvas');
+
 // ---- Main loop ----
 function frame(now) {
   requestAnimationFrame(frame);
   const t = now / 1000;
   if (tab === 'result') { renderThree(); return; }
+  if (phase === 'build') return;  // leave the main thread to the reconstruction
   fitCanvas(canvas);
   const W = canvas.width, Hh = canvas.height, mirror = $('optMirror').checked;
   ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, Hh);
@@ -1367,18 +1551,20 @@ function frame(now) {
     ctx.restore();
     info = processCamera(t, now);
     const toD = (x, y) => ({ x: mirror ? r.x + r.w - x * r.s : r.x + x * r.s, y: r.y + y * r.s });
-    if (follow && calib) {
-      const box = boxAt(follow), a = toD(box.x, box.y), b = toD(box.x + box.w, box.y + box.h);
+    const preview = !calib && phase === 'align' && follow ? previewBox() : null;
+    if (follow && (calib || preview)) {
+      const box = calib ? boxAt(follow) : preview, a = toD(box.x, box.y), b = toD(box.x + box.w, box.y + box.h);
       ctx.strokeStyle = phase === 'spin' ? 'rgba(124,242,156,0.7)' : 'rgba(255,255,255,0.4)'; ctx.lineWidth = 2 * dpr;
       ctx.setLineDash([8 * dpr, 6 * dpr]); ctx.strokeRect(Math.min(a.x, b.x), a.y, Math.abs(b.x - a.x), b.y - a.y); ctx.setLineDash([]);
     }
   } else if (source === 'demo' && demo) {
     processDemo(t);
     const img = demo.last;
-    cropCtx.putImageData(new ImageData(new Uint8ClampedArray(img.rgba), cfg.W, cfg.H), 0, 0);
-    const k = Math.min(W * 0.7 / cfg.W, Hh * 0.82 / cfg.H), dw = cfg.W * k, dh = cfg.H * k;
+    demoCanvas.width = cfg.pW; demoCanvas.height = cfg.pH;
+    demoCanvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(img.rgba), cfg.pW, cfg.pH), 0, 0);
+    const k = Math.min(W * 0.7 / cfg.pW, Hh * 0.82 / cfg.pH), dw = cfg.pW * k, dh = cfg.pH * k;
     ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(cropCanvas, W / 2 - dw / 2, Hh / 2 - dh / 2 - Hh * 0.03, dw, dh);
+    ctx.drawImage(demoCanvas, W / 2 - dw / 2, Hh / 2 - dh / 2 - Hh * 0.03, dw, dh);
     ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = `${Math.round(12 * dpr)}px system-ui, sans-serif`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     ctx.fillText(`DEMO · a synthetic ${cfg.noun} turning twice (green on its left, purple on its right)`, 14 * dpr, 14 * dpr);
@@ -1398,7 +1584,7 @@ $('btnStop').onclick = finishScan;
 $('btnDemo').onclick = startDemo;
 $('optMode').onchange = () => setScanMode($('optMode').value);
 
-window.__scan = { H, downloadZip, phase: () => phase, frames: () => frames, result: () => result, tracker: () => tracker, startDemo, finishScan, showTab, setScanMode, mode: () => scanMode };
+window.__scan = { H, downloadZip, three: () => three, phase: () => phase, frames: () => frames, result: () => result, tracker: () => tracker, startDemo, finishScan, showTab, setScanMode, mode: () => scanMode };
 
 setScanMode(params.get('mode') === 'body' ? 'body' : 'head');
 if (params.has('demo')) startDemo();

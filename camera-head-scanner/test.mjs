@@ -200,6 +200,31 @@ test('zip writer: stored entries with correct CRCs and directory', () => {
   globalThis.__zipSample = zip;
 });
 
+test('high-resolution photos: sampled in crop coordinates, mask shrinks to match', () => {
+  const lo = H.renderSynthetic(30, S, S, { cx: 50, top: 3 }), hi = H.renderSynthetic(30, 2 * S, 2 * S, { cx: 100, top: 6 });
+  const m = H.downsampleMask(hi.mask, 2 * S, 2 * S, S, S);
+  let diff = 0; for (let i = 0; i < m.length; i++) diff += m[i] !== lo.mask[i];
+  assert.ok(diff < S * 2, 'masks agree except along edges: ' + diff);
+  const sLo = H.photoSampler({ rgba: lo.rgba }, S, S), sHi = H.photoSampler({ img: { data: hi.rgba, w: 2 * S, h: 2 * S } }, S, S);
+  const a = [...sLo(50, 70)], b = [...sHi(50, 70)];
+  assert.ok(a.every((x, k) => Math.abs(x - b[k]) < 12), `same colour at the same crop point ${a} / ${b}`);
+  // Reconstruction and texture use the sharp photo when a view has one.
+  const views = [];
+  for (let k = 0; k < 90; k++) { const th = k * 8, h = H.renderSynthetic(th, 2 * S, 2 * S); views.push({ theta: th, mask: H.downsampleMask(h.mask, 2 * S, 2 * S, S, S), img: { data: h.rgba, w: 2 * S, h: 2 * S } }); }
+  const rec = H.reconstruct(views, { W: S, H: S, N: 48 }), tex = H.bakeTexture(rec, { texW: 128 });
+  assert.ok(rec.colors.some((c) => c > 0.6), 'vertex colours came from the photos');
+  assert.equal(tex.height, Math.round(S * 2.4));
+});
+
+test('render views: one per evenly spaced angle, either turn, sorted', () => {
+  const views = [];
+  for (let k = 0; k < 400; k++) views.push({ theta: k * 1.8 + 0.3 });  // two turns
+  const r = H.selectRenderViews(views, 72);
+  assert.equal(r.length, 72);
+  r.forEach((v, i) => near(H.angDiff(H.wrap360(v.theta), i * 5), 0, 1.0, 'angle ' + i));
+  assert.ok(r.some((v) => v.theta >= 360) && r.some((v) => v.theta < 360), 'both turns used');
+});
+
 // ---------------- Full body ----------------
 const BW = 120, BH = 168;
 const bodyViews = (count, seed = 11) => {
