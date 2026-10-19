@@ -67,6 +67,10 @@ aside h2:first-child { margin-top: 0; }
 .row { display: grid; grid-template-columns: 76px 1fr; align-items: center; gap: 6px 8px; margin-bottom: 7px; }
 .row > span { color: var(--dim); }
 .row select, .row input[type=range] { width: 100%; min-width: 0; }
+.row.knob { grid-template-columns: 76px 1fr 58px; }
+.row.knob output { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); text-align: right; white-space: nowrap; }
+.row.knob.mapped span, .row.knob.mapped output { color: var(--accent); }
+.row.knob input:disabled { opacity: 1; accent-color: var(--accent); }
 .row select { padding: 4px 6px; }
 input[type=range] { accent-color: var(--accent); }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -138,6 +142,17 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
     <div class="row"><span>Square</span><input type="range" id="optSquareLevel" min="0" max="1" step="0.01" value="0.6" title="Square voice level"></div>
     <div class="row"><span>Volume</span><input type="range" id="optVolume" min="0" max="1" step="0.01" value="0.6"></div>
     <div class="row"><span>Glide</span><input type="range" id="optGlide" min="0" max="0.4" step="0.01" value="0.05"></div>
+    <h2>Modulation</h2>
+    <div class="row"><span>Mode</span><select id="optMod"></select></div>
+    <div id="modKnobs"></div>
+    <label class="tog" style="margin-top:2px"><input type="checkbox" id="optHearMod">Hear the modulator too</label>
+    <h2>Filter &amp; reverb</h2>
+    <div id="fxKnobs"></div>
+    <div class="row"><span>Room</span><select id="optRoom">
+      <option value="0.8">Small room</option>
+      <option value="2.2" selected>Hall</option>
+      <option value="4.5">Cave</option>
+    </select></div>
     <h2>Body parameters</h2>
     <div id="meters"></div>
     <p class="note">Two voices: the <b style="color:var(--left)">left arm</b> plays a sawtooth, the <b style="color:var(--right)">right arm</b> a square wave. Shoulder angle sets the pitch: 0° hanging down, 90° in a T-pose (the base note), 180° straight up. The elbow sets the duty cycle from 0% (fully bent) to 100% (straight). Saw: 0% is a falling ramp, 50% a triangle, 100% a rising ramp. Square: 50% is a true square; toward 0% and 100% the pulse gets thin and quiet.</p>
@@ -197,12 +212,18 @@ const PoseSynth = (() => {
     // Signed torso lean in the image (assumes a level camera); positive = toward image right.
     const s2 = mid(lm2[11], lm2[12]), h2 = mid(lm2[23], lm2[24]);
     const lean = Math.atan2((s2.x - h2.x) * aspect, h2.y - s2.y) * DEG;
+    // Head tilt: ear line against the shoulder line in the image, signed, in degrees.
+    const lineAngle = (a, b) => Math.atan2(lm2[a].y - lm2[b].y, (lm2[a].x - lm2[b].x) * aspect) * DEG;
+    let headTilt = lineAngle(7, 8) - lineAngle(11, 12);
+    headTilt = ((headTilt + 540) % 360) - 180;
     return {
       T,
       left: arm(11, 13, 15),
       right: arm(12, 14, 16),
       handGap: dist(W[15], W[16]) / T,
       lean,
+      headTilt,
+      headVis: allVis(lm2, [7, 8]),
       hipsVis: allVis(lm2, [23, 24]),
     };
   }
@@ -219,6 +240,7 @@ const PoseSynth = (() => {
     rightElbow: { label: 'Right elbow', unit: '°', min: 40, max: 170, get: (m) => (m.right.handVis ? m.right.elbow : null) },
     handGap: { label: 'Hand distance', unit: '', min: 0, max: 3, get: (m) => (m.left.handVis && m.right.handVis ? m.handGap : null) },
     lean: { label: 'Torso lean', unit: '°', min: -40, max: 40, get: (m) => (m.hipsVis ? m.lean : null) },
+    headTilt: { label: 'Head tilt', unit: '°', min: -30, max: 30, get: (m) => (m.headVis ? m.headTilt : null) },
   };
   const unit01 = (key, v) => { const s = SOURCES[key]; return clamp((v - s.min) / (s.max - s.min), 0, 1); };
 
@@ -233,21 +255,68 @@ const PoseSynth = (() => {
     { key: 'sawDuty', label: 'Saw duty', side: 'L' },
     { key: 'squarePitch', label: 'Sq. pitch', side: 'R' },
     { key: 'squareDuty', label: 'Sq. duty', side: 'R' },
+    { key: 'modDepth', label: 'Mod depth' },
+    { key: 'cutoff', label: 'Cutoff' },
+    { key: 'resonance', label: 'Resonance' },
+    { key: 'reverb', label: 'Reverb' },
     { key: 'volume', label: 'Volume' },
-    { key: 'cutoff', label: 'Filter' },
     { key: 'vibrato', label: 'Vibrato' },
   ];
-  const IDLE = { volume: 'none', cutoff: 'none', vibrato: 'none' };
+  // Targets with a slider: the slider sets the value unless a body part is mapped to it.
+  // u is 0..1 on the slider; value(u) is the synth value.
+  const KNOBS = {
+    modDepth: { label: 'Depth', u: 0.5, value: (u) => u, fmt: (v) => Math.round(v * 100) + '%' },
+    cutoff: { label: 'Cutoff', u: 0.668, value: (u) => 120 * Math.pow(12000 / 120, u),
+      fmt: (v) => (v >= 1000 ? (v / 1000).toFixed(1) + ' kHz' : Math.round(v) + ' Hz') },
+    resonance: { label: 'Resonance', u: 0.3, value: (u) => 0.7 * Math.pow(24 / 0.7, u), fmt: (v) => 'Q ' + v.toFixed(1) },
+    reverb: { label: 'Reverb', u: 0.25, value: (u) => u, fmt: (v) => Math.round(v * 100) + '%' },
+  };
+  const ARMS = { sawPitch: 'leftShoulder', sawDuty: 'leftElbow', squarePitch: 'rightShoulder', squareDuty: 'rightElbow' };
+  const IDLE = { modDepth: 'none', cutoff: 'none', resonance: 'none', reverb: 'none', volume: 'none', vibrato: 'none' };
+  // A preset sets the whole mapping and, optionally, the modulation mode.
   const PRESETS = [
-    { name: 'Saw left, square right', hint: 'shoulders pitch, elbows duty cycle',
-      map: { sawPitch: 'leftShoulder', sawDuty: 'leftElbow', squarePitch: 'rightShoulder', squareDuty: 'rightElbow', ...IDLE } },
-    { name: 'Unison', hint: 'both voices follow the average shoulder angle',
-      map: { sawPitch: 'shoulders', sawDuty: 'leftElbow', squarePitch: 'shoulders', squareDuty: 'rightElbow', ...IDLE } },
+    { name: 'Saw left, square right', hint: 'shoulders pitch, elbows duty cycle, no modulation',
+      mod: 'mix', map: { ...ARMS, ...IDLE } },
+    { name: 'Ring mod', hint: 'saw × square; hand distance sets the depth',
+      mod: 'ring', map: { ...ARMS, ...IDLE, modDepth: 'handGap' } },
+    { name: 'FM growl', hint: 'square bends the saw pitch; head tilt sets the depth',
+      mod: 'fmSaw', map: { ...ARMS, ...IDLE, modDepth: 'headTilt' } },
+    { name: 'Cross FM', hint: 'each voice bends the other; hand distance depth, head tilt reverb',
+      mod: 'crossFm', map: { ...ARMS, ...IDLE, modDepth: 'handGap', reverb: 'headTilt' } },
+    { name: 'Filter dance', hint: 'hand distance opens the filter, torso lean adds resonance',
+      mod: 'mix', map: { ...ARMS, ...IDLE, cutoff: 'handGap', resonance: 'lean' } },
     { name: 'Theremin', hint: 'saw only: right arm pitch, left arm volume',
-      map: { sawPitch: 'rightShoulder', sawDuty: 'none', squarePitch: 'none', squareDuty: 'none', ...IDLE, volume: 'leftShoulder' } },
-    { name: 'Wobble', hint: 'hand distance filter, torso lean vibrato',
-      map: { sawPitch: 'leftShoulder', sawDuty: 'leftElbow', squarePitch: 'rightShoulder', squareDuty: 'rightElbow', volume: 'none', cutoff: 'handGap', vibrato: 'lean' } },
+      mod: 'mix', map: { ...IDLE, sawPitch: 'rightShoulder', sawDuty: 'none', squarePitch: 'none', squareDuty: 'none', volume: 'leftShoulder' } },
   ];
+
+  // ---- Saw <-> square modulation ----
+  // Signal flow per frame (S = saw oscillator, Q = square oscillator, both +-1):
+  //   saw out    = S * (sawBase + sawByQ * Q)      square out = Q * (sqBase + sqByS * S)
+  //   saw freq  += fmToSaw * Q  (Hz)              square freq += fmToSq * S  (Hz)
+  // sawOut / sqOut scale each voice's own output; a pure modulator is muted unless hearMod.
+  const MOD_MODES = [
+    { key: 'mix', label: 'None (mix)' },
+    { key: 'ring', label: 'Ring mod (saw × square)' },
+    { key: 'amSaw', label: 'AM: square → saw volume' },
+    { key: 'amSquare', label: 'AM: saw → square volume' },
+    { key: 'fmSaw', label: 'FM: square → saw pitch' },
+    { key: 'fmSquare', label: 'FM: saw → square pitch' },
+    { key: 'crossFm', label: 'Cross FM (both ways)' },
+  ];
+  const FM_INDEX = 6;  // modulation index at full depth: peak deviation = index x modulator freq
+  function modRouting(mode, depth, fSaw, fSq, hearMod = false) {
+    const d = clamp(depth, 0, 1), mod = hearMod ? 1 : 0;
+    const r = { sawBase: 1, sawByQ: 0, sqBase: 1, sqByS: 0, fmToSaw: 0, fmToSq: 0, sawOut: 1, sqOut: 1 };
+    switch (mode) {
+      case 'ring': Object.assign(r, { sawBase: 1 - d, sawByQ: d, sqOut: mod }); break;
+      case 'amSaw': Object.assign(r, { sawBase: 1 - d / 2, sawByQ: d / 2, sqOut: mod }); break;
+      case 'amSquare': Object.assign(r, { sqBase: 1 - d / 2, sqByS: d / 2, sawOut: mod }); break;
+      case 'fmSaw': Object.assign(r, { fmToSaw: d * FM_INDEX * fSq, sqOut: mod }); break;
+      case 'fmSquare': Object.assign(r, { fmToSq: d * FM_INDEX * fSaw, sawOut: mod }); break;
+      case 'crossFm': Object.assign(r, { fmToSaw: d * FM_INDEX * fSq, fmToSq: d * FM_INDEX * fSaw }); break;
+    }
+    return r;
+  }
 
   // ---- Duty-cycle waveforms ----
   // Saw with duty d: rises over the first d of the cycle and falls over the rest. d = 1 is a plain
@@ -314,9 +383,9 @@ const PoseSynth = (() => {
     sawDuty: (u) => (u === null ? 1 : u),
     squareDuty: (u) => (u === null ? 0.5 : u),
     volume: (u) => (u === null ? 1 : u),
-    cutoff: (u) => (u === null ? 2600 : 120 * Math.pow(12000 / 120, u)),  // Hz, exponential
-    vibrato: (u) => (u === null ? 0 : u * 70),                              // cents
+    vibrato: (u) => (u === null ? 0 : u * 70),  // cents
   };
+  for (const [key, k] of Object.entries(KNOBS)) TARGET_VALUE[key] = (u) => k.value(u === null ? k.u : u);
 
   const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const midiToFreq = (m) => 440 * Math.pow(2, (m - 69) / 12);
@@ -378,7 +447,8 @@ const PoseSynth = (() => {
   }
 
   return {
-    BONES, measure, SOURCES, unit01, VOICES, TARGETS, PRESETS, SCALES, snap, pitchOffset, TARGET_VALUE,
+    BONES, measure, SOURCES, unit01, VOICES, TARGETS, KNOBS, PRESETS, MOD_MODES, modRouting, FM_INDEX,
+    SCALES, snap, pitchOffset, TARGET_VALUE,
     WAVES, fourier, quantDuty, waveCoeffs,
     midiToFreq, noteName, OneEuro, buildPose, armDir, util: { mid, dist },
   };
@@ -387,7 +457,7 @@ if (typeof module !== 'undefined') module.exports = PoseSynth;
 </script>
 
 <script type="module">
-const { BONES, measure, SOURCES, unit01, VOICES, TARGETS, PRESETS, snap, pitchOffset, TARGET_VALUE,
+const { BONES, measure, SOURCES, unit01, VOICES, TARGETS, KNOBS, PRESETS, MOD_MODES, modRouting, snap, pitchOffset, TARGET_VALUE,
   WAVES, quantDuty, waveCoeffs, midiToFreq, noteName, OneEuro, buildPose, armDir } = PoseSynth;
 
 const $ = (id) => document.getElementById(id);
@@ -414,11 +484,38 @@ for (const t of TARGETS) {
 for (const p of PRESETS) {
   const b = document.createElement('button');
   b.textContent = p.name; if (p.hint) b.title = p.hint;
-  b.onclick = () => { Object.assign(mapping, p.map); for (const t of TARGETS) mapSelects[t.key].value = mapping[t.key]; resetNotes(); markUsed(); };
+  b.onclick = () => {
+    Object.assign(mapping, p.map); for (const t of TARGETS) mapSelects[t.key].value = mapping[t.key];
+    if (p.mod) $('optMod').value = p.mod;
+    resetNotes(); markUsed();
+  };
   $('presets').appendChild(b);
 }
 for (let m = 45; m <= 72; m++) $('optBase').add(new Option(`${noteName(m)} · ${midiToFreq(m).toFixed(1)} Hz`, m));
 $('optBase').value = 57;  // A3, 220 Hz
+for (const mm of MOD_MODES) $('optMod').add(new Option(mm.label, mm.key));
+
+// Sliders for the knob targets. A mapped knob follows the body and its slider shows the live value.
+const knobs = {};
+for (const [key, k] of Object.entries(KNOBS)) {
+  const row = document.createElement('div'); row.className = 'row knob';
+  row.innerHTML = '<span></span><input type="range" min="0" max="1" step="0.001"><output></output>';
+  row.firstChild.textContent = k.label;
+  const input = row.querySelector('input'), out = row.querySelector('output');
+  input.value = k.u;
+  $(key === 'modDepth' ? 'modKnobs' : 'fxKnobs').appendChild(row);
+  knobs[key] = { row, input, out, manual: k.u };
+  input.oninput = () => { knobs[key].manual = +input.value; };
+}
+function showKnobs(state) {
+  for (const [key, kn] of Object.entries(knobs)) {
+    const mapped = mapping[key] !== 'none';
+    kn.row.classList.toggle('mapped', mapped);
+    kn.input.disabled = mapped;
+    if (mapped) kn.input.value = state.knobU[key];
+    kn.out.textContent = KNOBS[key].fmt(state[key]);
+  }
+}
 
 const meters = {};
 for (const [key, s] of Object.entries(SOURCES)) {
@@ -434,8 +531,14 @@ function markUsed() {
 }
 markUsed();
 
-// ---- Audio: saw voice + square voice -> lowpass -> master ----
-// Each voice is one oscillator playing a PeriodicWave built for its current duty cycle.
+// ---- Audio ----
+//   saw osc ──► sawVca ──► sawAmp ─┐                       ┌─► dry ───────────────┐
+//   sq  osc ──► sqVca  ──► sqAmp  ─┴─► mix ─► lowpass ─────┤                       ├─► master ─► comp ─► out
+//   sq  osc ──► sawByQ ──► sawVca.gain (AM / ring)         └─► send ─► convolver ──┘
+//   saw osc ──► sqByS  ──► sqVca.gain
+//   saw osc ──► fmToSq ──► sq.frequency          sq osc ──► fmToSaw ──► delay ──► saw.frequency
+// The delay (one render quantum) is what Web Audio needs to allow the cross-FM feedback loop.
+// Each oscillator plays a PeriodicWave built for its current duty cycle.
 let audio = null, soundOn = false;
 function periodicWave(shape, d) {
   const key = shape + ':' + d;
@@ -447,28 +550,53 @@ function periodicWave(shape, d) {
   }
   return w;
 }
+// Stereo impulse response: decorrelated noise under an exponential decay.
+function impulseResponse(ac, seconds) {
+  const n = Math.round(ac.sampleRate * seconds), buf = ac.createBuffer(2, n, ac.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    let seed = 12345 + ch * 777;
+    for (let i = 0; i < n; i++) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      const t = i / n;
+      d[i] = (seed / 4294967296 * 2 - 1) * Math.pow(1 - t, 2.2) * (i < 80 ? i / 80 : 1);
+    }
+  }
+  return buf;
+}
 function buildAudio() {
   const ac = new (window.AudioContext || window.webkitAudioContext)();
-  const mix = ac.createGain();
-  const filter = ac.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 2600; filter.Q.value = 3;
-  const master = ac.createGain(); master.gain.value = +$('optVolume').value;
+  const gain = (v) => { const g = ac.createGain(); g.gain.value = v; return g; };
+  const mix = gain(1);
+  const filter = ac.createBiquadFilter(); filter.type = 'lowpass';
+  const dry = gain(1), send = gain(0), convolver = ac.createConvolver();
+  convolver.buffer = impulseResponse(ac, +$('optRoom').value);
+  const master = gain(+$('optVolume').value);
   const comp = ac.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 6;
   const analyser = ac.createAnalyser(); analyser.fftSize = 2048;
-  const lfo = ac.createOscillator(), lfoGain = ac.createGain();
-  lfo.frequency.value = 5.6; lfoGain.gain.value = 0;
+  const lfo = ac.createOscillator(), lfoGain = gain(0);
+  lfo.frequency.value = 5.6;
   lfo.connect(lfoGain);
-  mix.connect(filter); filter.connect(master); master.connect(comp); comp.connect(analyser); analyser.connect(ac.destination);
-  audio = { ac, voices: {}, filter, master, analyser, lfoGain, waves: new Map(), buf: new Float32Array(analyser.fftSize) };
+  mix.connect(filter);
+  filter.connect(dry); dry.connect(master);
+  filter.connect(send); send.connect(convolver); convolver.connect(master);
+  master.connect(comp); comp.connect(analyser); analyser.connect(ac.destination);
+  audio = { ac, voices: {}, filter, dry, send, convolver, master, analyser, lfoGain, waves: new Map(), buf: new Float32Array(analyser.fftSize) };
   for (const v of VOICES) {
-    const osc = ac.createOscillator(), amp = ac.createGain();
-    amp.gain.value = 0;
+    const osc = ac.createOscillator(), vca = gain(1), amp = gain(0);
     osc.frequency.value = midiToFreq(+$('optBase').value);
     const duty = quantDuty(TARGET_VALUE[v.key + 'Duty'](null));
     osc.setPeriodicWave(periodicWave(v.key, duty));
-    lfoGain.connect(osc.detune); osc.connect(amp); amp.connect(mix);
+    lfoGain.connect(osc.detune); osc.connect(vca); vca.connect(amp); amp.connect(mix);
     osc.start();
-    audio.voices[v.key] = { osc, amp, duty };
+    audio.voices[v.key] = { osc, vca, amp, duty };
   }
+  const S = audio.voices.saw, Q = audio.voices.square;
+  audio.sawByQ = gain(0); Q.osc.connect(audio.sawByQ); audio.sawByQ.connect(S.vca.gain);
+  audio.sqByS = gain(0); S.osc.connect(audio.sqByS); audio.sqByS.connect(Q.vca.gain);
+  audio.fmToSq = gain(0); S.osc.connect(audio.fmToSq); audio.fmToSq.connect(Q.osc.frequency);
+  audio.fmToSaw = gain(0); audio.fmDelay = ac.createDelay(0.01); audio.fmDelay.delayTime.value = 0;
+  Q.osc.connect(audio.fmToSaw); audio.fmToSaw.connect(audio.fmDelay); audio.fmDelay.connect(S.osc.frequency);
   lfo.start();
   return audio;
 }
@@ -485,6 +613,7 @@ async function setSound(on) {
 }
 $('btnSound').onclick = () => setSound(!soundOn);
 $('optVolume').oninput = () => { if (audio) audio.master.gain.setTargetAtTime(+$('optVolume').value, audio.ac.currentTime, 0.02); };
+$('optRoom').onchange = () => { if (audio) audio.convolver.buffer = impulseResponse(audio.ac, +$('optRoom').value); };
 for (const id of ['optBase', 'optRange', 'optScale']) $(id).onchange = () => resetNotes();
 window.addEventListener('keydown', (e) => { if (e.key === 'm' || e.key === 'M') { if (!e.repeat && !e.metaKey && !e.ctrlKey) setSound(!soundOn); } });
 
@@ -492,16 +621,26 @@ const LEVEL = { saw: 'optSawLevel', square: 'optSquareLevel' };
 // Push one frame of synth state into the audio graph.
 function drive(state) {
   if (!audio) return;
-  const t = audio.ac.currentTime, glide = Math.max(0.005, +$('optGlide').value / 3);
+  const t = audio.ac.currentTime, glide = Math.max(0.005, +$('optGlide').value / 3), k = 0.03;
+  const r = state.routing, out = { saw: r.sawOut, square: r.sqOut };
   for (const v of VOICES) {
     const vs = state.voices[v.key], node = audio.voices[v.key];
     const on = soundOn && vs.gate;
-    node.amp.gain.setTargetAtTime(on ? 0.32 * +$(LEVEL[v.key]).value * state.volume : 0, t, on ? 0.04 : 0.08);
+    node.amp.gain.setTargetAtTime(on ? 0.32 * +$(LEVEL[v.key]).value * state.volume * out[v.key] : 0, t, on ? 0.04 : 0.08);
     if (vs.gate) node.osc.frequency.setTargetAtTime(vs.freq, t, glide);
     const d = quantDuty(vs.duty);
     if (d !== node.duty) { node.osc.setPeriodicWave(periodicWave(v.key, d)); node.duty = d; }
   }
+  audio.voices.saw.vca.gain.setTargetAtTime(r.sawBase, t, k);
+  audio.voices.square.vca.gain.setTargetAtTime(r.sqBase, t, k);
+  audio.sawByQ.gain.setTargetAtTime(r.sawByQ, t, k);
+  audio.sqByS.gain.setTargetAtTime(r.sqByS, t, k);
+  audio.fmToSaw.gain.setTargetAtTime(r.fmToSaw, t, k);
+  audio.fmToSq.gain.setTargetAtTime(r.fmToSq, t, k);
   audio.filter.frequency.setTargetAtTime(state.cutoff, t, 0.04);
+  audio.filter.Q.setTargetAtTime(state.resonance, t, 0.04);
+  audio.send.gain.setTargetAtTime(state.reverb, t, 0.05);
+  audio.dry.gain.setTargetAtTime(1 - 0.45 * state.reverb, t, 0.05);
   audio.lfoGain.gain.setTargetAtTime(state.vibrato, t, 0.08);
 }
 
@@ -530,10 +669,16 @@ function synthState(m, tSec) {
     const midi = base + offset;
     voices[v.key] = { gate, midi, freq: midiToFreq(midi), duty: TARGET_VALUE[v.key + 'Duty'](src(v.key + 'Duty')) };
   }
+  // Knobs: the body when mapped and visible, otherwise the slider.
+  const knobU = {}, knobVal = {};
+  for (const key of Object.keys(KNOBS)) {
+    knobU[key] = src(key) ?? knobs[key].manual;
+    knobVal[key] = TARGET_VALUE[key](knobU[key]);
+  }
+  const routing = modRouting($('optMod').value, knobVal.modDepth, voices.saw.freq, voices.square.freq, $('optHearMod').checked);
   return {
-    raw, u, voices, gate: VOICES.some((v) => voices[v.key].gate),
+    raw, u, voices, gate: VOICES.some((v) => voices[v.key].gate), routing, knobU, ...knobVal,
     volume: TARGET_VALUE.volume(src('volume')),
-    cutoff: TARGET_VALUE.cutoff(src('cutoff')),
     vibrato: TARGET_VALUE.vibrato(src('vibrato')),
     base, range,
   };
@@ -853,6 +998,7 @@ function frame(now) {
   drawLadder(state);
   drawScope();
   showMeters(state);
+  showKnobs(state);
   if (!msg && !state.gate) msg = m ? 'Show your arms' : 'No person in view';
   setBig(state, msg);
 }

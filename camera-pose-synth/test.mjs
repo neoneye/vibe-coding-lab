@@ -82,11 +82,16 @@ test('note names and frequencies', () => {
 test('target values: idle when unmapped, span when mapped', () => {
   assert.equal(S.TARGET_VALUE.volume(null), 1); assert.equal(S.TARGET_VALUE.volume(0.25), 0.25);
   near(S.TARGET_VALUE.cutoff(0), 120, 1e-9); near(S.TARGET_VALUE.cutoff(1), 12000, 1e-6);
+  near(S.TARGET_VALUE.cutoff(null), 2600, 30, 'cutoff slider default');
+  near(S.TARGET_VALUE.resonance(0), 0.7, 1e-9); near(S.TARGET_VALUE.resonance(1), 24, 1e-9);
+  assert.equal(S.TARGET_VALUE.reverb(0.4), 0.4); assert.equal(S.TARGET_VALUE.modDepth(null), 0.5);
+  for (const key of Object.keys(S.KNOBS)) assert.ok(S.TARGETS.some((t) => t.key === key), 'knob is mappable: ' + key);
   assert.equal(S.TARGET_VALUE.vibrato(null), 0);
   for (const p of S.PRESETS) for (const t of S.TARGETS) {
     const src = p.map[t.key];
     assert.ok(src === 'none' || S.SOURCES[src], `${p.name}: ${t.key} -> ${src}`);
   }
+  for (const p of S.PRESETS) assert.ok(!p.mod || S.MOD_MODES.some((m) => m.key === p.mod), p.name + ' mod mode');
 });
 
 test('One Euro filter: holds still input, follows a step', () => {
@@ -159,6 +164,60 @@ test('Fourier coefficients reproduce the waves (PeriodicWave input)', () => {
     near(v, S.WAVES.saw(p, 0.7), 0.01, 'p=' + p);
   }
   assert.equal(S.quantDuty(0.123), 0.12); assert.equal(S.quantDuty(1.3), 1);
+});
+
+test('modulation routing per mode', () => {
+  const fs = 220, fq = 330;
+  const mix = S.modRouting('mix', 1, fs, fq);
+  assert.deepEqual(mix, { sawBase: 1, sawByQ: 0, sqBase: 1, sqByS: 0, fmToSaw: 0, fmToSq: 0, sawOut: 1, sqOut: 1 });
+  // Depth 0 is the plain mix for every mode (apart from which voice is heard).
+  for (const { key } of S.MOD_MODES) {
+    const r = S.modRouting(key, 0, fs, fq, true);
+    assert.equal(r.sawByQ + r.sqByS + r.fmToSaw + r.fmToSq, 0, key);
+    assert.equal(r.sawBase, 1, key); assert.equal(r.sqBase, 1, key);
+  }
+  // Ring at full depth: saw out = S * Q exactly; the square itself is muted unless heard.
+  const ring = S.modRouting('ring', 1, fs, fq);
+  assert.equal(ring.sawBase, 0); assert.equal(ring.sawByQ, 1); assert.equal(ring.sqOut, 0);
+  assert.equal(S.modRouting('ring', 1, fs, fq, true).sqOut, 1);
+  // AM at full depth swings the carrier gain between 0 and 1.
+  const am = S.modRouting('amSaw', 1, fs, fq);
+  near(am.sawBase - am.sawByQ, 0, 1e-12); near(am.sawBase + am.sawByQ, 1, 1e-12);
+  const am2 = S.modRouting('amSquare', 0.5, fs, fq);
+  near(am2.sqBase, 0.75, 1e-12); near(am2.sqByS, 0.25, 1e-12); assert.equal(am2.sawOut, 0);
+  // FM deviation = depth x index x modulator frequency.
+  near(S.modRouting('fmSaw', 0.5, fs, fq).fmToSaw, 0.5 * S.FM_INDEX * fq, 1e-9);
+  near(S.modRouting('fmSquare', 1, fs, fq).fmToSq, S.FM_INDEX * fs, 1e-9);
+  const x = S.modRouting('crossFm', 1, fs, fq);
+  assert.ok(x.fmToSaw > 0 && x.fmToSq > 0 && x.sawOut === 1 && x.sqOut === 1);
+  near(S.modRouting('ring', 2, fs, fq).sawByQ, 1, 1e-12, 'depth clamped');
+});
+
+test('ring modulation of the two waves is their product (signal check)', () => {
+  // Simulate the VCA equation over one second at 8 kHz and compare with S*Q.
+  const r = S.modRouting('ring', 1, 220, 330);
+  let err = 0;
+  for (let i = 0; i < 8000; i++) {
+    const t = i / 8000, sv = S.WAVES.saw((t * 220) % 1, 1), qv = S.WAVES.square((t * 330) % 1, 0.5);
+    err = Math.max(err, Math.abs(sv * (r.sawBase + r.sawByQ * qv) - sv * qv));
+  }
+  near(err, 0, 1e-12);
+});
+
+test('head tilt reads the ear line against the shoulders', () => {
+  const p = S.buildPose({});
+  near(S.measure(p.lm2, p.lm3).headTilt, 0, 1e-9, 'level');
+  // Rotate the ears by 20 degrees around their midpoint in the image.
+  const tilt = (deg) => {
+    const q = S.buildPose({}), c = { x: (q.lm2[7].x + q.lm2[8].x) / 2, y: (q.lm2[7].y + q.lm2[8].y) / 2 }, r = deg * Math.PI / 180;
+    for (const i of [7, 8]) {
+      const dx = q.lm2[i].x - c.x, dy = q.lm2[i].y - c.y;
+      q.lm2[i] = { ...q.lm2[i], x: c.x + dx * Math.cos(r) - dy * Math.sin(r), y: c.y + dx * Math.sin(r) + dy * Math.cos(r) };
+    }
+    return S.measure(q.lm2, q.lm3);
+  };
+  near(tilt(20).headTilt, 20, 1e-6); near(tilt(-15).headTilt, -15, 1e-6);
+  near(S.unit01('headTilt', tilt(-30).headTilt), 0, 1e-6); near(S.unit01('headTilt', tilt(30).headTilt), 1, 1e-6);
 });
 
 console.log(`${n} tests passed`);
