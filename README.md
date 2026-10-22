@@ -119,6 +119,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [3d-game-basement](3d-game-basement/) -- see highlights.
 - [3d-geo-guess](3d-geo-guess/) -- country-guessing on a draggable orthographic globe built from embedded polygon data, projected by hand on a canvas.
 - [3d-meta-balls](3d-meta-balls/) -- metaballs raymarched from signed distance fields with transparency, bump, gloss and subsurface controls. WebGL.
+- [3d-mosquito-simulator](3d-mosquito-simulator/) -- a female mosquito hunts a sleeping person through a chain of checks (CO₂ plume, sight, skin odour, warmth, landing taste, disturbance, probing), with live KPI bars showing what makes her abandon a spot. Auto and Fly modes, a "Your night" scenario, female vs male comparison, what happens during and after a bite, do's and don'ts, and why some people get bitten more (blood type: weak evidence). Three.js.
 - [3d-shadows](3d-shadows/) -- a spotlight with soft shadows; adjust position, cone, penumbra and intensity. Three.js.
 - [3d-spinor-belt-trick](3d-spinor-belt-trick/) -- see highlights.
 - [3d-stair-dismount](3d-stair-dismount/) -- see highlights.
