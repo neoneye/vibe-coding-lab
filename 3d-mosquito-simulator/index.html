@@ -20,7 +20,9 @@
 // +0.02/s within 0.3 m of the head, decay 0.01/s, stirring >0.3, halfAwake >0.6 (swat, hit p 0.5 within
 // 0.25 m), awake >0.85; turning over at restless/20 min; vessel found at vascular×0.25 per s, probe gives
 // up after 10 s; 120 s to fill; interrupted <0.9 rests 30–150 min; full digests 48 h; itch 10–25 min after a
-// bite adds 0.5+0.3×sensitivity; the awake sleeper creams the newest bite and sleeps again after 3 min.
+// bite adds 0.6+0.6×sensitivity (controller ruling; the plan had 0.5+0.3×sensitivity, which could never
+// reach 'awake'), so a forearm bite wakes the sleeper fully: they cream the newest bite and sleep again
+// after 3 min.
 //
 // Tuned / chosen here (the brief leaves these open):
 //   EXHALE_FRAC 0.4       first 40 % of each breath cycle is the exhale (gust + one puff at its start)
@@ -35,8 +37,9 @@
 //                         non-zero avoid on the bitten arm is what tips her to the other one later.
 //   Sensitivity           nose 1.0, forehead 0.9, neck 0.7, hands 0.5, forearms 0.45, feet 0.4
 //   Vascular              face 0.8, neck 0.7, forearms 0.6, hands/feet 0.5
-//   TWITCH_K 8e-4         (deviation, an addition) irritation twitch: while she stands, probes or drinks,
-//                         the limb twitches at hazard TWITCH_K × sensitivity × seconds-on-skin per second.
+//   TWITCH_K 8e-4         DEVIATION from the plan (an added mechanism, accepted by the controller):
+//                         irritation twitch. While she stands, probes or drinks, the limb twitches at
+//                         hazard TWITCH_K × sensitivity × seconds-on-skin per second.
 //                         Twitches are in the spec's safety KPI ("host movement … twitches"); without
 //                         them a 120 s meal is almost never interrupted (turning over alone ≈5 %), so
 //                         the owner's "partial meal, second bite later" could not emerge.
@@ -48,9 +51,6 @@
 //   Wander                after a rest she patrols waypoints for up to 2 min, then perches again
 //   Arousal hysteresis    a state drops back only 0.05 below its entry threshold; awake latches 3 min
 //   Swat miss             while she drinks it ends the meal (interrupted/full); otherwise she flees, avoid +1
-//
-// Known limitation: with the pinned itch (0.5 + 0.3×sensitivity ≤ 0.8) and decay, a bite's itch only
-// half-wakes the sleeper, so 'awake' (and the cream) rarely or never emerges under default parameters.
 const MosquitoSim = (() => {
   'use strict';
 
@@ -73,6 +73,7 @@ const MosquitoSim = (() => {
   const TASTE_TIME = 2, PROBE_TIME = 10, FEED_TIME = 120, FULL_AT = 0.9;
   const AVOID_HALF_LIFE = 600;
   const TWITCH_K = 8e-4;
+  const ITCH_BASE = 0.6, ITCH_SENS = 0.6;
   const BOUT_MAX = 14, SCORE_MIN = 0.15;
   const WANDER_MAX = 120;
   const AWAKE_HOLD = 180, SWAT_RANGE = 0.25, WHINE_RANGE = 0.3, SWAT_EVERY = 8;
@@ -394,7 +395,7 @@ const MosquitoSim = (() => {
       if (b.itched || b.itchAt === undefined || w.t < b.itchAt) continue;
       b.itched = true;
       const sp = spotById(w, b.spotId);
-      addArousal(w, 0.5 + 0.3 * sp.sensitivity);
+      addArousal(w, ITCH_BASE + ITCH_SENS * sp.sensitivity);
       H.moveTimer[sp.limb] = Math.max(H.moveTimer[sp.limb], 2); // scratching
     }
     if (H.state !== 'awake' && w.rng() < P.restless / (20 * MIN) * dt) {
@@ -996,6 +997,20 @@ MosquitoSim.Tests = {
         `bites=${w.bites.map((b) => b.spotId).join(',')}`);
     }
     assert(ok >= 8, `${ok}/10 seeds have the shape; ${fails.join('; ')}`);
+  });
+
+  T.add('your night has cream', () => {
+    let ok = 0;
+    const fails = [];
+    for (let seed = 1; seed <= 10; seed++) {
+      const w = S.createWorld(S.defaultParams(), seed);
+      runUntil(w, 8 * 3600);
+      const bitten = new Set(w.bites.map((b) => b.spotId));
+      const creams = w.events.filter((e) => e.type === 'cream' && bitten.has(e.spotId));
+      if (creams.length >= 1) ok++;
+      else fails.push(`seed ${seed}: bites=${[...bitten].join(',')} creams=${creams.length}`);
+    }
+    assert(ok >= 8, `${ok}/10 seeds cream a bite; ${fails.join('; ')}`);
   });
 })();
 </script>
