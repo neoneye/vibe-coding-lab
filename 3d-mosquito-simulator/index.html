@@ -172,7 +172,7 @@ const MosquitoSim = (() => {
       probes: 0, fill: 0, restUntil: rand(w, 2 * MIN, 12 * MIN), kpis: null, thought: 'Resting on the wall.',
       perch, perched: true, control: null, stateTime: 0, lastHit: -1e9, plumeRate: 0, bout: 0, lastReject: null,
       waypoint: null, waypointUntil: 0, castDir: 1, castLeg: 0.6, castLegT: 0, approachT: 0, fleeUntil: 0,
-      next: null, skinTime: 0, probeT: 0,
+      next: null, skinTime: 0, probeT: 0, landHeld: false,
     };
   }
 
@@ -686,6 +686,8 @@ const MosquitoSim = (() => {
     if (m.state === 'digesting' || (m.state === 'fleeing' && m.next === 'digest')) { aiStep(w, m, dt, hit); return; }
     const thrust = c.thrust || [0, 0, 0];
     const pushing = Math.hypot(thrust[0], thrust[1], thrust[2]) > 0.01;
+    const landPressed = !!c.land && !m.landHeld; // rising edge: a held key lands once, never re-lands
+    m.landHeld = !!c.land;
     const onSpot = m.state === 'landed' || m.state === 'probing' || m.state === 'feeding';
     if (onSpot) {
       const sp = spotById(w, m.targetSpot);
@@ -713,7 +715,7 @@ const MosquitoSim = (() => {
       }
       return;
     }
-    if (c.land) {
+    if (landPressed) {
       const n = nearestSpot(w, m.pos, false);
       if (n.d <= CONTROL_LAND_RANGE) { land(w, m, n.spot, false); return; }
     }
@@ -728,6 +730,10 @@ const MosquitoSim = (() => {
     setState(w, m, state, 'You are flying.');
   }
 
+  // control = {thrust:[x,y,z] m/s (capped at 1.2) | null, land:boolean, probe:boolean}, or null to hand her back
+  // to the AI. Call it every frame with the current key state. `land` acts on its rising edge (false → true)
+  // and only within 0.15 m of a spot; holding it never re-lands her after a shake-off or take-off. `probe` is
+  // level-triggered: probing continues while it is held. Thrust while on a spot takes her off.
   function setControl(m, control) { m.control = control || null; }
 
   function updateMosquito(w, m, dt) {
@@ -932,6 +938,44 @@ MosquitoSim.Tests = {
     S.step(w2);
     assert(w2.human.state === 'awake', 'arousal 0.95 wakes the sleeper');
     assert(w2.events.some((e) => e.type === 'cream' && e.spotId === 'lForearm'), 'woken sleeper creams the bite');
+  });
+
+  T.add('control mode: fly, land, probe, shake-off, land is an edge', () => {
+    const p = S.defaultParams(); p.person.repellent = 'deet'; // the AI would reject this spot on contact
+    const w = S.createWorld(p, 3);
+    const m = w.mosquitoes[0];
+    const arm = spotOf(w, 'rForearm').pos;
+    // fly there, then press land
+    for (let i = 0; i < 600; i++) {
+      const d = arm.map((v, k) => v - m.pos[k]), l = Math.hypot(...d);
+      if (l < 0.05) break;
+      S.setControl(m, { thrust: d.map((x) => x / l * Math.min(0.8, 4 * l)), land: false, probe: false });
+      S.step(w);
+    }
+    S.setControl(m, { thrust: null, land: true, probe: false });
+    S.step(w);
+    assert(m.state === 'landed' && m.targetSpot === 'rForearm', `landed on the forearm, got ${m.state} ${m.targetSpot}`);
+    const n0 = w.events.length;
+    for (let i = 0; i < 60; i++) { S.setControl(m, { thrust: null, land: true, probe: true }); S.step(w); }
+    const during = w.events.slice(n0);
+    assert(m.state === 'probing', `probing under control, got ${m.state}`);
+    assert(!during.some((e) => e.type === 'reject'), 'no AI reject while she is controlled on a DEET spot');
+    assert(!during.some((e) => e.type === 'bite'), 'no vessel through DEET');
+    assert(gate(w, m, 'contact').pass === false && gate(w, m, 'probing').active, 'gates still evaluate');
+    // a twitch of the arm shakes her off
+    w.human.moveTimer.rArm = 0.6;
+    S.setControl(m, { thrust: null, land: true, probe: true });
+    S.step(w);
+    assert(m.state !== 'landed' && m.state !== 'probing', `shaken off, got ${m.state}`);
+    assert(w.events.at(-1).type === 'reject' && w.events.at(-1).reason === 'safety', 'shake-off logged as safety');
+    // still holding land: no re-landing loop
+    const n1 = w.events.length;
+    for (let i = 0; i < 40; i++) { S.setControl(m, { thrust: null, land: true, probe: true }); S.step(w); }
+    assert(!w.events.slice(n1).some((e) => e.type === 'land'), 'a held land key does not re-land');
+    // releasing and pressing again lands
+    S.setControl(m, { thrust: null, land: false, probe: false }); S.step(w);
+    S.setControl(m, { thrust: null, land: true, probe: false }); S.step(w);
+    assert(w.events.at(-1).type === 'land' && m.state === 'landed', 'a fresh press lands again');
   });
 
   // 2 h with everything turned against her: blanket 1, DEET, fan 1, three mosquitoes.
