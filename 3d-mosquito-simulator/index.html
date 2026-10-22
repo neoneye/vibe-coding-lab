@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mosquito Simulator</title>
+</head>
+<body>
+<script id="shared-code">
+// ============================================================ MosquitoSim: pure simulation core
+// No DOM, no three.js. Units: metres, seconds, °C, ppm. Sim time t = seconds since 23:00.
+// Bed centred near the origin, head at +x, window at -x. All numbers are approximate/illustrative.
+//
+// Values pinned by the design (task brief): puff Q 20 ppm·m³, σ = 0.04 + 0.06·age^0.6, puffs dropped
+// after 90 s; room drift 0.06 m/s toward -x, fan up to +0.3 m/s, buoyant rise 0.02 m/s; odour falloff
+// 1/(1+(d/0.6)²), repellent −0.6/(1+(d/0.25)²); heat (skin−air)·exp(−d/0.15); surge 0.6 m/s, lost after
+// 1 s, give up after plumeTimeout of casting and rest 5–20 min; approach within 2 m when visual ≥ visualMin;
+// land at 3 cm; breath gust 0.6 at nose/forehead on exhale, limb movement 1, arousal×0.5; avoid +1 per
+// safety flee with a 10 min half-life, +2 after maxProbes; face landing arousal +0.25×sensitivity, whine
+// +0.02/s within 0.3 m of the head, decay 0.01/s, stirring >0.3, halfAwake >0.6 (swat, hit p 0.5 within
+// 0.25 m), awake >0.85; turning over at restless/20 min; vessel found at vascular×0.25 per s, probe gives
+// up after 10 s; 120 s to fill; interrupted <0.9 rests 30–150 min; full digests 48 h; itch 10–25 min after a
+// bite adds 0.5+0.3×sensitivity; the awake sleeper creams the newest bite and sleeps again after 3 min.
+//
+// Tuned / chosen here (the brief leaves these open):
+//   EXHALE_FRAC 0.4       first 40 % of each breath cycle is the exhale (gust + one puff at its start)
+//   ROOM_DRIFT_CLOSED     0.03 m/s drift with the window shut (0.06 open, as pinned)
+//   VISUAL 0.8/(1+(d/0.5)²) to the nearest body point, so visualMin 0.1 is reached at ≈1.3 m
+//   PLUME_MIN 0.2         contact-rate threshold shown on the plume bar (EMA of hits, τ = 1 s)
+//   Approach sub-stages   visual > 0.6 m, odour 0.2–0.6 m (odour gate checked), heat < 0.2 m (heat gate)
+//   TASTE_TIME 2 s        she stands and leg-tastes before the first probe; safety is checked throughout
+//   Target score          spot.odour × (skin−air) × (1 − 0.25·avoid); exact ties keep list order
+//   Spot odour weights    nose 1.0, forehead 0.95 (include the breath cue), feet 0.9 (covered),
+//                         forearms 0.75, hands 0.65, neck 0.55. Equal forearms, so a decayed but
+//                         non-zero avoid on the bitten arm is what tips her to the other one later.
+//   Sensitivity           nose 1.0, forehead 0.9, neck 0.7, hands 0.5, forearms 0.45, feet 0.4
+//   Vascular              face 0.8, neck 0.7, forearms 0.6, hands/feet 0.5
+//   TWITCH_K 8e-4         (deviation, an addition) irritation twitch: while she stands, probes or drinks,
+//                         the limb twitches at hazard TWITCH_K × sensitivity × seconds-on-skin per second.
+//                         Twitches are in the spec's safety KPI ("host movement … twitches"); without
+//                         them a 120 s meal is almost never interrupted (turning over alone ≈5 %), so
+//                         the owner's "partial meal, second bite later" could not emerge.
+//   FLEE_SPEED 0.5 m/s    safety flee lasts 1–2 s (≈0.5–1 m), other rejects 0.8 s: she stays within visual
+//                         range and comes straight back to try another spot (a 1.6 m flee lost her every time)
+//   BOUT_MAX 14           rejects in one hunting bout before she gives up and rests (never stuck)
+//   SCORE_MIN 0.15        relative target score below which she gives up (everything avoided/covered)
+//   Swat hit              she is knocked away: respawns on the window sill, rests 10–30 min, avoid +3
+//   Wander                after a rest she patrols waypoints for up to 2 min, then perches again
+//   Arousal hysteresis    a state drops back only 0.05 below its entry threshold; awake latches 3 min
+//   Swat miss             while she drinks it ends the meal (interrupted/full); otherwise she flees, avoid +1
+//
+// Known limitation: with the pinned itch (0.5 + 0.3×sensitivity ≤ 0.8) and decay, a bite's itch only
+// half-wakes the sleeper, so 'awake' (and the cream) rarely or never emerges under default parameters.
+const MosquitoSim = (() => {
+  'use strict';
+
+  // ---------------------------------------------------------- constants
+  const ROOM = { min: [-2.5, 0, -2], max: [2.5, 2.6, 2] };
+  const MARGIN = 0.02;
+  const EXHALE_FRAC = 0.4;
+  const BREATH_GUST = 0.6;
+  const PUFF_Q = 20, PUFF_MAX_AGE = 90, PUFF_RISE = 0.02, RESEED_SECONDS = 30;
+  const ROOM_DRIFT = 0.06, ROOM_DRIFT_CLOSED = 0.03, FAN_MAX = 0.3;
+  const GAUSS_NORM = Math.pow(2 * Math.PI, 1.5);
+  const ODOUR_RANGE2 = 0.6 * 0.6, REPEL_RANGE2 = 0.25 * 0.25, REPEL_STRENGTH = 0.6;
+  const HEAT_RANGE = 0.15;
+  const VISUAL_CONTRAST = 0.8, VISUAL_RANGE2 = 0.5 * 0.5;
+  const PLUME_MIN = 0.2, LOST_AFTER = 1;
+  const SURGE_SPEED = 0.6, CAST_SPEED = 0.4, WANDER_SPEED = 0.3, APPROACH_SPEED = 0.45, FLEE_SPEED = 0.5;
+  const PERCH_SPEED = 0.5, CONTROL_MAX_SPEED = 1.2, STEER_RATE = 5;
+  const APPROACH_RANGE = 2, ODOUR_STAGE = 0.6, HEAT_STAGE = 0.2, LAND_DIST = 0.03, APPROACH_TIMEOUT = 30;
+  const CONTROL_LAND_RANGE = 0.15;
+  const TASTE_TIME = 2, PROBE_TIME = 10, FEED_TIME = 120, FULL_AT = 0.9;
+  const AVOID_HALF_LIFE = 600;
+  const TWITCH_K = 8e-4;
+  const BOUT_MAX = 14, SCORE_MIN = 0.15;
+  const WANDER_MAX = 120;
+  const AWAKE_HOLD = 180, SWAT_RANGE = 0.25, WHINE_RANGE = 0.3, SWAT_EVERY = 8;
+  const HUMAN_STATES = ['asleep', 'stirring', 'halfAwake', 'awake'];
+  const AROUSAL_LEVELS = [0.3, 0.6, 0.85];
+  const HYSTERESIS = 0.05;
+  const MIN = 60, HOUR = 3600;
+
+  // id, label, limb, position, sensitivity, odour weight, vascular
+  const SPOT_TABLE = [
+    ['nose', 'Nose', 'head', [0.95, 0.74, 0], 1.0, 1.0, 0.8],
+    ['forehead', 'Forehead', 'head', [1.06, 0.72, 0], 0.9, 0.95, 0.8],
+    ['neck', 'Neck', 'neck', [0.80, 0.64, 0], 0.7, 0.55, 0.7],
+    ['rForearm', 'Right forearm', 'rArm', [0.30, 0.68, -0.32], 0.45, 0.75, 0.6],
+    ['rHand', 'Right hand', 'rArm', [0.05, 0.67, -0.34], 0.5, 0.65, 0.5],
+    ['lForearm', 'Left forearm', 'lArm', [0.30, 0.68, 0.32], 0.45, 0.75, 0.6],
+    ['lHand', 'Left hand', 'lArm', [0.05, 0.67, 0.34], 0.5, 0.65, 0.5],
+    ['feet', 'Feet', 'feet', [-0.85, 0.66, 0], 0.4, 0.9, 0.5],
+  ];
+  const LIMBS = ['head', 'neck', 'rArm', 'lArm', 'feet'];
+  const PERCHES = [
+    [-2.46, 1.02, -0.45], // window sill (respawn point)
+    [-2.46, 1.02, 0.55],
+    [-1.2, 2.1, -1.96],
+    [0.6, 1.8, 1.96],
+    [1.9, 2.56, 1.3],
+    [-2.0, 0.5, 1.96],
+  ];
+  const SILL = 0;
+  const REPELLENT_NAMES = { deet: 'DEET', picaridin: 'Picaridin' };
+
+  // ---------------------------------------------------------- small helpers
+  const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+  const dist2 = (a, b) => { const x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2]; return x * x + y * y + z * z; };
+  const dist = (a, b) => Math.sqrt(dist2(a, b));
+  const norm = (v) => { const l = Math.hypot(v[0], v[1], v[2]); return l > 1e-9 ? [v[0] / l, v[1] / l, v[2] / l] : [0, 0, 0]; };
+  const rand = (w, a, b) => a + (b - a) * w.rng();
+
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function clockString(t) {
+    const total = Math.floor(((23 * HOUR + t) % (24 * HOUR) + 24 * HOUR) % (24 * HOUR) / MIN);
+    const hh = Math.floor(total / 60), mm = total % 60;
+    return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+  }
+
+  // ---------------------------------------------------------- parameters
+  function defaultParams() {
+    return {
+      person: { breathRate: 14, bodySize: 1, skinTemp: 34, sweat: 0.2, skinAcids: 0.6, beer: false, pregnant: false,
+        bloodType: 'A', bloodTypeEffect: false, repellent: 'none', blanket: 0.6, restless: 0.5 },
+      room: { fan: 0, window: true, airTemp: 22, humidity: 0.5, mosquitoes: 1 },
+      mosq: { co2Activate: 8, plumeTimeout: 20, visualMin: 0.1, odourMin: 0.25, heatMin: 0.5, disturbMax: 0.5,
+        maxProbes: 5 },
+    };
+  }
+  function mergeParams(p) {
+    const d = defaultParams();
+    if (p) for (const k of ['person', 'room', 'mosq']) Object.assign(d[k], p[k] || {});
+    return d;
+  }
+
+  // ---------------------------------------------------------- world
+  function createWorld(params, seed = 1) {
+    const p = mergeParams(params);
+    const w = { t: 0, params: p, rng: mulberry32(seed), human: null, mosquitoes: [], puffs: [], events: [], bites: [] };
+    const moveTimer = {};
+    for (const l of LIMBS) moveTimer[l] = 0;
+    w.human = {
+      spots: SPOT_TABLE.map(([id, label, limb, pos, sensitivity, odour, vascular]) =>
+        ({ id, label, limb, pos: pos.slice(), exposed: true, sensitivity, odour, vascular })),
+      arousal: 0, state: 'asleep', breathPhase: w.rng(), moveTimer, awakeUntil: 0, swatAt: -1e9,
+    };
+    refreshExposure(w);
+    const n = clamp(Math.round(p.room.mosquitoes), 1, 3);
+    for (let i = 0; i < n; i++) w.mosquitoes.push(makeMosquito(w, i));
+    seedBreath(w);
+    return w;
+  }
+
+  function makeMosquito(w, id) {
+    const perch = PERCHES[(id * 2 + Math.floor(w.rng() * 2)) % PERCHES.length].slice();
+    const avoid = {};
+    for (const s of w.human.spots) avoid[s.id] = 0;
+    return {
+      id, pos: perch.slice(), vel: [0, 0, 0], state: 'resting', stage: 'activation', targetSpot: null, avoid,
+      probes: 0, fill: 0, restUntil: rand(w, 2 * MIN, 12 * MIN), kpis: null, thought: 'Resting on the wall.',
+      perch, perched: true, control: null, stateTime: 0, lastHit: -1e9, plumeRate: 0, bout: 0, lastReject: null,
+      waypoint: null, waypointUntil: 0, castDir: 1, castLeg: 0.6, castLegT: 0, approachT: 0, fleeUntil: 0,
+      next: null, skinTime: 0, probeT: 0,
+    };
+  }
+
+  function spotById(w, id) { return w.human.spots.find((s) => s.id === id) || null; }
+  function nose(w) { return w.human.spots[0]; }
+
+  function refreshExposure(w) {
+    const b = w.params.person.blanket;
+    for (const s of w.human.spots) {
+      if (s.id === 'feet') s.exposed = false;
+      else if (s.id === 'neck') s.exposed = !(b > 0.8);
+      else if (s.id === 'rForearm' || s.id === 'lForearm') s.exposed = !(b > 0.95);
+      else s.exposed = true;
+    }
+  }
+
+  // ---------------------------------------------------------- breath and fields
+  function isExhaling(human) { return human.breathPhase < EXHALE_FRAC; }
+  function breathPeriod(w) { return 60 / Math.max(1, w.params.person.breathRate); }
+  function puffQ(w) {
+    const P = w.params.person;
+    return PUFF_Q * P.bodySize * (P.pregnant ? 1.2 : 1) * (P.beer ? 1.1 : 1) * (1 + P.sweat * 0.5) * 14 / Math.max(1, P.breathRate);
+  }
+  function wind(w) {
+    const r = w.params.room;
+    return [-((r.window ? ROOM_DRIFT : ROOM_DRIFT_CLOSED) + FAN_MAX * clamp(r.fan, 0, 1)), 0, 0];
+  }
+  function puffOrigin(w) { const p = nose(w).pos; return [p[0], p[1] + 0.02, p[2]]; }
+  function inside(p) {
+    for (let i = 0; i < 3; i++) if (!(p[i] >= ROOM.min[i] && p[i] <= ROOM.max[i])) return false;
+    return true;
+  }
+
+  // Replace the puffs with the last RESEED_SECONDS of breathing, already drifted.
+  function seedBreath(w) {
+    w.puffs = [];
+    const period = breathPeriod(w), q = puffQ(w), v = wind(w), o = puffOrigin(w);
+    for (let age = w.human.breathPhase * period; age <= RESEED_SECONDS; age += period) {
+      const pos = [o[0] + v[0] * age, o[1] + PUFF_RISE * age, o[2] + v[2] * age];
+      if (inside(pos)) w.puffs.push({ pos, age, q });
+    }
+  }
+
+  function updateBreath(w, dt) {
+    const H = w.human;
+    H.breathPhase += dt / breathPeriod(w);
+    if (H.breathPhase >= 1) {
+      H.breathPhase -= Math.floor(H.breathPhase);
+      w.puffs.push({ pos: puffOrigin(w), age: 0, q: puffQ(w) });
+    }
+    const v = wind(w);
+    const keep = [];
+    for (const pf of w.puffs) {
+      pf.age += dt;
+      pf.pos[0] += v[0] * dt; pf.pos[1] += (v[1] + PUFF_RISE) * dt; pf.pos[2] += v[2] * dt;
+      if (pf.age <= PUFF_MAX_AGE && inside(pf.pos)) keep.push(pf);
+    }
+    w.puffs = keep;
+  }
+
+  function co2At(w, p) {
+    let c = 0;
+    for (const pf of w.puffs) {
+      const s = 0.04 + 0.06 * Math.pow(pf.age, 0.6);
+      c += pf.q / (GAUSS_NORM * s * s * s) * Math.exp(-dist2(p, pf.pos) / (2 * s * s));
+    }
+    return c;
+  }
+  function bloodMult(P) { return P.bloodTypeEffect && P.bloodType === 'O' ? 1.25 : 1; }
+  function odourAt(w, p) {
+    const P = w.params.person;
+    const k = P.skinAcids * (0.5 + P.sweat) * (P.beer ? 1.15 : 1) * bloodMult(P);
+    const repel = P.repellent && P.repellent !== 'none';
+    let s = 0;
+    for (const sp of w.human.spots) {
+      if (!sp.exposed) continue;
+      const d2 = dist2(p, sp.pos);
+      s += sp.odour * k / (1 + d2 / ODOUR_RANGE2);
+      if (repel) s -= REPEL_STRENGTH / (1 + d2 / REPEL_RANGE2);
+    }
+    return Math.max(0, s);
+  }
+  function nearestSpot(w, p, exposedOnly) {
+    let best = null, bd = Infinity;
+    for (const sp of w.human.spots) {
+      if (exposedOnly && !sp.exposed) continue;
+      const d = dist2(p, sp.pos);
+      if (d < bd) { bd = d; best = sp; }
+    }
+    return best ? { spot: best, d: Math.sqrt(bd) } : null;
+  }
+  function heatAt(w, p) {
+    const n = nearestSpot(w, p, true);
+    if (!n) return 0;
+    return Math.max(0, (w.params.person.skinTemp - w.params.room.airTemp) * Math.exp(-n.d / HEAT_RANGE));
+  }
+  function visualAt(w, p) {
+    const n = nearestSpot(w, p, false);
+    return VISUAL_CONTRAST / (1 + n.d * n.d / VISUAL_RANGE2);
+  }
+  function humidityAt(w, p) {
+    const n = nearestSpot(w, p, true);
+    const skin = n ? (0.1 + 0.3 * w.params.person.sweat) * Math.exp(-n.d / 0.2) : 0;
+    return clamp(w.params.room.humidity + skin, 0, 1);
+  }
+
+  function sense(w, pos) {
+    return { co2: co2At(w, pos), odour: odourAt(w, pos), heat: heatAt(w, pos), humidity: humidityAt(w, pos),
+      visual: visualAt(w, pos), wind: wind(w) };
+  }
+
+  // ---------------------------------------------------------- gates
+  function contactCheck(w, sp) {
+    const rep = w.params.person.repellent;
+    if (!sp.exposed) return { pass: false, why: 'covered by blanket (5 mm cloth > 2 mm proboscis)' };
+    if (rep && rep !== 'none') return { pass: false, why: (REPELLENT_NAMES[rep] || rep) + ' on the skin' };
+    return { pass: true, why: 'bare skin' };
+  }
+  function disturbance(w, sp) {
+    const H = w.human;
+    const gust = (sp.id === 'nose' || sp.id === 'forehead') && isExhaling(H) ? BREATH_GUST : 0;
+    const move = H.moveTimer[sp.limb] > 0 ? 1 : 0;
+    return gust + move + H.arousal * 0.5;
+  }
+
+  function gates(w, m) {
+    refreshExposure(w);
+    const mp = w.params.mosq;
+    const s = sense(w, m.pos);
+    const sp = (m.targetSpot && spotById(w, m.targetSpot)) || nearestSpot(w, m.pos, false).spot;
+    const c = contactCheck(w, sp);
+    const dis = disturbance(w, sp);
+    const list = [
+      { id: 'activation', label: 'CO₂ above room air (ppm)', value: s.co2, threshold: mp.co2Activate, pass: s.co2 > mp.co2Activate },
+      { id: 'plume', label: 'Plume contact rate', value: m.plumeRate, threshold: PLUME_MIN, pass: m.plumeRate >= PLUME_MIN },
+      { id: 'visual', label: 'Dark-object contrast', value: s.visual, threshold: mp.visualMin, pass: s.visual >= mp.visualMin },
+      { id: 'odour', label: 'Skin odour', value: s.odour, threshold: mp.odourMin, pass: s.odour >= mp.odourMin },
+      { id: 'heat', label: 'Warmth above air (°C)', value: s.heat, threshold: mp.heatMin, pass: s.heat >= mp.heatMin },
+      { id: 'contact', label: 'Landing surface: ' + sp.label.toLowerCase(), value: c.pass ? 1 : 0, threshold: 0.5,
+        pass: c.pass, why: c.why },
+      { id: 'safety', label: 'Disturbance at ' + sp.label.toLowerCase(), value: dis, threshold: mp.disturbMax,
+        pass: dis <= mp.disturbMax, below: true },
+      { id: 'probing', label: 'Probes used', value: m.probes, threshold: mp.maxProbes, pass: m.probes < mp.maxProbes,
+        below: true },
+    ];
+    for (const g of list) g.active = g.id === m.stage;
+    return list;
+  }
+
+  function stageOf(w, m) {
+    switch (m.state) {
+      case 'tracking': case 'casting': return 'plume';
+      case 'approach': {
+        const sp = m.targetSpot && spotById(w, m.targetSpot);
+        const d = sp ? dist(m.pos, sp.pos) : Infinity;
+        return d > ODOUR_STAGE ? 'visual' : d > HEAT_STAGE ? 'odour' : 'heat';
+      }
+      case 'landed': return 'contact';
+      case 'probing': return 'probing';
+      case 'feeding': case 'fleeing': return 'safety';
+      default: return 'activation';
+    }
+  }
+
+  // ---------------------------------------------------------- events
+  function emit(w, m, type, spotId, reason) {
+    w.events.push({ t: w.t, mosquitoId: m ? m.id : null, type, spotId: spotId || null, reason: reason || '' });
+  }
+
+  function cream(w) {
+    for (let i = w.bites.length - 1; i >= 0; i--) {
+      const b = w.bites[i];
+      if (!b.creamed) { b.creamed = true; emit(w, null, 'cream', b.spotId, 'hydrocortisone'); return b; }
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------- human
+  function addArousal(w, a) { w.human.arousal = clamp(w.human.arousal + a, 0, 1); }
+
+  function isFlying(m) {
+    return !m.perched && m.state !== 'landed' && m.state !== 'probing' && m.state !== 'feeding';
+  }
+
+  function swat(w) {
+    const H = w.human;
+    H.swatAt = w.t;
+    H.moveTimer.head = Math.max(H.moveTimer.head, 1);
+    H.moveTimer.rArm = Math.max(H.moveTimer.rArm, 1);
+    let any = false;
+    for (const m of w.mosquitoes) {
+      if (m.perched || dist(m.pos, nose(w).pos) > SWAT_RANGE) continue;
+      any = true;
+      if (w.rng() < 0.5) {
+        emit(w, m, 'swat', m.targetSpot, 'hit');
+        if (m.targetSpot) m.avoid[m.targetSpot] += 3;
+        m.pos = PERCHES[SILL].slice(); m.vel = [0, 0, 0]; m.perch = PERCHES[SILL].slice(); m.perched = true;
+        m.targetSpot = null; m.bout = 0; m.probes = 0;
+        m.restUntil = w.t + rand(w, 10 * MIN, 30 * MIN);
+        setState(w, m, 'resting', 'Swatted. Recovering on the window sill.');
+      } else {
+        emit(w, m, 'swat', m.targetSpot, 'miss');
+        if (m.state === 'feeding') endMeal(w, m);
+        else {
+          if (m.targetSpot) m.avoid[m.targetSpot] += 1;
+          flee(w, m, 2, 'hunt', 'A hand. Missed me.');
+        }
+      }
+    }
+    if (!any) emit(w, null, 'swat', null, 'miss');
+  }
+
+  function updateHuman(w, dt) {
+    const H = w.human, P = w.params.person;
+    for (const l of LIMBS) H.moveTimer[l] = Math.max(0, H.moveTimer[l] - dt);
+    H.arousal = Math.max(0, H.arousal - 0.01 * dt);
+    const head = nose(w).pos;
+    for (const m of w.mosquitoes) if (isFlying(m) && dist(m.pos, head) < WHINE_RANGE) addArousal(w, 0.02 * dt);
+    for (const b of w.bites) {
+      if (b.itched || b.itchAt === undefined || w.t < b.itchAt) continue;
+      b.itched = true;
+      const sp = spotById(w, b.spotId);
+      addArousal(w, 0.5 + 0.3 * sp.sensitivity);
+      H.moveTimer[sp.limb] = Math.max(H.moveTimer[sp.limb], 2); // scratching
+    }
+    if (H.state !== 'awake' && w.rng() < P.restless / (20 * MIN) * dt) {
+      for (const l of LIMBS) H.moveTimer[l] = Math.max(H.moveTimer[l], 2.5); // turning over
+    }
+    // state from arousal, with hysteresis on the way down and a latched 3 min awake
+    if (H.state === 'awake') {
+      if (w.t >= H.awakeUntil) { H.arousal = 0.2; H.state = 'asleep'; }
+      else { H.arousal = Math.max(H.arousal, AROUSAL_LEVELS[2] + 0.01); }
+    } else {
+      const level = (a) => (a > AROUSAL_LEVELS[2] ? 3 : a > AROUSAL_LEVELS[1] ? 2 : a > AROUSAL_LEVELS[0] ? 1 : 0);
+      const cur = HUMAN_STATES.indexOf(H.state), up = level(H.arousal);
+      if (up > cur) {
+        H.state = HUMAN_STATES[up];
+        emit(w, null, 'wake', null, H.state);
+        if (up === 1) H.moveTimer.head = Math.max(H.moveTimer.head, 1.5); // head turn
+        if (up >= 2) swat(w);
+        if (up === 3) { H.awakeUntil = w.t + AWAKE_HOLD; cream(w); }
+      } else if (up < cur) {
+        const down = level(H.arousal + HYSTERESIS);
+        if (down < cur) H.state = HUMAN_STATES[down];
+      }
+    }
+    if ((H.state === 'halfAwake' || H.state === 'awake') && w.t - H.swatAt >= SWAT_EVERY &&
+        w.mosquitoes.some((m) => isFlying(m) && dist(m.pos, head) < WHINE_RANGE)) swat(w);
+  }
+
+  // ---------------------------------------------------------- mosquito behaviour
+  function setState(w, m, state, thought) {
+    if (m.state !== state) m.stateTime = 0;
+    m.state = state;
+    if (thought) m.thought = thought;
+  }
+
+  function steer(m, desired, dt, rate = STEER_RATE) {
+    const a = Math.min(1, dt * rate);
+    for (let i = 0; i < 3; i++) m.vel[i] += (desired[i] - m.vel[i]) * a;
+  }
+  function move(m, dt) {
+    for (let i = 0; i < 3; i++) {
+      m.pos[i] += m.vel[i] * dt;
+      const lo = ROOM.min[i] + MARGIN, hi = ROOM.max[i] - MARGIN;
+      if (m.pos[i] < lo) { m.pos[i] = lo; m.vel[i] = Math.max(0, m.vel[i]); }
+      if (m.pos[i] > hi) { m.pos[i] = hi; m.vel[i] = Math.min(0, m.vel[i]); }
+    }
+  }
+  function jitter(w, a) { return [rand(w, -a, a), rand(w, -a, a), rand(w, -a, a)]; }
+
+  function pickPerch(w) { return PERCHES[Math.floor(w.rng() * PERCHES.length)].slice(); }
+
+  function rest(w, m, seconds, thought) {
+    m.restUntil = w.t + seconds;
+    m.perch = pickPerch(w);
+    m.targetSpot = null; m.bout = 0; m.probes = 0;
+    setState(w, m, 'resting', thought);
+  }
+  function giveUp(w, m, reason) {
+    emit(w, m, 'giveUp', m.targetSpot, reason);
+    rest(w, m, rand(w, 5 * MIN, 20 * MIN), 'Not worth it. Resting a while.');
+  }
+  function flee(w, m, seconds, next, thought) {
+    m.perched = false;
+    m.fleeUntil = w.t + seconds;
+    m.next = next;
+    setState(w, m, 'fleeing', thought);
+  }
+
+  function targetScore(w, m, sp) {
+    const P = w.params.person;
+    if (!sp.exposed) return 0;
+    return sp.odour * Math.max(0, P.skinTemp - w.params.room.airTemp) * Math.max(0, 1 - 0.25 * (m.avoid[sp.id] || 0));
+  }
+  function pickTarget(w, m) {
+    const P = w.params.person;
+    const heat = Math.max(0, P.skinTemp - w.params.room.airTemp);
+    let best = null, bs = SCORE_MIN * heat;
+    for (const sp of w.human.spots) {
+      const s = targetScore(w, m, sp);
+      if (s > bs) { bs = s; best = sp; }
+    }
+    return heat >= w.params.mosq.heatMin ? best : null;
+  }
+
+  function startApproach(w, m) {
+    const sp = pickTarget(w, m);
+    if (!sp) { giveUp(w, m, m.lastReject || 'odour'); return; }
+    m.targetSpot = sp.id;
+    m.approachT = 0;
+    setState(w, m, 'approach', 'Heading for the ' + sp.label.toLowerCase() + '.');
+  }
+  function startCasting(w, m) {
+    m.castDir = w.rng() < 0.5 ? 1 : -1; m.castLeg = 0.6; m.castLegT = 0;
+    setState(w, m, 'casting', 'Lost the plume. Casting side to side.');
+  }
+  function canApproach(w, m) {
+    return w.t - m.lastHit < w.params.mosq.plumeTimeout &&
+      nearestSpot(w, m.pos, false).d < APPROACH_RANGE && m.kpis.visual >= w.params.mosq.visualMin;
+  }
+  function resumeHunt(w, m) { if (canApproach(w, m)) startApproach(w, m); else startCasting(w, m); }
+
+  const REJECT_THOUGHTS = {
+    safety: 'Too much going on here. Abort.',
+    contact: 'Can\'t get through this. Next.',
+    odour: 'Smells wrong. Veering off.',
+    heat: 'Too cool to bother.',
+    probing: 'No vessel anywhere. Moving on.',
+  };
+  function reject(w, m, reason, avoidAdd, fleeSeconds) {
+    emit(w, m, 'reject', m.targetSpot, reason);
+    if (m.targetSpot) m.avoid[m.targetSpot] += avoidAdd;
+    m.lastReject = reason;
+    m.bout++;
+    m.probes = 0;
+    if (m.bout >= BOUT_MAX) { giveUp(w, m, reason); return; }
+    flee(w, m, fleeSeconds, 'hunt', REJECT_THOUGHTS[reason]);
+  }
+
+  function land(w, m, sp, judge) {
+    m.pos = sp.pos.slice(); m.vel = [0, 0, 0];
+    m.targetSpot = sp.id; m.probes = 0; m.skinTime = 0; m.probeT = 0;
+    emit(w, m, 'land', sp.id, '');
+    if (sp.limb === 'head') addArousal(w, 0.25 * sp.sensitivity);
+    if (judge) {
+      if (!contactCheck(w, sp).pass) { reject(w, m, 'contact', 1, 0.8); return; }
+      if (disturbance(w, sp) > w.params.mosq.disturbMax) { reject(w, m, 'safety', 1, rand(w, 1, 2)); return; }
+    }
+    setState(w, m, 'landed', 'Tasting the ' + sp.label.toLowerCase() + ' with my feet.');
+  }
+
+  function startProbe(w, m) {
+    m.probes++; m.probeT = 0;
+    emit(w, m, 'probe', m.targetSpot, String(m.probes));
+    setState(w, m, 'probing', 'Probing for a vessel (' + m.probes + '/' + w.params.mosq.maxProbes + ').');
+  }
+
+  function bite(w, m, sp) {
+    emit(w, m, 'bite', sp.id, '');
+    w.bites.push({ spotId: sp.id, t: w.t, mosquitoId: m.id, itchAt: w.t + rand(w, 10 * MIN, 25 * MIN), itched: false,
+      creamed: false });
+    setState(w, m, 'feeding', 'Found one. Drinking.');
+  }
+
+  function endMeal(w, m) {
+    if (m.fill >= FULL_AT) {
+      emit(w, m, 'full', m.targetSpot, '');
+      m.restUntil = w.t + 48 * HOUR;
+      m.perch = pickPerch(w);
+      flee(w, m, 2, 'digest', 'Full. Off to digest for a couple of days.');
+    } else {
+      emit(w, m, 'interrupted', m.targetSpot, 'safety');
+      if (m.targetSpot) m.avoid[m.targetSpot] += 1;
+      m.restUntil = w.t + rand(w, 30 * MIN, 150 * MIN);
+      m.perch = pickPerch(w);
+      flee(w, m, 2, 'rest', 'Interrupted. Half a meal will do for now.');
+    }
+    m.probes = 0; m.bout = 0;
+  }
+
+  // Twitches of the limb she stands on: irritation builds with time on the skin.
+  function onSkin(w, m, sp, dt) {
+    m.skinTime += dt;
+    if (w.rng() < TWITCH_K * sp.sensitivity * m.skinTime * dt) {
+      w.human.moveTimer[sp.limb] = Math.max(w.human.moveTimer[sp.limb], 0.6);
+    }
+  }
+
+  function flyToPerch(w, m, dt) {
+    if (m.perched) { m.vel = [0, 0, 0]; m.pos = m.perch.slice(); return; }
+    const d = dist(m.pos, m.perch);
+    if (d < 0.03) { m.perched = true; m.pos = m.perch.slice(); m.vel = [0, 0, 0]; return; }
+    const dir = norm([m.perch[0] - m.pos[0], m.perch[1] - m.pos[1], m.perch[2] - m.pos[2]]);
+    const sp = Math.min(PERCH_SPEED, 0.05 + 2 * d);
+    steer(m, [dir[0] * sp, dir[1] * sp, dir[2] * sp], dt);
+  }
+
+  function aiStep(w, m, dt, hit) {
+    const mp = w.params.mosq, k = m.kpis;
+    switch (m.state) {
+      case 'resting':
+      case 'digesting': {
+        if (m.state === 'digesting' || w.t < m.restUntil) { flyToPerch(w, m, dt); break; }
+        // rest is over: patrol the room, sniffing for a breath plume
+        if (hit) {
+          m.perched = false;
+          emit(w, m, 'activate', null, 'co2');
+          m.bout = 0;
+          setState(w, m, 'activated', 'CO₂! Someone is breathing.');
+          break;
+        }
+        if (w.t - m.restUntil > WANDER_MAX) { rest(w, m, rand(w, 5 * MIN, 20 * MIN), 'Nothing on the air. Resting.'); break; }
+        if (m.perched || !m.waypoint) m.thought = 'Patrolling. Nothing on the air yet.';
+        m.perched = false;
+        if (!m.waypoint || w.t > m.waypointUntil || dist(m.pos, m.waypoint) < 0.15) {
+          m.waypoint = [rand(w, -2.2, 2.2), rand(w, 0.4, 1.8), rand(w, -1.7, 1.7)];
+          m.waypointUntil = w.t + rand(w, 4, 8);
+        }
+        const dir = norm([m.waypoint[0] - m.pos[0], m.waypoint[1] - m.pos[1], m.waypoint[2] - m.pos[2]]);
+        const j = jitter(w, 0.1);
+        steer(m, [dir[0] * WANDER_SPEED + j[0], dir[1] * WANDER_SPEED + j[1], dir[2] * WANDER_SPEED + j[2]], dt);
+        break;
+      }
+      case 'activated':
+      case 'tracking': {
+        if (m.state === 'activated' && m.stateTime >= 0.4) setState(w, m, 'tracking', 'Surging upwind along the breath.');
+        if (canApproach(w, m)) { startApproach(w, m); break; }
+        if (m.state === 'tracking' && w.t - m.lastHit > LOST_AFTER) {
+          emit(w, m, 'lostPlume', null, 'plume');
+          startCasting(w, m);
+          break;
+        }
+        const up = norm([-k.wind[0], -k.wind[1], -k.wind[2]]);
+        const j = jitter(w, 0.15);
+        steer(m, [up[0] * SURGE_SPEED + j[0], up[1] * SURGE_SPEED + j[1], up[2] * SURGE_SPEED + j[2]], dt);
+        break;
+      }
+      case 'casting': {
+        if (hit) { setState(w, m, 'tracking', 'Back in the plume. Upwind!'); break; }
+        if (canApproach(w, m)) { startApproach(w, m); break; }
+        if (w.t - m.lastHit > mp.plumeTimeout) { giveUp(w, m, 'plume'); break; }
+        m.castLegT += dt;
+        if (m.castLegT >= m.castLeg) { m.castDir = -m.castDir; m.castLeg = Math.min(4, m.castLeg * 1.3); m.castLegT = 0; }
+        const up = norm([-k.wind[0], -k.wind[1], -k.wind[2]]);
+        const cross = norm([-up[2], 0, up[0]]);
+        const vy = 0.15 * (Math.sin(2 * Math.PI * m.stateTime / 3) >= 0 ? 1 : -1);
+        steer(m, [cross[0] * CAST_SPEED * m.castDir + up[0] * 0.05, vy, cross[2] * CAST_SPEED * m.castDir + up[2] * 0.05], dt);
+        break;
+      }
+      case 'approach': {
+        const sp = spotById(w, m.targetSpot);
+        if (!sp) { startApproach(w, m); break; }
+        m.approachT += dt;
+        const d = dist(m.pos, sp.pos);
+        if (d > ODOUR_STAGE && k.visual < mp.visualMin) { startCasting(w, m); break; }
+        if (d <= ODOUR_STAGE && k.odour < mp.odourMin) { reject(w, m, 'odour', 1, 0.8); break; }
+        if (d <= HEAT_STAGE && k.heat < mp.heatMin) { reject(w, m, 'heat', 1, 0.8); break; }
+        if (d <= LAND_DIST) { land(w, m, sp, true); break; }
+        if (m.approachT > APPROACH_TIMEOUT) { m.avoid[sp.id] += 0.5; startApproach(w, m); break; }
+        const dir = norm([sp.pos[0] - m.pos[0], sp.pos[1] - m.pos[1], sp.pos[2] - m.pos[2]]);
+        const speed = Math.min(APPROACH_SPEED, 0.06 + d);
+        const j = jitter(w, 0.12 * Math.min(1, d));
+        steer(m, [dir[0] * speed + j[0], dir[1] * speed + j[1], dir[2] * speed + j[2]], dt);
+        break;
+      }
+      case 'landed':
+      case 'probing':
+      case 'feeding': {
+        const sp = spotById(w, m.targetSpot);
+        onSkin(w, m, sp, dt);
+        if (disturbance(w, sp) > mp.disturbMax) {
+          if (m.state === 'feeding') endMeal(w, m);
+          else reject(w, m, 'safety', 1, rand(w, 1, 2));
+          break;
+        }
+        if (m.state === 'landed') { if (m.stateTime >= TASTE_TIME) startProbe(w, m); break; }
+        if (m.state === 'probing') {
+          m.probeT += dt;
+          if (contactCheck(w, sp).pass && w.rng() < sp.vascular * 0.25 * dt) { bite(w, m, sp); break; }
+          if (m.probeT >= PROBE_TIME) {
+            if (m.probes >= mp.maxProbes) reject(w, m, 'probing', 2, 1.5);
+            else startProbe(w, m);
+          }
+          break;
+        }
+        m.fill = Math.min(1, m.fill + dt / FEED_TIME);
+        if (m.fill >= 1) endMeal(w, m);
+        break;
+      }
+      case 'fleeing': {
+        if (w.t >= m.fleeUntil) {
+          if (m.next === 'rest') setState(w, m, 'resting', 'Resting off a partial meal.');
+          else if (m.next === 'digest') setState(w, m, 'digesting', 'Full. Digesting for a couple of days.');
+          else resumeHunt(w, m);
+          break;
+        }
+        const from = (m.targetSpot && spotById(w, m.targetSpot)) || nearestSpot(w, m.pos, false).spot;
+        const away = norm([m.pos[0] - from.pos[0], m.pos[1] - from.pos[1] + 0.3, m.pos[2] - from.pos[2]]);
+        const j = jitter(w, 0.2);
+        steer(m, [away[0] * FLEE_SPEED + j[0], away[1] * FLEE_SPEED + j[1], away[2] * FLEE_SPEED + j[2]], dt, 8);
+        break;
+      }
+    }
+  }
+
+  // Interactive flight: the visitor steers; gates still evaluate but never force her off a spot.
+  // Only physical events (a twitch or turn under her, a swat) shake her off.
+  function controlStep(w, m, dt, hit) {
+    const c = m.control, mp = w.params.mosq;
+    if (m.state === 'digesting' || (m.state === 'fleeing' && m.next === 'digest')) { aiStep(w, m, dt, hit); return; }
+    const thrust = c.thrust || [0, 0, 0];
+    const pushing = Math.hypot(thrust[0], thrust[1], thrust[2]) > 0.01;
+    const onSpot = m.state === 'landed' || m.state === 'probing' || m.state === 'feeding';
+    if (onSpot) {
+      const sp = spotById(w, m.targetSpot);
+      onSkin(w, m, sp, dt);
+      const shaken = w.human.moveTimer[sp.limb] > 0;
+      if (shaken || pushing) {
+        if (m.state === 'feeding') { endMeal(w, m); if (m.next !== 'digest') setState(w, m, 'approach'); }
+        else { if (shaken) emit(w, m, 'reject', sp.id, 'safety'); setState(w, m, 'approach', 'Up and away.'); }
+        m.perched = false;
+        return;
+      }
+      if (m.state === 'feeding') {
+        m.fill = Math.min(1, m.fill + dt / FEED_TIME);
+        if (m.fill >= 1) endMeal(w, m);
+        return;
+      }
+      if (c.probe) {
+        if (m.state !== 'probing') startProbe(w, m);
+        m.probeT += dt;
+        if (contactCheck(w, sp).pass && w.rng() < sp.vascular * 0.25 * dt) { bite(w, m, sp); return; }
+        if (m.probeT >= PROBE_TIME) {
+          if (m.probes >= mp.maxProbes) { emit(w, m, 'reject', sp.id, 'probing'); m.probes = 0; setState(w, m, 'landed'); }
+          else startProbe(w, m);
+        }
+      }
+      return;
+    }
+    if (c.land) {
+      const n = nearestSpot(w, m.pos, false);
+      if (n.d <= CONTROL_LAND_RANGE) { land(w, m, n.spot, false); return; }
+    }
+    m.perched = false;
+    let v = thrust.slice();
+    const sp = Math.hypot(v[0], v[1], v[2]);
+    if (sp > CONTROL_MAX_SPEED) v = v.map((x) => x * CONTROL_MAX_SPEED / sp);
+    m.vel = v;
+    const n = nearestSpot(w, m.pos, false);
+    m.targetSpot = n.spot.id;
+    const state = n.d < APPROACH_RANGE && m.kpis.visual >= mp.visualMin ? 'approach' : hit ? 'tracking' : 'casting';
+    setState(w, m, state, 'You are flying.');
+  }
+
+  function setControl(m, control) { m.control = control || null; }
+
+  function updateMosquito(w, m, dt) {
+    const decay = Math.pow(0.5, dt / AVOID_HALF_LIFE);
+    for (const id in m.avoid) m.avoid[id] *= decay;
+    m.stateTime += dt;
+    m.kpis = sense(w, m.pos);
+    const hit = m.kpis.co2 > w.params.mosq.co2Activate;
+    m.plumeRate += ((hit ? 1 : 0) - m.plumeRate) * Math.min(1, dt / 1);
+    if (hit && !m.perched) m.lastHit = w.t;
+    if (m.control) controlStep(w, m, dt, hit); else aiStep(w, m, dt, hit);
+    const onSpot = m.state === 'landed' || m.state === 'probing' || m.state === 'feeding';
+    if (onSpot) { m.vel = [0, 0, 0]; m.pos = spotById(w, m.targetSpot).pos.slice(); }
+    else if (!m.perched) move(m, dt);
+    if (!m.pos.every(Number.isFinite) || !m.vel.every(Number.isFinite)) { // never expected; keeps the UI alive
+      m.pos = PERCHES[SILL].slice(); m.vel = [0, 0, 0]; m.perched = true;
+    }
+    m.stage = stageOf(w, m);
+  }
+
+  // ---------------------------------------------------------- stepping
+  function step(w, dt = 0.05) {
+    w.t += dt;
+    refreshExposure(w);
+    updateBreath(w, dt);
+    updateHuman(w, dt);
+    for (const m of w.mosquitoes) updateMosquito(w, m, dt);
+  }
+
+  // Jump to the next thing that can happen while every mosquito sits out a rest and the sleeper sleeps.
+  // Optional limitT caps the jump (e.g. at 07:00). Returns the seconds skipped.
+  function skipQuiet(w, limitT = Infinity) {
+    if (w.human.state !== 'asleep') return 0;
+    let target = Infinity;
+    for (const m of w.mosquitoes) {
+      if (m.control || !(m.state === 'resting' || m.state === 'digesting') || m.restUntil <= w.t) return 0;
+      target = Math.min(target, m.restUntil);
+    }
+    for (const b of w.bites) if (!b.itched && b.itchAt !== undefined) target = Math.min(target, b.itchAt);
+    target = Math.min(target, limitT);
+    const skip = target - w.t;
+    if (!(skip > 0) || !Number.isFinite(skip)) return 0;
+    w.t = target;
+    const H = w.human;
+    H.arousal = Math.max(0, H.arousal - 0.01 * skip);
+    for (const l of LIMBS) H.moveTimer[l] = 0;
+    const decay = Math.pow(0.5, skip / AVOID_HALF_LIFE);
+    for (const m of w.mosquitoes) {
+      for (const id in m.avoid) m.avoid[id] *= decay;
+      m.pos = m.perch.slice(); m.vel = [0, 0, 0]; m.perched = true;
+      m.plumeRate = 0; m.stateTime += skip;
+    }
+    seedBreath(w);
+    return skip;
+  }
+
+  // ---------------------------------------------------------- aftermath (illustrative)
+  // A bump curve shaped like the textbook picture: an antibody/histamine wheal peaking at ~0.3 h and a
+  // delayed immune-cell reaction peaking at ~30 h. Not measured data.
+  function bumpCurve(hours, o = {}) {
+    const h = Math.max(0, Number(hours) || 0);
+    const pulse = (x, peak, k) => (x <= 0 ? 0 : Math.pow(x / peak, k) * Math.exp(k * (1 - x / peak)));
+    let wheal = 0.75 * pulse(h, 0.3, 1.5);
+    let delayed = 0.7 * pulse(h, 30, 2.5);
+    if (o.longBreak) delayed *= 1.3;
+    if (o.scratch) { wheal *= 1.25; delayed *= 1.4; }
+    if (o.cold) wheal *= 0.6;
+    if (o.hydrocortisone) delayed *= 0.55;
+    if (o.antihistamine) { wheal *= 0.55; delayed *= 0.85; }
+    let itch = 0.9 * wheal + 0.75 * delayed;
+    if (o.scratch) itch *= 1.3;
+    if (o.cold) itch *= 0.75;
+    if (o.hydrocortisone) itch *= 0.7;
+    if (o.antihistamine) itch *= 0.6;
+    wheal = clamp(wheal, 0, 1); delayed = clamp(delayed, 0, 1);
+    return { wheal, delayed, size: clamp(0.55 * wheal + 0.9 * delayed, 0, 1), itch: clamp(itch, 0, 1) };
+  }
+
+  return {
+    ROOM, PERCHES, defaultParams, createWorld, clockString, step, skipQuiet, sense, gates, bumpCurve, setControl,
+    isExhaling, cream,
+  };
+})();
+
+// ============================================================ tests
+MosquitoSim.Tests = {
+  cases: [],
+  add(name, fn) { this.cases.push([name, fn]); },
+  run() {
+    let pass = 0, fail = 0;
+    for (const [name, fn] of this.cases) {
+      try { fn(); pass++; console.log('ok   ' + name); }
+      catch (e) { fail++; console.log('FAIL ' + name + ': ' + e.message); }
+    }
+    console.log(`${pass} passed, ${fail} failed`);
+    return fail === 0;
+  },
+};
+(() => {
+  const S = MosquitoSim, T = S.Tests;
+  const assert = (c, m) => { if (!c) throw new Error(m || 'assertion failed'); };
+  const spotOf = (w, id) => w.human.spots.find((s) => s.id === id);
+  const gate = (w, m, id) => S.gates(w, m).find((g) => g.id === id);
+  const finite3 = (p) => p.every(Number.isFinite);
+  const inRoom = (p) => p.every((v, i) => v >= S.ROOM.min[i] && v <= S.ROOM.max[i]);
+  // Run until world.t reaches end, fast-forwarding quiet stretches.
+  const runUntil = (w, end, each) => {
+    while (w.t < end) {
+      if (S.skipQuiet(w, end) === 0) S.step(w, 0.05);
+      if (each) each(w);
+    }
+  };
+  const ARM_SPOTS = ['rForearm', 'rHand', 'lForearm', 'lHand'];
+  const limbOf = (w, id) => spotOf(w, id).limb;
+
+  T.add('params default', () => {
+    const p = S.defaultParams();
+    assert(p.person.bloodTypeEffect === false, 'blood type effect must default off');
+    assert(p.person.repellent === 'none' && p.room.mosquitoes === 1 && p.mosq.maxProbes === 5, 'defaults');
+  });
+
+  T.add('co2 decays with distance', () => {
+    const w = S.createWorld(S.defaultParams(), 1);
+    w.puffs = [{ pos: [0, 0, 0], age: 5, q: 20 }];
+    const c = (r) => S.sense(w, [r, 0, 0]).co2;
+    const a = c(0.2), b = c(1), d = c(3);
+    assert(a > b && b > d, `expected decay, got ${a} ${b} ${d}`);
+    assert(a >= 0 && b >= 0 && d >= 0, 'co2 excess is never negative');
+  });
+
+  T.add('contact gate fails on covered spot', () => {
+    const w = S.createWorld(S.defaultParams(), 1);
+    const m = w.mosquitoes[0];
+    m.targetSpot = 'feet'; m.pos = spotOf(w, 'feet').pos.slice();
+    assert(spotOf(w, 'feet').exposed === false, 'feet are under the blanket');
+    assert(gate(w, m, 'contact').pass === false, 'contact must fail on the blanket');
+    m.targetSpot = 'rForearm'; m.pos = spotOf(w, 'rForearm').pos.slice();
+    assert(gate(w, m, 'contact').pass === true, 'bare forearm passes contact');
+  });
+
+  T.add('contact gate fails with DEET', () => {
+    const p = S.defaultParams(); p.person.repellent = 'deet';
+    const w = S.createWorld(p, 1);
+    const m = w.mosquitoes[0];
+    m.targetSpot = 'rForearm'; m.pos = spotOf(w, 'rForearm').pos.slice();
+    assert(gate(w, m, 'contact').pass === false, 'DEET on the forearm fails contact');
+  });
+
+  T.add('safety fails at nose on exhale', () => {
+    const p = S.defaultParams();
+    const w = S.createWorld(p, 1);
+    const m = w.mosquitoes[0];
+    m.targetSpot = 'nose'; m.pos = spotOf(w, 'nose').pos.slice();
+    w.human.arousal = 0;
+    w.human.breathPhase = 0.1;
+    assert(S.isExhaling(w.human), 'phase 0.1 is exhale');
+    const g = gate(w, m, 'safety');
+    assert(g.value > p.mosq.disturbMax && g.pass === false, `exhale disturbance ${g.value}`);
+    w.human.breathPhase = 0.8;
+    assert(!S.isExhaling(w.human), 'phase 0.8 is inhale');
+    assert(gate(w, m, 'safety').pass === true, 'quiet inhale passes safety');
+  });
+
+  T.add('blood type no effect by default', () => {
+    const odour = (type, effect) => {
+      const p = S.defaultParams(); p.person.bloodType = type; p.person.bloodTypeEffect = effect;
+      return S.sense(S.createWorld(p, 1), [0.3, 0.9, -0.3]).odour;
+    };
+    assert(odour('O', false) === odour('A', false), 'type O = type A when the effect is off');
+    assert(odour('O', true) > odour('A', true), 'type O smells better when the weak-evidence switch is on');
+  });
+
+  T.add('bumpCurve shape', () => {
+    let wPeak = 0, wAt = 0, dPeak = 0, dAt = 0;
+    for (let h = 0; h <= 72; h += 0.05) {
+      const b = S.bumpCurve(h, {});
+      for (const k of ['wheal', 'delayed', 'size', 'itch']) assert(b[k] >= 0 && b[k] <= 1, `${k}=${b[k]} at ${h} h`);
+      if (b.wheal > wPeak) { wPeak = b.wheal; wAt = h; }
+      if (b.delayed > dPeak) { dPeak = b.delayed; dAt = h; }
+      const all = S.bumpCurve(h, { scratch: true, cold: true, hydrocortisone: true, antihistamine: true, longBreak: true });
+      for (const k of ['wheal', 'delayed', 'size', 'itch']) assert(all[k] >= 0 && all[k] <= 1, `all ${k}=${all[k]}`);
+    }
+    assert(wAt < 1, `wheal peaks at ${wAt} h`);
+    assert(dAt >= 18 && dAt <= 48, `delayed peaks at ${dAt} h`);
+    assert(S.bumpCurve(24, { scratch: true }).size > S.bumpCurve(24, {}).size, 'scratching makes it bigger');
+    assert(S.bumpCurve(24, { hydrocortisone: true }).delayed < S.bumpCurve(24, {}).delayed, 'hydrocortisone shrinks it');
+  });
+
+  T.add('cream does not change gates', () => {
+    const w = S.createWorld(S.defaultParams(), 1);
+    const m = w.mosquitoes[0];
+    m.targetSpot = 'rForearm'; m.pos = spotOf(w, 'rForearm').pos.slice();
+    w.bites.push({ spotId: 'rForearm', t: 0 });
+    const before = JSON.stringify(S.gates(w, m));
+    S.cream(w);
+    assert(w.events.some((e) => e.type === 'cream' && e.spotId === 'rForearm'), 'cream event on the newest bite');
+    assert(JSON.stringify(S.gates(w, m)) === before, 'gates unchanged by cream');
+    // waking up fully creams the newest bite
+    const w2 = S.createWorld(S.defaultParams(), 2);
+    w2.bites.push({ spotId: 'lForearm', t: 0 });
+    w2.human.arousal = 0.95;
+    S.step(w2);
+    assert(w2.human.state === 'awake', 'arousal 0.95 wakes the sleeper');
+    assert(w2.events.some((e) => e.type === 'cream' && e.spotId === 'lForearm'), 'woken sleeper creams the bite');
+  });
+
+  // 2 h with everything turned against her: blanket 1, DEET, fan 1, three mosquitoes.
+  let extreme = null;
+  const extremeRun = () => {
+    if (extreme) return extreme;
+    const p = S.defaultParams();
+    p.person.blanket = 1; p.person.repellent = 'deet'; p.room.fan = 1; p.room.mosquitoes = 3;
+    const w = S.createWorld(p, 5);
+    let finite = true, inside = true;
+    runUntil(w, 2 * 3600, (w) => {
+      for (const m of w.mosquitoes) { finite = finite && finite3(m.pos) && finite3(m.vel); inside = inside && inRoom(m.pos); }
+      for (const pf of w.puffs) finite = finite && finite3(pf.pos);
+    });
+    return (extreme = { w, finite, inside });
+  };
+
+  T.add('stays in room', () => {
+    const r = extremeRun();
+    assert(r.w.mosquitoes.length === 3, 'three mosquitoes');
+    assert(r.inside, 'a mosquito left the room');
+  });
+
+  T.add('extremes stay finite', () => {
+    const r = extremeRun();
+    assert(r.finite, 'non-finite position');
+    assert(r.w.bites.length === 0, 'no bites through DEET and a full blanket');
+    assert(r.w.events.some((e) => e.type === 'giveUp'), 'she gives up and rests');
+  });
+
+  T.add('skipQuiet + long run finite', () => {
+    const t0 = Date.now();
+    const w = S.createWorld(S.defaultParams(), 7);
+    let skipped = 0;
+    while (w.t < 8 * 3600) {
+      const s = S.skipQuiet(w, 8 * 3600);
+      skipped += s;
+      if (s === 0) S.step(w, 0.05);
+    }
+    const ms = Date.now() - t0;
+    assert(ms < 15000, `8 h took ${ms} ms`);
+    assert(skipped > 0, 'quiet stretches were skipped');
+    assert(w.mosquitoes.every((m) => finite3(m.pos) && inRoom(m.pos)), 'positions finite and in the room');
+    assert(S.clockString(0) === '23:00' && S.clockString(8 * 3600) === '07:00', 'night clock');
+  });
+
+  T.add('your night shape', () => {
+    const fails = [];
+    let ok = 0;
+    for (let seed = 1; seed <= 10; seed++) {
+      const w = S.createWorld(S.defaultParams(), seed);
+      runUntil(w, 8 * 3600);
+      const faceSafety = w.events.filter((e) => e.type === 'reject' && e.reason === 'safety' &&
+        (e.spotId === 'nose' || e.spotId === 'forehead')).length;
+      const first = w.bites[0];
+      const stirBefore = !!first && w.events.some((e) => e.type === 'wake' && e.t < first.t &&
+        (e.reason === 'stirring' || e.reason === 'halfAwake'));
+      const firstArm = !!first && ARM_SPOTS.includes(first.spotId);
+      const limbs = new Set(w.bites.map((b) => limbOf(w, b.spotId))).size;
+      const good = faceSafety >= 2 && stirBefore && firstArm && limbs >= 2;
+      if (good) ok++;
+      else fails.push(`seed ${seed}: faceSafety=${faceSafety} stirBefore=${stirBefore} firstArm=${firstArm} ` +
+        `bites=${w.bites.map((b) => b.spotId).join(',')}`);
+    }
+    assert(ok >= 8, `${ok}/10 seeds have the shape; ${fails.join('; ')}`);
+  });
+})();
+</script>
+</body>
+</html>
