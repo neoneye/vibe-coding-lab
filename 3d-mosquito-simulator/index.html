@@ -6,7 +6,7 @@
 <title>Mosquito Simulator</title>
 <style>
   :root { color-scheme: dark; }
-  html, body { margin: 0; overflow-x: hidden; background: #07090f; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #e9e6ee; }
+  html, body { margin: 0; overflow-x: clip; background: #07090f; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #e9e6ee; }
   html { scroll-behavior: smooth; }
   /* the simulator fills the first screen; the explainer (#learn) follows below it */
   #app { position: relative; height: 100vh; height: 100svh; overflow: hidden; }
@@ -212,6 +212,8 @@
   </div></div>
   <div class="card" id="cardGates"><h2>Her checklist (gates) <span class="chev">&#9662;</span></h2><div class="body">
     <div id="gates"></div>
+    <div class="kv" id="humRow"><span>Humidity (info, not a gate)</span><b id="humVal">0 %</b></div>
+    <div class="note">Humid air close to skin is a weak extra close-range cue. It is shown for the mosquito you follow, but she does not pass or fail on it in this model.</div>
     <div id="flyHint"></div>
     <div class="note">Bar = live value, white tick = her threshold. Green passes, red fails; the outlined gate is the one she is checking now. Approximate values.</div>
   </div></div>
@@ -247,7 +249,7 @@
   <h3>1. How she finds you</h3>
   <p>Only the female bites, and she works through a chain of checks. Each check is one of the bars in the simulator&rsquo;s &ldquo;Her checklist&rdquo; panel. When one fails, she drops back a step or gives up on that spot.</p>
   <ol class="gates">
-    <li><b>Wake up.</b> A whiff of CO&#8322; above the room&rsquo;s background (about 400&nbsp;ppm) switches her into hunting mode. A rise of a few tens of ppm is enough, and the pulses of breath work better than a steady level.</li>
+    <li><b>Wake up.</b> A whiff of CO&#8322; above the room&rsquo;s background (about 400&nbsp;ppm) switches her into hunting mode. In this model a rise of roughly 10&nbsp;ppm or more is enough (real thresholds vary by species), and the pulses of breath work better than a steady level.</li>
     <li><b>Follow the plume.</b> While she keeps hitting pockets of breath she flies upwind. If she loses it she zig-zags across the air flow to find it again, and if that takes too long she gives up and rests.</li>
     <li><b>Look.</b> Once CO&#8322; has switched her on, dark shapes against a lighter background become interesting. Without CO&#8322; she ignores them.</li>
     <li><b>Smell the skin.</b> Close in, skin odours take over: lactic acid, other carboxylic acids and ammonia. Repellent in the air spoils the blend, so she veers off and tries another body part.</li>
@@ -417,7 +419,7 @@
   <ol class="why">
     <li><span class="evb strong">Strong</span> <b>Skin chemistry and skin bacteria.</b> The best evidence for &ldquo;mosquito magnets&rdquo;. In a multi-year study (De Obaldia et al. 2022, <i>Cell</i>), the most attractive people had much higher levels of carboxylic acids on their skin, and stayed attractive over years. Skin bacteria turn sweat into many of these odours.
       <div class="row"><button data-preset="magnet">Mosquito magnet skin</button></div></li>
-    <li><span class="evb strong">Strong</span> <b>CO&#8322; output and body size.</b> CO&#8322; is how she finds anyone from a distance. Bigger bodies and faster breathing put out more of it, so they are found sooner. It gets you noticed, but your skin decides a lot of what happens up close.
+    <li><span class="evb strong">Strong</span> <b>CO&#8322; output and body size.</b> CO&#8322; is how she finds anyone from a distance. Bigger bodies, and a higher metabolism (after exercise, in pregnancy), put out more of it, so they are found sooner. It gets you noticed, but your skin decides a lot of what happens up close.
       <div class="row"><button data-preset="big">Big CO&#8322; output</button></div></li>
     <li><span class="evb good">Good</span> <b>Heat and sweat.</b> Warm skin, moisture and lactic acid after exercise all help her in the last metre.
       <div class="row"><button data-preset="run">After a run + beer</button></div></li>
@@ -1689,6 +1691,7 @@ const frac = (x) => x - Math.floor(x);
 // ------------------------------------------------------------------ state
 const P = S.defaultParams();             // UI params; the world copies them on every rebuild
 let seed = Math.max(1, parseInt(qs.get('seed'), 10) || 3);
+const DEFAULT_SEED = seed; // "Your night" and the explainer presets return to this night, even after "Other night"
 const V = { speed: 5, skip: true, co2: true, odour: true, heat: true, captions: true, cam: 'room' };
 let world = null, selected = 0, acc = 0, ended = false, evSeen = 0, logDirty = true;
 let prev = [];                            // positions before the last fixed step, for interpolation
@@ -2361,6 +2364,7 @@ function updateHud() {
   $('herState').textContent = (n > 1 ? '#' + (selected + 1) + ': ' : '') + herState(m);
   $('herThought').textContent = '“' + m.thought + '”';
   updateFlyHint(); updateRestBanner();
+  $('humVal').textContent = Math.round(S.sense(world, m.pos).humidity * 100) + ' % RH';
   S.gates(world, m).forEach((g, i) => {
     const r = gateRows[i];
     r.row.className = 'gate ' + (g.pass ? 'pass' : 'fail') + (g.active ? ' active' : '');
@@ -2578,12 +2582,29 @@ function flyKey(code, down) {
   else keysDown.delete(code);
   return true;
 }
-addEventListener('keydown', (e) => {
+// Fly keys are claimed only while the bedroom is on screen and the key press is not aimed at text entry or the explainer.
+// Range sliders, checkboxes and buttons in the app panel do not count as text entry, so WASD and Esc keep working after
+// the visitor has changed a parameter.
+const NON_TEXT_INPUTS = new Set(['range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'file', 'image']);
+function flyKeyTarget(e) {
   const t = e.target, tag = t && t.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return false;
+  if (tag === 'INPUT' && !NON_TEXT_INPUTS.has((t.type || 'text').toLowerCase())) return false;
+  return true;
+}
+addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || !flyKeyTarget(e)) return;
+  if (e.code !== 'Escape') { // Esc always leaves Fly; the other keys leave the explainer and off-screen page alone
+    const t = e.target;
+    if (!appVisible || (t && t.closest && t.closest('#learn'))) return;
+  }
   if (flyKey(e.code, true)) e.preventDefault();
 });
-addEventListener('keyup', (e) => { if (flyKey(e.code, false)) e.preventDefault(); });
+addEventListener('keyup', (e) => {
+  const t = e.target;
+  const claimed = flyKeyTarget(e) && appVisible && !(t && t.closest && t.closest('#learn'));
+  if (flyKey(e.code, false) && claimed) e.preventDefault(); // keyup always clears keysDown; it only swallows the default (a button's Space click) when the keydown was claimed
+});
 addEventListener('blur', () => keysDown.clear());
 function setMode(next) {
   const to = next === 'fly' ? 'fly' : 'auto';
@@ -2623,7 +2644,7 @@ function buildUI() {
   const bS = body('cardScenario');
   const row = el('div', 'grid3'); bS.append(row);
   for (const [text, fn] of [
-    ['Your night', () => { const d = S.defaultParams(); for (const k of ['person', 'room', 'mosq']) Object.assign(P[k], d[k]); syncers.forEach((s) => s()); rebuild(); }],
+    ['Your night', () => { seed = DEFAULT_SEED; const d = S.defaultParams(); for (const k of ['person', 'room', 'mosq']) Object.assign(P[k], d[k]); syncers.forEach((s) => s()); rebuild(); }],
     ['Reset', () => rebuild()],
     ['Other night', () => { seed = 1 + Math.floor(Math.random() * 999); rebuild(); }],
   ]) { const x = el('button', null, text); x.addEventListener('click', fn); row.append(x); }
@@ -2640,7 +2661,7 @@ function buildUI() {
   const pp = P.person, bP = body('cardPerson');
   slider(bP, 'Breath rate', pp, 'breathRate', 6, 24, 1, (v) => v + ' /min');
   slider(bP, 'Body size', pp, 'bodySize', 0.5, 1.6, 0.05, (v) => v.toFixed(2) + '×');
-  bP.append(el('div', 'note', 'Breath rate and body size set the CO₂ she follows.'));
+  bP.append(el('div', 'note', 'Body size sets how much CO₂ she follows (so do exercise and sweat, pregnancy and a beer, as modelled). Breath rate sets how pulsed the plume is: slower breaths make bigger, rarer puffs.'));
   slider(bP, 'Skin temperature', pp, 'skinTemp', 30, 37, 0.1, (v) => v.toFixed(1) + ' °C');
   slider(bP, 'Sweat / exercise', pp, 'sweat', 0, 1, 0.05, pct);
   slider(bP, 'Skin acids (“magnet” chemistry)', pp, 'skinAcids', 0, 1, 0.05, pct);
@@ -2670,7 +2691,7 @@ function buildUI() {
   slider(bM, 'Warmth needed', pm, 'heatMin', 0.1, 5, 0.1, (v) => v.toFixed(1) + ' °C');
   slider(bM, 'Disturbance tolerated', pm, 'disturbMax', 0.2, 1.5, 0.05, (v) => v.toFixed(2));
   slider(bM, 'Probe attempts', pm, 'maxProbes', 1, 10, 1, (v) => String(v));
-  bM.append(el('div', 'note', 'Approximate literature values, tuned so the night plays out. A lower threshold makes her keener.'));
+  bM.append(el('div', 'note', 'Rough model values, tuned so the night plays out (real thresholds vary by species and person). A lower threshold makes her keener.'));
   // display
   const bD = body('cardDisplay');
   check(bD, 'CO₂ puffs (blue)', V, 'co2', () => {});
@@ -2694,7 +2715,7 @@ const PRESETS = {
   night: { text: 'Your night: the default sleeper, one mosquito.' },
   two: { room: { mosquitoes: 2 }, text: 'Your night with two mosquitoes. Pick which one to follow in the Her card.' },
   magnet: { person: { skinAcids: 1 }, text: 'Mosquito magnet skin: skin acids at 100 %.' },
-  big: { person: { bodySize: 1.5, breathRate: 18 }, text: 'Big CO₂ output: body size 1.5×, 18 breaths/min.' },
+  big: { person: { bodySize: 1.6, sweat: 0.8 }, text: 'Big CO₂ output: body size 1.6×, sweat / exercise 80 % (more metabolism, more CO₂).' },
   run: { person: { sweat: 0.9, skinTemp: 35.5, breathRate: 18, beer: true }, text: 'After a run + beer: sweaty, warm, breathing harder, one beer.' },
   pregnant: { person: { pregnant: true }, text: 'Pregnant: about 20 % more CO₂ in the model.' },
   typeO: { person: { bloodType: 'O', bloodTypeEffect: true }, text: 'Type O with the weak-evidence switch on.' },
@@ -2702,6 +2723,7 @@ const PRESETS = {
 function applyPreset(name) {
   const pr = PRESETS[name]; if (!pr) return false;
   const d = S.defaultParams();
+  seed = DEFAULT_SEED;
   for (const k of ['person', 'room', 'mosq']) Object.assign(P[k], d[k], pr[k] || {});
   syncers.forEach((s) => s()); rebuild();
   if (innerWidth >= 900) $('cardPerson').classList.remove('collapsed');
@@ -2781,6 +2803,7 @@ try {
   setMode('auto');
   setCam(qs.get('cam') && (CAMS[qs.get('cam')] || qs.get('cam') === 'follow') ? qs.get('cam') : 'room');
   $('loading').remove();
+  { const er = $('err'); if (er.textContent.startsWith('three.js could not')) { er.style.display = 'none'; er.textContent = ''; } } // a slow CDN load can finish after the 15 s card appeared
   window.__mq = { get world() { return world; }, stepN, setMode, render: renderNow, setCam, rebuild, key: flyKey, get mode() { return mode; }, preset: applyPreset };
   if (qs.get('learn') === '1') { // deep link to the explainer
     const go = () => $('learn').scrollIntoView({ behavior: 'instant' });
