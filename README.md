@@ -177,6 +177,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [riemann-stab](riemann-stab/) -- see highlights.
 - [text-diff](text-diff/) -- side-by-side and unified diff with a line-level Myers implementation.
 - [text-ngram](text-ngram/) -- n-gram frequency analysis of dropped text files with many tokenization modes.
+- [trolley-problem](trolley-problem/) -- the trolley problem with up to six tracks: people, risk of death, life-years, and flags for means, volunteer, culpable and loved one, plus a lever that can jam. Seven ethical theories give live verdicts, and 33 sourced examples (levees blown up in floods, the V-1 deception, conjoined twins, ventilator triage, the German shoot-down ruling) can be loaded and decided before revealing what happened.
 - [zilog-z80a](zilog-z80a/) -- the Z80A as the Amstrad CPC used it: all five opcode tables, the gate array's three screen modes and 300 Hz interrupt, and CRTC hardware scrolling. No Amstrad ROMs.
 
 ## License
