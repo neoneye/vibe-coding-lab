@@ -138,6 +138,11 @@
       <label class="chk"><input type="checkbox" id="showRough" checked> roughness line (dissonance)</label>
     </div>
     <div class="card">
+      <h2>Key figures</h2>
+      <label class="chk"><input type="checkbox" id="showKpi" checked> table under the poster</label>
+      <div class="hint">Loudness per ITU-R BS.1770 / EBU R128, tempo, key, pitch range and more, one row per recording. Bars compare recordings within a column.</div>
+    </div>
+    <div class="card">
       <h2>Recordings</h2>
       <div class="rows" id="rowList"><span class="hint">Nothing loaded yet.</span></div>
     </div>
@@ -148,6 +153,15 @@
   <h2>What you are looking at</h2>
   <p>Each recording becomes one ribbon. Time runs left to right. By default every ribbon uses the same number of seconds per pixel, so a longer piece makes a longer ribbon. <b>Height</b> is loudness: the RMS of the samples, gathered per pixel column, normalized per recording, then smoothed and mirrored around the center line. <b>Color</b> is brightness: the spectral centroid, which is the "centre of mass" of the spectrum. Bright, treble-heavy passages are high, dark, bass-heavy passages are low. Color is on a log scale and spans the 2nd to 98th percentile of that recording's own centroids, so each row uses the full palette. Silence draws as a thin grey line.</p>
   <p>Analysis runs in your browser. Each file is decoded with the Web Audio API and mixed to mono. A 2048-sample Hann-windowed FFT runs every 1024 samples (about 21 ms). The microphone gives a live preview from an AnalyserNode. When you stop, the recording itself is analyzed with the same code as files, and you can play it back. Click a ribbon to play from that point.</p>
+  <h2>Key figures</h2>
+  <ul>
+    <li><b>Loudness (LUFS)</b> follows ITU-R BS.1770-4, the measure behind the EBU R128 broadcast standard. The signal is K-weighted (a high shelf around 1.7 kHz and a 38 Hz high-pass). The mean power of 400 ms blocks is taken every 100 ms, blocks below −70 LUFS are dropped, then blocks more than 10 LU under the average. The implementation reproduces the standard's coefficient table and its −23 LUFS test tone. On the four example files it agrees with pyloudnorm to within 0.05 LU, and that small offset is pyloudnorm's: its default filter uses rounded parameters and reads −23.04 on the same test tone.</li>
+    <li><b>Loudness range (LU)</b> follows EBU Tech 3342: the spread between the 10th and 95th percentile of 3-second loudness, ignoring anything 20 LU under the average. Quiet intros and big climaxes raise it.</li>
+    <li><b>Peak</b> is the largest sample in dBFS. A decoded lossy file can exceed 0 dBFS; the table marks that as "over full scale". <b>Peak-to-loudness</b> is peak minus loudness, a standard measure of how much headroom transients have. Heavily compressed pop sits under 10 dB, while acoustic classical recordings often reach 18–20.</li>
+    <li><b>Tempo</b> is the autocorrelation peak of the onset envelope between 40 and 220 BPM, with a mild preference for beats near 120. Classical performances with rubato or triplet motion often lock onto a multiple or a fraction of the written beat. The beat-strength note says how periodic the onsets really are.</li>
+    <li><b>Key</b> correlates the detected notes' pitch-class profile with the Krumhansl–Kessler profiles for all 24 keys; <i>r</i> is that correlation. A close runner-up, typically the dominant, parallel or relative key, is named. Für Elise, the Moonlight Sonata and Ride of the Valkyries come out as A minor, C♯ minor and B minor. Danse macabre, written in G minor, reads D minor, the note its harp tolls at the start.</li>
+    <li><b>Pitch range</b> runs from the 5th to the 95th percentile of the detected notes. The 1921 acoustic recording of the Valkyries has almost no bass left, so its range starts at G3. <b>Brightness</b> and <b>roughness</b> are medians over the audible frames. <b>Notes</b> counts onsets per second of playing, and <b>quiet</b> is the share of frames more than 36 dB under the recording's loud level.</li>
+  </ul>
   <p>File formats: whatever your browser decodes. WAV, MP3, FLAC and AAC work everywhere. Ogg Vorbis and Opus work in Chrome, Edge and Firefox, and in recent Safari. Example recordings, all public domain, fetched from Wikimedia Commons when you pick them:</p>
   <ul>
     <li><a href="https://commons.wikimedia.org/wiki/File:FurElise.ogg">Für Elise</a>, performed by V Gao.</li>
@@ -220,6 +234,13 @@ const Ribbon = (() => {
     let best = 0, tot = 0;
     for (let i = 0; i < 12; i++) { tot += chroma[i]; if (chroma[i] > chroma[best]) best = i; }
     out.pc = best; out.pcStrength = tot > 0 ? chroma[best] / tot : 0;
+    // spectral flux: summed rise of log-compressed magnitude since the previous frame (onsets)
+    const kTop = Math.min(kMax, Math.floor(11000 / binHz));
+    if (!out._prev || out._prev.length !== kTop + 1) { out._prev = new Float64Array(kTop + 1); out._first = true; }
+    let flux = 0;
+    for (let k = kMin; k <= kTop; k++) { const v = Math.log1p(100 * mag[k]); const d = v - out._prev[k]; if (d > 0) flux += d; out._prev[k] = v; }
+    out.flux = out._first ? 0 : flux / (kTop - kMin + 1);
+    out._first = false;
     const pk = findPeaks(pkMag, pkBinHz);
     out.roughness = roughness(pk);
     out.notes = findNotes(pk, 3);
@@ -388,11 +409,11 @@ const Ribbon = (() => {
   const noteName = m => { const r = Math.round(m); return NOTE_NAMES[((r % 12) + 12) % 12] + (Math.floor(r / 12) - 1); };
 
   function newFeatures(sampleRate, frameRate) {
-    return { sampleRate, frameRate, times: null, rms: [], centroid: [], rolloff: [], flatness: [], pc: [], pcStrength: [], roughness: [], nm: [], ns: [], duration: 0 };
+    return { sampleRate, frameRate, times: null, rms: [], centroid: [], rolloff: [], flatness: [], pc: [], pcStrength: [], roughness: [], flux: [], nm: [], ns: [], duration: 0 };
   }
   function pushFrame(F, rms, f, t) {
     F.rms.push(rms); F.centroid.push(f.centroid); F.rolloff.push(f.rolloff); F.flatness.push(f.flatness); F.pc.push(f.pc); F.pcStrength.push(f.pcStrength);
-    F.roughness.push(f.roughness);
+    F.roughness.push(f.roughness); F.flux.push(f.flux || 0);
     for (let r = 0; r < 3; r++) { const nt = f.notes && f.notes[r]; F.nm.push(nt ? nt.m : NaN); F.ns.push(nt ? nt.s : 0); }
     if (F.times) F.times.push(t);
   }
@@ -546,6 +567,151 @@ const Ribbon = (() => {
     return { amp, val, silent: sil };
   }
 
+  // ---------- loudness: ITU-R BS.1770-4 (integrated), EBU Tech 3342 (range) ----------
+  // K-weighting = high shelf (+4 dB above ~1.7 kHz) then a ~38 Hz high-pass, as two biquads.
+  // Coefficients for any sample rate from the analog prototypes (same derivation as pyloudnorm).
+  function kWeighting(fs) {
+    let K = Math.tan(Math.PI * 1681.974450955533 / fs), Q = 0.7071752369554196;
+    const Vh = 10 ** (3.999843853973347 / 20), Vb = Vh ** 0.4996667741545416;
+    let a0 = 1 + K / Q + K * K;
+    const shelf = { b: [(Vh + Vb * K / Q + K * K) / a0, 2 * (K * K - Vh) / a0, (Vh - Vb * K / Q + K * K) / a0], a: [1, 2 * (K * K - 1) / a0, (1 - K / Q + K * K) / a0] };
+    K = Math.tan(Math.PI * 38.13547087602444 / fs); Q = 0.5003270373238773;
+    a0 = 1 + K / Q + K * K;
+    const hp = { b: [1, -2, 1], a: [1, 2 * (K * K - 1) / a0, (1 - K / Q + K * K) / a0] };
+    return [shelf, hp];
+  }
+  // channels: Float32Array per channel (all weighted 1, as for L/R/C). Returns LUFS, LU, dBFS.
+  function loudness(channels, fs) {
+    const [f1, f2] = kWeighting(fs), seg = Math.round(0.1 * fs), n = channels[0].length, nSeg = Math.floor(n / seg);
+    const segE = new Float64Array(nSeg);   // Σ over channels of K-weighted energy per 100 ms
+    let peak = 0;
+    for (const x of channels) {
+      let x1 = 0, x2 = 0, y1 = 0, y2 = 0, z1 = 0, z2 = 0;
+      for (let i = 0; i < nSeg * seg; i++) {
+        const v = x[i], av = v < 0 ? -v : v;
+        if (av > peak) peak = av;
+        const y = f1.b[0] * v + f1.b[1] * x1 + f1.b[2] * x2 - f1.a[1] * y1 - f1.a[2] * y2;
+        x2 = x1; x1 = v;
+        const z = f2.b[0] * y + f2.b[1] * y1 + f2.b[2] * y2 - f2.a[1] * z1 - f2.a[2] * z2;
+        y2 = y1; y1 = y; z2 = z1; z1 = z;
+        segE[(i / seg) | 0] += z * z;
+      }
+    }
+    for (let i = nSeg * seg; i < n; i++) for (const x of channels) peak = Math.max(peak, Math.abs(x[i]));
+    const Lk = z => -0.691 + 10 * Math.log10(z);
+    const blocks = k => { const out = []; for (let j = 0; j + k <= nSeg; j++) { let e = 0; for (let q = 0; q < k; q++) e += segE[j + q]; out.push(e / (k * seg)); } return out; };
+    const mean = a => a.reduce((p, q) => p + q, 0) / a.length;
+    // integrated: 400 ms blocks every 100 ms, absolute gate −70 LUFS, relative gate −10 LU
+    const B = blocks(4).filter(z => Lk(z) > -70);
+    let lufs = -Infinity;
+    if (B.length) { const rel = Lk(mean(B)) - 10, G = B.filter(z => Lk(z) > rel); lufs = Lk(mean(G)); }
+    // range: 3 s short-term values every 100 ms, gates −70 LUFS and −20 LU, then p95 − p10
+    const ST = blocks(30).filter(z => Lk(z) > -70);
+    let lra = NaN;
+    if (ST.length) { const rel = Lk(mean(ST)) - 20, v = ST.filter(z => Lk(z) > rel).map(Lk).sort((a, b) => a - b); lra = percentile(v, 0.95) - percentile(v, 0.10); }
+    const peakDb = 20 * Math.log10(peak || 1e-12);
+    return { lufs, lra, peakDb, plr: peakDb - lufs };
+  }
+
+  // ---------- musical key figures ----------
+  const effFrameRate = F => F.times ? F.rms.length / Math.max(1e-9, F.duration || frameTime(F, F.rms.length - 1)) : F.frameRate;
+  // Onsets: peaks of the spectral flux (normalised by its 95th percentile while playing) that are
+  // the maximum within ±2 frames and exceed the local mean (−4…+3 frames) by delta.
+  function onsets(F, delta = 0.12) {
+    const n = F.flux.length, gate = noteGate(F), on = [];
+    const play = []; for (let i = 0; i < n; i++) if (F.rms[i] >= gate) play.push(F.flux[i]);
+    play.sort((a, b) => a - b);
+    const norm = percentile(play, 0.95) || 1, x = F.flux.map(v => v / norm), minGap = Math.max(1, Math.round(0.04 * effFrameRate(F)));
+    for (let i = 2; i < n - 2; i++) {
+      if (F.rms[i] < gate && F.rms[i + 1] < gate) continue;
+      let isMax = true; for (let j = i - 2; j <= i + 2; j++) if (x[j] > x[i] || (x[j] === x[i] && j < i)) isMax = false;
+      if (!isMax) continue;
+      let m = 0, c = 0; for (let j = Math.max(0, i - 4); j <= Math.min(n - 1, i + 3); j++) { m += x[j]; c++; }
+      if (x[i] < m / c + delta) continue;
+      if (on.length && i - on[on.length - 1] < minGap) continue;
+      on.push(i);
+    }
+    return on;
+  }
+  // Global tempo: autocorrelation of the onset-strength envelope (flux minus its 0.25 s moving
+  // average, half-wave rectified) over 40–220 BPM, weighted by a log-Gaussian around 120 BPM
+  // (σ = 1 octave). strength = autocorrelation at the chosen lag relative to lag 0.
+  function tempo(F) {
+    const fr = effFrameRate(F), n = F.flux.length, gate = noteGate(F), w = Math.max(1, Math.round(0.125 * fr));
+    const env = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let m = 0, c = 0; for (let j = Math.max(0, i - w); j <= Math.min(n - 1, i + w); j++) { m += F.flux[j]; c++; }
+      env[i] = F.rms[i] >= gate ? Math.max(0, F.flux[i] - m / c) : 0;
+    }
+    // onset pulses are about one frame wide, so a beat period that falls between two integer lags
+    // (21.5 frames at 120 BPM) loses most of its correlation while twice the period lines up:
+    // smooth the envelope by ~20 ms first
+    const env2 = smoothWeighted(env, new Float64Array(n).fill(1), Math.max(0.8, 0.02 * fr));
+    const ac = lag => { let s = 0; for (let i = lag; i < n; i++) s += env2[i] * env2[i - lag]; return s / (n - lag); };
+    const ac0 = ac(0);
+    if (!(ac0 > 0)) return { bpm: NaN, strength: 0 };
+    const lo = Math.max(2, Math.floor(60 * fr / 220)), hi = Math.min(n - 2, Math.ceil(60 * fr / 40));
+    let best = -1, bestV = -Infinity;
+    const vals = [];
+    for (let L = lo - 1; L <= hi + 1; L++) vals[L] = ac(L);
+    for (let L = lo; L <= hi; L++) {
+      const bpm = 60 * fr / L, wgt = Math.exp(-0.5 * Math.log2(bpm / 120) ** 2);
+      if (vals[L] * wgt > bestV && vals[L] >= vals[L - 1] && vals[L] >= vals[L + 1]) { bestV = vals[L] * wgt; best = L; }
+    }
+    if (best < 0) return { bpm: NaN, strength: 0 };
+    const a = vals[best - 1], b = vals[best], c = vals[best + 1], den = a - 2 * b + c, p = den < 0 ? 0.5 * (a - c) / den : 0;
+    return { bpm: 60 * fr / (best + p), strength: b / ac0 };
+  }
+  // Key: Krumhansl–Kessler probe-tone profiles correlated with the pitch-class profile of the
+  // detected notes (salience-weighted, loud enough frames only). r is the Pearson correlation.
+  const KK_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+  const KK_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+  const KEY_NAMES = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
+  const KEY_NAMES_MINOR = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'B♭', 'B'];
+  function pearson(a, b) {
+    const n = a.length, ma = a.reduce((p, q) => p + q, 0) / n, mb = b.reduce((p, q) => p + q, 0) / n;
+    let num = 0, da = 0, db = 0;
+    for (let i = 0; i < n; i++) { num += (a[i] - ma) * (b[i] - mb); da += (a[i] - ma) ** 2; db += (b[i] - mb) ** 2; }
+    return da > 0 && db > 0 ? num / Math.sqrt(da * db) : 0;
+  }
+  // Best key plus the runner-up (often the dominant or relative key: the profiles overlap a lot).
+  function keyFromProfile(pcp) {
+    const all = [];
+    for (let t = 0; t < 12; t++) for (const [mode, prof] of [['major', KK_MAJOR], ['minor', KK_MINOR]]) {
+      const rot = prof.map((_, i) => prof[(i - t + 12) % 12]);
+      all.push({ tonic: t, mode, r: pearson(pcp, rot), name: (mode === 'major' ? KEY_NAMES : KEY_NAMES_MINOR)[t] + ' ' + mode });
+    }
+    all.sort((a, b) => b.r - a.r);
+    return { ...all[0], alt: all[1] };
+  }
+  function estimateKey(F) {
+    const pcp = new Array(12).fill(0), gate = noteGate(F);
+    for (let i = 0; i < F.rms.length; i++) {
+      if (F.rms[i] < gate) continue;
+      for (let r = 0; r < 3; r++) { const m = F.nm[3 * i + r]; if (isFinite(m)) pcp[((Math.round(m) % 12) + 12) % 12] += F.ns[3 * i + r]; }
+    }
+    return pcp.some(v => v > 0) ? keyFromProfile(pcp) : null;
+  }
+  function musicKpis(F) {
+    const gate = noteGate(F), n = F.rms.length, cents = [], roughs = [], midis = [];
+    let quiet = 0;
+    for (let i = 0; i < n; i++) {
+      if (F.rms[i] < gate) { quiet++; continue; }
+      if (isFinite(F.centroid[i])) cents.push(F.centroid[i]);
+      roughs.push(F.roughness[i]);
+      for (let r = 0; r < 3; r++) { const m = F.nm[3 * i + r]; if (isFinite(m)) midis.push(m); }
+    }
+    const sorted = a => a.sort((p, q) => p - q);
+    sorted(cents); sorted(roughs); sorted(midis);
+    const on = onsets(F), playing = (n - quiet) / effFrameRate(F);
+    return {
+      tempo: tempo(F), key: estimateKey(F),
+      pitchLo: percentile(midis, 0.05), pitchHi: percentile(midis, 0.95),
+      brightness: percentile(cents, 0.5), roughness: percentile(roughs, 0.5),
+      notesPerSec: playing > 0 ? on.length / playing : NaN, quietPct: n ? 100 * quiet / n : NaN,
+    };
+  }
+
   // ---------- palettes ----------
   const PALETTES = {
     dusk: ['#46407a', '#4f6797', '#4a8b93', '#66a28d', '#9aae7c', '#d6a94f', '#ecd394'],
@@ -615,6 +781,7 @@ const Ribbon = (() => {
   }
 
   return {
+    kWeighting, loudness, onsets, tempo, keyFromProfile, estimateKey, musicKpis, KK_MAJOR,
     findPeaks, roughness, findNotes, noteGate, trackNotes, linkVoices, voices, pitchCenter, toMidi, noteName,
     FFT_SIZE, HOP, PEAK_FFT, encodeWav, fileName, extForMime, extForMagic, fft, hann, spectrumFeatures, newFeatures, pushFrame, analyzeSteps, analyze, mixToMono, frameTime,
     silentLevel, frameValue, percentile, valueRange, gauss, smoothWeighted, columns, PALETTES, paletteRgb, NOTE, pitchRgb,
@@ -765,6 +932,48 @@ const RibbonTests = {
       const center = R.pitchCenter(M, 4);
       check('moving median sits inside the melody', center(0.6) >= 60 && center(0.6) <= 67, R.noteName(center(0.6)));
     }
+    // 7. loudness against BS.1770 / EBU 3342 reference values
+    {
+      const [sh, hp] = R.kWeighting(48000);
+      const ref = [1.53512485958697, -2.69169618940638, 1.19839281085285, -1.69065929318241, 0.73248077421585, -1.99004745483398, 0.99007225036621];
+      const got = [...sh.b, sh.a[1], sh.a[2], hp.a[1], hp.a[2]];
+      check('K-weighting at 48 kHz matches the BS.1770 coefficient table', got.every((v, k) => Math.abs(v - ref[k]) < 1e-8), 'max err ' + Math.max(...got.map((v, k) => Math.abs(v - ref[k]))).toExponential(1));
+      const sine = (secs, dbfs, fs = 48000, f = 997) => { const a = 10 ** (dbfs / 20), x = new Float32Array(Math.round(secs * fs)); for (let i = 0; i < x.length; i++) x[i] = a * Math.sin(2 * Math.PI * f * i / fs); return x; };
+      const st = R.loudness([sine(20, -23), sine(20, -23)], 48000);
+      check('stereo 997 Hz sine at −23 dBFS reads −23.0 LUFS (EBU 3341 case)', Math.abs(st.lufs + 23) < 0.05, st.lufs.toFixed(2) + ' LUFS');
+      const mo = R.loudness([sine(10, -20, 44100)], 44100);
+      check('mono sine at −20 dBFS reads −23.0 LUFS at 44.1 kHz', Math.abs(mo.lufs + 23.01) < 0.05 && Math.abs(mo.peakDb + 20) < 0.01, `${mo.lufs.toFixed(2)} LUFS, peak ${mo.peakDb.toFixed(2)} dBFS`);
+      const two = new Float32Array(40 * 48000); two.set(sine(20, -20), 0); two.set(sine(20, -30), 20 * 48000);
+      const lr = R.loudness([two, two], 48000);
+      check('loudness range: 20 s at −20 then 20 s at −30 dBFS gives 10 LU (EBU 3342 case 1)', Math.abs(lr.lra - 10) < 1, lr.lra.toFixed(2) + ' LU');
+      const gated = new Float32Array(30 * 48000); gated.set(sine(10, -23), 0);   // 20 s of silence after
+      const gl = R.loudness([gated], 48000);
+      // mono −23 dBFS alone is −26.0 LUFS; averaged with 20 s of silence ungated it would be −30.8
+      check('silence is gated out of integrated loudness', Math.abs(gl.lufs + 26.01) < 0.1, gl.lufs.toFixed(2) + ' LUFS (ungated would be −30.8)');
+    }
+    // 8. musical key figures
+    {
+      const harm = (f0, amps) => amps.map((a, h) => [f0 * (h + 1), a]);
+      const hz = m => 440 * 2 ** ((m - 69) / 12);
+      // plucked notes: fast attack, exponential decay
+      // plucked notes with a 5 ms attack and a 20 ms fade-out (an abrupt end is a click, i.e. a real onset)
+      const pluck = (len, parts, decay = 6) => { const n = Math.round(len * sr), x = new Float32Array(n); for (let i = 0; i < n; i++) { const t = i / sr, env = Math.min(1, t / 0.005, (len - t) / 0.02) * Math.exp(-decay * t); let v = 0; for (const [f, a] of parts) v += a * Math.sin(2 * Math.PI * f * t); x[i] = v * env; } return x; };
+      const train = (secs, bpm, midiOf) => { const x = new Float32Array(Math.round(secs * sr)), step = 60 / bpm; for (let k = 0; 0.25 + k * step < secs - 0.45; k++) { const p = pluck(0.45, harm(hz(midiOf(k)), [0.3, 0.15, 0.08])), o = Math.round((0.25 + k * step) * sr); for (let i = 0; i < p.length && o + i < x.length; i++) x[o + i] += p[i]; } return x; };
+      const melody = [60, 64, 67, 72, 67, 64];
+      const T120 = R.analyze(train(20, 120, k => melody[k % 6]), sr), t120 = R.tempo(T120);
+      check('tempo of a 120 BPM note train', Math.abs(t120.bpm - 120) < 2, t120.bpm.toFixed(1) + ' BPM, strength ' + t120.strength.toFixed(2));
+      const T90 = R.analyze(train(20, 90, k => melody[k % 6]), sr), t90 = R.tempo(T90);
+      check('tempo of a 90 BPM note train (no octave error)', Math.abs(t90.bpm - 90) < 2, t90.bpm.toFixed(1) + ' BPM');
+      const on = R.onsets(T120), k120 = R.musicKpis(T120);
+      check('onsets: one per note at 2 notes/s', Math.abs(on.length - 39) <= 1 && Math.abs(k120.notesPerSec - 2) < 0.3, `${on.length} onsets for 39 notes, ${k120.notesPerSec.toFixed(2)} notes/s`);
+      check('pitch range spans the melody (C4–C5)', Math.round(k120.pitchLo) === 60 && Math.round(k120.pitchHi) === 72, R.noteName(k120.pitchLo) + '–' + R.noteName(k120.pitchHi));
+      check('KK profile itself scores r = 1 as C major', (() => { const k = R.keyFromProfile(R.KK_MAJOR); return k.name === 'C major' && Math.abs(k.r - 1) < 1e-12; })());
+      const chords = (seq, secs) => { const x = new Float32Array(Math.round(seq.length * secs * sr)); seq.forEach((ch, k) => { const p = pluck(secs, ch.flatMap(m => harm(hz(m), [0.2, 0.1, 0.05])), 2); x.set(p, Math.round(k * secs * sr)); }); return x; };
+      const cMaj = R.estimateKey(R.analyze(chords([[60, 64, 67], [65, 69, 72], [67, 71, 74], [60, 64, 67], [48, 60, 64, 67]], 1), sr));
+      check('key of C–F–G–C is C major', cMaj && cMaj.name === 'C major', cMaj && `${cMaj.name}, r = ${cMaj.r.toFixed(2)}`);
+      const aMin = R.estimateKey(R.analyze(chords([[57, 60, 64], [62, 65, 69], [64, 68, 71], [57, 60, 64], [45, 57, 60, 64]], 1), sr));
+      check('key of Am–Dm–E–Am is A minor', aMin && aMin.name === 'A minor', aMin && `${aMin.name}, r = ${aMin.r.toFixed(2)}`);
+    }
     check('percentile interpolates', R.percentile([0, 10], 0.25) === 2.5 && R.percentile([5], 0.98) === 5);
     check('palette ends', R.paletteRgb('dusk', 0).join() === '70,64,122' && R.paletteRgb('dusk', 1).join() === '236,211,148');
     check('pitch colors are distinct', new Set(R.NOTE.map((_, i) => R.pitchRgb(i).join())).size === 12);
@@ -810,6 +1019,7 @@ const S = () => ({
   feature: $('feature').value, colorScope: $('colorScope').value, palette: $('palette').value,
   heightMode: $('heightMode').value, heightScope: $('heightScope').value, timeScope: $('timeScope').value,
   smooth: +$('smooth').value, rowH: +$('rowH').value, zoom: +$('zoom').value,
+  kpi: $('showKpi').checked,
   pitch: $('showPitch').checked, pWin: +$('pWin').value, pRange: +$('pRange').value, pJump: +$('pJump').value, rough: $('showRough').checked,
 });
 
@@ -835,7 +1045,9 @@ async function analyzeBuffer(row, buffer) {
       t0 = performance.now();
     }
   }
-  row.F = F; row.status = 'ready'; row.cache = row.vcache = row.rcache = null;
+  const chans = []; for (let c = 0; c < buffer.numberOfChannels; c++) chans.push(buffer.getChannelData(c));
+  row.loud = R.loudness(chans, buffer.sampleRate);
+  row.F = F; row.status = 'ready'; row.cache = row.vcache = row.rcache = row.kcache = null;
   renderList(); scheduleDraw();
 }
 async function decodeInto(row, arrayBuffer) {
@@ -1030,7 +1242,9 @@ function computeLayout(W, s) {
   });
   if (!rowsAt.length) y += 60;
   const axisY = y - 6;
-  return { W, H: axisY + L.axisH + legendBlock(measureCtx, plotX, 0, plotW, s, false) + 24, plotX, plotW, secPerPx, maxDur, rowsAt, axisY };
+  const legendH = legendBlock(measureCtx, plotX, 0, plotW, s, false);
+  const tableY = axisY + L.axisH + legendH + 30, tableH = s.kpi ? kpiTable(measureCtx, plotX, 0, plotW, false) : 0;
+  return { W, H: (tableH ? tableY + tableH : axisY + L.axisH + legendH) + 24, plotX, plotW, secPerPx, maxDur, rowsAt, axisY, tableY };
 }
 
 function rowColumns(at, s, dpr) {
@@ -1164,6 +1378,91 @@ function renderPoster(ctx, lay, s, dpr) {
   } else { ctx.textAlign = 'left'; ctx.fillText('each row is stretched to the full width (lengths not comparable)', plotX, ay + 18); }
 
   legendBlock(ctx, plotX, ay + L.axisH, plotW, s, true);
+  if (s.kpi) kpiTable(ctx, plotX, lay.tableY, plotW, true);
+}
+
+// ---------------- key figures table ----------------
+function rowKpis(row) {
+  const key = row.F.rms.length;
+  if (row.kcache && row.kcache.key === key) return row.kcache.k;
+  const k = R.musicKpis(row.F);
+  row.kcache = { key, k };
+  return k;
+}
+const fmtNum = (v, d) => isFinite(v) ? v.toFixed(d).replace('-', '−') : '–';
+const KPI_COLS = [
+  { h: 'Loudness', u: 'LUFS integrated', v: (r, k) => r.loud && r.loud.lufs, f: v => fmtNum(v, 1) },
+  { h: 'Loudness range', u: 'LU', v: (r, k) => r.loud && r.loud.lra, f: v => fmtNum(v, 1) },
+  { h: 'Peak', u: 'dBFS sample', v: (r, k) => r.loud && r.loud.peakDb, f: v => fmtNum(v, 1), sub: (r, k) => r.loud && r.loud.peakDb > 0 ? 'over full scale' : '' },
+  { h: 'Peak-to-loudness', u: 'dB', v: (r, k) => r.loud && r.loud.plr, f: v => fmtNum(v, 1) },
+  { h: 'Tempo', u: 'BPM', v: (r, k) => k.tempo.bpm, f: v => fmtNum(v, 0), sub: (r, k) => isFinite(k.tempo.bpm) ? (k.tempo.strength > 0.5 ? 'clear beat' : k.tempo.strength > 0.3 ? 'some beat' : 'weak beat') : '' },
+  { h: 'Key', u: 'estimated', text: (r, k) => k.key ? k.key.name : '–', sub: (r, k) => k.key ? `r ${k.key.r.toFixed(2)}` + (k.key.alt.r > k.key.r - 0.06 ? ` · ${k.key.alt.name} close` : '') : '' },
+  { h: 'Pitch range', u: '5th–95th pct', text: (r, k) => isFinite(k.pitchLo) ? `${R.noteName(k.pitchLo)}–${R.noteName(k.pitchHi)}` : '–', v: (r, k) => k.pitchHi - k.pitchLo, f: () => '', sub: (r, k) => isFinite(k.pitchLo) ? `${Math.round(k.pitchHi - k.pitchLo)} semitones` : '' },
+  { h: 'Brightness', u: 'median centroid', v: (r, k) => k.brightness, f: v => isFinite(v) ? R.fmtHz(v) : '–' },
+  { h: 'Roughness', u: 'median', v: (r, k) => k.roughness, f: v => fmtNum(v, 3) },
+  { h: 'Notes', u: 'onsets / s', v: (r, k) => k.notesPerSec, f: v => fmtNum(v, 1) },
+  { h: 'Quiet', u: '% below −36 dB', v: (r, k) => k.quietPct, f: v => fmtNum(v, 1) + '%' },
+];
+// Draws (or measures) the table; splits the columns over several stacked tables when narrow.
+function kpiTable(ctx, x0, y0, plotW, draw) {
+  const list = rows.filter(r => r.F && r.F.rms.length && (r.status === 'ready' || r.status === 'recording'));
+  if (!list.length) return 0;
+  const data = list.map(r => ({ r, k: rowKpis(r) }));
+  const cells = KPI_COLS.map(c => data.map(({ r, k }) => {
+    const v = c.v ? c.v(r, k) : NaN;
+    return { v, text: c.text ? c.text(r, k) : c.f(v), sub: c.sub ? c.sub(r, k) : '' };
+  }));
+  const pad = 16, nameW = Math.min(230, plotW * 0.3), rowH = 36, headH = 38;
+  ctx.font = FONT(400, 13);
+  const widths = KPI_COLS.map((c, j) => {
+    let w = 0;
+    ctx.font = FONT(700, 11.5); w = Math.max(w, ctx.measureText(c.h).width);
+    ctx.font = FONT(400, 10.5); w = Math.max(w, ctx.measureText(c.u).width);
+    for (const cell of cells[j]) { ctx.font = FONT(600, 13); w = Math.max(w, ctx.measureText(cell.text).width); ctx.font = FONT(400, 10.5); w = Math.max(w, ctx.measureText(cell.sub).width); }
+    return Math.ceil(w) + pad;
+  });
+  // group columns into chunks that fit next to the name column
+  const chunks = [[]];
+  let used = nameW;
+  widths.forEach((w, j) => { if (used + w > plotW && chunks[chunks.length - 1].length) { chunks.push([]); used = nameW; } chunks[chunks.length - 1].push(j); used += w; });
+  let y = y0;
+  if (draw) { ctx.fillStyle = '#1f1f1f'; ctx.font = FONT(700, 15); ctx.textAlign = 'left'; ctx.fillText('Key figures', x0, y + 14); }
+  y += 26;
+  for (const chunk of chunks) {
+    if (draw) {
+      ctx.textAlign = 'left';
+      let x = x0 + nameW;
+      for (const j of chunk) {
+        ctx.fillStyle = '#333'; ctx.font = FONT(700, 11.5); ctx.fillText(KPI_COLS[j].h, x, y + 14);
+        ctx.fillStyle = '#888'; ctx.font = FONT(400, 10.5); ctx.fillText(KPI_COLS[j].u, x, y + 28);
+        x += widths[j];
+      }
+      const tw = Math.min(plotW, chunk.reduce((a, j) => a + widths[j], nameW));
+      ctx.strokeStyle = '#cfcfcf'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x0, y + headH - 2.5); ctx.lineTo(x0 + tw, y + headH - 2.5); ctx.stroke();
+      data.forEach(({ r }, i) => {
+        const ry = y + headH + i * rowH;
+        ctx.fillStyle = '#222'; ctx.font = FONT(600, 12.5);
+        let name = r.name; while (name.length > 3 && ctx.measureText(name).width > nameW - 24) name = name.slice(0, -2);
+        if (name !== r.name) name = name.trimEnd() + '…';
+        ctx.fillText(name, x0, ry + 15);
+        let x = x0 + nameW;
+        for (const j of chunk) {
+          const cell = cells[j][i], col = cells[j].map(c => c.v).filter(Number.isFinite);
+          if (isFinite(cell.v) && col.length > 1) {
+            const lo = Math.min(...col), hi = Math.max(...col), t = hi > lo ? (cell.v - lo) / (hi - lo) : 1;
+            ctx.fillStyle = '#3f6f8f30'; ctx.fillRect(x, ry + 28, Math.max(3, t * (widths[j] - pad)), 3);
+          }
+          ctx.fillStyle = '#1f1f1f'; ctx.font = FONT(600, 13); ctx.fillText(cell.text, x, ry + 15);
+          if (cell.sub) { ctx.fillStyle = '#888'; ctx.font = FONT(400, 10.5); ctx.fillText(cell.sub, x, ry + 26); }
+          x += widths[j];
+        }
+        ctx.strokeStyle = '#ececec'; ctx.beginPath(); ctx.moveTo(x0, ry + rowH - 0.5); ctx.lineTo(x0 + tw, ry + rowH - 0.5); ctx.stroke();
+      });
+    }
+    y += headH + data.length * rowH + 18;
+  }
+  return y - y0;
 }
 
 function wrapLines(ctx, text, maxW) {
@@ -1459,7 +1758,7 @@ $('btnCommons').addEventListener('click', () => { addLink($('commons').value); $
 $('commons').addEventListener('keydown', e => { if (e.key === 'Enter') { addLink($('commons').value); $('commons').value = ''; } });
 $('btnPlay').addEventListener('click', togglePlay);
 $('btnPng').addEventListener('click', savePng);
-for (const id of ['feature', 'colorScope', 'palette', 'heightMode', 'heightScope', 'timeScope', 'smooth', 'rowH', 'title', 'subtitle', 'showPitch', 'pWin', 'pRange', 'pJump', 'showRough', 'zoom']) {
+for (const id of ['feature', 'colorScope', 'palette', 'heightMode', 'heightScope', 'timeScope', 'smooth', 'rowH', 'title', 'subtitle', 'showPitch', 'pWin', 'pRange', 'pJump', 'showRough', 'zoom', 'showKpi']) {
   $(id).addEventListener('input', () => { syncLabels(); scheduleDraw(); });
 }
 function syncLabels() {

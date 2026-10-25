@@ -34,7 +34,7 @@ The owner asked for a standalone page that visualizes audio from the microphone 
 
 ## Engine
 
-The engine is the `shared-code` block, tested from Node by `test.mjs` (41 tests).
+The engine is the `shared-code` block, tested from Node by `test.mjs` (53 tests).
 
 - Mono mix, 2048-point Hann FFT, hop 1024.
 - Per-frame RMS, centroid (magnitude-weighted), 85% rolloff, flatness (geometric/arithmetic mean of power), and a 12-bin chroma over 55 Hz–4.2 kHz.
@@ -56,6 +56,19 @@ The owner asked for sparklines of "the 3 most significant FFT components" that r
   - At the 1× poster scale a pixel holds a dozen notes, and per-voice lines were unreadable scribble (seen in the first screenshot). So when zoomed out, the strip draws per-column loudness-weighted 85th/50th/15th percentiles: the contour of the upper voice, the middle and the bass.
   - A zoom control (1×–16×, horizontal scroll, canvas capped at 30k device px) reaches the per-voice view, colored by salience rank.
 - **Live microphone:** a second AnalyserNode (fftSize 8192) feeds the peaks.
+
+## Key figures table (owner request, 2026-10-25)
+
+The owner asked for "KPIs" and picked a per-recording panel. It is drawn on the poster canvas under the legend (so Save PNG includes it), with a faint bar per numeric cell comparing recordings within the column. Columns split into stacked tables when narrow.
+
+- **Loudness:** ITU-R BS.1770-4 integrated loudness, using K-weighting derived for any sample rate, 400 ms blocks every 100 ms, gates at −70 LUFS and −10 LU. Loudness range follows EBU Tech 3342 (3 s windows, gates −70/−20, p95 − p10). Also sample peak and peak-to-loudness.
+  - Tests: the 48 kHz coefficient table to 1e-15, the EBU −23 dBFS stereo tone at −23.00 LUFS, mono −20 dBFS at −23.01, and LRA case 1 at exactly 10.00 LU.
+  - On the four Commons files it agrees with pyloudnorm to +0.046 LU every time. That constant offset is pyloudnorm's: its default K-filter uses rounded parameters (shelf at 1500 Hz) and reads −23.04 on the EBU tone.
+  - Measured values: −24.0 / −32.4 / −17.3 / −17.7 LUFS. The Valkyries file peaks at +0.6 dBFS, so it is clipped, and the table flags it.
+- **Onsets:** peaks of log-compressed spectral flux (2048 FFT, ≤ 11 kHz), local max ±2 frames, above the local mean + 0.12 after normalising by the 95th percentile. In testing, an abrupt synthetic note end is a click and counts as a real onset; the test notes now fade out.
+- **Tempo:** autocorrelation of the onset envelope, 40–220 BPM, log-Gaussian prior at 120 BPM (σ = 1 octave). The envelope is smoothed ~20 ms first; without that, a 120 BPM train (21.5-frame period) read 60 BPM. The beat-strength label comes from the autocorrelation at the chosen lag relative to lag 0. On rubato or triplet classical music expect multiples or fractions of the written beat.
+- **Key:** Krumhansl–Kessler correlation on a salience-weighted pitch-class profile of the detected notes. A runner-up within 0.06 is named. Real files: Für Elise A minor, Moonlight C♯ minor, Valkyries B minor (B major close), all correct. Danse macabre reads D minor (r 0.63) against its written G minor; kept as measured and explained on the page.
+- **Also:** pitch range (5th–95th percentile of the notes; the 1921 acoustic Valkyries has no bass, so it starts at G3), median brightness, median roughness, onsets per playing second, % quiet (below the −36 dB note gate).
 
 ## Notes
 
