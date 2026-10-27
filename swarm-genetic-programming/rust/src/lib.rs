@@ -7,7 +7,9 @@
 
 pub mod course;
 pub mod fitness;
+pub mod ga;
 pub mod interp;
+pub mod library;
 pub mod path;
 pub mod program;
 pub mod reference;
@@ -17,3 +19,5 @@ pub mod world;
 
 #[cfg(test)]
 mod world_tests;
+#[cfg(test)]
+mod ga_tests;
