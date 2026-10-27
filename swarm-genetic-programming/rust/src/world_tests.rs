@@ -211,7 +211,9 @@ fn exhausted_creature_blocks() {
     let left = if w.creatures[0].x == 1 { 0 } else { 1 };
     w.creatures[left].state = CreatureState::Active;
     w.creatures[left].energy = 100;
+    assert_eq!(call(&mut w, left, WALK_TO_XY, &[5, 1])[0], MOVED, "queues up behind it");
     assert_eq!(call(&mut w, left, WALK_TO_XY, &[5, 1])[0], BLOCKED, "the exhausted creature still fills the corridor");
+    assert_eq!(pos(&w, left), (2, 1));
 }
 
 #[test]
@@ -484,4 +486,32 @@ fn every_course_map_parses() {
         }
         assert!(w.creatures.iter().all(|cr| w.exit_distance(cr.x, cr.y) > 0), "{}: exit reachable ignoring gates", c.name);
     }
+}
+
+#[test]
+fn creatures_queue_through_a_one_cell_corridor() {
+    // Without queueing, the follower sees no path while the leader is in the
+    // corridor and only starts once it has left.
+    let map = "\
+###########
+#SS......E#
+###########";
+    let p = Program::parse(crate::reference::EXIT).unwrap();
+    let mut w = World::from_map(map, params(2), 1, vec![p]).unwrap();
+    for _ in 0..10 {
+        w.step();
+    }
+    assert_eq!(w.arrived(), 2);
+}
+
+#[test]
+fn queueing_never_steps_into_a_creature() {
+    let map = "\
+#####
+#SSE#
+#####";
+    let mut w = world(map, 2);
+    let back = if w.creatures[0].x == 1 { 0 } else { 1 };
+    assert_eq!(call(&mut w, back, WALK_TO_KIND, &[EXIT as i64])[0], BLOCKED, "waits behind the leader");
+    assert_eq!(pos(&w, back), (1, 1));
 }

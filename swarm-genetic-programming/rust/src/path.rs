@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use crate::world::{EMPTY, EXIT, FOOD, GATE, WALL};
+use crate::world::{CREATURE, EMPTY, EXIT, FOOD, GATE, WALL};
 
 pub const NODE_BUDGET: usize = 4096;
 
@@ -46,8 +46,14 @@ impl Grid<'_> {
     /// Can a creature move from (x, y) by (dx, dy)? Checks the corner rule
     /// and that the destination is passable.
     pub fn can_move(&self, x: i32, y: i32, dx: i32, dy: i32) -> bool {
+        self.can_move_through(x, y, dx, dy, false)
+    }
+
+    /// Like `can_move`, but with `through_creatures` a creature's cell counts
+    /// as passable (for planning a queue, never for moving).
+    pub fn can_move_through(&self, x: i32, y: i32, dx: i32, dy: i32, through_creatures: bool) -> bool {
         match self.at(x + dx, y + dy) {
-            Some(k) if passable(k) => {}
+            Some(k) if passable(k) || (through_creatures && k == CREATURE) => {}
             _ => return false,
         }
         if dx != 0 && dy != 0 {
@@ -87,12 +93,15 @@ impl Scratch {
 
 /// First move of a shortest path from `from` to any cell where `goal(index)`
 /// holds. `radius` limits the search to cells within that Chebyshev distance.
+/// With `through_creatures`, other creatures don't block the search (the
+/// first step may then be into a creature's cell; the caller waits).
 pub fn first_step(
     grid: &Grid,
     scratch: &mut Scratch,
     from: (u16, u16),
     goal: &dyn Fn(usize) -> bool,
     radius: Option<u16>,
+    through_creatures: bool,
 ) -> PathResult {
     let w = grid.w as usize;
     let start = from.1 as usize * w + from.0 as usize;
@@ -118,7 +127,7 @@ pub fn first_step(
                     continue;
                 }
             }
-            if !grid.can_move(cx, cy, dx, dy) {
+            if !grid.can_move_through(cx, cy, dx, dy, through_creatures) {
                 continue;
             }
             let ni = ny as usize * w + nx as usize;
@@ -132,7 +141,7 @@ pub fn first_step(
                 return PathResult::Step((f % w) as u16, (f / w) as u16);
             }
             // Food and exits end a path: stepping on them eats / leaves.
-            if grid.kind[ni] == EMPTY {
+            if grid.kind[ni] == EMPTY || (through_creatures && grid.kind[ni] == CREATURE) {
                 scratch.queue.push_back(ni as u32);
             }
         }

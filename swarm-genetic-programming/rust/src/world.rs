@@ -470,7 +470,17 @@ impl World {
         }
         let from = (self.creatures[ci].x, self.creatures[ci].y);
         let mut scratch = std::mem::take(&mut self.scratch);
-        let result = path::first_step(&self.grid(), &mut scratch, from, &|i| goal(self, i), self.params.sense_radius);
+        let radius = self.params.sense_radius;
+        let mut result = path::first_step(&self.grid(), &mut scratch, from, &|i| goal(self, i), radius, false);
+        if result == PathResult::Blocked {
+            // No free path: plan through the other creatures and queue
+            // behind them, moving only when the next cell is free.
+            result = match path::first_step(&self.grid(), &mut scratch, from, &|i| goal(self, i), radius, true) {
+                PathResult::Step(nx, ny) if self.kind_at(nx, ny) == CREATURE => PathResult::Blocked,
+                PathResult::Arrived => PathResult::Blocked,
+                r => r,
+            };
+        }
         self.scratch = scratch;
         match result {
             PathResult::Arrived => ARRIVED,

@@ -6,9 +6,11 @@
 //! in a library, like LODA's mined programs.
 
 pub mod course;
+pub mod fitness;
 pub mod interp;
 pub mod path;
 pub mod program;
+pub mod reference;
 pub mod registry;
 pub mod rng;
 pub mod world;
