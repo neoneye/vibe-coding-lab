@@ -14,7 +14,7 @@ e-waste plants, spas, sports centers, bicycle repair shops, abattoirs,
 anatomy institutes, parliaments, sushi restaurants, airport baggage halls,
 cryosleep labs, nuclear waste repositories, call centers, courthouses,
 dental clinics, paperclip factories, pharmaceutical factories, cow butcher
-facilities and breweries. Nothing is drawn or dragged by hand. Every plan is a pure function of
+facilities, breweries and panopticon prisons. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -467,6 +467,39 @@ overrides and humour lines, and always carries a tag line
   keg wash and fill, barrel-aging cellar of barrels stacked two high,
   taproom, yeast lab, spent grain bay, CO2 recovery, sensory panel, merch
   shop, CIP station.
+
+### Panopticon prison (added 2026-10-27)
+
+The first building whose signature is not on the grid. Rather than making the
+engine radial, the round part lives inside one hall:
+
+- **Drum halls**: a building with `drumHalls: n` asks the room splitter to keep
+  a square (or, by coin flip, double-square) piece of its deepest wings
+  unsplit, at most 36 m a side and only when the wing is at least 14 m deep.
+  The piece is flagged `drum`, nesting leaves it alone, and a mandatory kind
+  with `drum: true` (the rotunda) claims it over every other hall. Other
+  buildings' layouts and seeds are unchanged.
+- **Rotunda**: one to four drums along the hall's long axis (long ÷ short),
+  each with its 2 m entry passage turned toward the nearest door of the hall.
+  Too small (under 10 m) falls back to ordinary rows of cells.
+- **`drumGeom(it)`** is shared by the furnishing routine, the 2D symbol and
+  the 3D prims: outer wall, a ring of wedge cells about 2 m wide at the bars
+  (2.2–3.2 m deep), a 1 m gallery for the upper tiers, and a central tower.
+- **2D**: solid poché outer wall with the entry gap, radial cell walls, dashed
+  bars, dashed galleries (overhead convention), a louvred tower with a spiral
+  stair, dashed inspection lines from the tower to every cell, a covered
+  walkway to the entry, and a cot and a pissoir in every cell.
+- **3D**: 2–5 tiers (by drum size) of 2.7 m rising above the roof line; chord
+  panels for the outer wall with window slits and a lintel over the entry,
+  radial walls, barred fronts, cell floors, galleries with railings, a dark
+  tower with a glazed band per tier and a lamp on top, and a catwalk from the
+  first gallery to the tower.
+- **Rooms**: inspector's lodgings, speaking tube exchange and workshop, tower
+  rota office, a single auto-icon display, louvre and blind store, prison
+  workshop, guard tunnel head, key room, observation log archive, watchers'
+  watch room, moral reform classroom, visitors' gallery, plus the supermax's
+  sally port, intake, yard, mess, solitary, visitation and friends.
+- Not verified: walking through a drum in the first-person view.
 
 ### 3D views (added 2026-09-19)
 
