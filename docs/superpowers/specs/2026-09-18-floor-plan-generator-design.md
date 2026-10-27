@@ -12,8 +12,9 @@ training bases, casinos, schools, zoos, fertility clinics, escape room
 centers, night clubs, museums, chemical plants, recording studios, farms,
 e-waste plants, spas, sports centers, bicycle repair shops, abattoirs,
 anatomy institutes, parliaments, sushi restaurants, airport baggage halls,
-cryosleep labs, nuclear waste repositories, call centers, courthouses and
-dental clinics. Nothing is drawn or dragged by hand. Every plan is a pure function of
+cryosleep labs, nuclear waste repositories, call centers, courthouses,
+dental clinics, paperclip factories, pharmaceutical factories, cow butcher
+facilities and breweries. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -434,6 +435,38 @@ overrides and humour lines, and always carries a tag line
   orientation in tall rooms (the old code passed swapped dims, which the 3D
   truck exposed as negative box sizes). The robustness test now builds the
   3D model for every building and checks every primitive.
+
+### Paperclip factory, pharmaceutical factory, cow butcher facility, brewery (added 2026-10-27)
+
+- **Paperclip factory** (the maximizer joke): clip bending floor of clip
+  machines (a gem-clip glyph on each) between wire coils and heaps of
+  clips; wire drawing hall, wire coil store, galvanizing line, sorting and
+  counting with scales, finished clip warehouse of clip mountains and
+  pallets, bend test lab, a one-person AI alignment office, optimizer server
+  room, paperclip museum, colour coating, stapler intelligence, probe launch
+  planning, scrap steel intake with trucks.
+- **Pharmaceutical factory**: tablet press hall (rotary turrets, drums of
+  API, consoles), granulation, coating pans, encapsulation, blister packing
+  lines, gowning airlock, clean room, sterile fill suite with gloveboxes,
+  stability chambers, API warehouse, cold chain store, quarantine store, QA
+  release, batch record archive, retained samples, and a marketing
+  department that is mandatory and larger than R&D, plus a side-effect
+  naming room, lobbyist lounge and pricing committee.
+- **Cow butcher facility** (downstream of the abattoir: carcasses arrive,
+  cuts leave): carcass receiving and chill rooms with half-cow sides hanging
+  from rails, a breaking room of oak butcher blocks under one carcass rail,
+  dry-aging rooms with a glowing salt wall, mincing room, sausage kitchen,
+  smokehouse, bone room, vacuum packing, and a butcher's counter (back
+  worktop, aisle, glass display of red trays, built from 1.5 m modules so a
+  door only drops the module in front of it); burger R&D, cut chart office,
+  blast freezer, spice and casing store, apron laundry, chainmail glove store.
+- **Brewery**: brewhouse of copper vessels cycling mash tun, lauter tun,
+  kettle (with flue) and whirlpool, with clear "BREWHOUSE WINDOW" glass into
+  the taproom or a viewing bar; fermentation cellars of conical fermenters on
+  legs, bright tanks, malt store, grist mill, hop cold store, bottling line,
+  keg wash and fill, barrel-aging cellar of barrels stacked two high,
+  taproom, yeast lab, spent grain bay, CO2 recovery, sensory panel, merch
+  shop, CIP station.
 
 ### 3D views (added 2026-09-19)
 
