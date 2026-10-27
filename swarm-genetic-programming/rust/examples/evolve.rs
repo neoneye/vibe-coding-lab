@@ -14,6 +14,6 @@ fn main() {
         let mut ev = Evolver::new(i, seed, lib.seeds_for(i));
         while ev.generation < max_gen && ev.verified_best.is_none() { ev.step(&mut lib); }
         println!("{:>2} {:<18} gen {:>3} evals {:>6} {:>6.1}s best {:>7.1} verified {}", i, c.name, ev.generation, ev.evaluations, t.elapsed().as_secs_f64(), ev.best.1.fitness, ev.verified_best.is_some());
-        if let Some((p, _)) = &ev.verified_best { println!("{}", p.serialize()); }
+        match &ev.verified_best { Some((p, _)) => println!("{}", p.serialize()), None => println!("best (unverified):\n{}", ev.best.0.serialize()) }
     }
 }

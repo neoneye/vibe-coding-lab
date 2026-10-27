@@ -98,6 +98,8 @@ pub struct Station {
     pub gates: Vec<usize>,
     /// Creatures that answered wrong; each creature gets one guess.
     pub locked: Vec<u32>,
+    /// Some creature has read the task.
+    pub read: bool,
 }
 
 impl Station {
@@ -287,6 +289,7 @@ impl World {
                     best_err: i64::MAX,
                     gates: Vec::new(),
                     locked: Vec::new(),
+                    read: false,
                 }),
                 GATE => gates.push(i),
                 _ => {}
@@ -438,6 +441,7 @@ impl World {
             }
             READ_TASK => {
                 if let Some(s) = self.adjacent_station(ci) {
+                    self.stations[s].read = true;
                     out.copy_from_slice(&self.stations[s].params);
                 }
             }

@@ -193,3 +193,53 @@ fn seeds_for_skips_own_course() {
     assert_eq!(lib.seeds_for(3).len(), 2);
     assert_eq!(Library::new().entries.len(), courses().len());
 }
+
+#[test]
+fn mutation_can_chain_a_call_to_earlier_outputs() {
+    // read_task writes x, a0.. to $4..$8; a chained call takes its id
+    // register just below one of those outputs, so its first input is one.
+    let p = Program::parse("mov $3,8\nf05 $4,$3").unwrap();
+    let mut rng = Rng::new(9);
+    let chained = (0..2000)
+        .filter(|_| {
+            let q = mutate(&p, &mut rng);
+            q.instructions.iter().skip(2).any(|i| match *i {
+                Instruction::Call { inputs, source, .. } => inputs >= 1 && (4..=8).contains(&(source + 1)),
+                _ => false,
+            })
+        })
+        .count();
+    assert!(chained >= 60, "{} of 2000 mutations chain a call", chained);
+}
+
+#[test]
+fn mutation_can_combine_call_outputs() {
+    use crate::program::{Op, Src};
+    let p = Program::parse("mov $3,8\nf05 $4,$3").unwrap();
+    let mut rng = Rng::new(10);
+    let combined = (0..2000)
+        .filter(|_| {
+            mutate(&p, &mut rng).instructions.iter().any(|i| match *i {
+                Instruction::Calc { op: Op::Add | Op::Mul, target, src: Src::Reg(r) } => (4..=8).contains(&target) && (4..=8).contains(&r) && target != r,
+                _ => false,
+            })
+        })
+        .count();
+    assert!(combined >= 60, "{} of 2000 mutations combine outputs", combined);
+}
+
+#[test]
+fn a_generalising_program_is_verified_even_after_a_better_overfit_failed() {
+    use crate::fitness::Score;
+    let mut lib = Library::new();
+    let mut ev = Evolver::new(3, 1, vec![]);
+    // An overfit program with a high training score that fails verification.
+    let overfit = Program::parse("mov $1,1").unwrap();
+    ev.consider_best(&overfit, Score { fitness: 1400.0, arrived_frac: 1.0, solved_frac: 1.0, ticks_used: 40 }, &mut lib);
+    assert!(ev.verified_best.is_none());
+    let good = Program::parse(crate::reference::GATE).unwrap();
+    let s = evaluate(3, &[good.clone()], &TRAIN_SEEDS);
+    assert!(s.fitness < 1400.0 && s.fitness > 0.98 * 1400.0 - 100.0, "reference scores {}", s.fitness);
+    ev.consider_best(&good, Score { fitness: 1390.0, ..s }, &mut lib);
+    assert!(ev.verified_best.is_some(), "the slightly lower generalising program still gets verified");
+}

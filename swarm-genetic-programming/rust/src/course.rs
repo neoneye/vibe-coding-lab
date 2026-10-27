@@ -147,7 +147,7 @@ fn build_courses() -> Vec<Course> {
             name: "Gate: sum",
             description: "A gate blocks the exit. Solve the station's task a0 + a1 (x = 1) to open it.",
             map: GATE,
-            params: CourseParams { task: gate_task(1, (0, 9), (1, 1)), ..DEFAULT_PARAMS },
+            params: CourseParams { task: gate_task(1, (0, 99), (1, 1)), ..DEFAULT_PARAMS },
         },
         Course {
             name: "Gate: line",

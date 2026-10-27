@@ -39,6 +39,7 @@ pub fn run_world(course: usize, programs: &[Program], seed: u64) -> World {
 /// - 50 × closeness of the best answer at each unsolved station,
 ///   1 / (1 + log2(1 + error)), solved stations count 1
 /// - 50 × food eaten per swarm member (capped at 1)
+/// - 30 × fraction of stations whose task was read (a stepping stone)
 /// - −20 × fraction of the tick limit used
 /// - −0.5 per instruction of the candidate program
 pub fn score_world(w: &World, program_len: usize) -> Score {
@@ -60,9 +61,10 @@ pub fn score_world(w: &World, program_len: usize) -> Score {
         .sum::<f64>()
         / n;
     let stations = w.stations.len();
-    let (solved, closeness) = if stations == 0 {
-        (0.0, 0.0)
+    let (solved, closeness, read) = if stations == 0 {
+        (0.0, 0.0, 0.0)
     } else {
+        let read = w.stations.iter().filter(|s| s.read).count() as f64 / stations as f64;
         let solved = w.stations.iter().filter(|s| s.solved).count() as f64 / stations as f64;
         let closeness = w
             .stations
@@ -74,13 +76,14 @@ pub fn score_world(w: &World, program_len: usize) -> Score {
             })
             .sum::<f64>()
             / stations as f64;
-        (solved, closeness)
+        (solved, closeness, read)
     };
     let food = (w.food_eaten as f64 / n).min(1.0);
     // A stalled world ended early only to save time: score the full limit.
     let ticks = if w.stalled { w.params.ticks } else { w.tick };
     let ticks_frac = ticks as f64 / w.params.ticks.max(1) as f64;
     let fitness = 1000.0 * arrived + 200.0 * solved + 100.0 * progress + 50.0 * closeness + 50.0 * food
+        + 30.0 * read
         - 20.0 * ticks_frac
         - 0.5 * program_len as f64;
     Score { fitness, arrived_frac: arrived, solved_frac: solved, ticks_used: ticks }
@@ -157,6 +160,15 @@ mod tests {
         let some = evaluate(0, &[partial], &TRAIN_SEEDS);
         assert_eq!(some.arrived_frac, 0.0);
         assert!(some.fitness > empty.fitness + 5.0, "{} vs {}", some.fitness, empty.fitness);
+    }
+
+    #[test]
+    fn reading_the_task_scores_higher_than_standing_there() {
+        let stand = Program::parse("mov $10,5\nmov $11,4\nf11 $0,$10").unwrap();
+        let read = Program::parse("mov $10,5\nmov $11,4\nf11 $0,$10\nmov $12,8\nf05 $1,$12").unwrap();
+        let a = evaluate(3, &[stand], &TRAIN_SEEDS);
+        let b = evaluate(3, &[read], &TRAIN_SEEDS);
+        assert!(b.fitness > a.fitness + 10.0, "{} vs {}", b.fitness, a.fitness);
     }
 
     #[test]

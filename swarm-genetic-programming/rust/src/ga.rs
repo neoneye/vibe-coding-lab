@@ -49,8 +49,10 @@ fn random_call(rng: &mut Rng) -> Vec<Instruction> {
     let t = rng.below((REGISTER_COUNT - f.outputs as usize + 1) as u64) as u8;
     let mut out = vec![Instruction::Calc { op: Op::Mov, target: s, src: Src::Const(f.id) }];
     for k in 1..=f.inputs {
-        if rng.chance(0.6) {
-            out.push(Instruction::Calc { op: Op::Mov, target: s + k, src: Src::Const(random_constant(rng)) });
+        match rng.below(5) {
+            0 | 1 => out.push(Instruction::Calc { op: Op::Mov, target: s + k, src: Src::Const(random_constant(rng)) }),
+            2 | 3 => out.push(Instruction::Calc { op: Op::Mov, target: s + k, src: Src::Reg(random_reg(rng)) }),
+            _ => {}
         }
     }
     out.push(Instruction::Call { inputs: f.inputs, outputs: f.outputs, target: t, source: s });
@@ -174,7 +176,8 @@ pub fn mutate(p: &Program, rng: &mut Rng) -> Program {
         let mut ins = p.instructions.clone();
         let n = ins.len();
         let pick = |rng: &mut Rng| rng.below(n.max(1) as u64) as usize;
-        match rng.below(11) {
+        let calls: Vec<usize> = (0..n).filter(|&i| matches!(ins[i], Instruction::Call { outputs: 1.., .. })).collect();
+        match rng.below(13) {
             // change a constant
             0 | 1 => {
                 let consts: Vec<usize> = (0..n)
@@ -280,6 +283,47 @@ pub fn mutate(p: &Program, rng: &mut Rng) -> Program {
                 ins.insert(b, Instruction::LoopEnd);
                 ins.insert(a, Instruction::LoopBegin(count));
             }
+            // chain: a new call after an earlier one, reading its outputs
+            11 => {
+                if calls.is_empty() {
+                    continue;
+                }
+                let c = calls[rng.below(calls.len() as u64) as usize];
+                let Instruction::Call { outputs, target, .. } = ins[c] else { unreachable!() };
+                let f = &FUNCTIONS[rng.below(FUNCTIONS.len() as u64) as usize];
+                if f.inputs == 0 {
+                    continue;
+                }
+                // first input = output k of the earlier call
+                let k = rng.below(outputs as u64) as i64;
+                let src = target as i64 + k - 1;
+                if src < 0 || src as usize + f.inputs as usize >= REGISTER_COUNT {
+                    continue;
+                }
+                let t = rng.below((REGISTER_COUNT - f.outputs as usize + 1) as u64) as u8;
+                let at = c + 1 + rng.below((n - c) as u64) as usize;
+                let new = [
+                    Instruction::Calc { op: Op::Mov, target: src as u8, src: Src::Const(f.id) },
+                    Instruction::Call { inputs: f.inputs, outputs: f.outputs, target: t, source: src as u8 },
+                ];
+                ins.splice(at..at, new);
+            }
+            // combine two outputs of a call
+            12 => {
+                let multi: Vec<usize> = calls.iter().copied().filter(|&i| matches!(ins[i], Instruction::Call { outputs: 2.., .. })).collect();
+                if multi.is_empty() {
+                    continue;
+                }
+                let c = multi[rng.below(multi.len() as u64) as usize];
+                let Instruction::Call { outputs, target, .. } = ins[c] else { unreachable!() };
+                let a = target + rng.below(outputs as u64) as u8;
+                let b = target + rng.below(outputs as u64) as u8;
+                if a == b {
+                    continue;
+                }
+                let op = [Op::Add, Op::Mul, Op::Sub][rng.below(3) as usize];
+                ins.insert(c + 1, Instruction::Calc { op, target: a, src: Src::Reg(b) });
+            }
             // unwrap a loop
             _ => {
                 let loops: Vec<usize> = (0..n).filter(|&i| matches!(ins[i], Instruction::LoopBegin(_))).collect();
@@ -310,6 +354,13 @@ pub fn crossover(a: &Program, b: &Program, rng: &mut Rng) -> Program {
     repair(ins)
 }
 
+fn program_hash(p: &Program) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    p.serialize().hash(&mut h);
+    h.finish()
+}
+
 pub struct Evolver {
     pub course: usize,
     rng: Rng,
@@ -322,8 +373,8 @@ pub struct Evolver {
     pub history: Vec<f64>,
     pub best: (Program, Score),
     pub verified_best: Option<(Program, Score)>,
-    /// Highest fitness already sent to verification (avoids re-verifying).
-    tried_verify: f64,
+    /// Programs already sent to verification (by serialized text hash).
+    tried_verify: std::collections::HashSet<u64>,
     steps_in_generation: usize,
     pub evaluations: u64,
 }
@@ -346,7 +397,7 @@ impl Evolver {
             history: Vec::new(),
             best: (Program::default(), Score { fitness: f64::NEG_INFINITY, ..Score::default() }),
             verified_best: None,
-            tried_verify: f64::NEG_INFINITY,
+            tried_verify: std::collections::HashSet::new(),
             steps_in_generation: 0,
             evaluations: 0,
         }
@@ -369,13 +420,15 @@ impl Evolver {
         pick
     }
 
-    fn consider_best(&mut self, p: &Program, s: Score, library: &mut Library) {
+    pub fn consider_best(&mut self, p: &Program, s: Score, library: &mut Library) {
         if s.fitness > self.best.1.fitness {
             self.best = (p.clone(), s);
         }
+        // Verify any new candidate close to the best: a program that
+        // generalises may score a little below one that overfits.
         let improves_verified = self.verified_best.as_ref().map_or(true, |(_, v)| s.fitness > v.fitness);
-        if s.arrived_frac >= VERIFY_ARRIVED && s.fitness > self.tried_verify && improves_verified {
-            self.tried_verify = s.fitness;
+        let near_best = s.fitness >= self.best.1.fitness - 0.02 * self.best.1.fitness.abs();
+        if s.arrived_frac >= VERIFY_ARRIVED && near_best && improves_verified && self.tried_verify.insert(program_hash(p)) {
             if verify(self.course, std::slice::from_ref(p)) {
                 self.verified_best = Some((p.clone(), s));
                 library.offer(self.course, p.clone(), s.fitness, self.generation);

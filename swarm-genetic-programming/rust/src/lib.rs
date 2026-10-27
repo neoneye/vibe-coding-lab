@@ -6,6 +6,7 @@
 //! in a library, like LODA's mined programs.
 
 pub mod course;
+pub mod ffi;
 pub mod fitness;
 pub mod ga;
 pub mod interp;
