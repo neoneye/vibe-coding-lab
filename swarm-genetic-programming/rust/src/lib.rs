@@ -5,5 +5,6 @@
 //! that get the swarm through obstacle courses, and verified programs are kept
 //! in a library, like LODA's mined programs.
 
+pub mod interp;
 pub mod program;
 pub mod rng;
