@@ -177,7 +177,7 @@ pub fn mutate(p: &Program, rng: &mut Rng) -> Program {
         let n = ins.len();
         let pick = |rng: &mut Rng| rng.below(n.max(1) as u64) as usize;
         let calls: Vec<usize> = (0..n).filter(|&i| matches!(ins[i], Instruction::Call { outputs: 1.., .. })).collect();
-        match rng.below(13) {
+        match rng.below(14) {
             // change a constant
             0 | 1 => {
                 let consts: Vec<usize> = (0..n)
@@ -323,6 +323,23 @@ pub fn mutate(p: &Program, rng: &mut Rng) -> Program {
                 }
                 let op = [Op::Add, Op::Mul, Op::Sub][rng.below(3) as usize];
                 ins.insert(c + 1, Instruction::Calc { op, target: a, src: Src::Reg(b) });
+            }
+            // retarget a call: load another function id into its id
+            // register (right before it) and adopt that signature
+            13 => {
+                let all: Vec<usize> = (0..n).filter(|&i| matches!(ins[i], Instruction::Call { .. })).collect();
+                if all.is_empty() {
+                    continue;
+                }
+                let c = all[rng.below(all.len() as u64) as usize];
+                let Instruction::Call { target, source, .. } = ins[c] else { unreachable!() };
+                let f = &FUNCTIONS[rng.below(FUNCTIONS.len() as u64) as usize];
+                ins[c] = Instruction::Call { inputs: f.inputs, outputs: f.outputs, target, source };
+                let load = Instruction::Calc { op: Op::Mov, target: source, src: Src::Const(f.id) };
+                match c.checked_sub(1).map(|p| ins[p]) {
+                    Some(Instruction::Calc { op: Op::Mov, target: t, src: Src::Const(_) }) if t == source => ins[c - 1] = load,
+                    _ => ins.insert(c, load),
+                }
             }
             // unwrap a loop
             _ => {

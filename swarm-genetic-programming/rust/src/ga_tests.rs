@@ -243,3 +243,28 @@ fn a_generalising_program_is_verified_even_after_a_better_overfit_failed() {
     ev.consider_best(&good, Score { fitness: 1390.0, ..s }, &mut lib);
     assert!(ev.verified_best.is_some(), "the slightly lower generalising program still gets verified");
 }
+
+#[test]
+fn mutation_can_retarget_a_call() {
+    // Retargeting loads another function id into the call's id register and
+    // adopts that function's signature, in one step.
+    use crate::program::{Op, Src};
+    use crate::registry::signature;
+    let p = Program::parse("mov $10,5\nmov $11,7\nf11 $0,$10").unwrap();
+    let mut rng = Rng::new(11);
+    let retargeted = (0..2000)
+        .filter(|_| {
+            let q = mutate(&p, &mut rng);
+            let ins = &q.instructions;
+            let calls = ins.iter().filter(|i| matches!(i, Instruction::Call { .. })).count();
+            calls == 1
+                && ins.windows(2).any(|w| match (w[0], w[1]) {
+                    (Instruction::Calc { op: Op::Mov, target: 10, src: Src::Const(id) }, Instruction::Call { inputs, outputs, target: 0, source: 10 }) => {
+                        id != 5 && signature(id) == Some((inputs, outputs))
+                    }
+                    _ => false,
+                })
+        })
+        .count();
+    assert!(retargeted >= 60, "{} of 2000 mutations retarget the call", retargeted);
+}

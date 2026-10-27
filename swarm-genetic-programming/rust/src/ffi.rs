@@ -76,12 +76,12 @@ pub extern "C" fn course_count() -> u32 {
     courses().len() as u32
 }
 
-/// `name\ndescription\nwidth\nheight\nswarm\nticks`
+/// `name\ndescription\nwidth\nheight\nswarm\nticks\nevolution note`
 #[no_mangle]
 pub extern "C" fn course_info(i: u32) -> u32 {
     let Some(c) = courses().get(i as usize) else { return with(|s| s.set_out("")) };
     let w = World::new(i as usize, 1, vec![Program::default()]);
-    let text = format!("{}\n{}\n{}\n{}\n{}\n{}", c.name, c.description, w.w, w.h, c.params.swarm, c.params.ticks);
+    let text = format!("{}\n{}\n{}\n{}\n{}\n{}\n{}", c.name, c.description, w.w, w.h, c.params.swarm, c.params.ticks, c.evolution);
     with(|s| s.set_out(&text))
 }
 

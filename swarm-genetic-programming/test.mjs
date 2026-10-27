@@ -33,6 +33,10 @@ check(e.course_count() >= 7, `course_count ${e.course_count()}`);
 const info = readOut(e.course_info(0)).split("\n");
 check(info[0] === "Open field" && Number(info[2]) > 0, `course_info(0) ${JSON.stringify(info)}`);
 check(readOut(e.function_info()).split("\n").length >= 12, "function_info lists the registry");
+for (let i = 0; i < e.course_count(); i++) {
+  const note = readOut(e.course_info(i)).split("\n")[6] || "";
+  check(note.length > 10, `course ${i} says how far evolution gets (${note.slice(0, 40)}…)`);
+}
 
 e.ga_new(0, 7);
 e.ga_steps(400);
