@@ -5656,6 +5656,7 @@ const FloorPlanTests = {
     try { const parts = [FP.serialize(params), v === "plan" ? "" : "view=" + v].filter(Boolean); history.replaceState(null, "", parts.length ? "#" + parts.join("&") : location.pathname + location.search); } catch (e) { /* ignore */ }
   }
   for (const b of document.querySelectorAll("#views button")) b.addEventListener("click", () => setView(b.dataset.view));
+  document.addEventListener("fp3d-walk-here", () => setView("walk"));
   $("btn-resetview").addEventListener("click", () => window.FP3D && window.FP3D.resetView());
   document.addEventListener("keydown", (e) => {
     if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
@@ -5676,7 +5677,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 const FP3D = (() => {
   let renderer, scene, container, hud, persp, ortho, walkCam, orbit, group = null, labelGroup = null, ceilingMesh = null, sun;
   let mode = "iso", data = null, params = null, running = false, lastT = 0, initialised = false, placed = false;
-  const walk = { yaw: 0, pitch: 0, pos: new THREE.Vector3(), keys: Object.create(null), locked: false, eye: 1.65, radius: 0.28 };
+  const walk = { yaw: 0, pitch: 0, pos: new THREE.Vector3(), keys: Object.create(null), locked: false, eye: 1.65, radius: 0.28, picked: false };
   const colorCache = new Map();
   const mat = (color, opts) => {
     const key = color + "|" + JSON.stringify(opts || {});
@@ -5719,6 +5720,41 @@ const FP3D = (() => {
       container.requestFullscreen().then(() => { if (wasLocked && document.pointerLockElement !== canvas) canvas.requestPointerLock(); }).catch(() => {});
     });
     document.addEventListener("fullscreenchange", updateHud);
+    // street view: in the overhead view a ring follows the pointer over the floor; double-click drops the walker there,
+    // facing the way the overhead camera looks, and captures the mouse so walking starts at once
+    hoverRing = new THREE.Mesh(new THREE.RingGeometry(0.35, 0.55, 40), new THREE.MeshBasicMaterial({ color: 0x4fd1ff, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }));
+    hoverRing.rotation.x = -Math.PI / 2; hoverRing.renderOrder = 10; hoverRing.visible = false; scene.add(hoverRing);
+    canvas.addEventListener("pointermove", (e) => { if (mode !== "iso") return; if (e.buttons) { pointerNdc = null; return; } pointerNdc = ndc(e); hoverDirty = true; });
+    orbit.addEventListener("change", () => { hoverDirty = true; });
+    canvas.addEventListener("pointerleave", () => { pointerNdc = null; hoverRing.visible = false; });
+    canvas.addEventListener("dblclick", (e) => {
+      if (mode !== "iso" || !data) return;
+      const hit = pick(ndc(e)); if (!hit) return;
+      const [x, z] = nearestClear(hit.x, hit.z);
+      const cam = orbit.object; const dx = orbit.target.x - cam.position.x, dz = orbit.target.z - cam.position.z;
+      walk.pos.set(x, walk.eye, z); walk.picked = true; if (Math.hypot(dx, dz) > 1e-6) walk.yaw = Math.atan2(-dx, -dz); walk.pitch = -0.05;
+      hoverRing.visible = false; pointerNdc = null;
+      document.dispatchEvent(new CustomEvent("fp3d-walk-here"));
+      if (mode === "walk" && canvas.requestPointerLock) canvas.requestPointerLock();
+    });
+  }
+  let hoverRing = null, pointerNdc = null, hoverDirty = false; // pointerNdc: last pointer over the canvas, null when away or dragging
+  const raycaster = new THREE.Raycaster();
+  function ndc(e) { const r = renderer.domElement.getBoundingClientRect(); return new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); }
+  // first surface under the pointer (floor, furniture top, wall top); its plan position is where the walker would stand
+  function pick(v) { if (!group) return null; raycaster.setFromCamera(v, orbit.object); const hits = raycaster.intersectObjects(group.children, true); return hits.length ? hits[0].point : null; }
+  function nearestClear(x, z) {
+    if (!blocked(x, z)) return [x, z];
+    for (let r = 0.1; r <= 3.01; r += 0.1) for (let k = 0; k < 24; k++) { const a = k * Math.PI / 12, nx = x + Math.cos(a) * r, nz = z + Math.sin(a) * r; if (!blocked(nx, nz)) return [nx, nz]; }
+    return [x, z];
+  }
+  function updateHover() {
+    if (!hoverRing) return;
+    if (mode !== "iso" || !pointerNdc) { hoverRing.visible = false; return; }
+    if (!hoverDirty) return; hoverDirty = false; // re-pick only after the pointer or the camera moved, at most once a frame
+    const hit = pick(pointerNdc);
+    if (!hit) { hoverRing.visible = false; return; }
+    hoverRing.position.set(hit.x, hit.y + 0.04, hit.z); hoverRing.visible = true;
   }
   const leaveFullscreen = () => { if (document.fullscreenElement === container && document.exitFullscreen) document.exitFullscreen(); };
   function resize() {
@@ -5820,7 +5856,7 @@ const FP3D = (() => {
     persp.position.set(cx + Math.sin(az) * Math.cos(el) * fit, Math.sin(el) * fit, cz + Math.cos(az) * Math.cos(el) * fit);
     ortho.position.copy(persp.position); orbit.target.set(cx, 0, cz); ortho.lookAt(cx, 0, cz); orbit.update(); fitOrtho();
   }
-  function resetWalk() { if (!data) return; walk.pos.set(data.start.x, walk.eye, data.start.y); walk.yaw = -data.start.angle - Math.PI / 2; walk.pitch = -0.05; }
+  function resetWalk() { if (!data) return; walk.picked = false; walk.pos.set(data.start.x, walk.eye, data.start.y); walk.yaw = -data.start.angle - Math.PI / 2; walk.pitch = -0.05; }
   function setMode(m) {
     mode = m; orbit.enabled = mode === "iso";
     if (labelGroup) labelGroup.traverse(o => { if (o.isSprite) { o.material.depthTest = mode === "walk"; o.material.needsUpdate = true; } });
@@ -5828,12 +5864,13 @@ const FP3D = (() => {
     if (ceilingMesh) ceilingMesh.visible = mode === "walk";
     if (mode !== "walk" && walk.locked && document.exitPointerLock) document.exitPointerLock();
     if (mode !== "walk") leaveFullscreen();
+    if (hoverRing && mode !== "iso") hoverRing.visible = false;
     updateHud();
   }
   function updateHud() {
     if (!hud) return;
-    if (mode === "walk") { hud.className = ""; const fs = document.fullscreenElement ? "<kbd>F</kbd> leaves fullscreen." : "<kbd>F</kbd> fullscreen."; hud.innerHTML = walk.locked ? "<b>Walking.</b> WASD or arrows move, Shift runs, mouse looks, <kbd>Esc</kbd> releases the mouse. " + fs : "<b>Click the view to walk.</b> WASD or arrows move, Shift runs, mouse looks, <kbd>Esc</kbd> releases the mouse, " + fs + " You start at the entry."; }
-    else { hud.className = ""; hud.innerHTML = "<b>Overhead.</b> Drag to orbit, right-drag to pan, wheel to zoom. Roof removed for your viewing pleasure."; }
+    if (mode === "walk") { hud.className = ""; const fs = document.fullscreenElement ? "<kbd>F</kbd> leaves fullscreen." : "<kbd>F</kbd> fullscreen."; hud.innerHTML = walk.locked ? "<b>Walking.</b> WASD or arrows move, Shift runs, mouse looks, <kbd>Esc</kbd> releases the mouse. " + fs : "<b>Click the view to walk.</b> WASD or arrows move, Shift runs, mouse looks, <kbd>Esc</kbd> releases the mouse, " + fs + (walk.picked ? " You start where you double-clicked." : " You start at the entry; double-click in the overhead view to start anywhere."); }
+    else { hud.className = ""; hud.innerHTML = "<b>Overhead.</b> Drag to orbit, right-drag to pan, wheel to zoom. <b>Double-click</b> the floor to walk from there. Roof removed for your viewing pleasure."; }
   }
   // ---- walk physics: circle vs wall boxes, sliding
   function blocked(x, z) {
@@ -5862,13 +5899,15 @@ const FP3D = (() => {
     const dt = Math.min(0.05, (t - lastT) / 1000 || 0.016); lastT = t;
     if (!data) { requestAnimationFrame(frame); return; }
     let cam;
-    if (mode === "walk") { stepWalk(dt); cam = walkCam; } else { orbit.update(); cam = orbit.object; }
+    if (mode === "walk") { stepWalk(dt); cam = walkCam; } else { orbit.update(); updateHover(); cam = orbit.object; }
     if (labelGroup) labelGroup.visible = !!(params && params.labels3d);
     renderer.render(scene, cam);
     requestAnimationFrame(frame);
   }
   function show(v) { if (v && !running) { running = true; lastT = performance.now(); resize(); requestAnimationFrame(frame); } else if (!v) { running = false; if (walk.locked && document.exitPointerLock) document.exitPointerLock(); leaveFullscreen(); } }
-  return { init, build, setMode, show, resetView, resetWalk };
+  // read-only snapshot for debugging and browser checks
+  function debugState() { return { mode, running, ring: hoverRing ? { visible: hoverRing.visible, x: hoverRing.position.x, y: hoverRing.position.y, z: hoverRing.position.z } : null, walk: { x: walk.pos.x, z: walk.pos.z, yaw: walk.yaw, locked: walk.locked } }; }
+  return { init, build, setMode, show, resetView, resetWalk, debugState };
 })();
 window.FP3D = FP3D;
 document.dispatchEvent(new Event("fp3d-ready"));
