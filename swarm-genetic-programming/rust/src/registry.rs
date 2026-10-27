@@ -5,6 +5,8 @@ pub const ARRIVED: i64 = 1;
 pub const MOVED: i64 = 0;
 pub const BLOCKED: i64 = -1;
 pub const ALREADY_MOVED: i64 = -2;
+/// `submit_answer` after this creature already answered this station wrong.
+pub const LOCKED_OUT: i64 = -2;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FnInfo {
@@ -38,7 +40,7 @@ pub const FUNCTIONS: &[FnInfo] = &[
     FnInfo { id: SENSE_NEAREST, inputs: 1, outputs: 2, name: "sense_nearest", doc: "input kind; outputs id, distance (-1, -1 if none)" },
     FnInfo { id: WALK_TO_ID, inputs: 1, outputs: 1, name: "walk_to_id", doc: "walk toward a creature or thing by id; status" },
     FnInfo { id: READ_TASK, inputs: 0, outputs: 5, name: "read_task", doc: "outputs x, a0, a1, a2, a3 of an adjacent problem" },
-    FnInfo { id: SUBMIT_ANSWER, inputs: 1, outputs: 1, name: "submit_answer", doc: "1 accepted, 0 wrong, -1 no adjacent problem" },
+    FnInfo { id: SUBMIT_ANSWER, inputs: 1, outputs: 1, name: "submit_answer", doc: "1 accepted, 0 wrong, -1 no adjacent problem, -2 locked out (one guess per creature)" },
     FnInfo { id: MY_ENERGY, inputs: 0, outputs: 1, name: "my_energy", doc: "outputs energy" },
     FnInfo { id: GIVE_FOOD, inputs: 1, outputs: 1, name: "give_food", doc: "give energy to the hungriest adjacent creature; outputs amount given" },
 ];

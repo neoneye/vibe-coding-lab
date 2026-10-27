@@ -308,6 +308,7 @@ fn read_task_and_submit_open_gate() {
     assert_eq!(call(&mut w, 0, READ_TASK, &[]), t, "the task is fixed for the seed");
     assert_eq!(call(&mut w, 0, SUBMIT_ANSWER, &[truth + 1])[0], 0);
     assert_eq!(w.kind_at(5, 1), GATE);
+    w.stations[0].locked.clear();
     assert_eq!(call(&mut w, 0, SUBMIT_ANSWER, &[truth])[0], 1);
     assert_eq!(w.kind_at(3, 1), STATION_SOLVED);
     assert_eq!(w.kind_at(5, 1), EMPTY);
@@ -323,8 +324,10 @@ fn submit_outside_tolerance_records_best_err() {
     let truth = t[1] + t[2];
     assert_eq!(call(&mut w, 0, SUBMIT_ANSWER, &[truth + 10])[0], 0);
     assert_eq!(w.stations[0].best_err, 10);
+    w.stations[0].locked.clear();
     assert_eq!(call(&mut w, 0, SUBMIT_ANSWER, &[truth + 5])[0], 0);
     assert_eq!(w.stations[0].best_err, 5);
+    w.stations[0].locked.clear();
     assert_eq!(call(&mut w, 0, SUBMIT_ANSWER, &[truth - 2])[0], 1, "within tolerance 2");
     assert_eq!(w.stations[0].best_err, 2);
 }
@@ -514,4 +517,66 @@ fn queueing_never_steps_into_a_creature() {
     let back = if w.creatures[0].x == 1 { 0 } else { 1 };
     assert_eq!(call(&mut w, back, WALK_TO_KIND, &[EXIT as i64])[0], BLOCKED, "waits behind the leader");
     assert_eq!(pos(&w, back), (1, 1));
+}
+
+#[test]
+fn wrong_answer_locks_out_the_creature() {
+    let map = "\
+#######
+#S.P.G#
+#.S..GE
+#######";
+    let p = CourseParams { swarm: 2, task: TaskSpec { degree: 1, coef: (0, 9), x: (1, 1), tol: 0 }, ..DEFAULT_PARAMS };
+    let mut w = World::from_map(map, p, 1, vec![Program::default()]).unwrap();
+    for ci in 0..2 {
+        walk_until_arrived(&mut w, ci, WALK_TO_KIND, &[STATION as i64], 5);
+    }
+    let truth = w.stations[0].truth().unwrap();
+    assert_eq!(call(&mut w, 0, SUBMIT_ANSWER, &[truth + 1])[0], 0);
+    assert_eq!(call(&mut w, 0, SUBMIT_ANSWER, &[truth])[0], LOCKED_OUT, "one guess per creature");
+    assert!(!w.stations[0].solved);
+    assert_eq!(call(&mut w, 1, SUBMIT_ANSWER, &[truth])[0], 1, "another creature may still answer");
+}
+
+#[test]
+fn idle_world_stalls_early() {
+    let mut w = World::new(0, 1, vec![Program::default()]);
+    while !w.done() {
+        w.step();
+    }
+    assert!(w.stalled);
+    assert!(w.tick <= IDLE_LIMIT + 1, "stopped after {} ticks", w.tick);
+    let counting = Program::parse("add $1,1").unwrap();
+    let mut w = World::new(0, 1, vec![counting]);
+    while !w.done() {
+        w.step();
+    }
+    assert!(!w.stalled, "changing registers is not idle");
+    assert_eq!(w.tick, w.params.ticks);
+}
+
+#[test]
+fn stalled_world_scores_full_ticks() {
+    let s = crate::fitness::evaluate(0, &[Program::default()], &[1]);
+    assert_eq!(s.ticks_used, courses()[0].params.ticks);
+}
+
+/// The field-guided A* and the plain search agree on every status (their
+/// steps may differ between equally short paths).
+#[test]
+fn field_walk_matches_search_walk() {
+    for course in [1usize, 2, 3, 6] {
+        for seed in 0..6 {
+            for kind in [EXIT, FOOD, STATION] {
+                let mut a = World::new(course, seed, vec![Program::default()]);
+                let mut b = World::new(course, seed, vec![Program::default()]);
+                b.use_fields = false;
+                for ci in 0..a.creatures.len() {
+                    let sa = call(&mut a, ci, WALK_TO_KIND, &[kind as i64])[0];
+                    let sb = call(&mut b, ci, WALK_TO_KIND, &[kind as i64])[0];
+                    assert_eq!(sa, sb, "course {} seed {} kind {} creature {}", course, seed, kind, ci);
+                }
+            }
+        }
+    }
 }

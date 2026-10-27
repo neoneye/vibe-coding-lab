@@ -77,11 +77,13 @@ pub fn score_world(w: &World, program_len: usize) -> Score {
         (solved, closeness)
     };
     let food = (w.food_eaten as f64 / n).min(1.0);
-    let ticks_frac = w.tick as f64 / w.params.ticks.max(1) as f64;
+    // A stalled world ended early only to save time: score the full limit.
+    let ticks = if w.stalled { w.params.ticks } else { w.tick };
+    let ticks_frac = ticks as f64 / w.params.ticks.max(1) as f64;
     let fitness = 1000.0 * arrived + 200.0 * solved + 100.0 * progress + 50.0 * closeness + 50.0 * food
         - 20.0 * ticks_frac
         - 0.5 * program_len as f64;
-    Score { fitness, arrived_frac: arrived, solved_frac: solved, ticks_used: w.tick }
+    Score { fitness, arrived_frac: arrived, solved_frac: solved, ticks_used: ticks }
 }
 
 /// Mean score over `seeds`. `programs[0]` is the candidate; a mixed course

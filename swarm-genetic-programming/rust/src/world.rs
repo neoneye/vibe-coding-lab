@@ -16,6 +16,24 @@ pub const STATION_SOLVED: u8 = 5;
 pub const GATE: u8 = 6;
 pub const EXIT: u8 = 7;
 
+/// A world where nothing changed (no move, no cell, no register) for this
+/// many ticks in a row is stalled: it can't change again, so it ends early
+/// and is scored as if it ran to the tick limit.
+pub const IDLE_LIMIT: u32 = 25;
+
+/// What a cached distance field leads to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FieldKey {
+    /// onto this cell
+    Cell(usize),
+    /// next to this cell
+    Near(usize),
+    /// onto any cell of this kind
+    Kind(u8),
+    /// next to any cell of this kind
+    NearKind(u8),
+}
+
 /// Unit vectors ×1024 for headings 0..15 (22.5° steps, counter-clockwise,
 /// 0 = +x, 4 = up on screen).
 const HEADINGS: [(i32, i32); 16] = [
@@ -78,6 +96,8 @@ pub struct Station {
     pub best_err: i64,
     /// Cell indices of the gates this station opens.
     pub gates: Vec<usize>,
+    /// Creatures that answered wrong; each creature gets one guess.
+    pub locked: Vec<u32>,
 }
 
 impl Station {
@@ -112,6 +132,7 @@ pub struct Thing {
     pub present: bool,
 }
 
+#[derive(Clone)]
 pub struct World {
     pub w: u16,
     pub h: u16,
@@ -130,6 +151,18 @@ pub struct World {
     pub tick: u32,
     pub food_total: u32,
     pub food_eaten: u32,
+    /// Ended early because nothing could change any more.
+    pub stalled: bool,
+    /// Use cached distance fields for fixed goals (false = search per
+    /// creature; kept for tests that compare the two).
+    pub use_fields: bool,
+    idle_ticks: u32,
+    /// Bumped whenever a non-creature cell changes (food eaten, gate
+    /// opened); goal fields are valid for one version.
+    version: u64,
+    /// Bumped on every creature move (for stall detection).
+    moves: u64,
+    fields: Vec<(FieldKey, u64, Vec<i32>)>,
     exit_dist: Vec<i32>,
     scratch: Scratch,
 }
@@ -253,6 +286,7 @@ impl World {
                     solved: false,
                     best_err: i64::MAX,
                     gates: Vec::new(),
+                    locked: Vec::new(),
                 }),
                 GATE => gates.push(i),
                 _ => {}
@@ -281,6 +315,12 @@ impl World {
             tick: 0,
             food_total,
             food_eaten: 0,
+            stalled: false,
+            use_fields: true,
+            idle_ticks: 0,
+            version: 0,
+            moves: 0,
+            fields: Vec::new(),
             exit_dist,
             scratch: Scratch::default(),
         })
@@ -308,7 +348,7 @@ impl World {
     }
 
     pub fn done(&self) -> bool {
-        self.tick >= self.params.ticks || !self.creatures.iter().any(|c| c.state == CreatureState::Active)
+        self.stalled || self.tick >= self.params.ticks || !self.creatures.iter().any(|c| c.state == CreatureState::Active)
     }
 
     /// Current position of a creature on the grid or a present thing.
@@ -327,6 +367,8 @@ impl World {
         let mut order: Vec<usize> = (0..self.creatures.len()).filter(|&i| self.creatures[i].state == CreatureState::Active).collect();
         self.rng.shuffle(&mut order);
         let programs = std::mem::take(&mut self.programs);
+        let version_before = (self.version, self.moves);
+        let mut registers_changed = false;
         for ci in order {
             let c = &mut self.creatures[ci];
             if c.state != CreatureState::Active {
@@ -343,11 +385,17 @@ impl World {
             let program = &programs[c.prog.min(programs.len() - 1)];
             let outcome = interp::run(program, &mut regs, &mut Ctx { world: self, me: ci }, INSTRUCTION_CAP);
             let c = &mut self.creatures[ci];
+            registers_changed |= c.regs != regs;
             c.regs = regs;
             c.last_error = outcome.error;
         }
         self.programs = programs;
         self.tick += 1;
+        let changed = registers_changed || (self.version, self.moves) != version_before;
+        self.idle_ticks = if changed { 0 } else { self.idle_ticks + 1 };
+        if self.idle_ticks >= IDLE_LIMIT && self.tick < self.params.ticks {
+            self.stalled = true;
+        }
     }
 
     /// Calls a registry function on behalf of creature `ci`.
@@ -422,6 +470,7 @@ impl World {
         let food_energy = self.params.food_energy;
         let id = self.creatures[ci].id;
         let target_kind = self.kind[to];
+        self.moves += 1;
         let c = &mut self.creatures[ci];
         c.moved = true;
         c.x = nx;
@@ -431,6 +480,7 @@ impl World {
             return;
         }
         if target_kind == FOOD {
+            self.version += 1;
             c.energy += food_energy;
             self.food_eaten += 1;
             let n = self.creatures.len();
@@ -463,10 +513,104 @@ impl World {
         }
     }
 
-    /// One step along a shortest path to a cell where `goal` holds.
-    fn walk(&mut self, ci: usize, goal: &dyn Fn(&World, usize) -> bool, target: Option<(i32, i32)>) -> i64 {
+    /// Cells where a walker arrives for `key`, counting cells that a
+    /// creature stands on (it may move away).
+    fn field_sources(&self, key: FieldKey) -> Vec<usize> {
+        let w = self.w as usize;
+        let near = |i: usize, pred: &dyn Fn(usize) -> bool| {
+            let (x, y) = ((i % w) as i32, (i / w) as i32);
+            NEIGHBOURS.iter().any(|&(dx, dy)| match self.grid().at(x + dx, y + dy) {
+                Some(_) => pred((y + dy) as usize * w + (x + dx) as usize),
+                None => false,
+            })
+        };
+        (0..self.kind.len())
+            .filter(|&i| path::passable(self.kind[i]) || self.kind[i] == CREATURE)
+            .filter(|&i| match key {
+                FieldKey::Cell(t) => i == t,
+                FieldKey::Near(t) => i == t || near(i, &|j| j == t),
+                FieldKey::Kind(k) => self.kind[i] == k,
+                FieldKey::NearKind(k) => near(i, &|j| self.kind[j] == k),
+            })
+            .collect()
+    }
+
+    /// Index into `fields` of an up-to-date goal field (through creatures)
+    /// for `key`.
+    fn field(&mut self, key: FieldKey) -> usize {
+        if let Some(i) = self.fields.iter().position(|f| f.0 == key && f.1 == self.version) {
+            return i;
+        }
+        let sources = self.field_sources(key);
+        let field = path::goal_field(&self.grid(), &sources, true);
+        let entry = (key, self.version, field);
+        if let Some(i) = self.fields.iter().position(|f| f.1 != self.version) {
+            self.fields[i] = entry;
+            return i;
+        }
+        if self.fields.len() >= 8 {
+            self.fields.remove(0);
+        }
+        self.fields.push(entry);
+        self.fields.len() - 1
+    }
+
+    /// A* guided by the goal field; queues behind other creatures when the
+    /// only routes run through them.
+    fn walk_field(&mut self, ci: usize, key: FieldKey, goal: &dyn Fn(&World, usize) -> bool) -> i64 {
+        let f = self.field(key);
+        let (x, y) = (self.creatures[ci].x as i32, self.creatures[ci].y as i32);
+        let w = self.w as usize;
+        let start = y as usize * w + x as usize;
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let result = path::astar_first_step(&self.grid(), &mut scratch, (x as u16, y as u16), &|i| goal(self, i), &self.fields[f].2);
+        self.scratch = scratch;
+        match result {
+            PathResult::Arrived => ARRIVED,
+            PathResult::Step(nx, ny) => {
+                let reached = goal(self, self.idx(nx, ny));
+                self.move_to(ci, nx, ny);
+                if reached || self.creatures[ci].state == CreatureState::Out {
+                    ARRIVED
+                } else {
+                    MOVED
+                }
+            }
+            PathResult::Blocked | PathResult::OverBudget => {
+                // Queue: the downhill neighbour ignoring creatures, if free.
+                let field = &self.fields[f].2;
+                let here = field[start];
+                let grid = self.grid();
+                let best = NEIGHBOURS
+                    .iter()
+                    .filter(|&&(dx, dy)| grid.can_move_through(x, y, dx, dy, true))
+                    .map(|&(dx, dy)| (field[(y + dy) as usize * w + (x + dx) as usize], dx, dy))
+                    .filter(|&(d, _, _)| d >= 0 && (here < 0 || d < here))
+                    .min_by_key(|&(d, _, _)| d);
+                match best {
+                    Some((d, dx, dy)) if self.kind_at((x + dx) as u16, (y + dy) as u16) != CREATURE => {
+                        self.move_to(ci, (x + dx) as u16, (y + dy) as u16);
+                        if d == 0 || self.creatures[ci].state == CreatureState::Out {
+                            ARRIVED
+                        } else {
+                            MOVED
+                        }
+                    }
+                    _ => BLOCKED,
+                }
+            }
+        }
+    }
+
+    /// One step along a shortest path to a cell where `goal` holds. With a
+    /// `key` (a goal that doesn't depend on who walks) and no sense radius,
+    /// a cached distance field is used instead of a search.
+    fn walk(&mut self, ci: usize, goal: &dyn Fn(&World, usize) -> bool, target: Option<(i32, i32)>, key: Option<FieldKey>) -> i64 {
         if self.creatures[ci].moved {
             return ALREADY_MOVED;
+        }
+        if let (Some(key), true, None) = (key, self.use_fields, self.params.sense_radius) {
+            return self.walk_field(ci, key, goal);
         }
         let from = (self.creatures[ci].x, self.creatures[ci].y);
         let mut scratch = std::mem::take(&mut self.scratch);
@@ -532,9 +676,9 @@ impl World {
         let ti = ty as usize * self.w as usize + tx as usize;
         let w = self.w as usize;
         if path::passable(self.kind[ti]) {
-            self.walk(ci, &move |_, i| i == ti, Some((tx, ty)))
+            self.walk(ci, &move |_, i| i == ti, Some((tx, ty)), Some(FieldKey::Cell(ti)))
         } else {
-            self.walk(ci, &move |_, i| cheb((i % w) as i32, (i / w) as i32, tx, ty) <= 1, Some((tx, ty)))
+            self.walk(ci, &move |_, i| cheb((i % w) as i32, (i / w) as i32, tx, ty) <= 1, Some((tx, ty)), Some(FieldKey::Near(ti)))
         }
     }
 
@@ -546,7 +690,7 @@ impl World {
         match k {
             k if k == FOOD as i64 || k == EXIT as i64 => {
                 let k = k as u8;
-                self.walk(ci, &move |world, i| world.kind[i] == k, None)
+                self.walk(ci, &move |world, i| world.kind[i] == k, None, Some(FieldKey::Kind(k)))
             }
             k if k == STATION as i64 || k == STATION_SOLVED as i64 || k == CREATURE as i64 => {
                 let k = k as u8;
@@ -557,7 +701,8 @@ impl World {
                         None => false,
                     })
                 };
-                self.walk(ci, &goal, None)
+                let key = if k == CREATURE { None } else { Some(FieldKey::NearKind(k)) };
+                self.walk(ci, &goal, None, key)
             }
             _ => BLOCKED,
         }
@@ -634,16 +779,22 @@ impl World {
 
     fn submit_answer(&mut self, ci: usize, answer: i64) -> i64 {
         let Some(s) = self.adjacent_station(ci) else { return -1 };
+        let me = self.creatures[ci].id;
         let station = &mut self.stations[s];
+        if station.locked.contains(&me) {
+            return LOCKED_OUT;
+        }
         let err = match station.truth() {
             Some(t) => (answer as i128 - t as i128).unsigned_abs().min(i64::MAX as u128) as i64,
             None => i64::MAX,
         };
         station.best_err = station.best_err.min(err);
         if err > station.tol {
+            station.locked.push(me);
             return 0;
         }
         station.solved = true;
+        self.version += 1;
         let (sx, sy) = (station.x, station.y);
         let gates = station.gates.clone();
         let i = self.idx(sx, sy);

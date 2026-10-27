@@ -38,7 +38,7 @@ pub const DEFAULT_PARAMS: CourseParams = CourseParams {
     swarm: 12,
     energy: 10_000,
     food_energy: 60,
-    ticks: 150,
+    ticks: 100,
     task: NO_TASK,
     sense_radius: None,
     mix: None,
