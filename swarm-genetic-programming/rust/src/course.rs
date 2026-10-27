@@ -206,6 +206,12 @@ fn build_courses() -> Vec<Course> {
             map: FOG_MAZE,
             params: CourseParams { sense_radius: Some(4), ticks: 400, ..DEFAULT_PARAMS },
         },
+        Course {
+            name: "Teach",
+            description: "Half the swarm runs a fixed program that wanders and never eats. Teach them your program before they run out of energy.",
+            map: FOOD,
+            params: CourseParams { energy: 25, food_energy: 60, mix: Some(crate::reference::WANDERER), ..DEFAULT_PARAMS },
+        },
     ]
 }
 

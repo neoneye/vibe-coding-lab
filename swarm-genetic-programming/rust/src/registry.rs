@@ -33,6 +33,7 @@ pub const TELL: i64 = 12;
 pub const MARK: i64 = 13;
 pub const READ_MARK: i64 = 14;
 pub const WALK_TO_LOWEST_MARK: i64 = 15;
+pub const TEACH: i64 = 16;
 
 pub const FUNCTIONS: &[FnInfo] = &[
     FnInfo { id: MY_POSITION, inputs: 0, outputs: 2, name: "my_position", doc: "outputs x, y" },
@@ -51,6 +52,7 @@ pub const FUNCTIONS: &[FnInfo] = &[
     FnInfo { id: MARK, inputs: 1, outputs: 1, name: "mark", doc: "write a value into the mark of my cell; outputs the previous mark" },
     FnInfo { id: READ_MARK, inputs: 2, outputs: 1, name: "read_mark", doc: "mark of the cell at offset (dx, dy), each clamped to -3..3" },
     FnInfo { id: WALK_TO_LOWEST_MARK, inputs: 0, outputs: 1, name: "walk_to_lowest_mark", doc: "step to the free neighbour with the lowest mark (unmarked = 0); status" },
+    FnInfo { id: TEACH, inputs: 0, outputs: 1, name: "teach", doc: "copy my program to an adjacent creature running another one (costs 10 energy); 1 if taught" },
 ];
 
 pub fn info(id: i64) -> Option<&'static FnInfo> {

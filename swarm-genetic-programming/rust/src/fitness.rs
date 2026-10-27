@@ -209,6 +209,17 @@ mod tests {
     }
 
     #[test]
+    fn teach_reference_fails_without_teach() {
+        let course = courses().iter().position(|c| c.name == "Teach").expect("teach course");
+        let p = reference(course);
+        assert!(verify(course, &[p.clone()]));
+        let with = arrived_with(course, &p, |_| {});
+        let without = arrived_with(course, &p, |w| w.flags.teach = false);
+        assert!(without < with, "{} with, {} without", with, without);
+        assert!(!verify_with(course, &[p], |w| w.flags.teach = false));
+    }
+
+    #[test]
     fn progress_rewards_getting_closer() {
         // Walk toward the exit for 5 ticks, then stop (the loop count runs out).
         let partial = Program::parse("mov $10,5\nmov $11,7\nmov $1,5\nsub $1,$2\nmax $1,0\nmin $1,1\nlpb $1\n  f11 $0,$10\n  add $2,1\nlpe").unwrap();

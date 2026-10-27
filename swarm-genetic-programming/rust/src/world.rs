@@ -19,6 +19,8 @@ pub const EXIT: u8 = 7;
 pub const TABLET: u8 = 8;
 /// Radius of `tell`.
 pub const TELL_RADIUS: i32 = 3;
+/// Energy a teacher pays per lesson.
+pub const TEACH_COST: i64 = 10;
 
 /// A world where nothing changed (no move, no cell, no register) for this
 /// many ticks in a row is stalled: it can't change again, so it ends early
@@ -476,6 +478,7 @@ impl World {
             }
             READ_MARK => out[0] = self.read_mark(ci, args[0], args[1]),
             WALK_TO_LOWEST_MARK => out[0] = self.walk_to_lowest_mark(ci),
+            TEACH => out[0] = self.teach(ci),
             SUBMIT_ANSWER => out[0] = self.submit_answer(ci, args[0]),
             GIVE_FOOD => out[0] = self.give_food(ci, args[0]),
             _ => return Err(EvalError::UnknownFunction(id)),
@@ -865,6 +868,26 @@ impl World {
             }
             None => BLOCKED,
         }
+    }
+
+    /// Copies the teacher's program to the adjacent creature (running another
+    /// program) with the least energy. The pupil keeps its registers.
+    fn teach(&mut self, ci: usize) -> i64 {
+        let t = &self.creatures[ci];
+        if !self.flags.teach || t.energy <= TEACH_COST {
+            return 0;
+        }
+        let (x, y, prog) = (t.x as i32, t.y as i32, t.prog);
+        let pupil = (0..self.creatures.len())
+            .filter(|&j| {
+                let o = &self.creatures[j];
+                j != ci && o.state == CreatureState::Active && o.prog != prog && cheb(x, y, o.x as i32, o.y as i32) <= 1
+            })
+            .min_by_key(|&j| (self.creatures[j].energy, self.creatures[j].id));
+        let Some(p) = pupil else { return 0 };
+        self.creatures[p].prog = prog;
+        self.creatures[ci].energy -= TEACH_COST;
+        1
     }
 
     fn tell(&mut self, ci: usize, value: i64) -> i64 {

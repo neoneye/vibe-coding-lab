@@ -118,6 +118,38 @@ lpb $1
 lpe
 ";
 
+/// The fixed partner program on the Teach course: wanders along a heading
+/// derived from its position, never eats.
+pub const WANDERER: &str = "\
+mov $10,0   ; my_position
+f02 $2,$10
+mul $2,3
+mul $3,5
+add $2,$3
+mod $2,16   ; heading from x, y
+mov $11,1   ; step
+mov $12,$2
+f11 $0,$11
+";
+
+/// Exchange 3 (teach): teach any neighbour running another program, then
+/// behave like the food program.
+pub const TEACH: &str = "\
+mov $10,16  ; teach
+f01 $0,$10
+mov $10,10  ; my_energy
+f01 $0,$10
+mov $1,30
+sub $1,$0
+max $1,0
+min $1,1    ; 1 when hungry
+mul $1,-4
+add $1,7    ; kind: 3 food when hungry, else 7 exit
+mov $10,5   ; walk_to_kind
+mov $11,$1
+f11 $2,$10
+";
+
 pub fn program_for(course: usize) -> Option<&'static str> {
     match course {
         0..=2 => Some(EXIT),
@@ -125,6 +157,7 @@ pub fn program_for(course: usize) -> Option<&'static str> {
         6 => Some(FOOD),
         7 => Some(RELAY),
         8 => Some(FOG),
+        9 => Some(TEACH),
         _ => None,
     }
 }

@@ -718,3 +718,43 @@ fn sight_is_by_path_length_so_it_never_flickers() {
     }
     assert_eq!(steps, 4);
 }
+
+#[test]
+fn teach_copies_program_and_costs_energy() {
+    let map = "\
+#######
+#SS.S.#
+#######";
+    let a = Program::parse("mov $1,1").unwrap();
+    let b = Program::parse("mov $1,2").unwrap();
+    let mut w = World::from_map(map, params(3), 1, vec![a, b]).unwrap();
+    let teacher = w.creatures.iter().position(|c| c.x == 1).unwrap();
+    let pupil = w.creatures.iter().position(|c| c.x == 2).unwrap();
+    let far = w.creatures.iter().position(|c| c.x == 4).unwrap();
+    w.creatures[teacher].prog = 0;
+    w.creatures[pupil].prog = 1;
+    w.creatures[far].prog = 1;
+    w.creatures[pupil].regs[7] = 99;
+    let e = w.creatures[teacher].energy;
+    assert_eq!(call(&mut w, teacher, TEACH, &[]), vec![1]);
+    assert_eq!(w.creatures[pupil].prog, 0);
+    assert_eq!(w.creatures[pupil].regs[7], 99, "keeps its registers");
+    assert_eq!(w.creatures[teacher].energy, e - TEACH_COST);
+    assert_eq!(w.creatures[far].prog, 1, "only adjacent creatures learn");
+    assert_eq!(call(&mut w, teacher, TEACH, &[]), vec![0], "nobody left nearby with another program");
+    w.creatures[pupil].prog = 1;
+    w.flags.teach = false;
+    assert_eq!(call(&mut w, teacher, TEACH, &[]), vec![0], "switched off");
+    w.flags.teach = true;
+    w.creatures[teacher].energy = TEACH_COST;
+    assert_eq!(call(&mut w, teacher, TEACH, &[]), vec![0], "can't afford it");
+}
+
+#[test]
+fn mixed_course_runs_two_programs() {
+    let course = courses().iter().position(|c| c.params.mix.is_some()).expect("a mixed course");
+    let w = World::new(course, 1, vec![Program::default()]);
+    assert_eq!(w.programs.len(), 2);
+    let others = w.creatures.iter().filter(|c| c.prog == 1).count();
+    assert_eq!(others, w.creatures.len() / 2);
+}
