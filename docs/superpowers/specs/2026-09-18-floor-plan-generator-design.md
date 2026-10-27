@@ -14,7 +14,7 @@ e-waste plants, spas, sports centers, bicycle repair shops, abattoirs,
 anatomy institutes, parliaments, sushi restaurants, airport baggage halls,
 cryosleep labs, nuclear waste repositories, call centers, courthouses,
 dental clinics, paperclip factories, pharmaceutical factories, cow butcher
-facilities, breweries, panopticon prisons and Area 51. Nothing is drawn or dragged by hand. Every plan is a pure function of
+facilities, breweries, panopticon prisons, Area 51 and embassies. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -521,6 +521,29 @@ engine radial, the round part lives inside one hall:
   story office, radar room, antigravity test cell, xenolinguistics,
   redaction office, Janet terminal lounge, black marker store, foil hat
   store, men in black wardrobe, probe store, moon rock safe, shredder.
+
+### Embassy (added 2026-10-27)
+
+A fictional embassy of no named country: no flags, no real people. The owner
+asked for inspiration from the Khashoggi killing and from reporting and
+rumours about a large embassy project (redacted rooms in the planning
+drawings, a site beside fibre cables, pressure on diaspora citizens). The
+satire is aimed at state behaviour in general; no real government is named,
+rumours are not stated as fact, and no joke is made about the killing itself.
+
+- Reuses Area 51's redaction (`redacted: 0.3`): "ROOMS MARKED REDACTED WERE
+  REDACTED IN THE PLANNING APPLICATION TOO."
+- **Cable vault**: a fibre trunk along its quietest wall (five coloured
+  cables in a duct, splice cabinets with a green light every 2 m), racks and
+  a console facing it.
+- **Diaspora liaison office** behind a one-way mirror; CCTV room, cipher
+  room, secure comms, diplomatic pouch room, shredders.
+- Reception hall with the palace banquet table, chandeliers and a gold
+  chocolate pyramid; consular services, visa windows (the casino cage),
+  chancery, ambassador's residence, motorcade garage (always furnished, its
+  own routine so other buildings' garages are unchanged), passport office,
+  cultural centre, safe room, long-stay guest room, rooftop antenna room,
+  and rubber stamp, spare flag and state gift stores.
 
 ### 3D views (added 2026-09-19)
 
