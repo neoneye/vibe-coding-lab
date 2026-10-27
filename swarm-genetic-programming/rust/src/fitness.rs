@@ -153,6 +153,27 @@ mod tests {
     }
 
     #[test]
+    fn relay_reference_fails_without_tell() {
+        let course = courses().iter().position(|c| c.name == "Relay").expect("relay course");
+        let p = reference(course);
+        assert!(verify(course, &[p.clone()]));
+        let with = evaluate(course, &[p.clone()], &TRAIN_SEEDS);
+        let without = TRAIN_SEEDS
+            .iter()
+            .map(|&seed| {
+                let mut w = World::new(course, seed, vec![p.clone()]);
+                w.flags.tell = false;
+                while !w.done() {
+                    w.step();
+                }
+                w.arrived()
+            })
+            .sum::<usize>();
+        assert_eq!(without, 0, "nobody gets out when the answer can't be told");
+        assert!(with.arrived_frac >= 0.8);
+    }
+
+    #[test]
     fn progress_rewards_getting_closer() {
         // Walk toward the exit for 5 ticks, then stop (the loop count runs out).
         let partial = Program::parse("mov $10,5\nmov $11,7\nmov $1,5\nsub $1,$2\nmax $1,0\nmin $1,1\nlpb $1\n  f11 $0,$10\n  add $2,1\nlpe").unwrap();

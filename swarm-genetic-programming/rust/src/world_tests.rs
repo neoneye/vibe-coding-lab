@@ -580,3 +580,54 @@ fn field_walk_matches_search_walk() {
         }
     }
 }
+
+#[test]
+fn tell_reaches_radius_3_only() {
+    let map = "\
+##########
+#S..S.S..#
+##########";
+    let mut w = world(map, 3);
+    let teller = w.creatures.iter().position(|c| c.x == 1).unwrap();
+    let near = w.creatures.iter().position(|c| c.x == 4).unwrap();
+    let far = w.creatures.iter().position(|c| c.x == 6).unwrap();
+    assert_eq!(call(&mut w, teller, TELL, &[42]), vec![1]);
+    assert_eq!(w.creatures[near].regs[15], 42);
+    assert_eq!(w.creatures[far].regs[15], 0);
+    assert_eq!(w.creatures[teller].regs[15], 0, "not told itself");
+    w.flags.tell = false;
+    assert_eq!(call(&mut w, teller, TELL, &[7]), vec![0]);
+    assert_eq!(w.creatures[near].regs[15], 42, "switched off");
+}
+
+#[test]
+fn tablet_read_returns_station_task() {
+    let map = "\
+########
+#ST#PS.#
+########";
+    let p = CourseParams { swarm: 2, task: TaskSpec { degree: 2, coef: (1, 9), x: (1, 9), tol: 0 }, ..DEFAULT_PARAMS };
+    let mut w = World::from_map(map, p, 3, vec![Program::default()]).unwrap();
+    let at_tablet = w.creatures.iter().position(|c| c.x == 1).unwrap();
+    let at_station = 1 - at_tablet;
+    let t = call(&mut w, at_tablet, READ_TASK, &[]);
+    assert_eq!(&t[..], &w.stations[0].params[..], "the tablet shows the station's task");
+    assert_eq!(call(&mut w, at_station, READ_TASK, &[]), vec![0; 5], "a station with a tablet shows nothing itself");
+    assert_eq!(call(&mut w, at_tablet, SUBMIT_ANSWER, &[1])[0], -1, "answers go to the station, not the tablet");
+    let truth = w.stations[0].truth().unwrap();
+    assert_eq!(call(&mut w, at_station, SUBMIT_ANSWER, &[truth])[0], 1);
+    assert_eq!(call(&mut w, at_tablet, READ_TASK, &[]), vec![0; 5], "solved: nothing to read");
+}
+
+#[test]
+fn walk_to_kind_tablet_arrives_adjacent() {
+    let map = "\
+#######
+#S...T#
+#####P#
+#######";
+    let p = CourseParams { swarm: 1, task: TaskSpec { degree: 1, coef: (1, 9), x: (1, 9), tol: 0 }, ..DEFAULT_PARAMS };
+    let mut w = World::from_map(map, p, 1, vec![Program::default()]).unwrap();
+    walk_until_arrived(&mut w, 0, WALK_TO_KIND, &[TABLET as i64], 10);
+    assert_eq!(pos(&w, 0), (4, 1));
+}

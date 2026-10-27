@@ -15,6 +15,10 @@ pub const STATION: u8 = 4;
 pub const STATION_SOLVED: u8 = 5;
 pub const GATE: u8 = 6;
 pub const EXIT: u8 = 7;
+/// Shows the task of the nearest station (which then shows nothing itself).
+pub const TABLET: u8 = 8;
+/// Radius of `tell`.
+pub const TELL_RADIUS: i32 = 3;
 
 /// A world where nothing changed (no move, no cell, no register) for this
 /// many ticks in a row is stalled: it can't change again, so it ends early
@@ -100,6 +104,8 @@ pub struct Station {
     pub locked: Vec<u32>,
     /// Some creature has read the task.
     pub read: bool,
+    /// The task is shown on a tablet, not at the station.
+    pub has_tablet: bool,
 }
 
 impl Station {
@@ -144,6 +150,8 @@ pub struct World {
     pub marks: Vec<i64>,
     pub creatures: Vec<Creature>,
     pub stations: Vec<Station>,
+    /// Tablets: position and the index of the station whose task they show.
+    pub tablets: Vec<(u16, u16, usize)>,
     /// Things by id; thing id = creatures.len() + 1 + index.
     pub things: Vec<Thing>,
     pub programs: Vec<Program>,
@@ -220,6 +228,7 @@ impl World {
                     b'F' => FOOD,
                     b'P' => STATION,
                     b'G' => GATE,
+                    b'T' => TABLET,
                     _ => return Err(format!("unknown map character '{}' at {},{}", ch as char, x, y)),
                 };
             }
@@ -267,10 +276,11 @@ impl World {
         let mut things = Vec::new();
         let mut stations = Vec::new();
         let mut gates = Vec::new();
+        let mut tablet_cells = Vec::new();
         let mut food_total = 0;
         for i in 0..kind.len() {
             let k = kind[i];
-            if !matches!(k, FOOD | STATION | GATE | EXIT) {
+            if !matches!(k, FOOD | STATION | GATE | EXIT | TABLET) {
                 continue;
             }
             let id = (n + 1 + things.len()) as u32;
@@ -290,16 +300,27 @@ impl World {
                     gates: Vec::new(),
                     locked: Vec::new(),
                     read: false,
+                    has_tablet: false,
                 }),
                 GATE => gates.push(i),
+                TABLET => tablet_cells.push(i),
                 _ => {}
             }
         }
+        let nearest_station = |stations: &[Station], i: usize| {
+            let (x, y) = ((i % w) as i32, (i / w) as i32);
+            (0..stations.len()).min_by_key(|&s| (cheb(x, y, stations[s].x as i32, stations[s].y as i32), s))
+        };
         for g in gates {
-            let (gx, gy) = ((g % w) as i32, (g / w) as i32);
-            let nearest = (0..stations.len()).min_by_key(|&s| (cheb(gx, gy, stations[s].x as i32, stations[s].y as i32), s));
-            if let Some(s) = nearest {
+            if let Some(s) = nearest_station(&stations, g) {
                 stations[s].gates.push(g);
+            }
+        }
+        let mut tablets = Vec::new();
+        for t in tablet_cells {
+            if let Some(s) = nearest_station(&stations, t) {
+                stations[s].has_tablet = true;
+                tablets.push(((t % w) as u16, (t / w) as u16, s));
             }
         }
         Ok(World {
@@ -310,6 +331,7 @@ impl World {
             marks: vec![0; w * h],
             creatures,
             stations,
+            tablets,
             things,
             programs,
             params,
@@ -440,11 +462,12 @@ impl World {
                 }
             }
             READ_TASK => {
-                if let Some(s) = self.adjacent_station(ci) {
+                if let Some(s) = self.readable_station(ci) {
                     self.stations[s].read = true;
                     out.copy_from_slice(&self.stations[s].params);
                 }
             }
+            TELL => out[0] = self.tell(ci, args[0]),
             SUBMIT_ANSWER => out[0] = self.submit_answer(ci, args[0]),
             GIVE_FOOD => out[0] = self.give_food(ci, args[0]),
             _ => return Err(EvalError::UnknownFunction(id)),
@@ -696,7 +719,7 @@ impl World {
                 let k = k as u8;
                 self.walk(ci, &move |world, i| world.kind[i] == k, None, Some(FieldKey::Kind(k)))
             }
-            k if k == STATION as i64 || k == STATION_SOLVED as i64 || k == CREATURE as i64 => {
+            k if k == STATION as i64 || k == STATION_SOLVED as i64 || k == TABLET as i64 || k == CREATURE as i64 => {
                 let k = k as u8;
                 let goal = move |world: &World, i: usize| {
                     let (x, y) = ((i % w) as i32, (i / w) as i32);
@@ -779,6 +802,30 @@ impl World {
     fn adjacent_station(&self, ci: usize) -> Option<usize> {
         let c = &self.creatures[ci];
         self.stations.iter().position(|s| !s.solved && cheb(c.x as i32, c.y as i32, s.x as i32, s.y as i32) <= 1)
+    }
+
+    /// The unsolved station whose task this creature can read: through an
+    /// adjacent tablet, or at an adjacent station without a tablet.
+    fn readable_station(&self, ci: usize) -> Option<usize> {
+        let c = &self.creatures[ci];
+        let (x, y) = (c.x as i32, c.y as i32);
+        let via_tablet = self.tablets.iter().find(|&&(tx, ty, s)| !self.stations[s].solved && cheb(x, y, tx as i32, ty as i32) <= 1).map(|t| t.2);
+        via_tablet.or_else(|| self.adjacent_station(ci).filter(|&s| !self.stations[s].has_tablet))
+    }
+
+    fn tell(&mut self, ci: usize, value: i64) -> i64 {
+        if !self.flags.tell {
+            return 0;
+        }
+        let (x, y) = (self.creatures[ci].x as i32, self.creatures[ci].y as i32);
+        let mut heard = 0;
+        for (j, o) in self.creatures.iter_mut().enumerate() {
+            if j != ci && o.state == CreatureState::Active && cheb(x, y, o.x as i32, o.y as i32) <= TELL_RADIUS {
+                o.regs[15] = value;
+                heard += 1;
+            }
+        }
+        heard
     }
 
     fn submit_answer(&mut self, ci: usize, answer: i64) -> i64 {

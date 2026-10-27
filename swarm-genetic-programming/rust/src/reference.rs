@@ -49,11 +49,50 @@ mov $11,$1
 f11 $2,$10
 ";
 
+/// Exchange 1 (tell): whoever can read the tablet computes the answer and
+/// tells it; whoever stands at the station submits what it heard ($15).
+pub const RELAY: &str = "\
+mov $10,5   ; walk_to_kind
+mov $11,7   ; exit
+f11 $0,$10
+mov $1,$0
+mul $1,-1   ; 1 when the exit is blocked
+lpb $1
+  mov $11,8   ; the tablet (only reachable on its side)
+  f11 $2,$10
+  mov $11,4   ; the station (only reachable on its side)
+  f11 $2,$10
+  mov $12,8   ; read_task -> $3 x, $4 a0, $5 a1, $6 a2, $7 a3
+  f05 $3,$12
+  mov $8,$7
+  mul $8,$3
+  add $8,$6
+  mul $8,$3
+  add $8,$5
+  mul $8,$3
+  add $8,$4
+  mov $13,12  ; tell, only when a task was read (x >= 1)
+  mov $14,$8
+  lpb $3
+    f11 $9,$13
+  lpe
+  mov $2,$15  ; heard something? submit it
+  min $2,1
+  max $2,0
+  mov $13,9
+  mov $14,$15
+  lpb $2
+    f11 $9,$13
+  lpe
+lpe
+";
+
 pub fn program_for(course: usize) -> Option<&'static str> {
     match course {
         0..=2 => Some(EXIT),
         3..=5 => Some(GATE),
         6 => Some(FOOD),
+        7 => Some(RELAY),
         _ => None,
     }
 }

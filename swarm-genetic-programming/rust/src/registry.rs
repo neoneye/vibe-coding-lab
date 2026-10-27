@@ -29,6 +29,7 @@ pub const READ_TASK: i64 = 8;
 pub const SUBMIT_ANSWER: i64 = 9;
 pub const MY_ENERGY: i64 = 10;
 pub const GIVE_FOOD: i64 = 11;
+pub const TELL: i64 = 12;
 
 pub const FUNCTIONS: &[FnInfo] = &[
     FnInfo { id: MY_POSITION, inputs: 0, outputs: 2, name: "my_position", doc: "outputs x, y" },
@@ -43,6 +44,7 @@ pub const FUNCTIONS: &[FnInfo] = &[
     FnInfo { id: SUBMIT_ANSWER, inputs: 1, outputs: 1, name: "submit_answer", doc: "1 accepted, 0 wrong, -1 no adjacent problem, -2 locked out (one guess per creature)" },
     FnInfo { id: MY_ENERGY, inputs: 0, outputs: 1, name: "my_energy", doc: "outputs energy" },
     FnInfo { id: GIVE_FOOD, inputs: 1, outputs: 1, name: "give_food", doc: "give energy to the hungriest adjacent creature; outputs amount given" },
+    FnInfo { id: TELL, inputs: 1, outputs: 1, name: "tell", doc: "write a value into $15 of every creature within 3 cells; outputs how many heard it" },
 ];
 
 pub fn info(id: i64) -> Option<&'static FnInfo> {

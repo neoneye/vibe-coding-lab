@@ -122,6 +122,20 @@ const FOOD: &str = "\
 #......................................#
 ########################################";
 
+const RELAY: &str = "\
+################################
+#SSSS...#...SSSS.....#.........#
+#SSSS...#...SSSS.....#.........#
+#SSSS...#...SSSS.....#.........#
+#.......#............#.........#
+#......T#P...........G........E#
+#.......#............G.........#
+#.......#............#.........#
+#.......##############.........#
+#.......G......................#
+######################.........#
+################################";
+
 fn build_courses() -> Vec<Course> {
     let gate_task = |degree, coef, x| TaskSpec { degree, coef, x, tol: 0 };
     vec![
@@ -166,6 +180,12 @@ fn build_courses() -> Vec<Course> {
             description: "Too little energy to reach the exit: eat on the way (or be fed).",
             map: FOOD,
             params: CourseParams { energy: 25, food_energy: 60, ..DEFAULT_PARAMS },
+        },
+        Course {
+            name: "Relay",
+            description: "The task is on a tablet (≡) in the left chamber; the station that takes the answer is behind the wall. Tell the answer across.",
+            map: RELAY,
+            params: CourseParams { task: TaskSpec { degree: 2, coef: (1, 9), x: (1, 9), tol: 0 }, ..DEFAULT_PARAMS },
         },
     ]
 }
