@@ -163,6 +163,12 @@ pub extern "C" fn ga_history_len() -> u32 {
     with(|s| s.evolver.as_ref().map_or(0, |e| e.history.len() as u32))
 }
 
+/// Number of verified programs kept for `course`.
+#[no_mangle]
+pub extern "C" fn library_count(course: u32) -> u32 {
+    with(|s| s.library().entries.get(course as usize).map_or(0, |l| l.len() as u32))
+}
+
 #[no_mangle]
 pub extern "C" fn library_text() -> u32 {
     with(|s| {
