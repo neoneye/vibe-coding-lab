@@ -5147,7 +5147,16 @@ const FP = (() => {
     for (let i = 0; i < p.people3d && spots.length; i++) { const sp = prng.pick(spots); people.push({ x: (sp.x + 0.5 + prng.range(0, sp.w - 1)) * cell, y: (sp.y + 0.5 + prng.range(0, sp.h - 1)) * cell, angle: prng.range(0, 360), color: prng.pick([C3.blue, C3.screen, C3.dark, C3.red, C3.green, C3.yellow]) }); }
     // start pose: inside the entry, facing in
     let start = { x: model.W * cell / 2, y: model.D * cell / 2, angle: 0 };
-    if (model.entry) { const d = model.entry; const nrm = d.dir === "h" ? [0, d.swing] : [d.swing, 0]; const cx = d.x + (d.dir === "h" ? d.len / 2 : 0), cy = d.y + (d.dir === "h" ? 0 : d.len / 2); start = { x: cx + nrm[0] * 1.6, y: cy + nrm[1] * 1.6, angle: Math.atan2(nrm[1], nrm[0]) }; }
+    if (model.entry) {
+      const d = model.entry; const nrm = d.dir === "h" ? [0, d.swing] : [d.swing, 0]; const tan = [nrm[1], -nrm[0]]; const cx = d.x + (d.dir === "h" ? d.len / 2 : 0), cy = d.y + (d.dir === "h" ? 0 : d.len / 2);
+      // 1.6 m inside the door, or the nearest spot to it that is clear of walls: behind a hatch into a full service ring the
+      // passage is narrow and 1.6 m lands in the wall on its far side, where the walker could never move
+      const clear = (x, y) => !walls.some(w => !(w.z0 > 1.5 || w.z1 < 0.35) && x + 0.35 > w.x && x - 0.35 < w.x + w.w && y + 0.35 > w.y && y - 0.35 < w.y + w.d);
+      const cands = []; for (let u = 0.5; u <= 4.01; u += 0.1) for (let v = -1.5; v <= 1.501; v += 0.1) cands.push([u, v]);
+      cands.sort((a, b) => Math.hypot(a[0] - 1.6, a[1]) - Math.hypot(b[0] - 1.6, b[1]));
+      const [u, v] = cands.find(([u, v]) => clear(cx + nrm[0] * u + tan[0] * v, cy + nrm[1] * u + tan[1] * v)) || [1.6, 0];
+      start = { x: cx + nrm[0] * u + tan[0] * v, y: cy + nrm[1] * u + tan[1] * v, angle: Math.atan2(nrm[1], nrm[0]) };
+    }
     return { H, cell, W: model.W * cell, D: model.D * cell, walls, caps, floors, glass, leaves, items, labels, pipes, people, start, extWall: te, intWall: ti };
   }
 
@@ -5293,6 +5302,13 @@ const FloorPlanTests = {
       assert(!none.doors.some(d => d.kind === "hatch"), "no hatches without passages");
     });
     test("3D build: wall pieces respect openings, items inside, start at entry, deterministic", () => {
+      // the walker never spawns inside a wall, also behind a hatch into a full service ring (was 48 of 432 plans)
+      for (const building of FP.BUILDING_IDS) for (const servicePassages of ["perimeter", "ring", "both"]) for (const seed of [1, 2, 3]) {
+        const sp = P({ building, seed, servicePassages }); const sb = FP.build3D(FP.generate(sp), sp); const r = 0.28, st = sb.start;
+        assert(!sb.walls.some(w => !(w.z0 > 1.5 || w.z1 < 0.35) && st.x + r > w.x && st.x - r < w.x + w.w && st.y + r > w.y && st.y - r < w.y + w.d), `spawn clear of walls: ${building} ${servicePassages} ${seed}`);
+      }
+      { const sp = FP.deserialize("seed=234082&building=panopticon&width=95&depth=63&extWall=0.55&intWall=0.25&corridorWidth=3.5&entranceStyle=cyberdyne&servicePassages=ring&maxArea=145&doorWidth=1.3&liminality=58&doorless=25&repetition=54"); const sb = FP.build3D(FP.generate(sp), sp);
+        assert(!sb.walls.some(w => !(w.z0 > 1.5 || w.z1 < 0.35) && sb.start.x + 0.28 > w.x && sb.start.x - 0.28 < w.x + w.w && sb.start.y + 0.28 > w.y && sb.start.y - 0.28 < w.y + w.d), "reported panopticon link spawns clear"); }
       const p = P({ seed: 5, building: "police", elevators: 2 }); const m = FP.generate(p); const b = FP.build3D(m, p);
       assert(b.walls.length > 50 && b.caps.length > 0 && b.floors.length > 0 && b.items.length > 0, "content");
       eq(b.H, p.wallHeight, "height");
@@ -5834,7 +5850,8 @@ const FP3D = (() => {
       const fx = -Math.sin(walk.yaw), fz = -Math.cos(walk.yaw); const rx = Math.cos(walk.yaw), rz = -Math.sin(walk.yaw);
       const dx = (fx * f + rx * s) * speed * dt, dz = (fz * f + rz * s) * speed * dt;
       const nx = walk.pos.x + dx, nz = walk.pos.z + dz;
-      if (!blocked(nx, walk.pos.z)) walk.pos.x = nx; if (!blocked(walk.pos.x, nz)) walk.pos.z = nz;
+      const stuck = blocked(walk.pos.x, walk.pos.z); // already inside a wall: let any move carry the walker out
+      if (stuck || !blocked(nx, walk.pos.z)) walk.pos.x = nx; if (stuck || !blocked(walk.pos.x, nz)) walk.pos.z = nz;
       walk.pos.x = Math.max(-40, Math.min(data.W + 40, walk.pos.x)); walk.pos.z = Math.max(-40, Math.min(data.D + 40, walk.pos.z));
     }
     walkCam.position.copy(walk.pos);
