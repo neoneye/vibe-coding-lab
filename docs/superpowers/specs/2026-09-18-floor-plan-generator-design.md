@@ -14,7 +14,7 @@ e-waste plants, spas, sports centers, bicycle repair shops, abattoirs,
 anatomy institutes, parliaments, sushi restaurants, airport baggage halls,
 cryosleep labs, nuclear waste repositories, call centers, courthouses,
 dental clinics, paperclip factories, pharmaceutical factories, cow butcher
-facilities, breweries and panopticon prisons. Nothing is drawn or dragged by hand. Every plan is a pure function of
+facilities, breweries, panopticon prisons and Area 51. Nothing is drawn or dragged by hand. Every plan is a pure function of
 a seed and a large panel of parameters, so the same inputs always produce the
 same drawing. The running joke is the restroom: every plan has toilets with far
 too many pissoirs, and a slider can turn that into whole pissoir halls.
@@ -500,6 +500,27 @@ engine radial, the round part lives inside one hall:
   watch room, moral reform classroom, visitors' gallery, plus the supermax's
   sally port, intake, yard, mess, solitary, visitation and friends.
 - Not verified: walking through a drum in the first-person view.
+
+### Area 51 (added 2026-10-27)
+
+- **Hangar 18** takes a reserved square hall (the panopticon's drum-hall
+  mechanism, `drum: true` on the kind) and parks up to four flying saucers
+  under a crane rail: landing legs, hull, a green glowing rim, a glass dome.
+  Reverse engineering has one saucer with its dome off and panels on the
+  floor; specimen containment has glowing tanks with an alien in each; the
+  autopsy theatre reuses the dissection tables; Soundstage 7 is a moon set
+  with craters, a lander, a flag and footprints, ringed by studio lamps.
+- **Secrets**: `redacted: 0.35` on the building blacks out that share of the
+  room names (mandatory rooms at half the rate, restrooms never, "the only
+  rooms cleared for publication"). In 2D the name becomes a solid bar of the
+  same width (`data-redacted`), with "(CLEARANCE: ABOVE YOURS)" under it; in
+  3D the label reads "[REDACTED]". Only buildings with `redacted` draw from
+  the rng for this, so other plans are unchanged. `hiddenBonus: 3` hides
+  extra rooms, and witness debriefing gets a one-way mirror.
+- Rooms: crash debris store, witness debriefing, memory adjustment, cover
+  story office, radar room, antigravity test cell, xenolinguistics,
+  redaction office, Janet terminal lounge, black marker store, foil hat
+  store, men in black wardrobe, probe store, moon rock safe, shredder.
 
 ### 3D views (added 2026-09-19)
 
