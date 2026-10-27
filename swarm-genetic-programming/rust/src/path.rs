@@ -93,7 +93,9 @@ impl Scratch {
 }
 
 /// First move of a shortest path from `from` to any cell where `goal(index)`
-/// holds. `radius` limits the search to cells within that Chebyshev distance.
+/// holds. `radius` limits paths to that many steps: a creature only sees
+/// what it could walk to within its sense radius, and following such a path
+/// keeps the goal in sight.
 /// With `through_creatures`, other creatures don't block the search (the
 /// first step may then be into a creature's cell; the caller waits).
 pub fn first_step(
@@ -110,8 +112,12 @@ pub fn first_step(
         return PathResult::Arrived;
     }
     scratch.reset(grid.kind.len());
+    if scratch.g.len() != grid.kind.len() {
+        scratch.g = vec![0; grid.kind.len()];
+    }
     let gen = scratch.gen;
     scratch.stamp[start] = gen;
+    scratch.g[start] = 0;
     scratch.queue.push_back(start as u32);
     let mut expanded = 0;
     while let Some(cur) = scratch.queue.pop_front() {
@@ -119,15 +125,13 @@ pub fn first_step(
         if expanded > NODE_BUDGET {
             return PathResult::OverBudget;
         }
+        let depth = scratch.g[cur as usize];
+        if radius.is_some_and(|r| depth >= r as i32) {
+            continue;
+        }
         let (cx, cy) = ((cur as usize % w) as i32, (cur as usize / w) as i32);
         for &(dx, dy) in &NEIGHBOURS {
             let (nx, ny) = (cx + dx, cy + dy);
-            if let Some(r) = radius {
-                let d = (nx - from.0 as i32).abs().max((ny - from.1 as i32).abs());
-                if d > r as i32 {
-                    continue;
-                }
-            }
             if !grid.can_move_through(cx, cy, dx, dy, through_creatures) {
                 continue;
             }
@@ -136,6 +140,7 @@ pub fn first_step(
                 continue;
             }
             scratch.stamp[ni] = gen;
+            scratch.g[ni] = depth + 1;
             scratch.first[ni] = if cur as usize == start { ni as u32 } else { scratch.first[cur as usize] };
             if goal(ni) {
                 let f = scratch.first[ni] as usize;

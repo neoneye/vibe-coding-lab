@@ -631,3 +631,90 @@ fn walk_to_kind_tablet_arrives_adjacent() {
     walk_until_arrived(&mut w, 0, WALK_TO_KIND, &[TABLET as i64], 10);
     assert_eq!(pos(&w, 0), (4, 1));
 }
+
+#[test]
+fn mark_and_read_mark() {
+    let map = "\
+######
+#S...#
+######";
+    let mut w = world(map, 1);
+    assert_eq!(call(&mut w, 0, MARK, &[5]), vec![0], "returns the previous mark");
+    assert_eq!(call(&mut w, 0, MARK, &[9]), vec![5]);
+    call(&mut w, 0, STEP, &[0]);
+    assert_eq!(call(&mut w, 0, READ_MARK, &[-1, 0]), vec![9]);
+    assert_eq!(call(&mut w, 0, READ_MARK, &[-9, 0]), vec![0], "offsets clamp to 3 cells; off-grid reads 0");
+    assert_eq!(call(&mut w, 0, READ_MARK, &[0, 0]), vec![0]);
+    w.flags.marks = false;
+    assert_eq!(call(&mut w, 0, MARK, &[1]), vec![0]);
+    assert_eq!(call(&mut w, 0, READ_MARK, &[-1, 0]), vec![0], "switched off");
+}
+
+#[test]
+fn walk_to_lowest_mark_moves_to_least_visited() {
+    let map = "\
+#####
+#...#
+#.S.#
+#...#
+#####";
+    let mut w = world(map, 1);
+    for v in w.marks.iter_mut() {
+        *v = 5;
+    }
+    let i = 3 * 5 + 1; // (1, 3)
+    w.marks[i] = 2;
+    assert_eq!(call(&mut w, 0, WALK_TO_LOWEST_MARK, &[]), vec![MOVED]);
+    assert_eq!(pos(&w, 0), (1, 3));
+    let map = "\
+###
+#S#
+###";
+    let mut w = world(map, 1);
+    assert_eq!(call(&mut w, 0, WALK_TO_LOWEST_MARK, &[]), vec![BLOCKED], "nowhere to go");
+}
+
+#[test]
+fn sense_radius_limits_paths() {
+    let map = "\
+############
+#S........E#
+############";
+    let p = CourseParams { swarm: 1, sense_radius: Some(4), ..DEFAULT_PARAMS };
+    let mut w = World::from_map(map, p, 1, vec![Program::default()]).unwrap();
+    assert_eq!(call(&mut w, 0, WALK_TO_KIND, &[EXIT as i64])[0], BLOCKED, "exit out of sight");
+    assert_eq!(call(&mut w, 0, SENSE_NEAREST, &[EXIT as i64]), vec![-1, -1]);
+    for _ in 0..5 {
+        call(&mut w, 0, STEP, &[0]);
+    }
+    assert_eq!(call(&mut w, 0, SENSE_NEAREST, &[EXIT as i64])[1], 4);
+    assert_eq!(call(&mut w, 0, WALK_TO_KIND, &[EXIT as i64])[0], MOVED);
+}
+
+#[test]
+fn sight_is_by_path_length_so_it_never_flickers() {
+    // The exit is 2 cells away in a straight line but 10 steps by path.
+    let map = "\
+#######
+#S#E..#
+#.###.#
+#.....#
+#######";
+    let p = CourseParams { swarm: 1, sense_radius: Some(4), ..DEFAULT_PARAMS };
+    let mut w = World::from_map(map, p, 1, vec![Program::default()]).unwrap();
+    assert_eq!(call(&mut w, 0, WALK_TO_KIND, &[EXIT as i64])[0], BLOCKED, "10 steps away: out of sight");
+    // 4 steps away by path: in sight, and it stays in sight all the way.
+    let map = "\
+#######
+#.#E..#
+#.###.#
+#....S#
+#######";
+    let mut w = World::from_map(map, p, 1, vec![Program::default()]).unwrap();
+    let mut steps = 0;
+    while w.creatures[0].state != CreatureState::Out {
+        assert!(call(&mut w, 0, WALK_TO_KIND, &[EXIT as i64])[0] >= 0, "lost sight after {} steps", steps);
+        steps += 1;
+    }
+    assert_eq!(steps, 4);
+}

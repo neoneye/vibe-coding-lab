@@ -112,9 +112,19 @@ pub fn evaluate(course: usize, programs: &[Program], seeds: &[u64]) -> Score {
 
 /// Verified: at least 80% of the swarm out on every validation seed.
 pub fn verify(course: usize, programs: &[Program]) -> bool {
+    verify_with(course, programs, |_| {})
+}
+
+/// `verify` with a hook to adjust each world first (tests switch exchange
+/// mechanisms off with it).
+pub fn verify_with(course: usize, programs: &[Program], setup: impl Fn(&mut World)) -> bool {
     let _ = courses();
     VALIDATION_SEEDS.iter().all(|&seed| {
-        let w = run_world(course, programs, seed);
+        let mut w = World::new(course, seed, programs.to_vec());
+        setup(&mut w);
+        while !w.done() {
+            w.step();
+        }
         w.arrived() as f64 >= VERIFY_ARRIVED * w.creatures.len() as f64
     })
 }
@@ -171,6 +181,31 @@ mod tests {
             .sum::<usize>();
         assert_eq!(without, 0, "nobody gets out when the answer can't be told");
         assert!(with.arrived_frac >= 0.8);
+    }
+
+    fn arrived_with(course: usize, p: &Program, switch_off: impl Fn(&mut World)) -> usize {
+        TRAIN_SEEDS
+            .iter()
+            .map(|&seed| {
+                let mut w = World::new(course, seed, vec![p.clone()]);
+                switch_off(&mut w);
+                while !w.done() {
+                    w.step();
+                }
+                w.arrived()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn fog_reference_fails_without_marks() {
+        let course = courses().iter().position(|c| c.name == "Fog maze").expect("fog course");
+        let p = reference(course);
+        assert!(verify(course, &[p.clone()]));
+        let with = arrived_with(course, &p, |_| {});
+        let without = arrived_with(course, &p, |w| w.flags.marks = false);
+        assert!(without * 2 < with, "marks should matter: {} with, {} without", with, without);
+        assert!(!verify_with(course, &[p], |w| w.flags.marks = false));
     }
 
     #[test]

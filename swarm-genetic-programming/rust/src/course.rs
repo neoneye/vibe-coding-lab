@@ -136,6 +136,19 @@ const RELAY: &str = "\
 ######################.........#
 ################################";
 
+const FOG_MAZE: &str = "\
+###############################
+#SSSS.....#.....#.....#.#.....#
+#SSSS.###.###.#.###.#.#.#.#.#.#
+#SSSS...#...........#.#.....#.#
+#.###.#.#####.###.###.#####.#.#
+#.#...#.....#.......#.....#.#.#
+#.###.#.#.#.#.#.###.#####.#.###
+#.#...#...#...#.....#.....#...#
+#.#.###.#########.#.#.#####.#.#
+#...#........................E#
+###############################";
+
 fn build_courses() -> Vec<Course> {
     let gate_task = |degree, coef, x| TaskSpec { degree, coef, x, tol: 0 };
     vec![
@@ -186,6 +199,12 @@ fn build_courses() -> Vec<Course> {
             description: "The task is on a tablet (≡) in the left chamber; the station that takes the answer is behind the wall. Tell the answer across.",
             map: RELAY,
             params: CourseParams { task: TaskSpec { degree: 2, coef: (1, 9), x: (1, 9), tol: 0 }, ..DEFAULT_PARAMS },
+        },
+        Course {
+            name: "Fog maze",
+            description: "Creatures only see what they could walk to in 4 steps. Marks left on cells are the swarm's shared memory of where it has been.",
+            map: FOG_MAZE,
+            params: CourseParams { sense_radius: Some(4), ticks: 400, ..DEFAULT_PARAMS },
         },
     ]
 }

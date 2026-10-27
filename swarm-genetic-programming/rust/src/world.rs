@@ -468,11 +468,19 @@ impl World {
                 }
             }
             TELL => out[0] = self.tell(ci, args[0]),
+            MARK => {
+                let i = self.idx(c.x, c.y);
+                if self.flags.marks {
+                    out[0] = std::mem::replace(&mut self.marks[i], args[0]);
+                }
+            }
+            READ_MARK => out[0] = self.read_mark(ci, args[0], args[1]),
+            WALK_TO_LOWEST_MARK => out[0] = self.walk_to_lowest_mark(ci),
             SUBMIT_ANSWER => out[0] = self.submit_answer(ci, args[0]),
             GIVE_FOOD => out[0] = self.give_food(ci, args[0]),
             _ => return Err(EvalError::UnknownFunction(id)),
         }
-        if matches!(id, STEP | WALK_TO_XY | WALK_TO_NEAREST_CREATURE | WALK_FROM_NEAREST_CREATURE | WALK_TO_KIND | WALK_TO_ID) {
+        if matches!(id, STEP | WALK_TO_XY | WALK_TO_NEAREST_CREATURE | WALK_FROM_NEAREST_CREATURE | WALK_TO_KIND | WALK_TO_ID | WALK_TO_LOWEST_MARK) {
             self.creatures[ci].last_status = out[0];
         }
         Ok(())
@@ -811,6 +819,52 @@ impl World {
         let (x, y) = (c.x as i32, c.y as i32);
         let via_tablet = self.tablets.iter().find(|&&(tx, ty, s)| !self.stations[s].solved && cheb(x, y, tx as i32, ty as i32) <= 1).map(|t| t.2);
         via_tablet.or_else(|| self.adjacent_station(ci).filter(|&s| !self.stations[s].has_tablet))
+    }
+
+    fn read_mark(&self, ci: usize, dx: i64, dy: i64) -> i64 {
+        if !self.flags.marks {
+            return 0;
+        }
+        let c = &self.creatures[ci];
+        let x = c.x as i64 + dx.clamp(-3, 3);
+        let y = c.y as i64 + dy.clamp(-3, 3);
+        if x < 0 || y < 0 || x >= self.w as i64 || y >= self.h as i64 {
+            return 0;
+        }
+        self.marks[self.idx(x as u16, y as u16)]
+    }
+
+    /// Step to the free neighbour with the lowest mark. Ties go round the
+    /// neighbours starting at an offset that depends on the creature and the
+    /// tick, so a swarm spreads out instead of following one direction.
+    fn walk_to_lowest_mark(&mut self, ci: usize) -> i64 {
+        if self.creatures[ci].moved {
+            return ALREADY_MOVED;
+        }
+        let (x, y) = (self.creatures[ci].x as i32, self.creatures[ci].y as i32);
+        let rot = (self.creatures[ci].id as usize + self.tick as usize) % 8;
+        let grid = self.grid();
+        let w = self.w as usize;
+        let best = (0..8)
+            .map(|k| NEIGHBOURS[(k + rot) % 8])
+            .enumerate()
+            .filter(|&(_, (dx, dy))| grid.can_move(x, y, dx, dy))
+            .map(|(order, (dx, dy))| {
+                let m = if self.flags.marks { self.marks[(y + dy) as usize * w + (x + dx) as usize] } else { 0 };
+                (m, order, dx, dy)
+            })
+            .min();
+        match best {
+            Some((_, _, dx, dy)) => {
+                self.move_to(ci, (x + dx) as u16, (y + dy) as u16);
+                if self.creatures[ci].state == CreatureState::Out {
+                    ARRIVED
+                } else {
+                    MOVED
+                }
+            }
+            None => BLOCKED,
+        }
     }
 
     fn tell(&mut self, ci: usize, value: i64) -> i64 {

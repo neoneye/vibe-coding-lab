@@ -87,12 +87,44 @@ lpb $1
 lpe
 ";
 
+/// Exchange 2 (marks): head for the exit when it is in sight (and mark the
+/// cell -100, which pulls explorers in); otherwise count a visit on this
+/// cell and move to the least visited neighbour.
+pub const FOG: &str = "\
+mov $10,5   ; walk_to_kind
+mov $11,7   ; exit (only seen within 4 cells)
+f11 $0,$10
+mov $1,$0
+add $1,1
+min $1,1    ; 1 when the exit is in sight
+mov $12,13  ; mark this cell -100: the exit is near
+mov $13,-100
+lpb $1
+  f11 $3,$12
+lpe
+mov $1,$0
+mul $1,-1   ; 1 when the exit is out of sight
+lpb $1
+  mov $12,14  ; read_mark here
+  mov $13,0
+  mov $14,0
+  f21 $2,$12
+  add $2,1    ; one more visit
+  mov $12,13  ; mark
+  mov $13,$2
+  f11 $3,$12
+  mov $12,15  ; walk_to_lowest_mark
+  f01 $3,$12
+lpe
+";
+
 pub fn program_for(course: usize) -> Option<&'static str> {
     match course {
         0..=2 => Some(EXIT),
         3..=5 => Some(GATE),
         6 => Some(FOOD),
         7 => Some(RELAY),
+        8 => Some(FOG),
         _ => None,
     }
 }
