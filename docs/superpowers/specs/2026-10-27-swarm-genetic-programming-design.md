@@ -183,3 +183,45 @@ Node (`test.mjs`): the embedded wasm loads, a course is created, ticks run, the 
 ## Left to the builder
 
 Fitness weights, exact course maps, population/tick/seed counts, colours and layout details, module structure inside the crate.
+
+## Outcome (2026-10-27)
+
+Built as designed, with these changes found while building (each has a test):
+
+- **One guess per creature per station.** With unlimited retries, programs brute-forced the answer. Also, "Gate: sum" coefficients are 0..99, so 12 guesses can't cover the range.
+- **Queueing.** When the only route runs through other creatures, a creature waits behind them instead of reporting "blocked" forever. The one-cell corridor jammed without this.
+- **Sight is measured by path length.** The sense radius limits how many steps a path may take, not a square box. With the box, creatures oscillated at the edge of sight.
+- **`walk_to_lowest_mark` counts unmarked cells as 0.** Visit-count exploration needs unvisited cells to attract.
+- **`teach` has no energy condition** on the pupil.
+- **A station with a tablet shows no task itself.**
+- **Tick limits.** 100 ticks by default, 400 on the Fog maze.
+- **Performance.** Walks use A* over a static goal field, and worlds that stall end early.
+- **GA help.** Credit for reading a task, plus chain, combine and retarget mutations.
+
+What evolution reaches, measured with `examples/evolve` (native, library-seeded, courses in order):
+
+- **Verified:** Open field, Wall and Corridor (generation 0), Gate: sum (generations 8–67), Food, and Teach.
+- **Verified in some runs:** Fog maze.
+- **Not verified:**
+  - **Gate: line.** The best program multiplies by repeated `lpb` addition, which is only right for x ≥ 0. This misses the goal above that evolution should clear it.
+  - **Gate: quadratic and Relay.** Each has a reference program that verifies.
+
+The page states this per course.
+
+Open minor items from the final review:
+
+- **Page:**
+  - The page reads wasm memory before calling `*_ptr`.
+  - The editor replay re-reads the textarea for each seed.
+  - The Step button skips the final state.
+  - Clicking the canvas before the wasm has loaded throws.
+- **Engine:**
+  - `position_of` overflows in debug builds when the id is i64::MIN.
+  - `sense_nearest` still uses a square box, while walking uses path-length sight.
+  - The parser accepts `$+5`.
+  - `loop_ends` is allocated on every run.
+- **Library:**
+  - Loading keeps the top 5 by *claimed* fitness, before verification.
+  - "kept N" counts duplicates.
+  - A library saved in local storage that fails to parse is overwritten.
+  - `seeds_for` seeds from every other course rather than only the easier ones.

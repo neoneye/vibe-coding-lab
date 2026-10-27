@@ -214,7 +214,7 @@ fn build_courses() -> Vec<Course> {
         Course {
             name: "Fog maze",
             description: "Creatures only see what they could walk to in 4 steps. Marks left on cells are the swarm's shared memory of where it has been.",
-            evolution: "Evolution verifies this in about 10 generations when seeded from the library.",
+            evolution: "Evolution sometimes verifies this (seen at generation 10 when seeded from the library), but not in every run.",
             map: FOG_MAZE,
             params: CourseParams { sense_radius: Some(4), ticks: 400, ..DEFAULT_PARAMS },
         },
