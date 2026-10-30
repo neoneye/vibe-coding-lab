@@ -164,6 +164,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [dmidi-survey](dmidi-survey/) -- a self-administered battery of judgment-and-decision-making and personality scales with scoring and export; nothing leaves the browser.
 - [education-computational-building-blocks](education-computational-building-blocks/) -- see highlights.
 - [education-cyber-vulnerability-atlas](education-cyber-vulnerability-atlas/) -- 18 cybersecurity concepts, each written at three depths from everyday analogy to the technical account.
+- [education-verify-the-cosmos](education-verify-the-cosmos/) -- how the size of the Earth, orbit shapes, the distances and sizes of the Sun, Moon and Mars, and G were first measured, whether those methods held up, and calculators and simulations to check each one yourself.
 - [enigma-machine](enigma-machine/) -- Enigma I, M3 and M4 with rotors, ring settings, plugboard and a live lampboard; enciphers and deciphers, but does not crack unknown keys.
 - [forward-forward](forward-forward/) -- see highlights.
 - [hex-editor](hex-editor/) -- hex and ASCII editor for local files, loaded in chunks so large ones stay responsive; it saves a copy and never touches the original.
