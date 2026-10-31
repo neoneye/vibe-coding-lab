@@ -117,6 +117,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 ### 3D
 
 - [3d-eiffel-tower-assembly](3d-eiffel-tower-assembly/) -- scrub the 1887 to 1889 timeline and watch the tower rise, with falsework, creeper cranes and weather. Three.js.
+- [3d-faraday-waves](3d-faraday-waves/) -- a shaken liquid breaks into standing waves at half the drive frequency; in a narrow ring channel the pattern starts to travel, ratchet teeth pick the direction, and two ratcheted rings make a pump. After Guan et al., Phys. Rev. Fluids 2023. WebGPU compute (WebGL fallback), Three.js.
 - [3d-game-basement](3d-game-basement/) -- see highlights.
 - [3d-geo-guess](3d-geo-guess/) -- country-guessing on a draggable orthographic globe built from embedded polygon data, projected by hand on a canvas.
 - [3d-meta-balls](3d-meta-balls/) -- metaballs raymarched from signed distance fields with transparency, bump, gloss and subsurface controls. WebGL.
