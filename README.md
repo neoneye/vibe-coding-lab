@@ -99,6 +99,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [2d-cloud-chamber](2d-cloud-chamber/) -- alpha, beta and muon condensation trails with an adjustable magnetic field.
 - [2d-dual-slit-experiment](2d-dual-slit-experiment/) -- one to three slits, a which-path detector and particle-by-particle accumulation, computed from Huygens wavelets.
 - [2d-fluid-simulation](2d-fluid-simulation/) -- particle fluid via double-density relaxation SPH, with draggable obstacles and stirring.
+- [2d-granular-drum](2d-granular-drum/) -- 20 000 beads of two to four sizes in a slowly turning drum (circle, polygons, gear, hollow torus) sort themselves by size in the avalanches; 3D discrete-element model on WebGPU compute shaders, stop-and-go drive, tracer stripes.
 - [2d-ifs-fractals](2d-ifs-fractals/) -- IFS and flame fractals that crossfade between systems into a histogram image.
 - [2d-ion-wind-aircraft](2d-ion-wind-aircraft/) -- explainer and simulation of electroaerodynamic propulsion, from the MIT glider to a hovering drone.
 - [2d-monte-carlo-pi](2d-monte-carlo-pi/) -- estimate pi by throwing points at inscribed shapes, with a convergence plot.
