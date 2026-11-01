@@ -103,6 +103,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [2d-ifs-fractals](2d-ifs-fractals/) -- IFS and flame fractals that crossfade between systems into a histogram image.
 - [2d-ion-wind-aircraft](2d-ion-wind-aircraft/) -- explainer and simulation of electroaerodynamic propulsion, from the MIT glider to a hovering drone.
 - [2d-monte-carlo-pi](2d-monte-carlo-pi/) -- estimate pi by throwing points at inscribed shapes, with a convergence plot.
+- [2d-optical-bench](2d-optical-bench/) -- a top-down optical table: lamps with real spectra (sodium, mercury, neon, hydrogen, LEDs, sunlight), prisms, thick lenses, mirrors, beam splitters, a grating, slits, a gem and a raindrop. Spectral ray tracing with Sellmeier dispersion and Fresnel reflection; screens show the spectrum that lands on them. Scenes include Newton's prism, a grating spectrometer, the 42° rainbow and an achromatic doublet. WebGL2 accumulation with a CPU fallback.
 - [2d-pendulum](2d-pendulum/) -- double and triple pendulum with trails, sonified through Web Audio with a spectrogram.
 - [2d-perlin-noise](2d-perlin-noise/) -- seamlessly tiling noise with fixed-point Perlin and simplex backends, octaves and shaping modes.
 - [2d-pulleys](2d-pulleys/) -- see highlights.
