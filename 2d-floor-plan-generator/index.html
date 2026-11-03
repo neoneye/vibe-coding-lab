@@ -58,6 +58,24 @@ main.three { padding: 0; overflow: hidden; position: relative; background: #2f32
 #hud { position: absolute; left: 12px; bottom: 12px; background: rgba(255,255,255,0.92); color: #1b1b1b; padding: 8px 10px; border-radius: 5px; font-size: 12px; max-width: 420px; line-height: 1.5; pointer-events: none; }
 #hud.hide { display: none; }
 #view3d .tb { position: absolute; right: 12px; top: 12px; display: flex; gap: 6px; }
+#stick { position: absolute; width: 96px; height: 96px; margin: -48px 0 0 -48px; border: 2px solid rgba(255,255,255,0.7); border-radius: 50%; background: rgba(255,255,255,0.12); pointer-events: none; }
+#stick::after { content: ""; position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; background: rgba(255,255,255,0.75); transform: translate(var(--sx, 0px), var(--sy, 0px)); }
+/* phones: the drawing on top at a fixed height, the controls below it in the page scroll */
+@media (max-width: 760px) {
+  html, body { height: auto; }
+  header { padding: 8px 12px; gap: 4px 10px; }
+  header .sub { font-size: 0.8rem; }
+  .toolbar button { padding: 7px 10px; font-size: 13px; }
+  .layout { flex-direction: column; }
+  main { order: -1; flex: none; max-height: 70vh; max-height: 70svh; padding: 8px; }
+  main.three { height: 62vh; height: 62svh; max-height: none; }
+  aside { width: auto; flex: none; border-right: 0; border-top: 1px solid var(--border); overflow: visible; padding: 8px 12px 30px; }
+  .ctl { font-size: 13px; }
+  .ctl select, .ctl input[type="text"], .ctl input[type="number"] { font-size: 16px; padding: 6px 8px; }
+  .ctl input[type="range"] { height: 26px; }
+  #hud { left: 8px; bottom: 8px; right: 8px; max-width: none; font-size: 11.5px; padding: 6px 8px; }
+  #view3d .tb { right: 8px; top: 8px; }
+}
 </style>
 </head>
 <body>
@@ -5832,6 +5850,7 @@ const FloorPlanTests = {
   $("btn-prev").addEventListener("click", () => setSeed(params.seed - 1));
   $("btn-next").addEventListener("click", () => setSeed(params.seed + 1));
   $("fit").addEventListener("change", (e) => paper.classList.toggle("fit", e.target.checked));
+  if (matchMedia("(max-width: 760px)").matches) { $("fit").checked = true; paper.classList.add("fit"); }   // phones start with the whole plan in view
   document.addEventListener("keydown", (e) => {
     if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
     if (e.key === "r" || e.key === "R") randomSeed(); else if (e.key === "[") setSeed(params.seed - 1); else if (e.key === "]") setSeed(params.seed + 1);
@@ -5878,7 +5897,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 const FP3D = (() => {
   let renderer, scene, container, hud, persp, ortho, walkCam, orbit, group = null, labelGroup = null, ceilingMesh = null, sun;
   let mode = "iso", data = null, params = null, running = false, lastT = 0, initialised = false, placed = false;
-  const walk = { yaw: 0, pitch: 0, pos: new THREE.Vector3(), keys: Object.create(null), locked: false, eye: 1.65, radius: 0.28, picked: false };
+  const walk = { yaw: 0, pitch: 0, pos: new THREE.Vector3(), keys: Object.create(null), locked: false, eye: 1.65, radius: 0.28, picked: false, stick: null };
   const colorCache = new Map();
   const mat = (color, opts) => {
     const key = color + "|" + JSON.stringify(opts || {});
@@ -5906,7 +5925,34 @@ const FP3D = (() => {
     new ResizeObserver(resize).observe(container); resize();
     // walk controls
     const canvas = renderer.domElement;
-    canvas.addEventListener("click", () => { if (mode === "walk" && !walk.locked) canvas.requestPointerLock(); });
+    canvas.addEventListener("click", () => { if (mode === "walk" && !walk.locked && lastPointer === "mouse" && canvas.requestPointerLock) canvas.requestPointerLock(); });
+    // touch: a stick on the left half moves, dragging on the right half looks around
+    const stickEl = document.createElement("div"); stickEl.id = "stick"; stickEl.hidden = true; container.appendChild(stickEl);
+    const touches = new Map();
+    canvas.addEventListener("pointerdown", (e) => {
+      lastPointer = e.pointerType || "mouse";
+      if (mode !== "walk" || e.pointerType === "mouse") return;
+      const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      const kind = x < r.width / 2 && ![...touches.values()].some(t => t.kind === "move") ? "move" : "look";
+      touches.set(e.pointerId, { kind, x0: x, y0: y, x, y });
+      hud.classList.add("hide");
+      if (kind === "move") { stickEl.hidden = false; stickEl.style.left = x + "px"; stickEl.style.top = y + "px"; stickEl.style.setProperty("--sx", "0px"); stickEl.style.setProperty("--sy", "0px"); }
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events have no live pointer */ }
+      e.preventDefault();
+    });
+    canvas.addEventListener("pointermove", (e) => {
+      const t = touches.get(e.pointerId); if (!t) return;
+      const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      if (t.kind === "look") { walk.yaw -= (x - t.x) * 0.006; walk.pitch = Math.max(-1.45, Math.min(1.45, walk.pitch - (y - t.y) * 0.006)); }
+      else {
+        let dx = x - t.x0, dy = y - t.y0; const L = Math.hypot(dx, dy), max = 40; if (L > max) { dx *= max / L; dy *= max / L; }
+        walk.stick = { f: -dy / max, s: dx / max, run: L > 1.6 * max };
+        stickEl.style.setProperty("--sx", dx + "px"); stickEl.style.setProperty("--sy", dy + "px");
+      }
+      t.x = x; t.y = y;
+    });
+    const endTouch = (e) => { const t = touches.get(e.pointerId); if (!t) return; touches.delete(e.pointerId); if (t.kind === "move") { walk.stick = null; stickEl.hidden = true; } if (!touches.size) hud.classList.remove("hide"); };
+    canvas.addEventListener("pointerup", endTouch); canvas.addEventListener("pointercancel", endTouch);
     document.addEventListener("pointerlockchange", () => { walk.locked = document.pointerLockElement === canvas; updateHud(); });
     document.addEventListener("mousemove", (e) => { if (!walk.locked) return; walk.yaw -= e.movementX * 0.0022; walk.pitch = Math.max(-1.45, Math.min(1.45, walk.pitch - e.movementY * 0.0022)); });
     document.addEventListener("keydown", (e) => { if (mode !== "walk" || !walk.locked) return; walk.keys[e.code] = true; if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault(); });
@@ -5928,7 +5974,16 @@ const FP3D = (() => {
     canvas.addEventListener("pointermove", (e) => { if (mode !== "iso") return; if (e.buttons) { pointerNdc = null; return; } pointerNdc = ndc(e); hoverDirty = true; });
     orbit.addEventListener("change", () => { hoverDirty = true; });
     canvas.addEventListener("pointerleave", () => { pointerNdc = null; hoverRing.visible = false; });
-    canvas.addEventListener("dblclick", (e) => {
+    // a double tap counts as a double-click (touch browsers do not reliably send dblclick)
+    let lastTap = null;
+    canvas.addEventListener("pointerup", (e) => {
+      if (e.pointerType === "mouse" || mode !== "iso") return;
+      const now = performance.now();
+      if (lastTap && now - lastTap.t < 350 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) { lastTap = null; walkHere(e); }
+      else lastTap = { t: now, x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener("dblclick", (e) => walkHere(e));
+    function walkHere(e) {
       if (mode !== "iso" || !data) return;
       const hit = pick(ndc(e)); if (!hit) return;
       const [x, z] = nearestClear(hit.x, hit.z);
@@ -5936,9 +5991,11 @@ const FP3D = (() => {
       walk.pos.set(x, walk.eye, z); walk.picked = true; if (Math.hypot(dx, dz) > 1e-6) walk.yaw = Math.atan2(-dx, -dz); walk.pitch = -0.05;
       hoverRing.visible = false; pointerNdc = null;
       document.dispatchEvent(new CustomEvent("fp3d-walk-here"));
-      if (mode === "walk" && canvas.requestPointerLock) canvas.requestPointerLock();
-    });
+      if (mode === "walk" && lastPointer === "mouse" && canvas.requestPointerLock) canvas.requestPointerLock();
+    }
   }
+  let lastPointer = "mouse";   // the kind of pointer last pressed on the 3D view
+  const coarse = matchMedia("(pointer: coarse)").matches;
   let hoverRing = null, pointerNdc = null, hoverDirty = false; // pointerNdc: last pointer over the canvas, null when away or dragging
   const raycaster = new THREE.Raycaster();
   function ndc(e) { const r = renderer.domElement.getBoundingClientRect(); return new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); }
@@ -6070,7 +6127,9 @@ const FP3D = (() => {
   }
   function updateHud() {
     if (!hud) return;
-    if (mode === "walk") { hud.className = ""; const fs = document.fullscreenElement ? "<kbd>F</kbd> leaves fullscreen." : "<kbd>F</kbd> fullscreen."; hud.innerHTML = walk.locked ? "<b>Walking.</b> WASD or arrows move, Shift runs, mouse looks, <kbd>Esc</kbd> releases the mouse. " + fs : "<b>Click the view to walk.</b> WASD or arrows move, Shift runs, mouse looks, <kbd>Esc</kbd> releases the mouse, " + fs + (walk.picked ? " You start where you double-clicked." : " You start at the entry; double-click in the overhead view to start anywhere."); }
+    if (mode === "walk" && coarse) { hud.className = ""; hud.innerHTML = "<b>Walking.</b> Drag on the left half to move (push further to run), drag on the right half to look around." + (walk.picked ? " You start where you double-tapped." : " You start at the entry; double-tap the floor in the overhead view to start anywhere."); }
+    else if (mode === "walk") { hud.className = ""; const fs = document.fullscreenElement ? "<kbd>F</kbd> leaves fullscreen." : "<kbd>F</kbd> fullscreen."; hud.innerHTML = walk.locked ? "<b>Walking.</b> WASD or arrows move, Shift runs, mouse looks, <kbd>Esc</kbd> releases the mouse. " + fs : "<b>Click the view to walk.</b> WASD or arrows move, Shift runs, mouse looks, <kbd>Esc</kbd> releases the mouse, " + fs + (walk.picked ? " You start where you double-clicked." : " You start at the entry; double-click in the overhead view to start anywhere."); }
+    else if (coarse) { hud.className = ""; hud.innerHTML = "<b>Overhead.</b> Drag to orbit, pinch to zoom, two fingers to pan. <b>Double-tap</b> the floor to walk from there."; }
     else { hud.className = ""; hud.innerHTML = "<b>Overhead.</b> Drag to orbit, right-drag to pan, wheel to zoom. <b>Double-click</b> the floor to walk from there. Roof removed for your viewing pleasure."; }
   }
   // ---- walk physics: circle vs wall boxes, sliding
@@ -6083,8 +6142,10 @@ const FP3D = (() => {
     const speed = (walk.keys.ShiftLeft || walk.keys.ShiftRight) ? 5.5 : 2.4;
     let f = 0, s = 0;
     if (walk.keys.KeyW || walk.keys.ArrowUp) f += 1; if (walk.keys.KeyS || walk.keys.ArrowDown) f -= 1; if (walk.keys.KeyA || walk.keys.ArrowLeft) s -= 1; if (walk.keys.KeyD || walk.keys.ArrowRight) s += 1;
-    if (f || s) {
-      const len = Math.hypot(f, s); f /= len; s /= len;
+    let scale = 1;
+    if (walk.stick && !f && !s) { f = walk.stick.f; s = walk.stick.s; scale = walk.stick.run ? 5.5 / speed : Math.min(1, Math.hypot(f, s)); }
+    if (Math.hypot(f, s) > 0.08) {
+      const len = Math.hypot(f, s); f = f / len * scale; s = s / len * scale;
       const fx = -Math.sin(walk.yaw), fz = -Math.cos(walk.yaw); const rx = Math.cos(walk.yaw), rz = -Math.sin(walk.yaw);
       const dx = (fx * f + rx * s) * speed * dt, dz = (fz * f + rz * s) * speed * dt;
       const nx = walk.pos.x + dx, nz = walk.pos.z + dz;
