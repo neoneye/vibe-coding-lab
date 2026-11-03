@@ -131,6 +131,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [3d-voxel-cave](3d-voxel-cave/) -- first-person Perlin-noise cave you can carve into, remeshed live with Surface Nets. Three.js.
 - [3d-wrecking-ball](3d-wrecking-ball/) -- see highlights.
 - [simulate-hand](simulate-hand/) -- a 27-degree-of-freedom hand grasping spheres, cubes and pencils with contact and grip-force readouts. Three.js.
+- [soap-bubbles](soap-bubbles/) -- soap films and bubbles. A floating 3D bubble coloured by exact thin-film interference (both faces, all bounces, water dispersion, CIE colour) drains, swirls, grows black film and bursts in slow motion at the Taylor–Culick speed. A vertical film on a wire frame shows Newton's colour bands, rising plumes, and sodium-lamp fringes 221 nm apart. A bubble raft, like the froth on a soapy window, forms Bragg–Nye crystals with grains and dislocations you can scrape, shake, shear and coarsen.
 
 ### Audio
 
