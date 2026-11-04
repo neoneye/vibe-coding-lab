@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A standalone `2d-monte-carlo-pi/index.html` that estimates π by sampling random points against four inscribed shapes, with live convergence chart and adjustable parameters.
+**Goal:** A standalone `monte-carlo-pi/index.html` that estimates π by sampling random points against four inscribed shapes, with live convergence chart and adjustable parameters.
 
 **Architecture:** All math (PRNG, shape definitions, estimator, tests) lives in a `<script id="shared-code">` block inside `index.html`; `test.mjs` extracts that block with a regex and runs `PiTests.run()` under Node (same mechanism as `game-snake/`). UI code is a separate `<script>` in the same file. No dependencies, no build step.
 
@@ -15,12 +15,12 @@
 ### Task 1: Scaffold, test runner, seeded PRNG
 
 **Files:**
-- Create: `2d-monte-carlo-pi/test.mjs`
-- Create: `2d-monte-carlo-pi/index.html`
+- Create: `monte-carlo-pi/test.mjs`
+- Create: `monte-carlo-pi/index.html`
 
 - [ ] **Step 1: Write the test runner**
 
-`2d-monte-carlo-pi/test.mjs`:
+`monte-carlo-pi/test.mjs`:
 
 ```js
 // Runs the PiTests embedded in index.html's shared-code script block.
@@ -41,12 +41,12 @@ process.exit(ok ? 0 : 1);
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `cd 2d-monte-carlo-pi && node test.mjs`
+Run: `cd monte-carlo-pi && node test.mjs`
 Expected: FAIL — `ENOENT ... index.html` (file doesn't exist yet).
 
 - [ ] **Step 3: Create the index.html skeleton with PRNG tests**
 
-`2d-monte-carlo-pi/index.html` — the shared-code block contains `mulberry32` plus a `PiTests` harness with PRNG tests. Body is a placeholder; UI comes in Task 4.
+`monte-carlo-pi/index.html` — the shared-code block contains `mulberry32` plus a `PiTests` harness with PRNG tests. Body is a placeholder; UI comes in Task 4.
 
 ```html
 <!DOCTYPE html>
@@ -112,13 +112,13 @@ const PiTests = {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-monte-carlo-pi && node test.mjs`
+Run: `cd monte-carlo-pi && node test.mjs`
 Expected: `PASS prng: ...` ×3, `ALL TESTS PASSED`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-monte-carlo-pi
+git add monte-carlo-pi
 git commit -m "monte-carlo-pi: scaffold with test runner and seeded PRNG"
 ```
 
@@ -127,7 +127,7 @@ git commit -m "monte-carlo-pi: scaffold with test runner and seeded PRNG"
 ### Task 2: Shape definitions
 
 **Files:**
-- Modify: `2d-monte-carlo-pi/index.html` (shared-code block only)
+- Modify: `monte-carlo-pi/index.html` (shared-code block only)
 
 All shapes live in the unit square [0,1]×[0,1]. Canvas mapping is `(x, y) → (x·s, y·s)` (y-down; fine since sampling is symmetric).
 
@@ -171,7 +171,7 @@ Inside `PiTests.run()`, after the PRNG section, before the final `console.log`:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-monte-carlo-pi && node test.mjs`
+Run: `cd monte-carlo-pi && node test.mjs`
 Expected: `FAIL shapes: 4 defined`, `1 FAILURES`, exit 1.
 
 - [ ] **Step 3: Implement SHAPES**
@@ -253,13 +253,13 @@ const SHAPES = [
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-monte-carlo-pi && node test.mjs`
+Run: `cd monte-carlo-pi && node test.mjs`
 Expected: all `PASS`, `ALL TESTS PASSED`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-monte-carlo-pi/index.html
+git add monte-carlo-pi/index.html
 git commit -m "monte-carlo-pi: four shape definitions with area-fraction tests"
 ```
 
@@ -268,7 +268,7 @@ git commit -m "monte-carlo-pi: four shape definitions with area-fraction tests"
 ### Task 3: Estimator
 
 **Files:**
-- Modify: `2d-monte-carlo-pi/index.html` (shared-code block only)
+- Modify: `monte-carlo-pi/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing estimator tests**
 
@@ -304,7 +304,7 @@ Inside `PiTests.run()`, after the area-fraction section:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-monte-carlo-pi && node test.mjs`
+Run: `cd monte-carlo-pi && node test.mjs`
 Expected: `FAIL estimator: class exists`, exit 1.
 
 - [ ] **Step 3: Implement Estimator**
@@ -343,13 +343,13 @@ class Estimator {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-monte-carlo-pi && node test.mjs`
+Run: `cd monte-carlo-pi && node test.mjs`
 Expected: all `PASS`, `ALL TESTS PASSED`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-monte-carlo-pi/index.html
+git add monte-carlo-pi/index.html
 git commit -m "monte-carlo-pi: estimator with convergence and determinism tests"
 ```
 
@@ -358,7 +358,7 @@ git commit -m "monte-carlo-pi: estimator with convergence and determinism tests"
 ### Task 4: UI — canvas, controls, readout
 
 **Files:**
-- Modify: `2d-monte-carlo-pi/index.html` (styles, body, UI script)
+- Modify: `monte-carlo-pi/index.html` (styles, body, UI script)
 
 No automated test for this task; verification is manual (Step 3).
 
@@ -558,7 +558,7 @@ requestAnimationFrame(frame);
 
 - [ ] **Step 2: Run tests to confirm nothing broke**
 
-Run: `cd 2d-monte-carlo-pi && node test.mjs`
+Run: `cd monte-carlo-pi && node test.mjs`
 Expected: `ALL TESTS PASSED` (UI changes must not touch shared-code).
 
 - [ ] **Step 3: Manual verification in headless Chrome**
@@ -566,7 +566,7 @@ Expected: `ALL TESTS PASSED` (UI changes must not touch shared-code).
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --screenshot=/tmp/mc-pi-check.png --window-size=1000,760 --virtual-time-budget=4000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-monte-carlo-pi/index.html"
+  "file:///Users/neoneye/git/vibe-coding-lab/monte-carlo-pi/index.html"
 ```
 
 Read `/tmp/mc-pi-check.png` and confirm: green points inside the circle, red outside, outline visible, readout shows a π estimate near 3.14, controls render. Fix any rendering issues before committing.
@@ -574,7 +574,7 @@ Read `/tmp/mc-pi-check.png` and confirm: green points inside the circle, red out
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 2d-monte-carlo-pi/index.html
+git add monte-carlo-pi/index.html
 git commit -m "monte-carlo-pi: interactive UI with canvas, controls, readout"
 ```
 
@@ -583,7 +583,7 @@ git commit -m "monte-carlo-pi: interactive UI with canvas, controls, readout"
 ### Task 5: Convergence chart
 
 **Files:**
-- Modify: `2d-monte-carlo-pi/index.html` (UI script only)
+- Modify: `monte-carlo-pi/index.html` (UI script only)
 
 - [ ] **Step 1: Implement drawChart**
 
@@ -632,12 +632,12 @@ Note: `chart`/`chartCtx` must be declared before `reset()` runs (place this bloc
 
 - [ ] **Step 2: Run tests, then re-screenshot**
 
-Run: `cd 2d-monte-carlo-pi && node test.mjs` → `ALL TESTS PASSED`.
+Run: `cd monte-carlo-pi && node test.mjs` → `ALL TESTS PASSED`.
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --screenshot=/tmp/mc-pi-chart.png --window-size=1000,760 --virtual-time-budget=6000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-monte-carlo-pi/index.html"
+  "file:///Users/neoneye/git/vibe-coding-lab/monte-carlo-pi/index.html"
 ```
 
 Read the screenshot: convergence line should wobble toward and hug the dashed π line.
@@ -645,7 +645,7 @@ Read the screenshot: convergence line should wobble toward and hug the dashed π
 - [ ] **Step 3: Commit**
 
 ```bash
-git add 2d-monte-carlo-pi/index.html
+git add monte-carlo-pi/index.html
 git commit -m "monte-carlo-pi: convergence chart with log-x axis and pi reference line"
 ```
 
@@ -654,7 +654,7 @@ git commit -m "monte-carlo-pi: convergence chart with log-x axis and pi referenc
 ### Task 6: Gallery integration
 
 **Files:**
-- Create: `2d-monte-carlo-pi/screenshot1.png` (from headless Chrome; gallery accepts .png)
+- Create: `monte-carlo-pi/screenshot1.png` (from headless Chrome; gallery accepts .png)
 - Modify: `gallery.yaml`
 - Modify: `index.html` (repo root, regenerated by script)
 
@@ -662,9 +662,9 @@ git commit -m "monte-carlo-pi: convergence chart with log-x axis and pi referenc
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
-  --screenshot=/Users/neoneye/git/vibe-coding-lab/2d-monte-carlo-pi/screenshot1.png \
+  --screenshot=/Users/neoneye/git/vibe-coding-lab/monte-carlo-pi/screenshot1.png \
   --window-size=1000,760 --virtual-time-budget=8000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-monte-carlo-pi/index.html"
+  "file:///Users/neoneye/git/vibe-coding-lab/monte-carlo-pi/index.html"
 ```
 
 Read the file to confirm it shows a populated simulation (thousands of points, chart converged near π).
@@ -674,22 +674,22 @@ Read the file to confirm it shows a populated simulation (thousands of points, c
 Append to `gallery.yaml`:
 
 ```yaml
-2d-monte-carlo-pi: 2D Monte Carlo π
+monte-carlo-pi: 2D Monte Carlo π
 ```
 
 - [ ] **Step 3: Rebuild the gallery**
 
 Run: `cd /Users/neoneye/git/vibe-coding-lab && python3 build_gallery.py`
-Expected: root `index.html` regenerated with a `2d-monte-carlo-pi` card.
+Expected: root `index.html` regenerated with a `monte-carlo-pi` card.
 
 - [ ] **Step 4: Final full test run**
 
-Run: `cd 2d-monte-carlo-pi && node test.mjs`
+Run: `cd monte-carlo-pi && node test.mjs`
 Expected: `ALL TESTS PASSED`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-monte-carlo-pi/screenshot1.png gallery.yaml index.html
+git add monte-carlo-pi/screenshot1.png gallery.yaml index.html
 git commit -m "monte-carlo-pi: add to gallery"
 ```

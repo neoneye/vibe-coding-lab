@@ -1,6 +1,6 @@
 # 2D Fresnel Lens: design
 
-Date: 2026-10-24. Directory: `2d-fresnel-lens/`.
+Date: 2026-10-24. Directory: `fresnel-lens/`.
 
 ## Intent
 

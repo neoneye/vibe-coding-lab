@@ -1,7 +1,7 @@
 # 3D Geo Guess — Design
 
 **Date:** 2026-06-20
-**Directory:** `3d-geo-guess/`
+**Directory:** `geo-guess/`
 **Deliverable:** A single self-contained `index.html` (no CDN, no external runtime deps) plus a `test.mjs` and a one-time data converter.
 
 ## Concept
@@ -92,7 +92,7 @@ All pure-logic units live in the shared-code block and are importable by `test.m
 ## File layout
 
 ```
-3d-geo-guess/
+geo-guess/
   index.html      # self-contained game (shared-code block + UI)
   test.mjs        # node tests of pure logic
   build_data.mjs  # one-time converter: Natural Earth -> embedded COUNTRIES

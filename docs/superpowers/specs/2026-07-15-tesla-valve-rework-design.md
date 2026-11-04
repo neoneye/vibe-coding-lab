@@ -1,7 +1,7 @@
 # 2D Tesla Valve Rework — Design
 
 **Date:** 2026-07-15
-**Directory:** `2d-tesla-valve/`
+**Directory:** `tesla-valve/`
 **Deliverable:** Full rework of the existing self-contained `index.html` + `test.mjs`. The old contents are replaced entirely (git history keeps the previous version).
 
 ## Problem

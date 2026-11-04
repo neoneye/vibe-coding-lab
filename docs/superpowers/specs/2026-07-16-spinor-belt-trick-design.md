@@ -1,7 +1,7 @@
 # Spinor Belt Trick — Design
 
 Date: 2026-07-16
-Project directory: `3d-spinor-belt-trick/`
+Project directory: `spinor-belt-trick/`
 
 ## Goal
 
@@ -15,7 +15,7 @@ interacts with the rotation directly.
 ## Approach
 
 Three.js via CDN importmap (jsdelivr, pinned version), matching the existing
-`3d-shadows` / `3d-geo-guess` pattern. Single self-contained `index.html`.
+`shadows` / `geo-guess` pattern. Single self-contained `index.html`.
 
 Alternatives rejected: raw WebGL (boilerplate for no benefit), 2D canvas
 pseudo-3D (depth sorting six twisting ribbons is painful and looks worse).

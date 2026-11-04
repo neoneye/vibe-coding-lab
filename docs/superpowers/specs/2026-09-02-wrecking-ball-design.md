@@ -1,7 +1,7 @@
 # Wrecking Ball — Design
 
 **Date:** 2026-09-02
-**Directory:** `3d-wrecking-ball/`
+**Directory:** `wrecking-ball/`
 **Deliverable:** One `index.html` (Three.js r170 and Rapier 3D 0.20 from jsdelivr via importmap; everything else inline), a `test.mjs` that runs the shared-code tests in Node, a `screenshot1.jpg`, a README entry and a `gallery.yaml` title override.
 
 ## Purpose

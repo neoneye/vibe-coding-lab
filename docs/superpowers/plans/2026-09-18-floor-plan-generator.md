@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A standalone `2d-floor-plan-generator/index.html` that draws deterministic, parameter-driven floor plans of villain mansions, prisons, datacenters, power plants, malls and bunkers, with pissoir-heavy restrooms and backrooms sliders.
+**Goal:** A standalone `floor-plan-generator/index.html` that draws deterministic, parameter-driven floor plans of villain mansions, prisons, datacenters, power plants, malls and bunkers, with pissoir-heavy restrooms and backrooms sliders.
 
 **Architecture:** Engine + renderer live in `<script id="shared-code">` (pure JS, no DOM) and produce a plan model, then an SVG string. The page script builds the control panel from a declarative `PARAMS` table, syncs to the URL hash, and inserts the SVG. `test.mjs` extracts the shared block and runs `FloorPlanTests.run()` in Node.
 
@@ -20,7 +20,7 @@
 
 ### Task 1: Scaffold, PRNG, test runner
 
-**Files:** Create `2d-floor-plan-generator/index.html`, `2d-floor-plan-generator/test.mjs`.
+**Files:** Create `floor-plan-generator/index.html`, `floor-plan-generator/test.mjs`.
 
 **Produces:** `FP.makeRng(seed) → { next(), int(a,b), pick(arr), chance(p), shuffle(arr) }` (sfc32), `FloorPlanTests.run() → boolean`.
 
@@ -92,6 +92,6 @@
 
 ### Task 10: Gallery and screenshot
 
-- [ ] `gallery.yaml`: `2d-floor-plan-generator: 2D Floor Plan Generator`.
+- [ ] `gallery.yaml`: `floor-plan-generator: 2D Floor Plan Generator`.
 - [ ] Headless Chrome screenshot → `screenshot1.png`; run `python3 build_gallery.py`.
 - [ ] Commit.

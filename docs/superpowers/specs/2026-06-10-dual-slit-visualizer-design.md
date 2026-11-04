@@ -1,7 +1,7 @@
 # 2D Double-Slit Experiment Visualizer — Design
 
 **Date:** 2026-06-10
-**Location:** `2d-dual-slit-experiment/index.html` (single self-contained file, vibe-coding-lab convention)
+**Location:** `dual-slit-experiment/index.html` (single self-contained file, vibe-coding-lab convention)
 
 ## Purpose
 

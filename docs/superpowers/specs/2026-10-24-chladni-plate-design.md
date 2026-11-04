@@ -1,6 +1,6 @@
 # 2D Chladni Plate: design
 
-Date: 2026-10-24. Directory: `2d-chladni-plate/`.
+Date: 2026-10-24. Directory: `chladni-plate/`.
 
 ## Intent
 

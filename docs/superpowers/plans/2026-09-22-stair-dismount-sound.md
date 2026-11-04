@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add synthesized punch, scream, thud, grunt and bonk sounds to `3d-stair-dismount/index.html`, with a Sound checkbox and an M hotkey.
+**Goal:** Add synthesized punch, scream, thud, grunt and bonk sounds to `stair-dismount/index.html`, with a Sound checkbox and an M hotkey.
 
 **Architecture:** Pure decision helpers (`Dismount.sfx`) live in the `<script id="shared-code">` block and are covered by `DismountTests`, which `test.mjs` runs in Node. An inline `audio` object in the module script builds Web Audio graphs on demand and is called from four existing hooks: `doPush`, `drainImpacts`, `frame`, and the two places the dismount ends. Audio reads physics state, never writes it.
 
@@ -11,19 +11,19 @@
 ## Global Constraints
 
 - Single `index.html`; no sample files, no new dependencies. Spec: "Everything is synthesized with Web Audio, no sample files".
-- `node 3d-stair-dismount/test.mjs` must stay green after every task.
+- `node stair-dismount/test.mjs` must stay green after every task.
 - Sound must never touch Rapier or `state.push`, so retry stays deterministic.
 - Thresholds in newtons: `thud: 400` (equals `score.threshold`), `grunt: 1200`, `loud: 4000`. Cooldown `0.08` s. Scream-rate floor `0.25`. Push gain `0.35 + 0.65 · percent/100`.
 - Timbre randomness uses `Math.random` only.
-- Commits go straight to `main`, message prefix `3d-stair-dismount:`, ending with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Commits go straight to `main`, message prefix `stair-dismount:`, ending with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 
 ---
 
 ### Task 1: Pure `Dismount.sfx` helpers with self-tests
 
 **Files:**
-- Modify: `3d-stair-dismount/index.html:319-338` (add `sfx` after `score`, export it)
-- Modify: `3d-stair-dismount/index.html:465-487` (add `testSfx`, register it in `run`)
+- Modify: `stair-dismount/index.html:319-338` (add `sfx` after `score`, export it)
+- Modify: `stair-dismount/index.html:465-487` (add `testSfx`, register it in `run`)
 
 **Interfaces:**
 - Produces: `Dismount.sfx = { thresholds, cooldown, impactGain(force), impactKind(partName, force), allow(last, partName, t), screamRate(slowmo), pushGain(percent) }`. Task 2 calls all of these.
@@ -58,7 +58,7 @@ Change the `run()` loop list from `[testStairs, testRagdoll, testScore]` to `[te
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `node 3d-stair-dismount/test.mjs`
+Run: `node stair-dismount/test.mjs`
 Expected: output contains `FAIL testSfx threw — TypeError: Cannot read properties of undefined` and exit code 1.
 
 - [ ] **Step 3: Implement `sfx`**
@@ -104,14 +104,14 @@ Change the return line to:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `node 3d-stair-dismount/test.mjs`
+Run: `node stair-dismount/test.mjs`
 Expected: last line `DismountTests: N/N passed` with no `FAIL` lines, exit code 0. N is the previous count plus 11.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 3d-stair-dismount/index.html
-git commit -m "3d-stair-dismount: pure sfx decision helpers with tests
+git add stair-dismount/index.html
+git commit -m "stair-dismount: pure sfx decision helpers with tests
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -121,12 +121,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ### Task 2: Audio module and physics hooks
 
 **Files:**
-- Modify: `3d-stair-dismount/index.html:616-619` (add `kindByCollider` beside `boneByCollider`)
-- Modify: `3d-stair-dismount/index.html:629-645` (record env collider kinds in `buildWorld`)
-- Modify: `3d-stair-dismount/index.html:750-760` (`doPush` hook)
-- Modify: `3d-stair-dismount/index.html:772-782` (`drainImpacts` hook)
-- Modify: `3d-stair-dismount/index.html:800-810` (`finishDismount` hook)
-- Modify: `3d-stair-dismount/index.html:1008-1025` (`frame` hook)
+- Modify: `stair-dismount/index.html:616-619` (add `kindByCollider` beside `boneByCollider`)
+- Modify: `stair-dismount/index.html:629-645` (record env collider kinds in `buildWorld`)
+- Modify: `stair-dismount/index.html:750-760` (`doPush` hook)
+- Modify: `stair-dismount/index.html:772-782` (`drainImpacts` hook)
+- Modify: `stair-dismount/index.html:800-810` (`finishDismount` hook)
+- Modify: `stair-dismount/index.html:1008-1025` (`frame` hook)
 - Add: new section "Audio" placed right after the Scoring section (after `refreshDamage`, before "Simulation loop").
 
 **Interfaces:**
@@ -333,13 +333,13 @@ In `frame`, inside `if (state.phase !== 'aim') { ... }` after `if (n) updateUI()
 
 - [ ] **Step 4: Run the Node tests and a syntax check**
 
-Run: `node 3d-stair-dismount/test.mjs`
+Run: `node stair-dismount/test.mjs`
 Expected: all pass, exit 0.
 
-Run: `node --check <(sed -n '/<script type="module">/,/<\/script>/p' 3d-stair-dismount/index.html | sed '1d;$d')` is unreliable because of the top-level `await`; instead extract to a scratch file and check as a module:
+Run: `node --check <(sed -n '/<script type="module">/,/<\/script>/p' stair-dismount/index.html | sed '1d;$d')` is unreliable because of the top-level `await`; instead extract to a scratch file and check as a module:
 
 ```bash
-sed -n '/<script type="module">/,/<\/script>/p' 3d-stair-dismount/index.html | sed '1d;$d' > /private/tmp/claude-501/-Users-neoneye-git-vibe-coding-lab/84e7bf62-bca5-4ce9-8041-d55dfc30c163/scratchpad/page.mjs && node --check /private/tmp/claude-501/-Users-neoneye-git-vibe-coding-lab/84e7bf62-bca5-4ce9-8041-d55dfc30c163/scratchpad/page.mjs && echo SYNTAX OK
+sed -n '/<script type="module">/,/<\/script>/p' stair-dismount/index.html | sed '1d;$d' > /private/tmp/claude-501/-Users-neoneye-git-vibe-coding-lab/84e7bf62-bca5-4ce9-8041-d55dfc30c163/scratchpad/page.mjs && node --check /private/tmp/claude-501/-Users-neoneye-git-vibe-coding-lab/84e7bf62-bca5-4ce9-8041-d55dfc30c163/scratchpad/page.mjs && echo SYNTAX OK
 ```
 
 Expected: `SYNTAX OK`.
@@ -347,8 +347,8 @@ Expected: `SYNTAX OK`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 3d-stair-dismount/index.html
-git commit -m "3d-stair-dismount: synthesized punch, scream, thud, grunt and bonk
+git add stair-dismount/index.html
+git commit -m "stair-dismount: synthesized punch, scream, thud, grunt and bonk
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -358,12 +358,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ### Task 3: Sound checkbox, M hotkey, reset hook
 
 **Files:**
-- Modify: `3d-stair-dismount/index.html:91` (checkbox in World card)
-- Modify: `3d-stair-dismount/index.html:96-101` (`.keys` row)
-- Modify: `3d-stair-dismount/index.html:920` (checkbox listener)
-- Modify: `3d-stair-dismount/index.html:929-941` (keydown handler)
-- Modify: `3d-stair-dismount/index.html:875` (`resetFigure`)
-- Modify: `3d-stair-dismount/index.html:1032-1038` (boot: disable checkbox when unsupported)
+- Modify: `stair-dismount/index.html:91` (checkbox in World card)
+- Modify: `stair-dismount/index.html:96-101` (`.keys` row)
+- Modify: `stair-dismount/index.html:920` (checkbox listener)
+- Modify: `stair-dismount/index.html:929-941` (keydown handler)
+- Modify: `stair-dismount/index.html:875` (`resetFigure`)
+- Modify: `stair-dismount/index.html:1032-1038` (boot: disable checkbox when unsupported)
 
 **Interfaces:**
 - Consumes: `audio.setEnabled(on)`, `audio.stopScream()`, `audio.supported`, `state.sound` from Task 2.
@@ -415,8 +415,8 @@ Same two commands as Task 2 Step 4. Expected: all pass, `SYNTAX OK`.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 3d-stair-dismount/index.html
-git commit -m "3d-stair-dismount: sound checkbox and M hotkey
+git add stair-dismount/index.html
+git commit -m "stair-dismount: sound checkbox and M hotkey
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -429,7 +429,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Serve and load**
 
-Use the Browser pane `preview_start` with the gitignored `.claude/launch.json` entry named `static` (http.server on 8765; create the entry if it is missing, per the memory note). Navigate to `http://localhost:8765/3d-stair-dismount/`.
+Use the Browser pane `preview_start` with the gitignored `.claude/launch.json` entry named `static` (http.server on 8765; create the entry if it is missing, per the memory note). Navigate to `http://localhost:8765/stair-dismount/`.
 
 - [ ] **Step 2: Push with a real gesture and check the console**
 
@@ -459,4 +459,4 @@ Expected: `same: true`.
 
 Set `#sSlow` to 0.25 via `form_input`, dispatch an `input` event, push with the button, and listen: the scream should be about two octaves lower and drawn out. No code assertion; note the result in the final report.
 
-- [ ] **Step 6: Nothing to commit unless fixes were needed.** If fixes were needed, rerun Node tests and commit with prefix `3d-stair-dismount:`.
+- [ ] **Step 6: Nothing to commit unless fixes were needed.** If fixes were needed, rerun Node tests and commit with prefix `stair-dismount:`.

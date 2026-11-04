@@ -2,24 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A standalone page at `3d-spinor-belt-trick/index.html` where a cube attached to 6 striped belts spins 0–720° (scrubber + auto-spin); belts spiral at 360° and return exactly to their start shape at 720°.
+**Goal:** A standalone page at `spinor-belt-trick/index.html` where a cube attached to 6 striped belts spins 0–720° (scrubber + auto-spin); belts spiral at 360° and return exactly to their start shape at 720°.
 
 **Architecture:** All math (quaternions + the belt-trick homotopy `H(u,t) = exp(πt·â(u))·exp(πt·ẑ)`) lives in a DOM-free `<script id="shared-code">` block, unit-tested via `test.mjs` (Node) and `?test=1` (browser). A `<script type="module">` block renders the scene with Three.js: cube + wireframe room + six ribbon meshes whose vertices are rebuilt each frame from the shared-code field.
 
-**Tech Stack:** Three.js 0.170.0 via jsdelivr CDN importmap (same as `3d-shadows`), vanilla JS, no build step.
+**Tech Stack:** Three.js 0.170.0 via jsdelivr CDN importmap (same as `shadows`), vanilla JS, no build step.
 
 **Spec:** `docs/superpowers/specs/2026-07-16-spinor-belt-trick-design.md`
 
 ## Global Constraints
 
-- Single self-contained `3d-spinor-belt-trick/index.html` plus `3d-spinor-belt-trick/test.mjs`; no other files except `screenshot1.jpg`.
-- Three.js pinned to `three@0.170.0` on jsdelivr, loaded via importmap exactly as in `3d-shadows/index.html`.
+- Single self-contained `spinor-belt-trick/index.html` plus `spinor-belt-trick/test.mjs`; no other files except `screenshot1.jpg`.
+- Three.js pinned to `three@0.170.0` on jsdelivr, loaded via importmap exactly as in `shadows/index.html`.
 - The `shared-code` block must never touch the DOM (it runs in Node).
 - `renderer.setPixelRatio(window.devicePixelRatio)` — user is on a retina Mac; never render at CSS pixel size.
 - Clamp per-frame `dt` to 0.1 s (tab-throttling protection).
 - Quaternion convention: `{w, x, y, z}`, `qExp(θ, n̂) = cos θ + sin θ·n̂` represents a rotation by `2θ` about `n̂`.
 - Belt parameter `u`: 0 at the cube face, 1 at the wall anchor. Animation phase `t ∈ [0,1]` = angle/720°.
-- Commits go directly to `main`, message prefix `3d-spinor-belt-trick:`, trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
+- Commits go directly to `main`, message prefix `spinor-belt-trick:`, trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 - Run all commands from `/Users/neoneye/git/vibe-coding-lab`.
 
 ---
@@ -27,12 +27,12 @@
 ### Task 1: Scaffold + test harness
 
 **Files:**
-- Create: `3d-spinor-belt-trick/index.html`
-- Create: `3d-spinor-belt-trick/test.mjs`
+- Create: `spinor-belt-trick/index.html`
+- Create: `spinor-belt-trick/test.mjs`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `SpinorTests.add(name, fn)` / `SpinorTests.run()` registry, `assert(cond, msg)`, `assertNear(actual, expected, eps, msg)`; `node 3d-spinor-belt-trick/test.mjs` exits 0 on all-pass. The HTML skeleton with the control-bar markup (`#bar`, `#play`, `#angle`, `#angleVal`, `#speed`, `#hint`) that Task 4 wires up.
+- Produces: `SpinorTests.add(name, fn)` / `SpinorTests.run()` registry, `assert(cond, msg)`, `assertNear(actual, expected, eps, msg)`; `node spinor-belt-trick/test.mjs` exits 0 on all-pass. The HTML skeleton with the control-bar markup (`#bar`, `#play`, `#angle`, `#angleVal`, `#speed`, `#hint`) that Task 4 wires up.
 
 - [ ] **Step 1: Write test.mjs (the failing test — index.html doesn't exist yet)**
 
@@ -55,12 +55,12 @@ process.exit(ok ? 0 : 1);
 
 - [ ] **Step 2: Run it to make sure it fails**
 
-Run: `node 3d-spinor-belt-trick/test.mjs`
+Run: `node spinor-belt-trick/test.mjs`
 Expected: FAIL — `Error: ENOENT ... index.html`
 
 - [ ] **Step 3: Write the index.html skeleton**
 
-Full initial contents of `3d-spinor-belt-trick/index.html`:
+Full initial contents of `spinor-belt-trick/index.html`:
 
 ```html
 <!DOCTYPE html>
@@ -155,14 +155,14 @@ if (new URLSearchParams(location.search).get("test") === "1") {
 
 - [ ] **Step 4: Run the tests and make sure they pass**
 
-Run: `node 3d-spinor-belt-trick/test.mjs`
+Run: `node spinor-belt-trick/test.mjs`
 Expected: `ok - smoke` / `1/1 passed`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 3d-spinor-belt-trick
-git commit -m "3d-spinor-belt-trick: scaffold with shared-code test harness
+git add spinor-belt-trick
+git commit -m "spinor-belt-trick: scaffold with shared-code test harness
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -172,7 +172,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: Quaternion helpers
 
 **Files:**
-- Modify: `3d-spinor-belt-trick/index.html` (shared-code block only)
+- Modify: `spinor-belt-trick/index.html` (shared-code block only)
 
 **Interfaces:**
 - Consumes: `SpinorTests`, `assert`, `assertNear` from Task 1.
@@ -211,7 +211,7 @@ SpinorTests.add("qRotationDistance folds sign: dist(q, -q) = 0", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `node 3d-spinor-belt-trick/test.mjs`
+Run: `node spinor-belt-trick/test.mjs`
 Expected: 3 FAIL lines (`qMul is not defined` etc.), exit 1.
 
 - [ ] **Step 3: Write the implementation** — insert directly under the `// Quaternions` banner comment, above the new tests:
@@ -248,14 +248,14 @@ function qRotationDistance(a, b) {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `node 3d-spinor-belt-trick/test.mjs`
+Run: `node spinor-belt-trick/test.mjs`
 Expected: `4/4 passed`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 3d-spinor-belt-trick/index.html
-git commit -m "3d-spinor-belt-trick: quaternion helpers
+git add spinor-belt-trick/index.html
+git commit -m "spinor-belt-trick: quaternion helpers
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -265,7 +265,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: Belt-trick homotopy
 
 **Files:**
-- Modify: `3d-spinor-belt-trick/index.html` (shared-code block only)
+- Modify: `spinor-belt-trick/index.html` (shared-code block only)
 
 **Interfaces:**
 - Consumes: `qMul`, `qExp`, `qRotateVec`, `qRotationDistance`, `QID` from Task 2.
@@ -342,7 +342,7 @@ SpinorTests.add("belt endpoints: cube end tracks cube, wall end fixed", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `node 3d-spinor-belt-trick/test.mjs`
+Run: `node spinor-belt-trick/test.mjs`
 Expected: the 6 new tests FAIL (`beltQuat is not defined`), exit 1.
 
 - [ ] **Step 3: Write the implementation** — insert directly under the `// Belt-trick homotopy` banner comment, above the new tests:
@@ -368,14 +368,14 @@ function beltPoint(u, t, face, wall) {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `node 3d-spinor-belt-trick/test.mjs`
+Run: `node spinor-belt-trick/test.mjs`
 Expected: `10/10 passed`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 3d-spinor-belt-trick/index.html
-git commit -m "3d-spinor-belt-trick: belt-trick homotopy H(u,t) with property tests
+git add spinor-belt-trick/index.html
+git commit -m "spinor-belt-trick: belt-trick homotopy H(u,t) with property tests
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -385,7 +385,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: Three.js scene, animation loop, controls
 
 **Files:**
-- Modify: `3d-spinor-belt-trick/index.html`
+- Modify: `spinor-belt-trick/index.html`
 
 **Interfaces:**
 - Consumes: `cubeQuat(t)` from shared-code (plain script scope, visible to the module script); `#bar` control markup from Task 1.
@@ -519,19 +519,19 @@ requestAnimationFrame(loop);
 
 - [ ] **Step 2: Verify the math tests still pass**
 
-Run: `node 3d-spinor-belt-trick/test.mjs`
+Run: `node spinor-belt-trick/test.mjs`
 Expected: `10/10 passed`.
 
 - [ ] **Step 3: Verify in the browser**
 
-Run: `open 3d-spinor-belt-trick/index.html`
-Expected: colored cube spinning twice per cycle inside a wireframe room with 6 wall plates; slider scrubs and pauses; play button resumes; orbit + zoom work. Also check `open "file:///Users/neoneye/git/vibe-coding-lab/3d-spinor-belt-trick/index.html?test=1"` shows `10/10 passed` in green.
+Run: `open spinor-belt-trick/index.html`
+Expected: colored cube spinning twice per cycle inside a wireframe room with 6 wall plates; slider scrubs and pauses; play button resumes; orbit + zoom work. Also check `open "file:///Users/neoneye/git/vibe-coding-lab/spinor-belt-trick/index.html?test=1"` shows `10/10 passed` in green.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 3d-spinor-belt-trick/index.html
-git commit -m "3d-spinor-belt-trick: Three.js scene, spin loop, scrubber controls
+git add spinor-belt-trick/index.html
+git commit -m "spinor-belt-trick: Three.js scene, spin loop, scrubber controls
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -541,7 +541,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 5: Belt ribbons
 
 **Files:**
-- Modify: `3d-spinor-belt-trick/index.html` (module script)
+- Modify: `spinor-belt-trick/index.html` (module script)
 
 **Interfaces:**
 - Consumes: `beltQuat(u, t)`, `beltPoint(u, t, face, wall)` from shared-code; `scene`, `DIRS`, `ROOM`, `CUBE`, `renderFrame()` from Task 4.
@@ -625,17 +625,17 @@ function updateBelts(t) {
 
 - [ ] **Step 3: Verify tests still pass, then verify in the browser**
 
-Run: `node 3d-spinor-belt-trick/test.mjs`
+Run: `node spinor-belt-trick/test.mjs`
 Expected: `10/10 passed`.
 
-Run: `open 3d-spinor-belt-trick/index.html`
+Run: `open spinor-belt-trick/index.html`
 Expected: six striped ribbons attached cube-face → wall plate. At 0° all straight; auto-spin swings them around the cube smoothly with no pop; scrub to 360° → visibly spiraled; scrub to 720° → straight again, identical to 0°. Orbit around to check back faces are the contrasting blue.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 3d-spinor-belt-trick/index.html
-git commit -m "3d-spinor-belt-trick: striped ribbon belts driven by the homotopy field
+git add spinor-belt-trick/index.html
+git commit -m "spinor-belt-trick: striped ribbon belts driven by the homotopy field
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -645,7 +645,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 6: Screenshot, gallery, final verification
 
 **Files:**
-- Create: `3d-spinor-belt-trick/screenshot1.jpg`
+- Create: `spinor-belt-trick/screenshot1.jpg`
 - Modify: `index.html` (repo root, regenerated by `build_gallery.py`)
 
 **Interfaces:**
@@ -654,14 +654,14 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Full test suite passes**
 
-Run: `node 3d-spinor-belt-trick/test.mjs`
+Run: `node spinor-belt-trick/test.mjs`
 Expected: `10/10 passed`, exit 0.
 
 - [ ] **Step 2: Headless screenshots at the three key angles**
 
 ```bash
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-BASE="file:///Users/neoneye/git/vibe-coding-lab/3d-spinor-belt-trick/index.html"
+BASE="file:///Users/neoneye/git/vibe-coding-lab/spinor-belt-trick/index.html"
 SCRATCH="/private/tmp/claude-501/-Users-neoneye-git-vibe-coding-lab/e4c6d9c5-f109-42bd-8032-0cadfd6eed34/scratchpad"
 for a in 0 360 720; do
   "$CHROME" --headless=new --use-angle=swiftshader --window-size=1200,800 \
@@ -679,7 +679,7 @@ Use the most interesting frame (360°, belts spiraled) as the thumbnail:
 "$CHROME" --headless=new --use-angle=swiftshader --window-size=1000,750 \
   --virtual-time-budget=5000 --screenshot="$SCRATCH/spinor-thumb.png" "$BASE?angle=360"
 sips -s format jpeg -s formatOptions 85 "$SCRATCH/spinor-thumb.png" \
-  --out 3d-spinor-belt-trick/screenshot1.jpg
+  --out spinor-belt-trick/screenshot1.jpg
 python3 build_gallery.py
 ```
 
@@ -688,8 +688,8 @@ Expected: `build_gallery.py` reports the new project; root `index.html` diff con
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 3d-spinor-belt-trick/screenshot1.jpg index.html
-git commit -m "3d-spinor-belt-trick: gallery entry with screenshot
+git add spinor-belt-trick/screenshot1.jpg index.html
+git commit -m "spinor-belt-trick: gallery entry with screenshot
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```

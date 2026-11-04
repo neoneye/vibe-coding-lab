@@ -1,7 +1,7 @@
 # Animal haircut
 
 Date: 2026-10-10
-Directory: `3d-animal-haircut/`
+Directory: `animal-haircut/`
 
 ## Goal
 
@@ -18,7 +18,7 @@ There is no score and no timer. Lots of parameters.
 - One self-contained `index.html`, plus `test.mjs` and later
   `screenshot1.jpg`.
 - three.js 0.170.0 comes from jsdelivr through an import map, as in
-  `3d-wrecking-ball`. Nothing else.
+  `wrecking-ball`. Nothing else.
 - Pure logic lives in `<script id="shared-code">` with a `HaircutTests.run()`
   runner. `test.mjs` extracts that block and runs it in Node.
 - Scene units are metres. The llama is about 1.8 m tall at the ears.
@@ -230,7 +230,7 @@ by hand.
 
 ## Parameters panel
 
-The panel has collapsible cards in the house style of `3d-wrecking-ball`.
+The panel has collapsible cards in the house style of `wrecking-ball`.
 
 | Card | Contents |
 |---|---|

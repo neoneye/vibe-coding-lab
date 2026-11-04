@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cylinder Tetris 3D - Two Player</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a1a; overflow: hidden; font-family: 'Courier New', monospace; color: #fff; }
+canvas { display: block; }
+.hud { position: absolute; top: 20px; font-size: 18px; }
+.hud div { margin: 8px 0; }
+#hud-p1 { left: 20px; text-shadow: 0 0 10px rgba(0,150,255,0.5); }
+#hud-p2 { right: 20px; text-align: right; text-shadow: 0 0 10px rgba(255,100,0,0.5); }
+.label { color: #88aacc; font-size: 14px; }
+.label-p2 { color: #cc8844; font-size: 14px; }
+.value { color: #fff; font-size: 22px; font-weight: bold; }
+.player-tag { font-size: 16px; font-weight: bold; margin-bottom: 12px; }
+.p1-tag { color: #00ccff; }
+.p2-tag { color: #ff8800; }
+.next-canvas { border: 1px solid #334; border-radius: 8px; background: rgba(0,0,30,0.5); margin-top: 8px; }
+#controls-info { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); text-align: center; color: #556; font-size: 13px; line-height: 1.6; }
+.overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; background: rgba(0,0,20,0.85); z-index: 10; }
+.overlay.hidden { display: none; }
+#start-overlay h1 { font-size: 42px; color: #00ccff; text-shadow: 0 0 30px rgba(0,200,255,0.5); margin-bottom: 10px; }
+#start-overlay h2 { font-size: 20px; color: #668; margin-bottom: 30px; font-weight: normal; }
+#game-over h1 { font-size: 48px; color: #ff4444; text-shadow: 0 0 30px rgba(255,0,0,0.5); margin-bottom: 20px; }
+.overlay p { font-size: 20px; color: #aaa; margin: 5px 0; }
+</style>
+</head>
+<body>
+<div id="hud-p1" class="hud">
+  <div class="player-tag p1-tag">PLAYER 1 (Outer)</div>
+  <div><span class="label">SCORE</span><br><span class="value" id="p1-score">0</span></div>
+  <div><span class="label">LEVEL</span><br><span class="value" id="p1-level">1</span></div>
+  <div><span class="label">LINES</span><br><span class="value" id="p1-lines">0</span></div>
+  <div><span class="label">NEXT</span><br><canvas id="p1-next" class="next-canvas" width="100" height="100"></canvas></div>
+</div>
+<div id="hud-p2" class="hud">
+  <div class="player-tag p2-tag">PLAYER 2 (Inner)</div>
+  <div><span class="label-p2">SCORE</span><br><span class="value" id="p2-score">0</span></div>
+  <div><span class="label-p2">LEVEL</span><br><span class="value" id="p2-level">1</span></div>
+  <div><span class="label-p2">LINES</span><br><span class="value" id="p2-lines">0</span></div>
+  <div><span class="label-p2">NEXT</span><br><canvas id="p2-next" class="next-canvas" width="100" height="100"></canvas></div>
+</div>
+<div id="controls-info">
+  P1: &#8592; &#8594; Move &nbsp;|&nbsp; &#8593; Rotate &nbsp;|&nbsp; &#8595; Soft drop &nbsp;|&nbsp; Space Hard drop<br>
+  P2: A D Move &nbsp;|&nbsp; W Rotate &nbsp;|&nbsp; S Soft drop &nbsp;|&nbsp; X Hard drop<br>
+  Mouse drag to orbit
+</div>
+<div id="start-overlay" class="overlay">
+  <h1>CYLINDER TETRIS</h1>
+  <h2>Two Player &mdash; Concentric Cylinders</h2>
+  <p>Press SPACE to start</p>
+</div>
+<div id="game-over" class="overlay hidden">
+  <h1>GAME OVER</h1>
+  <p id="final-p1"></p>
+  <p id="final-p2"></p>
+  <p style="margin-top:15px">Press R to restart</p>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+(function() {
+'use strict';
+
+// === CONSTANTS ===
+const SEGS = 32, ROWS = 18, CH = 1.0, GAP = 0.06;
+const SA = Math.PI * 2 / SEGS;
+const P1_RAD = 7, P1_THICK = 1.2;
+const P2_RAD = 3.5, P2_THICK = 1.0;
+
+const PIECES = {
+  I: { c: [[0,0],[0,1],[0,2],[0,3]], color: 0x00ddff },
+  O: { c: [[0,0],[0,1],[1,0],[1,1]], color: 0xffdd00 },
+  T: { c: [[0,0],[0,1],[0,2],[1,1]], color: 0xbb00ff },
+  S: { c: [[0,1],[0,2],[1,0],[1,1]], color: 0x00ff44 },
+  Z: { c: [[0,0],[0,1],[1,1],[1,2]], color: 0xff2200 },
+  L: { c: [[0,0],[0,1],[0,2],[1,0]], color: 0xff8800 },
+  J: { c: [[0,0],[0,1],[0,2],[1,2]], color: 0x2244ff }
+};
+const PNAMES = Object.keys(PIECES);
+
+// === THREE.JS SETUP ===
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x080818);
+scene.fog = new THREE.Fog(0x080818, 35, 70);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.insertBefore(renderer.domElement, document.body.firstChild);
+
+scene.add(new THREE.AmbientLight(0x334466, 0.6));
+const dLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dLight.position.set(10, 20, 10);
+scene.add(dLight);
+scene.add(new THREE.PointLight(0x4488ff, 0.5, 40)).position.set(0, ROWS * CH / 2, 0);
+
+// Camera orbit
+let camA = Math.PI / 4, camP = 0.6, camD = 28, dragging = false, autoRot = true;
+function updCam() {
+  const cy = ROWS * CH * 0.4;
+  camera.position.set(camD * Math.cos(camP) * Math.cos(camA), cy + camD * Math.sin(camP), camD * Math.cos(camP) * Math.sin(camA));
+  camera.lookAt(0, cy, 0);
+}
+renderer.domElement.addEventListener('pointerdown', () => { dragging = true; autoRot = false; });
+addEventListener('pointerup', () => { dragging = false; });
+renderer.domElement.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  camA -= e.movementX * 0.008;
+  camP = Math.max(-0.3, Math.min(1.2, camP + e.movementY * 0.008));
+});
+renderer.domElement.addEventListener('wheel', e => { camD = Math.max(15, Math.min(45, camD + e.deltaY * 0.02)); e.preventDefault(); }, { passive: false });
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+// === CELL GEOMETRY (arc segment, parameterized by radius) ===
+function makeCellGeom(radius, thickness) {
+  const ir = radius - thickness / 2 + GAP, or2 = radius + thickness / 2 - GAP;
+  const ag = GAP / radius, a1 = ag, a2 = SA - ag, st = 6;
+  const sh = new THREE.Shape();
+  for (let i = 0; i <= st; i++) {
+    const a = a1 + (a2 - a1) * i / st;
+    i === 0 ? sh.moveTo(or2 * Math.cos(a), or2 * Math.sin(a)) : sh.lineTo(or2 * Math.cos(a), or2 * Math.sin(a));
+  }
+  for (let i = st; i >= 0; i--) {
+    const a = a1 + (a2 - a1) * i / st;
+    sh.lineTo(ir * Math.cos(a), ir * Math.sin(a));
+  }
+  sh.closePath();
+  const g = new THREE.ExtrudeGeometry(sh, { depth: CH - GAP * 2, bevelEnabled: false });
+  g.rotateX(-Math.PI / 2);
+  g.translate(0, GAP, 0);
+  return g;
+}
+const cellGeom1 = makeCellGeom(P1_RAD, P1_THICK);
+const cellGeom2 = makeCellGeom(P2_RAD, P2_THICK);
+
+// === GRID WIREFRAMES (one per cylinder) ===
+function makeWireframe(radius, thickness, color) {
+  const pts = [], r2 = radius + thickness / 2;
+  for (let r = 0; r <= ROWS; r++) {
+    const y = r * CH;
+    for (let i = 0; i < 64; i++) {
+      const a1 = i / 64 * Math.PI * 2, a2 = (i + 1) / 64 * Math.PI * 2;
+      pts.push(new THREE.Vector3(r2 * Math.cos(a1), y, r2 * Math.sin(a1)));
+      pts.push(new THREE.Vector3(r2 * Math.cos(a2), y, r2 * Math.sin(a2)));
+    }
+  }
+  for (let s = 0; s < SEGS; s++) {
+    const a = s * SA;
+    pts.push(new THREE.Vector3(r2 * Math.cos(a), 0, r2 * Math.sin(a)));
+    pts.push(new THREE.Vector3(r2 * Math.cos(a), ROWS * CH, r2 * Math.sin(a)));
+  }
+  scene.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.25 })));
+}
+makeWireframe(P1_RAD, P1_THICK, 0x222244);
+makeWireframe(P2_RAD, P2_THICK, 0x222244);
+
+// Floor
+const fl = new THREE.Mesh(new THREE.CircleGeometry(P1_RAD + P1_THICK / 2 + 0.5, 32), new THREE.MeshPhongMaterial({ color: 0x151530 }));
+fl.rotateX(-Math.PI / 2); fl.position.y = -0.05; scene.add(fl);
+
+// === MESH POOLS (separate pool per cylinder geometry) ===
+const POOL = 350;
+const pool1 = [], pool2 = [];
+for (let i = 0; i < POOL; i++) {
+  const m = new THREE.Mesh(cellGeom1, new THREE.MeshPhongMaterial({ color: 0xffffff, shininess: 60, transparent: true }));
+  m.visible = false; scene.add(m); pool1.push(m);
+}
+for (let i = 0; i < POOL; i++) {
+  const m = new THREE.Mesh(cellGeom2, new THREE.MeshPhongMaterial({ color: 0xffffff, shininess: 60, transparent: true }));
+  m.visible = false; scene.add(m); pool2.push(m);
+}
+function posMesh(m, row, seg) { m.position.set(0, row * CH, 0); m.rotation.set(0, seg * SA, 0); }
+
+// === PARTICLES ===
+const particles = [];
+function explode(row, p) {
+  for (let s = 0; s < SEGS; s++) {
+    const a = (s + 0.5) * SA, y = (row + 0.5) * CH;
+    const cx = p.radius * Math.cos(a), cz = p.radius * Math.sin(a);
+    for (let k = 0; k < 3; k++) {
+      const sz = 0.1 + Math.random() * 0.15;
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(sz, sz, sz), new THREE.MeshPhongMaterial({ color: p.grid[row][s] || 0xffffff, transparent: true }));
+      mesh.position.set(cx + (Math.random() - 0.5) * 0.5, y + (Math.random() - 0.5) * 0.5, cz + (Math.random() - 0.5) * 0.5);
+      scene.add(mesh);
+      const sp = 3 + Math.random() * 5;
+      particles.push({ mesh, vel: new THREE.Vector3(Math.cos(a) * sp + (Math.random() - 0.5) * 3, (Math.random() - 0.3) * 4, Math.sin(a) * sp + (Math.random() - 0.5) * 3), life: 1, decay: 0.8 + Math.random() * 0.5 });
+    }
+  }
+}
+function updPart(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.mesh.position.addScaledVector(p.vel, dt);
+    p.vel.y -= 9.8 * dt;
+    p.life -= p.decay * dt;
+    p.mesh.material.opacity = Math.max(0, p.life);
+    p.mesh.rotation.x += dt * 3; p.mesh.rotation.z += dt * 2;
+    if (p.life <= 0) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); particles.splice(i, 1); }
+  }
+}
+
+// === PLAYER STATE ===
+let started = false, gameOver = false, lastT = 0;
+const p1 = { radius: P1_RAD, thick: P1_THICK, ids: { score: 'p1-score', level: 'p1-level', lines: 'p1-lines', next: 'p1-next' } };
+const p2 = { radius: P2_RAD, thick: P2_THICK, ids: { score: 'p2-score', level: 'p2-level', lines: 'p2-lines', next: 'p2-next' } };
+
+function rndP() { return PNAMES[Math.floor(Math.random() * PNAMES.length)]; }
+
+function initPlayer(p) {
+  p.grid = []; for (let r = 0; r < ROWS; r++) p.grid.push(new Array(SEGS).fill(0));
+  p.score = 0; p.level = 1; p.lines = 0; p.over = false;
+  p.dropT = 0; p.dropInt = 1.0; p.flashR = []; p.flashT = 0;
+  p.nextT = rndP(); spawnPiece(p); updHUD(p);
+}
+
+// === PIECE LOGIC ===
+function spawnPiece(p) {
+  const d = PIECES[p.nextT];
+  p.nextT = rndP();
+  p.cur = { cells: d.c.map(c => [...c]), color: d.color, row: ROWS - 2, seg: Math.floor(Math.random() * SEGS) };
+  if (collides(p, p.cur)) { p.over = true; p.cur = null; }
+  updNext(p);
+}
+
+function getCells(pc) { return pc.cells.map(([r, s]) => [pc.row + r, ((pc.seg + s) % SEGS + SEGS) % SEGS]); }
+
+function collides(p, pc) {
+  for (const [r, s] of getCells(pc)) { if (r < 0 || r >= ROWS || p.grid[r][s]) return true; }
+  return false;
+}
+
+function moveP(p, dr, ds) {
+  if (!p.cur || p.over || p.flashR.length) return false;
+  const t = { ...p.cur, row: p.cur.row + dr, seg: ((p.cur.seg + ds) % SEGS + SEGS) % SEGS };
+  t.cells = p.cur.cells;
+  if (!collides(p, t)) { p.cur.row = t.row; p.cur.seg = t.seg; return true; }
+  return false;
+}
+
+function rotateP(p) {
+  if (!p.cur || p.over || p.flashR.length) return;
+  const rot = p.cur.cells.map(([r, s]) => [s, -r]);
+  const mr = Math.min(...rot.map(c => c[0])), ms = Math.min(...rot.map(c => c[1]));
+  const norm = rot.map(([r, s]) => [r - mr, s - ms]);
+  const t = { ...p.cur, cells: norm };
+  if (!collides(p, t)) { p.cur.cells = norm; return; }
+  for (const ds of [1, -1, 2, -2]) {
+    const k = { ...t, seg: ((t.seg + ds) % SEGS + SEGS) % SEGS };
+    if (!collides(p, k)) { p.cur.cells = norm; p.cur.seg = k.seg; return; }
+  }
+}
+
+function hardDropP(p) {
+  if (!p.cur || p.over || p.flashR.length) return;
+  let n = 0; while (moveP(p, -1, 0)) n++;
+  p.score += n * 2; lockP(p);
+}
+
+function ghostRowP(p) {
+  if (!p.cur) return -1;
+  let r = p.cur.row;
+  while (true) { const t = { ...p.cur, row: r - 1 }; t.cells = p.cur.cells; if (collides(p, t)) break; r--; }
+  return r;
+}
+
+function lockP(p) {
+  if (!p.cur) return;
+  for (const [r, s] of getCells(p.cur)) { if (r >= 0 && r < ROWS) p.grid[r][s] = p.cur.color; }
+  p.cur = null; checkLinesP(p);
+}
+
+function checkLinesP(p) {
+  const full = [];
+  for (let r = 0; r < ROWS; r++) { if (p.grid[r].every(c => c !== 0)) full.push(r); }
+  if (full.length) { p.flashR = full; p.flashT = 0.5; } else spawnPiece(p);
+}
+
+function clearFullP(p) {
+  const full = [...p.flashR].sort((a, b) => b - a);
+  const sc = [0, 100, 300, 500, 800];
+  p.score += (sc[full.length] || full.length * 200) * p.level;
+  p.lines += full.length;
+  p.level = Math.floor(p.lines / 10) + 1;
+  p.dropInt = Math.max(0.1, 1.0 - (p.level - 1) * 0.08);
+  for (const r of full) { explode(r, p); p.grid.splice(r, 1); p.grid.push(new Array(SEGS).fill(0)); }
+  p.flashR = []; updHUD(p); spawnPiece(p);
+}
+
+// === HUD ===
+function updHUD(p) {
+  document.getElementById(p.ids.score).textContent = p.score;
+  document.getElementById(p.ids.level).textContent = p.level;
+  document.getElementById(p.ids.lines).textContent = p.lines;
+}
+function updNext(p) {
+  const cv = document.getElementById(p.ids.next), ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, 100, 100);
+  if (!p.nextT) return;
+  const d = PIECES[p.nextT], col = '#' + d.color.toString(16).padStart(6, '0');
+  const mxR = Math.max(...d.c.map(c => c[0])), mxS = Math.max(...d.c.map(c => c[1]));
+  const cs = 20, ox = (100 - (mxS + 1) * cs) / 2, oy = (100 - (mxR + 1) * cs) / 2;
+  for (const [r, s] of d.c) {
+    ctx.fillStyle = col; ctx.fillRect(ox + s * cs + 1, oy + (mxR - r) * cs + 1, cs - 2, cs - 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.strokeRect(ox + s * cs + 1, oy + (mxR - r) * cs + 1, cs - 2, cs - 2);
+  }
+}
+
+// === INPUT ===
+document.addEventListener('keydown', e => {
+  if (!started) {
+    if (e.code === 'Space') { started = true; document.getElementById('start-overlay').classList.add('hidden'); initPlayer(p1); initPlayer(p2); lastT = performance.now(); }
+    return;
+  }
+  if (gameOver) {
+    if (e.code === 'KeyR') { document.getElementById('game-over').classList.add('hidden'); gameOver = false; initPlayer(p1); initPlayer(p2); }
+    return;
+  }
+  // P1 controls (arrows + space)
+  switch (e.code) {
+    case 'ArrowLeft': moveP(p1, 0, -1); e.preventDefault(); break;
+    case 'ArrowRight': moveP(p1, 0, 1); e.preventDefault(); break;
+    case 'ArrowDown': if (moveP(p1, -1, 0)) { p1.score += 1; p1.dropT = 0; updHUD(p1); } e.preventDefault(); break;
+    case 'ArrowUp': rotateP(p1); e.preventDefault(); break;
+    case 'Space': hardDropP(p1); updHUD(p1); e.preventDefault(); break;
+  }
+  // P2 controls (WASD + X)
+  switch (e.code) {
+    case 'KeyA': moveP(p2, 0, -1); e.preventDefault(); break;
+    case 'KeyD': moveP(p2, 0, 1); e.preventDefault(); break;
+    case 'KeyS': if (moveP(p2, -1, 0)) { p2.score += 1; p2.dropT = 0; updHUD(p2); } e.preventDefault(); break;
+    case 'KeyW': rotateP(p2); e.preventDefault(); break;
+    case 'KeyX': hardDropP(p2); updHUD(p2); e.preventDefault(); break;
+  }
+  // R to restart during gameplay
+  if (e.code === 'KeyR') { initPlayer(p1); initPlayer(p2); }
+});
+
+// === RENDER ===
+function updPlayerMeshes(p, pool) {
+  let idx = 0;
+  // Settled pieces: bright but transparent solids
+  for (let r = 0; r < ROWS; r++) for (let s = 0; s < SEGS; s++) {
+    if (p.grid[r][s] && idx < POOL) {
+      const m = pool[idx++]; m.visible = true; m.material.wireframe = false;
+      if (p.flashR.includes(r)) {
+        const fl = Math.sin(p.flashT * 20) > 0;
+        m.material.color.setHex(fl ? 0xffffff : p.grid[r][s]); m.material.emissive.setHex(fl ? 0x444444 : 0);
+        m.material.opacity = 1;
+      } else { m.material.color.setHex(p.grid[r][s]); m.material.emissive.setHex(0x111111); m.material.opacity = 0.45; }
+      posMesh(m, r, s);
+    }
+  }
+  if (p.cur && !p.flashR.length) {
+    // Ghost piece: faint wireframe
+    const gr = ghostRowP(p);
+    if (gr !== p.cur.row) {
+      const gp = { ...p.cur, row: gr }; gp.cells = p.cur.cells;
+      for (const [r, s] of getCells(gp)) {
+        if (r >= 0 && r < ROWS && idx < POOL) {
+          const m = pool[idx++]; m.visible = true; m.material.color.setHex(p.cur.color);
+          m.material.emissive.setHex(0); m.material.opacity = 0.15; m.material.wireframe = true; posMesh(m, r, s);
+        }
+      }
+    }
+    // Active falling piece: bright wireframe
+    for (const [r, s] of getCells(p.cur)) {
+      if (r >= 0 && r < ROWS && idx < POOL) {
+        const m = pool[idx++]; m.visible = true; m.material.color.setHex(p.cur.color);
+        m.material.emissive.setHex(0x222222); m.material.opacity = 1; m.material.wireframe = true; posMesh(m, r, s);
+      }
+    }
+  }
+  for (let i = idx; i < POOL; i++) pool[i].visible = false;
+}
+
+// === GAME LOOP ===
+function updatePlayer(p, dt) {
+  if (p.over) return;
+  if (p.flashR.length) { p.flashT -= dt; if (p.flashT <= 0) clearFullP(p); }
+  else if (p.cur) { p.dropT += dt; if (p.dropT >= p.dropInt) { p.dropT = 0; if (!moveP(p, -1, 0)) lockP(p); } }
+}
+
+function loop(t) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((t - lastT) / 1000, 0.1); lastT = t;
+  if (!started) { camA += dt * 0.3; updCam(); renderer.render(scene, camera); return; }
+  if (autoRot) camA += dt * 0.15;
+  updCam();
+  if (!gameOver) {
+    updatePlayer(p1, dt);
+    updatePlayer(p2, dt);
+    if (p1.over || p2.over) {
+      gameOver = true;
+      document.getElementById('final-p1').innerHTML = '<span style="color:#00ccff">Player 1: ' + p1.score + '</span>';
+      document.getElementById('final-p2').innerHTML = '<span style="color:#ff8800">Player 2: ' + p2.score + '</span>';
+      document.getElementById('game-over').classList.remove('hidden');
+    }
+  }
+  updPart(dt); updPlayerMeshes(p1, pool1); updPlayerMeshes(p2, pool2); renderer.render(scene, camera);
+}
+
+lastT = performance.now(); updCam(); requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

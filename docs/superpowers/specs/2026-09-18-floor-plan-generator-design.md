@@ -1,7 +1,7 @@
 # 2D Floor Plan Generator
 
 Date: 2026-09-18
-Directory: `2d-floor-plan-generator/`
+Directory: `floor-plan-generator/`
 
 A standalone page that draws architectural floor plans of absurd buildings:
 evil villain mansions, supermax prisons, datacenters, power plants, malls,
@@ -590,7 +590,7 @@ Two extra views beside the 2D drawing, switched from the toolbar or with keys
 
 ## Files
 
-- `2d-floor-plan-generator/index.html`
-- `2d-floor-plan-generator/test.mjs`
-- `2d-floor-plan-generator/screenshot1.png`
+- `floor-plan-generator/index.html`
+- `floor-plan-generator/test.mjs`
+- `floor-plan-generator/screenshot1.png`
 - `gallery.yaml`: title override "2D Floor Plan Generator".

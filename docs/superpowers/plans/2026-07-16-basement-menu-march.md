@@ -2,22 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A hand-composed chiptune march plays on every non-play screen (title, pause, dead, win) of `3d-game-basement/index.html`; gameplay stays music-free.
+**Goal:** A hand-composed chiptune march plays on every non-play screen (title, pause, dead, win) of `game-basement/index.html`; gameplay stays music-free.
 
 **Architecture:** Two gain buses replace the current "suspend the whole AudioContext on pause" behavior: `gameBus` (hum, lamp buzz, all sfx — ducked to 0 while paused) and `musicBus` (a lookahead step-sequencer playing a 16-bar E-minor march from hand-written pattern strings). A per-frame `updateMusic()` decides `music plays iff (mode !== 'play' || paused)`, with a 1 s hold after death/win so the existing stingers land first. Spec: `docs/superpowers/specs/2026-07-16-basement-menu-march-design.md`.
 
-**Tech Stack:** Vanilla JS + WebAudio inside the single `index.html`. Verification via playwright-core driving headless Chromium (project `3d-game-basement:verify` skill conventions).
+**Tech Stack:** Vanilla JS + WebAudio inside the single `index.html`. Verification via playwright-core driving headless Chromium (project `game-basement:verify` skill conventions).
 
 ## Global Constraints
 
-- `3d-game-basement/index.html` stays fully self-contained: no assets, no libraries, all audio procedural.
+- `game-basement/index.html` stays fully self-contained: no assets, no libraries, all audio procedural.
 - Music never sounds during active play (`mode === 'play' && !paused`).
 - The march restarts from step 0 each time it starts (hook-first is deliberate).
 - M toggles music, session-only (no localStorage).
 - Verify scripts are disposable — they live in the session scratchpad, never in the repo. Scratch dir used below: `/private/tmp/claude-501/-Users-neoneye-git-vibe-coding-lab/10374aa8-c796-461e-9ca2-7ec5ba979754/scratchpad/basement-music` (call it `$SCRATCH`).
 - Existing `screenshot1.jpg` shows gameplay; the title-text change does NOT require refreshing it.
 - Every check script must assert zero `pageerror` events.
-- Commits go directly to `main`, message style `3d-game-basement: <what>`, ending with the Claude co-author line.
+- Commits go directly to `main`, message style `game-basement: <what>`, ending with the Claude co-author line.
 
 ## Verify-script boilerplate
 
@@ -61,7 +61,7 @@ process.exit(failed);
 Replace `AC.suspend()`-on-pause with a `gameBus` duck, and add the (silent for now) `musicBus`.
 
 **Files:**
-- Modify: `3d-game-basement/index.html` (audio section ~lines 890–948, main loop pause block ~lines 2160–2165, `__dbg` line ~2202)
+- Modify: `game-basement/index.html` (audio section ~lines 890–948, main loop pause block ~lines 2160–2165, `__dbg` line ~2202)
 - Test: `$SCRATCH/check1.mjs`
 
 **Interfaces:**
@@ -76,7 +76,7 @@ mkdir -p "$SCRATCH" && cd "$SCRATCH" && npm install playwright-core
 Write `$SCRATCH/check1.mjs` — boilerplate prelude, then:
 
 ```js
-await page.goto('file:///Users/neoneye/git/vibe-coding-lab/3d-game-basement/index.html?auto&debug');
+await page.goto('file:///Users/neoneye/git/vibe-coding-lab/game-basement/index.html?auto&debug');
 await sleep(300);
 await page.mouse.click(480, 300);          // user gesture → audioInit
 await sleep(300);
@@ -160,8 +160,8 @@ Expected: all PASS, exit 0.
 
 ```bash
 cd /Users/neoneye/git/vibe-coding-lab
-git add 3d-game-basement/index.html
-git commit -m "3d-game-basement: split audio into game/music buses; pause ducks instead of suspending
+git add game-basement/index.html
+git commit -m "game-basement: split audio into game/music buses; pause ducks instead of suspending
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -173,7 +173,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 The sequencer and the hand-composed 16-bar march. After this task the engine exists and is testable via `__dbg`, but nothing in the game calls it yet (that's Task 3) — a harmless intermediate state.
 
 **Files:**
-- Modify: `3d-game-basement/index.html` (insert a `// ---- music` section immediately after the `sfx` object literal, before the `// ---- state` section; extend `__dbg`)
+- Modify: `game-basement/index.html` (insert a `// ---- music` section immediately after the `sfx` object literal, before the `// ---- state` section; extend `__dbg`)
 - Test: `$SCRATCH/check2.mjs`
 
 **Interfaces:**
@@ -185,7 +185,7 @@ The sequencer and the hand-composed 16-bar march. After this task the engine exi
 Write `$SCRATCH/check2.mjs` — boilerplate prelude, then:
 
 ```js
-await page.goto('file:///Users/neoneye/git/vibe-coding-lab/3d-game-basement/index.html?auto&debug');
+await page.goto('file:///Users/neoneye/git/vibe-coding-lab/game-basement/index.html?auto&debug');
 await sleep(300);
 await page.mouse.click(480, 300);          // gesture → audioInit
 await sleep(200);
@@ -371,8 +371,8 @@ Expected: all PASS (in particular `tracks all parse to 128 steps` — if that fa
 
 ```bash
 cd /Users/neoneye/git/vibe-coding-lab
-git add 3d-game-basement/index.html
-git commit -m "3d-game-basement: chiptune march engine — 16-bar E-minor march on a lookahead sequencer
+git add game-basement/index.html
+git commit -m "game-basement: chiptune march engine — 16-bar E-minor march on a lookahead sequencer
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -382,7 +382,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: State integration — music on menus/pause, M mute, keyboard audio init
 
 **Files:**
-- Modify: `3d-game-basement/index.html` (keydown handler ~line 1035, `frame()` right after the gameBus block, title screen controls line, music section from Task 2)
+- Modify: `game-basement/index.html` (keydown handler ~line 1035, `frame()` right after the gameBus block, title screen controls line, music section from Task 2)
 - Test: `$SCRATCH/check3.mjs`
 
 **Interfaces:**
@@ -394,7 +394,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 Write `$SCRATCH/check3.mjs` — boilerplate prelude, then (note: `?debug` only, no `?auto` — we start on the title screen):
 
 ```js
-await page.goto('file:///Users/neoneye/git/vibe-coding-lab/3d-game-basement/index.html?debug');
+await page.goto('file:///Users/neoneye/git/vibe-coding-lab/game-basement/index.html?debug');
 await sleep(300);
 await page.keyboard.press('KeyQ');         // any key is a gesture → audio + title music
 await sleep(500);
@@ -502,8 +502,8 @@ Expected: all PASS.
 
 ```bash
 cd /Users/neoneye/git/vibe-coding-lab
-git add 3d-game-basement/index.html
-git commit -m "3d-game-basement: march plays on title/pause/dead/win, M mutes, any key starts audio
+git add game-basement/index.html
+git commit -m "game-basement: march plays on title/pause/dead/win, M mutes, any key starts audio
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -513,7 +513,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: Docs + full-flow verification + owner listen
 
 **Files:**
-- Modify: `3d-game-basement/README.md` (Controls table ~line 19, features bullet ~line 55)
+- Modify: `game-basement/README.md` (Controls table ~line 19, features bullet ~line 55)
 - Test: full pass of `check1.mjs` + `check2.mjs` + `check3.mjs`, plus a real-browser listen
 
 - [ ] **Step 1: Update README**
@@ -547,14 +547,14 @@ Expected: every line PASS, zero page errors.
 
 ```bash
 cd /Users/neoneye/git/vibe-coding-lab
-git add 3d-game-basement/README.md
-git commit -m "3d-game-basement: document menu march + M mute
+git add game-basement/README.md
+git commit -m "game-basement: document menu march + M mute
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 4: Owner listen (final quality gate)**
 
-Run: `open /Users/neoneye/git/vibe-coding-lab/3d-game-basement/index.html`
+Run: `open /Users/neoneye/git/vibe-coding-lab/game-basement/index.html`
 
 Ask the owner to listen on the title screen (press any key to start audio) and while paused. "Catchy" is a human judgment — if the hook doesn't stick, iterate on `MARCH.lead` (the pattern strings are the whole composition; bars are 8 tokens each) and re-run `node check2.mjs` to confirm the 128-step invariant still holds.

@@ -32,7 +32,7 @@ def load_title_overrides():
 
 
 def auto_title(dirname):
-    """Generate a display title from a directory name like '3d-torus-shooter'."""
+    """Generate a display title from a directory name like 'torus-shooter'."""
     words = dirname.split("-")
     result = []
     for i, word in enumerate(words):
@@ -54,6 +54,10 @@ def find_projects():
             continue
         if not os.path.isfile(os.path.join(subdir, "index.html")):
             continue
+        # old paths kept only to forward visitors to a renamed project
+        with open(os.path.join(subdir, "index.html"), encoding="utf-8") as f:
+            if 'http-equiv="refresh"' in f.read(2000):
+                continue
         # Find screenshot (screenshot1.jpg, .jpeg, .png, .webp, .gif)
         screenshots = globmod.glob(os.path.join(subdir, "screenshot1.*"))
         screenshot = None

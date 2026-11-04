@@ -1,7 +1,7 @@
 # 2D Slime Mold — Interaction Tools Design
 
 **Date:** 2026-06-11
-**Project directory:** `2d-slime-mold/` (iteration on existing project)
+**Project directory:** `slime-mold/` (iteration on existing project)
 **Status:** Approved by owner
 **Prior spec:** `2026-06-11-slime-mold-design.md`
 

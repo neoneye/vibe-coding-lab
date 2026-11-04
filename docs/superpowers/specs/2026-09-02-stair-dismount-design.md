@@ -1,7 +1,7 @@
 # Stair Dismount — Design
 
 **Date:** 2026-09-02
-**Directory:** `3d-stair-dismount/`
+**Directory:** `stair-dismount/`
 **Deliverable:** One `index.html` (Three.js r170 and Rapier 3D 0.20 from jsdelivr via importmap; everything else inline), a `test.mjs` that runs the shared-code tests in Node, a `screenshot1.jpg`, a README entry and a `gallery.yaml` title override.
 
 ## Purpose
@@ -12,7 +12,7 @@ A homage to *Porrasturvat / Stair Dismount* (tAAt, 2002). A ragdoll stands at th
 
 These were settled by the author without a dialogue (the session ran unattended); the owner can override any of them.
 
-- **Physics:** Rapier 3D via the `+esm` bundle, same precedent as `3d-wrecking-ball`. A hand-rolled ragdoll solver is the wrong place to spend effort.
+- **Physics:** Rapier 3D via the `+esm` bundle, same precedent as `wrecking-ball`. A hand-rolled ragdoll solver is the wrong place to spend effort.
 - **Joints:** Rapier's JavaScript API gives limits only on revolute joints. Knees and elbows are revolute with limits; neck, spine, shoulders, hips and ankles are spherical joints held near the rest pose by position motors on all three angular axes. Motor stiffness follows a *limpness* slider, so the figure ranges from a stiff plank to a rag.
 - **Aim phase:** all bones are fixed bodies while the player aims, so the figure stands perfectly still. Pushing switches them to dynamic and applies the impulse. Retry rebuilds the same pose and reapplies the recorded push, which is deterministic in Rapier.
 - **Scoring:** contact-force events between bones and the environment. No joint-bending score, no self-collision score.

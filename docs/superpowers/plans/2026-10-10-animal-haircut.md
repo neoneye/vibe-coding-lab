@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- One self-contained `3d-animal-haircut/index.html`; the only external dependency is three.js 0.170.0 from `https://cdn.jsdelivr.net/npm/three@0.170.0/`.
+- One self-contained `animal-haircut/index.html`; the only external dependency is three.js 0.170.0 from `https://cdn.jsdelivr.net/npm/three@0.170.0/`.
 - Pure logic goes in `<script id="shared-code">`. `test.mjs` extracts it with a regex and runs `HaircutTests.run()`.
 - Units are metres. The llama is about 1.8 m tall at the ears and its feet touch y = 0.
 - Pixel ratio is `Math.min(devicePixelRatio, 2)` and the backing store is sized by `renderer.setSize`.
@@ -32,8 +32,8 @@
 ### Task 1: Scaffold, SDF core and surface nets
 
 **Files:**
-- Create: `3d-animal-haircut/index.html` (the shared-code block only, for now)
-- Create: `3d-animal-haircut/test.mjs`
+- Create: `animal-haircut/index.html` (the shared-code block only, for now)
+- Create: `animal-haircut/test.mjs`
 
 **Interfaces:**
 - Produces: global `HaircutTests` (`add(name, fn)`, `run()`), global `assert(c, m)` and `assertNear(a, b, eps, m)`, and global `HC` with:
@@ -47,7 +47,7 @@
   - `meshPrims(prims, k, res) → mesh`, where mesh = `{pos, nrm, idx, area, nv, cell, bmin, bmax}`
   - `edgeCounts(idx) → Map`
 
-- [ ] **Step 1: Write the test runner and the failing tests.** Create `3d-animal-haircut/index.html`:
+- [ ] **Step 1: Write the test runner and the failing tests.** Create `animal-haircut/index.html`:
 
 ```html
 <!DOCTYPE html>
@@ -127,7 +127,7 @@ HaircutTests.add('surface nets sphere', () => {
 </html>
 ```
 
-Create `3d-animal-haircut/test.mjs`:
+Create `animal-haircut/test.mjs`:
 
 ```js
 // Runs the HaircutTests embedded in index.html's shared-code script block.
@@ -147,7 +147,7 @@ process.exit(ok ? 0 : 1);
 ```
 
 - [ ] **Step 2: Run the tests and watch them fail.**
-  - Run: `node 3d-animal-haircut/test.mjs`
+  - Run: `node animal-haircut/test.mjs`
   - Expected: 3 FAIL lines (`HC.cap is not a function`, …) and exit code 1.
 
 - [ ] **Step 3: Implement part 1.** Insert this directly after `const HC = {};`, before the part 1 tests:
@@ -345,15 +345,15 @@ Object.assign(HC, (() => {
 ```
 
 - [ ] **Step 4: Run the tests and watch them pass.**
-  - Run: `node 3d-animal-haircut/test.mjs`
+  - Run: `node animal-haircut/test.mjs`
   - Expected: `3 passed, 0 failed`, exit code 0.
   - If `surface nets sphere` reports inward triangles, every triangle is inward: swap the `flip` argument (`!in0` → `in0`) in all three `quad` calls and re-run.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add 3d-animal-haircut/index.html 3d-animal-haircut/test.mjs
-git commit -m "3d-animal-haircut: SDF primitives and surface-nets mesher with tests
+git add animal-haircut/index.html animal-haircut/test.mjs
+git commit -m "animal-haircut: SDF primitives and surface-nets mesher with tests
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -363,7 +363,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 2: Animals, region weights, features and fleece init
 
 **Files:**
-- Modify: `3d-animal-haircut/index.html` (append part 2 and its tests inside `shared-code`)
+- Modify: `animal-haircut/index.html` (append part 2 and its tests inside `shared-code`)
 
 **Interfaces:**
 - Consumes: everything from Task 1.
@@ -429,7 +429,7 @@ HaircutTests.add('llama features sit on the skin', () => {
 ```
 
 - [ ] **Step 2: Run the tests and watch them fail.**
-  - Run: `node 3d-animal-haircut/test.mjs`
+  - Run: `node animal-haircut/test.mjs`
   - Expected: the 4 new tests FAIL (`HC.makeSDF(...)` is fine, but `HC.surfacePoint is not a function`, `HC.ANIMALS` is undefined).
 
 - [ ] **Step 3: Implement part 2.** Insert it after part 1's `Object.assign(...)` and before the part 1 tests, so all implementation parts come first:
@@ -663,15 +663,15 @@ Object.assign(HC, (() => {
 ```
 
 - [ ] **Step 4: Run the tests and watch them pass.**
-  - Run: `node 3d-animal-haircut/test.mjs`
+  - Run: `node animal-haircut/test.mjs`
   - Expected: `7 passed, 0 failed`.
   - If `llama mesh` fails only on the vertex count, adjust `ANIMALS.llama.res` (vertex count scales with res², so for example 150 → 165 for +20%) until it lands in [20000, 45000]. Then use that same scale factor on the other animals' `res`.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add 3d-animal-haircut/index.html
-git commit -m "3d-animal-haircut: animal recipes, region weights, features and fleece init
+git add animal-haircut/index.html
+git commit -m "animal-haircut: animal recipes, region weights, features and fleece init
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -681,7 +681,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 3: Pose, pick, brush, style cuts and wool mass
 
 **Files:**
-- Modify: `3d-animal-haircut/index.html` (append part 3 and its tests)
+- Modify: `animal-haircut/index.html` (append part 3 and its tests)
 
 **Interfaces:**
 - Consumes: Tasks 1–2.
@@ -799,7 +799,7 @@ HaircutTests.add('every style cut only shortens', () => {
 ```
 
 - [ ] **Step 2: Run the tests and watch them fail.**
-  - Run: `node 3d-animal-haircut/test.mjs`
+  - Run: `node animal-haircut/test.mjs`
   - Expected: the 8 new tests FAIL (`HC.makePose is not a function`, …).
 
 - [ ] **Step 3: Implement part 3.** Insert it after part 2's `Object.assign(...)`:
@@ -909,14 +909,14 @@ Object.assign(HC, (() => {
 ```
 
 - [ ] **Step 4: Run the tests and watch them pass.**
-  - Run: `node 3d-animal-haircut/test.mjs`
+  - Run: `node animal-haircut/test.mjs`
   - Expected: `15 passed, 0 failed`.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add 3d-animal-haircut/index.html
-git commit -m "3d-animal-haircut: pose, fur picking, brush tools, style cuts and wool mass
+git add animal-haircut/index.html
+git commit -m "animal-haircut: pose, fur picking, brush tools, style cuts and wool mass
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -926,7 +926,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 4: The page (rendering, UI, interaction, animation)
 
 **Files:**
-- Modify: `3d-animal-haircut/index.html` (head styles, panel markup, import map and the app module around the existing `shared-code` block)
+- Modify: `animal-haircut/index.html` (head styles, panel markup, import map and the app module around the existing `shared-code` block)
 
 **Interfaces:**
 - Consumes the global `HC` from Tasks 1–3. Uses the name `HC` directly: the classic script's top-level `const` is visible to the module.
@@ -1782,13 +1782,13 @@ try {
 ```
 
 - [ ] **Step 3: Check that the tests still pass** (the module isn't part of shared-code).
-  - Run: `node 3d-animal-haircut/test.mjs`
+  - Run: `node animal-haircut/test.mjs`
   - Expected: `15 passed, 0 failed`.
 
 - [ ] **Step 4: Take a headless screenshot of the uncut and the Pom-pom llama.**
 
 ```bash
-cd 3d-animal-haircut && for q in "animal=llama" "animal=llama&cut=Pom-pom"; do "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu-sandbox --window-size=1400,900 --virtual-time-budget=8000 --screenshot="$SCRATCH/shot-${q//[=&]/_}.png" "file://$PWD/index.html?$q"; done
+cd animal-haircut && for q in "animal=llama" "animal=llama&cut=Pom-pom"; do "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu-sandbox --window-size=1400,900 --virtual-time-budget=8000 --screenshot="$SCRATCH/shot-${q//[=&]/_}.png" "file://$PWD/index.html?$q"; done
 ```
 
 Expected: two PNGs, each showing a cream llama on the checker floor, with the panel on the left and no `#err` box. The first is a big fluffy llama. The second has a shorn body and neck, with the topknot, tail and leg puffs still fluffy. If the page is blank, open it in the Browser pane over http (Task 5) and read the console.
@@ -1796,8 +1796,8 @@ Expected: two PNGs, each showing a cream llama on the checker floor, with the pa
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add 3d-animal-haircut/index.html
-git commit -m "3d-animal-haircut: shell-fur renderer, grooming tools, clippings, before/after and panel
+git add animal-haircut/index.html
+git commit -m "animal-haircut: shell-fur renderer, grooming tools, clippings, before/after and panel
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1807,10 +1807,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 5: Interactive verification in the Browser pane
 
 **Files:**
-- Modify (only if a fix is needed): `3d-animal-haircut/index.html`
+- Modify (only if a fix is needed): `animal-haircut/index.html`
 - Create (gitignored, only if it doesn't exist yet): `.claude/launch.json` with the `static` http.server config on port 8765 (see memory `browser-pane-localstorage-http`)
 
-- [ ] **Step 1: Start the preview.** Run `preview_start {name: "static"}` and navigate to `http://localhost:8765/3d-animal-haircut/index.html`.
+- [ ] **Step 1: Start the preview.** Run `preview_start {name: "static"}` and navigate to `http://localhost:8765/animal-haircut/index.html`.
 - [ ] **Step 2: Check the console.** Run `read_console_messages {onlyErrors: true}`. Expected: none.
 - [ ] **Step 3: Drive a stroke through the debug handle.** With `javascript_tool`, set `ndc` by dispatching pointer events on the canvas centre: `pointerdown`, 20 × `pointermove` across the body, then `pointerup`. Then read `__hc.A.st.len` statistics and `#rMass`.
   - Expected: rMass > 0, and some `len` values equal the guard (0.006).
@@ -1830,26 +1830,26 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - the head-follow twisting the neck;
   - clippings not reaching the floor.
 
-  Fix the recipe numbers or the shader constants as needed, re-run `node test.mjs`, then commit with the message `3d-animal-haircut: visual tuning`.
+  Fix the recipe numbers or the shader constants as needed, re-run `node test.mjs`, then commit with the message `animal-haircut: visual tuning`.
 
 ---
 
 ### Task 6: Screenshot, gallery and wrap-up
 
 **Files:**
-- Create: `3d-animal-haircut/screenshot1.jpg`
+- Create: `animal-haircut/screenshot1.jpg`
 - Modify (only if the auto title "3D Animal Haircut" is wrong): `gallery.yaml`
 
-- [ ] **Step 1: Capture the gallery screenshot.** Use the split-compare view of the llama: `?animal=llama&cut=Pom-pom&split=1` with a plain `--headless=new` screenshot, or a Browser pane screenshot. Convert it to JPEG at about 1200 px wide: `sips -s format jpeg -s formatOptions 80 -Z 1400 in.png --out 3d-animal-haircut/screenshot1.jpg`.
+- [ ] **Step 1: Capture the gallery screenshot.** Use the split-compare view of the llama: `?animal=llama&cut=Pom-pom&split=1` with a plain `--headless=new` screenshot, or a Browser pane screenshot. Convert it to JPEG at about 1200 px wide: `sips -s format jpeg -s formatOptions 80 -Z 1400 in.png --out animal-haircut/screenshot1.jpg`.
 - [ ] **Step 2: Check the gallery builder.** Run `python3 build_gallery.py`, if that is how the gallery index is regenerated (check `git log -3 --stat` on an earlier project commit to see whether `index.html` at the root changes with new projects). Then check that the new entry appears.
 - [ ] **Step 3: Run the full test suite one last time.**
-  - Run: `node 3d-animal-haircut/test.mjs`
+  - Run: `node animal-haircut/test.mjs`
   - Expected: `15 passed, 0 failed`.
 - [ ] **Step 4: Commit.**
 
 ```bash
-git add 3d-animal-haircut/screenshot1.jpg index.html gallery.yaml
-git commit -m "3d-animal-haircut: screenshot and gallery entry
+git add animal-haircut/screenshot1.jpg index.html gallery.yaml
+git commit -m "animal-haircut: screenshot and gallery entry
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```

@@ -67,7 +67,7 @@ Single self-contained `index.html`, following the repo convention
 ### `test.mjs`
 
 Extracts the `shared-code` block and runs `TeslaTests.run()`, exiting non-zero on
-failure — identical pattern to sibling projects (e.g. `2d-cloud-chamber`).
+failure — identical pattern to sibling projects (e.g. `cloud-chamber`).
 
 ## Controls
 
@@ -88,7 +88,7 @@ failure — identical pattern to sibling projects (e.g. `2d-cloud-chamber`).
 
 ## Gallery integration
 
-- Add a title override to `gallery.yaml` (`2d-tesla-valve: 2D Tesla Valve`).
+- Add a title override to `gallery.yaml` (`tesla-valve: 2D Tesla Valve`).
 - Add `screenshot1.png` captured via headless Chrome, matching siblings.
 
 ## Out of scope (YAGNI)

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Faithful port of the 2007 C++ `gfx_perlin` brick — fixed-point simplex AND classic-Perlin backends, seamless 4-corner tiling, octave caching, four modes, fast_sin/fast_pow bit hacks — to `2d-perlin-noise/index.html`.
+**Goal:** Faithful port of the 2007 C++ `gfx_perlin` brick — fixed-point simplex AND classic-Perlin backends, seamless 4-corner tiling, octave caching, four modes, fast_sin/fast_pow bit hacks — to `perlin-noise/index.html`.
 
 **Architecture:** Shared-code holds the permutation/fade tables, both fixed-point noise functions with exact integer semantics, the fast-math bit hacks (via Float32Array/Int32Array punning), and `PerlinEngine` (lazy per-octave Int32Array cache + cheap composite stage). UI is the big-canvas layout with progressive octave building.
 
@@ -15,8 +15,8 @@
 ### Task 1: Scaffold + tables
 
 **Files:**
-- Create: `2d-perlin-noise/test.mjs`
-- Create: `2d-perlin-noise/index.html`
+- Create: `perlin-noise/test.mjs`
+- Create: `perlin-noise/index.html`
 
 - [ ] **Step 1: Test runner** — standard extractor running `PerlinTests.run()`. Run → FAIL (ENOENT).
 
@@ -96,7 +96,7 @@ const FADE_LUT = new Int32Array([
 ### Task 2: Fast math bit hacks
 
 **Files:**
-- Modify: `2d-perlin-noise/index.html` (shared-code)
+- Modify: `perlin-noise/index.html` (shared-code)
 
 - [ ] **Step 1: Failing tests**
 
@@ -178,7 +178,7 @@ function fastPow(a, b) {
 ### Task 3: Both fixed-point noise backends
 
 **Files:**
-- Modify: `2d-perlin-noise/index.html` (shared-code)
+- Modify: `perlin-noise/index.html` (shared-code)
 
 - [ ] **Step 1: Failing tests** (characterization pins filled in at Step 3):
 
@@ -349,7 +349,7 @@ function perlinNoiseFixed(x, y, z, fadeZ) {
 ### Task 4: PerlinEngine — octave cache + composite
 
 **Files:**
-- Modify: `2d-perlin-noise/index.html` (shared-code)
+- Modify: `perlin-noise/index.html` (shared-code)
 
 - [ ] **Step 1: Failing tests**
 
@@ -612,9 +612,9 @@ class PerlinEngine {
 ### Task 5: UI
 
 **Files:**
-- Modify: `2d-perlin-noise/index.html` (style, body, UI script)
+- Modify: `perlin-noise/index.html` (style, body, UI script)
 
-- [ ] **Step 1: Styles** — the big-canvas stylesheet as in `2d-city-generator` (`.canvas-wrap`, scrollable `.controls`). Canvas background `#000`.
+- [ ] **Step 1: Styles** — the big-canvas stylesheet as in `city-generator` (`.canvas-wrap`, scrollable `.controls`). Canvas background `#000`.
 
 - [ ] **Step 2: Body**
 
@@ -821,7 +821,7 @@ requestAnimationFrame(frame);
 ### Task 6: Gallery
 
 **Files:**
-- Create: `2d-perlin-noise/screenshot1.png`
+- Create: `perlin-noise/screenshot1.png`
 - Modify: `gallery.yaml`, root `index.html` (regenerated)
 
 - [ ] **Step 1: Screenshot** a good-looking configuration (e.g., octaves 6, mode Absolute, gamma 1.5 via TEMP slider presets, or simply the default clouds), capture `screenshot1.png`, remove any TEMP code, re-test.
@@ -829,9 +829,9 @@ requestAnimationFrame(frame);
 - [ ] **Step 2: Register and commit**
 
 ```bash
-printf '2d-perlin-noise: 2D Perlin Noise\n' >> gallery.yaml
+printf 'perlin-noise: 2D Perlin Noise\n' >> gallery.yaml
 python3 build_gallery.py   # expect 36 entries
-cd 2d-perlin-noise && node test.mjs
-git add 2d-perlin-noise gallery.yaml index.html
+cd perlin-noise && node test.mjs
+git add perlin-noise gallery.yaml index.html
 git commit -m "perlin-noise: gallery integration"
 ```

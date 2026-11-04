@@ -1,7 +1,7 @@
 # Queen clothing simulator
 
 Date: 2026-10-10
-Directory: `3d-queen-clothing/`
+Directory: `queen-clothing/`
 
 ## Goal
 
@@ -34,7 +34,7 @@ era.
 - One self-contained `index.html`, plus `test.mjs` and later
   `screenshot1.jpg`.
 - three.js 0.170.0 comes from jsdelivr through an import map, as in
-  `3d-animal-haircut`. There are no other dependencies; all textures are
+  `animal-haircut`. There are no other dependencies; all textures are
   generated procedurally on a canvas.
 - Pure logic lives in `<script id="shared-code">` with a `QueenTests.run()`
   runner. `test.mjs` extracts that block and runs it in Node. The block uses

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a billowing, advected smoke layer to `2d-cloud-chamber/` — tracks and mist shed vapor that swirls through an animated flow field — with Amount/Swirl/Fade/Softness sliders.
+**Goal:** Add a billowing, advected smoke layer to `cloud-chamber/` — tracks and mist shed vapor that swirls through an animated flow field — with Amount/Swirl/Fade/Softness sliders.
 
 **Architecture:** A second Float32Array `smoke` with independent dynamics: fed from `_deposit` and the mist loop, advected semi-Lagrangian through a deterministic sine-flow (tick-driven, precomputed 1D trig tables for speed), blurred and decayed separately, composited under the crisp track palette at render time.
 
@@ -15,7 +15,7 @@
 ### Task 1: Smoke field, feeding, mist redirect
 
 **Files:**
-- Modify: `2d-cloud-chamber/index.html` (shared-code block only)
+- Modify: `cloud-chamber/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing tests and update the mist test**
 
@@ -70,7 +70,7 @@ with:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: `FAIL smoke: implemented` and `FAIL step: mist feeds smoke` (smokeMass undefined → the mist test throws or fails), exit 1. (If the run aborts on a TypeError before printing, that satisfies "red" — note it and continue.)
 
 - [ ] **Step 3: Implement the smoke field and feeding**
@@ -136,13 +136,13 @@ Add `smokeMass()` next to `fieldMass()`:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: all PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-cloud-chamber/index.html
+git add cloud-chamber/index.html
 git commit -m "cloud-chamber: smoke field fed by tracks and mist"
 ```
 
@@ -151,7 +151,7 @@ git commit -m "cloud-chamber: smoke field fed by tracks and mist"
 ### Task 2: Smoke dynamics — advection, blur, decay
 
 **Files:**
-- Modify: `2d-cloud-chamber/index.html` (shared-code block only)
+- Modify: `cloud-chamber/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -217,7 +217,7 @@ Inside `ChamberTests.run()`, after the smoke-feeding block:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: `FAIL smoke dynamics: implemented`, exit 1.
 
 - [ ] **Step 3: Generalize the blur and implement advection**
@@ -298,13 +298,13 @@ In `step()`, after the mist loop, replace `this._diffuseAndDecay();` with:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: all PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-cloud-chamber/index.html
+git add cloud-chamber/index.html
 git commit -m "cloud-chamber: smoke advection through animated swirl flow"
 ```
 
@@ -313,7 +313,7 @@ git commit -m "cloud-chamber: smoke advection through animated swirl flow"
 ### Task 3: UI — smoke sliders and composite rendering
 
 **Files:**
-- Modify: `2d-cloud-chamber/index.html` (body markup and UI script)
+- Modify: `cloud-chamber/index.html` (body markup and UI script)
 
 - [ ] **Step 1: Add the Smoke fieldset**
 
@@ -398,13 +398,13 @@ with:
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: `ALL TESTS PASSED` — UI edits must not touch shared-code.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-cloud-chamber/index.html
+git add cloud-chamber/index.html
 git commit -m "cloud-chamber: smoke sliders and composite vapor rendering"
 ```
 
@@ -413,8 +413,8 @@ git commit -m "cloud-chamber: smoke sliders and composite vapor rendering"
 ### Task 4: Visual verification and gallery screenshot refresh
 
 **Files:**
-- Modify: `2d-cloud-chamber/screenshot1.png`
-- Possibly modify: `2d-cloud-chamber/index.html` (visual constants only)
+- Modify: `cloud-chamber/screenshot1.png`
+- Possibly modify: `cloud-chamber/index.html` (visual constants only)
 
 - [ ] **Step 1: TEMP forced-track screenshot with smoke**
 
@@ -443,18 +443,18 @@ for (let i = 0; i < 2; i++) engine.step();
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --screenshot=/tmp/chamber-smoke.png --window-size=1060,980 --virtual-time-budget=2000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-cloud-chamber/index.html"
+  "file:///Users/neoneye/git/vibe-coding-lab/cloud-chamber/index.html"
 ```
 
 Read it: tracks should now trail soft blue vapor that visibly drifts/billows; mist should be a soft moving haze, not static speckle. Tune the smoke tint, SMOKE gamma (0.6), or default `smokeAmount` if the vapor is invisible or overwhelms the tracks — report any change.
 
 - [ ] **Step 2: Refresh the gallery screenshot**
 
-Capture the same composition into `2d-cloud-chamber/screenshot1.png` (same command, output path swapped). Read it to confirm. Then **delete the TEMP block** and re-run `node test.mjs` → `ALL TESTS PASSED`.
+Capture the same composition into `cloud-chamber/screenshot1.png` (same command, output path swapped). Read it to confirm. Then **delete the TEMP block** and re-run `node test.mjs` → `ALL TESTS PASSED`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add 2d-cloud-chamber
+git add cloud-chamber
 git commit -m "cloud-chamber: smoke visual verification and gallery refresh"
 ```

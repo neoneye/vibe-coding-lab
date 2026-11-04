@@ -1,7 +1,7 @@
 # 2D IFS Fractals — Design
 
 **Date:** 2026-06-12
-**Project directory:** `2d-ifs-fractals/`
+**Project directory:** `ifs-fractals/`
 **Status:** Approved by owner
 **Origin:** Full-fidelity port of the owner's 2009 C++ engine:
 `/Users/neoneye/git/opcoders_toolbox/CONTENT/TBEngine/brick_lib/gfx_chaos.cpp`
@@ -26,7 +26,7 @@ parameter exposed as a control.
 
 ## Data conversion (committed tool)
 
-`2d-ifs-fractals/convert_data.mjs` parses the original C++ (paths above,
+`ifs-fractals/convert_data.mjs` parses the original C++ (paths above,
 read-only) and splices generated JS between markers in `index.html`:
 
 - `PRESETS`: array of `{ name, maps: [[p, a, b, c, d, e, f], ...] }`

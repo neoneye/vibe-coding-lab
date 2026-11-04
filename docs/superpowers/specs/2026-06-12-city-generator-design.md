@@ -1,7 +1,7 @@
 # 2D City Generator — Design
 
 **Date:** 2026-06-12
-**Project directory:** `2d-city-generator/`
+**Project directory:** `city-generator/`
 **Status:** Approved by owner
 **Origin:** Faithful port of the owner's C++ brick
 `/Users/neoneye/git/opcoders_toolbox/CONTENT/TBEngine/brick_lib/gfx_city.cpp`
@@ -19,7 +19,7 @@ to a random existing street. Black streets on paper-white.
 
 - Single self-contained `index.html`; engine + tests in
   `<script id="shared-code">`; `test.mjs` extracts and runs `CityTests.run()`.
-- Big-canvas layout (as in `2d-ifs-fractals`): responsive square canvas,
+- Big-canvas layout (as in `ifs-fractals`): responsive square canvas,
   fixed scrollable right panel, actions on top.
 - `screenshot1.png`, `gallery.yaml`, `build_gallery.py`, commits to `main`.
 

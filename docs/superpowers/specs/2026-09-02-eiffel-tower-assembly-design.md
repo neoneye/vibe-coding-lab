@@ -1,8 +1,8 @@
 # Eiffel Tower Assembly — Design
 
 **Date:** 2026-09-02
-**Directory:** `3d-eiffel-tower-assembly/`
-**Deliverable:** One `index.html` (Three.js r170 from jsdelivr via importmap, same as `3d-shadows/`; everything else inline), a `test.mjs` that runs the shared-code tests in Node, a `screenshot1.jpg`, and a `gallery.yaml` title override.
+**Directory:** `eiffel-tower-assembly/`
+**Deliverable:** One `index.html` (Three.js r170 from jsdelivr via importmap, same as `shadows/`; everything else inline), a `test.mjs` that runs the shared-code tests in Node, a `screenshot1.jpg`, and a `gallery.yaml` title override.
 
 ## Purpose
 
@@ -10,7 +10,7 @@ Show the Eiffel Tower being assembled in 3D, from the foundation pits of January
 
 ## Approaches considered
 
-1. **Three.js with a procedural lattice built from instanced struts** (chosen). Thousands of struts in one `InstancedMesh`, so hiding/animating pieces is a per-instance matrix update. Matches how `3d-shadows` and the tetris game load Three.js.
+1. **Three.js with a procedural lattice built from instanced struts** (chosen). Thousands of struts in one `InstancedMesh`, so hiding/animating pieces is a per-instance matrix update. Matches how `shadows` and the tetris game load Three.js.
 2. Custom WebGL2 renderer, no library. Fully self-contained, but shadows, fog and instancing would cost several hundred lines that Three.js gives for free.
 3. A hand-modelled mesh loaded from an embedded glTF. Looks best, but the assembly needs each strut as a separate piece with a build height, which a monolithic mesh cannot give.
 
@@ -38,7 +38,7 @@ Units are metres; the world origin is the tower axis at ground level, Y up.
   A piece is complete when `h < height − band`, animating (scaled in and lowered from above) when within the `band` (6 m), otherwise absent. Foundation pits, timber scaffolds under the legs (visible for `28 ≤ height < 62`) and four creeper cranes riding at the current frontier are scenery driven by the same height.
 - **Tests.** `EiffelTests.run()` checks: `halfWidth` is monotone decreasing and hits the anchors; every piece has finite coordinates, `r > 0` and `h` inside `[−8, 315]`; piece heights are non-decreasing after sort; `stateAt(0)` and `stateAt(1)` match the schedule ends; `stateAt` is monotone in height; pieces count is between 2 000 and 20 000.
 
-## Page (full-screen canvas, dark control panel top-left like `3d-shadows`)
+## Page (full-screen canvas, dark control panel top-left like `shadows`)
 
 **Timeline card.** Range slider 0..1 (step 0.001), play/pause button, speed select (30 s, 1 min, 3 min per full build), a date readout and the milestone label, and a progress readout of height in metres and piece count.
 

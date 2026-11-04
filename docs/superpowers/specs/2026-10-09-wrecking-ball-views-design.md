@@ -1,7 +1,7 @@
 # Wrecking Ball — Cab and Ball views
 
 Date: 2026-10-09
-Project: `3d-wrecking-ball/index.html`
+Project: `wrecking-ball/index.html`
 
 ## Goal
 

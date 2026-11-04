@@ -1,7 +1,7 @@
 # Monte Carlo π Estimator — Design
 
 **Date:** 2026-06-11
-**Project directory:** `2d-monte-carlo-pi/`
+**Project directory:** `monte-carlo-pi/`
 **Status:** Approved by owner
 
 ## Purpose

@@ -1,17 +1,17 @@
 # Stair Dismount — Sound Effects Design
 
 **Date:** 2026-09-22
-**Directory:** `3d-stair-dismount/`
+**Directory:** `stair-dismount/`
 **Extends:** `2026-09-02-stair-dismount-design.md`
 **Deliverable:** Changes to `index.html` only (new pure helpers in the `shared-code` block with self-tests, a new inline audio module, one checkbox, one hotkey). `test.mjs` runs unchanged.
 
 ## Purpose
 
-The ragdoll tumbles in silence. Add cartoonish sound effects so the dismount is funnier: a punch when the push lands, a wobbly scream while the body is in motion, thuds and grunts on every impact, and a sharper bonk when the head hits. Everything is synthesized with Web Audio, no sample files, matching `3d-wrecking-ball`.
+The ragdoll tumbles in silence. Add cartoonish sound effects so the dismount is funnier: a punch when the push lands, a wobbly scream while the body is in motion, thuds and grunts on every impact, and a sharper bonk when the head hits. Everything is synthesized with Web Audio, no sample files, matching `wrecking-ball`.
 
 ## Decisions settled with the owner
 
-- **Project:** `3d-stair-dismount`.
+- **Project:** `stair-dismount`.
 - **Vocal style:** cartoonish, every hit. A scream starts at the push and continues while the body is moving; each impact adds a grunt scaled to force.
 - **Source:** Web Audio synthesis inline (approach A). Recorded samples and the Web Speech API were rejected.
 
@@ -40,7 +40,7 @@ A single object `audio = { ctx, master, noise, enabled, scream, last }`.
 
 - **Unlock.** `audio.init()` creates the `AudioContext` and a 2 s white-noise buffer the first time a push happens or the Sound checkbox is turned on. Browsers require a user gesture, and both of those are gestures. If the constructor throws, `audio.enabled` stays false and the checkbox is disabled with the title "Web Audio unavailable".
 - **Master gain** at 0.8. Toggling Sound off ramps master to 0 over 50 ms and stops the scream; toggling on ramps back.
-- **Noise burst** helper as in `3d-wrecking-ball`: a `BufferSource` of the noise buffer through a `BiquadFilter` and a gain envelope with a linear attack of 5 ms and an exponential decay to the given duration, playback rate multiplied by `sfx.screamRate(state.slowmo)`.
+- **Noise burst** helper as in `wrecking-ball`: a `BufferSource` of the noise buffer through a `BiquadFilter` and a gain envelope with a linear attack of 5 ms and an exponential decay to the given duration, playback rate multiplied by `sfx.screamRate(state.slowmo)`.
 
 ### Sounds
 
@@ -76,7 +76,7 @@ The audio module reads physics state and never writes it. Retry remains bit-iden
 
 ## Testing
 
-- `node 3d-stair-dismount/test.mjs` must stay green with the new `sfx` cases added.
+- `node stair-dismount/test.mjs` must stay green with the new `sfx` cases added.
 - Browser pane: load over the static http server, push, confirm the punch, scream and thuds are audible, and the console is clean. Toggle M twice; scream stops and resumes correctly on the next push. Set slow motion to 0.25×; scream drops in pitch.
 - Retry after a push and confirm the final score is unchanged from before the audio work.
 

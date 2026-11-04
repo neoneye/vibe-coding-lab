@@ -28,25 +28,25 @@ Hinton's Forward-Forward algorithm training a byte, bigram or trigram next-token
 
 A step-by-step visualisation of the Bernstein, Nanongkai and Wulff-Nilsen 2022 algorithm for single-source shortest paths with negative edge weights. Watch the low-diameter decomposition, the price functions and the recursion unfold on an SVG graph.
 
-![2d-shortest-path](2d-shortest-path/screenshot1.jpg)
+![shortest-path](shortest-path/screenshot1.jpg)
 
-### 3D Torus Shooter
+### Torus Shooter
 
 Amiga-demo-style two-player shooter on a torus. Shots stick, bounce or carve holes clean through the surface. Split-screen with an exterior view and a first-person interior view of the same signed-distance field. Hand-written WebGL ray marching with CSG, no engine.
 
-![3d-torus-shooter](3d-torus-shooter/screenshot1.jpg)
+![torus-shooter](torus-shooter/screenshot1.jpg)
 
-### 3D Wrecking Ball
+### Wrecking Ball
 
 Swing a crane-hung wrecking ball into a stone castle, a Mesoamerican pyramid, a wooden Trojan horse or a red-brick apartment block, all generated block by block. A mortar-bond model cracks blocks loose under impact and drops whatever loses its footing. Grab the ball on its chain with the mouse, drive the crane with the keys, synthesised thuds, clatter and crane motor. Three.js + Rapier.
 
-![3d-wrecking-ball](3d-wrecking-ball/screenshot1.jpg)
+![wrecking-ball](wrecking-ball/screenshot1.jpg)
 
-### 3D Stair Dismount
+### Stair Dismount
 
 A homage to Porrasturvat's Stair Dismount. A ragdoll stands on top of a straight flight, a dogleg, a spiral or a long walled staircase. Click a spot on the body, aim the arrow, choose the force and push; every impact on the way down scores, head hits most. Retry replays the exact push. Synthesized screams, thuds and grunts, M to mute. Three.js + Rapier.
 
-![3d-stair-dismount](3d-stair-dismount/screenshot1.jpg)
+![stair-dismount](stair-dismount/screenshot1.jpg)
 
 ### Snake MCTS
 
@@ -58,13 +58,13 @@ Browser port of [SwiftSnakeEngine](https://github.com/neoneye/SwiftSnakeEngine),
 
 A Wolfenstein-style raycaster horror game with VHS post-processing. Every texture, sprite and sound is generated in code at load time; the single HTML file has no assets at all.
 
-![3d-game-basement](3d-game-basement/screenshot1.jpg)
+![game-basement](game-basement/screenshot1.jpg)
 
-### 2D Pulleys
+### Pulleys
 
 Drag pulleys from the tray onto the beam or the hook, or start from a ready-made rig, then haul on the rope. Computes mechanical advantage and rope pull, lets the load swing on its sling and the wind push on it, and if you hang a unicorn from the hook its jointed legs dangle, its mane trails, and its horn will eventually snap off.
 
-![2d-pulleys](2d-pulleys/screenshot1.jpg)
+![pulleys](pulleys/screenshot1.jpg)
 
 ### Audio Singularity
 
@@ -76,7 +76,7 @@ Black holes, a bouncing ball, a spinning disk and the AI singularity are the sam
 
 The famous group photo with a clickable circle over each of the 29 attendees, linking to their Wikipedia pages. Face positions were found offline with OpenCV's YuNet detector.
 
-![2d-solvey-conference](2d-solvey-conference/screenshot1.jpg)
+![solvey-conference](solvey-conference/screenshot1.jpg)
 
 ### The Pythagorean Cup
 
@@ -88,51 +88,51 @@ The greedy cup, cut open and explained. A guided tour, a pressure view along the
 
 Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A scrubbable quaternion homotopy shows why. Three.js.
 
-![3d-spinor-belt-trick](3d-spinor-belt-trick/screenshot1.jpg)
+![spinor-belt-trick](spinor-belt-trick/screenshot1.jpg)
 
 ## All experiments
 
 ### 2D simulations and visualisations
 
-- [2d-blur](2d-blur/) -- image blur by repeated 1D box blurs at rotated angles; upload an image, tweak radius and iterations.
-- [2d-city-generator](2d-city-generator/) -- Substrate-style city plans grown by crawling agents that crack and branch at right angles.
-- [2d-cloud-chamber](2d-cloud-chamber/) -- alpha, beta and muon condensation trails with an adjustable magnetic field.
-- [2d-dual-slit-experiment](2d-dual-slit-experiment/) -- one to three slits, a which-path detector and particle-by-particle accumulation, computed from Huygens wavelets.
-- [2d-fluid-simulation](2d-fluid-simulation/) -- particle fluid via double-density relaxation SPH, with draggable obstacles and stirring.
-- [2d-granular-drum](2d-granular-drum/) -- 20 000 beads of two to four sizes in a slowly turning drum (circle, polygons, gear, hollow torus) sort themselves by size in the avalanches; 3D discrete-element model on WebGPU compute shaders, stop-and-go drive, tracer stripes.
-- [2d-ifs-fractals](2d-ifs-fractals/) -- IFS and flame fractals that crossfade between systems into a histogram image.
-- [2d-ink-chromatography](2d-ink-chromatography/) -- black ink is a blend of dyes, and water pulls them apart. Type a word and drop water on it to watch black bloom into violet, blue, pink and yellow; or run the school paper-strip experiment with six inks, where the solvent climbs by Washburn's law and each dye's band lands at its Rf (measured live). Water or rubbing alcohol reorders the bands. Built on the watercolour model, with four dyes and Beer–Lambert colour.
-- [2d-ion-wind-aircraft](2d-ion-wind-aircraft/) -- explainer and simulation of electroaerodynamic propulsion, from the MIT glider to a hovering drone.
-- [2d-monte-carlo-pi](2d-monte-carlo-pi/) -- estimate pi by throwing points at inscribed shapes, with a convergence plot.
-- [2d-optical-bench](2d-optical-bench/) -- a top-down optical table: lamps with real spectra (sodium, mercury, neon, hydrogen, LEDs, sunlight), prisms, thick lenses, mirrors, beam splitters, a grating, slits, a gem and a raindrop. Spectral ray tracing with Sellmeier dispersion and Fresnel reflection; screens show the spectrum that lands on them. Scenes include Newton's prism, a grating spectrometer, the 42° rainbow and an achromatic doublet. WebGL2 accumulation with a CPU fallback.
-- [2d-pendulum](2d-pendulum/) -- double and triple pendulum with trails, sonified through Web Audio with a spectrogram.
-- [2d-perlin-noise](2d-perlin-noise/) -- seamlessly tiling noise with fixed-point Perlin and simplex backends, octaves and shaping modes.
-- [2d-pulleys](2d-pulleys/) -- see highlights.
-- [2d-shortest-path](2d-shortest-path/) -- see highlights.
-- [2d-skin-texture](2d-skin-texture/) -- procedural tiling skin with veins, freckles, pores, vitiligo and bump-mapped lighting.
-- [2d-slime-mold](2d-slime-mold/) -- Physarum agents with pheromone deposit, diffusion and decay; click to drop food.
-- [2d-solvey-conference](2d-solvey-conference/) -- see highlights.
-- [2d-speed-of-light](2d-speed-of-light/) -- relativity of simultaneity with an animated scene and a Minkowski diagram driven by an observer-velocity slider.
-- [2d-sumi-e](2d-sumi-e/) -- paint with ink on rice paper. A brush of about 80 bristles, each holding its own ink, follows pen pressure (or mouse speed): strokes go from wet to dry, break into flying-white streaks when fast, and pool when held still. Raw xuan blooms ink into grey halos, sized paper keeps edges crisp, plus hemp with laid lines and a crackled sheet. Five ink tones, dark-tip loading, a seal, and painted bamboo and ensō demos.
-- [2d-tesla-valve](2d-tesla-valve/) -- forward and reverse flow through a Tesla valve side by side, with a live flow ratio, on a lattice-Boltzmann solver.
-- [2d-triangle-game-of-life](2d-triangle-game-of-life/) -- Conway's Game of Life on a triangular grid with selectable rules and themes.
-- [2d-watercolor-text](2d-watercolor-text/) -- type a title in poster lettering and watch drops of water land on the paint: it re-wets, frays along the paper fibres, runs, and dries with dark rims. A GPU watercolour model after Curtis et al. (1997): shallow water flow, invasion-percolation wicking, pigment that lifts and settles. Click to drop water, drag to trail it.
+- [blur](blur/) -- image blur by repeated 1D box blurs at rotated angles; upload an image, tweak radius and iterations.
+- [city-generator](city-generator/) -- Substrate-style city plans grown by crawling agents that crack and branch at right angles.
+- [cloud-chamber](cloud-chamber/) -- alpha, beta and muon condensation trails with an adjustable magnetic field.
+- [dual-slit-experiment](dual-slit-experiment/) -- one to three slits, a which-path detector and particle-by-particle accumulation, computed from Huygens wavelets.
+- [fluid-simulation](fluid-simulation/) -- particle fluid via double-density relaxation SPH, with draggable obstacles and stirring.
+- [granular-drum](granular-drum/) -- 20 000 beads of two to four sizes in a slowly turning drum (circle, polygons, gear, hollow torus) sort themselves by size in the avalanches; 3D discrete-element model on WebGPU compute shaders, stop-and-go drive, tracer stripes.
+- [ifs-fractals](ifs-fractals/) -- IFS and flame fractals that crossfade between systems into a histogram image.
+- [ink-chromatography](ink-chromatography/) -- black ink is a blend of dyes, and water pulls them apart. Type a word and drop water on it to watch black bloom into violet, blue, pink and yellow; or run the school paper-strip experiment with six inks, where the solvent climbs by Washburn's law and each dye's band lands at its Rf (measured live). Water or rubbing alcohol reorders the bands. Built on the watercolour model, with four dyes and Beer–Lambert colour.
+- [ion-wind-aircraft](ion-wind-aircraft/) -- explainer and simulation of electroaerodynamic propulsion, from the MIT glider to a hovering drone.
+- [monte-carlo-pi](monte-carlo-pi/) -- estimate pi by throwing points at inscribed shapes, with a convergence plot.
+- [optical-bench](optical-bench/) -- a top-down optical table: lamps with real spectra (sodium, mercury, neon, hydrogen, LEDs, sunlight), prisms, thick lenses, mirrors, beam splitters, a grating, slits, a gem and a raindrop. Spectral ray tracing with Sellmeier dispersion and Fresnel reflection; screens show the spectrum that lands on them. Scenes include Newton's prism, a grating spectrometer, the 42° rainbow and an achromatic doublet. WebGL2 accumulation with a CPU fallback.
+- [pendulum](pendulum/) -- double and triple pendulum with trails, sonified through Web Audio with a spectrogram.
+- [perlin-noise](perlin-noise/) -- seamlessly tiling noise with fixed-point Perlin and simplex backends, octaves and shaping modes.
+- [pulleys](pulleys/) -- see highlights.
+- [shortest-path](shortest-path/) -- see highlights.
+- [skin-texture](skin-texture/) -- procedural tiling skin with veins, freckles, pores, vitiligo and bump-mapped lighting.
+- [slime-mold](slime-mold/) -- Physarum agents with pheromone deposit, diffusion and decay; click to drop food.
+- [solvey-conference](solvey-conference/) -- see highlights.
+- [speed-of-light](speed-of-light/) -- relativity of simultaneity with an animated scene and a Minkowski diagram driven by an observer-velocity slider.
+- [sumi-e](sumi-e/) -- paint with ink on rice paper. A brush of about 80 bristles, each holding its own ink, follows pen pressure (or mouse speed): strokes go from wet to dry, break into flying-white streaks when fast, and pool when held still. Raw xuan blooms ink into grey halos, sized paper keeps edges crisp, plus hemp with laid lines and a crackled sheet. Five ink tones, dark-tip loading, a seal, and painted bamboo and ensō demos.
+- [tesla-valve](tesla-valve/) -- forward and reverse flow through a Tesla valve side by side, with a live flow ratio, on a lattice-Boltzmann solver.
+- [triangle-game-of-life](triangle-game-of-life/) -- Conway's Game of Life on a triangular grid with selectable rules and themes.
+- [watercolor-text](watercolor-text/) -- type a title in poster lettering and watch drops of water land on the paint: it re-wets, frays along the paper fibres, runs, and dries with dark rims. A GPU watercolour model after Curtis et al. (1997): shallow water flow, invasion-percolation wicking, pigment that lifts and settles. Click to drop water, drag to trail it.
 
 ### 3D
 
-- [3d-eiffel-tower-assembly](3d-eiffel-tower-assembly/) -- scrub the 1887 to 1889 timeline and watch the tower rise, with falsework, creeper cranes and weather. Three.js.
-- [3d-faraday-waves](3d-faraday-waves/) -- a shaken liquid breaks into standing waves at half the drive frequency; in a narrow ring channel the pattern starts to travel, ratchet teeth pick the direction, and two ratcheted rings make a pump. After Guan et al., Phys. Rev. Fluids 2023. WebGPU compute (WebGL fallback), Three.js.
-- [3d-game-basement](3d-game-basement/) -- see highlights.
-- [3d-geo-guess](3d-geo-guess/) -- country-guessing on a draggable orthographic globe built from embedded polygon data, projected by hand on a canvas.
-- [3d-meta-balls](3d-meta-balls/) -- metaballs raymarched from signed distance fields with transparency, bump, gloss and subsurface controls. WebGL.
-- [3d-mosquito-simulator](3d-mosquito-simulator/) -- a female mosquito hunts a sleeping person through a chain of checks (CO₂ plume, sight, skin odour, warmth, landing taste, disturbance, probing), with live KPI bars showing what makes her abandon a spot. Auto and Fly modes, a "Your night" scenario, female vs male comparison, what happens during and after a bite, do's and don'ts, and why some people get bitten more (blood type: weak evidence). Three.js.
-- [3d-shadows](3d-shadows/) -- a spotlight with soft shadows; adjust position, cone, penumbra and intensity. Three.js.
-- [3d-spinor-belt-trick](3d-spinor-belt-trick/) -- see highlights.
-- [3d-stair-dismount](3d-stair-dismount/) -- see highlights.
-- [3d-tetris-cylinder-2player-game](3d-tetris-cylinder-2player-game/) -- two-player Tetris on concentric cylinders, one keyboard. Three.js.
-- [3d-torus-shooter](3d-torus-shooter/) -- see highlights.
-- [3d-voxel-cave](3d-voxel-cave/) -- first-person Perlin-noise cave you can carve into, remeshed live with Surface Nets. Three.js.
-- [3d-wrecking-ball](3d-wrecking-ball/) -- see highlights.
+- [eiffel-tower-assembly](eiffel-tower-assembly/) -- scrub the 1887 to 1889 timeline and watch the tower rise, with falsework, creeper cranes and weather. Three.js.
+- [faraday-waves](faraday-waves/) -- a shaken liquid breaks into standing waves at half the drive frequency; in a narrow ring channel the pattern starts to travel, ratchet teeth pick the direction, and two ratcheted rings make a pump. After Guan et al., Phys. Rev. Fluids 2023. WebGPU compute (WebGL fallback), Three.js.
+- [game-basement](game-basement/) -- see highlights.
+- [geo-guess](geo-guess/) -- country-guessing on a draggable orthographic globe built from embedded polygon data, projected by hand on a canvas.
+- [meta-balls](meta-balls/) -- metaballs raymarched from signed distance fields with transparency, bump, gloss and subsurface controls. WebGL.
+- [mosquito-simulator](mosquito-simulator/) -- a female mosquito hunts a sleeping person through a chain of checks (CO₂ plume, sight, skin odour, warmth, landing taste, disturbance, probing), with live KPI bars showing what makes her abandon a spot. Auto and Fly modes, a "Your night" scenario, female vs male comparison, what happens during and after a bite, do's and don'ts, and why some people get bitten more (blood type: weak evidence). Three.js.
+- [shadows](shadows/) -- a spotlight with soft shadows; adjust position, cone, penumbra and intensity. Three.js.
+- [spinor-belt-trick](spinor-belt-trick/) -- see highlights.
+- [stair-dismount](stair-dismount/) -- see highlights.
+- [tetris-cylinder-2player-game](tetris-cylinder-2player-game/) -- two-player Tetris on concentric cylinders, one keyboard. Three.js.
+- [torus-shooter](torus-shooter/) -- see highlights.
+- [voxel-cave](voxel-cave/) -- first-person Perlin-noise cave you can carve into, remeshed live with Surface Nets. Three.js.
+- [wrecking-ball](wrecking-ball/) -- see highlights.
 - [simulate-hand](simulate-hand/) -- a 27-degree-of-freedom hand grasping spheres, cubes and pencils with contact and grip-force readouts. Three.js.
 - [soap-bubbles](soap-bubbles/) -- soap films and bubbles. A floating 3D bubble coloured by exact thin-film interference (both faces, all bounces, water dispersion, CIE colour) drains, swirls, grows black film and bursts in slow motion at the Taylor–Culick speed. A vertical film on a wire frame shows Newton's colour bands, rising plumes, and sodium-lamp fringes 221 nm apart. A bubble raft, like the froth on a soapy window, forms Bragg–Nye crystals with grains and dislocations you can scrape, shake, shear and coarsen.
 

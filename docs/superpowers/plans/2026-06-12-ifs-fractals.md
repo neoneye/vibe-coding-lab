@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Full-fidelity port of the 2009 C++ `gfx_chaos` brick to `2d-ifs-fractals/index.html` — ~210 IFS presets, dual crossfades (presets and flame variants), histogram rendering with the original 2D tonemap.
+**Goal:** Full-fidelity port of the 2009 C++ `gfx_chaos` brick to `ifs-fractals/index.html` — ~210 IFS presets, dual crossfades (presets and flame variants), histogram rendering with the original 2D tonemap.
 
 **Architecture:** `convert_data.mjs` regenerates a `PRESETS` block inside `index.html` from the original C++ data file. The shared-code block holds the engine as standalone functions mirroring the C++ stages (`random1d`, `obtainFunctionValues`, `VARIANT_FNS`/`VARIANT_MENU`, `computePoints`, histogram splat/finalize, tonemap) plus `IfsTests`. The UI runs a progressive renderer (one 30k-point pass per frame up to `repeat` passes).
 
@@ -15,8 +15,8 @@
 ### Task 1: Scaffold, PRNGs (mulberry32 + bit-faithful random1d)
 
 **Files:**
-- Create: `2d-ifs-fractals/test.mjs`
-- Create: `2d-ifs-fractals/index.html`
+- Create: `ifs-fractals/test.mjs`
+- Create: `ifs-fractals/index.html`
 
 - [ ] **Step 1: Write the test runner** — same regex extractor as the sibling projects, running `IfsTests.run()`:
 
@@ -41,7 +41,7 @@ Run it → expected FAIL (ENOENT).
 
 - [ ] **Step 2: Create the index.html skeleton**
 
-Same shape as `2d-cloud-chamber/index.html` Task-1 skeleton (placeholder body, `<style>` comment for Task 6), with shared-code containing `mulberry32` (copy verbatim from the cloud chamber), `random1d`, the generated-presets markers, and `IfsTests` with PRNG tests:
+Same shape as `cloud-chamber/index.html` Task-1 skeleton (placeholder body, `<style>` comment for Task 6), with shared-code containing `mulberry32` (copy verbatim from the cloud chamber), `random1d`, the generated-presets markers, and `IfsTests` with PRNG tests:
 
 ```js
 // Bit-faithful port of the C++ random_1d (Perlin-style integer hash).
@@ -79,7 +79,7 @@ After implementing, print `random1d(1), random1d(7), random1d(100)` with a one-o
 - [ ] **Step 3: Run tests → all PASS, then commit**
 
 ```bash
-git add 2d-ifs-fractals
+git add ifs-fractals
 git commit -m "ifs-fractals: scaffold with test runner, mulberry32, bit-faithful random1d"
 ```
 
@@ -88,8 +88,8 @@ git commit -m "ifs-fractals: scaffold with test runner, mulberry32, bit-faithful
 ### Task 2: Data converter and PRESETS
 
 **Files:**
-- Create: `2d-ifs-fractals/convert_data.mjs`
-- Modify: `2d-ifs-fractals/index.html` (generated block + tests)
+- Create: `ifs-fractals/convert_data.mjs`
+- Modify: `ifs-fractals/index.html` (generated block + tests)
 
 - [ ] **Step 1: Add failing data tests**
 
@@ -119,7 +119,7 @@ Run → FAIL (`presets: converted` — PRESETS is empty).
 
 - [ ] **Step 2: Write the converter**
 
-`2d-ifs-fractals/convert_data.mjs`:
+`ifs-fractals/convert_data.mjs`:
 
 ```js
 // Regenerates the PRESETS block in index.html from the original C++ data.
@@ -181,13 +181,13 @@ console.log(`Wrote ${presets.length} presets.`);
 
 - [ ] **Step 3: Run the converter, inspect, pin the count**
 
-Run: `cd 2d-ifs-fractals && node convert_data.mjs`
+Run: `cd ifs-fractals && node convert_data.mjs`
 Expected: `Wrote N presets.` with N in the ~190–215 range. Then UPDATE the first data test to pin it exactly: `PRESETS.length === N`. Run `node test.mjs` → all PASS. (If the probability-sum test fails for a few presets, print the offenders and widen only as far as the real data requires — the originals are hand-tuned; report what was found.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 2d-ifs-fractals/convert_data.mjs 2d-ifs-fractals/index.html
+git add ifs-fractals/convert_data.mjs ifs-fractals/index.html
 git commit -m "ifs-fractals: preset data converted from gfx_chaos_data.cpp"
 ```
 
@@ -196,7 +196,7 @@ git commit -m "ifs-fractals: preset data converted from gfx_chaos_data.cpp"
 ### Task 3: Function mixing (obtainFunctionValues)
 
 **Files:**
-- Modify: `2d-ifs-fractals/index.html` (shared-code)
+- Modify: `ifs-fractals/index.html` (shared-code)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -305,7 +305,7 @@ Note: with mix=0, `interpolateCosine(0, a, b)` returns `a` exactly (cos(0)=1 →
 - [ ] **Step 3: Run tests → PASS, commit**
 
 ```bash
-git add 2d-ifs-fractals/index.html
+git add ifs-fractals/index.html
 git commit -m "ifs-fractals: preset crossfade mixing with seeded row shuffle"
 ```
 
@@ -314,7 +314,7 @@ git commit -m "ifs-fractals: preset crossfade mixing with seeded row shuffle"
 ### Task 4: Flame variants — VARIANT_FNS and VARIANT_MENU
 
 **Files:**
-- Modify: `2d-ifs-fractals/index.html` (shared-code)
+- Modify: `ifs-fractals/index.html` (shared-code)
 - Reference: `gfx_chaos.cpp` lines ~58–1010 (Variant struct + all calc functions) and lines ~1576–2015 (`init_variant` switch — the menu)
 
 This is a transcription task. The C++ file is the spec; the JS pattern is fixed here; the wholesale finite-output test catches typos across all entries.
@@ -438,7 +438,7 @@ Every case index in the C++ switch becomes exactly one entry, in order (ARCH is 
 - [ ] **Step 4: Run tests → all PASS** (the finite test names the first broken entry if any transcription slipped). Commit:
 
 ```bash
-git add 2d-ifs-fractals/index.html
+git add ifs-fractals/index.html
 git commit -m "ifs-fractals: all 53 flame variants and the full parameterized menu"
 ```
 
@@ -447,7 +447,7 @@ git commit -m "ifs-fractals: all 53 flame variants and the full parameterized me
 ### Task 5: Chaos game, histograms, tonemap, finalize
 
 **Files:**
-- Modify: `2d-ifs-fractals/index.html` (shared-code)
+- Modify: `ifs-fractals/index.html` (shared-code)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -695,7 +695,7 @@ Note on the bilinear weights: the original C++ uses `x0f*y0f` at (x0,y0) — wei
 - [ ] **Step 3: Run tests → PASS, commit**
 
 ```bash
-git add 2d-ifs-fractals/index.html
+git add ifs-fractals/index.html
 git commit -m "ifs-fractals: chaos game pipeline with histograms and tonemap"
 ```
 
@@ -704,9 +704,9 @@ git commit -m "ifs-fractals: chaos game pipeline with histograms and tonemap"
 ### Task 6: UI
 
 **Files:**
-- Modify: `2d-ifs-fractals/index.html` (style, body, UI script)
+- Modify: `ifs-fractals/index.html` (style, body, UI script)
 
-- [ ] **Step 1: Styles and markup** — reuse the repo's standard dark layout CSS (copy the `:root`/panel/slider/button/readout rules from `2d-cloud-chamber`, drop the canvas cursor rule). Body:
+- [ ] **Step 1: Styles and markup** — reuse the repo's standard dark layout CSS (copy the `:root`/panel/slider/button/readout rules from `cloud-chamber`, drop the canvas cursor rule). Body:
 
 ```html
 <h1>2D IFS Fractals</h1>
@@ -916,7 +916,7 @@ requestAnimationFrame(frame);
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 2d-ifs-fractals/index.html
+git add ifs-fractals/index.html
 git commit -m "ifs-fractals: full parameter UI with progressive rendering"
 ```
 
@@ -925,18 +925,18 @@ git commit -m "ifs-fractals: full parameter UI with progressive rendering"
 ### Task 7: Visual exploration pass and gallery
 
 **Files:**
-- Create: `2d-ifs-fractals/screenshot1.png`
+- Create: `ifs-fractals/screenshot1.png`
 - Modify: `gallery.yaml`, root `index.html` (regenerated)
-- Possibly modify: `2d-ifs-fractals/index.html` (defaults only)
+- Possibly modify: `ifs-fractals/index.html` (defaults only)
 
 - [ ] **Step 1: Screenshot several configurations** via a TEMP block setting select/slider values before the loop starts (e.g., a plant preset with julia_n variant at mix 0.4; a spiral pair at function mix 0.5; sierpinski with swirl). Verify variants visually do what their names say (swirl swirls, ngon polygonizes). Pick the most beautiful as the default startup configuration (set the actual `value` attributes / select defaults), and capture `screenshot1.png` from it. Remove the TEMP block, re-run tests.
 
 - [ ] **Step 2: Gallery**
 
 ```bash
-printf '2d-ifs-fractals: 2D IFS Fractals\n' >> gallery.yaml
+printf 'ifs-fractals: 2D IFS Fractals\n' >> gallery.yaml
 python3 build_gallery.py
-cd 2d-ifs-fractals && node test.mjs
+cd ifs-fractals && node test.mjs
 ```
 
 Expected: 34 entries; ALL TESTS PASSED.
@@ -944,6 +944,6 @@ Expected: 34 entries; ALL TESTS PASSED.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add 2d-ifs-fractals gallery.yaml index.html
+git add ifs-fractals gallery.yaml index.html
 git commit -m "ifs-fractals: default composition and gallery integration"
 ```

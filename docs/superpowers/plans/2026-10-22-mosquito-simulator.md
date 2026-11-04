@@ -6,7 +6,7 @@
 chain of KPI gates, in Auto and Interactive modes, with explainers on bites, aftermath, female vs male, and
 "why me?".
 
-**Architecture:** One `3d-mosquito-simulator/index.html`.
+**Architecture:** One `mosquito-simulator/index.html`.
 - **Pure simulation core:** sits in `<script id="shared-code">`. It has no DOM and no three.js, and is
   exposed as the global `MosquitoSim`. It covers the puff/field model, the gates, the mosquito and human
   state machines, and the bump curve.
@@ -29,7 +29,7 @@ chain of KPI gates, in Auto and Interactive modes, with explainers on bites, aft
 - The cream has no effect on the gates.
 - All numbers on the page are labelled approximate or illustrative where the spec says so. The page
   includes a "not medical advice" line.
-- The visual style follows the dark card side panel of `3d-animal-haircut/index.html` (`#panel`, `.card`,
+- The visual style follows the dark card side panel of `animal-haircut/index.html` (`#panel`, `.card`,
   collapsible `h2`). The canvas uses a HiDPI backing store.
 - Commit to `main`. The commit message ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
@@ -52,9 +52,9 @@ chain of KPI gates, in Auto and Interactive modes, with explainers on bites, aft
 ### Task 1: Simulation core + tests
 
 **Files:**
-- Create: `3d-mosquito-simulator/index.html`. In this task it holds only the HTML skeleton plus the
+- Create: `mosquito-simulator/index.html`. In this task it holds only the HTML skeleton plus the
   shared-code block.
-- Create: `3d-mosquito-simulator/test.mjs`, a copy of `3d-animal-haircut/test.mjs` with `MosquitoSim.Tests`.
+- Create: `mosquito-simulator/test.mjs`, a copy of `animal-haircut/test.mjs` with `MosquitoSim.Tests`.
 
 **Interfaces (produces):**
 
@@ -182,7 +182,7 @@ chain of KPI gates, in Auto and Interactive modes, with explainers on bites, aft
     - ≥1 human `stirring` or `halfAwake` before the first bite
     - the first bite is on a forearm or hand
     - ≥2 bites on different limbs
-- [ ] **Step 2: Run `node 3d-mosquito-simulator/test.mjs`.** Expected: FAIL (MosquitoSim not defined).
+- [ ] **Step 2: Run `node mosquito-simulator/test.mjs`.** Expected: FAIL (MosquitoSim not defined).
 - [ ] **Step 3: Implement `MosquitoSim`** to the interfaces and model above.
 - [ ] **Step 4: Tune and re-run.**
   - Tune constants only within the model decisions until all the tests pass.
@@ -191,7 +191,7 @@ chain of KPI gates, in Auto and Interactive modes, with explainers on bites, aft
 
 ### Task 2: 3D scene, side panel, KPI overlay, Auto mode
 
-**Files:** Modify `3d-mosquito-simulator/index.html`.
+**Files:** Modify `mosquito-simulator/index.html`.
 
 **Interfaces:** Consumes everything in Task 1. Produces `window.__mq = {world, stepN(n), setMode(m),
 render()}` for the headless screenshots.
@@ -289,7 +289,7 @@ from spec §"Explainer content", in that order.
 - [ ] **Step 1: Capture `screenshot1.jpg`** at 1600×1000, JPEG, from the `?shot=1` state.
 - [ ] **Step 2: Update the gallery.**
   - Add the README "All experiments" entry in alphabetical order:
-    `- [3d-mosquito-simulator](3d-mosquito-simulator/) -- ...`.
+    `- [mosquito-simulator](mosquito-simulator/) -- ...`.
   - Run `python3 build_gallery.py` and confirm that `index.html` gains the card.
-- [ ] **Step 3: Run `node 3d-mosquito-simulator/test.mjs`.** Expected: all pass.
+- [ ] **Step 3: Run `node mosquito-simulator/test.mjs`.** Expected: all pass.
 - [ ] **Step 4: Commit** with the message `mosquito-simulator: gallery entry and screenshot`.

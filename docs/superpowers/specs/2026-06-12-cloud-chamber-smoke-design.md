@@ -1,7 +1,7 @@
 # 2D Cloud Chamber — Smoke Layer Design
 
 **Date:** 2026-06-12
-**Project directory:** `2d-cloud-chamber/` (iteration)
+**Project directory:** `cloud-chamber/` (iteration)
 **Status:** Approved by owner
 **Prior spec:** `2026-06-11-cloud-chamber-design.md`
 

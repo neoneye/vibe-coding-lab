@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Faithful port of the C++ `gfx_city` brick (Substrate-style street growth) to `2d-city-generator/index.html` with animated growth.
+**Goal:** Faithful port of the C++ `gfx_city` brick (Substrate-style street growth) to `city-generator/index.html` with animated growth.
 
-**Architecture:** `CityEngine` in shared-code mirrors the brick stage by stage (uint-grid with the negative-direction wrap quirk via `Uint32Array`, incrementing-seed PRNG, perpendicular branch-on-collision); the UI runs `step(speed)` per frame into a 640×640 ImageData with the big-canvas layout from `2d-ifs-fractals`.
+**Architecture:** `CityEngine` in shared-code mirrors the brick stage by stage (uint-grid with the negative-direction wrap quirk via `Uint32Array`, incrementing-seed PRNG, perpendicular branch-on-collision); the UI runs `step(speed)` per frame into a 640×640 ImageData with the big-canvas layout from `ifs-fractals`.
 
 **Tech Stack:** Vanilla JS, Canvas 2D, Node ≥18. Transcription source: `/Users/neoneye/git/opcoders_toolbox/CONTENT/TBEngine/brick_lib/gfx_city.cpp` (439 lines, fully read).
 
@@ -15,8 +15,8 @@
 ### Task 1: Scaffold + PRNG
 
 **Files:**
-- Create: `2d-city-generator/test.mjs`
-- Create: `2d-city-generator/index.html`
+- Create: `city-generator/test.mjs`
+- Create: `city-generator/index.html`
 
 - [ ] **Step 1: Test runner** — standard extractor running `CityTests.run()` (same file as the siblings with `IfsTests` → `CityTests`). Run → FAIL (ENOENT).
 
@@ -65,7 +65,7 @@ And `CityTests` with:
 ### Task 2: Engine — construction, start(), seeding
 
 **Files:**
-- Modify: `2d-city-generator/index.html` (shared-code)
+- Modify: `city-generator/index.html` (shared-code)
 
 - [ ] **Step 1: Failing tests**
 
@@ -195,7 +195,7 @@ class CityEngine {
 ### Task 3: Engine — agent movement, branching, stepping
 
 **Files:**
-- Modify: `2d-city-generator/index.html` (shared-code)
+- Modify: `city-generator/index.html` (shared-code)
 
 - [ ] **Step 1: Failing tests**
 
@@ -387,9 +387,9 @@ Run → FAIL.
 ### Task 4: UI
 
 **Files:**
-- Modify: `2d-city-generator/index.html` (style, body, UI script)
+- Modify: `city-generator/index.html` (style, body, UI script)
 
-- [ ] **Step 1: Styles** — copy the `2d-ifs-fractals` stylesheet (post-layout-update version: `.canvas-wrap`, scrollable `.controls`, `button.tool` rule not needed). Add nothing else.
+- [ ] **Step 1: Styles** — copy the `ifs-fractals` stylesheet (post-layout-update version: `.canvas-wrap`, scrollable `.controls`, `button.tool` rule not needed). Add nothing else.
 
 - [ ] **Step 2: Body**
 
@@ -567,7 +567,7 @@ requestAnimationFrame(frame);
 ### Task 5: Gallery
 
 **Files:**
-- Create: `2d-city-generator/screenshot1.png`
+- Create: `city-generator/screenshot1.png`
 - Modify: `gallery.yaml`, root `index.html` (regenerated)
 
 - [ ] **Step 1: Gallery screenshot** — TEMP line `engine.finish();` after `restart();`, screenshot (a finished city), delete the TEMP line, re-test.
@@ -575,9 +575,9 @@ requestAnimationFrame(frame);
 - [ ] **Step 2: Register and commit**
 
 ```bash
-printf '2d-city-generator: 2D City Generator\n' >> gallery.yaml
+printf 'city-generator: 2D City Generator\n' >> gallery.yaml
 python3 build_gallery.py   # expect 35 entries
-cd 2d-city-generator && node test.mjs
-git add 2d-city-generator gallery.yaml index.html
+cd city-generator && node test.mjs
+git add city-generator gallery.yaml index.html
 git commit -m "city-generator: gallery integration"
 ```

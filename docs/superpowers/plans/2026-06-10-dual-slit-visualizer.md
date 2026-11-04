@@ -10,17 +10,17 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-10-dual-slit-visualizer-design.md`
 
-**Working directory:** `/Users/neoneye/git/vibe-coding-lab/2d-dual-slit-experiment`
+**Working directory:** `/Users/neoneye/git/vibe-coding-lab/dual-slit-experiment`
 
 ## File Structure
 
-- `2d-dual-slit-experiment/index.html` — the whole app:
+- `dual-slit-experiment/index.html` — the whole app:
   - `<style>` — dark theme layout
   - markup — header, `#field` canvas (720×480), `#screenview` canvas (260×480), `#caption`, `#controls`
   - `<script id="physics-core">` — pure functions: `slitSources`, `fieldAt`, `screenIntensity`, `buildCDF`, `sampleIndex`, `findPeaks`; exports via `module.exports` guard for Node
   - `<script id="app">` — state, precompute, render loop, particles, controls, captions
-- `2d-dual-slit-experiment/test.mjs` — extracts the physics-core block from index.html, runs assertions
-- `2d-dual-slit-experiment/screenshot1.jpg` — committed at the end (lab convention)
+- `dual-slit-experiment/test.mjs` — extracts the physics-core block from index.html, runs assertions
+- `dual-slit-experiment/screenshot1.jpg` — committed at the end (lab convention)
 
 World coordinates = `#field` canvas pixels (720×480). Constants: source at (40, 240), barrier at x=280 (6 px thick), screen at x=700. Field is computed on a half-resolution grid (360×240) and upscaled.
 
@@ -29,7 +29,7 @@ World coordinates = `#field` canvas pixels (720×480). Constants: source at (40,
 ### Task 1: HTML skeleton
 
 **Files:**
-- Create: `2d-dual-slit-experiment/index.html`
+- Create: `dual-slit-experiment/index.html`
 
 - [ ] **Step 1: Write the skeleton** (layout, styles, controls markup, empty script blocks)
 
@@ -113,12 +113,12 @@ button:disabled { opacity:0.4; cursor:default; }
 
 - [ ] **Step 2: Open in browser, confirm layout renders** (two dark canvases side by side, controls below)
 
-Run: `open /Users/neoneye/git/vibe-coding-lab/2d-dual-slit-experiment/index.html`
+Run: `open /Users/neoneye/git/vibe-coding-lab/dual-slit-experiment/index.html`
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add 2d-dual-slit-experiment/index.html
+git add dual-slit-experiment/index.html
 git commit -m "feat(dual-slit): page skeleton with layout and controls"
 ```
 
@@ -127,8 +127,8 @@ git commit -m "feat(dual-slit): page skeleton with layout and controls"
 ### Task 2: Physics core (TDD)
 
 **Files:**
-- Create: `2d-dual-slit-experiment/test.mjs`
-- Modify: `2d-dual-slit-experiment/index.html` (fill `<script id="physics-core">`)
+- Create: `dual-slit-experiment/test.mjs`
+- Modify: `dual-slit-experiment/index.html` (fill `<script id="physics-core">`)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -230,7 +230,7 @@ console.log('all physics tests passed');
 
 - [ ] **Step 2: Run tests, verify they fail**
 
-Run: `cd 2d-dual-slit-experiment && node test.mjs`
+Run: `cd dual-slit-experiment && node test.mjs`
 Expected: FAIL — `Physics exported` assertion (block contains only a comment).
 
 - [ ] **Step 3: Implement the physics-core block**
@@ -303,13 +303,13 @@ if (typeof module !== 'undefined') module.exports = Physics;
 
 - [ ] **Step 4: Run tests, verify they pass**
 
-Run: `cd 2d-dual-slit-experiment && node test.mjs`
+Run: `cd dual-slit-experiment && node test.mjs`
 Expected: `all physics tests passed`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-dual-slit-experiment/index.html 2d-dual-slit-experiment/test.mjs
+git add dual-slit-experiment/index.html dual-slit-experiment/test.mjs
 git commit -m "feat(dual-slit): Huygens phasor physics core with node tests"
 ```
 
@@ -318,7 +318,7 @@ git commit -m "feat(dual-slit): Huygens phasor physics core with node tests"
 ### Task 3: Wave-field rendering
 
 **Files:**
-- Modify: `2d-dual-slit-experiment/index.html` (fill `<script id="app">`)
+- Modify: `dual-slit-experiment/index.html` (fill `<script id="app">`)
 
 - [ ] **Step 1: Implement precompute + animated field render**
 
@@ -487,18 +487,18 @@ requestAnimationFrame(frame);
 
 - [ ] **Step 2: Verify in browser**
 
-Run: `open /Users/neoneye/git/vibe-coding-lab/2d-dual-slit-experiment/index.html`
+Run: `open /Users/neoneye/git/vibe-coding-lab/dual-slit-experiment/index.html`
 Expected: circular ripples spread from the source, pass the two slits, and a fringed interference fan fills the right side; amber glow stripes on the right edge with a bright central band.
 
 - [ ] **Step 3: Run physics tests still pass**
 
-Run: `cd 2d-dual-slit-experiment && node test.mjs`
+Run: `cd dual-slit-experiment && node test.mjs`
 Expected: `all physics tests passed`
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 2d-dual-slit-experiment/index.html
+git add dual-slit-experiment/index.html
 git commit -m "feat(dual-slit): animated Huygens wave field with barrier and screen glow"
 ```
 
@@ -507,7 +507,7 @@ git commit -m "feat(dual-slit): animated Huygens wave field with barrier and scr
 ### Task 4: Particles + detection panel
 
 **Files:**
-- Modify: `2d-dual-slit-experiment/index.html` (replace the three stubs `fireParticles`, `drawPops`, `drawPanel` in `#app`; add panel state above them)
+- Modify: `dual-slit-experiment/index.html` (replace the three stubs `fireParticles`, `drawPops`, `drawPanel` in `#app`; add panel state above them)
 
 - [ ] **Step 1: Replace stubs with particle firing, landing pops, and the detection panel**
 
@@ -591,13 +591,13 @@ function drawPanel() {
 
 - [ ] **Step 2: Verify in browser**
 
-Run: `open /Users/neoneye/git/vibe-coding-lab/2d-dual-slit-experiment/index.html`
+Run: `open /Users/neoneye/git/vibe-coding-lab/dual-slit-experiment/index.html`
 Expected: source flashes, amber rings pop on the screen edge, dots accumulate in the panel in stripes matching the glow, histogram bars grow and hug the orange theory curve.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add 2d-dual-slit-experiment/index.html
+git add dual-slit-experiment/index.html
 git commit -m "feat(dual-slit): particle detection, histogram, and theory overlay"
 ```
 
@@ -606,7 +606,7 @@ git commit -m "feat(dual-slit): particle detection, histogram, and theory overla
 ### Task 5: Controls, captions, clamps
 
 **Files:**
-- Modify: `2d-dual-slit-experiment/index.html` (replace `updateCaption`/`syncControls` stubs; append wiring code before `recompute()` call)
+- Modify: `dual-slit-experiment/index.html` (replace `updateCaption`/`syncControls` stubs; append wiring code before `recompute()` call)
 
 - [ ] **Step 1: Replace the two remaining stubs and add control wiring**
 
@@ -672,13 +672,13 @@ Note: `clearDetections` references `bins`/`dots`/`pops` defined in the particles
 
 - [ ] **Step 3: Run physics tests still pass**
 
-Run: `cd 2d-dual-slit-experiment && node test.mjs`
+Run: `cd dual-slit-experiment && node test.mjs`
 Expected: `all physics tests passed`
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 2d-dual-slit-experiment/index.html
+git add dual-slit-experiment/index.html
 git commit -m "feat(dual-slit): controls, which-path detector, adaptive captions"
 ```
 
@@ -687,17 +687,17 @@ git commit -m "feat(dual-slit): controls, which-path detector, adaptive captions
 ### Task 6: Verification + screenshot
 
 **Files:**
-- Create: `2d-dual-slit-experiment/screenshot1.jpg`
+- Create: `dual-slit-experiment/screenshot1.jpg`
 
 - [ ] **Step 1: Run full test suite**
 
-Run: `cd 2d-dual-slit-experiment && node test.mjs`
+Run: `cd dual-slit-experiment && node test.mjs`
 Expected: `all physics tests passed`
 
 - [ ] **Step 2: Headless screenshot for visual check**
 
 ```bash
-cd 2d-dual-slit-experiment
+cd dual-slit-experiment
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu \
   --window-size=1040,760 --virtual-time-budget=4000 \
   --screenshot=shot.png "file://$PWD/index.html"
@@ -714,6 +714,6 @@ sips -s format jpeg -s formatOptions 85 shot.png --out screenshot1.jpg && rm sho
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 2d-dual-slit-experiment/screenshot1.jpg
+git add dual-slit-experiment/screenshot1.jpg
 git commit -m "feat(dual-slit): screenshot"
 ```

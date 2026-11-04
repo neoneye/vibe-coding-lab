@@ -1,9 +1,9 @@
 # Basement menu march — design
 
 Date: 2026-07-16
-Project: `3d-game-basement/`
+Project: `game-basement/`
 Status: superseded 2026-09-29 — the chiptune march engine was removed and
-replaced by the owner's Suno track (`3d-game-basement/assets/music.mp3`),
+replaced by the owner's Suno track (`game-basement/assets/music.mp3`),
 played on the same screens with the same 1s death/win hold and M toggle.
 The march engine and both compositions remain in git history.
 
@@ -88,7 +88,7 @@ should be audible.
 ## Testing / verification
 
 - Extend `window.__dbg` with a music-state getter (playing/muted/step).
-- Verify with the project's `3d-game-basement:verify` headless-Chrome skill:
+- Verify with the project's `game-basement:verify` headless-Chrome skill:
   - title after synthetic gesture → music playing,
   - enter play → music stops (fade-out),
   - lose pointer lock (pause) → music resumes and `gameBus` is silent,

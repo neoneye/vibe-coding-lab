@@ -137,7 +137,7 @@ two bites, with "two mosquitoes" as an equally possible one.
 
 ## Builder calls (mine)
 
-- **Directory and files:** `3d-mosquito-simulator/` with a single `index.html`, plus `test.mjs` and
+- **Directory and files:** `mosquito-simulator/` with a single `index.html`, plus `test.mjs` and
   `screenshot1.jpg`.
 - **three.js:** three.js 0.170.0 from jsdelivr via an importmap, matching the newer projects in the repo.
 - **Tests:** the pure model goes in a `<script id="shared-code">` block, and `test.mjs` runs it in Node.

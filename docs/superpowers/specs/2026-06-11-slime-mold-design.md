@@ -1,7 +1,7 @@
 # 2D Slime Mold (Physarum) — Design
 
 **Date:** 2026-06-11
-**Project directory:** `2d-slime-mold/`
+**Project directory:** `slime-mold/`
 **Status:** Approved by owner
 
 ## Purpose
@@ -14,7 +14,7 @@ emergent organic transport networks. Two experiences in one engine:
    sliders and presets explore distinct morphologies.
 2. **Food mode:** clicking the canvas drops food sources that continuously
    emit pheromone; the mold grows and prunes networks connecting them — a
-   living companion piece to `2d-shortest-path`.
+   living companion piece to `shortest-path`.
 
 ## Repo conventions followed
 
@@ -90,7 +90,7 @@ actual output; the spec requirement is four visually distinct presets.)
 
 ## UI
 
-Layout mirrors `2d-monte-carlo-pi`: canvas panel left, controls right,
+Layout mirrors `monte-carlo-pi`: canvas panel left, controls right,
 stacking on narrow screens.
 
 - **Canvas:** display canvas 640×640 CSS px; the 320×320 trail rendered via an

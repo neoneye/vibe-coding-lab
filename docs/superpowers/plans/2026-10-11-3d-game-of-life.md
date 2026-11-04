@@ -17,7 +17,7 @@
 
 ## Global Constraints
 
-- The project is one self-contained `3d-game-of-life/index.html`. The only external dependency is three.js 0.160.0 from `https://cdn.jsdelivr.net/npm/three@0.160.0/`.
+- The project is one self-contained `game-of-life/index.html`. The only external dependency is three.js 0.160.0 from `https://cdn.jsdelivr.net/npm/three@0.160.0/`.
 - Pure logic lives in `<script id="shared-code">`, with no DOM and no three.js. `test.mjs` extracts it by regex and runs `GolTests.run()`.
 - Grid sizes are N ∈ {24, 32, 48, 64}. Radius r ∈ {1, 2} (3×3 / 5×5). The world requires N ≥ 2r+1.
 - Max neighbour counts: cube 26 / 124, tetra 161 / 749.
@@ -38,8 +38,8 @@
 ### Task 1: Engine core (rules, world, box-sum counting, Generations step)
 
 **Files:**
-- Create: `3d-game-of-life/index.html` (for now, a minimal page holding only the shared-code block)
-- Create: `3d-game-of-life/test.mjs`
+- Create: `game-of-life/index.html` (for now, a minimal page holding only the shared-code block)
+- Create: `game-of-life/test.mjs`
 
 **Interfaces:**
 - Produces globals: `GolTests` (`add(name, fn)`, `run() → boolean`), `assert(cond, msg)`, `GOL`.
@@ -298,7 +298,7 @@ GolTests.add('seed fills only the centred region, reproducibly', () => {
 
 - [ ] **Step 3: Run the tests and confirm they fail**
 
-Run: `node 3d-game-of-life/test.mjs`
+Run: `node game-of-life/test.mjs`
 Expected: every test FAILs (`GOL.maxCount is not a function` and similar), ending with `0 passed, 14 failed`.
 
 - [ ] **Step 4: Replace the stub `GOL` with the engine**
@@ -450,14 +450,14 @@ const GOL = (() => {
 
 - [ ] **Step 5: Run the tests and confirm they pass**
 
-Run: `node 3d-game-of-life/test.mjs`
+Run: `node game-of-life/test.mjs`
 Expected: `14 passed, 0 failed`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add 3d-game-of-life/index.html 3d-game-of-life/test.mjs
-git commit -m "3d-game-of-life: engine core with box-sum counting, Kuhn tetra lattice and Generations rules
+git add game-of-life/index.html game-of-life/test.mjs
+git commit -m "game-of-life: engine core with box-sum counting, Kuhn tetra lattice and Generations rules
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -467,8 +467,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 2: Preset evaluation, `search.mjs` and the preset table
 
 **Files:**
-- Modify: `3d-game-of-life/index.html` (shared-code: add `evaluate`, `PRESETS` and `presetsFor` to `GOL`, and add tests)
-- Create: `3d-game-of-life/search.mjs`
+- Modify: `game-of-life/index.html` (shared-code: add `evaluate`, `PRESETS` and `presetsFor` to `GOL`, and add tests)
+- Create: `game-of-life/search.mjs`
 
 **Interfaces:**
 - Consumes: `GOL.World`, `GOL.parseRule`, `GOL.mulberry32`, `GOL.maxCount` (Task 1).
@@ -509,7 +509,7 @@ GolTests.add('every preset stays alive, below 50% and active for 300 generations
 
 - [ ] **Step 2: Run the tests and confirm the new ones fail**
 
-Run: `node 3d-game-of-life/test.mjs`
+Run: `node game-of-life/test.mjs`
 Expected: 3 FAIL lines (`GOL.PRESETS` undefined), ending with `14 passed, 3 failed`.
 
 - [ ] **Step 3: Add `evaluate`, `presetsFor` and the known cube 3×3 presets to `GOL`**
@@ -555,12 +555,12 @@ and change the return line to:
 
 - [ ] **Step 4: Check the known cube 3×3 presets**
 
-Run: `node 3d-game-of-life/test.mjs`
+Run: `node game-of-life/test.mjs`
 Expected: the "at least 4 presets" test fails for the three empty combinations. Look at the "every preset stays alive" output for cube r=1 entries. For each failing known rule, try `fill` ∈ {0.2, 0.3, 0.5, 1.0} and `density` ∈ {0.2, 0.35, 0.5} with a quick one-off:
 
 ```bash
 node -e '
-const fs=require("fs");const h=fs.readFileSync("3d-game-of-life/index.html","utf8");
+const fs=require("fs");const h=fs.readFileSync("game-of-life/index.html","utf8");
 const G=new Function(h.match(/<script id="shared-code">([\s\S]*?)<\/script>/)[1]+";return GOL;")();
 const name=process.argv[1];const base=G.PRESETS.find(p=>p.name===name);
 for(const fill of [0.2,0.3,0.5,1])for(const density of [0.2,0.35,0.5]){const e=G.evaluate({...base,fill,density});console.log(fill,density,e.ok,e.alive,e.frac.toFixed(3),e.activity.toFixed(4));}
@@ -629,9 +629,9 @@ for (const p of passed.slice(0, 20)) console.log(JSON.stringify(p));
 Run each command (they can run in parallel, in the background):
 
 ```bash
-node 3d-game-of-life/search.mjs cube 2 300 1
-node 3d-game-of-life/search.mjs tetra 1 300 1
-node 3d-game-of-life/search.mjs tetra 2 300 1
+node game-of-life/search.mjs cube 2 300 1
+node game-of-life/search.mjs tetra 1 300 1
+node game-of-life/search.mjs tetra 2 300 1
 ```
 
 Expected: each prints `N/M passed` and up to 20 JSON lines. If a combination prints fewer than 4, rerun it with seed 2 and 600 tries.
@@ -650,14 +650,14 @@ Order the entries within each combination with the most visually active preset f
 
 - [ ] **Step 8: Run the tests**
 
-Run: `node 3d-game-of-life/test.mjs`
+Run: `node game-of-life/test.mjs`
 Expected: `17 passed, 0 failed`. The preset test takes several seconds because the tetra presets each run 300 generations of 196k cells.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add 3d-game-of-life/index.html 3d-game-of-life/search.mjs
-git commit -m "3d-game-of-life: preset acceptance test, rule search script and presets for all four combinations
+git add game-of-life/index.html game-of-life/search.mjs
+git commit -m "game-of-life: preset acceptance test, rule search script and presets for all four combinations
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -667,7 +667,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 3: Renderer and main loop (three.js, instanced cells, URL params, debug handle)
 
 **Files:**
-- Modify: `3d-game-of-life/index.html` (add styles, the canvas, the readout, the import map and the page module after the shared-code block)
+- Modify: `game-of-life/index.html` (add styles, the canvas, the readout, the import map and the page module after the shared-code block)
 
 **Interfaces:**
 - Consumes: `GOL.World`, `GOL.parseRule`, `GOL.presetsFor`, `GOL.TETRA`, `GOL.mulberry32` (Tasks 1–2).
@@ -946,12 +946,12 @@ requestAnimationFrame(frame);
 
 - [ ] **Step 3: Run the unit tests (the shared-code block must still be clean)**
 
-Run: `node 3d-game-of-life/test.mjs`
+Run: `node game-of-life/test.mjs`
 Expected: `17 passed, 0 failed`.
 
 - [ ] **Step 4: Check the page in the Browser pane**
 
-Start the server with `preview_start { name: "static" }`, then navigate to `http://localhost:8765/3d-game-of-life/index.html`. Make sure the pane tab is visible (`tabs_select`), because a hidden pane pauses rAF. Then:
+Start the server with `preview_start { name: "static" }`, then navigate to `http://localhost:8765/game-of-life/index.html`. Make sure the pane tab is visible (`tabs_select`), because a hidden pane pauses rAF. Then:
 
 - `read_console_messages { onlyErrors: true }`. Expected: none.
 - Take a screenshot. Expected: coloured cubes inside a dim wireframe box, slowly rotating, with the readout at the bottom right.
@@ -965,8 +965,8 @@ If tetra faces render black, flip the winding test (`> 0` → `< 0`) in `tetraGe
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 3d-game-of-life/index.html
-git commit -m "3d-game-of-life: instanced cube/tetra renderer, main loop, URL params and debug handle
+git add game-of-life/index.html
+git commit -m "game-of-life: instanced cube/tetra renderer, main loop, URL params and debug handle
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -976,7 +976,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 4: Control panel (combination, presets, rule, size, playback, seeding, slice, colour, keys)
 
 **Files:**
-- Modify: `3d-game-of-life/index.html` (panel styles and markup, plus the wiring at the end of the page module)
+- Modify: `game-of-life/index.html` (panel styles and markup, plus the wiring at the end of the page module)
 
 **Interfaces:**
 - Consumes from Task 3 (page-module scope): `sim`, `view`, `MAX_GPS`, `setCombo`, `applyPreset`, `applyRule`, `reseed`, `clearWorld`, `stepOnce`, `markDirty`, `controls`, `GOL`.
@@ -1131,7 +1131,7 @@ document.addEventListener('click', e => { if (e.target.tagName === 'BUTTON') e.t
 
 - [ ] **Step 4: Verify the controls in the Browser pane** (covers Review Focus 2 and 4)
 
-Reload `http://localhost:8765/3d-game-of-life/index.html` with the tab fronted. Check each item with `computer` clicks or `form_input`, plus `read_page` or `javascript_tool` readbacks:
+Reload `http://localhost:8765/game-of-life/index.html` with the tab fronted. Check each item with `computer` clicks or `form_input`, plus `read_page` or `javascript_tool` readbacks:
 
 1. Click **Tetrahedra**. Expected: the hint reads `161 neighbours per cell · 663,552 cells`, the preset list shows the tetra 3×3 presets, tetrahedra are drawn, and there are no console errors.
 2. Type `100-160/40-60/5` into the rule field and press Enter, then click **Cubes**. Expected: no error. The rule field shows the first cube 3×3 preset's rule, and the world runs (`__gol.sim.world.gen` increases).
@@ -1161,11 +1161,11 @@ Expected: `m1.geometries` equals `m0.geometries` (± 1).
 
 - [ ] **Step 6: Run the unit tests and commit**
 
-Run: `node 3d-game-of-life/test.mjs`. Expected: `17 passed, 0 failed`.
+Run: `node game-of-life/test.mjs`. Expected: `17 passed, 0 failed`.
 
 ```bash
-git add 3d-game-of-life/index.html
-git commit -m "3d-game-of-life: control panel with lattice, neighbourhood, presets, rule field, seeding, slice and keys
+git add game-of-life/index.html
+git commit -m "game-of-life: control panel with lattice, neighbourhood, presets, rule field, seeding, slice and keys
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1175,7 +1175,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 5: Performance check, gallery screenshot and entry
 
 **Files:**
-- Create: `3d-game-of-life/screenshot1.jpg` (1600×1000)
+- Create: `game-of-life/screenshot1.jpg` (1600×1000)
 - Modify: `index.html` (repo root gallery, regenerated by `build_gallery.py`)
 
 **Interfaces:**
@@ -1183,7 +1183,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Measure the performance target** (spec: 48³ tetra 3×3 ≥ 5 gen/s including the refill)
 
-In the Browser pane, at `http://localhost:8765/3d-game-of-life/index.html?lattice=tetra&r=1&n=48&play=0`:
+In the Browser pane, at `http://localhost:8765/game-of-life/index.html?lattice=tetra&r=1&n=48&play=0`:
 
 ```js
 const g = __gol; const t0 = performance.now(); g.step(20); const ms = (performance.now() - t0) / 20; ({ ms, gps: 1000 / ms })
@@ -1207,8 +1207,8 @@ With the static server running, take two candidates and pick the better-looking 
 
 ```bash
 SCRATCH=/private/tmp/claude-501/-Users-neoneye-git-vibe-coding-lab/2ce0befc-08bd-45a5-b12f-fb14995d2782/scratchpad
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1087 --virtual-time-budget=15000 --screenshot="$SCRATCH/gol-cube.png" "http://127.0.0.1:8765/3d-game-of-life/index.html?lattice=cube&r=1&n=48&seed=7&gen=120&play=0&rotate=0&ui=0"
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1087 --virtual-time-budget=15000 --screenshot="$SCRATCH/gol-tetra.png" "http://127.0.0.1:8765/3d-game-of-life/index.html?lattice=tetra&r=1&n=32&seed=7&gen=120&play=0&rotate=0&ui=0"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1087 --virtual-time-budget=15000 --screenshot="$SCRATCH/gol-cube.png" "http://127.0.0.1:8765/game-of-life/index.html?lattice=cube&r=1&n=48&seed=7&gen=120&play=0&rotate=0&ui=0"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1087 --virtual-time-budget=15000 --screenshot="$SCRATCH/gol-tetra.png" "http://127.0.0.1:8765/game-of-life/index.html?lattice=tetra&r=1&n=32&seed=7&gen=120&play=0&rotate=0&ui=0"
 ```
 
 Run each in the background, because headless can hang. Look at both PNGs. Expected: a lit 3D structure that fills about 60–80% of the frame, with no UI visible. If one is black or empty, take the shot from the Browser pane instead, using the `drawImage`-to-1600×1000 upload route described in memory.
@@ -1216,23 +1216,23 @@ Run each in the background, because headless can hang. Look at both PNGs. Expect
 Convert the chosen one:
 
 ```bash
-sips -s format jpeg -s formatOptions 85 -z 1000 1600 "$SCRATCH/gol-tetra.png" --out 3d-game-of-life/screenshot1.jpg
+sips -s format jpeg -s formatOptions 85 -z 1000 1600 "$SCRATCH/gol-tetra.png" --out game-of-life/screenshot1.jpg
 ```
 
-Use the cube PNG instead if it looked better. Confirm the size with `sips -g pixelWidth -g pixelHeight 3d-game-of-life/screenshot1.jpg`; expected `1600` × `1000`.
+Use the cube PNG instead if it looked better. Confirm the size with `sips -g pixelWidth -g pixelHeight game-of-life/screenshot1.jpg`; expected `1600` × `1000`.
 
 - [ ] **Step 4: Regenerate the gallery**
 
 Run: `python3 build_gallery.py && git diff --stat index.html`
-Expected: the root `index.html` gains a `3d-game-of-life` card titled "3D Game of Life".
+Expected: the root `index.html` gains a `game-of-life` card titled "3D Game of Life".
 
 - [ ] **Step 5: Run the final tests and commit**
 
-Run: `node 3d-game-of-life/test.mjs`. Expected: `17 passed, 0 failed`.
+Run: `node game-of-life/test.mjs`. Expected: `17 passed, 0 failed`.
 
 ```bash
-git add 3d-game-of-life/screenshot1.jpg index.html
-git commit -m "3d-game-of-life: screenshot and gallery entry
+git add game-of-life/screenshot1.jpg index.html
+git commit -m "game-of-life: screenshot and gallery entry
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```

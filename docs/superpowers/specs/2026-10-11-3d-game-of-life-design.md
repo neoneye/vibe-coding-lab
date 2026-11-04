@@ -1,7 +1,7 @@
 # 3D Game of Life (cubes and tetrahedrons)
 
 Date: 2026-10-11
-Directory: `3d-game-of-life/`
+Directory: `game-of-life/`
 
 ## Goal
 
@@ -33,7 +33,7 @@ immediate-neighbour reach (a 3×3×3 voxel block), and 5×5 reaches two voxels o
 - One self-contained `index.html`, plus `test.mjs`, `search.mjs` and later
   `screenshot1.jpg`.
 - three.js 0.160.0 and OrbitControls come from jsdelivr through an import map,
-  as in `3d-voxel-cave`. There are no other dependencies.
+  as in `voxel-cave`. There are no other dependencies.
 - Pure logic lives in `<script id="shared-code">` with a `GolTests.run()`
   runner. `test.mjs` extracts that block by regex and runs it in Node. The
   block must not touch the DOM or three.js.

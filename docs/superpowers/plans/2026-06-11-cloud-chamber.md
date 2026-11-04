@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A standalone `2d-cloud-chamber/index.html` simulating a diffusion cloud chamber — alpha/beta/muon tracks with Bragg peaks, scattering, magnetic spirals, and delta rays, condensing into a fading droplet field, with placeable radioactive sources.
+**Goal:** A standalone `cloud-chamber/index.html` simulating a diffusion cloud chamber — alpha/beta/muon tracks with Bragg peaks, scattering, magnetic spirals, and delta rays, condensing into a fading droplet field, with placeable radioactive sources.
 
-**Architecture:** `ChamberEngine` (Float32Array droplet field, non-wrapping; per-type track integrator; ambient event spawner; sources) lives in `<script id="shared-code">` with `ChamberTests`; `test.mjs` runs them under Node (`2d-slime-mold` pattern). UI renders the field through a monochrome vapor palette into a 480→640 scaled canvas, with the slime mold's click-feedback language for sources.
+**Architecture:** `ChamberEngine` (Float32Array droplet field, non-wrapping; per-type track integrator; ambient event spawner; sources) lives in `<script id="shared-code">` with `ChamberTests`; `test.mjs` runs them under Node (`slime-mold` pattern). UI renders the field through a monochrome vapor palette into a 480→640 scaled canvas, with the slime mold's click-feedback language for sources.
 
 **Tech Stack:** Vanilla JS, Canvas 2D, Node ≥18, headless Chrome for screenshots.
 
@@ -15,12 +15,12 @@
 ### Task 1: Scaffold, test runner, seeded PRNG
 
 **Files:**
-- Create: `2d-cloud-chamber/test.mjs`
-- Create: `2d-cloud-chamber/index.html`
+- Create: `cloud-chamber/test.mjs`
+- Create: `cloud-chamber/index.html`
 
 - [ ] **Step 1: Write the test runner**
 
-`2d-cloud-chamber/test.mjs`:
+`cloud-chamber/test.mjs`:
 
 ```js
 // Runs the ChamberTests embedded in index.html's shared-code script block.
@@ -41,7 +41,7 @@ process.exit(ok ? 0 : 1);
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: FAIL — `ENOENT ... index.html`.
 
 - [ ] **Step 3: Create index.html skeleton with PRNG tests**
@@ -109,13 +109,13 @@ const ChamberTests = {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: 2× PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-cloud-chamber
+git add cloud-chamber
 git commit -m "cloud-chamber: scaffold with test runner and seeded PRNG"
 ```
 
@@ -124,7 +124,7 @@ git commit -m "cloud-chamber: scaffold with test runner and seeded PRNG"
 ### Task 2: Engine skeleton — field, deposit, sources
 
 **Files:**
-- Modify: `2d-cloud-chamber/index.html` (shared-code block only)
+- Modify: `cloud-chamber/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -159,7 +159,7 @@ Inside `ChamberTests.run()`, before the final `console.log`:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: `FAIL engine: class exists`, exit 1.
 
 - [ ] **Step 3: Implement the engine skeleton**
@@ -224,13 +224,13 @@ class ChamberEngine {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: all PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-cloud-chamber/index.html
+git add cloud-chamber/index.html
 git commit -m "cloud-chamber: engine skeleton with droplet field and sources"
 ```
 
@@ -239,7 +239,7 @@ git commit -m "cloud-chamber: engine skeleton with droplet field and sources"
 ### Task 3: Particle track integrator
 
 **Files:**
-- Modify: `2d-cloud-chamber/index.html` (shared-code block only)
+- Modify: `cloud-chamber/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -313,7 +313,7 @@ Inside `ChamberTests.run()`, after the engine-skeleton block:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: `FAIL fireParticle: implemented`, exit 1.
 
 - [ ] **Step 3: Implement PARTICLE_TYPES and fireParticle**
@@ -396,13 +396,13 @@ And add to `ChamberEngine` (after `_deposit`):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: all PASS, exit 0. If the beta-confinement margins fail, report the measured numbers — do not silently loosen thresholds.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-cloud-chamber/index.html
+git add cloud-chamber/index.html
 git commit -m "cloud-chamber: particle track integrator with Bragg peak, scattering, B-field, deltas"
 ```
 
@@ -411,7 +411,7 @@ git commit -m "cloud-chamber: particle track integrator with Bragg peak, scatter
 ### Task 4: step() — ambient events, sources, mist, field dynamics
 
 **Files:**
-- Modify: `2d-cloud-chamber/index.html` (shared-code block only)
+- Modify: `cloud-chamber/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -470,7 +470,7 @@ Inside `ChamberTests.run()`, after the particle-tracks block:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: `FAIL step: implemented`, exit 1.
 
 - [ ] **Step 3: Implement step() and _diffuseAndDecay()**
@@ -534,13 +534,13 @@ Add to `ChamberEngine` (after `fireParticle`):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: all PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-cloud-chamber/index.html
+git add cloud-chamber/index.html
 git commit -m "cloud-chamber: ambient events, sources, mist, field dynamics"
 ```
 
@@ -549,7 +549,7 @@ git commit -m "cloud-chamber: ambient events, sources, mist, field dynamics"
 ### Task 5: UI
 
 **Files:**
-- Modify: `2d-cloud-chamber/index.html` (style, body, UI script)
+- Modify: `cloud-chamber/index.html` (style, body, UI script)
 
 - [ ] **Step 1: Replace the `<style>` contents**
 
@@ -808,12 +808,12 @@ requestAnimationFrame(frame);
 
 - [ ] **Step 4: Run tests, then screenshot**
 
-Run: `cd 2d-cloud-chamber && node test.mjs` → `ALL TESTS PASSED`.
+Run: `cd cloud-chamber && node test.mjs` → `ALL TESTS PASSED`.
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --screenshot=/tmp/chamber-check.png --window-size=1060,900 --virtual-time-budget=8000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-cloud-chamber/index.html"
+  "file:///Users/neoneye/git/vibe-coding-lab/cloud-chamber/index.html"
 ```
 
 Read it: dark chamber with mist speckle, controls rendered. Ambient rates are low (~1.2 events/s combined), so few or no tracks may appear in the handful of headless frames — layout and mist are what this step verifies; track visuals come in Task 6.
@@ -821,7 +821,7 @@ Read it: dark chamber with mist speckle, controls rendered. Ambient rates are lo
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-cloud-chamber/index.html
+git add cloud-chamber/index.html
 git commit -m "cloud-chamber: UI with particle sliders, magnet, sources, vapor rendering"
 ```
 
@@ -830,10 +830,10 @@ git commit -m "cloud-chamber: UI with particle sliders, magnet, sources, vapor r
 ### Task 6: Visual tuning and gallery integration
 
 **Files:**
-- Create: `2d-cloud-chamber/screenshot1.png`
+- Create: `cloud-chamber/screenshot1.png`
 - Modify: `gallery.yaml`
 - Modify: `index.html` (repo root, regenerated)
-- Possibly modify: `2d-cloud-chamber/index.html` (visual constants only)
+- Possibly modify: `cloud-chamber/index.html` (visual constants only)
 
 - [ ] **Step 1: Warm-up screenshot with forced tracks**
 
@@ -859,9 +859,9 @@ With the TEMP block still in place (tuned), capture:
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
-  --screenshot=/Users/neoneye/git/vibe-coding-lab/2d-cloud-chamber/screenshot1.png \
+  --screenshot=/Users/neoneye/git/vibe-coding-lab/cloud-chamber/screenshot1.png \
   --window-size=1060,900 --virtual-time-budget=8000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-cloud-chamber/index.html"
+  "file:///Users/neoneye/git/vibe-coding-lab/cloud-chamber/index.html"
 ```
 
 Read it to confirm a captivating frame, then **delete the TEMP block** and re-run `node test.mjs`.
@@ -871,20 +871,20 @@ Read it to confirm a captivating frame, then **delete the TEMP block** and re-ru
 Append to `gallery.yaml`:
 
 ```yaml
-2d-cloud-chamber: 2D Cloud Chamber
+cloud-chamber: 2D Cloud Chamber
 ```
 
 Run: `cd /Users/neoneye/git/vibe-coding-lab && python3 build_gallery.py`
-Expected: 33 entries with a `2d-cloud-chamber` card.
+Expected: 33 entries with a `cloud-chamber` card.
 
 - [ ] **Step 4: Final test run**
 
-Run: `cd 2d-cloud-chamber && node test.mjs`
+Run: `cd cloud-chamber && node test.mjs`
 Expected: `ALL TESTS PASSED`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-cloud-chamber gallery.yaml index.html
+git add cloud-chamber gallery.yaml index.html
 git commit -m "cloud-chamber: visual tuning and gallery integration"
 ```

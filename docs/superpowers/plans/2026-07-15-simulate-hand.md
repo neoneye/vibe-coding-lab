@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Single page `simulate-hand/index.html`; only external dependency is the three.js CDN import map (repo convention, see `3d-shadows/index.html`).
+- Single page `simulate-hand/index.html`; only external dependency is the three.js CDN import map (repo convention, see `shadows/index.html`).
 - All pure logic in **one classic `<script id="shared-code">`** — no `import`/`export`/`type="module"` inside it, so `test.mjs` can run it via `new Function`. `function` declarations and `const` at top level only.
 - Tests registered with the in-file **`HandTests.add(name, fn)`** harness; run via **`node test.mjs`** which extracts the block and calls `HandTests.run()`.
 - Units: **1 unit = 1 cm**, y-up, ground plane at y=0. Angles in **radians**.
@@ -80,7 +80,7 @@ const ok = new Function(`${m[1]}; return HandTests.run();`)();
 process.exit(ok ? 0 : 1);
 ```
 
-- [ ] **Step 2: Create `index.html`** with HTML shell, CSS stub, and the shared-code block containing the harness (copy the `GeoTests` IIFE pattern from `3d-geo-guess/index.html` renamed `HandTests`, with `add/run/assert/assertApprox`), math helpers, and data tables:
+- [ ] **Step 2: Create `index.html`** with HTML shell, CSS stub, and the shared-code block containing the harness (copy the `GeoTests` IIFE pattern from `geo-guess/index.html` renamed `HandTests`, with `add/run/assert/assertApprox`), math helpers, and data tables:
 
 ```html
 <!DOCTYPE html>

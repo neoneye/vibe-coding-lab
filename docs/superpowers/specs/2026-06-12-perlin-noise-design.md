@@ -1,7 +1,7 @@
 # 2D Perlin Noise — Design
 
 **Date:** 2026-06-12
-**Project directory:** `2d-perlin-noise/`
+**Project directory:** `perlin-noise/`
 **Status:** Approved by owner
 **Origin:** Faithful port of the owner's 2007 C++ brick
 `/Users/neoneye/git/opcoders_toolbox/CONTENT/TBEngine/brick_lib/gfx_perlin.cpp`

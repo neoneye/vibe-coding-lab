@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a Food/Drag/Slime tool palette to `2d-slime-mold/` with clear add/remove feedback, brush-circle dragging of trail/agents/food, and paint-to-spawn slime.
+**Goal:** Add a Food/Drag/Slime tool palette to `slime-mold/` with clear add/remove feedback, brush-circle dragging of trail/agents/food, and paint-to-spawn slime.
 
 **Architecture:** Two new tested engine methods (`addAgents`, `translateRegion`) go in the shared-code block; the UI script gains a tool system (pointer events, cursor state, transient effects list, brush rendering) and the frame loop is restructured to always render so feedback works while paused.
 
@@ -15,7 +15,7 @@
 ### Task 1: Engine — addAgents
 
 **Files:**
-- Modify: `2d-slime-mold/index.html` (shared-code block only)
+- Modify: `slime-mold/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -44,7 +44,7 @@ Inside `SlimeTests.run()`, before the final `console.log`:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: `FAIL addAgents: implemented`, exit 1.
 
 - [ ] **Step 3: Implement addAgents**
@@ -77,13 +77,13 @@ Add to `SlimeEngine` (after `clearFood`):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: all PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-slime-mold/index.html
+git add slime-mold/index.html
 git commit -m "slime-mold: addAgents engine method for slime painting"
 ```
 
@@ -92,7 +92,7 @@ git commit -m "slime-mold: addAgents engine method for slime painting"
 ### Task 2: Engine — translateRegion
 
 **Files:**
-- Modify: `2d-slime-mold/index.html` (shared-code block only)
+- Modify: `slime-mold/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -146,7 +146,7 @@ Inside `SlimeTests.run()`, after the addAgents block:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: `FAIL translateRegion: implemented`, exit 1.
 
 - [ ] **Step 3: Implement translateRegion**
@@ -200,13 +200,13 @@ Add to `SlimeEngine` (after `addAgents`):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: all PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-slime-mold/index.html
+git add slime-mold/index.html
 git commit -m "slime-mold: translateRegion engine method for the drag tool"
 ```
 
@@ -215,7 +215,7 @@ git commit -m "slime-mold: translateRegion engine method for the drag tool"
 ### Task 3: UI — tool palette, pointer system, feedback rendering
 
 **Files:**
-- Modify: `2d-slime-mold/index.html` (style, body, UI script)
+- Modify: `slime-mold/index.html` (style, body, UI script)
 
 - [ ] **Step 1: Add tool-button CSS**
 
@@ -443,13 +443,13 @@ function frame() {
 
 - [ ] **Step 6: Run tests**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: `ALL TESTS PASSED` (UI changes must not touch shared-code).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add 2d-slime-mold/index.html
+git add slime-mold/index.html
 git commit -m "slime-mold: tool palette with food feedback, drag and slime brushes"
 ```
 
@@ -458,14 +458,14 @@ git commit -m "slime-mold: tool palette with food feedback, drag and slime brush
 ### Task 4: Visual verification
 
 **Files:**
-- Possibly modify: `2d-slime-mold/index.html` (only if defects found)
+- Possibly modify: `slime-mold/index.html` (only if defects found)
 
 - [ ] **Step 1: Layout screenshot**
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --screenshot=/tmp/slime-tools.png --window-size=1060,900 --virtual-time-budget=8000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-slime-mold/index.html"
+  "file:///Users/neoneye/git/vibe-coding-lab/slime-mold/index.html"
 ```
 
 Read it: Tool fieldset with Food active (highlighted), Brush size slider, hint text present, simulation running.
@@ -491,6 +491,6 @@ Screenshot again with the same command. Verify: food dot+ring at upper-left, exp
 If Step 2 revealed defects, fix them, re-verify, then:
 
 ```bash
-git add 2d-slime-mold/index.html
+git add slime-mold/index.html
 git commit -m "slime-mold: visual fixes from tool verification"
 ```

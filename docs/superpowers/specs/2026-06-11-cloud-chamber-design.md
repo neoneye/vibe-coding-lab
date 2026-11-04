@@ -1,7 +1,7 @@
 # 2D Cloud Chamber — Design
 
 **Date:** 2026-06-11
-**Project directory:** `2d-cloud-chamber/`
+**Project directory:** `cloud-chamber/`
 **Status:** Approved by owner
 
 ## Purpose
@@ -16,7 +16,7 @@ and click to place radioactive specks that spray particles.
 
 - Single self-contained `index.html`, no dependencies.
 - Engine in `<script id="shared-code">`; `test.mjs` extracts and runs the
-  embedded `ChamberTests.run()` under Node (same as `2d-slime-mold/`).
+  embedded `ChamberTests.run()` under Node (same as `slime-mold/`).
 - Seeded mulberry32 PRNG injected for deterministic tests.
 - `screenshot1.png` + `gallery.yaml` + `build_gallery.py`; commits to `main`.
 

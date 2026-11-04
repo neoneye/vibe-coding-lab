@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the fake particle demo in `2d-tesla-valve/` with a real lattice-Boltzmann fluid simulation of the authentic Tesla valve geometry, shown as two stacked canvases (forward vs reverse pumping) with a live, emergent diodicity readout.
+**Goal:** Replace the fake particle demo in `tesla-valve/` with a real lattice-Boltzmann fluid simulation of the authentic Tesla valve geometry, shown as two stacked canvases (forward vs reverse pumping) with a live, emergent diodicity readout.
 
 **Architecture:** One self-contained `index.html`. A DOM-free `<script id="shared-code">` block holds geometry builder, D2Q9 LBM solver, tracer advection, meters, and tests (`TeslaTests`); `test.mjs` extracts and runs it in Node. A second DOM script builds two LBM instances over the same wall mask, pumped in opposite directions, and renders field shading + tracer particles.
 
@@ -26,8 +26,8 @@
 Replace the old page wholesale with a new shell: HTML/CSS layout, empty-ish shared-code block containing constants, `makeRng`, an `assert` helper, and a registration-style `TeslaTests` harness. `test.mjs` stays byte-identical.
 
 **Files:**
-- Rewrite: `2d-tesla-valve/index.html`
-- Keep unchanged: `2d-tesla-valve/test.mjs`
+- Rewrite: `tesla-valve/index.html`
+- Keep unchanged: `tesla-valve/test.mjs`
 
 **Interfaces:**
 - Produces: constants `GRID_W=320`, `GRID_H=96`, `TAU`, `DEFAULT_FORCE`, `PROBE_X=8`, `DIODICITY_MIN`; `makeRng(seed) -> () => float`; `assert(cond, msg)`; `TeslaTests.test(name, fn)` and `TeslaTests.run() -> bool`. Later tasks append code to the shared-code block and register tests via `TeslaTests.test(...)` **above** the final `TeslaTests.run` definition order requirement: registration calls may appear anywhere after the harness definition; `run()` executes them all.
@@ -223,13 +223,13 @@ TeslaTests.test("harness sanity", () => {
 
 - [ ] **Step 2: Run tests**
 
-Run: `cd /Users/neoneye/git/vibe-coding-lab/2d-tesla-valve && node test.mjs`
+Run: `cd /Users/neoneye/git/vibe-coding-lab/tesla-valve && node test.mjs`
 Expected: `TeslaTests: 1 passed, 0 failed`, exit 0.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add 2d-tesla-valve/index.html
+git add tesla-valve/index.html
 git commit -m "tesla-valve: replace old demo with LBM rework skeleton"
 ```
 
@@ -240,7 +240,7 @@ git commit -m "tesla-valve: replace old demo with LBM rework skeleton"
 Parametric builder producing a `Uint8Array` solid mask: a straight duct spanning the full width (periodic in x) plus 4 loop branches, each traced the way reverse flow travels it — peel off shallowly up-left, over the top, down the left side, re-enter the duct pointing downstream (+x).
 
 **Files:**
-- Modify: `2d-tesla-valve/index.html` (append inside `shared-code`, before the DOM script)
+- Modify: `tesla-valve/index.html` (append inside `shared-code`, before the DOM script)
 
 **Interfaces:**
 - Produces: `carveCapsule(solid, W, H, ax, ay, bx, by, r)` (mutates mask, wraps x, never carves rows 0 / H-1); `buildValveMask(opts?) -> { solid: Uint8Array, width, height, opts }` where `solid[y*width+x]` is 1 = wall, 0 = fluid; `fluidComponents(solid, W, H) -> { count, label: Int32Array }` (4-connectivity, x-periodic).
@@ -391,7 +391,7 @@ Expected: `TeslaTests: 7 passed, 0 failed`.
 
 - [ ] **Step 5: Eyeball the mask in ASCII**
 
-Run (from `2d-tesla-valve/`):
+Run (from `tesla-valve/`):
 
 ```bash
 node -e '
@@ -412,7 +412,7 @@ Expected: a horizontal channel of `.` near the bottom with four loop shapes risi
 - [ ] **Step 6: Commit**
 
 ```bash
-git add 2d-tesla-valve/index.html
+git add tesla-valve/index.html
 git commit -m "tesla-valve: parametric valve wall mask with loop branches"
 ```
 
@@ -423,7 +423,7 @@ git commit -m "tesla-valve: parametric valve wall mask with loop branches"
 BGK collision, velocity-shift (Shan–Chen) body forcing, halfway bounce-back at walls, periodic in x. Two Float32 distribution buffers swapped each step; per-cell `rho/ux/uy` kept for rendering, advection, and measurement.
 
 **Files:**
-- Modify: `2d-tesla-valve/index.html` (append inside `shared-code`)
+- Modify: `tesla-valve/index.html` (append inside `shared-code`)
 
 **Interfaces:**
 - Consumes: `buildValveMask`, constants from earlier tasks.
@@ -605,7 +605,7 @@ Expected: `TeslaTests: 11 passed, 0 failed`. Runtime up to ~30 s (the solver tes
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-tesla-valve/index.html
+git add tesla-valve/index.html
 git commit -m "tesla-valve: D2Q9 LBM solver with bounce-back and body force"
 ```
 
@@ -624,7 +624,7 @@ flow is aimed by each descending leg straight into a bucket mouth, curls around
 inside, and is thrown back against the oncoming stream. Verified: single connected
 fluid region, all Task-2/Task-3 test predicates, stability at 1.5× pump for 11k steps.
 
-Apply ALL of the following to `2d-tesla-valve/index.html` (and `tune.mjs` where noted):
+Apply ALL of the following to `tesla-valve/index.html` (and `tune.mjs` where noted):
 
 **A. Constants** (in `shared-code`):
 
@@ -718,8 +718,8 @@ is force 4e-5 / tau 0.51.
 Add `tune.mjs` (a keeper, like the repo's other converter/tool scripts) that sweeps pump force and tau, printing forward/reverse flow and the emergent diodicity. Pick defaults, then lock in the headline test.
 
 **Files:**
-- Create: `2d-tesla-valve/tune.mjs`
-- Modify: `2d-tesla-valve/index.html` (constants + one test)
+- Create: `tesla-valve/tune.mjs`
+- Modify: `tesla-valve/index.html` (constants + one test)
 
 **Interfaces:**
 - Consumes: `buildValveMask`, `LBM`, `PROBE_X` via shared-code extraction.
@@ -805,7 +805,7 @@ Expected: `TeslaTests: 12 passed, 0 failed` (total runtime roughly 30–90 s; th
 - [ ] **Step 6: Commit**
 
 ```bash
-git add 2d-tesla-valve/index.html 2d-tesla-valve/tune.mjs
+git add tesla-valve/index.html tesla-valve/tune.mjs
 git commit -m "tesla-valve: tuning sweep and emergent-diodicity test"
 ```
 
@@ -816,7 +816,7 @@ git commit -m "tesla-valve: tuning sweep and emergent-diodicity test"
 Tracers are massless particles advected through the LBM velocity field (bilinear-sampled, scaled for visibility); they respawn on wall contact or old age. `Meter` is an exponential moving average for the readouts.
 
 **Files:**
-- Modify: `2d-tesla-valve/index.html` (append inside `shared-code`)
+- Modify: `tesla-valve/index.html` (append inside `shared-code`)
 
 **Interfaces:**
 - Consumes: `LBM` fields `W, H, solid, ux, uy`; `makeRng`.
@@ -963,7 +963,7 @@ Expected: `TeslaTests: 15 passed, 0 failed`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-tesla-valve/index.html
+git add tesla-valve/index.html
 git commit -m "tesla-valve: field-advected tracer particles and flow meter"
 ```
 
@@ -974,7 +974,7 @@ git commit -m "tesla-valve: field-advected tracer particles and flow meter"
 Two panes over one geometry, pumped opposite ways. Field shading at grid resolution scaled up with smoothing; tracers on top; adaptive LBM steps per frame; synchronous `?prewarm=N` first paint for headless screenshots.
 
 **Files:**
-- Modify: `2d-tesla-valve/index.html` (fill the second `<script>` block)
+- Modify: `tesla-valve/index.html` (fill the second `<script>` block)
 
 **Interfaces:**
 - Consumes: everything from `shared-code`; canvas ids `cfwd`, `crev`; control ids `pump`, `pumpVal`, `tracers`, `tracersVal`, `pauseBtn`, `resetBtn`; readout ids `qf`, `qr`, `verdict`.
@@ -1150,19 +1150,19 @@ Expected: `TeslaTests: 15 passed, 0 failed` (DOM script is not extracted; this j
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu \
   --screenshot=/private/tmp/claude-501/-Users-neoneye-git-vibe-coding-lab/2d5906f3-8799-4e09-9c84-96594c106c40/scratchpad/tesla_smoke.png \
   --window-size=1400,1000 --virtual-time-budget=6000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-tesla-valve/index.html?prewarm=3000"
+  "file:///Users/neoneye/git/vibe-coding-lab/tesla-valve/index.html?prewarm=3000"
 ```
 
 Read the PNG and verify: both canvases show the valve walls with a bright flowing duct; the FORWARD pane's duct visibly brighter (faster) than REVERSE; verdict text shows a ratio > 1 (e.g. "≈ 1.8× easier forward"); flow readouts non-zero. If canvases are blank, the synchronous `renderAll()` after prewarm did not run — check the `?prewarm` parsing before blaming rAF (per repo memory, rAF does not advance under `--virtual-time-budget`).
 
 - [ ] **Step 4: Interactive sanity check (best-effort)**
 
-Open the page normally (`open 2d-tesla-valve/index.html`) and let it run ~20 s: verify the verdict appears after warm-up, Pause/Reset/sliders work, and animation is smooth. If working headless-only, capture a second screenshot with `?prewarm=6000` and confirm the ratio is stable versus Step 3.
+Open the page normally (`open tesla-valve/index.html`) and let it run ~20 s: verify the verdict appears after warm-up, Pause/Reset/sliders work, and animation is smooth. If working headless-only, capture a second screenshot with `?prewarm=6000` and confirm the ratio is stable versus Step 3.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-tesla-valve/index.html
+git add tesla-valve/index.html
 git commit -m "tesla-valve: dual-pane rendering, controls, live diodicity readout"
 ```
 
@@ -1171,7 +1171,7 @@ git commit -m "tesla-valve: dual-pane rendering, controls, live diodicity readou
 ### Task 7: Screenshot, final verification, wrap-up
 
 **Files:**
-- Replace: `2d-tesla-valve/screenshot1.png`
+- Replace: `tesla-valve/screenshot1.png`
 
 - [ ] **Step 1: Full test run**
 
@@ -1182,9 +1182,9 @@ Expected: all tests pass, exit 0. Record the pass count.
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu \
-  --screenshot=/Users/neoneye/git/vibe-coding-lab/2d-tesla-valve/screenshot1.png \
+  --screenshot=/Users/neoneye/git/vibe-coding-lab/tesla-valve/screenshot1.png \
   --window-size=1400,1000 --virtual-time-budget=6000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-tesla-valve/index.html?prewarm=4000"
+  "file:///Users/neoneye/git/vibe-coding-lab/tesla-valve/index.html?prewarm=4000"
 ```
 
 Read the PNG to confirm it shows the finished page (both panes, ratio readout). The gallery (`index.html` at repo root) references this filename directly — no gallery edits needed.
@@ -1192,7 +1192,7 @@ Read the PNG to confirm it shows the finished page (both panes, ratio readout). 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add 2d-tesla-valve/screenshot1.png
+git add tesla-valve/screenshot1.png
 git commit -m "tesla-valve: refresh gallery screenshot"
 ```
 

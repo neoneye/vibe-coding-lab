@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A standalone `2d-slime-mold/index.html` running a Physarum agent simulation — emergent trail networks, click-to-feed food sources, presets, palettes — with a deterministic Node-tested engine.
+**Goal:** A standalone `slime-mold/index.html` running a Physarum agent simulation — emergent trail networks, click-to-feed food sources, presets, palettes — with a deterministic Node-tested engine.
 
-**Architecture:** `SlimeEngine` (typed-array agents + Float32Array toroidal trail grid) lives in `<script id="shared-code">` together with `mulberry32`, `PRESETS`, and `SlimeTests`; `test.mjs` extracts the block via regex and runs `SlimeTests.run()` under Node (same as `game-snake/` and `2d-monte-carlo-pi/`). UI is a separate `<script>` rendering the trail through a palette LUT into a 320×320 ImageData scaled to a 640×640 display canvas.
+**Architecture:** `SlimeEngine` (typed-array agents + Float32Array toroidal trail grid) lives in `<script id="shared-code">` together with `mulberry32`, `PRESETS`, and `SlimeTests`; `test.mjs` extracts the block via regex and runs `SlimeTests.run()` under Node (same as `game-snake/` and `monte-carlo-pi/`). UI is a separate `<script>` rendering the trail through a palette LUT into a 320×320 ImageData scaled to a 640×640 display canvas.
 
 **Tech Stack:** Vanilla JS, Canvas 2D, Node ≥18 for tests, headless Chrome for screenshots.
 
@@ -15,12 +15,12 @@
 ### Task 1: Scaffold, test runner, seeded PRNG
 
 **Files:**
-- Create: `2d-slime-mold/test.mjs`
-- Create: `2d-slime-mold/index.html`
+- Create: `slime-mold/test.mjs`
+- Create: `slime-mold/index.html`
 
 - [ ] **Step 1: Write the test runner**
 
-`2d-slime-mold/test.mjs`:
+`slime-mold/test.mjs`:
 
 ```js
 // Runs the SlimeTests embedded in index.html's shared-code script block.
@@ -41,7 +41,7 @@ process.exit(ok ? 0 : 1);
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: FAIL — `ENOENT ... index.html`.
 
 - [ ] **Step 3: Create index.html skeleton with PRNG tests**
@@ -109,13 +109,13 @@ const SlimeTests = {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: 2× PASS, `ALL TESTS PASSED`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-slime-mold
+git add slime-mold
 git commit -m "slime-mold: scaffold with test runner and seeded PRNG"
 ```
 
@@ -124,7 +124,7 @@ git commit -m "slime-mold: scaffold with test runner and seeded PRNG"
 ### Task 2: Engine skeleton — construction, agents, reset
 
 **Files:**
-- Modify: `2d-slime-mold/index.html` (shared-code block only)
+- Modify: `slime-mold/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -161,7 +161,7 @@ Inside `SlimeTests.run()`, before the final `console.log`:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: `FAIL engine: class exists`, exit 1.
 
 - [ ] **Step 3: Implement PRESETS, TRAIL_CLAMP, and the engine skeleton**
@@ -231,13 +231,13 @@ class SlimeEngine {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: all PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-slime-mold/index.html
+git add slime-mold/index.html
 git commit -m "slime-mold: engine skeleton with agents, presets, reset"
 ```
 
@@ -246,7 +246,7 @@ git commit -m "slime-mold: engine skeleton with agents, presets, reset"
 ### Task 3: Movement, deposit, diffusion, decay, clamp
 
 **Files:**
-- Modify: `2d-slime-mold/index.html` (shared-code block only)
+- Modify: `slime-mold/index.html` (shared-code block only)
 
 In this task `step()` ignores sensing (always moves straight); sensing arrives in Task 4.
 
@@ -309,7 +309,7 @@ Inside `SlimeTests.run()`, after the engine-construction block:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: `FAIL step: implemented`, exit 1.
 
 - [ ] **Step 3: Implement movement and the diffusion pass**
@@ -364,13 +364,13 @@ Add methods to `SlimeEngine` (sensing comes in Task 4; `_stampFood` in Task 5 �
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: all PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-slime-mold/index.html
+git add slime-mold/index.html
 git commit -m "slime-mold: agent movement, deposit, toroidal diffusion and decay"
 ```
 
@@ -379,7 +379,7 @@ git commit -m "slime-mold: agent movement, deposit, toroidal diffusion and decay
 ### Task 4: Sensing and steering
 
 **Files:**
-- Modify: `2d-slime-mold/index.html` (shared-code block only)
+- Modify: `slime-mold/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing steering test**
 
@@ -418,7 +418,7 @@ Inside `SlimeTests.run()`, after the movement block:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: `FAIL sensing: ...` (without sensing both runs behave identically), exit 1.
 
 - [ ] **Step 3: Implement sensing**
@@ -468,13 +468,13 @@ with:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: all PASS — the sensing run's mean distance should be well under 60% of control.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-slime-mold/index.html
+git add slime-mold/index.html
 git commit -m "slime-mold: three-sensor steering toward trails"
 ```
 
@@ -483,7 +483,7 @@ git commit -m "slime-mold: three-sensor steering toward trails"
 ### Task 5: Food sources and determinism
 
 **Files:**
-- Modify: `2d-slime-mold/index.html` (shared-code block only)
+- Modify: `slime-mold/index.html` (shared-code block only)
 
 - [ ] **Step 1: Add failing tests**
 
@@ -528,7 +528,7 @@ Inside `SlimeTests.run()`, after the sensing block:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: `FAIL food: implemented`, exit 1.
 
 - [ ] **Step 3: Implement food**
@@ -579,13 +579,13 @@ And in `step()`, insert `this._stampFood();` between the agent loop and `this._d
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: all PASS, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-slime-mold/index.html
+git add slime-mold/index.html
 git commit -m "slime-mold: food sources with pheromone stamping, determinism test"
 ```
 
@@ -594,7 +594,7 @@ git commit -m "slime-mold: food sources with pheromone stamping, determinism tes
 ### Task 6: UI — rendering, controls, interaction
 
 **Files:**
-- Modify: `2d-slime-mold/index.html` (styles, body, UI script)
+- Modify: `slime-mold/index.html` (styles, body, UI script)
 
 No automated test; verification is the screenshot in Step 4.
 
@@ -848,12 +848,12 @@ requestAnimationFrame(frame);
 
 - [ ] **Step 4: Run tests, then verify visually in headless Chrome**
 
-Run: `cd 2d-slime-mold && node test.mjs` → `ALL TESTS PASSED`.
+Run: `cd slime-mold && node test.mjs` → `ALL TESTS PASSED`.
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
   --screenshot=/tmp/slime-check.png --window-size=1060,820 --virtual-time-budget=20000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-slime-mold/index.html"
+  "file:///Users/neoneye/git/vibe-coding-lab/slime-mold/index.html"
 ```
 
 Read `/tmp/slime-check.png`: trail structure should be visible (amber filaments), controls rendered, readout counting steps. Headless captures run few frames, so patterns will be embryonic — verify structure exists, not maturity. If the canvas is solid black or solid white, debug the palette/clamp mapping before committing.
@@ -861,7 +861,7 @@ Read `/tmp/slime-check.png`: trail structure should be visible (amber filaments)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-slime-mold/index.html
+git add slime-mold/index.html
 git commit -m "slime-mold: interactive UI with palettes, presets, click-to-feed"
 ```
 
@@ -870,10 +870,10 @@ git commit -m "slime-mold: interactive UI with palettes, presets, click-to-feed"
 ### Task 7: Visual tuning pass and gallery integration
 
 **Files:**
-- Create: `2d-slime-mold/screenshot1.png`
+- Create: `slime-mold/screenshot1.png`
 - Modify: `gallery.yaml`
 - Modify: `index.html` (repo root, regenerated)
-- Possibly modify: `2d-slime-mold/index.html` (PRESETS values only)
+- Possibly modify: `slime-mold/index.html` (PRESETS values only)
 
 - [ ] **Step 1: Let the simulation mature, screenshot each preset**
 
@@ -885,9 +885,9 @@ With the (temporary) warm-up in place for a mature pattern:
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
-  --screenshot=/Users/neoneye/git/vibe-coding-lab/2d-slime-mold/screenshot1.png \
+  --screenshot=/Users/neoneye/git/vibe-coding-lab/slime-mold/screenshot1.png \
   --window-size=1060,860 --virtual-time-budget=20000 \
-  "file:///Users/neoneye/git/vibe-coding-lab/2d-slime-mold/index.html"
+  "file:///Users/neoneye/git/vibe-coding-lab/slime-mold/index.html"
 ```
 
 Read the file: it must show developed amber filament networks. Then remove the warm-up line and re-run `node test.mjs`.
@@ -897,20 +897,20 @@ Read the file: it must show developed amber filament networks. Then remove the w
 Append to `gallery.yaml`:
 
 ```yaml
-2d-slime-mold: 2D Slime Mold
+slime-mold: 2D Slime Mold
 ```
 
 Run: `cd /Users/neoneye/git/vibe-coding-lab && python3 build_gallery.py`
-Expected: 32 entries, `2d-slime-mold` card present.
+Expected: 32 entries, `slime-mold` card present.
 
 - [ ] **Step 4: Final test run**
 
-Run: `cd 2d-slime-mold && node test.mjs`
+Run: `cd slime-mold && node test.mjs`
 Expected: `ALL TESTS PASSED`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 2d-slime-mold gallery.yaml index.html
+git add slime-mold gallery.yaml index.html
 git commit -m "slime-mold: visual tuning and gallery integration"
 ```

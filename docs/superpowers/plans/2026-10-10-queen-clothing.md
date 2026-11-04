@@ -23,7 +23,7 @@
 
 ## Global Constraints
 
-- The project is one self-contained `3d-queen-clothing/index.html`. The only external dependency is three.js 0.170.0 from `https://cdn.jsdelivr.net/npm/three@0.170.0/`. All textures are procedural canvases.
+- The project is one self-contained `queen-clothing/index.html`. The only external dependency is three.js 0.170.0 from `https://cdn.jsdelivr.net/npm/three@0.170.0/`. All textures are procedural canvases.
 - Pure logic lives in `<script id="shared-code">`, with no three.js and no DOM. `test.mjs` extracts it with a regex and runs `QueenTests.run()`.
 - Units are metres. y is up, the floor is y = 0 and the queen faces +z. θ = 0 is the front and +x is the queen's left.
 - Pixel ratio is `Math.min(devicePixelRatio, 2)`, and the backing store is sized by `renderer.setSize`.
@@ -43,8 +43,8 @@
 ### Task 1: Scaffold, parameter model, morph, hash and dice
 
 **Files:**
-- Create: `3d-queen-clothing/index.html` (the shared-code block only, for now)
-- Create: `3d-queen-clothing/test.mjs`
+- Create: `queen-clothing/index.html` (the shared-code block only, for now)
+- Create: `queen-clothing/test.mjs`
 
 **Interfaces:**
 - Produces globals:
@@ -70,7 +70,7 @@
   - `decodeHash(str) → { era, params }`
   - `randomCommission(rng, 'within'|'wild', eraIndex, cur?) → params`
 
-- [ ] **Step 1: Write the harness, the model and the failing tests.** Create `3d-queen-clothing/test.mjs`:
+- [ ] **Step 1: Write the harness, the model and the failing tests.** Create `queen-clothing/test.mjs`:
 
 ```js
 // Runs the QueenTests embedded in index.html's shared-code script block.
@@ -89,7 +89,7 @@ const ok = new Function(`${m[1]}; return QueenTests.run();`)();
 process.exit(ok ? 0 : 1);
 ```
 
-Then create `3d-queen-clothing/index.html`. For now it holds the tests only, so they fail with `QC.SCHEMA is undefined`:
+Then create `queen-clothing/index.html`. For now it holds the tests only, so they fail with `QC.SCHEMA is undefined`:
 
 ```html
 <!DOCTYPE html>
@@ -216,7 +216,7 @@ QueenTests.add('random commissions are deterministic and valid', () => {
 
 - [ ] **Step 2: Run the tests and confirm they fail.**
 
-Run: `node 3d-queen-clothing/test.mjs`
+Run: `node queen-clothing/test.mjs`
 Expected: `FAIL schema is well formed: … not iterable` (or similar), and `0 passed, 9 failed`.
 
 - [ ] **Step 3: Implement part 1 of the model.** Insert this block right after `const QC = {};` and before the part 1 tests:
@@ -510,14 +510,14 @@ Object.assign(QC, (() => {
 
 - [ ] **Step 4: Run the tests and confirm they pass.**
 
-Run: `node 3d-queen-clothing/test.mjs`
+Run: `node queen-clothing/test.mjs`
 Expected: `9 passed, 0 failed`. If "era presets … off grid" fails, fix the preset literal, not `snap`.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add 3d-queen-clothing/index.html 3d-queen-clothing/test.mjs
-git commit -m "3d-queen-clothing: parameter model, six eras, morph, share hash and dice
+git add queen-clothing/index.html queen-clothing/test.mjs
+git commit -m "queen-clothing: parameter model, six eras, morph, share hash and dice
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -527,7 +527,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 2: Figure, silhouette, grid builders, underpinnings, swing and poses
 
 **Files:**
-- Modify: `3d-queen-clothing/index.html` (shared-code block: add part 2 and its tests)
+- Modify: `queen-clothing/index.html` (shared-code block: add part 2 and its tests)
 
 **Interfaces:**
 - Consumes: `QC.clamp`, `lerp`, `smoothstep`, `TAU`, `paramsForEra`, `paramsAtYear`, `randomCommission` and `mulberry32` from Task 1.
@@ -738,7 +738,7 @@ QueenTests.add('wild commissions never break the geometry', () => {
 
 - [ ] **Step 2: Run the tests and confirm they fail.**
 
-Run: `node 3d-queen-clothing/test.mjs`
+Run: `node queen-clothing/test.mjs`
 Expected: the 9 part 1 tests pass, and the 19 new tests fail with `QC.figure is not a function` or similar.
 
 - [ ] **Step 3: Implement part 2.** Insert it after the part 1 block (`})());`) and before the part 1 tests:
@@ -1022,7 +1022,7 @@ Object.assign(QC, (() => {
 
 - [ ] **Step 4: Run the tests and confirm they pass.**
 
-Run: `node 3d-queen-clothing/test.mjs`
+Run: `node queen-clothing/test.mjs`
 Expected: `28 passed, 0 failed`.
 
 If a silhouette test fails, adjust the formula constants in part 2. Do not change the presets or the test thresholds; those come from the spec. The exception is "front profile never narrows". If it fails at the drum or the pannier joint, check that `skirtProfile` stays monotone: `hem = max(hemRadius, shelf)`.
@@ -1030,8 +1030,8 @@ If a silhouette test fails, adjust the formula constants in part 2. Do not chang
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add 3d-queen-clothing/index.html
-git commit -m "3d-queen-clothing: figure, silhouette, mesh builders, underpinnings, swing and poses
+git add queen-clothing/index.html
+git commit -m "queen-clothing: figure, silhouette, mesh builders, underpinnings, swing and poses
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1041,7 +1041,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 3: Page shell, studio, queen body, gown core and parameter panel
 
 **Files:**
-- Modify: `3d-queen-clothing/index.html` (add the markup, CSS and render module; the shared-code block is unchanged)
+- Modify: `queen-clothing/index.html` (add the markup, CSS and render module; the shared-code block is unchanged)
 
 **Interfaces:**
 - Consumes: everything on `QC` from Tasks 1–2.
@@ -1087,7 +1087,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `?warm=<seconds>`
   - a `#hash`
 
-- [ ] **Step 1: Add the markup and CSS.** In `3d-queen-clothing/index.html`:
+- [ ] **Step 1: Add the markup and CSS.** In `queen-clothing/index.html`:
 
   - Replace `<title>Queen Clothing Simulator</title>\n</head>\n<body>` with the block below.
   - Leave the `shared-code` script exactly as it is.
@@ -1793,13 +1793,13 @@ requestAnimationFrame(frame);
 
 - [ ] **Step 3: Run the unit tests again.** The shared block is unchanged.
 
-Run: `node 3d-queen-clothing/test.mjs`
+Run: `node queen-clothing/test.mjs`
 Expected: `28 passed, 0 failed`.
 
 - [ ] **Step 4: Screenshot all six eras headless.** Start the static server with `preview_start { name: "static" }`. It serves the repo on port 8765 through `.claude/launch.json`. Then run:
 
 ```bash
-for e in 0 1 2 3 4 5; do "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1400,900 --virtual-time-budget=12000 --screenshot="$SCRATCH/core-era$e.png" "http://127.0.0.1:8765/3d-queen-clothing/index.html?era=$e&motion=still"; done
+for e in 0 1 2 3 4 5; do "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1400,900 --virtual-time-budget=12000 --screenshot="$SCRATCH/core-era$e.png" "http://127.0.0.1:8765/queen-clothing/index.html?era=$e&motion=still"; done
 ```
 
 `$SCRATCH` is the session scratchpad. Look at each PNG. Expected for every era:
@@ -1819,7 +1819,7 @@ Expected:
 - The eyes and lips sit on the front of the head and are not wrapped round the side. If they are, `cx = W * 0.25` in `faceTex` is wrong for this three.js version; try `W * 0.75`.
 - The Rococo forepart shows through the front opening, and the stomacher panel is in the forepart fabric.
 
-- [ ] **Step 6: Check for leaks and measure the rebuild time** (Review Focus 4). In the Browser pane, on `http://127.0.0.1:8765/3d-queen-clothing/index.html?era=1`, run with `javascript_tool`:
+- [ ] **Step 6: Check for leaks and measure the rebuild time** (Review Focus 4). In the Browser pane, on `http://127.0.0.1:8765/queen-clothing/index.html?era=1`, run with `javascript_tool`:
 
 ```js
 const q = __qc; q.tick(0); const m0 = { ...q.renderer.info.memory };
@@ -1837,8 +1837,8 @@ If `ms` is larger, lower the skirt grid to 128×56 and the ruff to `N * 6` colum
 - [ ] **Step 7: Commit.**
 
 ```bash
-git add 3d-queen-clothing/index.html
-git commit -m "3d-queen-clothing: studio, queen figure, hair, crowns, gown core and parameter panel
+git add queen-clothing/index.html
+git commit -m "queen-clothing: studio, queen figure, hair, crowns, gown core and parameter panel
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1848,7 +1848,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 4: Gown details: sleeves, collars, mantle, flounces, trims, jewels and regalia
 
 **Files:**
-- Modify: `3d-queen-clothing/index.html` (render module: replace the `buildDetails` stub)
+- Modify: `queen-clothing/index.html` (render module: replace the `buildDetails` stub)
 
 **Interfaces:**
 - Consumes:
@@ -2101,7 +2101,7 @@ function buildDetails(Q, p, f) {
 
 - [ ] **Step 2: Run the unit tests.**
 
-Run: `node 3d-queen-clothing/test.mjs`
+Run: `node queen-clothing/test.mjs`
 Expected: `28 passed, 0 failed` (nothing in shared code changed).
 
 - [ ] **Step 3: Screenshot all six eras and the extremes.** Rerun the loop from Task 3, step 4, with the prefix `detail-era`. Add these five shots:
@@ -2125,8 +2125,8 @@ Check each one by eye against the spec's era table. Fix any of these failures by
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add 3d-queen-clothing/index.html
-git commit -m "3d-queen-clothing: sleeves, ruffs, fans, bertha, mantle with ermine, flounces, braid, pearls, jewels, bows, sash and regalia
+git add queen-clothing/index.html
+git commit -m "queen-clothing: sleeves, ruffs, fans, bertha, mantle with ermine, flounces, braid, pearls, jewels, bows, sash and regalia
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -2136,7 +2136,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 5: Cloth motion (shader sway) and the x-ray underpinnings
 
 **Files:**
-- Modify: `3d-queen-clothing/index.html` (render module: replace the `clothify` and `buildUnder` stubs and `Queen.step`, and wire the x-ray slider)
+- Modify: `queen-clothing/index.html` (render module: replace the `clothify` and `buildUnder` stubs and `Queen.step`, and wire the x-ray slider)
 
 **Interfaces:**
 - Consumes: `Queen.U`, `Queen.swing`, `QC.swingStep`, `QC.poseAt`, `QC.underpinningsFor`, `QC.hoopPoints`, `QC.skirtRadius`, `QC.buildSkirtGrid`, `QC.buildTorsoBand`.
@@ -2254,7 +2254,7 @@ studioQueen.xray = S.xray;
 
 - [ ] **Step 4: Run the unit tests, then screenshot x-ray and motion.**
 
-Run: `node 3d-queen-clothing/test.mjs`. Expected: `28 passed, 0 failed`.
+Run: `node queen-clothing/test.mjs`. Expected: `28 passed, 0 failed`.
 
 Headless shots:
 
@@ -2290,8 +2290,8 @@ Then drag the x-ray slider to 1, change `hemRadius`, and confirm that the rebuil
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add 3d-queen-clothing/index.html
-git commit -m "3d-queen-clothing: spring-driven cloth sway in the vertex shader and x-ray underpinnings
+git add queen-clothing/index.html
+git commit -m "queen-clothing: spring-driven cloth sway in the vertex shader and x-ray underpinnings
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -2301,7 +2301,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 6: Gallery mode, camera flights, picking, dice, share link and reset
 
 **Files:**
-- Modify: `3d-queen-clothing/index.html` (render module: replace the gallery stub section and wire the buttons)
+- Modify: `queen-clothing/index.html` (render module: replace the gallery stub section and wire the buttons)
 
 **Interfaces:**
 - Consumes: `Queen`, `S`, `setSlot`, `syncUI`, `saveHash`, `saveHashNow`, `applyXray`, `setCam`, `key`, `studio`, `gallery`, `QC.galleryLayout`, `QC.randomCommission`, `QC.paramsForEra`.
@@ -2397,7 +2397,7 @@ if (qs.get('mode') === 'gallery') {
 
 - [ ] **Step 3: Run the unit tests and take the gallery screenshots.**
 
-Run: `node 3d-queen-clothing/test.mjs`. Expected: `28 passed, 0 failed`.
+Run: `node queen-clothing/test.mjs`. Expected: `28 passed, 0 failed`.
 
 Headless shots:
 
@@ -2405,7 +2405,7 @@ Headless shots:
   - `?mode=gallery&focus=3`: close on the Victorian queen. The info card says Victorian.
   - `?mode=gallery&xray=1`: all six show their underpinnings.
 
-- [ ] **Step 4: Check the interactions in the Browser pane.** Use `http://127.0.0.1:8765/3d-queen-clothing/index.html` and do each of the following, with `read_page`/`find` to get refs:
+- [ ] **Step 4: Check the interactions in the Browser pane.** Use `http://127.0.0.1:8765/queen-clothing/index.html` and do each of the following, with `read_page`/`find` to get refs:
 
   - Click Gallery, then click a queen in the screenshot. Expected: the camera flies to her and the panel shows her era.
   - Change Hem radius. Expected: only that queen changes.
@@ -2418,8 +2418,8 @@ Headless shots:
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add 3d-queen-clothing/index.html
-git commit -m "3d-queen-clothing: gallery of six queens with camera flights and picking, dice, share link and reset
+git add queen-clothing/index.html
+git commit -m "queen-clothing: gallery of six queens with camera flights and picking, dice, share link and reset
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -2429,8 +2429,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 7: Visual tuning pass, screenshot and gallery entry
 
 **Files:**
-- Modify: `3d-queen-clothing/index.html` (tuning constants only)
-- Create: `3d-queen-clothing/screenshot1.jpg`
+- Modify: `queen-clothing/index.html` (tuning constants only)
+- Create: `queen-clothing/screenshot1.jpg`
 - Modify: `gallery.yaml`, `index.html` (repo root, via `build_gallery.py`)
 
 - [ ] **Step 1: Do a side-by-side review against the reference folder.** Put each `detail-era*.png` next to the matching reference image in `~/Desktop/clothing`:
@@ -2440,35 +2440,35 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - 1800: the floral crinoline and the Sisi portrait
   - 1900: the lilac trellis gown
 
-  Note the three biggest read-at-a-glance differences per era, such as a ruff that is too small, a pattern scale that is off, or a skirt that is too dark. Fix them only through preset values or render constants. If you change a preset, rerun `node 3d-queen-clothing/test.mjs`; the presets must stay on the grid and the silhouette tests must stay green.
+  Note the three biggest read-at-a-glance differences per era, such as a ruff that is too small, a pattern scale that is off, or a skirt that is too dark. Fix them only through preset values or render constants. If you change a preset, rerun `node queen-clothing/test.mjs`; the presets must stay on the grid and the silhouette tests must stay green.
 
 - [ ] **Step 2: Check the lighting and both themes of the panel.** If gowns look dim or blown out, adjust `key` intensity, `toneMappingExposure` and `environmentIntensity`. Confirm the panel is usable at 375 px wide with `resize_window` `mobile`, then reset to `desktop`.
 
 - [ ] **Step 3: Make the hero screenshot.**
 
 ```bash
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=12000 --screenshot="$SCRATCH/hero.png" "http://127.0.0.1:8765/3d-queen-clothing/index.html?era=1&motion=still&cam=three"
-sips -s format jpeg -s formatOptions 85 "$SCRATCH/hero.png" --out 3d-queen-clothing/screenshot1.jpg
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=12000 --screenshot="$SCRATCH/hero.png" "http://127.0.0.1:8765/queen-clothing/index.html?era=1&motion=still&cam=three"
+sips -s format jpeg -s formatOptions 85 "$SCRATCH/hero.png" --out queen-clothing/screenshot1.jpg
 ```
 
 Expected: the Elizabethan queen with her ruff and fan, the panel at the left and the info card at the right. If the gallery overview reads better, use `?mode=gallery&motion=still` instead.
 
-- [ ] **Step 4: Add the gallery entry.** Append `3d-queen-clothing: 3D Queen Clothing Simulator` to `gallery.yaml`, then run:
+- [ ] **Step 4: Add the gallery entry.** Append `queen-clothing: 3D Queen Clothing Simulator` to `gallery.yaml`, then run:
 
 ```bash
 python3 build_gallery.py
 git diff --stat index.html
 ```
 
-Expected: `index.html` gains one entry for `3d-queen-clothing`.
+Expected: `index.html` gains one entry for `queen-clothing`.
 
 - [ ] **Step 5: Run the final checks and commit.**
 
-Run: `node 3d-queen-clothing/test.mjs`. Expected: `28 passed, 0 failed`.
+Run: `node queen-clothing/test.mjs`. Expected: `28 passed, 0 failed`.
 
 ```bash
-git add 3d-queen-clothing gallery.yaml index.html
-git commit -m "3d-queen-clothing: visual tuning, screenshot and gallery entry
+git add queen-clothing gallery.yaml index.html
+git commit -m "queen-clothing: visual tuning, screenshot and gallery entry
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```

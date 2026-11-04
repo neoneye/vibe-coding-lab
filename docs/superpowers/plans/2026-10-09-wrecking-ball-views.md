@@ -6,19 +6,19 @@
 
 **Architecture:** Pure direction math (`Wreck.view`) lives in the shared-code block and is unit tested by `WreckTests` via `node test.mjs`. The page code gains a `state.view` mode, and `updateCamera(dt)` dispatches on it: Orbit is unchanged, Cab places the camera at an eye point on `slewGroup`, and Ball places it relative to the ball body along a smoothed horizontal heading. The cab window frame is real Three.js geometry on `slewGroup`, toggled with the view.
 
-**Tech Stack:** Single-file `3d-wrecking-ball/index.html`, Three.js and Rapier (already loaded), Node for `test.mjs`.
+**Tech Stack:** Single-file `wrecking-ball/index.html`, Three.js and Rapier (already loaded), Node for `test.mjs`.
 
 **Spec:** `docs/superpowers/specs/2026-10-09-wrecking-ball-views-design.md`
 
 ## Global Constraints
 
-- Everything stays in `3d-wrecking-ball/index.html` (self-contained page); tests run with `node 3d-wrecking-ball/test.mjs`.
+- Everything stays in `wrecking-ball/index.html` (self-contained page); tests run with `node wrecking-ball/test.mjs`.
 - Views: `'orbit' | 'cab' | 'ball'`; C cycles orbit → cab → ball → orbit.
 - Cab head yaw offset clamped to ±120°, final gaze pitch to −60°…+70°; double-click resets the head.
 - First-person field of view 20°–75°, default 50°; Orbit always 50°.
 - Near plane 0.05 in Cab and Ball, 0.5 in Orbit.
 - Ball gaze: velocity above 1.5 m/s horizontal, target below 0.5 m/s, linear blend between; smoothing tau 0.3 s; pitch −12°.
-- Commits go straight to `main` with the message prefix `3d-wrecking-ball:`.
+- Commits go straight to `main` with the message prefix `wrecking-ball:`.
 
 ## Review Focus
 
@@ -33,8 +33,8 @@
 ### Task 1: `Wreck.view` direction math
 
 **Files:**
-- Modify: `3d-wrecking-ball/index.html` — inside the `Wreck` IIFE before `const assets = {` (~line 592), the `return { … }` export (~line 600), and `WreckTests.run` before the final `console.log('WreckTests: …')` (~line 708)
-- Test: `3d-wrecking-ball/test.mjs` (unchanged runner)
+- Modify: `wrecking-ball/index.html` — inside the `Wreck` IIFE before `const assets = {` (~line 592), the `return { … }` export (~line 600), and `WreckTests.run` before the final `console.log('WreckTests: …')` (~line 708)
+- Test: `wrecking-ball/test.mjs` (unchanged runner)
 
 **Interfaces:**
 - Produces:
@@ -89,7 +89,7 @@
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `node 3d-wrecking-ball/test.mjs`
+Run: `node wrecking-ball/test.mjs`
 Expected: a TypeError, because `W.view` is undefined (exit code 1).
 
 - [ ] **Step 3: Implement** — insert before `const assets = {` inside the `Wreck` IIFE:
@@ -137,14 +137,14 @@ Note on the "cancelling blend" test: with `vel [-1,0,0]` (w = 0.5) and target `[
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `node 3d-wrecking-ball/test.mjs`
+Run: `node wrecking-ball/test.mjs`
 Expected: `WreckTests: N passed, 0 failed`, exit code 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add 3d-wrecking-ball/index.html
-git commit -m "3d-wrecking-ball: view math for the cab and ball cameras, with tests"
+git add wrecking-ball/index.html
+git commit -m "wrecking-ball: view math for the cab and ball cameras, with tests"
 ```
 
 ---
@@ -152,7 +152,7 @@ git commit -m "3d-wrecking-ball: view math for the cab and ball cameras, with te
 ### Task 2: View switching and Cab view
 
 **Files:**
-- Modify: `3d-wrecking-ball/index.html` — World card HTML (~line 77–86), `#hint` (~line 100), globals (~line 795), crane build block (~lines 809–870), camera section (~lines 887–895), input section (~lines 1381–1448), `syncVisuals`/`frame` (~lines 1514–1570), `window.__wreck` (~line 1582)
+- Modify: `wrecking-ball/index.html` — World card HTML (~line 77–86), `#hint` (~line 100), globals (~line 795), crane build block (~lines 809–870), camera section (~lines 887–895), input section (~lines 1381–1448), `syncVisuals`/`frame` (~lines 1514–1570), `window.__wreck` (~line 1582)
 
 **Interfaces:**
 - Consumes: `W.view.clampHead` (Task 1), with the page-scope alias `const W = Wreck`.
@@ -329,10 +329,10 @@ for (const b of document.querySelectorAll('#viewButtons button')) b.addEventList
 
 - [ ] **Step 7: Unit tests still pass**
 
-Run: `node 3d-wrecking-ball/test.mjs`
+Run: `node wrecking-ball/test.mjs`
 Expected: `0 failed`.
 
-- [ ] **Step 8: Visual check of the Cab view.** Start the `static` preview (`preview_start {name: "static"}`) and navigate to `http://127.0.0.1:8765/3d-wrecking-ball/index.html`. The Browser pane pauses rAF while hidden, so drive it synchronously with `javascript_tool`:
+- [ ] **Step 8: Visual check of the Cab view.** Start the `static` preview (`preview_start {name: "static"}`) and navigate to `http://127.0.0.1:8765/wrecking-ball/index.html`. The Browser pane pauses rAF while hidden, so drive it synchronously with `javascript_tool`:
 
 ```js
 await window.__wreckReady; __wreck.setView('cab'); __wreck.step(30); [__wreck.view, document.getElementById('hint').textContent]
@@ -342,8 +342,8 @@ await window.__wreckReady; __wreck.setView('cab'); __wreck.step(30); [__wreck.vi
 - [ ] **Step 9: Commit**
 
 ```bash
-git add 3d-wrecking-ball/index.html
-git commit -m "3d-wrecking-ball: view switcher (C key) and the crane operator's cab view"
+git add wrecking-ball/index.html
+git commit -m "wrecking-ball: view switcher (C key) and the crane operator's cab view"
 ```
 
 ---
@@ -351,7 +351,7 @@ git commit -m "3d-wrecking-ball: view switcher (C key) and the crane operator's 
 ### Task 3: Ball view
 
 **Files:**
-- Modify: `3d-wrecking-ball/index.html` — camera section added in Task 2
+- Modify: `wrecking-ball/index.html` — camera section added in Task 2
 
 **Interfaces:**
 - Consumes: `Wreck.view.ballGaze`, `Wreck.view.smoothDir` (Task 1); `updateCamera(dt)`, `state.view`, `centre`, `ballBody`, `state.radius` (Task 2 and existing code)
@@ -400,7 +400,7 @@ Check the screen-right sign: for a camera looking along +Z (`hx=0, hz=1`), scree
 
 - [ ] **Step 2: Unit tests still pass**
 
-Run: `node 3d-wrecking-ball/test.mjs`
+Run: `node wrecking-ball/test.mjs`
 Expected: `0 failed`.
 
 - [ ] **Step 3: Visual check of the Ball view, at rest and mid-swing.** In the Browser pane:
@@ -420,8 +420,8 @@ Screenshot: the view should face the swing direction, with no roll. `__wreck.bal
 - [ ] **Step 4: Commit**
 
 ```bash
-git add 3d-wrecking-ball/index.html docs/superpowers/specs/2026-10-09-wrecking-ball-views-design.md
-git commit -m "3d-wrecking-ball: ride the wrecking ball — stabilised ball view"
+git add wrecking-ball/index.html docs/superpowers/specs/2026-10-09-wrecking-ball-views-design.md
+git commit -m "wrecking-ball: ride the wrecking ball — stabilised ball view"
 ```
 
 ---
@@ -429,7 +429,7 @@ git commit -m "3d-wrecking-ball: ride the wrecking ball — stabilised ball view
 ### Task 4: Final pass
 
 **Files:**
-- Modify: `3d-wrecking-ball/index.html` (only if fixes are needed)
+- Modify: `wrecking-ball/index.html` (only if fixes are needed)
 
 - [ ] **Step 1: Interaction checks in the Browser pane.** In each view, check:
   - The C key cycles in order, and the `on` button highlight follows.
@@ -438,5 +438,5 @@ git commit -m "3d-wrecking-ball: ride the wrecking ball — stabilised ball view
   - Double-click in Cab recentres the head.
   - Switching to Orbit restores the old framing (fov 50, near 0.5).
   - Resizing the window keeps the current view.
-- [ ] **Step 2: Run the tests one last time:** `node 3d-wrecking-ball/test.mjs` → `0 failed`.
-- [ ] **Step 3: Commit any fixes**, using the message prefix `3d-wrecking-ball:`.
+- [ ] **Step 2: Run the tests one last time:** `node wrecking-ball/test.mjs` → `0 failed`.
+- [ ] **Step 3: Commit any fixes**, using the message prefix `wrecking-ball:`.

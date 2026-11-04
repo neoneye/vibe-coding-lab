@@ -1,4 +1,4 @@
-# 3d-shoggoth: parameterized morphology + novelty Random
+# shoggoth: parameterized morphology + novelty Random
 
 ## Goal
 
@@ -60,7 +60,7 @@ Latin binomial and Random counter.
 
 ## Testing
 
-`3d-shoggoth/test.mjs` runs `ShoggothTests.run()` from the shared-code block:
+`shoggoth/test.mjs` runs `ShoggothTests.run()` from the shared-code block:
 determinism, hash round-trip, layout counts vs genome, constraint handling,
 200-Random novelty acceptance. Visual check: headless contact sheet of ~12
 consecutive Randoms.

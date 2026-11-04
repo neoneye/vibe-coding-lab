@@ -1,7 +1,7 @@
 # 2D Pulleys — Design
 
 **Date:** 2026-09-04
-**Directory:** `2d-pulleys/`
+**Directory:** `pulleys/`
 **Deliverable:** A self-contained `index.html` that teaches how pulleys multiply lifting force, plus `test.mjs` for the pure model and a `screenshot1.jpg` for the gallery.
 
 ## Concept

@@ -1,7 +1,7 @@
 # Ion-Wind Aircraft — Design
 
 **Date:** 2026-09-02
-**Directory:** `2d-ion-wind-aircraft/`
+**Directory:** `ion-wind-aircraft/`
 **Deliverable:** One self-contained `index.html` (no dependencies, works from `file://`), a `test.mjs` that runs the shared-code tests in Node, a `screenshot1.jpg`, and a `gallery.yaml` title override.
 
 ## Purpose
@@ -29,7 +29,7 @@ Numbers the page derives live (a deliberately simplified one-dimensional model, 
 - Ion drift speed `v_ion = μ V / d`; bulk wind speed `v_air = √(T' / (ρ d))`, ρ = 1.2 kg/m³.
 - Calibration check: 20 m of emitter at 40 kV / 5 cm gives ≈ 3.2 N and ≈ 512 W — the MIT plane's published figures (3.2 N, 6.25 N/kW).
 
-## Page structure (single scrolling page, dark theme like `2d-tesla-valve`)
+## Page structure (single scrolling page, dark theme like `tesla-valve`)
 
 **Header.** Title, one paragraph: "no fan, no propeller — the air is pushed by electricity". Small legend of the two machines.
 
