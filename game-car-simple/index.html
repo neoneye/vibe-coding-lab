@@ -1,0 +1,1196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lithium</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0000ff; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #fff; user-select: none; }
+  #view { position: fixed; inset: 0; display: block; }
+  #score { position: fixed; top: 3vh; left: 0; right: 0; text-align: center; color: #ff0; font-weight: 700;
+    font-size: clamp(56px, 13vh, 150px); line-height: 1; pointer-events: none; }
+  #caption { position: fixed; top: calc(3vh + clamp(56px, 13vh, 150px) + 6px); left: 0; right: 0; text-align: center;
+    color: #ff0; font-weight: 700; font-size: clamp(16px, 2.6vh, 26px); pointer-events: none; }
+  #fuel { position: fixed; top: calc(3vh + clamp(56px, 13vh, 150px) + 44px); left: 50%; width: 160px; margin-left: -80px;
+    height: 6px; background: rgba(255,255,255,0.25); display: none; pointer-events: none; }
+  #fuelFill { height: 100%; width: 100%; background: #ff0; }
+  #go { position: fixed; bottom: 4vh; left: 50%; transform: translateX(-50%); background: none; border: 0; padding: 0 0.2em;
+    color: #ff0; font: 700 clamp(56px, 12vh, 140px)/1 "Helvetica Neue", Helvetica, Arial, sans-serif; cursor: pointer; }
+  #go:focus-visible { outline: 3px solid #fff; }
+  #panel { position: fixed; top: 0; left: 0; bottom: 0; width: 300px; padding: 18px 20px; box-sizing: border-box;
+    background: rgba(0, 0, 90, 0.35); overflow-y: auto; }
+  #panel.hidden { display: none; }
+  #levels { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  #levels button { flex: 1 1 100%; text-align: left; background: none; border: 1px solid rgba(255,255,255,0.35);
+    color: #fff; font: 13px "Helvetica Neue", Helvetica, Arial, sans-serif; padding: 5px 8px; cursor: pointer; }
+  #levels button.current { border-color: #ff0; color: #ff0; }
+  #levels button:disabled { opacity: 0.35; cursor: default; }
+  .row { margin: 0 0 10px; font-size: 13px; }
+  .row .top { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .row .val { color: #ff0; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: none; margin: 0; }
+  input[type=range]::-webkit-slider-runnable-track { height: 2px;
+    background: linear-gradient(to right, #3d8bff 0 var(--p), #c8c8c8 var(--p) 100%); }
+  input[type=range]::-moz-range-track { height: 2px; background: #c8c8c8; }
+  input[type=range]::-moz-range-progress { height: 2px; background: #3d8bff; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -9px;
+    border-radius: 50%; background: #fff; border: 0; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+  input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 0; }
+  #reset { background: none; border: 0; color: rgba(255,255,255,0.7); font-size: 12px; text-decoration: underline;
+    cursor: pointer; padding: 0; }
+  #help { position: fixed; left: 12px; bottom: 8px; font-size: 12px; color: rgba(255,255,255,0.75); pointer-events: none; }
+  #panel:not(.hidden) ~ #help { left: 312px; }
+  #stats { position: fixed; right: 6px; bottom: 6px; padding: 2px 6px; background: rgba(0,0,0,0.25);
+    font: 11px Menlo, Monaco, monospace; color: #fff; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="score">0</div>
+<div id="caption"></div>
+<div id="fuel"><div id="fuelFill"></div></div>
+<div id="panel">
+  <div id="levels"></div>
+  <div id="sliders"></div>
+  <button id="reset" type="button">reset car</button>
+</div>
+<button id="go" type="button">Start</button>
+<div id="help">Enter start/stop · Space booster · ← → tilt · R restart · 1–5 level · M mute</div>
+<div id="stats"></div>
+<script id="shared-code">
+// ---- Lithium shared code: pure logic, no DOM, no three.js. planck is injected where needed. ----
+const RUNUP = 8;     // flat metres before score 0
+const RUNOUT = 10;   // flat metres after score 10, then a wall
+const WALL_H = 8;
+const BAND = 0.6;    // drawn thickness of the yellow track band
+const FRICTION = { normal: 0.9, ice: 0.05, grip: 1.6 };
+
+// Each level is the 2016 prototype's `slopes` format: segment angles in degrees, each segment segLen
+// metres wide. Objects add features: {a, f} friction kind, {gap: w} a pit, {bridge: w, sag} a rope bridge
+// (sag = depth of its middle as a fraction of the span, default 0.06).
+const LEVELS = [
+  { name: "Bumps", segLen: 3,
+    slopes: [0, 5, -5, 0, 8, 4, -6, -8, 0, 6, 10, 0, -10, -4, 0, 5, 8, -3, -8, 0, 6, -6, 0, 10, 0, -8, 0, 4, 0, 0] },
+  { name: "Steep places", segLen: 3,
+    slopes: [0, 10, 20, 30, 20, 0, -20, -30, 0, 0, 15, 25, 35, 35, 10, 0, -25, -35, -20, 0, 10, 30, 35, 20, 0, -30, -15, 0, 0, 0] },
+  { name: "Pitfalls", segLen: 3,
+    slopes: [0, 5, 0, { gap: 1.5 }, 0, -5, 5, 0, { gap: 2.5 }, 0, 10, 0, -10, { gap: 2 }, 0, 0, 15, 0, { gap: 3.5 }, -10, 0, 5, 0, { gap: 2.5 }, 0, 0] },
+  { name: "Rope bridge", segLen: 3,
+    slopes: [0, 0, 5, 0, { bridge: 8, sag: 0.1 }, 0, -5, 10, 15, 0, { bridge: 12, sag: 0.15 }, 0, -10, 0, 5, 0, 0] },
+  { name: "Friction varies", segLen: 3,
+    slopes: [0, 0, { a: 10, f: "ice" }, { a: 15, f: "ice" }, 0, { a: 20, f: "grip" }, { a: 30, f: "grip" }, 0, -10,
+      { a: -20, f: "ice" }, 0, { a: 15, f: "ice" }, 25, 0, { a: 30, f: "grip" }, { a: 35, f: "grip" }, 0,
+      { a: -15, f: "ice" }, { a: 20, f: "ice" }, 0, 0] },
+];
+
+const Tracks = {
+  count: LEVELS.length,
+  name(i) { return LEVELS[i].name; },
+
+  build(i) {
+    const L = LEVELS[i];
+    const segments = [], runs = [], gaps = [], bridges = [];
+    let cur = null, x = 0, y = 0;
+    const addSeg = (x0, y0, x1, y1, kind) => {
+      segments.push({ x0, y0, x1, y1, kind });
+      if (!cur || cur.kind !== kind) { cur = { kind, points: [{ x: x0, y: y0 }] }; runs.push(cur); }
+      cur.points.push({ x: x1, y: y1 });
+    };
+    addSeg(-RUNUP, 0, 0, 0, "normal");
+    for (const e of L.slopes) {
+      if (typeof e === "object" && (e.gap || e.bridge)) {
+        const w = e.gap || e.bridge;
+        const drop = e.gap ? (e.drop ?? 0.3) : 0;
+        if (e.gap) gaps.push({ x0: x, x1: x + w, y0: y, y1: y - drop });
+        else bridges.push({ x0: x, x1: x + w, y0: y, y1: y, sag: e.sag ?? 0.06 });
+        x += w; y -= drop; cur = null;
+        continue;
+      }
+      const a = typeof e === "number" ? e : e.a;
+      const kind = (typeof e === "object" && e.f) || "normal";
+      const dy = Math.tan(a * Math.PI / 180) * L.segLen;
+      addSeg(x, y, x + L.segLen, y + dy, kind);
+      x += L.segLen; y += dy;
+    }
+    const scoreEndX = x;
+    addSeg(x, y, x + RUNOUT, y, "normal");
+    const walls = [
+      { x0: -RUNUP, y0: 0, x1: -RUNUP, y1: WALL_H },
+      { x0: x + RUNOUT, y0: y, x1: x + RUNOUT, y1: y + WALL_H },
+    ];
+    const minY = Math.min(...segments.map(s => Math.min(s.y0, s.y1)));
+    return { name: L.name, segments, runs, gaps, bridges, walls,
+      spawnX: -RUNUP / 2, scoreStartX: 0, scoreEndX, endX: x + RUNOUT, minY };
+  },
+
+  // Plank joint points along a sagging parabola (sag b.sag of span, default 6%), ~0.5 m planks of equal chord length.
+  bridgePlanks(b) {
+    const w = b.x1 - b.x0, sag = (b.sag ?? 0.06) * w, N = 400;
+    const pts = [], cum = [0];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      pts.push({ x: b.x0 + w * t, y: b.y0 + (b.y1 - b.y0) * t - 4 * sag * t * (1 - t) });
+      if (i > 0) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+    }
+    const n = Math.ceil(w / 0.5 - 1e-9), total = cum[N], out = [];
+    let j = 0;
+    for (let k = 0; k <= n; k++) {
+      const s = total * k / n;
+      while (j < N - 1 && cum[j + 1] < s) j++;
+      const f = Math.min(1, (s - cum[j]) / (cum[j + 1] - cum[j]));
+      out.push({ x: pts[j].x + (pts[j + 1].x - pts[j].x) * f, y: pts[j].y + (pts[j + 1].y - pts[j].y) * f });
+    }
+    return out;
+  },
+
+  // Track surface height under x. Over a gap or bridge: the lower rim. Outside the track: nearest end.
+  groundYAt(geom, x) {
+    for (const s of geom.segments) if (x >= s.x0 && x <= s.x1) return s.y0 + (s.y1 - s.y0) * (x - s.x0) / (s.x1 - s.x0);
+    for (const h of [...geom.gaps, ...geom.bridges]) if (x > h.x0 && x < h.x1) return Math.min(h.y0, h.y1);
+    const first = geom.segments[0], last = geom.segments[geom.segments.length - 1];
+    return x < first.x0 ? first.y0 : last.y1;
+  },
+};
+
+const Score = {
+  scoreFor(x, geom) {
+    const f = (x - geom.scoreStartX) / (geom.scoreEndX - geom.scoreStartX);
+    return Math.max(0, Math.min(10, Math.floor(10 * f + 1e-9)));
+  },
+};
+
+// Watches one run. Ends it as stuck (< 0.3 m new progress in 3 s), flipped (|angle| > 120° for 1.5 s),
+// fell (4 m under the track surface, or 5 m under its lowest point), or win (score 10).
+class RunMonitor {
+  constructor(geom) {
+    this.geom = geom; this.t = 0; this.score = 0;
+    this.bestX = -Infinity; this.gainX = null; this.gainT = 0; this.flipT = 0;
+  }
+  update(dt, s) {
+    this.t += dt;
+    if (this.gainX === null) { this.gainX = s.x; this.gainT = this.t; }
+    if (s.x > this.bestX) this.bestX = s.x;
+    if (this.bestX > this.gainX + 0.3) { this.gainX = this.bestX; this.gainT = this.t; }
+    this.score = Math.max(this.score, Score.scoreFor(this.bestX, this.geom));
+    if (this.score >= 10) return "win";
+    if (s.y < this.geom.minY - 5 || s.y < Tracks.groundYAt(this.geom, s.x) - 4) return "fell";
+    const a = Math.atan2(Math.sin(s.angle), Math.cos(s.angle));
+    this.flipT = Math.abs(a) > 2 * Math.PI / 3 ? this.flipT + dt : 0;
+    if (this.flipT > 1.5 + 1e-9) return "flipped";
+    if (this.t - this.gainT > 3) return "stuck";
+    return null;
+  }
+}
+
+const WHEEL_TYPES = [
+  { name: "smooth", friction: 0.6 },
+  { name: "hex", friction: 0.9 },
+  { name: "gear", friction: 1.4 },
+];
+const SLIDERS = [
+  { key: "rearRadius", label: "Rear wheel", min: 3, max: 12, def: 5, show: v => (v / 10).toFixed(1) + " m" },
+  { key: "frontRadius", label: "Front wheel", min: 3, max: 12, def: 5, show: v => (v / 10).toFixed(1) + " m" },
+  { key: "wheelType", label: "Wheel type", min: 0, max: 2, def: 1, show: v => WHEEL_TYPES[v].name },
+  { key: "motorSpeed", label: "Motor speed", min: 2, max: 14, def: 6, show: v => v + " rad/s" },
+  { key: "motorTorque", label: "Motor torque", min: 1, max: 10, def: 4, show: v => v * 20 + " N·m" },
+  { key: "legLength", label: "Leg length", min: 1, max: 8, def: 4, show: v => (v * 0.2).toFixed(1) + " m" },
+  { key: "chassisWidth", label: "Chassis width", min: 2, max: 6, def: 4, show: v => v + " m" },
+  { key: "chassisHeight", label: "Chassis height", min: 1, max: 5, def: 2, show: v => (v * 0.2).toFixed(1) + " m" },
+  { key: "suspension", label: "Suspension", min: 1, max: 10, def: 4, show: v => v + " Hz" },
+  { key: "cargo", label: "Cargo", min: 0, max: 6, def: 4, show: v => v + (v === 1 ? " block" : " blocks") },
+  { key: "fuel", label: "Booster fuel", min: 0, max: 5, def: 2, show: v => v + " s" },
+];
+// Cargo block sizes (w, h) in metres; the first four are the Car6 blocks (15x10, 20x40, 25x30, 15x20 px at 50 px/m).
+const CARGO_BLOCKS = [[0.3, 0.2], [0.4, 0.8], [0.5, 0.6], [0.3, 0.4], [0.3, 0.3], [0.25, 0.5]];
+
+const VehicleConfig = {
+  SLIDERS, WHEEL_TYPES,
+  defaults() {
+    const v = {};
+    for (const s of SLIDERS) v[s.key] = s.def;
+    return v;
+  },
+  clamp(values) {
+    const out = {};
+    for (const s of SLIDERS) {
+      let x = Math.round(Number(values == null ? NaN : values[s.key]));
+      if (!Number.isFinite(x)) x = s.def;
+      out[s.key] = Math.max(s.min, Math.min(s.max, x));
+    }
+    return out;
+  },
+  toPhysicsSpec(values) {
+    const v = VehicleConfig.clamp(values);
+    const w = v.chassisWidth, h = v.chassisHeight * 0.2, leg = v.legLength * 0.2;
+    const wx = Math.max(w / 2 - 0.8, 0.3 * w);
+    const wt = WHEEL_TYPES[v.wheelType];
+    const axleY = -h / 2 - leg;
+    const wheels = [
+      { x: -wx, y: axleY, r: v.rearRadius / 10, friction: wt.friction, type: wt.name },
+      { x: wx, y: axleY, r: v.frontRadius / 10, friction: wt.friction, type: wt.name },
+    ];
+    const posts = [-1, 1].map(sx => ({ x: sx * (w / 2 - 0.1), y: h / 2 + 0.15, hx: 0.1, hy: 0.15 }));
+    const legs = wheels.map(wh => ({ x: wh.x, top: -h / 2, bottom: axleY, hw: 0.1 }));
+    // Cargo packed left to right, centred on the bed, squeezed to fit between the posts.
+    const blocks = CARGO_BLOCKS.slice(0, v.cargo), gap = 0.04, room = w - 0.5;
+    const total = blocks.reduce((s, b) => s + b[0], 0) + gap * Math.max(0, blocks.length - 1);
+    const k = total > room ? room / total : 1;
+    const cargo = [];
+    let x = -total * k / 2;
+    for (const [bw, bh] of blocks) {
+      cargo.push({ x: x + bw * k / 2, y: h / 2 + 0.01 + bh / 2, w: bw * k, h: bh });
+      x += (bw + gap) * k;
+    }
+    return { chassis: { w, h }, posts, legs, wheels, cargo,
+      motor: { speed: v.motorSpeed, torque: v.motorTorque * 20 },
+      spring: { hz: v.suspension, damping: 0.7 }, fuel: v.fuel };
+  },
+};
+
+const Save = {
+  KEY: "lithium.v1",
+  fresh() {
+    return { values: VehicleConfig.defaults(), unlocked: 1, best: [0, 0, 0, 0, 0], level: 0, muted: false };
+  },
+  sanitize(raw) {
+    const s = Save.fresh();
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return s;
+    s.values = VehicleConfig.clamp(raw.values);
+    const int = (x, lo, hi, d) => { const n = Math.round(Number(x)); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
+    s.unlocked = int(raw.unlocked, 1, Tracks.count, 1);
+    if (Array.isArray(raw.best)) s.best = s.best.map((_, i) => int(raw.best[i], 0, 10, 0));
+    s.level = int(raw.level, 0, s.unlocked - 1, 0);
+    s.muted = !!raw.muted;
+    return s;
+  },
+};
+
+// Builds the planck world for one level and one slider set. Wheel motors start braked (speed 0):
+// the garage shows the car resting on its suspension; start() releases them.
+function createSim(pl, levelIndex, values, opts = {}) {
+  const geom = Tracks.build(levelIndex);
+  const spec = VehicleConfig.toPhysicsSpec(values);
+  const world = new pl.World({ gravity: pl.Vec2(0, -10) });
+
+  const ground = world.createBody({ type: "static" });
+  ground.setUserData({ kind: "ground" });
+  for (const run of geom.runs) {
+    ground.createFixture(new pl.Chain(run.points.map(p => pl.Vec2(p.x, p.y)), false), { friction: FRICTION[run.kind] });
+  }
+  for (const wl of geom.walls) ground.createFixture(new pl.Edge(pl.Vec2(wl.x0, wl.y0), pl.Vec2(wl.x1, wl.y1)), { friction: 0.5 });
+
+  const planks = [];
+  for (const b of geom.bridges) {
+    const pts = Tracks.bridgePlanks(b);
+    let prev = ground;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i], p1 = pts[i + 1];
+      const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+      const body = world.createDynamicBody({ position: pl.Vec2((p0.x + p1.x) / 2, (p0.y + p1.y) / 2), angle: Math.atan2(p1.y - p0.y, p1.x - p0.x) });
+      body.createFixture(new pl.Box(len / 2, 0.1, pl.Vec2(0, -0.1), 0), { density: 20, friction: 0.9 });
+      body.setUserData({ kind: "plank", len });
+      world.createJoint(new pl.RevoluteJoint({}, prev, body, pl.Vec2(p0.x, p0.y)));
+      prev = body;
+      planks.push(body);
+    }
+    world.createJoint(new pl.RevoluteJoint({}, prev, ground, pl.Vec2(b.x1, b.y1)));
+  }
+
+  // The car. The run-up is flat at y = 0; lift the chassis so the lower wheel just clears it.
+  const x0 = geom.spawnX;
+  const lift = Math.max(...spec.wheels.map(w => w.r - w.y)) + 0.05;
+  const chassis = world.createDynamicBody({ position: pl.Vec2(x0, lift) });
+  chassis.setUserData({ kind: "chassis" });
+  chassis.createFixture(new pl.Box(spec.chassis.w / 2, spec.chassis.h / 2), { density: 20, friction: 0.6 });
+  for (const p of spec.posts) chassis.createFixture(new pl.Box(p.hx, p.hy, pl.Vec2(p.x, p.y), 0), { density: 20, friction: 0.6 });
+  // Legs add mass but never collide (filterMaskBits 0); they are drawn to the axle.
+  for (const l of spec.legs) {
+    chassis.createFixture(new pl.Box(l.hw, (l.top - l.bottom) / 2, pl.Vec2(l.x, (l.top + l.bottom) / 2), 0), { density: 10, filterMaskBits: 0 });
+  }
+  const wheels = [], joints = [];
+  for (const w of spec.wheels) {
+    const wb = world.createDynamicBody({ position: pl.Vec2(x0 + w.x, lift + w.y) });
+    wb.createFixture(new pl.Circle(w.r), { density: 6, friction: w.friction, filterGroupIndex: -1 });
+    wb.setUserData({ kind: "wheel", type: w.type, r: w.r });
+    joints.push(world.createJoint(new pl.WheelJoint({
+      enableMotor: true, motorSpeed: 0, maxMotorTorque: spec.motor.torque,
+      frequencyHz: spec.spring.hz, dampingRatio: spec.spring.damping,
+    }, chassis, wb, wb.getPosition(), pl.Vec2(0, 1))));
+    wheels.push(wb);
+  }
+  const cargo = spec.cargo.map(c => {
+    const b = world.createDynamicBody({ position: pl.Vec2(x0 + c.x, lift + c.y) });
+    b.createFixture(new pl.Box(c.w / 2, c.h / 2), { density: 8, friction: 0.7 });
+    b.setUserData({ kind: "cargo" });
+    return b;
+  });
+  const mass = [chassis, ...wheels, ...cargo].reduce((s, b) => s + b.getMass(), 0);
+  // Rotational inertia of the whole car about the chassis origin, so tilt turns big and small cars alike.
+  const inertia = [chassis, ...wheels, ...cargo].reduce((s, b) => {
+    const d = pl.Vec2.sub(b.getPosition(), chassis.getPosition());
+    return s + b.getInertia() + (b === chassis ? 0 : b.getMass() * pl.Vec2.dot(d, d));
+  }, 0);
+
+  // Fastest approach speed (m/s) of a car part (chassis, wheel, cargo) hitting the world (ground or
+  // plank) during the last step, for the thump sound. Car-internal contacts (cargo on the chassis) do
+  // not count. Measured when a contact begins, before the solver, so the suspension cannot hide it.
+  let impact = 0;
+  const carKinds = new Set(["chassis", "wheel", "cargo"]);
+  world.on("begin-contact", contact => {
+    const ba = contact.getFixtureA().getBody(), bb = contact.getFixtureB().getBody();
+    if (carKinds.has(ba.getUserData()?.kind) === carKinds.has(bb.getUserData()?.kind)) return;
+    const wm = contact.getWorldManifold(null);
+    if (!wm) return;
+    for (let i = 0; i < (wm.pointCount || 0); i++) {
+      const p = wm.points[i];
+      const va = ba.getLinearVelocityFromWorldPoint(p), vb = bb.getLinearVelocityFromWorldPoint(p);
+      const approach = -((vb.x - va.x) * wm.normal.x + (vb.y - va.y) * wm.normal.y);  // normal points A -> B
+      if (approach > impact) impact = approach;
+    }
+  });
+
+  let fuel = spec.fuel, running = false;
+  const BOOST_ACC = 18;  // m/s² of booster thrust per kg of car
+  const TILT_ACC = 3;    // rad/s² of tilt (torque = TILT_ACC × car inertia): about a quarter turn in 1 s in the air
+  const TILT_MAX_W = 2;  // rad/s: no more tilt torque once the chassis spins this fast in the tilt direction
+  const sim = {
+    geom, spec, world, chassis, wheels, cargo, planks, mass, t: 0,
+    get fuel() { return fuel; },
+    get running() { return running; },
+    start() {
+      running = true;
+      const speed = opts.motorSpeed ?? spec.motor.speed;
+      for (const j of joints) j.setMotorSpeed(-speed);  // negative = clockwise = drive right
+    },
+    stop() {
+      running = false;
+      for (const j of joints) j.setMotorSpeed(0);
+    },
+    step(input = {}) {
+      impact = 0;
+      let boosting = false;
+      if (running && input.boost && fuel > 0) {
+        const f = chassis.getWorldVector(pl.Vec2(1, 0));
+        chassis.applyForceToCenter(pl.Vec2(f.x * BOOST_ACC * mass, f.y * BOOST_ACC * mass), true);
+        fuel = Math.max(0, fuel - 1 / 60);
+        boosting = true;
+      }
+      if (running && input.tilt) {
+        const dir = -Math.sign(input.tilt);  // +tilt (→) = clockwise = nose down
+        if (dir * chassis.getAngularVelocity() < TILT_MAX_W) chassis.applyTorque(dir * TILT_ACC * inertia, true);
+      }
+      world.step(1 / 60, 10, 8);
+      sim.t += 1 / 60;
+      return { boosting, impact };
+    },
+    state() {
+      const p = chassis.getPosition();
+      return { x: p.x, y: p.y, angle: chassis.getAngle() };
+    },
+    wheelSpeed() {
+      return wheels.reduce((s, w) => s + Math.abs(w.getAngularVelocity()), 0) / wheels.length;
+    },
+  };
+  return sim;
+}
+
+const Sim = {
+  // Runs one level without rendering: settle 1 s braked, then drive until the monitor ends the run.
+  runHeadless(pl, level, values, { maxT = 90, input = () => ({}), opts = {} } = {}) {
+    const sim = createSim(pl, level, values, opts);
+    for (let k = 0; k < 60; k++) sim.step();
+    sim.start();
+    const mon = new RunMonitor(sim.geom);
+    let result = null;
+    while (!result && mon.t < maxT) {
+      sim.step(input(mon.t, sim));
+      result = mon.update(1 / 60, sim.state());
+    }
+    return { result: result || "timeout", score: mon.score, t: Math.round(mon.t * 10) / 10 };
+  },
+};
+
+// One known-passing slider set per level, sliders only (no booster or tilt input), each a small change
+// from the default car that reads as the level's lesson. Level 1 is the default car. The test proves
+// every level is passable; the default fuel (2 s) is unused by the headless runs.
+const SOLUTIONS = [
+  { note: "the Car6 default car", values: VehicleConfig.defaults() },
+  { note: "a fast motor charges the 35° climbs", values: { ...VehicleConfig.defaults(), motorSpeed: 13 } },
+  { note: "big wheels at high speed jump the pits", values: { ...VehicleConfig.defaults(), rearRadius: 10, frontRadius: 10, motorSpeed: 12 } },
+  { note: "a long chassis rides over the sagging planks", values: { ...VehicleConfig.defaults(), chassisWidth: 6 } },
+  { note: "gear wheels and more torque on the ice", values: { ...VehicleConfig.defaults(), wheelType: 2, motorTorque: 6 } },
+];
+
+const LithiumTests = {
+  run(planck) {
+    let pass = 0, fail = 0;
+    const test = (name, fn) => {
+      try { fn(); pass++; } catch (e) { fail++; console.log("FAIL " + name + ": " + e.message); }
+    };
+    const ok = (c, msg) => { if (!c) throw new Error(msg || "assertion failed"); };
+    const near = (a, b, eps, msg) => ok(Math.abs(a - b) <= eps, (msg || "") + ` expected ${b} got ${a}`);
+
+    test("five levels build", () => {
+      ok(Tracks.count === 5, "count " + Tracks.count);
+      for (let i = 0; i < Tracks.count; i++) {
+        const g = Tracks.build(i);
+        ok(typeof Tracks.name(i) === "string" && Tracks.name(i).length > 0, "name");
+        ok(g.scoreEndX > g.scoreStartX + 30, "level " + i + " too short");
+        ok(g.spawnX < g.scoreStartX && g.spawnX > -RUNUP, "spawn inside run-up");
+        ok(g.endX === g.scoreEndX + RUNOUT, "run-out");
+        ok(g.walls.length === 2, "walls");
+      }
+    });
+    test("runs are continuous polylines", () => {
+      for (let i = 0; i < Tracks.count; i++) {
+        const g = Tracks.build(i);
+        for (const r of g.runs) {
+          ok(r.points.length >= 2, "run too short");
+          for (let k = 1; k < r.points.length; k++) ok(r.points[k].x > r.points[k - 1].x, "x increases");
+        }
+      }
+    });
+    test("segments chain except at gaps and bridges", () => {
+      for (let i = 0; i < Tracks.count; i++) {
+        const g = Tracks.build(i);
+        const holes = g.gaps.length + g.bridges.length;
+        let breaks = 0;
+        for (let k = 1; k < g.segments.length; k++) {
+          const a = g.segments[k - 1], b = g.segments[k];
+          if (Math.abs(a.x1 - b.x0) > 1e-9 || Math.abs(a.y1 - b.y0) > 1e-9) breaks++;
+        }
+        ok(breaks === holes, `level ${i}: ${breaks} breaks, ${holes} holes`);
+      }
+    });
+    test("level features", () => {
+      ok(Tracks.build(2).gaps.length >= 3, "pitfalls has gaps");
+      ok(Tracks.build(3).bridges.length === 2, "two bridges");
+      const kinds = new Set(Tracks.build(4).segments.map(s => s.kind));
+      ok(kinds.has("ice") && kinds.has("grip"), "friction kinds");
+      const steep = Math.max(...Tracks.build(1).segments.map(s => Math.abs(Math.atan2(s.y1 - s.y0, s.x1 - s.x0))));
+      near(steep * 180 / Math.PI, 35, 0.01, "steepest slope");
+    });
+    test("bridge planks span the gap with a sag", () => {
+      const b = { x0: 10, x1: 18, y0: 2, y1: 2 };
+      const p = Tracks.bridgePlanks(b);
+      ok(p.length === 17, "16 planks -> 17 points, got " + p.length);
+      near(p[0].x, 10, 1e-9); near(p[0].y, 2, 1e-9);
+      near(p[p.length - 1].x, 18, 1e-6); near(p[p.length - 1].y, 2, 1e-6);
+      ok(Math.min(...p.map(q => q.y)) < 2 - 0.3, "sags");
+      const lens = [];
+      for (let k = 1; k < p.length; k++) lens.push(Math.hypot(p[k].x - p[k - 1].x, p[k].y - p[k - 1].y));
+      ok(Math.max(...lens) - Math.min(...lens) < 0.01, "even planks");
+    });
+    test("groundYAt interpolates and covers gaps", () => {
+      const g = Tracks.build(0);
+      near(Tracks.groundYAt(g, -5), 0, 1e-9, "run-up");
+      const s = g.segments[3];
+      near(Tracks.groundYAt(g, (s.x0 + s.x1) / 2), (s.y0 + s.y1) / 2, 1e-9, "mid segment");
+      const gp = Tracks.build(2).gaps[0];
+      near(Tracks.groundYAt(Tracks.build(2), (gp.x0 + gp.x1) / 2), Math.min(gp.y0, gp.y1), 1e-9, "gap");
+      near(Tracks.groundYAt(g, 1e6), g.segments[g.segments.length - 1].y1, 1e-9, "beyond end");
+    });
+    test("scoreFor maps 0..10 and clamps", () => {
+      const g = { scoreStartX: 0, scoreEndX: 100 };
+      ok(Score.scoreFor(-50, g) === 0, "before");
+      ok(Score.scoreFor(0, g) === 0, "start");
+      ok(Score.scoreFor(9.99, g) === 0, "just under 1");
+      ok(Score.scoreFor(10, g) === 1, "exactly 1");
+      ok(Score.scoreFor(55, g) === 5, "mid");
+      ok(Score.scoreFor(100, g) === 10, "end");
+      ok(Score.scoreFor(500, g) === 10, "after");
+    });
+    const flatGeom = () => ({ scoreStartX: 0, scoreEndX: 100, minY: 0,
+      segments: [{ x0: -10, y0: 0, x1: 200, y1: 0, kind: "normal" }], gaps: [], bridges: [] });
+    test("monitor: steady progress is fine, score never drops", () => {
+      const m = new RunMonitor(flatGeom());
+      let r = null;
+      for (let i = 0; i < 600 && !r; i++) r = m.update(1 / 60, { x: i * 0.05, y: 1, angle: 0 });
+      ok(r === null, "got " + r);
+      const s = m.score;
+      m.update(1 / 60, { x: 0, y: 1, angle: 0 });
+      ok(m.score === s && s === 2, "score kept " + m.score);
+    });
+    test("monitor: no progress for 3 s is stuck", () => {
+      const m = new RunMonitor(flatGeom());
+      let r = null, t = 0;
+      while (!r && t < 10) { r = m.update(1 / 60, { x: 5 + 0.1 * Math.sin(t * 5), y: 1, angle: 0 }); t += 1 / 60; }
+      ok(r === "stuck", "got " + r);
+      near(t, 3, 0.1, "after ~3 s");
+    });
+    test("monitor: upside down 1.5 s is flipped, brief flip is not", () => {
+      let m = new RunMonitor(flatGeom()), r = null;
+      for (let i = 0; i < 60; i++) r = r || m.update(1 / 60, { x: i * 0.1, y: 1, angle: Math.PI });
+      for (let i = 0; i < 60; i++) r = r || m.update(1 / 60, { x: 6 + i * 0.1, y: 1, angle: 0 });
+      ok(r === null, "brief flip " + r);
+      m = new RunMonitor(flatGeom()); r = null;
+      let i = 0;
+      while (!r && i < 300) { r = m.update(1 / 60, { x: i * 0.1, y: 1, angle: -3 }); i++; }
+      ok(r === "flipped" && i >= 90 && i <= 92, "flipped at " + i + " " + r);
+    });
+    test("monitor: falling into a pit, and win at 10", () => {
+      const g = Tracks.build(2), gp = g.gaps[0];
+      const m = new RunMonitor(g);
+      ok(m.update(1 / 60, { x: (gp.x0 + gp.x1) / 2, y: Math.min(gp.y0, gp.y1) - 4.5, angle: 0 }) === "fell", "pit");
+      const m2 = new RunMonitor(flatGeom());
+      ok(m2.update(1 / 60, { x: -100, y: -6, angle: 0 }) === "fell", "below minY");
+      const m3 = new RunMonitor(flatGeom());
+      ok(m3.update(1 / 60, { x: 100, y: 1, angle: 0 }) === "win", "win");
+    });
+    test("sliders: defaults in range, clamp handles junk", () => {
+      const d = VehicleConfig.defaults();
+      ok(VehicleConfig.SLIDERS.length === 11, "11 sliders");
+      for (const s of VehicleConfig.SLIDERS) ok(d[s.key] >= s.min && d[s.key] <= s.max && Number.isInteger(d[s.key]), s.key);
+      const c = VehicleConfig.clamp({ rearRadius: 99, frontRadius: -4, motorSpeed: "7", cargo: NaN, fuel: 2.6, bogus: 1 });
+      ok(c.rearRadius === 12 && c.frontRadius === 3 && c.motorSpeed === 7, "clamped");
+      ok(c.cargo === d.cargo && c.fuel === 3 && !("bogus" in c), "junk");
+      ok(JSON.stringify(VehicleConfig.clamp(null)) === JSON.stringify(d), "null -> defaults");
+    });
+    test("default spec reproduces the Car6 vehicle", () => {
+      const s = VehicleConfig.toPhysicsSpec(VehicleConfig.defaults());
+      near(s.chassis.w, 4, 1e-9); near(s.chassis.h, 0.4, 1e-9);
+      near(s.wheels[0].x, -1.2, 1e-9); near(s.wheels[1].x, 1.2, 1e-9);
+      near(s.wheels[0].r, 0.5, 1e-9); near(s.wheels[0].y, -0.2 - 0.8, 1e-9);
+      ok(s.wheels[0].type === "hex" && s.cargo.length === 4, "hex wheels, 4 cargo");
+      near(s.motor.torque, 80, 1e-9);
+    });
+    test("cargo never overlaps and stays between the posts", () => {
+      for (let w = 2; w <= 6; w++) for (let n = 0; n <= 6; n++) {
+        const s = VehicleConfig.toPhysicsSpec({ ...VehicleConfig.defaults(), chassisWidth: w, cargo: n });
+        ok(s.cargo.length === n, "count");
+        const inner = w / 2 - 0.2;
+        for (let k = 0; k < n; k++) {
+          const c = s.cargo[k];
+          ok(c.x - c.w / 2 >= -inner - 1e-9 && c.x + c.w / 2 <= inner + 1e-9, `w${w} n${n} block ${k} out`);
+          if (k > 0) { const p = s.cargo[k - 1]; ok(p.x + p.w / 2 <= c.x - c.w / 2 + 1e-9, "overlap"); }
+          near(c.y - c.h / 2, s.chassis.h / 2 + 0.01, 1e-9, "rests on bed");
+        }
+      }
+    });
+    test("save sanitize survives junk", () => {
+      const f = Save.fresh();
+      ok(f.unlocked === 1 && f.level === 0 && f.best.length === 5 && f.muted === false, "fresh");
+      const s = Save.sanitize({ values: { cargo: 99 }, unlocked: 42, best: [3, "x", 99], level: 7, muted: 1 });
+      ok(s.values.cargo === 6 && s.unlocked === 5, "values/unlocked");
+      ok(JSON.stringify(s.best) === "[3,0,10,0,0]", "best " + JSON.stringify(s.best));
+      ok(s.level === 4 && s.muted === true, "level/muted");
+      for (const junk of [null, 5, "x", [], { unlocked: -3, level: -1 }]) {
+        const j = Save.sanitize(junk);
+        ok(j.unlocked === 1 && j.level === 0 && j.best.length === 5, "junk " + JSON.stringify(junk));
+      }
+    });
+
+    if (planck) LithiumTests.physics(planck, test, ok);
+    console.log(`${pass} passed, ${fail} failed`);
+    return fail === 0;
+  },
+  physics(pl, test, ok) {
+    test("sim builds every level and the car settles on the run-up", () => {
+      for (let i = 0; i < Tracks.count; i++) {
+        const sim = createSim(pl, i, VehicleConfig.defaults());
+        for (let k = 0; k < 120; k++) sim.step();
+        const s = sim.state();
+        ok(Math.abs(s.x - sim.geom.spawnX) < 0.5 && s.y > 0.3 && s.y < 3 && Math.abs(s.angle) < 0.2,
+          `level ${i} settled at ${JSON.stringify(s)}`);
+      }
+    });
+    test("bridges hold their planks", () => {
+      const sim = createSim(pl, 3, VehicleConfig.defaults());
+      ok(sim.planks.length === 16 + 24, "planks " + sim.planks.length);
+      for (let k = 0; k < 120; k++) sim.step();
+      const lowest = Math.min(...sim.planks.map(b => b.getPosition().y));
+      ok(lowest > sim.geom.minY - 3, "planks fell: " + lowest);
+    });
+    test("zero motor speed ends stuck", () => {
+      const r = Sim.runHeadless(pl, 0, VehicleConfig.defaults(), { maxT: 10, opts: { motorSpeed: 0 } });
+      ok(r.result === "stuck", JSON.stringify(r));
+    });
+    test("every level has a known slider solution", () => {
+      ok(SOLUTIONS.length === Tracks.count, "one per level");
+      ok(JSON.stringify(VehicleConfig.clamp(SOLUTIONS[0].values)) === JSON.stringify(VehicleConfig.defaults()), "level 1 = defaults");
+      for (let i = 0; i < Tracks.count; i++) {
+        const r = Sim.runHeadless(pl, i, SOLUTIONS[i].values, { maxT: 120 });
+        ok(r.result === "win", `level ${i + 1}: ${JSON.stringify(r)}`);
+        if (i > 0) {
+          const d = Sim.runHeadless(pl, i, VehicleConfig.defaults(), { maxT: 120 });
+          ok(d.result !== "win", `level ${i + 1} is too easy: the default car wins`);
+        }
+      }
+    });
+    test("extreme sliders stay finite", () => {
+      const S = VehicleConfig.SLIDERS, lo = {}, hi = {};
+      for (const s of S) { lo[s.key] = s.min; hi[s.key] = s.max; }
+      const combos = [lo, hi,
+        { ...hi, legLength: 1, chassisWidth: 2, chassisHeight: 1 },
+        { ...lo, legLength: 8, chassisWidth: 6, cargo: 6, motorTorque: 10, motorSpeed: 14 },
+        { ...hi, rearRadius: 3, frontRadius: 12, suspension: 1 }];
+      for (const v of combos) for (const lvl of [1, 3]) {
+        const sim = createSim(pl, lvl, v);
+        sim.start();
+        for (let k = 0; k < 600; k++) sim.step({ boost: k % 120 < 30, tilt: k % 200 < 50 ? 1 : 0 });
+        const s = sim.state(), vel = sim.chassis.getLinearVelocity();
+        ok([s.x, s.y, s.angle, vel.x, vel.y].every(Number.isFinite), "NaN " + JSON.stringify(v));
+        ok(Math.hypot(vel.x, vel.y) < 60, "exploded " + JSON.stringify(v));
+      }
+    });
+  },
+};
+</script>
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js";
+import * as planck from "https://cdn.jsdelivr.net/npm/planck@1.5.1/dist/planck.mjs";
+
+const C = {
+  sky: 0x0000ff, track: 0xffff00, ice: 0xffff99, grip: 0xffcc00, black: 0x000000,
+  tyre: 0x5a5a5a, hub: 0xe0e0e0, gearRing: 0x6e6e6e, gearDisc: 0x9a9a9a, cargo: 0x00ff00,
+  red: 0xff0000, green: 0x00ff00, spark: 0xffff00,
+};
+const KIND_COLOR = { normal: C.track, ice: C.ice, grip: C.grip };
+const MIN_VIEW_H = 9, VIEW_W = 18;
+
+const canvas = document.getElementById("view");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+renderer.setClearColor(C.sky);
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
+
+// At least VIEW_W metres wide and MIN_VIEW_H metres tall, whatever the window shape.
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(w, h);
+  let halfW = VIEW_W / 2, halfH = halfW * h / w;
+  if (halfH * 2 < MIN_VIEW_H) { halfH = MIN_VIEW_H / 2; halfW = halfH * w / h; }
+  camera.left = -halfW; camera.right = halfW; camera.top = halfH; camera.bottom = -halfH;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", () => { resize(); updateCamera(0, true); render(); });
+
+const materials = new Map();
+function M(color) {
+  if (!materials.has(color)) materials.set(color, new THREE.MeshBasicMaterial({ color }));
+  return materials.get(color);
+}
+function polyMesh(points, color, z) {
+  const shape = new THREE.Shape(points.map(p => new THREE.Vector2(p.x, p.y)));
+  const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), M(color));
+  m.position.z = z;
+  return m;
+}
+function rectPts(cx, cy, hx, hy) {
+  return [{ x: cx - hx, y: cy - hy }, { x: cx + hx, y: cy - hy }, { x: cx + hx, y: cy + hy }, { x: cx - hx, y: cy + hy }];
+}
+function circleMesh(r, color, z) {
+  const m = new THREE.Mesh(new THREE.CircleGeometry(r, 48), M(color));
+  m.position.z = z;
+  return m;
+}
+function ngonPts(r, n, rot = 0) {
+  const pts = [];
+  for (let i = 0; i < n; i++) { const a = rot + i * 2 * Math.PI / n; pts.push({ x: r * Math.cos(a), y: r * Math.sin(a) }); }
+  return pts;
+}
+// Gear outline like the prototype's cog wheels: flat-topped teeth around a disc.
+function gearPts(rOut, rIn, teeth) {
+  const pts = [], step = 2 * Math.PI / teeth;
+  for (let i = 0; i < teeth; i++) {
+    const a = i * step;
+    for (const [f, r] of [[0, rIn], [0.15, rOut], [0.5, rOut], [0.65, rIn]]) {
+      pts.push({ x: r * Math.cos(a + f * step), y: r * Math.sin(a + f * step) });
+    }
+  }
+  return pts;
+}
+function spoke(r, z) { return polyMesh([{ x: 0, y: -0.03 }, { x: r, y: -0.03 }, { x: r, y: 0.03 }, { x: 0, y: 0.03 }], C.black, z); }
+
+function wheelObject(w) {
+  const g = new THREE.Group();
+  if (w.type === "gear") {
+    g.add(polyMesh(gearPts(w.r, w.r * 0.86, Math.max(8, Math.round(w.r * 20))), C.gearRing, 2));
+    g.add(circleMesh(w.r * 0.78, C.gearDisc, 2.1));
+    g.add(spoke(w.r * 0.75, 2.2));
+  } else if (w.type === "hex") {
+    g.add(circleMesh(w.r, C.tyre, 2));
+    g.add(polyMesh(ngonPts(w.r * 0.42, 6, 0.3), C.hub, 2.1));
+  } else {
+    g.add(circleMesh(w.r, C.tyre, 2));
+    g.add(circleMesh(w.r * 0.35, C.hub, 2.1));
+    g.add(spoke(w.r * 0.9, 2.2));
+  }
+  return g;
+}
+
+// Scene objects: `static` never moves (track, walls); `dynamic` follows a planck body.
+const world = { static: [], dynamic: [] };
+let chassisGroup = null, flameGroup = null;
+
+function buildWorld() {
+  const geom = sim.geom, spec = sim.spec;
+  for (const s of geom.segments) {
+    // Adjacent quads at different angles leave the small notches the SpriteKit track showed.
+    const m = polyMesh([{ x: s.x0, y: s.y0 }, { x: s.x1, y: s.y1 }, { x: s.x1, y: s.y1 - BAND }, { x: s.x0, y: s.y0 - BAND }], KIND_COLOR[s.kind], 0);
+    world.static.push(m);
+  }
+  for (const wl of geom.walls) {
+    const dir = wl.x0 < 0 ? -1 : 1;
+    world.static.push(polyMesh(rectPts(wl.x0 + dir * BAND / 2, (wl.y0 + wl.y1) / 2 - BAND / 2, BAND / 2, (wl.y1 - wl.y0) / 2 + BAND / 2), C.track, 0));
+  }
+  for (const o of world.static) scene.add(o);
+
+  chassisGroup = new THREE.Group();
+  chassisGroup.add(polyMesh(rectPts(0, 0, spec.chassis.w / 2, spec.chassis.h / 2), C.black, 1));
+  for (const p of spec.posts) chassisGroup.add(polyMesh(rectPts(p.x, p.y, p.hx, p.hy), C.black, 1));
+  for (const l of spec.legs) chassisGroup.add(polyMesh(rectPts(l.x, (l.top + l.bottom) / 2, l.hw, (l.top - l.bottom) / 2), C.black, 0.9));
+  flameGroup = new THREE.Group();
+  flameGroup.visible = false;
+  chassisGroup.add(flameGroup);
+  // Booster flame (screenshot 1): a red triangle at the rear of the chassis, a long green one behind it,
+  // a small yellow square at its tip.
+  const rx = -spec.chassis.w / 2, hy = spec.chassis.h / 2;
+  flameGroup.add(polyMesh([{ x: rx, y: hy * 0.8 }, { x: rx, y: -hy }, { x: rx - 0.55, y: -hy - 0.35 }], C.red, 0.8));
+  const green = polyMesh([{ x: 0, y: 0 }, { x: 0.12, y: -0.22 }, { x: -1.1, y: -0.75 }], C.green, 0.7);
+  green.position.set(rx - 0.5, -hy - 0.28, 0.7);
+  green.name = "greenFlame";
+  flameGroup.add(green);
+  const tip = polyMesh(rectPts(0, 0, 0.07, 0.07), C.spark, 0.75);
+  tip.name = "flameTip";
+  tip.position.set(rx - 0.5 - 1.1, -hy - 0.28 - 0.75, 0.75);
+  flameGroup.add(tip);
+  world.dynamic.push({ body: sim.chassis, obj: chassisGroup });
+  sim.wheels.forEach((b, i) => world.dynamic.push({ body: b, obj: wheelObject(spec.wheels[i]) }));
+  sim.cargo.forEach((b, i) => {
+    const c = spec.cargo[i];
+    world.dynamic.push({ body: b, obj: polyMesh(rectPts(0, 0, c.w / 2, c.h / 2), C.cargo, 1.5) });
+  });
+  for (const b of sim.planks) {
+    const len = b.getUserData().len;
+    world.dynamic.push({ body: b, obj: polyMesh(rectPts(0, -0.1, len / 2 - 0.02, 0.1), C.track, 0.2) });
+  }
+  for (const d of world.dynamic) scene.add(d.obj);
+  syncBodies();
+}
+
+function disposeWorld() {
+  const all = [...world.static, ...world.dynamic.map(d => d.obj)];
+  for (const o of all) {
+    scene.remove(o);
+    o.traverse(n => { if (n.geometry) n.geometry.dispose(); });  // materials are shared, kept
+  }
+  world.static = []; world.dynamic = [];
+}
+
+function syncBodies() {
+  for (const d of world.dynamic) {
+    const p = d.body.getPosition();
+    d.obj.position.x = p.x; d.obj.position.y = p.y;  // keep z: meshes carry their own depth
+    d.obj.rotation.z = d.body.getAngle();
+  }
+}
+
+const cam = { x: 0, y: 0 };
+function panelWorldWidth() {
+  const panel = document.getElementById("panel");
+  if (!panel || mode !== "garage") return 0;
+  return panel.getBoundingClientRect().right / innerWidth * (camera.right - camera.left);
+}
+function updateCamera(dt, snap) {
+  const s = sim.state();
+  const tx = mode === "garage" ? s.x - panelWorldWidth() / 2 : s.x + 2;
+  const ty = Math.max(s.y + 0.5, sim.geom.minY - 2);
+  if (snap) { cam.x = tx; cam.y = ty; }
+  else { const k = 1 - Math.exp(-dt * 4); cam.x += (tx - cam.x) * k; cam.y += (ty - cam.y) * k; }
+  camera.position.set(cam.x, cam.y, 5);
+}
+
+function render() {
+  syncBodies();
+  renderer.render(scene, camera);
+}
+
+// ---- state ----
+let save = Save.fresh();
+try { save = Save.sanitize(JSON.parse(localStorage.getItem(Save.KEY) || "null")); } catch (e) { /* no storage */ }
+function persist() {
+  save.values = values; save.level = level;
+  try { localStorage.setItem(Save.KEY, JSON.stringify(save)); } catch (e) { /* no storage */ }
+}
+let level = save.level, values = save.values, mode = "garage", sim = null, monitor = null;
+let lastResult = "", lastScore = 0;
+
+const ui = {
+  score: document.getElementById("score"), caption: document.getElementById("caption"),
+  fuel: document.getElementById("fuel"), fuelFill: document.getElementById("fuelFill"),
+  panel: document.getElementById("panel"), levels: document.getElementById("levels"),
+  sliders: document.getElementById("sliders"), reset: document.getElementById("reset"),
+  go: document.getElementById("go"), help: document.getElementById("help"), stats: document.getElementById("stats"),
+};
+
+function rebuild() {
+  if (sim) disposeWorld();
+  sim = createSim(planck, level, values);
+  buildWorld();
+  updateCamera(0, true);
+}
+
+// Sliders: one row per VehicleConfig.SLIDERS entry; any change rebuilds the preview car.
+const sliderInputs = {};
+for (const s of VehicleConfig.SLIDERS) {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `<div class="top"><span>${s.label}</span><span class="val"></span></div>`;
+  const input = document.createElement("input");
+  Object.assign(input, { type: "range", min: s.min, max: s.max, step: 1 });
+  input.setAttribute("aria-label", s.label);
+  input.addEventListener("input", () => {
+    values = { ...values, [s.key]: Number(input.value) };
+    syncSliders(); persist(); rebuild();
+  });
+  row.appendChild(input);
+  ui.sliders.appendChild(row);
+  sliderInputs[s.key] = { input, val: row.querySelector(".val"), s };
+}
+function syncSliders() {
+  for (const { input, val, s } of Object.values(sliderInputs)) {
+    input.value = values[s.key];
+    input.style.setProperty("--p", ((values[s.key] - s.min) / (s.max - s.min) * 100) + "%");
+    val.textContent = s.show(values[s.key]);
+  }
+}
+ui.reset.addEventListener("click", () => { values = VehicleConfig.defaults(); syncSliders(); persist(); rebuild(); });
+
+function renderLevels() {
+  ui.levels.innerHTML = "";
+  for (let i = 0; i < Tracks.count; i++) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = `${i + 1}  ${Tracks.name(i)}` + (i < save.unlocked ? `  ·  best ${save.best[i]}` : "");
+    b.disabled = i >= save.unlocked;
+    if (i === level) b.classList.add("current");
+    b.addEventListener("click", () => setLevel(i));
+    ui.levels.appendChild(b);
+  }
+}
+function setLevel(i) {
+  if (mode !== "garage" || i < 0 || i >= save.unlocked) return;
+  level = i; lastResult = ""; lastScore = 0;
+  persist(); renderLevels(); rebuild(); updateHud();
+}
+
+function updateHud() {
+  ui.score.textContent = mode === "garage" ? lastScore : monitor ? monitor.score : 0;
+  ui.caption.textContent = mode === "garage"
+    ? (lastResult || `level ${level + 1} · ${Tracks.name(level)}` + (save.best[level] ? ` · best ${save.best[level]}` : ""))
+    : mode === "over" ? lastResult : "";
+  const showFuel = mode === "run" && sim.spec.fuel > 0;
+  ui.fuel.style.display = showFuel ? "block" : "none";
+  if (showFuel) ui.fuelFill.style.width = (sim.fuel / sim.spec.fuel * 100) + "%";
+  ui.go.textContent = mode === "run" ? "Stop" : "Start";
+  ui.go.style.visibility = mode === "over" || mode === "win" ? "hidden" : "visible";
+  ui.panel.classList.toggle("hidden", mode !== "garage");
+}
+
+function startRun() {
+  if (document.activeElement) document.activeElement.blur();
+  lastResult = ""; lastScore = 0;
+  rebuild();
+  sim.start();
+  monitor = new RunMonitor(sim.geom);
+  mode = "run";
+  sound.ensure();
+  updateHud();
+}
+function stopRun() {
+  if (document.activeElement) document.activeElement.blur();
+  mode = "garage"; monitor = null;
+  rebuild(); renderLevels(); updateHud();
+}
+function recordBest(score) {
+  if (score > save.best[level]) save.best[level] = score;
+  persist();
+}
+// Player-initiated Stop / restart keep the score reached so far.
+function playerStop() {
+  if (mode === "run" && monitor) recordBest(monitor.score);
+  stopRun();
+}
+function playerRestart() {
+  if (mode === "run" && monitor) recordBest(monitor.score);
+  clearTimeout(overTimer);
+  startRun();
+}
+let overTimer = 0;
+function endRun(reason) {
+  mode = "over";
+  lastScore = monitor.score;
+  lastResult = `out at ${monitor.score} · ${reason}`;
+  recordBest(monitor.score);
+  updateHud();
+  clearTimeout(overTimer);
+  overTimer = setTimeout(() => { if (mode === "over") stopRun(); }, 1500);
+}
+// The prototype's winnerSequence: the background flashes white/black, then the next level opens.
+function winRun() {
+  mode = "win";
+  recordBest(10);
+  lastScore = 10;
+  updateHud();
+  sound.win();
+  // Default is the prototype's fast sequence; reduced-motion users get three slow (>= 150 ms) flashes.
+  const calm = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const seq = calm ? [1, 0, 1, 0, 1, 0] : [1, 0, 1, 0, 1, 0, 1, 0, 1];
+  let i = 0;
+  const flash = () => {
+    renderer.setClearColor(seq[i] ? 0xffffff : 0x000000);
+    render();
+    i++;
+    if (i < seq.length) { setTimeout(flash, calm ? 200 : i < 2 ? 50 : 30); return; }
+    setTimeout(() => {
+      renderer.setClearColor(C.sky);
+      const next = level + 1;
+      if (next < Tracks.count) {
+        save.unlocked = Math.max(save.unlocked, next + 1);
+        level = next; lastScore = 0; lastResult = `level ${next} cleared!`;
+      } else {
+        lastResult = "all tracks done!";
+      }
+      persist();
+      stopRun();
+    }, 300);
+  };
+  flash();
+}
+
+// ---- input ----
+const keys = new Set();
+addEventListener("keydown", e => {
+  sound.ensure();
+  if (e.metaKey || e.ctrlKey || e.altKey) return;  // leave browser shortcuts (Cmd+R, Cmd+1) alone
+  if (e.code === "Enter" || e.code === "NumpadEnter") {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (mode === "garage") startRun(); else if (mode === "run") playerStop();
+    return;
+  }
+  // Space must not re-press a focused button (Stop leaves #go focused in some browsers).
+  if (e.code === "Space" && e.target && e.target.tagName === "BUTTON") e.preventDefault();
+  if (e.code === "KeyM") { if (!e.repeat) { sound.toggleMute(); save.muted = sound.muted; persist(); updateHelp(); } return; }
+  if (e.code === "KeyR" && (mode === "run" || mode === "over")) { if (!e.repeat) playerRestart(); return; }
+  if (mode === "garage" && /^Digit[1-5]$/.test(e.code)) { setLevel(Number(e.code.slice(5)) - 1); return; }
+  if (mode === "run" && ["Space", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.code)) {
+    e.preventDefault();
+    keys.add(e.code);
+  }
+});
+addEventListener("keyup", e => keys.delete(e.code));
+addEventListener("blur", () => { keys.clear(); sound.update(false, 0, false); });
+// A hidden tab stops rAF, so sound.update never runs: suspend the context so the hum cannot drone on.
+document.addEventListener("visibilitychange", () => {
+  if (!sound.ctx) return;
+  if (document.hidden) sound.ctx.suspend(); else sound.ctx.resume();
+});
+ui.go.addEventListener("click", e => {
+  if (e.detail > 1) return;  // a double-click on Start must not immediately Stop
+  sound.ensure();
+  if (mode === "garage") startRun(); else if (mode === "run") playerStop();
+});
+
+// ---- loop ----
+// ---- effects ----
+let boosting = false;
+const sparks = [];
+const sparkGeo = new THREE.PlaneGeometry(0.07, 0.07);
+for (let i = 0; i < 40; i++) {
+  const m = new THREE.Mesh(sparkGeo, M(C.spark));
+  m.visible = false;
+  m.position.z = 0.6;
+  scene.add(m);
+  sparks.push({ m, vx: 0, vy: 0, life: 0 });
+}
+let sparkIx = 0;
+function emitSpark() {
+  const tip = flameGroup.getObjectByName("flameTip");
+  if (!tip) return;
+  const p = new THREE.Vector3();
+  tip.getWorldPosition(p);
+  const back = sim.chassis.getWorldVector(planck.Vec2(-1, 0));
+  const s = sparks[sparkIx++ % sparks.length];
+  s.m.position.set(p.x, p.y, 0.6);
+  s.vx = back.x * (2 + Math.random() * 2) + (Math.random() - 0.5);
+  s.vy = back.y * (2 + Math.random() * 2) - Math.random();
+  s.life = 0.5 + Math.random() * 0.3;
+  s.m.visible = true;
+}
+function afterStep(r) {
+  boosting = r.boosting;
+  if (boosting && Math.random() < 0.5) emitSpark();
+  if (r.impact > 2) sound.thump(r.impact);  // landing faster than 2 m/s
+}
+function drawEffects(dt) {
+  if (flameGroup) {
+    flameGroup.visible = boosting && mode === "run";
+    const g = flameGroup.getObjectByName("greenFlame");
+    if (g) g.scale.set(0.8 + Math.random() * 0.4, 1, 1);
+  }
+  for (const s of sparks) {
+    if (!s.m.visible) continue;
+    s.life -= dt;
+    if (s.life <= 0) { s.m.visible = false; continue; }
+    s.vy -= 6 * dt;
+    s.m.position.x += s.vx * dt;
+    s.m.position.y += s.vy * dt;
+  }
+  sound.update(mode === "run", sim ? sim.wheelSpeed() : 0, boosting && mode === "run");
+  if (mode !== "run") boosting = false;
+}
+
+// ---- sound ----
+class Sound {
+  constructor(muted) { this.ctx = null; this.muted = muted; this.lastThump = 0; }
+  ensure() {
+    if (this.ctx) { if (this.ctx.state === "suspended") this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = this.ctx = new AC();
+    this.master = ctx.createGain();
+    this.master.gain.value = this.muted ? 0 : 0.6;
+    this.master.connect(ctx.destination);
+    // Motor hum: sawtooth through a lowpass, pitch follows wheel speed.
+    this.motor = ctx.createOscillator();
+    this.motor.type = "sawtooth";
+    this.motor.frequency.value = 45;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 380;
+    this.motorGain = ctx.createGain();
+    this.motorGain.gain.value = 0;
+    this.motor.connect(lp).connect(this.motorGain).connect(this.master);
+    this.motor.start();
+    // One second of white noise, shared by the booster hiss and the thumps.
+    this.noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = this.noise.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const hiss = ctx.createBufferSource();
+    hiss.buffer = this.noise; hiss.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 900; bp.Q.value = 0.8;
+    this.boostGain = ctx.createGain();
+    this.boostGain.gain.value = 0;
+    hiss.connect(bp).connect(this.boostGain).connect(this.master);
+    hiss.start();
+  }
+  update(running, wheelSpeed, boost) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.motor.frequency.setTargetAtTime(45 + wheelSpeed * 9, t, 0.05);
+    this.motorGain.gain.setTargetAtTime(running ? 0.05 : 0, t, 0.1);
+    this.boostGain.gain.setTargetAtTime(boost ? 0.2 : 0, t, 0.03);
+  }
+  thump(strength) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    if (t - this.lastThump < 0.08) return;
+    this.lastThump = t;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noise;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 260;
+    const g = this.ctx.createGain();
+    const v = 0.5 * Math.min(1, strength / 4);
+    g.gain.setValueAtTime(v, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    src.connect(lp).connect(g).connect(this.master);
+    src.start(t, Math.random() * 0.8, 0.2);
+  }
+  win() {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+      const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+      o.type = "square"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.08, t0 + i * 0.09);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + i * 0.09 + 0.12);
+      o.connect(g).connect(this.master);
+      o.start(t0 + i * 0.09); o.stop(t0 + i * 0.09 + 0.13);
+    });
+  }
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.master) this.master.gain.setTargetAtTime(this.muted ? 0 : 0.6, this.ctx.currentTime, 0.02);
+  }
+}
+const sound = new Sound(save.muted);
+const HELP_KEYS = ui.help.textContent;
+function updateHelp() { ui.help.textContent = HELP_KEYS + (sound.muted ? " · muted" : " · sound on"); }
+updateHelp();
+
+function tick() {
+  if (mode === "garage") { sim.step(); return; }
+  if (mode !== "run") return;  // over / win: the car is frozen
+  const input = { boost: keys.has("Space"), tilt: (keys.has("ArrowRight") ? 1 : 0) - (keys.has("ArrowLeft") ? 1 : 0) };
+  const r = sim.step(input);
+  afterStep(r);
+  const res = monitor.update(1 / 60, sim.state());
+  if (res === "win") winRun(); else if (res) endRun(res);
+}
+
+const STEP = 1 / 60;
+let acc = 0, last = performance.now(), fps = 60, statT = 0;
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  acc += dt;
+  let n = 0;
+  while (acc >= STEP && n < 5) { tick(); acc -= STEP; n++; }
+  if (n === 5) acc = 0;  // drop the backlog after a stall instead of catching up
+  updateCamera(dt, false);
+  drawEffects(dt);
+  render();
+  if (mode === "run") updateHud();
+  if (dt > 0) fps += (1 / dt - fps) * 0.05;
+  statT += dt;
+  if (statT > 0.25) {
+    statT = 0;
+    let nodes = 0;
+    scene.traverse(() => nodes++);
+    ui.stats.textContent = `nodes:${nodes} draws:${renderer.info.render.calls}  ${fps.toFixed(1)} fps`;
+  }
+  requestAnimationFrame(frame);
+}
+
+resize();
+syncSliders();
+renderLevels();
+rebuild();
+updateHud();
+requestAnimationFrame(frame);
+
+// Debug handle for headless screenshots (rAF does not advance under virtual time).
+window.__lithium = {
+  get sim() { return sim; }, get mode() { return mode; }, get audio() { return sound; }, scene, camera, THREE, planck,
+  start: startRun, setLevel, render,
+  setValues(v) { values = VehicleConfig.clamp(v); syncSliders(); rebuild(); },
+  step(n, input = {}) {
+    for (let i = 0; i < n; i++) {
+      if (mode === "run") { const r = sim.step(input); afterStep(r); const res = monitor.update(1 / 60, sim.state()); if (res) { if (res === "win") winRun(); else endRun(res); break; } }
+      else sim.step();
+      updateCamera(1 / 60, false);
+    }
+    updateHud(); drawEffects(0); render();
+  },
+};
+
+// ?shot=1&level=N&t=SECONDS : start a run on level N and advance it synchronously t seconds (for headless screenshots).
+const q = new URLSearchParams(location.search);
+if (q.has("shot")) {
+  const lv = Math.max(0, Math.min(Tracks.count - 1, Number(q.get("level")) || 0));
+  save.unlocked = Math.max(save.unlocked, lv + 1);
+  level = lv;
+  values = VehicleConfig.clamp(SOLUTIONS[lv].values);
+  syncSliders(); renderLevels();
+  startRun();
+  window.__lithium.step(Math.round((Number(q.get("t")) || 6) * 60), { boost: q.has("boost") });
+}
+</script>
+</body>
+</html>

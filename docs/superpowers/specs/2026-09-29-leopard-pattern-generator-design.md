@@ -1,7 +1,7 @@
 # Leopard pattern generator
 
 Date: 2026-09-29
-Directory: `leopard-pattern-generator/`
+Directory: `leopard-pattern/` (formerly `leopard-pattern-generator/`)
 
 ## Goal
 

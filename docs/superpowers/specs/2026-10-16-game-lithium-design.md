@@ -1,6 +1,6 @@
 # Lithium — design
 
-Date: 2026-10-16. Directory: `game-lithium/` (single `index.html` + `test.mjs` + `screenshot1.jpg` + `README.md`).
+Date: 2026-10-16. Directory: `game-car-simple/` (formerly `game-lithium/`) (single `index.html` + `test.mjs` + `screenshot1.jpg` + `README.md`).
 Gallery title: "Lithium".
 
 ## Intent
