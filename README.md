@@ -130,6 +130,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [spinor-belt-trick](spinor-belt-trick/) -- see highlights.
 - [stair-dismount](stair-dismount/) -- see highlights.
 - [tetris-cylinder-2player-game](tetris-cylinder-2player-game/) -- two-player Tetris on concentric cylinders, one keyboard. Three.js.
+- [tin-foil](tin-foil/) -- a sheet of foil on a table under movable lamps with real spectra (halogen, light bulb, candle, white and RGB LEDs, fluorescent, sodium and mercury street lamps, a laser). Write a word under the foil, press letters into it, burnish it tight to reveal what is underneath, scrunch it. Kitchen foil (shiny and matte side), lacquered chocolate foils, gold leaf and copper each have a reflectance spectrum, so gold and silver foil match under low-pressure sodium. Crumple from faceted envelopes, embossed snowflakes, quilting and curls, chocolate coins and bar, tin-foil-art cords. WebGL2 height map with anisotropic GGX and traced crease shadows.
 - [torus-shooter](torus-shooter/) -- see highlights.
 - [voxel-cave](voxel-cave/) -- first-person Perlin-noise cave you can carve into, remeshed live with Surface Nets. Three.js.
 - [wrecking-ball](wrecking-ball/) -- see highlights.
