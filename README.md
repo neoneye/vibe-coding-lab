@@ -113,6 +113,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [2d-slime-mold](2d-slime-mold/) -- Physarum agents with pheromone deposit, diffusion and decay; click to drop food.
 - [2d-solvey-conference](2d-solvey-conference/) -- see highlights.
 - [2d-speed-of-light](2d-speed-of-light/) -- relativity of simultaneity with an animated scene and a Minkowski diagram driven by an observer-velocity slider.
+- [2d-sumi-e](2d-sumi-e/) -- paint with ink on rice paper. A brush of about 80 bristles, each holding its own ink, follows pen pressure (or mouse speed): strokes go from wet to dry, break into flying-white streaks when fast, and pool when held still. Raw xuan blooms ink into grey halos, sized paper keeps edges crisp, plus hemp with laid lines and a crackled sheet. Five ink tones, dark-tip loading, a seal, and painted bamboo and ensō demos.
 - [2d-tesla-valve](2d-tesla-valve/) -- forward and reverse flow through a Tesla valve side by side, with a live flow ratio, on a lattice-Boltzmann solver.
 - [2d-triangle-game-of-life](2d-triangle-game-of-life/) -- Conway's Game of Life on a triangular grid with selectable rules and themes.
 - [2d-watercolor-text](2d-watercolor-text/) -- type a title in poster lettering and watch drops of water land on the paint: it re-wets, frays along the paper fibres, runs, and dries with dark rims. A GPU watercolour model after Curtis et al. (1997): shallow water flow, invasion-percolation wicking, pigment that lifts and settles. Click to drop water, drag to trail it.
