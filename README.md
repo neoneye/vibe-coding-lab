@@ -94,6 +94,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 
 ### 2D simulations and visualisations
 
+- [asphalt](asphalt/) -- a drawing program in hot mix. Shovel lumpy asphalt onto a gravel base or lay an even mat with the paver, rake it, and roll it flat before it cools. Each 5 mm cell keeps a stack of layers with thickness, air voids and temperature: thin lifts cool faster, rolling only compacts above about 80 °C and cracks cold mix, hot mix is shoved ahead of the drum. Place cold lumps, big stones, puddles that steam, boot prints and stony patches; watch it in a cross-section strip, a thermal camera, a density map and a roller-pass map. Demos pave a strip and patch a pothole.
 - [blur](blur/) -- image blur by repeated 1D box blurs at rotated angles; upload an image, tweak radius and iterations.
 - [city-generator](city-generator/) -- Substrate-style city plans grown by crawling agents that crack and branch at right angles.
 - [cloud-chamber](cloud-chamber/) -- alpha, beta and muon condensation trails with an adjustable magnetic field.
