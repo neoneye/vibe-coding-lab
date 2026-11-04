@@ -114,6 +114,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [2d-speed-of-light](2d-speed-of-light/) -- relativity of simultaneity with an animated scene and a Minkowski diagram driven by an observer-velocity slider.
 - [2d-tesla-valve](2d-tesla-valve/) -- forward and reverse flow through a Tesla valve side by side, with a live flow ratio, on a lattice-Boltzmann solver.
 - [2d-triangle-game-of-life](2d-triangle-game-of-life/) -- Conway's Game of Life on a triangular grid with selectable rules and themes.
+- [2d-watercolor-text](2d-watercolor-text/) -- type a title in poster lettering and watch drops of water land on the paint: it re-wets, frays along the paper fibres, runs, and dries with dark rims. A GPU watercolour model after Curtis et al. (1997): shallow water flow, invasion-percolation wicking, pigment that lifts and settles. Click to drop water, drag to trail it.
 
 ### 3D
 
