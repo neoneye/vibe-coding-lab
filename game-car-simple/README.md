@@ -1,6 +1,6 @@
-# Lithium
+# Simple Car
 
-A desktop revival of *Lithium*, an unfinished iOS car prototype from 2016 (SpriteKit). Tune the car with
+A desktop revival of an unfinished iOS car prototype from 2016 (SpriteKit), once called *Lithium* as a working title. Tune the car with
 sliders, press Start, and watch it drive itself. Reach 10 to clear the track. The idea comes from the
 2016 concept deck: *it's addictive to tweak sliders over and over and see how the new vehicle behaves
 and if it passes the track.*
