@@ -168,3 +168,14 @@ REPRODUCE, WATCH TV, CONFORM, SUBMIT, WORK 8 HOURS, SLEEP 8 HOURS, PLAY 8 HOURS)
 condensed capitals, Big Brother in red beneath a rule. They Live: a dim grey wall, one stark white
 bold word per panel, all at one size. Both walls stay dark so the strokes read against pale dust;
 the dark skirting band along the bottom is kept. The Roman quotes above are superseded.
+
+## Change (2026-11-05): particles vary in colour
+
+The owner found the dust too uniform in colour: "IRL the particles that land here in Denmark varies
+a lot". Each kind now has a colour variety (Saharan 0.85, household 0.9, sand 0.9, soot 0.15,
+pollen 0.35, ash 0.55), mixed by mass like the other properties. The shader draws (a) the fine dust
+softly mottled at the millimetre scale towards redder (iron-stained clay) or greyer (local grime),
+and (b) two layers of sparse coarse particles lying on the dust (0.07–0.24 mm and 0.2–0.52 mm), each
+its own colour: quartz, soot flakes, rust, pollen, grey fibre bits, plant matter, salt. More dust
+carries more particles, and a wiped stroke carries none. Dried crust is more even. My first try,
+per-grain minerals everywhere, looked like sandpaper; a strong mottle looked like camouflage.
