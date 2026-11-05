@@ -157,3 +157,14 @@ entry; exported image renders the pane only, centred, without UI.
   rings more).
 - **Watch**: "A Saharan rain shower" (dusty rain, then clean rain, then drying) and "Left alone for
   a year" (settling at one month per second with two short showers).
+
+## Change (2026-11-05): slogans instead of Roman quotes
+
+The owner asked to replace the Roman quotes with the Party slogans from George Orwell's *1984*
+("WAR IS PEACE", "FREEDOM IS SLAVERY", "IGNORANCE IS STRENGTH", "BIG BROTHER IS WATCHING YOU") and
+the hidden messages from the film *They Live* (OBEY, CONSUME, STAY ASLEEP, NO THOUGHT, MARRY AND
+REPRODUCE, WATCH TV, CONFORM, SUBMIT, WORK 8 HOURS, SLEEP 8 HOURS, PLAY 8 HOURS). My calls: two walls,
+"Other slogans" switches between them. 1984: a dim concrete wall, the three slogans in tall
+condensed capitals, Big Brother in red beneath a rule. They Live: a dim grey wall, one stark white
+bold word per panel, all at one size. Both walls stay dark so the strokes read against pale dust;
+the dark skirting band along the bottom is kept. The Roman quotes above are superseded.
