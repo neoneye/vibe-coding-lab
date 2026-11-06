@@ -122,6 +122,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 
 ### 3D
 
+- [centipede](centipede/) -- centipedes and millipedes built from their parts: number of segments, segment shape (round, flattened, keeled, domed), leg pairs per segment, leg length and how far each joint bends sideways and up/down. Walk, coil up or climb over stones and logs. Legs step in metachronal waves (head to tail or tail to head, left and right alternating or together, set duty factor) with planted feet and two-bone legs; coiling closes into a spiral or a ball only if the joints bend far enough. Nine real animals to start from, from the house centipede to the 1306-legged Eumillipes persephone. Low camera with a fish-eye lens. Three.js.
 - [eiffel-tower-assembly](eiffel-tower-assembly/) -- scrub the 1887 to 1889 timeline and watch the tower rise, with falsework, creeper cranes and weather. Three.js.
 - [faraday-waves](faraday-waves/) -- a shaken liquid breaks into standing waves at half the drive frequency; in a narrow ring channel the pattern starts to travel, ratchet teeth pick the direction, and two ratcheted rings make a pump. After Guan et al., Phys. Rev. Fluids 2023. WebGPU compute (WebGL fallback), Three.js.
 - [game-basement](game-basement/) -- see highlights.
