@@ -368,7 +368,8 @@ const SnakeCore = (() => {
     let k = P.wander * 0.9 * (0.6 * Math.sin(s) + 0.4 * Math.sin(2.3 * s + 1)) / A.L;
     // keep near the middle of the world
     const d = Math.hypot(sim.X[0], sim.X[1]);
-    if (d > 2 * A.L) { const want = Math.atan2(-sim.X[1], -sim.X[0]); let e = Math.atan2(Math.sin(want - sim.th), Math.cos(want - sim.th)); k += e * smooth(2 * A.L, 3 * A.L, d) * 2 / A.L; }
+    // a positive bend (heading growing towards the tail) turns the travelling snake clockwise, hence the minus
+    if (d > 1.5 * A.L) { const want = Math.atan2(-sim.X[1], -sim.X[0]); let e = Math.atan2(Math.sin(want - sim.th), Math.cos(want - sim.th)); k -= e * smooth(1.5 * A.L, 2.5 * A.L, d) * 2 / A.L; }
     return k;
   }
 
@@ -378,8 +379,13 @@ const SnakeCore = (() => {
     let pts, ups = null, headDir = null;
     const mode = sim.mode;
     if (mode === "slither" || mode === "sidewind") {
-      const turn = mode === "slither" ? turnBias(sim) : 0;
-      const h = 1 / 240, S0 = waveShape(P, A, sim.t, turn), S1 = waveShape(P, A, sim.t + h, turn);
+      // steering bends the whole body a little; it follows its target slowly (no instant feedback from the
+      // heading, which made the heading zigzag frame to frame), and its rate of change counts as body motion
+      if (sim.turn === undefined) sim.turn = 0;
+      const target = mode === "slither" ? turnBias(sim) : 0, turnRate = clamp((target - sim.turn) / 0.8, -0.5 / A.L, 0.5 / A.L);
+      const turn = sim.turn;
+      const h = 1 / 240, S0 = waveShape(P, A, sim.t, turn), S1 = waveShape(P, A, sim.t + h, turn + turnRate * h);
+      if (dt > 0) sim.turn += turnRate * dt;
       const dq = new Float64Array(S0.q.length); for (let i = 0; i < dq.length; i++) dq[i] = (S1.q[i] - S0.q[i]) / h;
       const k = TAU * P.waves / A.L, w = new Float64Array(N + 1), lifts = new Float64Array(N + 1);
       const Hl = P.sideLift * P.girth;
@@ -667,6 +673,15 @@ const SnakeCore = (() => {
       T("a cobra rears up; with stiff up/down joints it cannot", () => {
         const a = run(validate(sp("cobra")), "strike", 1.5), b = run(validate({ ...sp("cobra"), vertLim: 0.5 }), "strike", 1.5);
         const h = s => s.pose.head[1]; return h(a) > 0.2 * a.P.length && h(b) < 0.5 * h(a) ? true : `heads ${h(a).toFixed(0)} / ${h(b).toFixed(0)}`;
+      });
+      T("the heading changes smoothly from frame to frame (no zigzag), also when steering back", () => {
+        for (const id of ["grass", "garter", "python", "blind"]) for (const mode of ["slither", "sidewind"]) {
+          const s = create(validate(sp(id)), mode); let prev = s.th, prevD = 0, flips = 0, far = 0;
+          for (let f = 0; f < 60 * 40; f++) { step(s, 1 / 60); const d = s.th - prev; if (prevD * d < 0 && Math.abs(d) > 0.004 && Math.abs(prevD) > 0.004) flips++; prevD = d; prev = s.th; far = Math.max(far, Math.hypot(s.X[0], s.X[1]) / s.A.L); }
+          if (flips > 0) return `${id} ${mode}: ${flips} zigzags`;
+          if (mode === "slither" && far > 4) return `${id} wandered off to ${far.toFixed(1)} lengths`;
+        }
+        return true;
       });
       T("every preset runs every mode without NaN", () => {
         for (const sp0 of SPECIES) for (const m of ["slither", "concertina", "sidewind", "creep", "strike"]) {

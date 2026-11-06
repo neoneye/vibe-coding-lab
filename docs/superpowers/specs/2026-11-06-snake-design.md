@@ -130,3 +130,18 @@ Vertebra counts are estimated from typical ventral plus subcaudal scale counts.
 
 - **Core tests.** 13 tests in `test.mjs`.
 - **Selftest.** It runs every control and every snake in every mode. It checks friction against glass, sidewinding tracks and a strike. It passes in Chrome, Firefox and Safari. Safari needs a foreground run.
+
+## Fix (2026-11-06): heading zigzag after about 10 s
+
+The owner saw the snake alternate between two rotations on even and odd frames after about 10 seconds. There were two causes:
+
+- **Feedback with no delay.** The "steer back to the middle" bend was computed from the current heading every substep, and its change between frames was not counted as body motion. The result was a feedback loop with no delay, which flipped every frame once the snake was far enough out (from about 5–7 s).
+- **Wrong sign.** The steering sign was wrong: a positive bend turns the travelling snake clockwise.
+
+The fix:
+
+- The bend now follows its target with a 0.8 s lag, rate-limited.
+- Its rate goes into the shape velocity.
+- The sign is flipped.
+
+A regression test checks for no zigzags over 40 s and checks that the snake stays near the middle.
