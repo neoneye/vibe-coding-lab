@@ -95,7 +95,7 @@ A 3D glass falls onto a floor, seen through a "high-speed camera".
 
 ### Tests
 
-`node glass-shatter/test.mjs` runs 180 checks:
+`node glass-shatter/test.mjs` runs 212 checks:
 - material constants;
 - parameter ranges and hash round trips;
 - profile sanity for all shapes, and tumbler mass and area;
@@ -111,6 +111,46 @@ A 3D glass falls onto a floor, seen through a "high-speed camera".
 - "two halves" gives a few pieces;
 - meshes are closed and finite, with in-range indices;
 - every piece has collision patches.
+
+## Prince Rupert's drop (added the same day)
+
+The owner asked: *"add prince rupert"*.
+
+**Shape.** A solid of revolution (`SHAPES.rupert`, `solid: true`, `buildDropProfile`).
+- A hemispherical head; v = 0 is at its pole.
+- A tail r(y) = r_t + (R − r_t)·(1 + ((y − R)/0.9R)²)^−0.8, ending at a 0.25 mm tip, which is the "rim".
+- The inner curve is the axis: each surface point joins the axis along its normal (the head's centre for the head).
+- Cell mass uses the offset-shell volume factor 1 − t·n_r/2r, which is ½ for these wedges.
+- Parameters: head diameter (10 mm), tail length (55 mm) and grid cell (0.35 mm).
+
+**Glass.** `quenched`: tempered, with the skin at 4.5 × CT and CT 140 MPa by default, which gives a 630 MPa skin.
+- The drop's own glass, temper, cell, tilt and action live in `extras`. They go into the hash only when changed, and are reset when you switch to another shape.
+
+**Actions** (`action`):
+- **Snip the tail** (default): it is held by its head on a rod, about 9 cm above the floor, and pliers close on the last 1.5 mm. It always breaks. The crack starts at the tip and points back toward the head, and the stored residual energy does all the cracking.
+- **Hit the head with a hammer**: a 0.5 kg hammer at `hammerV` (0.5 to 20 m/s) lands on the top of the head.
+  - Hertz contact (steel against glass), ring tension = (1 − 2ν)/3 · p₀ · 0.25.
+  - The 0.25 share is my estimate: the ring tension fades much shallower than the squeezed skin.
+  - The head breaks above about 15 m/s; an ordinary glass bead breaks at 0.5 m/s.
+  - 0.1% of the blow's energy goes into the glass.
+- **Drop it on the floor**: Hertz contact with the floor's modulus. It survives.
+
+**Page.**
+- Pliers, a hammer, and a clamp rod.
+- Its own phase captions, readouts (contact force, spot, pressure, skin squeeze, core stretch, locked-in energy) and verdicts.
+- A closer camera.
+- Powder spawned over the whole drop.
+
+**As built:**
+- The snip gives about 370 pieces, the biggest 2%, and the front crosses in about 55 µs.
+- A hard hammer gives a front from the head down the tail.
+
+**Tests:** 212 checks in total. The drop-specific ones cover:
+- shape, solidity, mass (1 to 4 g) and mass conservation;
+- the snip: always breaks, starts at the tail, takes 20 to 150 µs, bursts into many small pieces;
+- the hammer: the head survives 3 m/s, an ordinary glass bead does not, and 20 m/s breaks it;
+- dropping it on tiles survives;
+- the hash round trip.
 
 ## Tuning notes
 
