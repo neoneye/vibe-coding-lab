@@ -25,7 +25,14 @@ The owner was not asked further questions. The scope and the choices below are m
    - Heat source: kerosene, LPG, a solar collector or an electric element.
 4. **Night-sky ice.** A shallow pond with a straw bed, a shelter wall and a yakhchāl dome, under a sky that changes through the day.
    - Ice is harvested at 07:00 and the pond refilled at 17:00.
-5. **Compare.** Runs the fridge, kerosene fridge and zeer pot for 72 h with each tab's own settings, against food left in the shade. It reports:
+5. **Radiative panel** (added later the same day, at the owner's request after a chat about other cooling methods). An insulated box under a panel that reflects sunlight and radiates infrared.
+   - The panel can be paint (broadband) or film (8–13 µm window only), with an optional polyethylene wind shield and dust.
+   - A one-way thermosiphon carries heat from the box (or its cold store of water packs) up to the panel, never back down.
+6. **Dew-point cooler.** A plate exchanger with dry and wet channels feeding an insulated store.
+   - It can be set to dew-point (Maisotsenko), indirect, or direct (swamp cooler). The fan can run day and night or in sunshine only.
+7. **Solar ice maker.** A glazed adsorption collector (activated carbon + methanol, or silica gel + water) with a condenser, a liquid reservoir and an evaporator in an ice bank.
+   - By day it desorbs; at night, with the vents open, it adsorbs and freezes the ice bank.
+8. **Compare.** Runs the fridge, kerosene fridge, zeer pot and the three new coolers for 72 h with each tab's own settings, against food left in the shade. It reports:
    - mean, minimum and maximum food temperature, and time in the ideal range;
    - shelf life;
    - what each one uses (kWh, L of kerosene, kg of gas, L of water);
@@ -62,6 +69,20 @@ The owner was not asked further questions. The scope and the choices below are m
   - Convection plus linearised radiation to the air, sun on the pot, and ground contact.
   - Sand conductivity rises with wetness. The lid changes how heat reaches the inside.
   - Watering refills the sand to saturation.
+- **Radiative panel:**
+  - Two-band sky: 32% of thermal radiation lies in the window. The window's emissivity is derived from the Berdahl–Martin total, with the rest of the sky at 0.97.
+  - Gains from absorbed sun (1 − R + dust), convection (lower with the shield) and dew. The shield passes 90% of sun and 80% of infrared.
+  - Thermosiphon UA is 7 W/K per m², with 6% leaking backward.
+- **Evaporative coolers:**
+  - Effectiveness is 1 − exp(−NTU), with NTU = 6.65·A/flow.
+  - Direct: 0.95 × that toward the wet bulb, adding humidity. Indirect: 0.7 × toward the wet bulb.
+  - Dew-point: 0.8 × toward the dew point, scaled by the working-air share.
+  - Fan power comes from a pressure-drop estimate. Water is 1.1 × the sensible heat removed from all the air ÷ latent heat.
+- **Adsorption:**
+  - Carbon + methanol uses Dubinin–Astakhov with Critoph's AC-35 constants (W0ρ 0.336, D 5.02e-7, n 2.15) and methanol Antoine pressures. Silica gel + water uses a Freundlich fit.
+  - Uptake relaxes toward equilibrium at a rate of 1/600 s. Check valves: desorb to the condenser (air + set K); adsorb from the evaporator, whose temperature is solved against the ice-bank UA.
+  - Evaporator floor: −12 °C for methanol, +1 °C for water.
+  - Glazing U is 4.6 (double) or 7.0 (single); night vents give U 20.
 - **Sky pond:**
   - Radiation εσ(T_w⁴ − (F·ε_sky + 1 − F)·T_a⁴), where the wall removes 8% of the sky view.
   - Convection and evaporation (or sublimation), reduced by the wall.
@@ -70,7 +91,7 @@ The owner was not asked further questions. The scope and the choices below are m
 
 ### Tests
 
-`node cooling/test.mjs` runs 435 checks:
+`node cooling/test.mjs` runs 516 checks:
 - psychrometric values;
 - the climate curve;
 - refrigerant pressures within about 10% of table values;
@@ -92,6 +113,8 @@ The owner was not asked further questions. The scope and the choices below are m
 - At 25% flame, an absorption unit's evaporator sits near the box temperature, which gives a high COP. A default efficiency of 0.12 of ideal gives COP 0.2 to 0.4 at full flame, in line with real units.
 - The ice pond's shelter wall first removed 30% of the sky and cost ice. Low sky is nearly as warm as the air anyway, so it is now 8%.
   - In very dry air, wind speeds up evaporation, so the wall can still cost a little ice. The page says so.
+- The radiative panel first heated the cold store at noon, because heat could flow both ways. A real thermosiphon only works one way, and the page now shows "stopped" when the panel is warmer than the box.
+- The ice-maker bed reached 180 °C and the ice went down to −23 °C. Higher glazing losses, more metal mass, a faster uptake rate and a −12 °C evaporator floor give a 100 °C bed and ice at −6 to −10 °C, about 0.1 to 0.18 solar COP.
 - The Kerman preset has a night low of +1 °C, so the page shows ice forming while the air never freezes.
 
 ## Verified

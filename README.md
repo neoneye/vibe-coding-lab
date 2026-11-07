@@ -103,9 +103,12 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
   - a zeer pot (two clay pots with wet sand between), cooling by evaporation down toward the wet-bulb temperature;
   - a kerosene, gas or solar absorption fridge (ammonia, water and hydrogen, no moving parts);
   - a night-sky ice pond like the Persian yakhchāl, which freezes water while the air stays above 0 °C;
+  - a daytime radiative cooling box: a panel that reflects sunlight and radiates heat through the 8–13 µm window, with paint or film, a wind shield, and a one-way thermosiphon to a cold store;
+  - a dew-point (Maisotsenko) evaporative cooler that gets below the wet-bulb temperature, next to indirect and swamp coolers;
+  - a solar adsorption ice maker (activated carbon + methanol, or silica gel + water) that drives the refrigerant out by day and freezes ice at night;
   - a comparison of them all for three days.
 
-  Each tab has a temperature ladder showing where the heat goes, plus spoilage by the Q10 rule. About seventy parameters.
+  Each tab has a temperature ladder showing where the heat goes, plus spoilage by the Q10 rule. About a hundred parameters.
 - [dust](dust/) -- a dusty window pane to draw in with your finger. Each 0.8 mm cell holds loose dust and dried crust in g/m² and the mix of dust kinds in it (Saharan, household, sand, soot, pollen, volcanic ash), drawn as mottled fine powder with sparse particles of every colour: a fingertip pushes dust into ridges and drops a heap where it lifts, sticky dust smears, a cloth soaks it up, breath fogs and cakes it. Raindrops pick up dust and dry into coffee rings, big drops run on a tilted pane and stop in muddy heads, dry sand slides and banks against the frame, and the clock lets dust settle for years. Front or back light; slogans from Orwell's 1984 and the film They Live, or your own image, behind the glass.
 - [dual-slit-experiment](dual-slit-experiment/) -- one to three slits, a which-path detector and particle-by-particle accumulation, computed from Huygens wavelets.
 - [fluid-simulation](fluid-simulation/) -- particle fluid via double-density relaxation SPH, with draggable obstacles and stirring.
