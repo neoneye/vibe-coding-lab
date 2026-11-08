@@ -1,6 +1,6 @@
 # 90s Web Banners — design (as built)
 
-**Date:** 2026-11-08
+**Date:** 2026-11-08 (second batch the same day: see the end)
 **Page:** `web-banners-90s/index.html`. One self-contained page with no libraries; nothing is loaded from the network.
 
 ## Intent
@@ -128,6 +128,32 @@ Breach victims are given by date, not by name. The banners use no real logos, an
 - **Headless Chrome:** contact sheets of all banners, frame strips, and the looks (JPEG re-post, deep fried, dial-up, VGA).
 - **Headless Firefox:** the wall renders the same.
 - **Not checked:** Safari, and the Firefox self-test, since the headless screenshot fires before the test finishes.
+
+## Second batch (same day)
+
+The owner asked for:
+- more Black October banners: "hot fridges, where the temperature have been turned up";
+- AI banners that are not about Black October:
+  - dating a companion AI instead of a human;
+  - RSI;
+  - getting paid to share your screen for AI training;
+  - AI bots that share your private life, and so your friends' lives, with big companies;
+  - vulnerability checks everywhere as the new virus cleaning.
+
+**What was added:**
+- **Fridges:** six Black October banners.
+  - The news: mid-October attacks on the smart temperature controllers of a French supermarket chain, then a second European wave on November 2 that set fridges and freezers to 50 °C.
+  - Sources: Schneier and Dexerto.
+- **AI life:** a new `group: 'ai'` with 22 banners.
+  - They carry a note but need no news source.
+  - The wall has an "AI life banners" view, and the editor's banner list has an "AI life" group.
+  - I read RSI as recursive self-improvement.
+- **New banner types:**
+  - `dating`: a profile card with hearts. The cursor clicks ♥, then "It's a match".
+  - `permissions`: a dialog that ticks every box itself, scrolls, and clicks "Allow all".
+  - `scanner`: a 1998 antivirus scan with a path ticker, a progress bar, a findings counter that grows, and a flashing fix button.
+- **New sprites:** fridge, thermometer, webcam and AI companion.
+- **Totals:** 52 types and 100 presets. There are 1331 Node checks, and `?selftest` renders 360 combinations.
 
 ## Scope deltas (left for the owner)
 
