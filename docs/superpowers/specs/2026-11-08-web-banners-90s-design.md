@@ -155,6 +155,25 @@ The owner asked for:
 - **New sprites:** fridge, thermometer, webcam and AI companion.
 - **Totals:** 52 types and 100 presets. There are 1331 Node checks, and `?selftest` renders 360 combinations.
 
+## Third batch (same day)
+
+The owner asked for:
+- two more Black October banners:
+  - smart TVs that spy on their users and send screenshots home;
+  - a Broadcom flaw that can be bypassed without any password;
+- AI-life banners about mathematicians replaced by AI.
+
+**What was added:**
+- **Smart TVs:** five banners about automatic content recognition (ACR).
+  - The news: an October 6 class action, and an October 22 study in which a Samsung TV kept sending viewing data after tracking was switched off.
+  - The "screenshots" framing is popular but disputed (ACR sends fingerprints), so the notes say fingerprints or snapshots, and the counter's number is labelled illustrative.
+  - New `tv` sprite.
+- **WPSplinter:** five banners.
+  - The news: disclosed on October 16 at Hexacon. A WPS memory bug in Broadcom's Wi-Fi SDK, shipped since 2010, gives root over the air before any password is checked. Broadcom calls the code obsolete and assigned no CVE.
+- **Mathematicians:** six AI-life banners.
+- **New banner type:** a `chalkboard` that writes itself in grainy chalk, wrapping on the whole sentence so the size never jumps, then adds a signature, with a tray for small print.
+- **Totals:** 53 types and 116 banners (88 Black October, 28 AI life).
+
 ## Scope deltas (left for the owner)
 
 - No sound (a modem screech would be easy).
