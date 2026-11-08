@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voronoi Surfaces</title>
+<style>
+  :root {
+    --bg: #f3f1ec;
+    --panel: #fbfaf7;
+    --ink: #222;
+    --muted: #6b6760;
+    --line: #dedad2;
+    --accent: #b8321f;
+    --ok: #2e7d4f;
+    --warn: #a35a00;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { display: flex; height: 100%; }
+  #view { position: relative; flex: 1 1 auto; min-width: 0; }
+  #c { display: block; width: 100%; height: 100%; touch-action: none; }
+  #hint { position: absolute; left: 10px; bottom: 10px; max-width: calc(100% - 20px); color: var(--muted);
+    font-size: 12px; pointer-events: none; background: rgba(243, 241, 236, 0.85); padding: 3px 8px; border-radius: 6px; }
+  #panel { flex: 0 0 340px; overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line);
+    padding: 14px 16px 24px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .lede { margin: 0 0 10px; color: var(--muted); }
+  section { border-top: 1px solid var(--line); padding: 10px 0 6px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 8px; color: var(--muted); }
+  .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  .row > label { flex: 0 0 auto; }
+  .row select { flex: 1 1 auto; min-width: 0; }
+  .slider { display: grid; grid-template-columns: 62px 1fr 48px; align-items: center; gap: 8px; margin: 3px 0; }
+  .slider .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .slider .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .slider input { width: 100%; margin: 0; }
+  .coef .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; }
+  .coef.zero .val { opacity: .45; }
+  .seg { display: inline-flex; flex: none; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; padding: 3px 10px; cursor: pointer; font: inherit; color: var(--ink); }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--ink); color: #fff; }
+  button.btn { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; color: var(--ink); }
+  button.btn:hover { border-color: #aaa; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  select { font: inherit; padding: 2px 4px; }
+  .formula { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f1eee8;
+    border-radius: 6px; padding: 6px 8px; margin: 6px 0; overflow-wrap: anywhere; }
+  .check { font-size: 12px; margin: 4px 0; }
+  .check.ok { color: var(--ok); }
+  .check.warn { color: var(--warn); }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
+  .checks label { display: flex; align-items: center; gap: 6px; }
+  #stats { font-size: 12px; color: var(--muted); }
+  details { margin-top: 8px; }
+  details p { margin: 6px 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  .hidden { display: none !important; }
+  @media (max-width: 760px) {
+    #app { flex-direction: column; height: auto; }
+    #view { height: 62vh; flex: none; }
+    #panel { flex: none; border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="view">
+    <canvas id="c"></canvas>
+    <div id="hint">Drag to turn · scroll to zoom · drag a black dot to move a site · double-click to add or remove a site</div>
+  </div>
+  <aside id="panel">
+    <h1>Voronoi Surfaces</h1>
+    <p class="lede">Each site carries the same surface. From the front, the lowest surface wins at every point, and that pattern is the Voronoi diagram. Turn the view to see the surfaces behind the diagram and where they cross.</p>
+
+    <section>
+      <h2>Distance</h2>
+      <div class="row">
+        <select id="metric">
+          <option value="euclid">Euclidean</option>
+          <option value="manhattan">Manhattan</option>
+          <option value="chebyshev">Chebyshev</option>
+          <option value="quasi">Quasi-Euclidean</option>
+          <option value="minkowski">Minkowski (p)</option>
+          <option value="poly">Polynomial surface P(u, v)</option>
+        </select>
+      </div>
+      <div id="metricNote" class="check"></div>
+      <div id="pRow"></div>
+    </section>
+
+    <section id="profSec">
+      <h2>Surface over each site: z = h(d)</h2>
+      <div class="row"><label>Order</label><span class="seg" id="profOrder"></span>
+        <select id="profPreset"></select></div>
+      <div class="check" style="color:var(--muted)">Coefficient of each term. Double-click a term to set it to 0.</div>
+      <div id="profSliders"></div>
+      <div class="formula" id="profFormula"></div>
+      <div class="check" id="profCheck"></div>
+    </section>
+
+    <section id="polySec" class="hidden">
+      <h2>Surface over each site: z = P(u, v)</h2>
+      <div class="check" style="color:var(--muted)">u = x − pₓ, v = y − p<sub>y</sub>: the same surface is moved to sit over every site.</div>
+      <div class="row"><label>Order</label><span class="seg" id="polyOrder"></span>
+        <select id="polyPreset"></select></div>
+      <div class="check" style="color:var(--muted)">Coefficient of each term. Double-click a term to set it to 0.</div>
+      <div id="polySliders"></div>
+      <div class="formula" id="polyFormula"></div>
+      <div class="check" id="polyCheck"></div>
+    </section>
+
+    <section>
+      <h2>Sites</h2>
+      <div id="siteSliders"></div>
+      <div class="btns">
+        <button class="btn" id="randomize">Randomize</button>
+        <label class="row" style="margin:0"><input type="checkbox" id="drift"> Drift</label>
+      </div>
+      <div id="stats"></div>
+    </section>
+
+    <section>
+      <h2>Show</h2>
+      <div class="row"><label>Surfaces</label>
+        <select id="surfMode">
+          <option value="envelope">Lower envelope</option>
+          <option value="all">Envelope + every surface</option>
+          <option value="none">None</option>
+        </select></div>
+      <div class="row"><label>Colour</label>
+        <select id="colorMode">
+          <option value="0">Site colours</option>
+          <option value="1">Magenta (as in the paper)</option>
+        </select></div>
+      <div class="checks">
+        <label><input type="checkbox" id="iso" checked> Isolines</label>
+        <label><input type="checkbox" id="cells" checked> Cell tint</label>
+        <label><input type="checkbox" id="edges" checked> Edges and creases</label>
+        <label><input type="checkbox" id="drops" checked> Lifted sites</label>
+        <label><input type="checkbox" id="box" checked> Box and axes</label>
+        <label><input type="checkbox" id="autoFit" checked> Auto-fit height</label>
+      </div>
+      <div id="showSliders"></div>
+    </section>
+
+    <section>
+      <h2>View</h2>
+      <div class="btns">
+        <button class="btn" data-view="front">Front</button>
+        <button class="btn" data-view="turned">Turned</button>
+        <button class="btn" data-view="side">Side</button>
+        <button class="btn" data-view="above">Above</button>
+        <button class="btn" data-view="behind">Behind</button>
+        <button class="btn" id="savePng">Save PNG</button>
+      </div>
+    </section>
+
+    <section>
+      <details>
+        <summary>How it works</summary>
+        <p>Every site p gets the same surface, z = f(x − p), placed over it. At each point of the plane, the site whose surface is lowest owns that point. The front layer is the plane coloured by that winner. Behind it is the <b>lower envelope</b>, the minimum of all the surfaces. The red creases on the envelope are where two surfaces cross, and they project straight down onto the Voronoi edges.</p>
+        <p>With Euclidean distance and h(d) = d², every surface is the paraboloid z = |x − p|², and you get the ordinary Voronoi diagram. This is the lifting construction, and it is Figure 10 of Boissonnat, Nielsen and Nock, <i>Bregman Voronoi diagrams</i> (Discrete &amp; Computational Geometry, 2010).</p>
+        <p><b>Any increasing h(d)</b> gives the same cells: a cone (d), a quartic (d⁴) or d³ − d² + d. Only the heights change. A profile that turns back down, like the ring (d − 0.4)² or the Mexican hat, changes the diagram: a site can lose the ground under itself, and cells can split into pieces.</p>
+        <p><b>Weights</b> lift each surface by its own amount. With d² you get the power diagram, which still has straight edges. With the cone d you get the additively weighted (Apollonius) diagram, whose edges are hyperbolas.</p>
+        <p><b>Polynomial surfaces.</b> Every quadratic P gives straight edges, even a saddle, because the difference of two moved copies is linear in x. Elliptic and sheared bowls give a stretched Voronoi diagram, and the linear terms shift the whole diagram. Cubic and quartic terms bend the edges. Odd leading terms and saddles are not bowls: they fall away to −∞, so a distant site can win, and cells may hold no site or no ground at all.</p>
+        <p><b>Distances.</b> Manhattan |u|+|v| and Chebyshev max(|u|,|v|) give axis-aligned and 45° edges. Where two sites sit exactly on a diagonal, the tie can cover a whole area. Quasi-Euclidean is the octagonal distance from image-processing distance transforms: max + (√2−1)·min. Minkowski p blends them: p = 1 is Manhattan, p = 2 is Euclidean, and large p approaches Chebyshev.</p>
+      </details>
+    </section>
+  </aside>
+</div>
+
+<script id="shared-code">
+// Pure maths shared by the page and test.mjs. The GLSL in the module script mirrors surf() exactly.
+const VoronoiCore = (() => {
+  const METRICS = ['euclid', 'manhattan', 'chebyshev', 'quasi', 'minkowski', 'poly'];
+  const K_QUASI = Math.SQRT2 - 1;
+  // P(u,v) = sum c_k u^a v^b, in this order
+  const POLY_TERMS = [[0,0],[1,0],[0,1],[2,0],[1,1],[0,2],[3,0],[2,1],[1,2],[0,3],[4,0],[3,1],[2,2],[1,3],[0,4]];
+  const POLY_LABELS = ['1','u','v','u²','uv','v²','u³','u²v','uv²','v³','u⁴','u³v','u²v²','uv³','v⁴'];
+  const PROF_LABELS = ['1','d','d²','d³','d⁴'];
+
+  function dist(m, p, u, v) {
+    const ax = Math.abs(u), ay = Math.abs(v);
+    switch (m) {
+      case 0: return Math.sqrt(u * u + v * v);
+      case 1: return ax + ay;
+      case 2: return Math.max(ax, ay);
+      case 3: return ax > ay ? ax + K_QUASI * ay : K_QUASI * ax + ay;
+      default: { const s = Math.pow(ax, p) + Math.pow(ay, p); return s > 0 ? Math.pow(s, 1 / p) : 0; }
+    }
+  }
+  function profile(c, d) { return c[0] + d * (c[1] + d * (c[2] + d * (c[3] + d * c[4]))); }
+  function profileSlope(c, d) { return c[1] + d * (2 * c[2] + d * (3 * c[3] + d * 4 * c[4])); }
+  function poly(c, u, v) {
+    const u2 = u * u, v2 = v * v;
+    return c[0] + c[1] * u + c[2] * v
+      + c[3] * u2 + c[4] * u * v + c[5] * v2
+      + c[6] * u2 * u + c[7] * u2 * v + c[8] * u * v2 + c[9] * v2 * v
+      + c[10] * u2 * u2 + c[11] * u2 * u * v + c[12] * u2 * v2 + c[13] * u * v2 * v + c[14] * v2 * v2;
+  }
+  function metricIndex(name) { const i = METRICS.indexOf(name); return i < 0 ? 0 : i; }
+
+  // f(site, x, y): height of a site's surface over (x, y)
+  function makeSurf(P) {
+    const m = metricIndex(P.metric), p = P.p, prof = P.prof, pc = P.poly, w = P.weight;
+    if (m === 5) return (s, x, y) => poly(pc, x - s.x, y - s.y) + w * s.w;
+    return (s, x, y) => profile(prof, dist(m, p, x - s.x, y - s.y)) + w * s.w;
+  }
+
+  // Winner of every cell of a G×G grid over [-1,1]², plus envelope range and per-cell statistics.
+  function analyse(P, sites, G = 96) {
+    const f = makeSurf(P), n = sites.length;
+    const labels = new Int16Array(G * G);
+    let min = Infinity, max = -Infinity;
+    for (let j = 0; j < G; j++) {
+      const y = -1 + (j + 0.5) * 2 / G;
+      for (let i = 0; i < G; i++) {
+        const x = -1 + (i + 0.5) * 2 / G;
+        let best = Infinity, bi = 0;
+        for (let k = 0; k < n; k++) { const h = f(sites[k], x, y); if (h < best) { best = h; bi = k; } }
+        labels[j * G + i] = bi;
+        if (best < min) min = best;
+        if (best > max) max = best;
+      }
+    }
+    const area = new Int32Array(n), comps = new Int32Array(n);
+    const seen = new Uint8Array(G * G), stack = new Int32Array(G * G);
+    for (let s = 0; s < G * G; s++) {
+      if (seen[s]) continue;
+      const lab = labels[s]; comps[lab]++;
+      let top = 0; stack[top++] = s; seen[s] = 1;
+      while (top) {
+        const q = stack[--top]; area[lab]++;
+        const qi = q % G, qj = (q - qi) / G;
+        if (qi > 0 && !seen[q - 1] && labels[q - 1] === lab) { seen[q - 1] = 1; stack[top++] = q - 1; }
+        if (qi < G - 1 && !seen[q + 1] && labels[q + 1] === lab) { seen[q + 1] = 1; stack[top++] = q + 1; }
+        if (qj > 0 && !seen[q - G] && labels[q - G] === lab) { seen[q - G] = 1; stack[top++] = q - G; }
+        if (qj < G - 1 && !seen[q + G] && labels[q + G] === lab) { seen[q + G] = 1; stack[top++] = q + G; }
+      }
+    }
+    let empty = 0, split = 0, outside = 0;
+    for (let k = 0; k < n; k++) {
+      if (area[k] === 0) empty++;
+      if (comps[k] > 1) split++;
+      const i = Math.min(G - 1, Math.max(0, Math.floor((sites[k].x + 1) / 2 * G)));
+      const j = Math.min(G - 1, Math.max(0, Math.floor((sites[k].y + 1) / 2 * G)));
+      if (labels[j * G + i] !== k) outside++;
+    }
+    return { G, labels, min, max, area, comps, empty, split, outside };
+  }
+
+  // Is h(d) increasing over the distances that occur in the box? If so, the cells equal the plain metric's.
+  function checkProfile(P) {
+    const m = metricIndex(P.metric);
+    const dmax = dist(m, P.p, 2, 2);
+    let minSlope = Infinity, turnAt = null;
+    for (let k = 0; k <= 400; k++) {
+      const d = dmax * k / 400, s = profileSlope(P.prof, d);
+      if (s < minSlope) minSlope = s;
+      if (s < -1e-9 && turnAt === null) turnAt = d;
+    }
+    const allZero = P.prof.slice(1).every(c => c === 0);
+    return { increasing: !allZero && turnAt === null, flat: allZero, turnAt, dmax };
+  }
+
+  // Classify P(u,v): flat, not bounded below, a bowl that is not convex, or a convex bowl.
+  function checkPoly(c) {
+    let deg = 0;
+    POLY_TERMS.forEach(([a, b], k) => { if (c[k] !== 0 && a + b > deg) deg = a + b; });
+    if (deg <= 1) return { kind: 'flat', deg };
+    let lmin = Infinity, lmax = -Infinity;
+    for (let t = 0; t < 360; t++) {
+      const th = t * Math.PI / 180, cu = Math.cos(th), sv = Math.sin(th);
+      let L = 0;
+      POLY_TERMS.forEach(([a, b], k) => { if (a + b === deg) L += c[k] * Math.pow(cu, a) * Math.pow(sv, b); });
+      lmin = Math.min(lmin, L); lmax = Math.max(lmax, L);
+    }
+    if (lmin < -1e-12 || deg % 2 === 1) return { kind: 'unbounded', deg };
+    // convexity: Hessian positive semidefinite over the differences that occur, u,v in [-2,2]
+    let convex = true;
+    for (let j = 0; j <= 24 && convex; j++) for (let i = 0; i <= 24; i++) {
+      const u = -2 + i / 6, v = -2 + j / 6;
+      let huu = 0, huv = 0, hvv = 0;
+      POLY_TERMS.forEach(([a, b], k) => {
+        const ck = c[k]; if (!ck) return;
+        if (a >= 2) huu += ck * a * (a - 1) * Math.pow(u, a - 2) * Math.pow(v, b);
+        if (b >= 2) hvv += ck * b * (b - 1) * Math.pow(u, a) * Math.pow(v, b - 2);
+        if (a >= 1 && b >= 1) huv += ck * a * b * Math.pow(u, a - 1) * Math.pow(v, b - 1);
+      });
+      if (huu < -1e-9 || hvv < -1e-9 || huu * hvv - huv * huv < -1e-9) { convex = false; break; }
+    }
+    return { kind: convex ? (lmin > 1e-12 ? 'convex' : 'convex-flat') : 'bowl', deg };
+  }
+
+  function hsl2rgb(h, s, l) {
+    const f = o => { const x = ((h * 6 + o) % 6 + 6) % 6; return Math.min(1, Math.max(0, Math.abs(x - 3) - 1)); };
+    const a = s * (1 - Math.abs(2 * l - 1));
+    return [l + a * (f(0) - 0.5), l + a * (f(4) - 0.5), l + a * (f(2) - 0.5)];
+  }
+  function siteColor(i) { return hsl2rgb((i * 0.618033988749895) % 1, 0.55, 0.6); }
+
+  function rng(seed) {
+    let a = seed >>> 0;
+    return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+  function randomSites(n, seed) {
+    const r = rng(seed), out = [];
+    for (let k = 0; k < n; k++) out.push({ x: -0.88 + 1.76 * r(), y: -0.88 + 1.76 * r(), w: 2 * r() - 1 });
+    return out;
+  }
+
+  function fmtNum(x) { return Math.abs(x - Math.round(x)) < 1e-9 ? String(Math.round(x)) : x.toFixed(2).replace(/0$/, ''); }
+  function formatTerms(c, labels) {
+    let s = '';
+    c.forEach((ck, k) => {
+      if (Math.abs(ck) < 1e-12) return;
+      const neg = ck < 0, a = Math.abs(ck), lab = labels[k];
+      const body = lab === '1' ? fmtNum(a) : (Math.abs(a - 1) < 1e-12 ? lab : fmtNum(a) + '·' + lab);
+      s += s ? (neg ? ' − ' : ' + ') + body : (neg ? '−' : '') + body;
+    });
+    return s || '0';
+  }
+
+  return { METRICS, POLY_TERMS, POLY_LABELS, PROF_LABELS, K_QUASI, dist, profile, profileSlope, poly, metricIndex,
+    makeSurf, analyse, checkProfile, checkPoly, siteColor, hsl2rgb, rng, randomSites, formatTerms };
+})();
+
+const VoronoiTests = {
+  run() {
+    const C = VoronoiCore;
+    let pass = 0, fail = 0;
+    const ok = (cond, name) => { if (cond) pass++; else { fail++; console.error('FAIL', name); } };
+    const near = (a, b, e = 1e-9) => Math.abs(a - b) <= e;
+    const base = () => ({ metric: 'euclid', p: 3, prof: [0, 0, 1, 0, 0], poly: [0,0,0,1,0,1,0,0,0,0,0,0,0,0,0], weight: 0 });
+    const labelsOf = (P, sites, G = 64) => C.analyse(P, sites, G).labels;
+    const agree = (a, b) => { let d = 0; for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) d++; return d; };
+
+    // distances
+    ok(near(C.dist(0, 3, 3, 4), 5), 'euclid 3-4-5');
+    ok(near(C.dist(1, 3, 3, -4), 7), 'manhattan');
+    ok(near(C.dist(2, 3, -3, 4), 4), 'chebyshev');
+    ok(near(C.dist(3, 3, 3, 4), 4 + (Math.SQRT2 - 1) * 3), 'quasi-euclidean');
+    ok(near(C.dist(4, 2, 3, 4), 5, 1e-12), 'minkowski p=2 is euclid');
+    ok(near(C.dist(4, 1, 3, 4), 7, 1e-12), 'minkowski p=1 is manhattan');
+    ok(C.dist(4, 3, 0, 0) === 0, 'minkowski at origin');
+
+    // default polynomial equals euclid d²
+    const sites = C.randomSites(12, 3);
+    const Pd = base(), Pp = Object.assign(base(), { metric: 'poly' });
+    const fd = C.makeSurf(Pd), fp = C.makeSurf(Pp);
+    let maxErr = 0;
+    for (let k = 0; k < 200; k++) { const x = Math.sin(k) * 0.9, y = Math.cos(k * 1.7) * 0.9;
+      maxErr = Math.max(maxErr, Math.abs(fd(sites[k % 12], x, y) - fp(sites[k % 12], x, y))); }
+    ok(maxErr < 1e-12, 'u²+v² equals d²');
+
+    // euclid argmin is the nearest site
+    const A = C.analyse(Pd, sites, 48);
+    let wrong = 0;
+    for (let j = 0; j < 48; j++) for (let i = 0; i < 48; i++) {
+      const x = -1 + (i + 0.5) / 24, y = -1 + (j + 0.5) / 24;
+      let bd = Infinity, bk = 0;
+      sites.forEach((s, k) => { const d = Math.hypot(x - s.x, y - s.y); if (d < bd) { bd = d; bk = k; } });
+      if (A.labels[j * 48 + i] !== bk) wrong++;
+    }
+    ok(wrong === 0, 'euclid argmin = nearest site');
+    ok(A.empty === 0 && A.split === 0 && A.outside === 0, 'plain voronoi: cells whole and own their site');
+
+    // increasing profiles give the same cells
+    const L2 = labelsOf(Pd, sites);
+    ok(agree(L2, labelsOf(Object.assign(base(), { prof: [0, 1, 0, 0, 0] }), sites)) === 0, 'cone = paraboloid cells');
+    ok(agree(L2, labelsOf(Object.assign(base(), { prof: [0, 1, -1, 1, 0] }), sites)) === 0, 'd³−d²+d = paraboloid cells');
+    ok(agree(L2, labelsOf(Object.assign(base(), { prof: [5, 0, 0, 0, 2] }), sites)) === 0, '2d⁴+5 = paraboloid cells');
+    ok(C.checkProfile(Pd).increasing, 'd² flagged increasing');
+    ok(C.checkProfile(Object.assign(base(), { prof: [0, 1, -1, 1, 0] })).increasing, 'd³−d²+d flagged increasing');
+    ok(!C.checkProfile(Object.assign(base(), { prof: [0.16, -0.8, 1, 0, 0] })).increasing, 'ring flagged not increasing');
+    ok(C.checkProfile(Object.assign(base(), { prof: [1, 0, 0, 0, 0] })).flat, 'constant flagged flat');
+
+    // linear terms translate the whole diagram: u²+v²+a·u is Voronoi of sites shifted by −a/2 in x
+    const a = 0.4;
+    const Plin = Object.assign(base(), { metric: 'poly', poly: [0, a, 0, 1, 0, 1, 0,0,0,0,0,0,0,0,0] });
+    const shifted = sites.map(s => ({ x: s.x - a / 2, y: s.y, w: s.w }));
+    ok(agree(labelsOf(Plin, sites), labelsOf(Pd, shifted)) === 0, 'linear term shifts the diagram');
+
+    // polynomial classification
+    const pz = () => new Array(15).fill(0);
+    const P1 = pz(); P1[3] = 1; P1[5] = 1;
+    ok(C.checkPoly(P1).kind === 'convex', 'u²+v² convex');
+    const P2 = pz(); P2[3] = 1; P2[5] = -1;
+    ok(C.checkPoly(P2).kind === 'unbounded', 'saddle unbounded');
+    const P3 = pz(); P3[10] = 1; P3[14] = 1;
+    ok(C.checkPoly(P3).kind === 'convex', 'u⁴+v⁴ convex');
+    const P4 = pz(); P4[3] = 1; P4[5] = 1; P4[6] = 0.8;
+    ok(C.checkPoly(P4).kind === 'unbounded', 'cubic unbounded');
+    const P5 = pz(); P5[10] = 1; P5[12] = 2; P5[14] = 1; P5[3] = -0.5; P5[5] = -0.5;
+    ok(C.checkPoly(P5).kind === 'bowl', 'mexican hat is a non-convex bowl');
+    ok(C.checkPoly(pz()).kind === 'flat', 'zero is flat');
+
+    // a ring profile makes sites lose their own spot
+    const ring = C.analyse(Object.assign(base(), { prof: [0.16, -0.8, 1, 0, 0] }), sites, 64);
+    ok(ring.outside > 0, 'ring profile: some site outside its cell');
+
+    // weights with d² are a power diagram: argmin |x-p|² + w
+    const Pw = Object.assign(base(), { weight: 0.2 });
+    const fw = C.makeSurf(Pw);
+    ok(near(fw(sites[0], 0.1, 0.2), (0.1 - sites[0].x) ** 2 + (0.2 - sites[0].y) ** 2 + 0.2 * sites[0].w, 1e-12), 'weighted surface');
+
+    // formatting
+    ok(C.formatTerms([0.16, -0.8, 1, 0, 0], C.PROF_LABELS) === '0.16 − 0.8·d + d²', 'format ring');
+    ok(C.formatTerms(P2, C.POLY_LABELS) === 'u² − v²', 'format saddle');
+
+    // deterministic sites and colours
+    ok(JSON.stringify(C.randomSites(3, 9)) === JSON.stringify(C.randomSites(3, 9)), 'seeded sites');
+    const col = C.siteColor(0);
+    ok(col.every(v => v >= 0 && v <= 1), 'colour in range');
+
+    console.log(`VoronoiTests: ${pass} passed, ${fail} failed`);
+    return fail === 0;
+  }
+};
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const C = VoronoiCore;
+const MAXS = 64;      // GLSL array size
+const H = 1.4;        // depth of the box behind the plane
+const GAP = 0.05;     // gap between the diagram plane and the envelope
+
+const PROF_PRESETS = [
+  ['d² (paraboloid)', [0, 0, 1, 0, 0]],
+  ['d (cone)', [0, 1, 0, 0, 0]],
+  ['d⁴ (flat-bottomed)', [0, 0, 0, 0, 1]],
+  ['d³ − d² + d (still increasing)', [0, 1, -1, 1, 0]],
+  ['(d − 0.4)² (ring)', [0.16, -0.8, 1, 0, 0]],
+  ['d⁴ − d² (Mexican hat)', [0, 0, -1, 0, 1]],
+  ['d² − 0.6·d⁴ (tips over)', [0, 0, 1, 0, -0.6]],
+];
+const z15 = () => new Array(15).fill(0);
+const polyOf = o => { const c = z15(); for (const k in o) c[C.POLY_LABELS.indexOf(k)] = o[k]; return c; };
+const POLY_PRESETS = [
+  ['u² + v² (paraboloid)', polyOf({ 'u²': 1, 'v²': 1 })],
+  ['2u² + ½v² (elliptic)', polyOf({ 'u²': 2, 'v²': 0.5 })],
+  ['u² + uv + v² (sheared)', polyOf({ 'u²': 1, 'uv': 1, 'v²': 1 })],
+  ['u² + v² + 0.6u (shifted)', polyOf({ 'u²': 1, 'v²': 1, 'u': 0.6 })],
+  ['u² − v² (saddle)', polyOf({ 'u²': 1, 'v²': -1 })],
+  ['u² + v² + 0.8u³ (cubic lean)', polyOf({ 'u²': 1, 'v²': 1, 'u³': 0.8 })],
+  ['u³ − 3uv² (monkey saddle)', polyOf({ 'u³': 1, 'uv²': -3 })],
+  ['u⁴ + v⁴ (quartic bowl)', polyOf({ 'u⁴': 1, 'v⁴': 1 })],
+  ['u⁴ + v⁴ + 0.3(u² + v²)', polyOf({ 'u⁴': 1, 'v⁴': 1, 'u²': 0.3, 'v²': 0.3 })],
+  ['u⁴ + u²v² + v⁴ + uv³ (twisted)', polyOf({ 'u⁴': 1, 'u²v²': 1, 'v⁴': 1, 'uv³': 1 })],
+  ['(u² + v²)² − ½(u² + v²) (Mexican hat)', polyOf({ 'u⁴': 1, 'u²v²': 2, 'v⁴': 1, 'u²': -0.5, 'v²': -0.5 })],
+];
+const POLY_DEG = C.POLY_TERMS.map(([a, b]) => a + b);
+const orderOfPoly = c => Math.max(2, ...c.map((v, k) => v ? POLY_DEG[k] : 0));
+const orderOfProf = c => Math.max(2, ...c.map((v, k) => v ? k : 0));
+
+// ---------- state ----------
+const qs = new URLSearchParams(location.search);
+const P = {
+  metric: 'euclid', p: 3,
+  profOrder: 2, prof: [0, 0, 1, 0, 0],
+  polyOrder: 2, poly: POLY_PRESETS[0][1].slice(),
+  weight: 0,
+};
+const S = { n: 14, seed: 7, drift: false, surfaces: 'envelope', colorMode: 0, opacity: 1, iso: true, isoCount: 12,
+  cells: true, edges: true, drops: true, box: true, autoFit: true, heightMul: 1 };
+if (C.METRICS.includes(qs.get('metric'))) P.metric = qs.get('metric');
+if (qs.has('prof')) { const pr = PROF_PRESETS[+qs.get('prof')]; if (pr) P.prof = pr[1].slice(); }
+if (qs.has('poly')) { const pr = POLY_PRESETS[+qs.get('poly')]; if (pr) P.poly = pr[1].slice(); }
+if (qs.has('n')) S.n = Math.max(1, Math.min(MAXS, +qs.get('n') || 14));
+if (qs.has('seed')) S.seed = +qs.get('seed') || 7;
+if (qs.has('weight')) P.weight = +qs.get('weight') || 0;
+if (['envelope', 'all', 'none'].includes(qs.get('surfaces'))) S.surfaces = qs.get('surfaces');
+if (qs.has('magenta')) S.colorMode = 1;
+P.profOrder = orderOfProf(P.prof);
+P.polyOrder = orderOfPoly(P.poly);
+
+let siteRng = C.rng(S.seed * 7919 + 1);
+let sites = C.randomSites(S.n, S.seed);
+let vel = sites.map(() => ({ x: 0, y: 0 }));
+const newVel = () => { const a = siteRng() * Math.PI * 2, s = 0.05 + 0.08 * siteRng(); return { x: Math.cos(a) * s, y: Math.sin(a) * s }; };
+vel = sites.map(newVel);
+
+// ---------- three ----------
+const canvas = document.getElementById('c');
+const view = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setClearColor(0xf3f1ec, 1);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 100);
+const target = new THREE.Vector3(0, 0, -0.45);
+
+const U = {
+  uSites: { value: Array.from({ length: MAXS }, () => new THREE.Vector3()) },
+  uN: { value: 0 }, uMetric: { value: 0 }, uP: { value: 3 },
+  uProf: { value: [0, 0, 1, 0, 0] }, uPoly: { value: z15() }, uWeight: { value: 0 },
+  uScale: { value: 1 }, uOff: { value: 0 }, uH: { value: H }, uGap: { value: GAP },
+  uSpacing: { value: 0.05 }, uIso: { value: 1 }, uCells: { value: 1 }, uEdges: { value: 1 },
+  uOpacity: { value: 1 }, uColorMode: { value: 0 }, uGhostAlpha: { value: 0.2 }, uDotPx: { value: 3.6 }, uHover: { value: -1 },
+};
+
+const GLSL_COMMON = /* glsl */`
+#define MAXS ${MAXS}
+uniform vec3 uSites[MAXS];
+uniform int uN;
+uniform int uMetric;
+uniform float uP;
+uniform float uProf[5];
+uniform float uPoly[15];
+uniform float uWeight;
+uniform float uScale, uOff, uH, uGap, uSpacing, uIso, uCells, uEdges, uOpacity, uGhostAlpha, uDotPx;
+uniform int uColorMode, uHover;
+
+float distM(vec2 w) {
+  vec2 a = abs(w);
+  if (uMetric == 0) return length(w);
+  if (uMetric == 1) return a.x + a.y;
+  if (uMetric == 2) return max(a.x, a.y);
+  if (uMetric == 3) { const float k = ${C.K_QUASI.toFixed(10)}; return a.x > a.y ? a.x + k * a.y : k * a.x + a.y; }
+  float s = pow(a.x, uP) + pow(a.y, uP);
+  return s > 0.0 ? pow(s, 1.0 / uP) : 0.0;
+}
+float profH(float d) { return uProf[0] + d * (uProf[1] + d * (uProf[2] + d * (uProf[3] + d * uProf[4]))); }
+float polyH(vec2 w) {
+  float u = w.x, v = w.y, u2 = u * u, v2 = v * v;
+  return uPoly[0] + uPoly[1] * u + uPoly[2] * v
+    + uPoly[3] * u2 + uPoly[4] * u * v + uPoly[5] * v2
+    + uPoly[6] * u2 * u + uPoly[7] * u2 * v + uPoly[8] * u * v2 + uPoly[9] * v2 * v
+    + uPoly[10] * u2 * u2 + uPoly[11] * u2 * u * v + uPoly[12] * u2 * v2 + uPoly[13] * u * v2 * v + uPoly[14] * v2 * v2;
+}
+float surf(vec2 x, int i) {
+  vec3 s = uSites[i];
+  vec2 w = x - s.xy;
+  float h = (uMetric == 5) ? polyH(w) : profH(distM(w));
+  return h + uWeight * s.z;
+}
+vec3 hsl2rgb(float h, float s, float l) {
+  vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+  return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+}
+vec3 siteColor(int i) { return hsl2rgb(fract(float(i) * 0.618033988749895), 0.55, 0.6); }
+vec3 surfColor(int i) { return uColorMode == 1 ? vec3(0.86, 0.30, 0.86) : siteColor(i); }
+// shading for a surface z = -(gap + s*h): normal (s*hx, s*hy, 1)
+vec3 shade(vec3 base, vec2 x, int i, vec3 p) {
+  const float e = 1e-3;
+  float hx = (surf(x + vec2(e, 0.0), i) - surf(x - vec2(e, 0.0), i)) / (2.0 * e);
+  float hy = (surf(x + vec2(0.0, e), i) - surf(x - vec2(0.0, e), i)) / (2.0 * e);
+  vec3 n = normalize(vec3(uScale * hx, uScale * hy, 1.0));
+  vec3 V = normalize(cameraPosition - p);
+  if (dot(n, V) < 0.0) n = -n;
+  vec3 L = normalize(V + vec3(0.35, 0.6, 0.2));
+  float diff = max(dot(n, L), 0.0);
+  float rim = pow(1.0 - max(dot(n, V), 0.0), 2.0);
+  return base * (0.42 + 0.62 * diff) + 0.08 * rim;
+}
+`;
+
+// front plane: the diagram itself
+const planeMat = new THREE.ShaderMaterial({
+  uniforms: U, side: THREE.DoubleSide, transparent: true,
+  vertexShader: /* glsl */`
+    varying vec2 vXY;
+    void main() { vXY = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: GLSL_COMMON + /* glsl */`
+    varying vec2 vXY;
+    void main() {
+      vec2 x = vXY;
+      float px = length(fwidth(x)) * 0.7071;
+      float best = 1e30, second = 1e30, dotMask = 0.0, ring = 0.0;
+      int bi = 0;
+      for (int i = 0; i < MAXS; i++) {
+        if (i >= uN) break;
+        float h = surf(x, i);
+        if (h < best) { second = best; best = h; bi = i; } else if (h < second) second = h;
+        float dp = length(x - uSites[i].xy) / px;
+        dotMask = max(dotMask, 1.0 - smoothstep(uDotPx - 0.7, uDotPx + 0.7, dp));
+        if (i == uHover) ring = max(ring, 1.0 - smoothstep(0.8, 1.8, abs(dp - uDotPx * 2.2)));
+      }
+      vec3 base = siteColor(bi);
+      vec3 col = uCells > 0.5 ? mix(vec3(1.0), base, 0.30) : vec3(0.99);
+      float v = (best - uOff) / uSpacing;
+      float iw = fwidth(v);
+      float iso = (1.0 - smoothstep(0.5, 1.4, abs(fract(v + 0.5) - 0.5) / max(iw, 1e-6))) * (1.0 - smoothstep(0.2, 0.45, iw));
+      col = mix(col, base * 0.55, iso * 0.8 * uIso);
+      float gap = second - best;
+      float gw = fwidth(gap);
+      float edge = uN > 1 ? 1.0 - smoothstep(0.7, 1.7, gap / max(gw, 1e-9)) : 0.0;
+      col = mix(col, vec3(0.72, 0.12, 0.08), edge * uEdges);
+      col = mix(col, vec3(0.07), max(dotMask, ring));
+      gl_FragColor = vec4(col, uOpacity);
+    }`,
+});
+const plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2, 1, 1), planeMat);
+plane.renderOrder = 3;
+scene.add(plane);
+
+// lower envelope: one mesh whose height is the minimum of all surfaces
+const envMat = new THREE.ShaderMaterial({
+  uniforms: U, side: THREE.DoubleSide,
+  vertexShader: GLSL_COMMON + /* glsl */`
+    varying vec2 vXY;
+    void main() {
+      vec2 x = position.xy;
+      float best = 1e30;
+      for (int i = 0; i < MAXS; i++) { if (i >= uN) break; best = min(best, surf(x, i)); }
+      float hz = clamp(uScale * (best - uOff), -0.03, uH + 0.03);
+      vXY = x;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(x, -uGap - hz, 1.0);
+    }`,
+  fragmentShader: GLSL_COMMON + /* glsl */`
+    varying vec2 vXY;
+    void main() {
+      vec2 x = vXY;
+      float best = 1e30, second = 1e30;
+      int bi = 0;
+      for (int i = 0; i < MAXS; i++) {
+        if (i >= uN) break;
+        float h = surf(x, i);
+        if (h < best) { second = best; best = h; bi = i; } else if (h < second) second = h;
+      }
+      float hz = uScale * (best - uOff);
+      float gap = second - best;
+      float gw = fwidth(gap);
+      float v = (best - uOff) / uSpacing;
+      float iw = fwidth(v);
+      vec3 p = vec3(x, -uGap - hz);
+      vec3 col = shade(surfColor(bi), x, bi, p);
+      float iso = (1.0 - smoothstep(0.5, 1.4, abs(fract(v + 0.5) - 0.5) / max(iw, 1e-6))) * (1.0 - smoothstep(0.2, 0.45, iw));
+      col = mix(col, col * 0.62, iso * 0.6 * uIso);
+      float edge = uN > 1 ? 1.0 - smoothstep(0.8, 1.9, gap / max(gw, 1e-9)) : 0.0;
+      col = mix(col, vec3(0.80, 0.08, 0.06), edge * uEdges);
+      if (hz > uH || hz < -0.8 * uGap) discard;
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+});
+const envGeo = new THREE.PlaneGeometry(2, 2, 256, 256);
+const envelope = new THREE.Mesh(envGeo, envMat);
+envelope.frustumCulled = false;
+envelope.renderOrder = 0;
+scene.add(envelope);
+
+// every surface, translucent; pushed back so the envelope wins where they coincide
+const ghostMat = new THREE.ShaderMaterial({
+  uniforms: U, side: THREE.DoubleSide, transparent: true, depthWrite: false,
+  polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 6,
+  vertexShader: GLSL_COMMON + /* glsl */`
+    varying vec2 vXY;
+    varying float vIdx;
+    void main() {
+      vec2 x = position.xy;
+      int i = gl_InstanceID;
+      float hz = clamp(uScale * (surf(x, i) - uOff), -0.03, uH + 0.03);
+      vXY = x; vIdx = float(i);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(x, -uGap - hz, 1.0);
+    }`,
+  fragmentShader: GLSL_COMMON + /* glsl */`
+    varying vec2 vXY;
+    varying float vIdx;
+    void main() {
+      int i = int(vIdx + 0.5);
+      vec2 x = vXY;
+      float hz = uScale * (surf(x, i) - uOff);
+      if (hz > uH || hz < -0.8 * uGap) discard;
+      vec3 p = vec3(x, -uGap - hz);
+      vec3 col = shade(surfColor(i), x, i, p);
+      gl_FragColor = vec4(col, uGhostAlpha);
+    }`,
+});
+const ghostGeo = new THREE.PlaneGeometry(2, 2, 128, 128);
+const ghosts = new THREE.InstancedMesh(ghostGeo, ghostMat, MAXS);
+ghosts.frustumCulled = false;
+ghosts.renderOrder = 1;
+scene.add(ghosts);
+
+// box, axes, lifted sites
+const boxGroup = new THREE.Group();
+scene.add(boxGroup);
+{
+  const zb = -(GAP + H);
+  const pts = [];
+  const c = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+  for (let k = 0; k < 4; k++) {
+    const [x0, y0] = c[k], [x1, y1] = c[(k + 1) % 4];
+    pts.push(x0, y0, 0, x1, y1, 0, x0, y0, zb, x1, y1, zb, x0, y0, 0, x0, y0, zb);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  boxGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x8a857c })));
+  const o = new THREE.Vector3(-1, -1, 0);
+  boxGroup.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), o, 2.25, 0xd23a2a, 0.1, 0.05));
+  boxGroup.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), o, 2.25, 0x2fa043, 0.1, 0.05));
+  boxGroup.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), o, GAP + H + 0.2, 0x2a52d2, 0.1, 0.05));
+}
+const liftGroup = new THREE.Group();
+scene.add(liftGroup);
+const liftSpheres = new THREE.InstancedMesh(new THREE.SphereGeometry(0.02, 14, 10), new THREE.MeshBasicMaterial({ color: 0x111111 }), MAXS);
+liftSpheres.frustumCulled = false;
+liftGroup.add(liftSpheres);
+const dropGeo = new THREE.BufferGeometry();
+dropGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAXS * 6), 3));
+const drops = new THREE.LineSegments(dropGeo, new THREE.LineBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.55 }));
+drops.frustumCulled = false;
+liftGroup.add(drops);
+
+// ---------- syncing state to the GPU ----------
+let analysis = null;
+let fitDirty = true, statsDirty = true, lastStats = 0;
+
+function pushUniforms() {
+  U.uN.value = sites.length;
+  sites.forEach((s, k) => U.uSites.value[k].set(s.x, s.y, s.w));
+  U.uMetric.value = C.metricIndex(P.metric);
+  U.uP.value = P.p;
+  for (let k = 0; k < 5; k++) U.uProf.value[k] = P.prof[k];
+  for (let k = 0; k < 15; k++) U.uPoly.value[k] = P.poly[k];
+  U.uWeight.value = P.weight;
+  U.uIso.value = S.iso ? 1 : 0;
+  U.uCells.value = S.cells ? 1 : 0;
+  U.uEdges.value = S.edges ? 1 : 0;
+  U.uOpacity.value = S.opacity;
+  U.uColorMode.value = S.colorMode;
+  planeMat.depthWrite = S.opacity > 0.98;
+  ghosts.count = sites.length;
+  envelope.visible = S.surfaces !== 'none';
+  ghosts.visible = S.surfaces === 'all';
+  boxGroup.visible = S.box;
+  liftGroup.visible = S.drops;
+}
+
+function refit() {
+  analysis = C.analyse(P, sites, 96);
+  const range = Math.max(analysis.max - analysis.min, 1e-6);
+  if (S.autoFit) { U.uOff.value = analysis.min; U.uScale.value = 0.6 * H / range * S.heightMul; }
+  else { U.uOff.value = 0; U.uScale.value = S.heightMul; }
+  U.uSpacing.value = range / S.isoCount;
+  fitDirty = false; statsDirty = false; lastStats = performance.now();
+  showStats();
+}
+
+const tmpM = new THREE.Matrix4();
+function updateLifted() {
+  const f = C.makeSurf(P);
+  const pos = dropGeo.attributes.position.array;
+  let visible = 0;
+  sites.forEach((s, k) => {
+    const hz = U.uScale.value * (f(s, s.x, s.y) - U.uOff.value);
+    const inBox = hz >= -0.03 && hz <= H;
+    const z = -GAP - Math.min(Math.max(hz, -0.03), H);
+    tmpM.makeTranslation(s.x, s.y, z);
+    if (!inBox) tmpM.scale(new THREE.Vector3(0.001, 0.001, 0.001));
+    liftSpheres.setMatrixAt(k, tmpM);
+    pos.set([s.x, s.y, 0, s.x, s.y, z], visible * 6);
+    visible++;
+  });
+  liftSpheres.count = sites.length;
+  liftSpheres.instanceMatrix.needsUpdate = true;
+  dropGeo.attributes.position.needsUpdate = true;
+  dropGeo.setDrawRange(0, visible * 2);
+}
+
+function showStats() {
+  const a = analysis; if (!a) return;
+  const n = sites.length;
+  const parts = [`${n} site${n === 1 ? '' : 's'}`, `${n - a.empty} cells with ground`];
+  if (a.empty) parts.push(`<b style="color:var(--warn)">${a.empty} empty</b>`);
+  if (a.split) parts.push(`<b style="color:var(--warn)">${a.split} split into pieces</b>`);
+  if (a.outside) parts.push(`<b style="color:var(--warn)">${a.outside} site${a.outside === 1 ? '' : 's'} outside own cell</b>`);
+  document.getElementById('stats').innerHTML = parts.join(' · ') + '<br><span>(counted on a 96×96 grid)</span>';
+}
+
+function changed({ fit = true } = {}) {
+  pushUniforms();
+  if (fit) fitDirty = true; else statsDirty = true;
+  updatePanelText();
+}
+
+// ---------- panel ----------
+const $ = id => document.getElementById(id);
+function makeSlider(parent, { name, min, max, step, get, set, fmt = v => v.toFixed(2), cls = '', title = '' }) {
+  const row = document.createElement('div');
+  row.className = 'slider ' + cls;
+  row.innerHTML = `<span class="name" title="${title}">${name}</span><input type="range" min="${min}" max="${max}" step="${step}"><span class="val"></span>`;
+  const input = row.querySelector('input'), val = row.querySelector('.val');
+  const refresh = () => { input.value = get(); val.textContent = fmt(+get()); row.classList.toggle('zero', +get() === 0); };
+  input.addEventListener('input', () => { set(+input.value); refresh(); });
+  parent.appendChild(row);
+  refresh();
+  return { row, refresh };
+}
+
+function buildSeg(el, values, get, set) {
+  el.innerHTML = '';
+  for (const v of values) {
+    const b = document.createElement('button');
+    b.textContent = v;
+    b.addEventListener('click', () => { set(v); [...el.children].forEach(c => c.classList.toggle('on', +c.textContent === get())); });
+    el.appendChild(b);
+  }
+  [...el.children].forEach(c => c.classList.toggle('on', +c.textContent === get()));
+}
+
+let profRefreshers = [], polyRefreshers = [];
+function buildProfSliders() {
+  const box = $('profSliders'); box.innerHTML = ''; profRefreshers = [];
+  for (let k = P.profOrder; k >= 0; k--) {
+    const s = makeSlider(box, { name: C.PROF_LABELS[k], min: -3, max: 3, step: 0.01, cls: 'coef', title: 'double-click to zero',
+      get: () => P.prof[k], set: v => { P.prof[k] = v; changed(); } });
+    s.row.querySelector('.name').addEventListener('dblclick', () => { P.prof[k] = 0; s.refresh(); changed(); });
+    profRefreshers.push(s.refresh);
+  }
+}
+function buildPolySliders() {
+  const box = $('polySliders'); box.innerHTML = ''; polyRefreshers = [];
+  for (let k = 0; k < 15; k++) {
+    if (POLY_DEG[k] > P.polyOrder) continue;
+    const s = makeSlider(box, { name: C.POLY_LABELS[k], min: -3, max: 3, step: 0.01, cls: 'coef', title: 'double-click to zero',
+      get: () => P.poly[k], set: v => { P.poly[k] = v; changed(); } });
+    s.row.querySelector('.name').addEventListener('dblclick', () => { P.poly[k] = 0; s.refresh(); changed(); });
+    polyRefreshers.push(s.refresh);
+  }
+}
+
+function fillPresets(sel, list) {
+  sel.innerHTML = '<option value="">Presets…</option>' + list.map((p, i) => `<option value="${i}">${p[0]}</option>`).join('');
+}
+
+const METRIC_NOTES = {
+  euclid: 'd = √(u² + v²)',
+  manhattan: 'd = |u| + |v|',
+  chebyshev: 'd = max(|u|, |v|)',
+  quasi: 'd = max(|u|,|v|) + (√2 − 1)·min(|u|,|v|)',
+  minkowski: 'd = (|u|ᵖ + |v|ᵖ)^(1/p)',
+  poly: 'No distance: the polynomial below is the whole surface.',
+};
+
+function updatePanelText() {
+  const isPoly = P.metric === 'poly';
+  $('profSec').classList.toggle('hidden', isPoly);
+  $('polySec').classList.toggle('hidden', !isPoly);
+  $('pRow').classList.toggle('hidden', P.metric !== 'minkowski');
+  $('metricNote').textContent = METRIC_NOTES[P.metric] + (isPoly ? '' : ', with u = x − pₓ, v = y − p_y');
+  $('metricNote').style.color = 'var(--muted)';
+  if (!isPoly) {
+    $('profFormula').textContent = 'z = ' + C.formatTerms(P.prof, C.PROF_LABELS);
+    const ck = C.checkProfile(P), el = $('profCheck');
+    if (ck.flat) { el.className = 'check warn'; el.textContent = 'Flat: every surface has the same height, so the first site wins everywhere.'; }
+    else if (ck.increasing) { el.className = 'check ok'; el.textContent = 'h increases with d, so the cells are the same as for plain ' + $('metric').selectedOptions[0].text + ' distance. Only the surfaces change shape.'; }
+    else { el.className = 'check warn'; el.textContent = `h turns down at d ≈ ${ck.turnAt.toFixed(2)}, so it is not increasing. The cells change: a near site no longer always beats a far one.`; }
+  } else {
+    $('polyFormula').textContent = 'z = ' + C.formatTerms(P.poly, C.POLY_LABELS);
+    const ck = C.checkPoly(P.poly), el = $('polyCheck');
+    const msg = {
+      flat: ['warn', 'Degree ≤ 1: the surfaces are parallel planes, so one site wins everywhere.'],
+      unbounded: ['warn', `Not a bowl: the degree-${ck.deg} part goes negative in some direction, so the surface falls away to −∞. Far sites can win, and cells may be empty or hold no site.`],
+      bowl: ['warn', 'A bowl, but not convex: cells can be non-convex or split, and a site can sit outside its own cell.'],
+      convex: ['ok', (ck.deg === 2 ? 'A convex quadratic bowl: the edges stay straight and you get a stretched Voronoi diagram.' : 'A convex bowl: the cubic and quartic terms bend the edges.')
+        + (P.poly[1] || P.poly[2] ? ' The linear terms move the bottom of the bowl off the site, so sites can sit off their own cells.' : '')],
+      'convex-flat': ['ok', 'Convex, but flat along some direction: the cells may stretch into bands.'],
+    }[ck.kind];
+    el.className = 'check ' + msg[0]; el.textContent = msg[1];
+  }
+}
+
+$('metric').value = P.metric;
+$('metric').addEventListener('change', e => { P.metric = e.target.value; changed(); });
+makeSlider($('pRow'), { name: 'p', min: 0.3, max: 10, step: 0.05, get: () => P.p, set: v => { P.p = v; changed(); } });
+
+buildSeg($('profOrder'), [2, 3, 4], () => P.profOrder, v => {
+  P.profOrder = v; for (let k = v + 1; k < 5; k++) P.prof[k] = 0; buildProfSliders(); changed();
+});
+buildSeg($('polyOrder'), [2, 3, 4], () => P.polyOrder, v => {
+  P.polyOrder = v; for (let k = 0; k < 15; k++) if (POLY_DEG[k] > v) P.poly[k] = 0; buildPolySliders(); changed();
+});
+fillPresets($('profPreset'), PROF_PRESETS);
+fillPresets($('polyPreset'), POLY_PRESETS);
+$('profPreset').addEventListener('change', e => {
+  if (e.target.value === '') return;
+  P.prof = PROF_PRESETS[+e.target.value][1].slice(); P.profOrder = orderOfProf(P.prof);
+  buildSeg($('profOrder'), [2, 3, 4], () => P.profOrder, v => { P.profOrder = v; for (let k = v + 1; k < 5; k++) P.prof[k] = 0; buildProfSliders(); changed(); });
+  buildProfSliders(); changed(); e.target.value = '';
+});
+$('polyPreset').addEventListener('change', e => {
+  if (e.target.value === '') return;
+  P.poly = POLY_PRESETS[+e.target.value][1].slice(); P.polyOrder = orderOfPoly(P.poly);
+  buildSeg($('polyOrder'), [2, 3, 4], () => P.polyOrder, v => { P.polyOrder = v; for (let k = 0; k < 15; k++) if (POLY_DEG[k] > v) P.poly[k] = 0; buildPolySliders(); changed(); });
+  buildPolySliders(); changed(); e.target.value = '';
+});
+buildProfSliders();
+buildPolySliders();
+
+const countSlider = makeSlider($('siteSliders'), { name: 'Sites', min: 1, max: MAXS, step: 1, fmt: v => String(v),
+  get: () => sites.length, set: v => { setSiteCount(v); } });
+makeSlider($('siteSliders'), { name: 'Weights', min: 0, max: 0.6, step: 0.005, title: 'each site gets its own random weight in [−1, 1], times this',
+  get: () => P.weight, set: v => { P.weight = v; changed(); } });
+
+function setSiteCount(n) {
+  while (sites.length < n) { sites.push({ x: -0.88 + 1.76 * siteRng(), y: -0.88 + 1.76 * siteRng(), w: 2 * siteRng() - 1 }); vel.push(newVel()); }
+  while (sites.length > n) { sites.pop(); vel.pop(); }
+  changed();
+}
+$('randomize').addEventListener('click', () => {
+  S.seed = (S.seed * 48271 + 11) % 2147483647;
+  sites = C.randomSites(sites.length, S.seed); vel = sites.map(newVel);
+  changed();
+});
+$('drift').addEventListener('change', e => { S.drift = e.target.checked; if (!S.drift) fitDirty = true; });
+
+$('surfMode').value = S.surfaces;
+$('surfMode').addEventListener('change', e => { S.surfaces = e.target.value; changed({ fit: false }); });
+$('colorMode').value = String(S.colorMode);
+$('colorMode').addEventListener('change', e => { S.colorMode = +e.target.value; changed({ fit: false }); });
+for (const id of ['iso', 'cells', 'edges', 'drops', 'box', 'autoFit']) {
+  $(id).checked = S[id];
+  $(id).addEventListener('change', e => { S[id] = e.target.checked; changed({ fit: id === 'autoFit' }); });
+}
+makeSlider($('showSliders'), { name: 'Plane', min: 0, max: 1, step: 0.01, title: 'opacity of the diagram plane',
+  get: () => S.opacity, set: v => { S.opacity = v; changed({ fit: false }); } });
+makeSlider($('showSliders'), { name: 'Ghosts', min: 0.03, max: 0.8, step: 0.01, title: 'opacity of the other surfaces',
+  get: () => U.uGhostAlpha.value, set: v => { U.uGhostAlpha.value = v; } });
+makeSlider($('showSliders'), { name: 'Isolines', min: 3, max: 40, step: 1, fmt: v => String(v), title: 'number of height levels',
+  get: () => S.isoCount, set: v => { S.isoCount = v; changed(); } });
+makeSlider($('showSliders'), { name: 'Height', min: -1.5, max: 1.5, step: 0.01, fmt: v => '×' + Math.pow(4, v).toFixed(2), title: 'height scale',
+  get: () => Math.log(S.heightMul) / Math.log(4), set: v => { S.heightMul = Math.pow(4, v); changed(); } });
+
+// ---------- camera views ----------
+function sphericalView(azDeg, elDeg, dist = 5.6) {
+  const az = azDeg * Math.PI / 180, el = elDeg * Math.PI / 180;
+  return new THREE.Vector3(target.x + dist * Math.sin(az) * Math.cos(el), target.y + dist * Math.sin(el), target.z + dist * Math.cos(az) * Math.cos(el));
+}
+const VIEWS = { front: [0, 0], turned: [38, 18], side: [88, 6], above: [0, 82], behind: [142, 24] };
+let tween = null;
+function goView(name, instant = false) {
+  const [az, el] = VIEWS[name];
+  const dist = instant ? 5.6 : Math.min(Math.max(camera.position.distanceTo(target), 3), 9);
+  const to = sphericalView(az, el, dist);
+  if (instant) { camera.position.copy(to); camera.lookAt(target); return; }
+  tween = { from: camera.position.clone(), to, t0: performance.now(), dur: 700 };
+}
+document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => goView(b.dataset.view)));
+
+// ---------- site dragging (registered before OrbitControls so it can claim the pointer) ----------
+const ray = new THREE.Raycaster();
+const zPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const ndc = new THREE.Vector2(), hitP = new THREE.Vector3(), proj = new THREE.Vector3();
+let drag = -1;
+function pointerXY(e) { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top, r]; }
+function planeHit(e) {
+  const [x, y, r] = pointerXY(e);
+  ndc.set(x / r.width * 2 - 1, -(y / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  return ray.ray.intersectPlane(zPlane, hitP) ? hitP : null;
+}
+function siteAt(e) {
+  const [x, y, r] = pointerXY(e);
+  let best = -1, bd = 12;
+  sites.forEach((s, k) => {
+    proj.set(s.x, s.y, 0).project(camera);
+    const d = Math.hypot((proj.x + 1) / 2 * r.width - x, (1 - proj.y) / 2 * r.height - y);
+    if (d < bd) { bd = d; best = k; }
+  });
+  return best;
+}
+canvas.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  const k = siteAt(e);
+  if (k < 0) return;
+  drag = k; U.uHover.value = k;
+  canvas.setPointerCapture(e.pointerId);
+  canvas.style.cursor = 'grabbing';
+  e.stopImmediatePropagation();
+  e.preventDefault();
+});
+canvas.addEventListener('pointermove', e => {
+  if (drag >= 0) {
+    const p = planeHit(e);
+    if (p) { sites[drag].x = Math.max(-0.99, Math.min(0.99, p.x)); sites[drag].y = Math.max(-0.99, Math.min(0.99, p.y)); changed({ fit: false }); }
+    e.stopImmediatePropagation();
+    return;
+  }
+  const k = e.buttons ? -1 : siteAt(e);
+  U.uHover.value = k;
+  canvas.style.cursor = k >= 0 ? 'grab' : '';
+});
+const endDrag = e => { if (drag >= 0) { drag = -1; canvas.style.cursor = ''; fitDirty = true; e.stopImmediatePropagation(); } };
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('dblclick', e => {
+  const k = siteAt(e);
+  if (k >= 0) { if (sites.length > 1) { sites.splice(k, 1); vel.splice(k, 1); U.uHover.value = -1; } }
+  else {
+    const p = planeHit(e);
+    if (!p || Math.abs(p.x) > 1 || Math.abs(p.y) > 1 || sites.length >= MAXS) return;
+    sites.push({ x: p.x, y: p.y, w: 2 * siteRng() - 1 }); vel.push(newVel());
+  }
+  countSlider.refresh();
+  changed();
+});
+
+const orbit = new OrbitControls(camera, canvas);
+orbit.target.copy(target);
+orbit.enableDamping = true;
+orbit.dampingFactor = 0.12;
+orbit.minDistance = 2.2;
+orbit.maxDistance = 14;
+orbit.addEventListener('start', () => { tween = null; });
+
+// ---------- sizing and loop ----------
+function resize() {
+  const w = Math.max(1, view.clientWidth || window.innerWidth), h = Math.max(1, view.clientHeight || window.innerHeight);
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  // keep the whole box in view on tall, narrow screens
+  camera.fov = camera.aspect < 1 ? 2 * Math.atan(Math.tan(16 * Math.PI / 180) / camera.aspect) * 180 / Math.PI : 32;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+window.addEventListener('resize', resize);
+
+const VIEW0 = VIEWS[qs.get('view')] ? qs.get('view') : null;
+if (VIEW0) goView(VIEW0, true); else { camera.position.copy(sphericalView(22, 12)); camera.lookAt(target); }
+resize();
+
+function step(dt) {
+  if (S.drift && drag < 0) {
+    sites.forEach((s, k) => {
+      const v = vel[k];
+      s.x += v.x * dt; s.y += v.y * dt;
+      if (s.x < -0.97 || s.x > 0.97) { v.x = -v.x; s.x = Math.max(-0.97, Math.min(0.97, s.x)); }
+      if (s.y < -0.97 || s.y > 0.97) { v.y = -v.y; s.y = Math.max(-0.97, Math.min(0.97, s.y)); }
+    });
+    pushUniforms();
+    statsDirty = true;
+  }
+  if (tween) {
+    const t = Math.min(1, (performance.now() - tween.t0) / tween.dur), e = t * t * (3 - 2 * t);
+    camera.position.lerpVectors(tween.from, tween.to, e);
+    if (t >= 1) tween = null;
+  }
+  orbit.update();
+  if (fitDirty) refit();
+  else if (statsDirty && performance.now() - lastStats > 200) {
+    analysis = C.analyse(P, sites, 96); statsDirty = false; lastStats = performance.now(); showStats();
+  }
+  updateLifted();
+}
+function render() { renderer.render(scene, camera); }
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  step(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+$('savePng').addEventListener('click', () => {
+  const hover = U.uHover.value; U.uHover.value = -1;
+  render();
+  const url = renderer.domElement.toDataURL('image/png');
+  U.uHover.value = hover;
+  const a = document.createElement('a');
+  a.href = url; a.download = 'voronoi-surfaces.png'; a.click();
+});
+
+pushUniforms();
+updatePanelText();
+refit();
+updateLifted();
+render();
+requestAnimationFrame(frame);
+
+// debug handle for screenshots and checks
+window.__vs = { P, S, U, get sites() { return sites; }, set sites(v) { sites = v; vel = v.map(newVel); changed(); },
+  goView, step: () => { step(0.016); render(); }, changed, refit, renderer, camera, analysis: () => analysis };
+</script>
+</body>
+</html>
