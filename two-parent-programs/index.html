@@ -223,17 +223,18 @@ const TP = (() => {
 
   const N8 = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
   const P = {
-    startEnergy: 60, foodValue: 18, maxEnergy: 150, maxAge: 600,
+    startEnergy: 60, foodValue: 24, maxEnergy: 150, maxAge: 600,
     mateEnergy: 30, mateAge: 60, mateCooldown: 40, birthCost: 20, childEnergy: 40, failCost: 5,
-    cap: 400, patches: 3, patchRadius: 18, seasonTicks: 3000, foodSigma: 6, foodChance: 0.9, foodCrowd: 150,
+    cap: 400, patches: 3, patchRadius: 18, seasonTicks: 3000, foodSigma: 6, foodChance: 1, foodCrowd: Infinity,
     earlyAge: 200, sampleEvery: 50, keepRecords: 20000,
+    gardenFood: 0.015, gardenEnergy: 30, gardenTicks: 1500, gardenPlots: 4, gardenSample: 12,
   };
   const senseCells = (range) => range / 16 + 2;
   const tickCost = (b) => 0.15 + (b.metab / 255) * 0.35 + (b.speed / 255) * 0.25 + (b.size / 255) * 0.25;
 
   class World {
-    constructor({ mode, seed, fitCheck = true, mixEvolves = true, founders = FOUNDERS, perLineage = 20 }) {
-      Object.assign(this, { mode, seed, fitCheck, mixEvolves, founders });
+    constructor({ mode, seed, fitCheck = true, mixEvolves = true, founders = FOUNDERS, perLineage = 20, sampling = true, foodChance = P.foodChance, initialFood = 150 }) {
+      Object.assign(this, { mode, seed, fitCheck, mixEvolves, founders, sampling, foodChance });
       this.rand = rng(seed);
       this.time = 0;
       this.nextId = 1;
@@ -250,7 +251,7 @@ const TP = (() => {
       this.series = [];
       this.phase = this.rand() * Math.PI * 2;
       this.makeWalls();
-      for (let i = 0; i < 150; i++) this.spawnFood(true);
+      for (let i = 0; i < initialFood; i++) this.spawnFood(true);
       founders.forEach((f, k) => {
         for (let i = 0; i < perLineage; i++) {
           const cell = this.freeCell();
@@ -448,7 +449,7 @@ const TP = (() => {
     tick() {
       this.time++;
       const tries = P.patches;
-      const chance = P.foodChance / (1 + this.creatures.length / P.foodCrowd);
+      const chance = this.foodChance / (1 + this.creatures.length / P.foodCrowd);
       for (let k = 0; k < tries; k++) if (this.rand() < chance) this.spawnFood();
       // a shuffled order each tick, so nobody always moves first
       const order = this.creatures.slice();
@@ -471,7 +472,7 @@ const TP = (() => {
       }
       if (this.creatures.some((c) => c.state !== 'alive')) this.creatures = this.creatures.filter((c) => c.state === 'alive');
       this.judge();
-      if (this.time % P.sampleEvery === 0) this.sample();
+      if (this.sampling && this.time % P.sampleEvery === 0) this.sample();
       this.trimRecords();
     }
 
@@ -511,6 +512,9 @@ const TP = (() => {
       const cs = this.creatures, n = cs.length;
       const rates = cs.map((c) => c.eaten / Math.max(1, c.age));
       const mixed = cs.filter((c) => c.lineage.filter((v) => v >= 0.1).length >= 2).length;
+      // garden scores of a random handful of creatures (a separate generator keeps the world's own sequence)
+      const pick = rng(this.seed * 7919 + this.time), g = [];
+      for (let k = 0; k < Math.min(P.gardenSample, n); k++) g.push(this.garden(cs[Math.floor(pick() * n)]));
       this.series.push({
         t: this.time, pop: n,
         meanRate: n ? rates.reduce((x, y) => x + y, 0) / n : 0,
@@ -519,7 +523,19 @@ const TP = (() => {
         mixedShare: n ? mixed / n : 0,
         meanShare: n ? cs.reduce((x, c) => x + c.ph.mix.share, 0) / n : 0,
         meanCuts: n ? cs.reduce((x, c) => x + c.ph.mix.cuts, 0) / n : 0,
+        garden: g.length ? g.reduce((x, y) => x + y, 0) / g.length : 0,
+        gardenBest: g.length ? Math.max(...g) : 0,
       });
+    }
+
+    // the common-garden score of a creature, computed once per genome
+    garden(c) {
+      if (c.garden === undefined) {
+        c.garden = gardenScore(c.bytes);
+        const r = this.records.get(c.id);
+        if (r) r.garden = c.garden;
+      }
+      return c.garden;
     }
 
     trimRecords() {
@@ -529,6 +545,57 @@ const TP = (() => {
         if (r.died !== null) this.records.delete(id);
       }
     }
+  }
+
+  // Common garden: a creature alone on sparse plots, as biologists compare organisms under the same
+  // conditions. Score: ticks survived, averaged over a few plots (ageing switched off). Cached per genome.
+  const gardenCache = new Map();
+  function gardenScore(bytes) {
+    const key = hex(bytes);
+    if (gardenCache.has(key)) return gardenCache.get(key);
+    let total = 0;
+    for (let plot = 1; plot <= P.gardenPlots; plot++) {
+      const w = new World({ mode: 'aligned', seed: 20261110 + plot, founders: [], perLineage: 0, sampling: false, foodChance: P.gardenFood, initialFood: 0 });
+      w.walls.fill(0);
+      const c = w.addCreature(bytes, GRID >> 1, GRID >> 1, P.gardenEnergy, null, [1]);
+      c.age = -1e9;
+      let t = 0;
+      for (; t < P.gardenTicks && c.state === 'alive'; t++) w.tick();
+      total += t;
+    }
+    const score = total / P.gardenPlots;
+    if (gardenCache.size > 5000) gardenCache.clear();
+    gardenCache.set(key, score);
+    return score;
+  }
+
+  // Run both worlds from the same seed and summarise what happened.
+  function summarize(w, extinctAt, capTicks, ticks) {
+    const s = w.series, k = Math.min(5, s.length);
+    const avg = (xs, f = 'meanRate') => (xs.length ? xs.reduce((x, y) => x + y[f], 0) / xs.length : 0);
+    return {
+      pop: w.creatures.length, births: w.stats.births, failed: w.stats.failed,
+      adultsShare: w.stats.births ? w.stats.adults / w.stats.births : 0,
+      betterShare: w.stats.judged ? w.stats.betterThanBoth / w.stats.judged : 0,
+      meanRateStart: avg(s.slice(0, k)), meanRateEnd: avg(s.slice(s.length - k)),
+      gardenStart: avg(s.slice(0, k), 'garden'), gardenEnd: avg(s.slice(s.length - k), 'garden'),
+      mixedShare: s.length ? s[s.length - 1].mixedShare : 0,
+      capShare: ticks ? capTicks / ticks : 0, extinctAt,
+    };
+  }
+  function experiment(seed, ticks, opts = {}) {
+    const out = {};
+    for (const mode of ['naive', 'aligned']) {
+      const w = new World({ mode, seed, ...opts });
+      let extinctAt = null, capTicks = 0;
+      for (let t = 0; t < ticks; t++) {
+        w.tick();
+        if (w.creatures.length >= P.cap) capTicks++;
+        if (!w.creatures.length && extinctAt === null) { extinctAt = w.time; break; }
+      }
+      out[mode] = summarize(w, extinctAt, capTicks, ticks);
+    }
+    return out;
   }
 
   const encodeGene = (type, settings, lowBits = 0) => [...START, ((type & 15) << 4) | (lowBits & 15), ...settings, ...END];
@@ -588,7 +655,7 @@ const TP = (() => {
   ];
 
   return { GRID, START, END, TOLERANCE, T, SETTINGS, TYPE_NAMES, DEFAULT_MIX, DEFAULT_BODY,
-    parse, express, fits, bindSensor, encodeGene, rng, hex, FOUNDERS, mutate, segments, mixAligned, mixNaive, conceive, World, P, tickCost, senseCells };
+    parse, express, fits, bindSensor, encodeGene, rng, hex, FOUNDERS, mutate, segments, mixAligned, mixNaive, conceive, World, P, tickCost, senseCells, experiment, gardenScore };
 })();
 
 const TPTests = {
@@ -596,7 +663,7 @@ const TPTests = {
     let pass = 0, fail = 0;
     const ok = (c, name = '') => { if (c) pass++; else { fail++; console.error('FAIL', name, new Error().stack.split('\n')[2]); } };
     const eq = (a, b, name = '') => { ok(a === b, `${name} got ${JSON.stringify(a)} want ${JSON.stringify(b)}`); };
-    const tests = [this.genome, this.reproduction, this.world];
+    const tests = [this.genome, this.reproduction, this.world, this.experiment];
     for (const t of tests) {
       try { t(ok, eq); } catch (e) { fail++; console.error('ERROR in', t.name, e.message); }
     }
@@ -763,6 +830,36 @@ const TPTests = {
     for (let i = 0; i < 400; i++) wn.tick();
     eq(wn.stats.failed, 0, 'naive has no failed conceptions');
     ok(wn.stats.conceptions > 0, 'naive conceives');
+  },
+
+  experiment(ok, eq) {
+    const e = TP.experiment(2, 600);
+    for (const k of ['naive', 'aligned']) {
+      const s = e[k];
+      for (const f of ['pop', 'births', 'failed', 'adultsShare', 'betterShare', 'meanRateStart', 'meanRateEnd', 'capShare']) ok(Number.isFinite(s[f]), k + ' ' + f);
+      ok(s.extinctAt === null || Number.isInteger(s.extinctAt), k + ' extinctAt');
+    }
+    eq(e.naive.failed, 0, 'naive never fails a fit check');
+    // the tuned worlds stay alive (tuned for a living world, not for a winner)
+    const long = TP.experiment(1, 3000);
+    eq(long.aligned.extinctAt, null, 'aligned world survives 3000 ticks');
+    eq(long.naive.extinctAt, null, 'naive world survives 3000 ticks');
+    ok(long.aligned.births > 50 && long.naive.births > 50, 'both worlds breed');
+    // common garden: one creature alone on a fixed plot; net energy per tick
+    const [Sn, Sa] = TP.FOUNDERS.map((f) => f.bytes);
+    eq(TP.gardenScore(Sa), TP.gardenScore(Sa), 'garden is deterministic');
+    ok(TP.gardenScore(new Uint8Array(0)) < 100, 'a creature with no genes dies early in the garden');
+    // the combination the founders were built for: Saver's body and rules with Sniffer's long-range nose
+    const sniffNose = TP.parse(Sn).genes.find((g) => g.type === TP.T.NOSE);
+    const saverNose = TP.parse(Sa).genes.find((g) => g.type === TP.T.NOSE);
+    const hybrid = Uint8Array.from([...Sa.subarray(0, saverNose.start), ...Sn.subarray(sniffNose.start, sniffNose.end), ...Sa.subarray(saverNose.end)]);
+    ok(TP.fits(TP.express(hybrid)).ok, 'hybrid fits');
+    const h = TP.gardenScore(hybrid), a = TP.gardenScore(Sn), b = TP.gardenScore(Sa);
+    ok(h > a && h > b, `hybrid beats both parents in the garden: ${h.toFixed(3)} vs ${a.toFixed(3)}, ${b.toFixed(3)}`);
+    // series carry the garden measure
+    const w = new TP.World({ mode: 'aligned', seed: 4 });
+    for (let i = 0; i < 200; i++) w.tick();
+    ok(w.series.every((x) => Number.isFinite(x.garden) && Number.isFinite(x.gardenBest)), 'garden in series');
   },
 };
 </script>
