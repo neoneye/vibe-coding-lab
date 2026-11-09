@@ -199,6 +199,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [forward-forward](forward-forward/) -- see highlights.
 - [hex-editor](hex-editor/) -- hex and ASCII editor for local files, loaded in chunks so large ones stay responsive; it saves a copy and never touches the original.
 - [intel-4004](intel-4004/) -- the 1971 Intel 4004, assembled and stepped one instruction at a time against a live block diagram.
+- [lean-quine](lean-quine/) -- a two-line Lean 4 program that prints its own source, explained step by step: the string that holds the rest of the file, `String.quote` doing one level of quoting, and the output coloured by the expression that produced each piece. A small in-page interpreter for the slice of Lean used, with Lean's exact escaping rules, lets you break the quine and repair it. There are also a one-line variant and an `#eval` variant that prints itself while Lean checks the file. All three were run with Lean 4.35.0 and compared byte for byte.
 - [lossless-compression](lossless-compression/) -- RLE, Huffman, arithmetic coding, LZ77, LZSS, LZ78, LZW and DEFLATE- and bzip2-style pipelines, each a real bit-exact encoder and decoder, scored against the entropy and the browser's own zlib.
 - [markdown-in-html](markdown-in-html/) -- a page that renders its own inline Markdown source.
 - [mos-6510](mos-6510/) -- the CPU inside the Commodore 64: assembler, every documented opcode plus the stable undocumented ones, and a VIC-II text screen. No Commodore ROMs.
