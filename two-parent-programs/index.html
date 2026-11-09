@@ -219,6 +219,318 @@ const TP = (() => {
     return { born: opts.fitCheck === false || fit.ok, conception, fit };
   }
 
+  // ---------- the world ----------
+
+  const N8 = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+  const P = {
+    startEnergy: 60, foodValue: 18, maxEnergy: 150, maxAge: 600,
+    mateEnergy: 30, mateAge: 60, mateCooldown: 40, birthCost: 20, childEnergy: 40, failCost: 5,
+    cap: 400, patches: 3, patchRadius: 18, seasonTicks: 3000, foodSigma: 6, foodChance: 0.9, foodCrowd: 150,
+    earlyAge: 200, sampleEvery: 50, keepRecords: 20000,
+  };
+  const senseCells = (range) => range / 16 + 2;
+  const tickCost = (b) => 0.15 + (b.metab / 255) * 0.35 + (b.speed / 255) * 0.25 + (b.size / 255) * 0.25;
+
+  class World {
+    constructor({ mode, seed, fitCheck = true, mixEvolves = true, founders = FOUNDERS, perLineage = 20 }) {
+      Object.assign(this, { mode, seed, fitCheck, mixEvolves, founders });
+      this.rand = rng(seed);
+      this.time = 0;
+      this.nextId = 1;
+      this.walls = new Uint8Array(GRID * GRID);
+      this.food = new Uint8Array(GRID * GRID);
+      this.occ = new Int32Array(GRID * GRID);      // creature id per cell, 0 = empty
+      this.creatures = [];
+      this.byId = new Map();
+      this.records = new Map();
+      this.events = [];
+      this.lastConception = null;
+      this.pending = [];                           // children waiting to be judged against their parents
+      this.stats = { conceptions: 0, failed: 0, births: 0, deaths: { starved: 0, old: 0 }, adults: 0, betterThanBoth: 0, judged: 0 };
+      this.series = [];
+      this.phase = this.rand() * Math.PI * 2;
+      this.makeWalls();
+      for (let i = 0; i < 150; i++) this.spawnFood(true);
+      founders.forEach((f, k) => {
+        for (let i = 0; i < perLineage; i++) {
+          const cell = this.freeCell();
+          if (cell < 0) break;
+          const lineage = founders.map((_, j) => (j === k ? 1 : 0));
+          const c = this.addCreature(f.bytes, cell % GRID, (cell / GRID) | 0, P.startEnergy, null, lineage);
+          c.age = Math.floor(this.rand() * 100);
+          this.records.get(c.id).born = -c.age;
+        }
+      });
+    }
+
+    makeWalls() {
+      for (let k = 0; k < 6; k++) {
+        let x = 4 + Math.floor(this.rand() * 56), y = 4 + Math.floor(this.rand() * 56);
+        const [dx, dy] = [[1, 0], [0, 1]][Math.floor(this.rand() * 2)];
+        const len = 6 + Math.floor(this.rand() * 9);
+        for (let i = 0; i < len && x >= 0 && x < GRID && y >= 0 && y < GRID; i++) { this.walls[y * GRID + x] = 1; x += dx; y += dy; }
+      }
+    }
+
+    patchCenters(t = this.time) {
+      const out = [];
+      for (let k = 0; k < P.patches; k++) {
+        const a = this.phase + (k * Math.PI * 2) / P.patches + (t / P.seasonTicks) * Math.PI * 2;
+        out.push([GRID / 2 + Math.cos(a) * P.patchRadius, GRID / 2 + Math.sin(a) * P.patchRadius]);
+      }
+      return out;
+    }
+
+    gauss() {
+      let u = 0, v = 0;
+      while (u === 0) u = this.rand();
+      v = this.rand();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+
+    spawnFood(anywhere = false) {
+      const centers = this.patchCenters();
+      const [cx, cy] = centers[Math.floor(this.rand() * centers.length)];
+      const x = Math.round(cx + this.gauss() * P.foodSigma * (anywhere ? 1.6 : 1)), y = Math.round(cy + this.gauss() * P.foodSigma * (anywhere ? 1.6 : 1));
+      if (x < 0 || y < 0 || x >= GRID || y >= GRID) return;
+      const i = y * GRID + x;
+      if (!this.walls[i]) this.food[i] = 1;
+    }
+
+    freeCell() {
+      for (let tries = 0; tries < 500; tries++) {
+        const i = Math.floor(this.rand() * GRID * GRID);
+        if (!this.walls[i] && !this.occ[i]) return i;
+      }
+      return -1;
+    }
+
+    addCreature(bytes, x, y, energy, parents, lineage) {
+      const ph = express(bytes);
+      const bound = ph.rules.map((r) => bindSensor(ph, r));
+      const c = { id: this.nextId++, x, y, energy, age: 0, bytes, ph, bound, parents, lineage, eaten: 0, early: 0, earlyFinal: false,
+        lastMate: -1e9, heading: Math.floor(this.rand() * 8), state: 'alive', action: 'wander' };
+      this.creatures.push(c);
+      this.byId.set(c.id, c);
+      this.occ[y * GRID + x] = c.id;
+      this.records.set(c.id, { id: c.id, parents, bytes, lineage, born: this.time, died: null, cause: null, early: 0, earlyFinal: false, x, y });
+      return c;
+    }
+
+    // nearest cell (Chebyshev rings) for which test(index) holds, within r cells
+    nearest(c, r, test) {
+      const R = Math.min(GRID, Math.floor(r));
+      for (let d = 1; d <= R; d++) {
+        let best = -1, bestD = Infinity;
+        for (let dy = -d; dy <= d; dy++) {
+          const y = c.y + dy;
+          if (y < 0 || y >= GRID) continue;
+          const step = Math.abs(dy) === d ? 1 : 2 * d;
+          for (let dx = -d; dx <= d; dx += step) {
+            const x = c.x + dx;
+            if (x < 0 || x >= GRID) continue;
+            const i = y * GRID + x;
+            if (test(i)) { const e = dx * dx + dy * dy; if (e < bestD) { bestD = e; best = i; } }
+          }
+        }
+        if (best >= 0) return best;
+      }
+      return -1;
+    }
+
+    canEnter(x, y) { return x >= 0 && y >= 0 && x < GRID && y < GRID && !this.walls[y * GRID + x] && !this.occ[y * GRID + x]; }
+
+    moveTo(c, x, y) {
+      this.occ[c.y * GRID + c.x] = 0;
+      c.x = x; c.y = y;
+      this.occ[y * GRID + x] = c.id;
+    }
+
+    // one step towards (sign 1) or away from (sign -1) a target cell, greedily
+    stepToward(c, ti, sign) {
+      const tx = ti % GRID, ty = (ti / GRID) | 0;
+      let best = null, bestD = sign > 0 ? Math.hypot(tx - c.x, ty - c.y) : -Math.hypot(tx - c.x, ty - c.y);
+      for (const [dx, dy] of N8) {
+        const x = c.x + dx, y = c.y + dy;
+        if (!this.canEnter(x, y)) continue;
+        const d = sign > 0 ? Math.hypot(tx - x, ty - y) : -Math.hypot(tx - x, ty - y);
+        if (d < bestD - 1e-9) { bestD = d; best = [x, y]; }
+      }
+      if (best) this.moveTo(c, best[0], best[1]);
+      return !!best;
+    }
+
+    wander(c) {
+      if (this.rand() < 0.2) c.heading = (c.heading + (this.rand() < 0.5 ? 1 : 7)) % 8;
+      const [dx, dy] = N8[c.heading];
+      if (this.canEnter(c.x + dx, c.y + dy)) this.moveTo(c, c.x + dx, c.y + dy);
+      else c.heading = Math.floor(this.rand() * 8);
+    }
+
+    mateReady(c) {
+      if (c.energy < P.mateEnergy || c.age < P.mateAge || this.time - c.lastMate < P.mateCooldown) return false;
+      return c.ph.rules.some((r, k) => r.kind === 'mate' && c.bound[k] && c.energy > r.a);
+    }
+
+    // Two neighbours with active mate rules try for a child.
+    tryMate(a, b) {
+      if (!this.mateReady(a) || !this.mateReady(b) || this.creatures.length >= P.cap) return;
+      let cell = -1;
+      for (const [dx, dy] of N8) {
+        if (this.canEnter(a.x + dx, a.y + dy)) { cell = (a.y + dy) * GRID + a.x + dx; break; }
+        if (this.canEnter(b.x + dx, b.y + dy)) { cell = (b.y + dy) * GRID + b.x + dx; break; }
+      }
+      if (cell < 0) return;
+      const res = conceive(a.bytes, b.bytes, this.mode, this.rand, { fitCheck: this.fitCheck, mixEvolves: this.mixEvolves });
+      this.stats.conceptions++;
+      a.lastMate = b.lastMate = this.time;
+      let child = null;
+      if (res.born) {
+        a.energy -= P.birthCost; b.energy -= P.birthCost;
+        const o = res.conception.origin;
+        let fa = 0, fb = 0;
+        for (const v of o) { if (v === 0) fa++; else if (v === 1) fb++; }
+        const wa = fa + fb ? fa / (fa + fb) : 0.5;
+        const lineage = a.lineage.map((v, k) => v * wa + b.lineage[k] * (1 - wa));
+        const sum = lineage.reduce((x, y) => x + y, 0);
+        child = this.addCreature(res.conception.bytes, cell % GRID, (cell / GRID) | 0, P.childEnergy, [a.id, b.id], lineage.map((v) => v / sum));
+        this.stats.births++;
+        this.pending.push(child.id);
+        this.event({ t: this.time, kind: 'birth', ids: [a.id, b.id, child.id] });
+      } else {
+        a.energy -= P.failCost; b.energy -= P.failCost;
+        this.stats.failed++;
+        this.event({ t: this.time, kind: 'failed', ids: [a.id, b.id], x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      }
+      this.lastConception = { t: this.time, parents: [a.id, b.id], parentBytes: [a.bytes.slice(), b.bytes.slice()],
+        conception: res.conception, fit: res.fit, born: res.born, childId: child ? child.id : null };
+    }
+
+    event(e) {
+      this.events.push(e);
+      if (this.events.length > 500) this.events.splice(0, this.events.length - 500);
+    }
+
+    act(c) {
+      const moves = this.rand() < 0.3 + (c.ph.body.speed / 255) * 0.7;
+      for (let k = 0; k < c.ph.rules.length; k++) {
+        const r = c.ph.rules[k], sensor = c.bound[k];
+        if (!sensor) continue;
+        const range = senseCells(sensor.range);
+        if (r.kind === 'forage' && c.energy < r.a) {
+          const t = this.nearest(c, range, (i) => this.food[i] === 1);
+          if (t < 0) continue;
+          c.action = 'forage';
+          if (moves) this.stepToward(c, t, 1);
+          return;
+        }
+        if (r.kind === 'mate' && this.mateReady(c)) {
+          const t = this.nearest(c, range, (i) => this.occ[i] && this.occ[i] !== c.id);
+          if (t < 0) continue;
+          c.action = 'mate';
+          const other = this.byId.get(this.occ[t]);
+          if (Math.max(Math.abs(other.x - c.x), Math.abs(other.y - c.y)) <= 1) this.tryMate(c, other);
+          else if (moves) this.stepToward(c, t, 1);
+          return;
+        }
+        if (r.kind === 'flee') {
+          const t = this.nearest(c, range, (i) => { const o = this.occ[i] && this.byId.get(this.occ[i]); return o && o !== c && o.ph.body.size - c.ph.body.size > r.a; });
+          if (t < 0) continue;
+          c.action = 'flee';
+          if (moves) this.stepToward(c, t, -1);
+          return;
+        }
+      }
+      c.action = 'wander';
+      if (moves) this.wander(c);
+    }
+
+    tick() {
+      this.time++;
+      const tries = P.patches;
+      const chance = P.foodChance / (1 + this.creatures.length / P.foodCrowd);
+      for (let k = 0; k < tries; k++) if (this.rand() < chance) this.spawnFood();
+      // a shuffled order each tick, so nobody always moves first
+      const order = this.creatures.slice();
+      for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(this.rand() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+      for (const c of order) {
+        if (c.state !== 'alive') continue;
+        c.age++;
+        c.energy -= tickCost(c.ph.body);
+        this.act(c);
+        const i = c.y * GRID + c.x;
+        if (this.food[i]) { this.food[i] = 0; c.energy = Math.min(P.maxEnergy, c.energy + P.foodValue); c.eaten++; }
+        if (c.age <= P.earlyAge) c.early = c.eaten;
+        if (c.age === P.earlyAge) this.finishEarly(c);
+        if (c.age === 100 && c.parents) this.stats.adults++;
+      }
+      for (const c of order) {
+        if (c.state !== 'alive') continue;
+        const cause = c.energy <= 0 ? 'starved' : c.age >= P.maxAge ? 'old' : null;
+        if (cause) this.die(c, cause);
+      }
+      if (this.creatures.some((c) => c.state !== 'alive')) this.creatures = this.creatures.filter((c) => c.state === 'alive');
+      this.judge();
+      if (this.time % P.sampleEvery === 0) this.sample();
+      this.trimRecords();
+    }
+
+    finishEarly(c) {
+      if (c.earlyFinal) return;
+      c.earlyFinal = true;
+      const r = this.records.get(c.id);
+      if (r) { r.early = c.early; r.earlyFinal = true; }
+    }
+
+    die(c, cause) {
+      if (c.age < P.earlyAge) this.finishEarly(c);
+      c.state = 'dead';
+      this.occ[c.y * GRID + c.x] = 0;
+      this.byId.delete(c.id);
+      this.stats.deaths[cause]++;
+      const r = this.records.get(c.id);
+      if (r) Object.assign(r, { died: this.time, cause, x: c.x, y: c.y, eaten: c.eaten, age: c.age });
+      this.event({ t: this.time, kind: 'death', ids: [c.id], cause, x: c.x, y: c.y });
+    }
+
+    // a child is better than both parents when it ate more in its first 200 ticks than either of them did in theirs
+    judge() {
+      this.pending = this.pending.filter((id) => {
+        const r = this.records.get(id);
+        if (!r) return false;
+        const [pa, pb] = r.parents.map((p) => this.records.get(p));
+        if (!pa || !pb) return false;
+        if (!r.earlyFinal || !pa.earlyFinal || !pb.earlyFinal) return true;
+        this.stats.judged++;
+        if (r.early > pa.early && r.early > pb.early) this.stats.betterThanBoth++;
+        return false;
+      });
+    }
+
+    sample() {
+      const cs = this.creatures, n = cs.length;
+      const rates = cs.map((c) => c.eaten / Math.max(1, c.age));
+      const mixed = cs.filter((c) => c.lineage.filter((v) => v >= 0.1).length >= 2).length;
+      this.series.push({
+        t: this.time, pop: n,
+        meanRate: n ? rates.reduce((x, y) => x + y, 0) / n : 0,
+        bestRate: n ? Math.max(...rates) : 0,
+        betterShare: this.stats.judged ? this.stats.betterThanBoth / this.stats.judged : 0,
+        mixedShare: n ? mixed / n : 0,
+        meanShare: n ? cs.reduce((x, c) => x + c.ph.mix.share, 0) / n : 0,
+        meanCuts: n ? cs.reduce((x, c) => x + c.ph.mix.cuts, 0) / n : 0,
+      });
+    }
+
+    trimRecords() {
+      if (this.records.size <= P.keepRecords) return;
+      for (const [id, r] of this.records) {
+        if (this.records.size <= P.keepRecords * 0.9) break;
+        if (r.died !== null) this.records.delete(id);
+      }
+    }
+  }
+
   const encodeGene = (type, settings, lowBits = 0) => [...START, ((type & 15) << 4) | (lowBits & 15), ...settings, ...END];
 
   function rng(seed) {
@@ -276,7 +588,7 @@ const TP = (() => {
   ];
 
   return { GRID, START, END, TOLERANCE, T, SETTINGS, TYPE_NAMES, DEFAULT_MIX, DEFAULT_BODY,
-    parse, express, fits, bindSensor, encodeGene, rng, hex, FOUNDERS, mutate, segments, mixAligned, mixNaive, conceive };
+    parse, express, fits, bindSensor, encodeGene, rng, hex, FOUNDERS, mutate, segments, mixAligned, mixNaive, conceive, World, P, tickCost, senseCells };
 })();
 
 const TPTests = {
@@ -284,7 +596,7 @@ const TPTests = {
     let pass = 0, fail = 0;
     const ok = (c, name = '') => { if (c) pass++; else { fail++; console.error('FAIL', name, new Error().stack.split('\n')[2]); } };
     const eq = (a, b, name = '') => { ok(a === b, `${name} got ${JSON.stringify(a)} want ${JSON.stringify(b)}`); };
-    const tests = [this.genome, this.reproduction];
+    const tests = [this.genome, this.reproduction, this.world];
     for (const t of tests) {
       try { t(ok, eq); } catch (e) { fail++; console.error('ERROR in', t.name, e.message); }
     }
@@ -406,6 +718,51 @@ const TPTests = {
     ok(TP.mixNaive(new Uint8Array(0), new Uint8Array(0), R).bytes.length === 0, 'naive of empty parents');
     // determinism
     eq(TP.hex(TP.mixAligned(S, V, TP.rng(9)).bytes), TP.hex(TP.mixAligned(S, V, TP.rng(9)).bytes));
+  },
+
+  world(ok, eq) {
+    const w1 = new TP.World({ mode: 'aligned', seed: 3 }), w2 = new TP.World({ mode: 'aligned', seed: 3 });
+    eq(w1.creatures.length, 60, '3 lineages x 20');
+    for (let i = 0; i < 800; i++) { w1.tick(); w2.tick(); }
+    eq(w1.time, 800);
+    eq(w1.creatures.map((c) => c.x + ',' + c.y + ',' + c.energy.toFixed(3)).join(), w2.creatures.map((c) => c.x + ',' + c.y + ',' + c.energy.toFixed(3)).join(), 'determinism');
+    eq(w1.stats.conceptions, w1.stats.births + w1.stats.failed, 'conceptions = births + failed');
+    ok(w1.stats.births > 0, 'births happen: ' + w1.stats.births);
+    for (const c of w1.creatures) if (c.parents) eq(c.parents.length, 2, 'two parents');
+    ok(w1.creatures.every((c) => c.x >= 0 && c.x < 64 && c.y >= 0 && c.y < 64 && !w1.walls[c.y * 64 + c.x]), 'inside the grid, not in walls');
+    const cells = new Set(w1.creatures.map((c) => c.y * 64 + c.x));
+    eq(cells.size, w1.creatures.length, 'one creature per cell');
+    ok(w1.creatures.length <= 400, 'cap');
+    ok(w1.walls.some((v) => v), 'there are walls');
+    // records survive death (Review Focus 5)
+    const dead = [...w1.records.values()].find((r) => r.died !== null);
+    ok(dead && dead.bytes.length > 0 && (dead.cause === 'starved' || dead.cause === 'old'), 'dead creatures keep their record');
+    eq(w1.stats.deaths.starved + w1.stats.deaths.old, [...w1.records.values()].filter((r) => r.died !== null).length, 'death counts match records');
+    // last conception is a copy with both parents' genomes
+    const lc = w1.lastConception;
+    ok(lc && lc.parentBytes.length === 2 && lc.parentBytes[0].length > 0 && lc.conception.plan.length > 0, 'last conception record');
+    ok(lc.born ? lc.childId !== null : lc.childId === null, 'child id only when born');
+    // lineage shares sum to 1
+    for (const c of w1.creatures) ok(Math.abs(c.lineage.reduce((x, y) => x + y, 0) - 1) < 1e-9, 'lineage sums to 1');
+    // events and series
+    ok(w1.events.some((e) => e.kind === 'birth'), 'birth events');
+    ok(w1.series.length === 16 && w1.series[0].t === 50, 'series every 50 ticks');
+    ok(w1.series.every((x) => Number.isFinite(x.meanRate) && Number.isFinite(x.pop)), 'series finite');
+    // food drifts with the seasons
+    const c0 = w1.patchCenters(0), c1 = w1.patchCenters(750);
+    ok(Math.hypot(c0[0][0] - c1[0][0], c0[0][1] - c1[0][1]) > 5, 'patches move');
+    // "better than both" is judged only when the child's and both parents' early food counts are final
+    ok(w1.stats.judged <= w1.stats.births && w1.stats.betterThanBoth <= w1.stats.judged, 'judging counts');
+    // an emptied world keeps ticking without NaN (Review Focus 4)
+    const w3 = new TP.World({ mode: 'naive', seed: 1 });
+    w3.creatures.length = 0;
+    for (let i = 0; i < 120; i++) w3.tick();
+    ok(w3.series.every((x) => !Number.isNaN(x.meanRate) && !Number.isNaN(x.betterShare) && x.pop === 0), 'empty world');
+    // naive world also runs and records conceptions
+    const wn = new TP.World({ mode: 'naive', seed: 3 });
+    for (let i = 0; i < 400; i++) wn.tick();
+    eq(wn.stats.failed, 0, 'naive has no failed conceptions');
+    ok(wn.stats.conceptions > 0, 'naive conceives');
   },
 };
 </script>
