@@ -175,8 +175,11 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
           <div class="bars" id="tokAccBars"></div>
           <h3>Share of each level's codebook used on held-out text (%); codes per window below each bar</h3>
           <div class="bars" id="tokUtilBars"></div>
-          <h3>Training loss</h3>
+          <h3>Training loss, last 1,000 steps</h3>
+          <canvas id="tokSpark" data-h="64"></canvas>
+          <h3>Training loss, every step of this session</h3>
           <canvas id="tokChart" data-h="120"></canvas>
+          <div class="legend"><span><i class="line" style="background:var(--series1)"></i>average</span><span><i style="background:var(--series1); opacity:0.35"></i>lowest to highest</span></div>
           <div class="hover" id="tokHover"></div>
         </div>
         <div class="stage" id="stageGen">
@@ -189,9 +192,11 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
           <div class="legend"><span><i style="background:var(--series1)"></i>model</span><span><i class="line" style="background:var(--series2)"></i>guessing by code frequency</span><span>full height = uniform guess</span></div>
           <h3>Held-out codes predicted exactly (%)</h3>
           <div class="bars" id="genAccBars"></div>
-          <h3>Loss</h3>
+          <h3>Training loss, last 1,000 steps</h3>
+          <canvas id="genSpark" data-h="64"></canvas>
+          <h3>Loss, every step of this session</h3>
           <canvas id="genChart" data-h="120"></canvas>
-          <div class="legend"><span><i class="line" style="background:var(--series1)"></i>training</span><span><i style="background:var(--series2); border-radius:50%"></i>held-out</span></div>
+          <div class="legend"><span><i class="line" style="background:var(--series1)"></i>training (average)</span><span><i style="background:var(--series1); opacity:0.35"></i>training, lowest to highest</span><span><i class="line" style="background:var(--series2)"></i>held-out</span></div>
           <div class="hover" id="genHover"></div>
         </div>
       </div>
@@ -381,7 +386,7 @@ let baseLevels = [1, 4, 8, 12, 16, 20, 26, 32, 38, 46, 54, 64];
 const LOAD_ERRORS = { 1: "that file is not an NCM weights file", 2: "that weights file is from a different version", 3: "that weights file is cut short", 4: "that weights file is damaged (its tensors do not match its header)" };
 const state = {
   ready: false, running: false, M: null, texts: {}, uploaded: null, pretrained: null,
-  lr: { tok: 0.002, gen: 0.001 }, loss: { tok: [], gen: [] }, held: { gen: [] },
+  lr: { tok: 0.002, gen: 0.001 }, loss: { tok: [], gen: [] }, agg: { tok: { w: 1, bins: [] }, gen: { w: 1, bins: [] } }, held: { gen: [] },
   last: null, shown: 0, playTimer: null, seedCounter: 1,
 };
 
@@ -528,60 +533,127 @@ function fitCanvas(c) {
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
   return dpr;
 }
-function drawChart(which) {
-  const c = $(which + "Chart");
+// Loss history. `state.loss` keeps the raw points of the last RECENT steps
+// (the sparkline); `state.agg` keeps the whole session in at most MAX_BINS
+// equal-width step bins, each with its mean step, mean, lowest and highest loss, so the
+// long chart stays readable however long the run is.
+const RECENT = 1000, MAX_BINS = 240;
+const newAgg = () => ({ w: 1, bins: [] });
+function aggPush(a, x, y) {
+  const k = Math.floor(x / a.w), last = a.bins[a.bins.length - 1];
+  if (last && last.k === k) { last.n++; last.sx += x; last.sum += y; last.lo = Math.min(last.lo, y); last.hi = Math.max(last.hi, y); }
+  else a.bins.push({ k, n: 1, sx: x, sum: y, lo: y, hi: y });
+  while (a.bins.length > MAX_BINS) {
+    a.w *= 2;
+    const out = [];
+    for (const b of a.bins) {
+      const k2 = Math.floor(b.k / 2), p = out[out.length - 1];
+      if (p && p.k === k2) { p.n += b.n; p.sx += b.sx; p.sum += b.sum; p.lo = Math.min(p.lo, b.lo); p.hi = Math.max(p.hi, b.hi); }
+      else out.push({ k: k2, n: b.n, sx: b.sx, sum: b.sum, lo: b.lo, hi: b.hi });
+    }
+    a.bins = out;
+  }
+}
+function recordLoss(which, x, y) {
+  const pts = state.loss[which];
+  pts.push({ x, y });
+  let drop = 0;
+  while (drop < pts.length - 1 && pts[drop].x < x - RECENT) drop++;
+  if (drop) pts.splice(0, drop);
+  aggPush(state.agg[which], x, y);
+}
+function recordHeld(x, y) {
+  const h = state.held.gen;
+  h.push({ x, y });
+  // Thin the older half once the list gets long; the recent half stays dense.
+  if (h.length > 800) state.held.gen = h.filter((p, i) => i >= 400 || i % 2 === 0);
+}
+
+// One plot: a training line, an optional lowest-to-highest band behind it and
+// an optional held-out line. `o.ticks` is the number of y labels.
+function plot(c, o) {
   const dpr = fitCanvas(c);
   const g = c.getContext("2d");
   const W = c.width, H = c.height;
   g.clearRect(0, 0, W, H);
-  const pts = state.loss[which], held = which === "gen" ? state.held.gen : [];
-  const all = pts.concat(held);
   g.font = `${10 * dpr}px system-ui, sans-serif`;
   g.fillStyle = "#9aa4b2";
-  if (!all.length) { g.fillText("no steps yet in this session", 8 * dpr, 18 * dpr); c._geom = null; return; }
-  const padL = 34 * dpr, padR = 8 * dpr, padT = 8 * dpr, padB = 16 * dpr;
-  let lo = Infinity, hi = -Infinity, x0 = Infinity, x1 = -Infinity;
-  for (const p of all) { lo = Math.min(lo, p.y); hi = Math.max(hi, p.y); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); }
+  c._tip = null;
+  if (!o.line.length) { g.textAlign = "left"; g.fillText("no steps yet in this session", 8 * dpr, 18 * dpr); return; }
+  const padL = 34 * dpr, padR = 10 * dpr, padT = 8 * dpr, padB = 16 * dpr;
+  let lo = Infinity, hi = -Infinity;
+  const x0 = o.line[0].x;
+  let x1 = o.line[o.line.length - 1].x;
+  const held = o.held.filter((p) => p.x >= x0);
+  for (const p of o.line) { lo = Math.min(lo, p.lo === undefined ? p.y : p.lo); hi = Math.max(hi, p.hi === undefined ? p.y : p.hi); }
+  for (const p of held) { lo = Math.min(lo, p.y); hi = Math.max(hi, p.y); x1 = Math.max(x1, p.x); }
   if (hi - lo < 1e-6) { hi += 0.5; lo -= 0.5; }
   if (x1 === x0) x1 = x0 + 1;
   const X = (x) => padL + (x - x0) / (x1 - x0) * (W - padL - padR);
   const Y = (y) => padT + (hi - y) / (hi - lo) * (H - padT - padB);
   g.strokeStyle = "#232a36"; g.lineWidth = dpr;
-  for (const y of [lo, (lo + hi) / 2, hi]) {
+  const ticks = o.ticks === 2 ? [lo, hi] : [lo, (lo + hi) / 2, hi];
+  for (const y of ticks) {
     g.beginPath(); g.moveTo(padL, Y(y)); g.lineTo(W - padR, Y(y)); g.stroke();
     g.textAlign = "right"; g.fillText(y.toFixed(2), padL - 4 * dpr, Y(y) + 3 * dpr);
   }
-  g.textAlign = "left"; g.fillText("step " + fmtInt(x0), padL, H - 3 * dpr);
-  g.textAlign = "right"; g.fillText(fmtInt(x1), W - padR, H - 3 * dpr);
-  if (pts.length) {
-    g.strokeStyle = "#3f86e0"; g.lineWidth = 2 * dpr; g.lineJoin = "round";
+  g.textAlign = "left"; g.fillText("step " + fmtInt(Math.floor(x0)), padL, H - 3 * dpr);
+  g.textAlign = "right"; g.fillText(fmtInt(Math.ceil(x1)), W - padR, H - 3 * dpr);
+  if (o.band && o.line.length > 1) {
+    g.fillStyle = "rgba(63, 134, 224, 0.28)";
+    g.beginPath();
+    o.line.forEach((p, i) => (i ? g.lineTo(X(p.x), Y(p.hi)) : g.moveTo(X(p.x), Y(p.hi))));
+    for (let i = o.line.length - 1; i >= 0; i--) g.lineTo(X(o.line[i].x), Y(o.line[i].lo));
+    g.closePath(); g.fill();
+  }
+  const stroke = (pts, color) => {
+    g.strokeStyle = color; g.lineWidth = 2 * dpr; g.lineJoin = "round";
     g.beginPath();
     pts.forEach((p, i) => (i ? g.lineTo(X(p.x), Y(p.y)) : g.moveTo(X(p.x), Y(p.y))));
     g.stroke();
-  }
-  for (const p of held) {
-    g.fillStyle = "#0e1118"; g.beginPath(); g.arc(X(p.x), Y(p.y), 6 * dpr, 0, 7); g.fill();
-    g.fillStyle = "#c97f33"; g.beginPath(); g.arc(X(p.x), Y(p.y), 4 * dpr, 0, 7); g.fill();
-  }
-  c._geom = { X, dpr };
+  };
+  const endDot = (p, color) => {
+    g.fillStyle = "#0e1118"; g.beginPath(); g.arc(X(p.x), Y(p.y), 5 * dpr, 0, 7); g.fill();
+    g.fillStyle = color; g.beginPath(); g.arc(X(p.x), Y(p.y), 3 * dpr, 0, 7); g.fill();
+  };
+  stroke(o.line, "#3f86e0");
+  if (held.length) { stroke(held, "#c97f33"); endDot(held[held.length - 1], "#c97f33"); }
+  if (o.line.length === 1) endDot(o.line[0], "#3f86e0");
+  c._tip = (cssX) => {
+    const px = cssX * dpr;
+    const near = (arr) => arr.reduce((b, p) => (b === null || Math.abs(X(p.x) - px) < Math.abs(X(b.x) - px) ? p : b), null);
+    const a = near(o.line), h = near(held);
+    return o.tip(a) + (h ? `   held-out at step ${fmtInt(h.x)}: ${h.y.toFixed(3)}` : "");
+  };
+}
+function drawChart(which) {
+  const held = which === "gen" ? state.held.gen : [];
+  plot($(which + "Spark"), {
+    line: state.loss[which], held: [], ticks: 2,
+    tip: (p) => `step ${fmtInt(p.x)}: training ${p.y.toFixed(3)}`,
+  });
+  const a = state.agg[which];
+  plot($(which + "Chart"), {
+    line: a.bins.map((b) => ({ x: b.sx / b.n, y: b.sum / b.n, lo: b.lo, hi: b.hi, k: b.k })),
+    band: true, held, ticks: 3,
+    tip: (p) => (a.w === 1 ? `step ${fmtInt(p.k)}` : `steps ${fmtInt(p.k * a.w)}–${fmtInt((p.k + 1) * a.w - 1)}`)
+      + `: training ${p.y.toFixed(3)}` + (p.hi > p.lo ? ` (${p.lo.toFixed(3)} to ${p.hi.toFixed(3)})` : ""),
+  });
 }
 for (const which of ["tok", "gen"]) {
-  const c = $(which + "Chart");
-  c.addEventListener("mousemove", (e) => {
-    if (!c._geom) return;
-    const px = (e.clientX - c.getBoundingClientRect().left) * c._geom.dpr;
-    const near = (arr) => arr.reduce((b, p) => (b === null || Math.abs(c._geom.X(p.x) - px) < Math.abs(c._geom.X(b.x) - px) ? p : b), null);
-    const a = near(state.loss[which]), h = which === "gen" ? near(state.held.gen) : null;
-    $(which + "Hover").textContent = (a ? `step ${fmtInt(a.x)}: training ${a.y.toFixed(3)}` : "") + (h ? `   held-out at step ${fmtInt(h.x)}: ${h.y.toFixed(3)}` : "");
-  });
-  c.addEventListener("mouseleave", () => { $(which + "Hover").textContent = ""; });
+  for (const c of [$(which + "Spark"), $(which + "Chart")]) {
+    c.addEventListener("mousemove", (e) => {
+      if (c._tip) $(which + "Hover").textContent = c._tip(e.clientX - c.getBoundingClientRect().left);
+    });
+    c.addEventListener("mouseleave", () => { $(which + "Hover").textContent = ""; });
+  }
 }
 // Redraw whenever a canvas gets its real size (also covers a pane that was hidden at load).
 const redrawAll = () => { drawChart("tok"); drawChart("gen"); drawHists(); };
 window.addEventListener("resize", redrawAll);
 if (window.ResizeObserver) {
   const ro = new ResizeObserver(redrawAll);
-  ro.observe($("tokChart")); ro.observe($("genChart")); ro.observe($("hists"));
+  ro.observe($("tokChart")); ro.observe($("genChart")); ro.observe($("tokSpark")); ro.observe($("genSpark")); ro.observe($("hists"));
 }
 
 // ---------- level rows (reveal and inspector) ----------
@@ -786,7 +858,7 @@ async function evalStage(which) {
   if (which === "tok") showTokEval(r.stats);
   else {
     showGenEval(r.stats);
-    if (state.loss.gen.length) { state.held.gen.push({ x: state.M.genSteps, y: r.stats[0] }); drawChart("gen"); }
+    if (state.loss.gen.length) { recordHeld(state.M.genSteps, r.stats[0]); drawChart("gen"); }
   }
 }
 function clearEvalViews() {
@@ -824,9 +896,8 @@ async function trainLoop() {
       showMsg("The tokenizer is changing, so the codes the generator learned are shifting. The generator keeps its weights as a starting point; train stage 2 again afterwards to bring it back in line.", false);
     }
     if (which === "gen") state.genStale = false;
-    if (which === "tok") { $("tokLoss").textContent = s[4].toFixed(3); state.loss.tok.push({ x: M.tokSteps, y: s[4] }); }
-    else { $("genLoss").textContent = s[8].toFixed(3); state.loss.gen.push({ x: M.genSteps, y: s[8] }); }
-    if (state.loss[which].length > 1500) state.loss[which] = state.loss[which].filter((p, i) => i % 2 === 0);
+    if (which === "tok") { $("tokLoss").textContent = s[4].toFixed(3); recordLoss("tok", M.tokSteps, s[4]); }
+    else { $("genLoss").textContent = s[8].toFixed(3); recordLoss("gen", M.genSteps, s[8]); }
     drawChart(which);
     const perStep = r.ms / chunk;
     rate = rate === null ? perStep : rate * 0.8 + perStep * 0.2;
@@ -861,7 +932,7 @@ $("start").onclick = async () => {
 $("pause").onclick = () => { state.running = false; $("pause").disabled = true; };
 
 function resetCharts() {
-  state.loss = { tok: [], gen: [] }; state.held = { gen: [] };
+  state.loss = { tok: [], gen: [] }; state.agg = { tok: newAgg(), gen: newAgg() }; state.held = { gen: [] };
   drawChart("tok"); drawChart("gen");
   $("sps").textContent = "–";
 }
