@@ -41,6 +41,11 @@ button:disabled { opacity: 0.4; cursor: default; }
 canvas { display: block; width: 100%; background: var(--well); border-radius: 6px; }
 .gen { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: var(--well); padding: 8px; border-radius: 6px; margin-top: 8px; line-height: 1.4; }
 .gen .nl { color: var(--muted); }
+.prow { margin-top: 10px; }
+.prow .row input { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, Menlo, monospace; }
+.prow .row button { margin: 0; flex: 0 0 auto; padding: 6px 10px; }
+.comp { white-space: pre; overflow-x: auto; font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: var(--well); padding: 6px 8px; border-radius: 6px; margin-top: 4px; line-height: 1.4; min-height: 31px; }
+.sym { color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
 .stages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .stage { border: 1px solid var(--edge); border-radius: 6px; padding: 10px; min-width: 0; }
 .stage.active { border-color: var(--accent); }
@@ -222,6 +227,13 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
       <div id="genOut"></div>
     </div>
 
+    <div class="panel" id="promptPanel">
+      <h2>Continue a prompt (uses the current weights)</h2>
+      <p class="note">Type a start; the line under it is the next 80 characters the model writes after it, redone whenever the text or the weights change. <span class="sym">↵</span> marks a line break and <span class="sym">□</span> a character with nothing to show (a tab, for instance); a space is shown as a space. Temperature, top-k and seed are the ones set under Generate. The paper only generates without a prompt, so this conditioning is this page's own: codes that lie inside your text are fixed to what the tokenizer reads there, and the rest are generated, with up to 32 characters of context per window.</p>
+      <div id="prompts"></div>
+      <button id="addPrompt" class="secondary" style="margin-top:10px">Add a row</button>
+    </div>
+
     <div class="panel" id="revealPanel">
       <h2>Coarse to fine: one generated window, level by level</h2>
       <p class="note" style="margin-top:0">Each row is one level. The coloured cells are the codes chosen at that level (colour = which code; hover for its number), and the text under them is what the decoder would write if generation stopped there. Grey characters still differ from the final text.</p>
@@ -344,6 +356,7 @@ const handlers = {
   },
   evaluate(a) { const code = x.ncm_eval(a.stage, a.batches); return { code, stats: code === 0 ? outF32() : null }; },
   encode(a) { const code = withBytes(enc.encode(a.text), (p, n) => x.ncm_encode(p, n)); return { code, data: code === 0 ? outU32() : null }; },
+  complete(a) { const code = withBytes(enc.encode(a.text), (p, n) => x.ncm_complete(a.seed, a.temperature, a.topK, p, n, a.n)); return { code, data: code === 0 ? outU32() : null }; },
   generate(a) { const code = x.ncm_generate(a.seed, a.temperature, a.topK, a.n); return { code, data: code === 0 ? outU32() : null }; },
   usage(a) { const code = x.ncm_usage(a.windows); return { code, data: code === 0 ? outU32() : null }; },
   heldout(a) { const code = x.ncm_heldout(a.i); return { code, data: code === 0 ? outU32() : null }; },
@@ -723,6 +736,64 @@ function splitWindow(u, off) {
   return rows;
 }
 
+// ---------- prompt rows ----------
+const PROMPT_KEY = "ncm.prompts", COMPLETION_CHARS = 80;
+function loadPrompts() {
+  try {
+    const v = JSON.parse(localStorage.getItem(PROMPT_KEY));
+    if (Array.isArray(v) && v.length && v.every((t) => typeof t === "string")) return v.slice(0, 50);
+  } catch (err) { /* no storage: use the defaults */ }
+  return ["To be or not to be", "Hello world", "Explain this"];
+}
+function savePrompts() {
+  const texts = Array.from($("prompts").querySelectorAll("input")).map((i) => i.value);
+  try { localStorage.setItem(PROMPT_KEY, JSON.stringify(texts)); } catch (err) { /* not saved */ }
+}
+// One line: a line break becomes a dim ↵, anything else with nothing to
+// show (controls, tabs, odd spaces, zero-width characters) a dim □.
+function showCompletion(el, text) {
+  el.textContent = "";
+  for (const ch of text) {
+    const sym = ch === "\n" ? "↵" : ch !== " " && /[\p{C}\p{Z}]/u.test(ch) ? "□" : null;
+    if (sym) { const s = document.createElement("span"); s.className = "sym"; s.textContent = sym; el.appendChild(s); }
+    else el.appendChild(document.createTextNode(ch));
+  }
+}
+async function completeRow(row) {
+  if (!state.ready) return;
+  const out = row.querySelector(".comp"), ticket = (row._ticket = (row._ticket || 0) + 1);
+  const r = await send("complete", { text: row.querySelector("input").value, seed: +$("seed").value >>> 0, temperature: $("temp").value / 100, topK: +$("topk").value, n: COMPLETION_CHARS });
+  if (ticket !== row._ticket || !row.isConnected) return;
+  if (r.code !== 0) { out.textContent = "untrained model: nothing to continue with yet"; return; }
+  showCompletion(out, String.fromCodePoint(...r.data));
+}
+async function completeAll() {
+  for (const row of Array.from($("prompts").children)) await completeRow(row);
+}
+function addPromptRow(text) {
+  const row = document.createElement("div");
+  row.className = "prow";
+  const line = document.createElement("div");
+  line.className = "row";
+  const input = document.createElement("input");
+  input.type = "text"; input.value = text; input.placeholder = "type the start of a text";
+  input.setAttribute("aria-label", "Prompt");
+  input.spellcheck = false;
+  const del = document.createElement("button");
+  del.className = "secondary"; del.textContent = "Remove"; del.title = "Remove this row";
+  const comp = document.createElement("div");
+  comp.className = "comp";
+  let timer = null;
+  input.addEventListener("input", () => { savePrompts(); clearTimeout(timer); timer = setTimeout(() => completeRow(row), 250); });
+  del.onclick = () => { row.remove(); savePrompts(); };
+  line.append(input, del);
+  row.append(line, comp);
+  $("prompts").appendChild(row);
+  return row;
+}
+for (const t of loadPrompts()) addPromptRow(t);
+$("addPrompt").onclick = () => { const row = addPromptRow(""); savePrompts(); row.querySelector("input").focus(); completeRow(row); };
+
 // ---------- generate and reveal ----------
 function genBox(text) {
   const d = document.createElement("div");
@@ -747,6 +818,7 @@ async function generate() {
     outEl.appendChild(p);
     state.last = null;
     $("reveal").textContent = "";
+    await completeAll();
     return;
   }
   if (M.genSteps === 0) {
@@ -763,6 +835,7 @@ async function generate() {
   }
   state.shown = M.K;
   drawReveal();
+  await completeAll();
 }
 function drawReveal() {
   if (!state.last) return;

@@ -73,6 +73,14 @@ check("unknown characters fall back", withBytes(new TextEncoder().encode("café 
 check("usage histogram", x.ncm_usage(64) === 0 && outU32().length === levels.length * 64);
 check("held-out window", x.ncm_heldout(3) === 0 && outU32().length === 64);
 
+const complete = (seed, prompt, n) => withBytes(new TextEncoder().encode(prompt), (p, len) => x.ncm_complete(seed, 0.7, 0, p, len, n));
+check("complete returns the requested characters", complete(5, "To be, or not to be", 80) === 0 && outU32().length === 80);
+const c1 = out();
+complete(5, "To be, or not to be", 80);
+check("completion is deterministic per seed", out().every((v, i) => v === c1[i]));
+check("completion of an empty prompt", complete(5, "", 80) === 0 && outU32().length === 80);
+check("completion of a prompt longer than the window", complete(5, "x".repeat(300), 10) === 0 && outU32().length === 10);
+
 check("export", x.ncm_export() === 0 && out().length > 1000);
 const ckpt = out();
 check("import of junk is refused", withBytes(new Uint8Array(10), (p, n) => x.ncm_import(p, n)) === 1);

@@ -361,29 +361,36 @@ impl Quant {
         up.iter().zip(&conv).map(|(a, b)| (1.0 - RESI) * a + RESI * b).collect()
     }
 
+    /// The codes one level picks for a residual z_rest[n, L, d]: the residual
+    /// brought down to the level's length, then the nearest codebook rows.
+    pub fn nearest_at(&self, level: usize, z_rest: &[F], n: usize) -> Vec<u32> {
+        let (d, l, k) = (self.d, self.l, self.levels.len());
+        let flat = if level == 0 {
+            let mut h = z_rest.to_vec();
+            let mut len = l;
+            for (s, &stride) in self.strides.iter().enumerate() {
+                h = strided_down_fwd(&h, &self.down_w[s].w, &self.down_b[s].w, n, len, stride, d);
+                len /= stride;
+            }
+            h
+        } else if level < k - 1 {
+            area_pool_fwd(z_rest, n, l, self.levels[level], d)
+        } else {
+            z_rest.to_vec()
+        };
+        nearest(&flat, &self.emb[level], d)
+    }
+
     /// Codes for z[n, L, d], [n, total] with levels back to back.
     pub fn encode(&self, z: &[F], n: usize) -> Vec<u32> {
-        let (d, l, k) = (self.d, self.l, self.levels.len());
+        let k = self.levels.len();
         let total = self.total();
         let offs = self.offsets();
         let mut codes = vec![0u32; n * total];
         let mut z_rest = z.to_vec();
         for i in 0..k {
             let lk = self.levels[i];
-            let flat = if i == 0 {
-                let mut h = z_rest.clone();
-                let mut len = l;
-                for (s, &stride) in self.strides.iter().enumerate() {
-                    h = strided_down_fwd(&h, &self.down_w[s].w, &self.down_b[s].w, n, len, stride, d);
-                    len /= stride;
-                }
-                h
-            } else if i < k - 1 {
-                area_pool_fwd(&z_rest, n, l, lk, d)
-            } else {
-                z_rest.clone()
-            };
-            let idx = nearest(&flat, &self.emb[i], d);
+            let idx = self.nearest_at(i, &z_rest, n);
             for s in 0..n {
                 codes[s * total + offs[i]..s * total + offs[i] + lk].copy_from_slice(&idx[s * lk..(s + 1) * lk]);
             }

@@ -447,6 +447,102 @@ impl Generator {
         }
         GenOut { codes, texts }
     }
+
+    /// Generates one window whose first `known` characters are given.
+    /// `tokens` is [L]: the known characters followed by any filler.
+    ///
+    /// The paper only generates unconditionally; this is the page's own
+    /// conditioning. At every level, a code whose span lies entirely inside
+    /// the known characters is not sampled: it is the code the tokenizer
+    /// would pick there, measured against the reconstruction built so far.
+    /// The single level-1 code is taken from the encoded window too. All
+    /// other codes are sampled from the generator as usual. Returns the L
+    /// characters decoded from all levels.
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_window(
+        &self,
+        tok: &Tokenizer,
+        l1: &LevelOneDist,
+        tokens: &[u32],
+        known: usize,
+        rng: &mut Rng,
+        temperature: F,
+        top_k: usize,
+    ) -> Vec<u32> {
+        let k = self.levels.len();
+        let l = self.levels[k - 1];
+        let known = known.min(l);
+        let z = tok.latents(tokens, 1);
+        let mut z_hat = vec![0.0 as F; l * self.d];
+        for lv in 0..k {
+            let len = self.levels[lv];
+            let rest: Vec<F> = z.iter().zip(&z_hat).map(|(a, b)| a - b).collect();
+            let enc = tok.quant.nearest_at(lv, &rest, 1);
+            let idx: Vec<u32> = if lv == 0 {
+                if known > 0 {
+                    enc
+                } else {
+                    (0..len).map(|_| l1.sample(rng)).collect()
+                }
+            } else {
+                let mut t = Tape::new();
+                let input = self.level_input(&z_hat, 1, lv);
+                let logits = self.forward(&mut t, &[input], &[lv], 1)[0];
+                t.val(logits)
+                    .chunks_exact(self.codes)
+                    .enumerate()
+                    .map(|(j, row)| {
+                        // Sample every position so the random stream does not
+                        // depend on the prompt length.
+                        let c = sample_logits(row, temperature, top_k, rng);
+                        if (j + 1) * l <= known * len {
+                            enc[j]
+                        } else {
+                            c
+                        }
+                    })
+                    .collect()
+            };
+            axpy(1.0 as F, &tok.quant.level_contrib(lv, &idx, 1), &mut z_hat);
+        }
+        tok.decode_z(&z_hat, 1)
+    }
+
+    /// Continues `prompt` by `n_chars` characters. Each window holds up to
+    /// L/2 characters of context (the end of the prompt plus what has been
+    /// written so far) and the rest is generated; the window then slides.
+    /// Every window is generated twice: the first pass fills the unknown
+    /// part, and the second re-reads the window with that filling in place,
+    /// so that the known codes are measured in a realistic context.
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete(
+        &self,
+        tok: &Tokenizer,
+        l1: &LevelOneDist,
+        prompt: &[u32],
+        n_chars: usize,
+        rng: &mut Rng,
+        temperature: F,
+        top_k: usize,
+    ) -> Vec<u32> {
+        let l = self.levels[self.levels.len() - 1];
+        let ctx = (l / 2).max(1);
+        let mut text = prompt.to_vec();
+        let mut out = Vec::with_capacity(n_chars + l);
+        while out.len() < n_chars {
+            let known = text.len().min(ctx);
+            let prefix = &text[text.len() - known..];
+            let mut window: Vec<u32> = if known > 0 { (0..l).map(|i| prefix[i % known]).collect() } else { vec![0; l] };
+            for _ in 0..if known > 0 { 2 } else { 1 } {
+                let w = self.complete_window(tok, l1, &window, known, rng, temperature, top_k);
+                window[known..].copy_from_slice(&w[known..]);
+            }
+            out.extend_from_slice(&window[known..]);
+            text.extend_from_slice(&window[known..]);
+        }
+        out.truncate(n_chars);
+        out
+    }
 }
 
 impl Params for Generator {
@@ -474,6 +570,28 @@ mod tests {
     use super::*;
     use crate::param::{clip_grad_norm, AdamW};
     use crate::tokenizer::{tiny_config, tiny_tokens};
+
+    #[test]
+    fn completing_a_fully_known_window_is_reconstruction() {
+        let (tok, gen, mut r) = setup(16, 1);
+        let l1 = LevelOneDist::from_codes(&[], 5);
+        let tokens = tiny_tokens(1, &mut r);
+        let out = gen.complete_window(&tok, &l1, &tokens, 8, &mut r, 1.0, 0);
+        assert_eq!(out, tok.decode(&tok.encode(&tokens, 1), 1, 4));
+    }
+
+    #[test]
+    fn complete_returns_the_requested_length_and_is_seeded() {
+        let (tok, gen, _) = setup(16, 1);
+        let l1 = LevelOneDist::from_codes(&[], 5);
+        for prompt in [vec![], vec![1u32, 2, 3], (0..20).map(|i| i % 7).collect::<Vec<u32>>()] {
+            let a = gen.complete(&tok, &l1, &prompt, 21, &mut Rng::new(3), 1.0, 0);
+            let b = gen.complete(&tok, &l1, &prompt, 21, &mut Rng::new(3), 1.0, 0);
+            assert_eq!(a.len(), 21);
+            assert_eq!(a, b);
+            assert!(a.iter().all(|&c| c < 7));
+        }
+    }
 
     fn setup(width: usize, blocks: usize) -> (Tokenizer, Generator, Rng) {
         let mut r = Rng::new(21);

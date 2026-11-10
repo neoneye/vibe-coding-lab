@@ -17,6 +17,7 @@
 //!   ncm_encode  u32: sum(levels) codes, K*L reconstructed characters,
 //!       L input characters as tokenised
 //!   ncm_generate u32: per window: sum(levels) codes, K*L characters
+//!   ncm_complete u32: the requested number of continuation characters
 //!   ncm_usage   u32: K*codes histogram of codes over held-out windows
 //!   ncm_heldout u32: L characters
 //!   ncm_export  bytes of a checkpoint
@@ -339,6 +340,33 @@ pub extern "C" fn ncm_generate(seed: u32, temperature: f32, top_k: u32, n: u32) 
             }
             put_text(&mut out, &s.charset, &g.texts[i * k * l..(i + 1) * k * l]);
         }
+        st.out = out;
+        0
+    })
+}
+
+/// Continues a prompt (UTF-8) by `n_chars` characters. Returns 1 when no
+/// tokenizer has been trained, 3 without a model.
+/// # Safety
+/// `ptr` must point to `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn ncm_complete(seed: u32, temperature: f32, top_k: u32, ptr: *const u8, len: u32, n_chars: u32) -> u32 {
+    let text = String::from_utf8_lossy(bytes(ptr, len)).into_owned();
+    with(|st| {
+        let s = match st.session.as_ref() {
+            Some(s) => s,
+            None => return 3,
+        };
+        if !s.tokenizer_ready() {
+            return 1;
+        }
+        let temperature = if temperature.is_finite() { temperature.clamp(0.0, 10.0) } else { 1.0 };
+        let mut rng = Rng::new(seed as u64 ^ 0x6E63_6D01);
+        let prompt = s.charset.encode(&text);
+        let n_chars = n_chars.clamp(1, 4096) as usize;
+        let ids = s.gen.complete(&s.tok, &s.l1, &prompt, n_chars, &mut rng, temperature as F, top_k as usize);
+        let mut out = Vec::new();
+        put_text(&mut out, &s.charset, &ids);
         st.out = out;
         0
     })
