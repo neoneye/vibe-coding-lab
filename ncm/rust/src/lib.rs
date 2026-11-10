@@ -7,6 +7,7 @@ pub type F = f64;
 pub type F = f32;
 
 pub mod block;
+pub mod generator;
 pub mod ops;
 pub mod param;
 pub mod quant;
