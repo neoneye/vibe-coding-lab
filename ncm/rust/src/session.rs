@@ -27,13 +27,14 @@ impl Default for Config {
         Config {
             seed: 1,
             d: 64,
-            codes: 256,
+            codes: 16,
             dec_blocks: 1,
             dec_heads: 4,
             gen_blocks: 4,
             gen_width: 128,
             gen_heads: 4,
-            levels: vec![1, 4, 8, 12, 16, 24, 32, 48, 64],
+            // The reference TinyStories schedule (1, 8, 16, ... 128) at half length.
+            levels: vec![1, 4, 8, 12, 16, 20, 26, 32, 38, 46, 54, 64],
         }
     }
 }
@@ -94,8 +95,8 @@ impl Default for Hparams {
             batch: 32,
             fine_drop: 0.5,
             alpha: 0.0,
-            corrupt_mean: 0.5,
-            corrupt_delta: 0.3,
+            corrupt_mean: 0.15,
+            corrupt_delta: 0.1,
             warmup: 100,
             total_steps: 20_000,
         }
@@ -208,7 +209,8 @@ impl Session {
         self.diverged = false;
     }
 
-    fn reset_generator(&mut self) {
+    /// Replaces the generator with a fresh, untrained one.
+    pub fn reset_generator(&mut self) {
         self.gen = Generator::new(self.cfg.gen(), &self.tok, &mut self.rng);
         self.opt_gen = AdamW::new(0.01);
         self.gen_steps = 0;

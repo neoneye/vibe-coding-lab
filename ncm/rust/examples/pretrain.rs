@@ -38,7 +38,15 @@ fn main() {
     hp.alpha = num("--alpha", hp.alpha as f64) as ncm::F;
     hp.fine_drop = num("--fine-drop", hp.fine_drop as f64) as ncm::F;
 
-    let mut s = Session::new(cfg.clone(), charset);
+    // --resume file continues from a checkpoint (its shape wins over the size flags).
+    let mut s = match get("--resume") {
+        Some(path) => ncm::checkpoint::load(&std::fs::read(path).unwrap()).unwrap(),
+        None => Session::new(cfg.clone(), charset),
+    };
+    if args.iter().any(|a| a == "--fresh-gen") {
+        s.reset_generator();
+    }
+    let cfg = s.cfg.clone();
     s.set_corpus(&text).unwrap();
     s.threads = num("--threads", std::thread::available_parallelism().map_or(1, |n| n.get().min(8)) as f64) as usize;
     let np_tok = ncm::param::count(&mut s.tok);
@@ -91,19 +99,26 @@ fn main() {
         );
     }
     if gen_steps > 0 {
-        let temp = num("--temp", 1.0) as ncm::F;
-        let mut rng = ncm::rng::Rng::new(7);
-        let out = s.gen.generate(&s.tok, &s.l1, 5, &mut rng, temp, 0, None);
+    }
+    if s.gen_steps > 0 {
         let (k, l) = (cfg.levels.len(), cfg.l());
-        for i in 0..5 {
-            let text = s.charset.decode(&out.texts[(i * k + k - 1) * l..(i * k + k) * l]);
-            println!("sample {}: {:?}", i, text);
-        }
-        for lv in 0..k {
-            println!("  level {}: {:?}", lv + 1, s.charset.decode(&out.texts[lv * l..(lv + 1) * l]));
+        for temp in [1.0, 0.8, 0.6] {
+            let mut rng = ncm::rng::Rng::new(7);
+            let out = s.gen.generate(&s.tok, &s.l1, 5, &mut rng, temp as ncm::F, 0, None);
+            for i in 0..5 {
+                let text = s.charset.decode(&out.texts[(i * k + k - 1) * l..(i * k + k) * l]);
+                println!("temp {} sample {}: {:?}", temp, i, text);
+            }
+            if temp == 1.0 {
+                for lv in 0..k {
+                    println!("  level {}: {:?}", lv + 1, s.charset.decode(&out.texts[lv * l..(lv + 1) * l]));
+                }
+            }
         }
     }
-    if let Some(_path) = get("--out") {
-        println!("(checkpoint writing is added with checkpoint.rs)");
+    if let Some(path) = get("--out") {
+        let bytes = ncm::checkpoint::save(&mut s);
+        std::fs::write(&path, &bytes).unwrap();
+        println!("wrote {} ({} bytes)", path, bytes.len());
     }
 }
