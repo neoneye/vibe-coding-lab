@@ -9,11 +9,11 @@ const TP = new Function(`${html.match(/<script id="shared-code">([\s\S]*?)<\/scr
 const ticks = +(process.argv[2] || 6000), seeds = +(process.argv[3] || 5);
 const pct = (x) => (100 * x).toFixed(0).padStart(3) + "%";
 console.log(`ticks ${ticks}`);
-console.log("seed mode     pop  births failed adults better garden0 gardenN mixed cap  extinct");
+console.log("seed mode     pop  births failed viable adults better garden0 gardenN medLen cap  extinct");
 for (let seed = 1; seed <= seeds; seed++) {
   const e = TP.experiment(seed, ticks);
   for (const mode of ["naive", "aligned"]) {
     const s = e[mode];
-    console.log(`${String(seed).padStart(4)} ${mode.padEnd(8)} ${String(s.pop).padStart(4)} ${String(s.births).padStart(7)} ${String(s.failed).padStart(6)} ${pct(s.adultsShare)}  ${pct(s.betterShare)}  ${s.gardenStart.toFixed(0).padStart(6)}  ${s.gardenEnd.toFixed(0).padStart(6)} ${pct(s.mixedShare)} ${pct(s.capShare)} ${s.extinctAt ?? "-"}`);
+    console.log(`${String(seed).padStart(4)} ${mode.padEnd(8)} ${String(s.pop).padStart(4)} ${String(s.births).padStart(7)} ${String(s.failed).padStart(6)} ${pct(s.viableShare)}  ${pct(s.adultsShare)}  ${pct(s.betterShare)}  ${s.gardenStart.toFixed(0).padStart(6)}  ${s.gardenEnd.toFixed(0).padStart(6)} ${String(s.medianLength).padStart(6)} ${pct(s.capShare)} ${s.extinctAt ?? "-"}`);
   }
 }

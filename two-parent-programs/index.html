@@ -124,6 +124,7 @@
       <div class="controls" style="margin-bottom:6px">
         <label>Show conceptions from <select id="birthWorld"><option value="1">Life's way</option><option value="0">Naive splicing</option></select></label>
         <button class="btn on" id="follow">Follow latest</button>
+        <button class="btn" id="pauseBirth">Pause</button>
         <button class="btn" id="replay">Replay</button>
         <span class="note" id="birthNote">Click a creature to show the conception it came from.</span>
       </div>
@@ -163,13 +164,13 @@
         <h2>The genome is bytes</h2>
         <p>A genome is a few hundred bytes. Each gene starts with <code>47 45</code> ("GE") and ends with <code>4E 44</code> ("ND"); the bytes between genes are junk and do nothing. After the start marker, the top four bits of one byte say what kind of gene it is (the low four are ignored), and the bytes after it are its settings. There are no instructions: genes describe a body (size, speed, metabolism), senses (an eye and a nose, each with a range and a <b>key</b> byte) and rules (eat when energy is below X, look for a mate when it is above Y, flee from bigger creatures), each rule with a <b>lock</b> byte. Use <b>Save .bin</b> in the inspector to open a genome in a hex editor.</p>
         <h2>Two parents, one child</h2>
-        <p><b>Naive splicing</b> cuts each parent at a random byte and glues the front of one to the back of the other, even in the middle of a gene. <b>Life's way</b> lines the genes up by kind, the way chromosomes pair gene against gene. A coin flip picks which parent's <b>mix gene</b> rules the mixing: its share says how many genes come from that parent, its cuts say how many crossover points there are, and its rate says how often bytes mutate. The child inherits that mix gene, so ways of mixing can evolve too. In mammals the gene <i>PRDM9</i> plays a similar part, deciding where chromosomes cross over.</p>
+        <p><b>Naive splicing</b> cuts each parent at a random byte and glues the front of one to the back of the other, even in the middle of a gene. <b>Life's way</b> lines the genes up by kind, the way chromosomes pair gene against gene. A coin flip picks which parent's <b>mix gene</b> rules the mixing: its cuts say how many crossover points there are, its share is the chance that each gene (or each block between cuts) comes from that parent, and its rate says how often bytes mutate. The child inherits that mix gene, so ways of mixing can evolve too. In mammals the gene <i>PRDM9</i> plays a similar part, deciding where chromosomes cross over.</p>
         <h2>Lock and key</h2>
         <p>A rule only works if its lock byte is within 8 of a key on the matching sense: forage needs a nose, mate and flee need an eye. In life's way a child is not born if any rule has nothing to bind to: a failed conception, like the checks that cells and early embryos go through. Genes that work in their own lineage can fail together with genes from another (Dobzhansky–Muller incompatibility). The three founder lineages are built so that Sniffer and Saver fit each other and Runner fits neither.</p>
         <h2>Gentle mutation</h2>
         <p>Rare and mostly harmless: a setting moves by 1 to 3, the silent low bits of a type byte flip, junk changes freely. Rarely a gene is copied, deleted, or loses a marker byte and switches off.</p>
         <h2>The world and the garden</h2>
-        <p>A 64 × 64 field with a few walls. Food grows in three patches that circle the field with the seasons. Each tick costs energy (more for big, fast or wasteful bodies), food gives energy, and creatures die when they starve or reach age 600. To see whether creatures get <i>better</i>, the charts use a <b>common garden</b>: a creature is put alone on four sparse plots and the score is how long it survives (up to 1500 ticks). The score depends only on the genome, not on how crowded the world is.</p>
+        <p>A 64 × 64 field with a few walls. Food grows in three patches that circle the field with the seasons. Each tick costs energy (more for big, fast or wasteful bodies, and a little for every byte of genome, which can be at most 512 bytes), food gives energy, and creatures die when they starve or reach age 600. To see whether creatures get <i>better</i>, the charts use a <b>common garden</b>: a creature is put alone on four sparse plots and the score is how long it survives (up to 1500 ticks). The score depends only on the genome, not on how crowded the world is. A quarter of all children are also compared with both parents this way.</p>
       </div>
     </div>
     <div class="win">
@@ -201,6 +202,7 @@ const TP = (() => {
   const TYPE_NAMES = ['mix', 'body', 'eye', 'nose', 'forage', 'mate', 'flee'];
   const DEFAULT_MIX = { share: 128, cuts: 1, rate: 4 };
   const DEFAULT_BODY = { size: 64, speed: 64, metab: 128 };
+  const MAX_GENOME = 512;              // bytes; longer children are cut short, like a physical limit on chromosome size
 
   const isStart = (b, i) => b[i] === START[0] && b[i + 1] === START[1];
   const isEnd = (b, i) => b[i] === END[0] && b[i + 1] === END[1];
@@ -327,6 +329,7 @@ const TP = (() => {
         mutations.push({ offset: k, kind: 'marker', from, to: b[k] });
       }
     }
+    if (b.length > MAX_GENOME) { b.length = MAX_GENOME; o.length = MAX_GENOME; src.length = MAX_GENOME; }
     return { bytes: Uint8Array.from(b), origin: Uint8Array.from(o), source: Int32Array.from(src), mutations };
   }
 
@@ -366,8 +369,9 @@ const TP = (() => {
       for (let i = 1; i < n; i++) bounds.push(i);
       const cuts = new Set();
       while (cuts.size < Math.min(mix.cuts, bounds.length)) cuts.add(bounds[Math.floor(rand() * bounds.length)]);
+      // each block between cuts comes from the ruling parent with the share's probability
       let cur = rand() < share ? usedMixOf : other;
-      for (let i = 0; i < n; i++) { if (cuts.has(i)) cur = 1 - cur; side[i] = cur; }
+      for (let i = 0; i < n; i++) { if (cuts.has(i)) cur = rand() < share ? usedMixOf : other; side[i] = cur; }
     }
     const bytes = [], origin = [], source = [], plan = [];
     keys.forEach((key, i) => {
@@ -416,11 +420,12 @@ const TP = (() => {
     startEnergy: 60, foodValue: 24, maxEnergy: 150, maxAge: 600,
     mateEnergy: 30, mateAge: 60, mateCooldown: 40, birthCost: 20, childEnergy: 40, failCost: 5,
     cap: 400, patches: 3, patchRadius: 18, seasonTicks: 3000, foodSigma: 6, foodChance: 1, foodCrowd: Infinity,
-    earlyAge: 200, sampleEvery: 50, keepRecords: 20000,
+    sampleEvery: 50, keepRecords: 20000, judgeShare: 0.25,
     gardenFood: 0.015, gardenEnergy: 30, gardenTicks: 1500, gardenPlots: 4, gardenSample: 12,
   };
   const senseCells = (range) => range / 16 + 2;
-  const tickCost = (b) => 0.15 + (b.metab / 255) * 0.35 + (b.speed / 255) * 0.25 + (b.size / 255) * 0.25;
+  // energy per tick: a base cost, the body's costs, and keeping the genome itself (every byte costs a little)
+  const tickCost = (b, genomeBytes = 0) => 0.15 + (b.metab / 255) * 0.35 + (b.speed / 255) * 0.25 + (b.size / 255) * 0.25 + genomeBytes * 0.001;
 
   class World {
     constructor({ mode, seed, fitCheck = true, mixEvolves = true, founders = FOUNDERS, perLineage = 20, sampling = true, foodChance = P.foodChance, initialFood = 150 }) {
@@ -436,8 +441,8 @@ const TP = (() => {
       this.records = new Map();
       this.events = [];
       this.lastConception = null;
-      this.pending = [];                           // children waiting to be judged against their parents
-      this.stats = { conceptions: 0, failed: 0, births: 0, deaths: { starved: 0, old: 0 }, adults: 0, betterThanBoth: 0, judged: 0 };
+            this.stats = { conceptions: 0, failed: 0, births: 0, viable: 0, deaths: { starved: 0, old: 0 }, adults: 0, betterThanBoth: 0, judged: 0 };
+      this.judgeRand = rng(seed * 31 + 7);   // its own generator, so judging never changes the world
       this.series = [];
       this.phase = this.rand() * Math.PI * 2;
       this.makeWalls();
@@ -499,12 +504,12 @@ const TP = (() => {
     addCreature(bytes, x, y, energy, parents, lineage) {
       const ph = express(bytes);
       const bound = ph.rules.map((r) => bindSensor(ph, r));
-      const c = { id: this.nextId++, x, y, energy, age: 0, bytes, ph, bound, parents, lineage, eaten: 0, early: 0, earlyFinal: false,
+      const c = { id: this.nextId++, x, y, energy, age: 0, bytes, ph, bound, parents, lineage, eaten: 0,
         lastMate: -1e9, heading: Math.floor(this.rand() * 8), state: 'alive', action: 'wander' };
       this.creatures.push(c);
       this.byId.set(c.id, c);
       this.occ[y * GRID + x] = c.id;
-      this.records.set(c.id, { id: c.id, parents, bytes, lineage, born: this.time, died: null, cause: null, early: 0, earlyFinal: false, x, y });
+      this.records.set(c.id, { id: c.id, parents, bytes, lineage, born: this.time, died: null, cause: null, x, y });
       return c;
     }
 
@@ -585,9 +590,21 @@ const TP = (() => {
         const lineage = a.lineage.map((v, k) => v * wa + b.lineage[k] * (1 - wa));
         const sum = lineage.reduce((x, y) => x + y, 0);
         child = this.addCreature(res.conception.bytes, cell % GRID, (cell / GRID) | 0, P.childEnergy, [a.id, b.id], lineage.map((v) => v / sum));
-        Object.assign(this.records.get(child.id), { origin: res.conception.origin, conception: res.conception, fit: res.fit });
+        const rec = this.records.get(child.id);
+        Object.assign(rec, { origin: res.conception.origin, conception: res.conception, fit: res.fit });
         this.stats.births++;
-        this.pending.push(child.id);
+        // can this child both eat and find a mate? (a rule of each kind bound to a sense)
+        const bound = (kind) => child.ph.rules.some((r, k) => r.kind === kind && child.bound[k]);
+        rec.viable = bound('forage') && bound('mate');
+        if (rec.viable) this.stats.viable++;
+        // a sample of children is compared with both parents in the common garden
+        if (this.judgeRand() < P.judgeShare) {
+          const g = gardenScore(child.bytes), ga = gardenScore(a.bytes), gb = gardenScore(b.bytes);
+          Object.assign(rec, { judged: true, garden: g, judgedAgainst: [ga, gb] });
+          child.garden = g;
+          this.stats.judged++;
+          if (g > ga && g > gb) this.stats.betterThanBoth++;
+        }
         this.event({ t: this.time, kind: 'birth', ids: [a.id, b.id, child.id] });
       } else {
         a.energy -= P.failCost; b.energy -= P.failCost;
@@ -648,12 +665,10 @@ const TP = (() => {
       for (const c of order) {
         if (c.state !== 'alive') continue;
         c.age++;
-        c.energy -= tickCost(c.ph.body);
+        c.energy -= tickCost(c.ph.body, c.bytes.length);
         this.act(c);
         const i = c.y * GRID + c.x;
         if (this.food[i]) { this.food[i] = 0; c.energy = Math.min(P.maxEnergy, c.energy + P.foodValue); c.eaten++; }
-        if (c.age <= P.earlyAge) c.early = c.eaten;
-        if (c.age === P.earlyAge) this.finishEarly(c);
         if (c.age === 100 && c.parents) this.stats.adults++;
       }
       for (const c of order) {
@@ -662,20 +677,11 @@ const TP = (() => {
         if (cause) this.die(c, cause);
       }
       if (this.creatures.some((c) => c.state !== 'alive')) this.creatures = this.creatures.filter((c) => c.state === 'alive');
-      this.judge();
       if (this.sampling && this.time % P.sampleEvery === 0) this.sample();
       this.trimRecords();
     }
 
-    finishEarly(c) {
-      if (c.earlyFinal) return;
-      c.earlyFinal = true;
-      const r = this.records.get(c.id);
-      if (r) { r.early = c.early; r.earlyFinal = true; }
-    }
-
     die(c, cause) {
-      if (c.age < P.earlyAge) this.finishEarly(c);
       c.state = 'dead';
       this.occ[c.y * GRID + c.x] = 0;
       this.byId.delete(c.id);
@@ -683,20 +689,6 @@ const TP = (() => {
       const r = this.records.get(c.id);
       if (r) Object.assign(r, { died: this.time, cause, x: c.x, y: c.y, eaten: c.eaten, age: c.age });
       this.event({ t: this.time, kind: 'death', ids: [c.id], cause, x: c.x, y: c.y });
-    }
-
-    // a child is better than both parents when it ate more in its first 200 ticks than either of them did in theirs
-    judge() {
-      this.pending = this.pending.filter((id) => {
-        const r = this.records.get(id);
-        if (!r) return false;
-        const [pa, pb] = r.parents.map((p) => this.records.get(p));
-        if (!pa || !pb) return false;
-        if (!r.earlyFinal || !pa.earlyFinal || !pb.earlyFinal) return true;
-        this.stats.judged++;
-        if (r.early > pa.early && r.early > pb.early) this.stats.betterThanBoth++;
-        return false;
-      });
     }
 
     sample() {
@@ -714,6 +706,7 @@ const TP = (() => {
         mixedShare: n ? mixed / n : 0,
         meanShare: n ? cs.reduce((x, c) => x + c.ph.mix.share, 0) / n : 0,
         meanCuts: n ? cs.reduce((x, c) => x + c.ph.mix.cuts, 0) / n : 0,
+        medLen: n ? cs.map((c) => c.bytes.length).sort((x, y) => x - y)[n >> 1] : 0,
         garden: g.length ? g.reduce((x, y) => x + y, 0) / g.length : 0,
         gardenBest: g.length ? Math.max(...g) : 0,
       });
@@ -771,6 +764,8 @@ const TP = (() => {
       meanRateStart: avg(s.slice(0, k)), meanRateEnd: avg(s.slice(s.length - k)),
       gardenStart: avg(s.slice(0, k), 'garden'), gardenEnd: avg(s.slice(s.length - k), 'garden'),
       mixedShare: s.length ? s[s.length - 1].mixedShare : 0,
+      viableShare: w.stats.births ? w.stats.viable / w.stats.births : 0,
+      medianLength: w.creatures.length ? w.creatures.map((c) => c.bytes.length).sort((x, y) => x - y)[w.creatures.length >> 1] : 0,
       capShare: ticks ? capTicks / ticks : 0, extinctAt,
     };
   }
@@ -787,6 +782,16 @@ const TP = (() => {
       out[mode] = summarize(w, extinctAt, capTicks, ticks);
     }
     return out;
+  }
+
+  // One line about a creature, alive or dead.
+  function statusLine(world, id) {
+    const c = world.byId.get(id);
+    if (c) return `alive, energy ${Math.max(0, c.energy).toFixed(0)}, age ${c.age}, doing: ${c.action}`;
+    const r = world.records.get(id);
+    if (!r) return 'unknown';
+    if (r.died === null) return 'alive';
+    return `died at tick ${r.died}, ${r.cause === 'starved' ? 'starved' : 'of old age'}, age ${r.age}`;
   }
 
   // Family tree: level k holds 2^k ancestors (parents of level k-1), null where unknown.
@@ -860,7 +865,7 @@ const TP = (() => {
   ];
 
   return { GRID, START, END, TOLERANCE, T, SETTINGS, TYPE_NAMES, DEFAULT_MIX, DEFAULT_BODY,
-    parse, express, fits, bindSensor, encodeGene, rng, hex, FOUNDERS, mutate, segments, mixAligned, mixNaive, conceive, World, P, tickCost, senseCells, experiment, gardenScore, pedigree };
+    parse, express, fits, bindSensor, encodeGene, rng, hex, FOUNDERS, mutate, segments, mixAligned, mixNaive, conceive, World, P, tickCost, senseCells, experiment, gardenScore, pedigree, statusLine, MAX_GENOME };
 })();
 
 const TPTests = {
@@ -868,7 +873,7 @@ const TPTests = {
     let pass = 0, fail = 0;
     const ok = (c, name = '') => { if (c) pass++; else { fail++; console.error('FAIL', name, new Error().stack.split('\n')[2]); } };
     const eq = (a, b, name = '') => { ok(a === b, `${name} got ${JSON.stringify(a)} want ${JSON.stringify(b)}`); };
-    const tests = [this.genome, this.reproduction, this.world, this.experiment, this.pedigree];
+    const tests = [this.genome, this.reproduction, this.world, this.experiment, this.pedigree, this.review];
     for (const t of tests) {
       try { t(ok, eq); } catch (e) { fail++; console.error('ERROR in', t.name, e.message); }
     }
@@ -1095,6 +1100,52 @@ const TPTests = {
     // a child's record keeps its conception, so the birth panel can show it after the parents die
     ok(child.conception && child.conception.plan.length > 0 && child.fit && child.origin.length === child.bytes.length, 'record keeps the conception');
   },
+
+  // Findings of the final review, each pinned by a test.
+  review(ok, eq) {
+    const [S, V] = TP.FOUNDERS.map((f) => f.bytes);
+    // Critical 1: genomes cannot grow without limit, and every byte costs energy to keep
+    ok(TP.MAX_GENOME >= 256 && TP.MAX_GENOME <= 1024, 'there is a genome size limit');
+    ok(TP.tickCost(TP.DEFAULT_BODY, 400) > TP.tickCost(TP.DEFAULT_BODY, 100), 'a longer genome costs more per tick');
+    for (let i = 0; i < 40; i++) ok(TP.mixNaive(new Uint8Array(900).fill(7), new Uint8Array(900).fill(9), TP.rng(i)).bytes.length <= TP.MAX_GENOME, 'naive child within the limit');
+    const wn = new TP.World({ mode: 'naive', seed: 1 });
+    for (let i = 0; i < 6000; i++) wn.tick();
+    const lens = wn.creatures.map((c) => c.bytes.length).sort((x, y) => x - y);
+    ok(lens.length > 0 && lens[lens.length >> 1] <= 300, 'naive genomes stay small: median ' + lens[lens.length >> 1]);
+    ok(lens.every((n) => n <= TP.MAX_GENOME), 'naive genomes within the limit');
+    // Important 2: children that can both eat and mate are counted
+    eq(wn.stats.viable, [...wn.records.values()].filter((r) => r.parents && r.viable).length, 'viable count matches records');
+    ok(wn.stats.viable <= wn.stats.births, 'viable <= births');
+    ok(wn.series.every((x) => Number.isFinite(x.medLen)) && wn.series[wn.series.length - 1].medLen === lens[lens.length >> 1], 'series has the median genome length');
+    // Important 3: "better than both" compares common-garden scores of child and parents
+    const wa = new TP.World({ mode: 'aligned', seed: 2 });
+    for (let i = 0; i < 1500; i++) wa.tick();
+    ok(wa.stats.judged > 20, 'children judged: ' + wa.stats.judged);
+    let better = 0, judged = 0;
+    for (const r of wa.records.values()) if (r.judged) {
+      judged++;
+      const [pa, pb] = r.judgedAgainst;
+      if (r.garden > pa && r.garden > pb) better++;
+    }
+    eq(judged, wa.stats.judged, 'judged count'); eq(better, wa.stats.betterThanBoth, 'better count from garden scores');
+    // Important 4: the status line of a dead creature says it died
+    const dead = [...wa.records.values()].find((r) => r.died !== null);
+    ok(/^died at tick \d+/.test(TP.statusLine(wa, dead.id)), 'dead status: ' + TP.statusLine(wa, dead.id));
+    ok(/^alive, energy \d+/.test(TP.statusLine(wa, wa.creatures[0].id)), 'alive status');
+    // Important 5: with cuts, each block comes from the ruling parent with the mix gene's share
+    const withMix = (bytes, mix) => { const b = bytes.slice(), g = TP.parse(b).genes.find((x) => x.type === TP.T.MIX); b[g.start + 3] = mix[0]; b[g.start + 4] = mix[1]; b[g.start + 5] = 0; return b; };
+    for (const [share, cuts, lo, hi] of [[255, 1, 0.99, 1], [0, 1, 0, 0.01], [255, 2, 0.99, 1], [160, 1, 0.55, 0.71], [160, 0, 0.55, 0.71]]) {
+      const A = withMix(S, [share, cuts]), B = withMix(V, [share, cuts]);
+      let from = 0, all = 0;
+      const R = TP.rng(share * 10 + cuts);
+      for (let i = 0; i < 600; i++) {
+        const c = TP.mixAligned(A, B, R);
+        for (const p of c.plan) if (p.type !== TP.T.MIX && p.from !== null) { all++; if (p.from === c.usedMixOf) from++; }
+      }
+      const f = from / all;
+      ok(f >= lo && f <= hi, `share ${share}, cuts ${cuts}: ${f.toFixed(3)} of genes from the ruling parent`);
+    }
+  },
 };
 </script>
 <script>
@@ -1115,7 +1166,7 @@ const TPTests = {
   const state = {
     worlds: [], running: true, speed: 2, seed: 1,
     selected: null,           // { wi, id }
-    birthWorld: 1, follow: true, shown: null, birthStart: 0,
+    birthWorld: 1, follow: true, shown: null, birthStart: 0, birthPausedAt: null,
     effects: [[], []], lastEvent: [null, null], frame: 0,
   };
 
@@ -1291,8 +1342,9 @@ const TPTests = {
     const last = w.series[w.series.length - 1];
     $('c' + wi).innerHTML = [
       ['alive', n ? n : '<span class="extinct">extinct</span>'], ['conceptions', s.conceptions], ['not born', s.failed], ['born', s.births],
-      ['starved', s.deaths.starved], ['old age', s.deaths.old], ['reached age 100', pct(s.adults, s.births)], ['better than both', pct(s.betterThanBoth, s.judged)],
-    ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('') + (last ? `<div><span>garden (mean)</span><b>${last.garden.toFixed(0)}</b></div>` : '');
+      ['starved', s.deaths.starved], ['old age', s.deaths.old], ['can eat and mate', pct(s.viable, s.births)], ['reached age 100', pct(s.adults, s.births)],
+      ['better than both', pct(s.betterThanBoth, s.judged)], ['garden (mean)', last ? last.garden.toFixed(0) : '–'], ['genome (median)', last ? `${last.medLen} B` : '–'],
+    ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
   }
 
   // ---------- birth panel ----------
@@ -1307,6 +1359,8 @@ const TPTests = {
   function showConception(rec) {
     state.shown = rec;
     state.birthStart = performance.now();
+    state.birthPausedAt = null;
+    $('pauseBirth').textContent = 'Pause';
     renderBirthText();
   }
   const ANIM = 4200, HOLD = 1400;
@@ -1363,6 +1417,7 @@ const TPTests = {
     x.setTransform(dpr, 0, 0, dpr, 0, 0);
     x.imageSmoothingEnabled = false;
     x.fillStyle = '#f7f3e8'; x.fillRect(0, 0, cssW, L.height);
+    if (state.birthPausedAt !== null) now = state.birthPausedAt;
     const p = reduceMotion ? 1 : Math.min(1, (now - state.birthStart) / ANIM);
     const maps = [geneMap(A), geneMap(B), geneMap(C)];
     const cellXY = (k, i) => { const b = L.boxes[k]; return [b.x + (i % L.per) * L.cs, b.y + 40 + Math.floor(i / L.per) * L.cs]; };
@@ -1475,7 +1530,7 @@ const TPTests = {
       $('planlist').innerHTML = `Bytes 0–${c.cutA - 1} of A, then B from byte ${c.cutB} to the end. ${muts}`;
     } else {
       const pa = rec.parentBytes[c.usedMixOf], mix = TP.express(pa).mix;
-      $('planlist').innerHTML = `<div>Coin flip: parent ${'AB'[c.usedMixOf]}'s mix gene rules: ${Math.round((mix.share / 255) * 100)} % of genes from ${'AB'[c.usedMixOf]}, ${mix.cuts} cut${mix.cuts === 1 ? '' : 's'}, rate ${mix.rate}.</div>`
+      $('planlist').innerHTML = `<div>Coin flip: parent ${'AB'[c.usedMixOf]}'s mix gene rules. ${mix.cuts ? `${mix.cuts} cut${mix.cuts === 1 ? '' : 's'}; each block between cuts` : 'Each gene'} comes from ${'AB'[c.usedMixOf]} with a ${Math.round((mix.share / 255) * 100)} % chance; mutation rate ${mix.rate}. The mix gene itself always comes from ${'AB'[c.usedMixOf]}.</div>`
         + c.plan.map((s) => `<span class="${s.from === 0 ? 'fa' : s.from === 1 ? 'fb' : ''}">${s.type === null ? 'broken' : TP.TYPE_NAMES[s.type]}${s.occurrence ? ' ' + (s.occurrence + 1) : ''} ← ${s.from === null ? '–' : 'AB'[s.from]}</span>`).join('')
         + `<div>${muts}</div>`;
     }
@@ -1555,13 +1610,13 @@ const TPTests = {
     $('inspTitle').textContent = `Inspector: #${id} in "${MODE_NAMES[state.selected.wi]}"`;
     const lin = rec.lineage.map((v, k) => v > 0.005 ? `<span><i style="display:inline-block;width:10px;height:10px;background:${TP.FOUNDERS[k].color};margin-right:3px"></i>${TP.FOUNDERS[k].name} ${Math.round(v * 100)} %</span>` : '').join(' ');
     const age = live ? live.age : rec.age, eaten = live ? live.eaten : rec.eaten;
-    const status = live ? `alive, energy ${live.energy.toFixed(0)}, age ${live.age}, doing: ${live.action}` : `died at tick ${rec.died}, ${rec.cause === 'starved' ? 'starved' : 'of old age'}, age ${rec.age}`;
+    const status = TP.statusLine(w, id);
     const garden = rec.garden !== undefined ? rec.garden : TP.gardenScore(rec.bytes);
     rec.garden = garden;
     $('inspector').innerHTML = `
       <div class="row" style="gap:12px;align-items:center"><canvas id="inspSprite" width="64" height="64" style="width:64px;height:64px;image-rendering:pixelated;background:#42734b"></canvas>
-        <div><div><b>${founder ? 'Founder' : 'Child of #' + rec.parents.join(' and #')}</b></div><div>${status}</div><div>${lin}</div>
-        <div>Food per tick: ${age ? (eaten / Math.max(1, age)).toFixed(3) : '–'} · garden: survives ${garden.toFixed(0)} of 1500 ticks alone</div></div></div>
+        <div><div><b>${founder ? 'Founder' : 'Child of #' + rec.parents.join(' and #')}</b></div><div id="inspStatus" data-alive="${live ? 1 : 0}">${esc(status)}</div><div>${lin}</div>
+        <div>Food per tick: ${age ? (eaten / Math.max(1, age)).toFixed(3) : '–'} · garden: survives ${garden.toFixed(0)} of ${TP.P.gardenTicks} ticks alone · genome ${rec.bytes.length} bytes</div></div></div>
       <div class="genes" style="margin-top:8px">${describeGenes(rec.bytes)}</div>
       <pre class="hex">${hexDump(rec.bytes, rec.origin)}</pre>
       <div class="controls"><button class="btn" id="saveBin">Save .bin</button>${rec.origin ? '<span class="note">Underlined blue: from parent A, amber: from parent B, red: mutated.</span>' : ''}${!founder && rec.conception ? '<button class="btn" id="showBirth">Show its conception</button>' : ''}</div>`;
@@ -1611,9 +1666,11 @@ const TPTests = {
     { key: 'pop', title: 'Creatures alive', fmt: (v) => v.toFixed(0) },
     { key: 'garden', title: 'Common garden: ticks survived alone (mean)', fmt: (v) => v.toFixed(0) },
     { key: 'gardenBest', title: 'Common garden: best of the sample', fmt: (v) => v.toFixed(0) },
-    { key: 'betterShare', title: 'Children better than both parents', fmt: (v) => `${Math.round(v * 100)} %`, pct: true },
+    { key: 'betterShare', title: 'Children better than both parents (garden, sampled)', fmt: (v) => `${Math.round(v * 100)} %`, pct: true },
     { key: 'mixedShare', title: 'Creatures with genes from 2+ founder lineages', fmt: (v) => `${Math.round(v * 100)} %`, pct: true },
+    { key: 'medLen', title: 'Genome length (median bytes)', fmt: (v) => v.toFixed(0) },
     { key: 'meanShare', title: "Mix genes: share from the ruling parent (life's way)", fmt: (v) => `${Math.round((v / 255) * 100)} %`, only: 1 },
+    { key: 'meanCuts', title: "Mix genes: crossover cuts (life's way)", fmt: (v) => v.toFixed(1), only: 1 },
   ];
   $('charts').innerHTML = CHARTS.map((c, i) => `<figure><figcaption>${c.title}</figcaption><canvas id="ch${i}" aria-label="${esc(c.title)}"></canvas></figure>`).join('');
   function drawCharts() {
@@ -1660,7 +1717,11 @@ const TPTests = {
     }
     parts.push('</ul>');
     if (gn && ga) parts.push(`<p>Common garden (mean ticks survived alone): naive splicing went from ${gn[0].toFixed(0)} to ${gn[1].toFixed(0)}, life's way from ${ga[0].toFixed(0)} to ${ga[1].toFixed(0)}.</p>`);
-    parts.push(`<p class="note">These numbers are measured in this run, and they change with the seed. In our own runs of 6000 ticks over five seeds, naive splicing was much less lethal than we expected: 88–90 % of its children reached adulthood, against 95–98 % in life's way. The markers make genes into separate units, so a random cut breaks at most one gene. In life's way the Runner lineage is usually shut out by the fit check, while Sniffer–Saver hybrids with a long nose and an efficient body take over.</p>`);
+    const med = (w) => { const s = w.series; return s.length ? s[s.length - 1].medLen : 0; };
+    parts.push(`<p>Children able to both eat and find a mate: ${pct(n.stats.viable, n.stats.births)} with naive splicing, ${pct(a.stats.viable, a.stats.births)} in life's way. Median genome length now: ${med(n)} bytes with naive splicing, ${med(a)} bytes in life's way (the founders have about 65). A naive cut can drop a whole run of genes, and children with extra copies are more likely to keep a working set, so naive genomes tend to grow even though every byte costs energy.</p>`);
+    const lin = (w) => { const k = w.creatures.length || 1; return [0, 1, 2].map((j) => Math.round((100 * w.creatures.reduce((x, c) => x + c.lineage[j], 0)) / k)); };
+    parts.push(`<p>Share of the genes from each founder lineage (Sniffer / Saver / Runner): naive splicing ${lin(n).join(' / ')} %, life's way ${lin(a).join(' / ')} %.</p>`);
+    parts.push('<p class="note">Every number here is measured in this run and changes with the seed. "Better than both" compares the common-garden score of a sample of children with both parents\' scores; if children were drawn at random from the same population as their parents, roughly one in three would beat both.</p>');
     $('happened').innerHTML = parts.join('');
   }
 
@@ -1675,6 +1736,9 @@ const TPTests = {
   function step(n) {
     for (let k = 0; k < n; k++) for (const w of state.worlds) w.tick();
     collectEvents(0); collectEvents(1);
+    // if the selected creature just died, redraw the inspector and the family tree once
+    const el = $('inspStatus');
+    if (state.selected && el && el.dataset.alive === '1' && !state.worlds[state.selected.wi].byId.has(state.selected.id)) renderSelection();
     if (state.follow) {
       const lc = state.worlds[state.birthWorld].lastConception;
       if (lc && (!state.shown || (performance.now() - state.birthStart > ANIM + HOLD && state.shown.source !== lc))) showConception({ ...lc, wi: state.birthWorld, source: lc });
@@ -1686,7 +1750,12 @@ const TPTests = {
     drawAll(false);
     if (state.selected && state.frame % 30 === 0) {
       const r = recordFor(state.selected);
-      if (r && r.live) { const el = $('inspector').querySelector('.row div div:nth-child(2)'); if (el) el.textContent = `alive, energy ${r.live.energy.toFixed(0)}, age ${r.live.age}, doing: ${r.live.action}`; }
+      const el = $('inspStatus');
+      if (r && el) {
+        const line = TP.statusLine(r.w, state.selected.id);
+        if (!r.live && el.dataset.alive === '1') renderSelection();   // it just died: redraw the inspector and the tree
+        else el.textContent = line;
+      }
     }
     $('clock').textContent = `tick ${state.worlds[0].time}`;
     requestAnimationFrame(frame);
@@ -1701,7 +1770,12 @@ const TPTests = {
   $('mixEvolves').addEventListener('change', () => { resetAligned(); drawAll(true); });
   $('birthWorld').addEventListener('change', (e) => { state.birthWorld = +e.target.value; state.follow = true; $('follow').classList.add('on'); state.shown = null; step(0); });
   $('follow').addEventListener('click', () => { state.follow = true; $('follow').classList.add('on'); $('birthNote').textContent = 'Click a creature to show the conception it came from.'; const lc = state.worlds[state.birthWorld].lastConception; if (lc) showConception({ ...lc, wi: state.birthWorld, source: lc }); });
-  $('replay').addEventListener('click', () => { if (state.shown) { state.birthStart = performance.now(); } });
+  $('replay').addEventListener('click', () => { if (state.shown) { state.birthStart = performance.now(); state.birthPausedAt = null; $('pauseBirth').textContent = 'Pause'; } });
+  $('pauseBirth').addEventListener('click', () => {
+    const now = performance.now();
+    if (state.birthPausedAt === null) { state.birthPausedAt = now; $('pauseBirth').textContent = 'Resume'; }
+    else { state.birthStart += now - state.birthPausedAt; state.birthPausedAt = null; $('pauseBirth').textContent = 'Pause'; }
+  });
   worldCanvas.forEach((cv, wi) => cv.addEventListener('click', (ev) => selectAt(wi, ev)));
 
   legend();
