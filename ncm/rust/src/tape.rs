@@ -658,3 +658,57 @@ mod tests {
         });
     }
 }
+
+/// Finite-difference check for a whole model. `f(model, true)` must zero the
+/// gradients, compute the loss and fill them; `f(model, false)` only returns
+/// the loss. Returning `None` skips that probe (used when a perturbation
+/// changes a discrete choice). Returns the largest relative error.
+#[cfg(test)]
+pub fn gradcheck_model<M: crate::param::Params>(
+    m: &mut M,
+    f: &mut dyn FnMut(&mut M, bool) -> Option<F>,
+    per_param: usize,
+) -> F {
+    f(m, true).expect("baseline");
+    let mut ana: Vec<Vec<F>> = Vec::new();
+    m.visit(&mut |p| ana.push(p.g.clone()));
+    let eps = 1e-5 as F;
+    let mut worst = 0.0 as F;
+    let mut probes = 0;
+    for pi in 0..ana.len() {
+        let len = ana[pi].len();
+        for i in (0..len).step_by((len / per_param).max(1)) {
+            let mut vals = [None, None];
+            for (s, sign) in [1.0 as F, -1.0 as F].iter().enumerate() {
+                let mut k = 0;
+                m.visit(&mut |p| {
+                    if k == pi {
+                        p.w[i] += sign * eps;
+                    }
+                    k += 1;
+                });
+                vals[s] = f(m, false);
+                let mut k = 0;
+                m.visit(&mut |p| {
+                    if k == pi {
+                        p.w[i] -= sign * eps;
+                    }
+                    k += 1;
+                });
+            }
+            if let (Some(up), Some(dn)) = (vals[0], vals[1]) {
+                let num = (up - dn) / (2.0 * eps);
+                let err = (num - ana[pi][i]).abs() / (num.abs() + ana[pi][i].abs() + 1e-4);
+                if err > worst {
+                    worst = err;
+                    if std::env::var("GRADCHECK_VERBOSE").is_ok() {
+                        eprintln!("param {} index {} numeric {:e} analytic {:e} err {:e}", pi, i, num, ana[pi][i], err);
+                    }
+                }
+                probes += 1;
+            }
+        }
+    }
+    assert!(probes > ana.len(), "too few probes survived: {}", probes);
+    worst
+}

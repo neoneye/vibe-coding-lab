@@ -9,6 +9,8 @@ pub type F = f32;
 pub mod block;
 pub mod ops;
 pub mod param;
+pub mod quant;
+pub mod tokenizer;
 pub mod rng;
 pub mod tape;
 pub mod ffi;
