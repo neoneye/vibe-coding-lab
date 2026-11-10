@@ -6,6 +6,7 @@ pub type F = f64;
 #[cfg(not(feature = "f64"))]
 pub type F = f32;
 
+pub mod block;
 pub mod ops;
 pub mod param;
 pub mod rng;
