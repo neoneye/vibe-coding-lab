@@ -83,7 +83,8 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
 .explain { max-width: 820px; font-size: 14px; line-height: 1.55; color: var(--ink2); }
 .explain h3 { font-size: 13px; color: var(--ink); margin: 18px 0 4px; }
 .explain p { margin: 6px 0; }
-.explain ul { margin: 6px 0; padding-left: 20px; }
+.explain ul, .explain ol { margin: 6px 0; padding-left: 20px; }
+.explain li { margin: 3px 0; }
 .explain a { color: #7fb0ff; }
 .explain svg { width: 100%; height: auto; margin: 8px 0; background: var(--well); border-radius: 6px; }
 .explain table { border-collapse: collapse; font-size: 13px; margin: 8px 0; }
@@ -291,6 +292,22 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
       <p>With the tokenizer frozen, a transformer learns to predict the codes of level k from the picture built out of levels 1 to k&minus;1. Every code of a level is predicted in the same forward pass, and positions only attend to their own level. Generating a window of <span class="vL">64</span> characters therefore takes <span class="vP">11</span> transformer passes, one per level after the first, instead of one per character. The first level is a single code and is simply drawn according to how often each code occurs in the training text.</p>
       <p>Two details matter in training. The inputs are deliberately damaged: some of the earlier codes are swapped for random ones, more at coarse levels than at fine ones, so the model learns to cope with its own imperfect earlier choices. And the output layer is tied to the tokenizer's codebooks: the model proposes a vector and the scores are how close each codebook entry is to it.</p>
 
+      <h3>3. Writing a window, step by step</h3>
+      <p>Generation never looks at characters until the very end. It keeps one running picture, a grid of <span class="vL">64</span> vectors that starts out as all zeros, and refines it level by level:</p>
+      <ol>
+        <li>Draw the single level-1 code at random, weighted by how often each code occurs in the training text. Look it up in the level-1 codebook, stretch it to full length and add it to the picture. The picture now says roughly what kind of passage this is.</li>
+        <li>For level 2, shrink the picture to that level's length (4 positions) and hand it to the transformer. It returns, for each position, a score for every codebook entry. Pick one code per position at random according to those scores; the temperature and top-k sliders control how adventurous that pick is.</li>
+        <li>Look those codes up, stretch them to full length, smooth them with a small learned filter and add them to the picture.</li>
+        <li>Repeat steps 2 and 3 for every remaining level. Each level has more positions than the last, so each pass adds finer detail: first the rough shape of the lines, then where the words fall, finally the individual letters.</li>
+        <li>After the last level, the tokenizer's decoder reads the finished picture and writes one character per position.</li>
+      </ol>
+      <p>The "Coarse to fine" panel above shows exactly this: the codes chosen at each level, and what the decoder would write if generation stopped there.</p>
+
+      <h3>4. How the two parts learn</h3>
+      <p><b>The tokenizer</b> is trained to get the original characters back out of its own codes. Its loss has two terms. The reconstruction term asks the decoder to give the right character a high score at every position. The codebook term pulls the picture after each level towards the vectors it is supposed to describe, and the other way round. Choosing the nearest codebook entry is a hard choice with no slope to learn from, so the entries themselves are not trained by gradient: each one drifts towards the average of the vectors that picked it.</p>
+      <p><b>The generator</b> is trained like a fill-in exercise on real text. A real window is run through the frozen tokenizer to get its codes at every level. For each level the generator is shown the picture built from the true earlier codes (with some of them swapped at random, as described above) and is scored on how much probability it gave to the true codes of that level. All levels of a window are trained in one pass, because positions only look at their own level. Fine levels have many more codes than coarse ones. The "level weighting &alpha;" slider sets how the two are balanced: at 0 every code counts equally, so the many fine codes dominate the loss, and higher values give the few coarse codes more say.</p>
+      <p><b>Why this could be faster than writing token by token:</b> the number of transformer passes depends on the number of levels, not on the length of the text. The price is that codes within one level are chosen independently of each other, given the picture so far. Two neighbouring codes cannot coordinate within a level; they can only be reconciled by the next, finer level. That is why the coarse levels matter so much, and why the bars above show how well each level is predicted.</p>
+
       <h3>How this page differs from the paper</h3>
       <table>
         <tr><th></th><th>Paper (TinyStories model)</th><th>This page</th></tr>
@@ -298,7 +315,7 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
         <tr><td>Levels</td><td>12, from 1 to 128 codes</td><td><span class="vK">12</span>, lengths <span class="vLevels">1, 4, 8, &hellip;</span> (the paper's schedule at half length)</td></tr>
         <tr><td>Codes per level</td><td>4,096</td><td><span class="vCodes">16</span></td></tr>
         <tr><td>Size</td><td>about 36 M (tokenizer) + 89 M (generator) weights</td><td><span class="vTok">&ndash;</span> + <span class="vGen">&ndash;</span> weights</td></tr>
-        <tr><td>Tasks</td><td>also summarisation, translation, Sudoku</td><td>unconditional text only</td></tr>
+        <tr><td>Tasks</td><td>also summarisation, translation, Sudoku</td><td>unconditional text, plus this page's own way of continuing a prompt</td></tr>
       </table>
       <ul>
         <li>The structure follows the authors' released code: an embedding-only encoder, a one-block decoder, learned down- and up-sampling for level 1 only, codebooks updated by moving averages, tied output heads, rotary positions restarting at each level.</li>
