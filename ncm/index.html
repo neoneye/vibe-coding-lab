@@ -106,8 +106,8 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
       <option value="frankenstein">Frankenstein</option>
       <option value="shakespeare">Shakespeare</option>
     </select>
-    <label for="upload">Upload a text file (or drag &amp; drop anywhere)</label>
-    <input type="file" id="upload" accept=".txt,text/plain">
+    <label for="upload">Upload text or Markdown files (or drag &amp; drop anywhere); several are joined into one training text</label>
+    <input type="file" id="upload" multiple accept=".txt,.md,.markdown,.text,text/plain,text/markdown">
 
     <label for="stage">Stage to train</label>
     <select id="stage">
@@ -295,7 +295,7 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
     </div>
   </section>
 </main>
-<div id="dropzone">Drop a text file to use as training text</div>
+<div id="dropzone">Drop text or Markdown files to use as training text</div>
 
 <script type="text/js-worker" id="worker-code">
 "use strict";
@@ -937,9 +937,13 @@ let prevCorpus = "both";
 $("corpus").addEventListener("change", async () => {
   if (await applyCorpus()) { prevCorpus = $("corpus").value; if (prevCorpus !== "both") corpusNote(); else showMsg(""); } else $("corpus").value = prevCorpus;
 });
-async function useUpload(file) {
-  if (!state.ready || !file) return;
-  const text = await file.text();
+// Several files are joined, in name order, into one training text.
+async function useUpload(fileList) {
+  const files = Array.from(fileList || []).sort((a, b) => a.name.localeCompare(b.name));
+  if (!state.ready || !files.length) return;
+  const parts = await Promise.all(files.map((f) => f.text()));
+  const text = parts.map((t) => (t.endsWith("\n") ? t : t + "\n")).join("\n");
+  const label = files.length === 1 ? files[0].name : `${files.length} files (${files.map((f) => f.name).join(", ")})`;
   const before = state.uploaded;
   state.uploaded = text;
   let opt = $("corpus").querySelector('option[value="uploaded"]');
@@ -947,21 +951,22 @@ async function useUpload(file) {
   const old = $("corpus").value;
   $("corpus").value = "uploaded";
   if (await applyCorpus()) {
-    opt.textContent = "Uploaded: " + file.name;
+    opt.textContent = "Uploaded: " + (label.length > 60 ? label.slice(0, 57) + "..." : label);
+    opt.title = label;
     prevCorpus = "uploaded";
-    showMsg(`Using ${file.name} (${fmtInt(text.length)} characters). Characters the model does not know are read as "?".`, false);
+    showMsg(`Using ${label}: ${fmtInt(text.length)} characters in total. Characters the model does not know are read as "?". The held-out numbers use the last 5% of the joined text; the current weights were not trained on it until you train here.`, false);
   } else {
     state.uploaded = before;
     if (before === null) opt.remove();
     $("corpus").value = old;
   }
 }
-$("upload").onchange = (e) => { useUpload(e.target.files[0]); e.target.value = ""; };
+$("upload").onchange = (e) => { const files = Array.from(e.target.files); e.target.value = ""; useUpload(files); };
 let dragDepth = 0;
 window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; $("dropzone").classList.add("active"); });
 window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("dropzone").classList.remove("active"); } });
 window.addEventListener("dragover", (e) => e.preventDefault());
-window.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; $("dropzone").classList.remove("active"); useUpload(e.dataTransfer.files[0]); });
+window.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; $("dropzone").classList.remove("active"); useUpload(e.dataTransfer.files); });
 
 // ---------- start-up ----------
 async function boot() {
