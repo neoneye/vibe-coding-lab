@@ -86,8 +86,8 @@ x.ncm_generate(5, 1.0, 0, 3);
 check("generation identical after import", out().every((v, i) => v === a[i]));
 check("training continues after import", x.ncm_train(1, 1) === 0);
 
-// A tokenizer step after generator training throws the generator away.
-check("tokenizer step resets generator", x.ncm_train(0, 1) === 0 && outF32()[3] === 1 && outF32()[2] === 0);
+// A tokenizer step after generator training flags the generator as stale but keeps it.
+check("tokenizer step keeps the generator and flags it", x.ncm_train(0, 1) === 0 && outF32()[3] === 1 && outF32()[2] === 11);
 
 // An absurd learning rate is reported as divergence and rolled back.
 withBytes(f32Bytes([1e6, 1e-3, 8, 0.5, 0, 0.5, 0.3, 0, 1000]), (p, n) => x.ncm_set_hparams(p, n / 4));

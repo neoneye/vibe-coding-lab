@@ -123,7 +123,7 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
       <button id="restore" class="secondary">Restore pretrained</button>
       <input type="file" id="loadFile" accept=".bin" style="display:none">
     </div>
-    <p class="note">The tokenizer trains at several steps a second here. The generator is much heavier: expect a second or more per step, so the shipped checkpoint (trained offline for 6,000 steps) is the one to explore.</p>
+    <p class="note">Start always continues from the current weights, whether shipped, loaded or trained here; only Reset starts from scratch. The tokenizer trains at several steps a second here. The generator is much heavier: expect a second or more per step, so the shipped checkpoint (trained offline for 6,000 steps) is the one to explore.</p>
 
     <div class="sep">
       <div class="row"><label for="lr">Peak learning rate (selected stage)</label><span class="val" id="lrVal"></span></div>
@@ -313,7 +313,8 @@ const outF32 = () => new Float32Array(out().buffer);
 const outU32 = () => new Uint32Array(out().buffer);
 const handlers = {
   async load(a) {
-    const res = await fetch(a.url);
+    // no-cache: always revalidate, so a new page never runs against an old wasm.
+    const res = await fetch(a.url, { cache: "no-cache" });
     if (!res.ok) throw new Error("could not fetch ncm.wasm (" + res.status + ")");
     const { instance } = await WebAssembly.instantiate(await res.arrayBuffer(), {});
     x = instance.exports;
@@ -819,11 +820,10 @@ async function trainLoop() {
     $("tokSteps").textContent = fmtInt(M.tokSteps);
     $("genSteps").textContent = fmtInt(M.genSteps);
     if (s[3]) {
-      state.loss.gen = []; state.held.gen = []; drawChart("gen");
-      for (const id of ["genLossBars", "genAccBars"]) $(id).textContent = "";
-      $("genLoss").textContent = $("genHeld").textContent = "–";
-      showMsg("Tokenizer changed: the generator was trained on the old codes, so it has been reset.", false);
+      state.genStale = true;
+      showMsg("The tokenizer is changing, so the codes the generator learned are shifting. The generator keeps its weights as a starting point; train stage 2 again afterwards to bring it back in line.", false);
     }
+    if (which === "gen") state.genStale = false;
     if (which === "tok") { $("tokLoss").textContent = s[4].toFixed(3); state.loss.tok.push({ x: M.tokSteps, y: s[4] }); }
     else { $("genLoss").textContent = s[8].toFixed(3); state.loss.gen.push({ x: M.genSteps, y: s[8] }); }
     if (state.loss[which].length > 1500) state.loss[which] = state.loss[which].filter((p, i) => i % 2 === 0);
@@ -892,6 +892,8 @@ async function importBytes(bytes, what) {
   await pushHparams();
   resetCharts();
   showMsg("");
+  // Continue where the loaded model left off: the generator if it has one.
+  $("stage").value = state.M.genSteps > 0 ? "gen" : "tok"; markStage();
   setStatus(what + " loaded");
   await refreshAll();
   return true;
@@ -977,7 +979,7 @@ async function boot() {
     const r = await send("load", { url: new URL("ncm.wasm", here).href });
     if (r.code !== 0) throw new Error("self-test failed with code " + r.code);
     const [fr, sh] = await Promise.all(["corpus/frankenstein.txt", "corpus/shakespeare.txt"].map(async (p) => {
-      const res = await fetch(new URL(p, here));
+      const res = await fetch(new URL(p, here), { cache: "no-cache" });
       if (!res.ok) throw new Error("could not fetch " + p);
       return res.text();
     }));
@@ -990,7 +992,7 @@ async function boot() {
   await send("charset", { text: Array.from(new Set(state.texts.frankenstein + state.texts.shakespeare)).sort().join("") });
   let loaded = false;
   try {
-    const res = await fetch(new URL("pretrained.bin", here));
+    const res = await fetch(new URL("pretrained.bin", here), { cache: "no-cache" });
     if (res.ok) {
       state.pretrained = await res.arrayBuffer();
       const r = await send("importWeights", { bytes: state.pretrained.slice(0) });

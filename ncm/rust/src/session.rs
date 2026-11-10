@@ -122,8 +122,10 @@ pub struct TrainStats {
     pub steps: u32,
     pub tok: TokStats,
     pub gen: GenStats,
-    /// Set when this call's tokenizer steps threw away a trained generator.
-    pub generator_reset: bool,
+    /// Set when this call's tokenizer steps shifted the codes under a
+    /// trained generator. Its weights are kept as a starting point, but it
+    /// needs more training on the new codes.
+    pub generator_stale: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -309,9 +311,12 @@ impl Session {
             return Err(TrainError::NoTokenizer);
         }
         let mut out = TrainStats::default();
-        if stage == Stage::Tokenizer && self.gen_steps > 0 {
-            self.reset_generator();
-            out.generator_reset = true;
+        if stage == Stage::Tokenizer && self.gen_steps > 0 && steps > 0 {
+            // Keep the generator's weights; restart its optimiser and
+            // schedule so it can re-adapt to the codes that are about to move.
+            self.opt_gen.reset(&mut self.gen);
+            self.gen_sched = 0;
+            out.generator_stale = true;
         }
         if stage == Stage::Generator && !self.stats_fresh {
             self.refresh_code_stats();
@@ -492,18 +497,28 @@ mod tests {
     }
 
     #[test]
-    fn tokenizer_step_resets_trained_generator() {
+    fn tokenizer_step_keeps_generator_weights() {
         let mut s = tiny_session();
         s.train(Stage::Tokenizer, 2).unwrap();
         let st = s.train(Stage::Generator, 3).unwrap();
-        assert!(!st.generator_reset);
-        assert_eq!(s.gen_steps, 3);
+        assert!(!st.generator_stale);
+        let mut before = Vec::new();
+        s.gen.visit(&mut |p| before.push(p.w.clone()));
+        // More tokenizer training shifts the codes under the generator. Its
+        // weights stay as the starting point; the call only flags it.
         let st = s.train(Stage::Tokenizer, 1).unwrap();
-        assert!(st.generator_reset);
-        assert_eq!(s.gen_steps, 0);
+        assert!(st.generator_stale);
+        assert_eq!(s.gen_steps, 3);
         assert!(!s.stats_fresh);
-        // Without generator steps there is nothing to reset.
-        assert!(!s.train(Stage::Tokenizer, 1).unwrap().generator_reset);
+        let mut after = Vec::new();
+        s.gen.visit(&mut |p| after.push(p.w.clone()));
+        assert_eq!(before, after);
+        // Generator training then continues from those weights on the new codes.
+        assert!(s.train(Stage::Generator, 2).is_ok());
+        assert_eq!(s.gen_steps, 5);
+        // With no generator training there is nothing to flag.
+        let mut fresh = tiny_session();
+        assert!(!fresh.train(Stage::Tokenizer, 1).unwrap().generator_stale);
     }
 
     #[test]

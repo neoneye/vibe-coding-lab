@@ -9,7 +9,7 @@
 //!   ncm_info / ncm_init / ncm_import  u32: seed, d, codes, dec_blocks, dec_heads,
 //!       gen_blocks, gen_width, gen_heads, K, l_1..l_K, tok_steps, gen_steps,
 //!       tok_params, codebook_floats, gen_params, vocab, diverged
-//!   ncm_train   f32: steps, tok_steps, gen_steps, generator_reset,
+//!   ncm_train   f32: steps, tok_steps, gen_steps, generator_stale,
 //!       tok loss, tok recon loss, tok vq loss, tok accuracy,
 //!       gen loss, (K-1) per-level loss, (K-1) per-level accuracy
 //!   ncm_eval(0) f32: K accuracy per cutoff, K codebook utilisation
@@ -225,7 +225,7 @@ pub extern "C" fn ncm_train(stage: u32, steps: u32) -> u32 {
             Ok(r) => {
                 let mut out = Vec::new();
                 let k = s.cfg.levels.len();
-                for v in [r.steps as F, s.tok_steps as F, s.gen_steps as F, r.generator_reset as u32 as F] {
+                for v in [r.steps as F, s.tok_steps as F, s.gen_steps as F, r.generator_stale as u32 as F] {
                     put_f32(&mut out, v);
                 }
                 for v in [r.tok.loss, r.tok.recon_loss, r.tok.vq_loss, r.tok.acc, r.gen.loss] {
