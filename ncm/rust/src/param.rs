@@ -3,17 +3,12 @@
 use crate::rng::Rng;
 use crate::tape::Tape;
 use crate::F;
-use std::cell::Cell;
-
-pub const NO_ID: usize = usize::MAX;
 
 pub struct Param {
     pub w: Vec<F>,
     pub g: Vec<F>,
     pub m: Vec<F>,
     pub v: Vec<F>,
-    /// Node id on the tape this parameter was last placed on.
-    pub id: Cell<usize>,
     /// Whether weight decay applies (matrices yes, gains and biases no).
     pub decay: bool,
 }
@@ -21,7 +16,7 @@ pub struct Param {
 impl Param {
     pub fn from_vec(w: Vec<F>, decay: bool) -> Param {
         let n = w.len();
-        Param { w, g: vec![0.0 as F; n], m: vec![0.0 as F; n], v: vec![0.0 as F; n], id: Cell::new(NO_ID), decay }
+        Param { w, g: vec![0.0 as F; n], m: vec![0.0 as F; n], v: vec![0.0 as F; n], decay }
     }
     pub fn normal(n: usize, std: F, rng: &mut Rng) -> Param {
         Param::from_vec((0..n).map(|_| rng.normal() * std).collect(), true)
@@ -49,22 +44,16 @@ impl Params for Vec<Param> {
 pub fn zero_grad(model: &mut dyn Params) {
     model.visit(&mut |p| {
         p.g.iter_mut().for_each(|g| *g = 0.0 as F);
-        p.id.set(NO_ID);
     });
 }
 
 /// Adds the tape's gradients into each parameter that was placed on it.
 pub fn pull_grads(model: &mut dyn Params, tape: &Tape) {
     model.visit(&mut |p| {
-        let id = p.id.get();
-        if id != NO_ID {
-            let g = tape.grad(id);
-            if g.len() == p.g.len() {
-                for (a, b) in p.g.iter_mut().zip(g) {
-                    *a += b;
-                }
+        if let Some(g) = tape.param_grad(p) {
+            for (a, b) in p.g.iter_mut().zip(g) {
+                *a += b;
             }
-            p.id.set(NO_ID);
         }
     });
 }

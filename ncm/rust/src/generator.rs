@@ -317,6 +317,7 @@ impl Generator {
     }
 
     /// One training step's forward and backward; the caller clips and steps.
+    /// `threads` above 1 splits the batch across native threads (ignored on wasm).
     #[allow(clippy::too_many_arguments)]
     pub fn train_step(
         &mut self,
@@ -327,6 +328,7 @@ impl Generator {
         alpha: F,
         corrupt_mean: F,
         corrupt_delta: F,
+        threads: usize,
     ) -> GenStats {
         zero_grad(self);
         let cond = if corrupt_mean > 0.0 || corrupt_delta > 0.0 {
@@ -334,10 +336,64 @@ impl Generator {
         } else {
             codes.to_vec()
         };
-        let mut t = Tape::new();
-        let (root, stats) = self.loss(&mut t, tok, &cond, codes, n, alpha);
-        t.backward(root);
-        pull_grads(self, &t);
+        let shards = if cfg!(target_arch = "wasm32") { 1 } else { threads.clamp(1, n) };
+        if shards == 1 {
+            let mut t = Tape::new();
+            let (root, stats) = self.loss(&mut t, tok, &cond, codes, n, alpha);
+            t.backward(root);
+            pull_grads(self, &t);
+            return stats;
+        }
+        // Each shard computes the mean loss over its own windows; weighting
+        // by shard size gives the gradient of the mean over the whole batch.
+        let total: usize = self.levels.iter().sum();
+        let mut bounds = Vec::with_capacity(shards);
+        let mut start = 0;
+        for i in 0..shards {
+            let len = n / shards + usize::from(i < n % shards);
+            bounds.push((start, len));
+            start += len;
+        }
+        let this: &Generator = self;
+        let results: Vec<(usize, GenStats, Vec<(usize, Vec<F>)>)> = std::thread::scope(|sc| {
+            let handles: Vec<_> = bounds
+                .iter()
+                .map(|&(a, len)| {
+                    let (cond, codes) = (&cond[a * total..(a + len) * total], &codes[a * total..(a + len) * total]);
+                    sc.spawn(move || {
+                        let mut t = Tape::new();
+                        let (root, stats) = this.loss(&mut t, tok, cond, codes, len, alpha);
+                        t.backward(root);
+                        (len, stats, t.take_param_grads())
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().expect("shard panicked")).collect()
+        });
+        let np = self.levels.len() - 1;
+        let mut stats = GenStats { loss: 0.0, per_level_loss: vec![0.0; np], per_level_acc: vec![0.0; np] };
+        let mut merged: std::collections::HashMap<usize, Vec<F>> = std::collections::HashMap::new();
+        for (len, s, grads) in results {
+            let w = len as F / n as F;
+            stats.loss += w * s.loss;
+            for i in 0..np {
+                stats.per_level_loss[i] += w * s.per_level_loss[i];
+                stats.per_level_acc[i] += w * s.per_level_acc[i];
+            }
+            for (key, g) in grads {
+                match merged.get_mut(&key) {
+                    Some(acc) => axpy(w, &g, acc),
+                    None => {
+                        merged.insert(key, g.iter().map(|v| v * w).collect());
+                    }
+                }
+            }
+        }
+        self.visit(&mut |p| {
+            if let Some(g) = merged.get(&(p.w.as_ptr() as usize)) {
+                p.g.copy_from_slice(g);
+            }
+        });
         stats
     }
 
@@ -456,8 +512,25 @@ mod tests {
         assert!(err < 1e-5, "max relative error {}", err);
         // The frozen tokenizer gets no gradient.
         zero_grad(&mut tok);
-        gen.train_step(&tok, &codes, 2, &mut r, 0.0, 0.0, 0.0);
+        gen.train_step(&tok, &codes, 2, &mut r, 0.0, 0.0, 0.0, 1);
         tok.visit(&mut |p| assert!(p.g.iter().all(|g| *g == 0.0)));
+    }
+
+    #[test]
+    fn threaded_step_matches_single() {
+        let (tok, mut gen, mut r) = setup(8, 1);
+        let codes = tok.encode(&tiny_tokens(5, &mut r), 5);
+        let a = gen.train_step(&tok, &codes, 5, &mut r, 0.0, 0.0, 0.0, 1);
+        let mut single = Vec::new();
+        gen.visit(&mut |p| single.push(p.g.clone()));
+        let b = gen.train_step(&tok, &codes, 5, &mut r, 0.0, 0.0, 0.0, 3);
+        let mut multi = Vec::new();
+        gen.visit(&mut |p| multi.push(p.g.clone()));
+        assert!((a.loss - b.loss).abs() < 1e-5);
+        for (x, y) in single.iter().flatten().zip(multi.iter().flatten()) {
+            assert!((x - y).abs() < 1e-5, "{} vs {}", x, y);
+        }
+        assert!(single.iter().flatten().any(|g| g.abs() > 1e-6));
     }
 
     #[test]
@@ -543,7 +616,7 @@ mod tests {
         }
         let mut opt = AdamW::new(0.0);
         for _ in 0..600 {
-            gen.train_step(&tok, &codes, 4, &mut r, 0.0, 0.0, 0.0);
+            gen.train_step(&tok, &codes, 4, &mut r, 0.0, 0.0, 0.0, 1);
             clip_grad_norm(&mut gen, 1.0);
             opt.step(&mut gen, 3e-3);
         }

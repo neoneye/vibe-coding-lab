@@ -4,6 +4,7 @@
 use crate::ops::*;
 use crate::param::Param;
 use crate::F;
+use std::collections::HashMap;
 use std::mem::take;
 use std::rc::Rc;
 
@@ -52,6 +53,8 @@ pub struct Tape {
     grads: Vec<Vec<F>>,
     ops: Vec<Op>,
     need: Vec<bool>,
+    /// Parameters placed on this tape, keyed by the address of their weights.
+    params: HashMap<usize, Id>,
 }
 
 /// Takes the gradient buffer of `id` out of the table, allocating it on first use.
@@ -96,9 +99,35 @@ impl Tape {
         self.push(v, Op::Leaf, true)
     }
     pub fn param(&mut self, p: &Param) -> Id {
+        let key = p.w.as_ptr() as usize;
+        if let Some(&id) = self.params.get(&key) {
+            return id;
+        }
         let id = self.leaf(p.w.clone());
-        p.id.set(id);
+        self.params.insert(key, id);
         id
+    }
+    /// Gradient of a parameter placed on this tape, if it received one.
+    pub fn param_grad(&self, p: &Param) -> Option<&[F]> {
+        let id = *self.params.get(&(p.w.as_ptr() as usize))?;
+        let g = &self.grads[id];
+        if g.len() == p.w.len() {
+            Some(g)
+        } else {
+            None
+        }
+    }
+    /// All parameter gradients as (weights address, gradient), for merging
+    /// the work of several tapes.
+    pub fn take_param_grads(&mut self) -> Vec<(usize, Vec<F>)> {
+        let mut out = Vec::with_capacity(self.params.len());
+        for (&key, &id) in &self.params {
+            let g = take(&mut self.grads[id]);
+            if !g.is_empty() {
+                out.push((key, g));
+            }
+        }
+        out
     }
     pub fn detach(&mut self, a: Id) -> Id {
         let v = self.vals[a].clone();
@@ -265,7 +294,7 @@ impl Tape {
     /// Back-propagates from the one-element node `root`.
     pub fn backward(&mut self, root: Id) {
         self.grads[root] = vec![1.0 as F];
-        let Tape { vals, grads, ops, need } = self;
+        let Tape { vals, grads, ops, need, .. } = self;
         for i in (0..=root).rev() {
             if matches!(ops[i], Op::Leaf) || grads[i].is_empty() || !need[i] {
                 continue;

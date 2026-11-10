@@ -98,13 +98,19 @@ pub fn plan_strides(total: usize, base: usize) -> Vec<usize> {
 
 /// Nearest codebook row for each row of `x`.
 pub fn nearest(x: &[F], emb: &[F], d: usize) -> Vec<u32> {
+    let codes = emb.len() / d;
     let sq: Vec<F> = emb.chunks_exact(d).map(|e| dot(e, e)).collect();
+    // score[row, code] = x . e, as one matrix product against E^T.
+    let et = transpose(emb, codes, d);
+    let mut score = vec![0.0 as F; codes];
     x.chunks_exact(d)
         .map(|xr| {
+            score.iter_mut().for_each(|v| *v = 0.0 as F);
+            lin_acc(xr, &et, d, codes, &mut score);
             let mut best = 0;
             let mut bd = F::INFINITY;
-            for (j, e) in emb.chunks_exact(d).enumerate() {
-                let dist = sq[j] - 2.0 * dot(xr, e);
+            for j in 0..codes {
+                let dist = sq[j] - 2.0 * score[j];
                 if dist < bd {
                     bd = dist;
                     best = j;
@@ -409,6 +415,21 @@ impl Quant {
             axpy(1.0 as F, &c, &mut z_hat);
         }
         z_hat
+    }
+
+    /// Recomputes the EMA sums from the codebooks and counts (a checkpoint
+    /// stores only those two; emb = ema_w / smoothed(count)).
+    pub fn rebuild_ema_sums(&mut self) {
+        let (d, v) = (self.d, self.codes);
+        for i in 0..self.levels.len() {
+            let n: F = self.ema_cs[i].iter().sum();
+            for j in 0..v {
+                let smoothed = (self.ema_cs[i][j] + EMA_EPS) / (n + v as F * EMA_EPS) * n;
+                for ch in 0..d {
+                    self.ema_w[i][j * d + ch] = self.emb[i][j * d + ch] * smoothed;
+                }
+            }
+        }
     }
 
     /// The raw state that a checkpoint must carry besides the parameters.

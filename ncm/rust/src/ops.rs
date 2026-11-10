@@ -35,8 +35,23 @@ pub fn axpy(a: F, x: &[F], y: &mut [F]) {
 #[inline]
 fn tap_fwd(xrow: &[F], w: &[F], yrow: &mut [F]) {
     let dout = yrow.len();
-    for (k, &xk) in xrow.iter().enumerate() {
-        axpy(xk, &w[k * dout..(k + 1) * dout], yrow);
+    let din = xrow.len();
+    let mut k = 0;
+    // Four input channels per pass: one load/store of y for four products.
+    while k + 4 <= din {
+        let (x0, x1, x2, x3) = (xrow[k], xrow[k + 1], xrow[k + 2], xrow[k + 3]);
+        let w0 = &w[k * dout..(k + 1) * dout];
+        let w1 = &w[(k + 1) * dout..(k + 2) * dout];
+        let w2 = &w[(k + 2) * dout..(k + 3) * dout];
+        let w3 = &w[(k + 3) * dout..(k + 4) * dout];
+        for j in 0..dout {
+            yrow[j] += x0 * w0[j] + x1 * w1[j] + x2 * w2[j] + x3 * w3[j];
+        }
+        k += 4;
+    }
+    while k < din {
+        axpy(xrow[k], &w[k * dout..(k + 1) * dout], yrow);
+        k += 1;
     }
 }
 
@@ -55,17 +70,68 @@ fn tap_bwd(xrow: &[F], w: &[F], dyrow: &[F], dxrow: Option<&mut [F]>, dw: Option
     }
 }
 
+/// y[rows, dout] += x[rows, din] . w[din, dout]
+pub fn lin_acc(x: &[F], w: &[F], din: usize, dout: usize, y: &mut [F]) {
+    for (xr, yr) in x.chunks_exact(din).zip(y.chunks_exact_mut(dout)) {
+        tap_fwd(xr, w, yr);
+    }
+}
+
+/// w[din, dout] -> [dout, din]
+pub fn transpose(w: &[F], din: usize, dout: usize) -> Vec<F> {
+    let mut t = vec![0.0 as F; w.len()];
+    for k in 0..din {
+        for j in 0..dout {
+            t[j * din + k] = w[k * dout + j];
+        }
+    }
+    t
+}
+
+/// Backward of `lin_acc`: dx += dy . w^T and dw += x^T . dy.
+pub fn lin_bwd(x: &[F], w: &[F], dy: &[F], din: usize, dout: usize, dx: Option<&mut [F]>, dw: Option<&mut [F]>) {
+    let rows = x.len() / din;
+    if let Some(dx) = dx {
+        let wt = transpose(w, din, dout);
+        lin_acc(dy, &wt, dout, din, dx);
+    }
+    if let Some(dw) = dw {
+        // dW[k, :] += sum_i x[i, k] * dy[i, :], four rows of the batch per pass.
+        let mut i = 0;
+        while i + 4 <= rows {
+            let d0 = &dy[i * dout..(i + 1) * dout];
+            let d1 = &dy[(i + 1) * dout..(i + 2) * dout];
+            let d2 = &dy[(i + 2) * dout..(i + 3) * dout];
+            let d3 = &dy[(i + 3) * dout..(i + 4) * dout];
+            for k in 0..din {
+                let (x0, x1, x2, x3) = (x[i * din + k], x[(i + 1) * din + k], x[(i + 2) * din + k], x[(i + 3) * din + k]);
+                let dwr = &mut dw[k * dout..(k + 1) * dout];
+                for j in 0..dout {
+                    dwr[j] += x0 * d0[j] + x1 * d1[j] + x2 * d2[j] + x3 * d3[j];
+                }
+            }
+            i += 4;
+        }
+        while i < rows {
+            let dyr = &dy[i * dout..(i + 1) * dout];
+            for k in 0..din {
+                axpy(x[i * din + k], dyr, &mut dw[k * dout..(k + 1) * dout]);
+            }
+            i += 1;
+        }
+    }
+}
+
 /// y[rows, dout] = x[rows, din] . w[din, dout] + b
 pub fn linear_fwd(x: &[F], w: &[F], b: Option<&[F]>, din: usize, dout: usize) -> Vec<F> {
     let rows = x.len() / din;
     let mut y = vec![0.0 as F; rows * dout];
-    for i in 0..rows {
-        let yr = &mut y[i * dout..(i + 1) * dout];
-        if let Some(b) = b {
+    if let Some(b) = b {
+        for yr in y.chunks_exact_mut(dout) {
             yr.copy_from_slice(b);
         }
-        tap_fwd(&x[i * din..(i + 1) * din], w, yr);
     }
+    lin_acc(x, w, din, dout, &mut y);
     y
 }
 
@@ -75,24 +141,14 @@ pub fn linear_bwd(
     dy: &[F],
     din: usize,
     dout: usize,
-    mut dx: Option<&mut [F]>,
-    mut dw: Option<&mut [F]>,
+    dx: Option<&mut [F]>,
+    dw: Option<&mut [F]>,
     db: Option<&mut [F]>,
 ) {
-    let rows = x.len() / din;
-    for i in 0..rows {
-        let dyr = &dy[i * dout..(i + 1) * dout];
-        tap_bwd(
-            &x[i * din..(i + 1) * din],
-            w,
-            dyr,
-            dx.as_deref_mut().map(|d| &mut d[i * din..(i + 1) * din]),
-            dw.as_deref_mut(),
-        );
-    }
+    lin_bwd(x, w, dy, din, dout, dx, dw);
     if let Some(db) = db {
-        for i in 0..rows {
-            axpy(1.0 as F, &dy[i * dout..(i + 1) * dout], db);
+        for dyr in dy.chunks_exact(dout) {
+            axpy(1.0 as F, dyr, db);
         }
     }
 }
@@ -269,21 +325,26 @@ pub fn gelu_bwd(x: &[F], dy: &[F], dx: &mut [F]) {
 /// (tap, in, out); tap 0 reads position t-1.
 pub fn conv3_fwd(x: &[F], w: &[F], b: &[F], n: usize, l: usize, c: usize) -> Vec<F> {
     let mut y = vec![0.0 as F; x.len()];
+    for yr in y.chunks_exact_mut(c) {
+        yr.copy_from_slice(b);
+    }
     for s in 0..n {
-        for t in 0..l {
-            let yr = &mut y[(s * l + t) * c..(s * l + t + 1) * c];
-            yr.copy_from_slice(b);
-            for tap in 0..3 {
-                let src = t as isize + tap as isize - 1;
-                if src < 0 || src >= l as isize {
-                    continue;
-                }
-                let xi = (s * l + src as usize) * c;
-                tap_fwd(&x[xi..xi + c], &w[tap * c * c..(tap + 1) * c * c], yr);
-            }
+        for tap in 0..3 {
+            let (xa, ya, len) = conv3_range(tap, l);
+            let (xo, yo) = ((s * l + xa) * c, (s * l + ya) * c);
+            lin_acc(&x[xo..xo + len * c], &w[tap * c * c..(tap + 1) * c * c], c, c, &mut y[yo..yo + len * c]);
         }
     }
     y
+}
+
+/// For a tap: first input position, first output position, run length.
+fn conv3_range(tap: usize, l: usize) -> (usize, usize, usize) {
+    match tap {
+        0 => (0, 1, l - 1),
+        1 => (0, 0, l),
+        _ => (1, 0, l - 1),
+    }
 }
 
 pub fn conv3_bwd(
@@ -297,24 +358,22 @@ pub fn conv3_bwd(
     dw: &mut [F],
     db: &mut [F],
 ) {
+    for dyr in dy.chunks_exact(c) {
+        axpy(1.0 as F, dyr, db);
+    }
     for s in 0..n {
-        for t in 0..l {
-            let dyr = &dy[(s * l + t) * c..(s * l + t + 1) * c];
-            axpy(1.0 as F, dyr, db);
-            for tap in 0..3 {
-                let src = t as isize + tap as isize - 1;
-                if src < 0 || src >= l as isize {
-                    continue;
-                }
-                let xi = (s * l + src as usize) * c;
-                tap_bwd(
-                    &x[xi..xi + c],
-                    &w[tap * c * c..(tap + 1) * c * c],
-                    dyr,
-                    dx.as_deref_mut().map(|d| &mut d[xi..xi + c]),
-                    Some(&mut dw[tap * c * c..(tap + 1) * c * c]),
-                );
-            }
+        for tap in 0..3 {
+            let (xa, ya, len) = conv3_range(tap, l);
+            let (xo, yo) = ((s * l + xa) * c, (s * l + ya) * c);
+            lin_bwd(
+                &x[xo..xo + len * c],
+                &w[tap * c * c..(tap + 1) * c * c],
+                &dy[yo..yo + len * c],
+                c,
+                c,
+                dx.as_deref_mut().map(|d| &mut d[xo..xo + len * c]),
+                Some(&mut dw[tap * c * c..(tap + 1) * c * c]),
+            );
         }
     }
 }
