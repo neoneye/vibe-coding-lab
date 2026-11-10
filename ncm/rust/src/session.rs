@@ -160,6 +160,11 @@ pub struct Session {
     pub rng: Rng,
     pub tok_steps: u32,
     pub gen_steps: u32,
+    /// Steps taken in this session per stage. The learning-rate schedule
+    /// runs on these, so a loaded checkpoint warms up and decays afresh
+    /// instead of continuing at the floor its saved step count implies.
+    tok_sched: u32,
+    gen_sched: u32,
     /// The code statistics (`l1`, `unigram`) match the current tokenizer.
     pub stats_fresh: bool,
     pub diverged: bool,
@@ -189,6 +194,8 @@ impl Session {
             rng,
             tok_steps: 0,
             gen_steps: 0,
+            tok_sched: 0,
+            gen_sched: 0,
             stats_fresh: false,
             diverged: false,
             threads: 1,
@@ -214,6 +221,16 @@ impl Session {
         self.gen = Generator::new(self.cfg.gen(), &self.tok, &mut self.rng);
         self.opt_gen = AdamW::new(0.01);
         self.gen_steps = 0;
+        self.gen_sched = 0;
+    }
+
+    /// The learning rate the next step of `stage` will use.
+    pub fn current_lr(&self, stage: Stage) -> F {
+        let (step, peak) = match stage {
+            Stage::Tokenizer => (self.tok_sched, self.hp.lr_tok),
+            Stage::Generator => (self.gen_sched, self.hp.lr_gen),
+        };
+        lr_at(step, self.hp.warmup, self.hp.total_steps, peak, 0.1)
     }
 
     /// Everything a divergence must be able to roll back.
@@ -351,16 +368,18 @@ impl Session {
             match stage {
                 Stage::Tokenizer => {
                     clip_grad_norm(&mut self.tok, 1.0);
-                    let lr = lr_at(self.tok_steps, self.hp.warmup, self.hp.total_steps, self.hp.lr_tok, 0.1);
+                    let lr = self.current_lr(stage);
                     self.opt_tok.step(&mut self.tok, lr);
                     self.tok_steps += 1;
+                    self.tok_sched += 1;
                     self.stats_fresh = false;
                 }
                 Stage::Generator => {
                     clip_grad_norm(&mut self.gen, 1.0);
-                    let lr = lr_at(self.gen_steps, self.hp.warmup, self.hp.total_steps, self.hp.lr_gen, 0.1);
+                    let lr = self.current_lr(stage);
                     self.opt_gen.step(&mut self.gen, lr);
                     self.gen_steps += 1;
+                    self.gen_sched += 1;
                 }
             }
             out.steps += 1;
@@ -445,6 +464,24 @@ mod tests {
         assert_eq!(s.train(Stage::Generator, 1).err(), Some(TrainError::NoTokenizer));
         s.train(Stage::Tokenizer, 1).unwrap();
         assert!(s.train(Stage::Generator, 1).is_ok());
+    }
+
+    #[test]
+    fn schedule_restarts_for_a_loaded_checkpoint() {
+        // total_steps is 50 in the tiny session; train past it so the
+        // persisted counter sits on the schedule's floor.
+        let mut s = tiny_session();
+        s.train(Stage::Tokenizer, 60).unwrap();
+        assert!((s.current_lr(Stage::Tokenizer) - 0.1 * s.hp.lr_tok).abs() < 1e-9);
+        let mut t = crate::checkpoint::load(&crate::checkpoint::save(&mut s)).unwrap();
+        t.set_hparams(s.hp.clone());
+        assert_eq!(t.tok_steps, 60);
+        // A loaded model starts its own schedule: warmup from zero, then the peak.
+        assert_eq!(t.current_lr(Stage::Tokenizer), 0.0);
+        t.set_corpus(&"the cat sat on a mat\n".repeat(400)).unwrap();
+        t.train(Stage::Tokenizer, 2).unwrap();
+        assert!((t.current_lr(Stage::Tokenizer) - t.hp.lr_tok).abs() < 1e-9);
+        assert_eq!(t.tok_steps, 62);
     }
 
     #[test]

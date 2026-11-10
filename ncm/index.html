@@ -126,8 +126,9 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
     <p class="note">The tokenizer trains at several steps a second here. The generator is much heavier: expect a second or more per step, so the shipped checkpoint (trained offline for 6,000 steps) is the one to explore.</p>
 
     <div class="sep">
-      <div class="row"><label for="lr">Learning rate (selected stage)</label><span class="val" id="lrVal"></span></div>
+      <div class="row"><label for="lr">Peak learning rate (selected stage)</label><span class="val" id="lrVal"></span></div>
       <input type="range" id="lr" min="1" max="50" value="10">
+      <p class="note">The rate warms up over 50 steps, then decays to a tenth of the peak over 6,000 steps, counted from when the model was loaded or reset.</p>
       <div class="row"><label for="batch">Batch size</label><span class="val" id="batchVal"></span></div>
       <input type="range" id="batch" min="4" max="64" step="4" value="16">
       <div class="row"><label for="fineDrop">Nested dropout (tokenizer)</label><span class="val" id="fineDropVal"></span></div>
@@ -286,7 +287,7 @@ canvas { display: block; width: 100%; background: var(--well); border-radius: 6p
       </ul>
 
       <h3>What the numbers mean, and what to expect</h3>
-      <p>All "held-out" numbers are measured on the last 5&nbsp;% of the text, which is never used for training. The shipped checkpoint was trained offline with the same Rust code: <span id="pretrainedNumbers">its numbers appear above when the page loads</span>.</p>
+      <p>All "held-out" numbers are measured on the last 5&nbsp;% of the selected training text, which training on that selection never uses. If you switch the text without retraining, that slice may be text the current weights have already seen, so the numbers are only clean for the selection the model was trained on. The shipped checkpoint was trained offline with the same Rust code: <span id="pretrainedNumbers">its numbers appear above when the page loads</span>.</p>
       <p>This is a toy. With about a million weights and characters instead of word pieces, the output is word-shaped and often contains real English words, but it is not coherent prose, and nothing here reproduces the paper's quality or speed results. The page makes no speed comparison; it only counts forward passes.</p>
 
       <h3>Sources</h3>
@@ -855,7 +856,7 @@ $("start").onclick = async () => {
   await pushHparams();
   state.running = true;
   setButtons();
-  trainLoop();
+  state.loop = trainLoop();
 };
 $("pause").onclick = () => { state.running = false; $("pause").disabled = true; };
 
@@ -864,10 +865,12 @@ function resetCharts() {
   drawChart("tok"); drawChart("gen");
   $("sps").textContent = "–";
 }
+// Stops training and waits until the loop, including the evaluation it
+// runs after the last step, has finished, so nothing from the old model is
+// drawn over the new one.
 async function stopTraining() {
-  if (!state.running) return;
   state.running = false;
-  while ($("start").disabled) await new Promise((r) => setTimeout(r, 30));
+  if (state.loop) { try { await state.loop; } catch (err) { /* reported by the loop */ } state.loop = null; }
 }
 $("reset").onclick = async () => {
   await stopTraining();
@@ -924,9 +927,15 @@ async function applyCorpus() {
   if (state.M && state.M.tokSteps > 0) { await evalStage("tok"); await evalStage("gen"); await loadHists(); }
   return true;
 }
+// The held-out slice is the tail of the selected text. It is only unseen if
+// the current weights were not trained on a text that contains it.
+function corpusNote() {
+  if (!state.M || state.M.tokSteps === 0) return;
+  showMsg("The held-out numbers now use the last 5% of this text. They are only truly held-out if the current weights were trained on this same selection: the shipped checkpoint was trained on Frankenstein + Shakespeare, so with any other selection it may be scored on text it has seen (or never learned from).", false);
+}
 let prevCorpus = "both";
 $("corpus").addEventListener("change", async () => {
-  if (await applyCorpus()) prevCorpus = $("corpus").value; else $("corpus").value = prevCorpus;
+  if (await applyCorpus()) { prevCorpus = $("corpus").value; if (prevCorpus !== "both") corpusNote(); else showMsg(""); } else $("corpus").value = prevCorpus;
 });
 async function useUpload(file) {
   if (!state.ready || !file) return;
