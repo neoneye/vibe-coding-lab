@@ -56,6 +56,11 @@
   pre.hex .m { color: #6d6658; font-weight: 700; } pre.hex .j { color: #9a9385; }
   pre.hex .oa { text-decoration: underline 2px var(--a); } pre.hex .ob { text-decoration: underline 2px var(--b); } pre.hex .om { background: #f6c7c3; }
   .genes div { font-size: 12.5px; }
+  #labCanvas { display: block; width: 100%; image-rendering: pixelated; background: var(--paper); }
+  .labsteps { margin: 8px 0 0; padding-left: 22px; font-size: 13.5px; }
+  .labsteps li { padding: 2px 6px; }
+  .labsteps li.cur { background: #fff6d0; font-weight: 700; }
+  .labsteps li.later { color: var(--muted); opacity: 0.55; }
   .tree { display: grid; gap: 6px; }
   .tree .lvl { display: grid; gap: 4px; }
   .tree button { font: 11.5px var(--ui); background: var(--paper); border: 1px solid var(--win-lo); padding: 2px 3px; cursor: pointer; display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; white-space: nowrap; color: var(--ink); }
@@ -134,6 +139,27 @@
         <div><div class="verdict" id="verdict"></div><div class="planlist" id="planlist"></div></div>
         <div class="checks" id="checks"></div>
       </div>
+    </div>
+  </div>
+
+  <div class="win" style="margin-top:14px">
+    <div class="bar"><span>Reproduction lab: mix(A, B) one step at a time</span><span class="dots">▪▪▪</span></div>
+    <div class="body">
+      <div class="controls" style="margin-bottom:6px">
+        <label>Parent A <select id="labA"></select></label>
+        <label>Parent B <select id="labB"></select></label>
+        <label>Breeding <select id="labMode"><option value="aligned">Life's way</option><option value="naive">Naive splicing</option></select></label>
+        <label><input type="checkbox" id="labFit" checked> Fit check</label>
+        <button class="btn" id="labNew">New conception</button>
+      </div>
+      <div class="controls" style="margin-bottom:6px">
+        <button class="btn" id="labBack">Back</button>
+        <button class="btn" id="labNext">Next step</button>
+        <button class="btn" id="labAll">Show all steps</button>
+        <span class="note">Creatures you click in a world are added to the parent lists.</span>
+      </div>
+      <canvas id="labCanvas" width="1200" height="330" aria-label="The lab's two parent genomes and their child"></canvas>
+      <ol class="labsteps" id="labSteps"></ol>
     </div>
   </div>
 
@@ -784,6 +810,41 @@ const TP = (() => {
     return out;
   }
 
+  // The reproduction lab: one conception, explained step by step. Gene steps carry childEnd, the index in the
+  // child just after the last byte placed so far, so the drawing can reveal the child gene by gene.
+  function labSteps(A, B, res, mode) {
+    const c = res.conception, hx = (v) => v.toString(16).padStart(2, '0');
+    const name = (t) => (t === null ? 'broken gene' : TYPE_NAMES[t] + ' gene');
+    const steps = [{ kind: 'parents', text: `Parent A has ${A.length} bytes and ${parse(A).genes.filter((g) => !g.broken).length} working genes; parent B has ${B.length} bytes and ${parse(B).genes.filter((g) => !g.broken).length} working genes.` }];
+    if (mode === 'naive') {
+      steps.push({ kind: 'cut', text: `Cut A after byte ${c.cutA} and B before byte ${c.cutB}, then glue the front of A to the back of B. The cuts ignore where genes begin and end.`, childEnd: c.bytes.length });
+    } else {
+      const mix = express([A, B][c.usedMixOf]).mix, who = 'AB'[c.usedMixOf];
+      steps.push({ kind: 'coin', text: `Coin flip: parent ${who}'s mix gene rules this conception. ${mix.cuts ? `It makes ${mix.cuts} cut${mix.cuts === 1 ? '' : 's'}, and each block between cuts` : 'Each gene'} comes from ${who} with a ${Math.round((mix.share / 255) * 100)} % chance. The child also inherits this mix gene.` });
+      const segs = [segments(A), segments(B)];
+      let end = 0;
+      c.plan.forEach((slot) => {
+        if (slot.from === null) {
+          steps.push({ kind: 'gene', text: `The ${name(slot.type)} slot is empty: the parent chosen for it does not have this gene.`, childEnd: end });
+          return;
+        }
+        const key = (slot.type === null ? 'x' : String(slot.type)) + '#' + slot.occurrence;
+        const seg = segs[slot.from].segs.find((x) => x.key === key);
+        for (let k = 0; k < c.bytes.length; k++) if (c.origin[k] === slot.from && c.source[k] >= seg.from && c.source[k] < seg.to) end = Math.max(end, k + 1);
+        steps.push({ kind: 'gene', text: `The ${name(slot.type)}${slot.occurrence ? ' (copy ' + (slot.occurrence + 1) + ')' : ''} comes from parent ${'AB'[slot.from]}, with the junk bytes in front of it.`, childEnd: end });
+      });
+    }
+    steps.push({ kind: 'mutations', text: c.mutations.length ? `${c.mutations.length} mutation${c.mutations.length === 1 ? '' : 's'}: ${c.mutations.map((m) => m.kind + (m.from !== undefined ? ` ${hx(m.from)}→${hx(m.to)}` : '')).join(', ')}.` : 'No mutations this time.' });
+    if (res.fit) {
+      const bad = res.fit.checks.filter((x) => !x.ok);
+      steps.push({ kind: 'fit', text: res.fit.checks.length === 0 ? 'The child has no rules, so there is nothing to check.'
+        : bad.length === 0 ? `Lock and key: all ${res.fit.checks.length} rules bind a sense.`
+        : `Lock and key: ${bad.map((x) => `the ${x.rule.kind} lock ${hx(x.lock)} finds no ${x.rule.kind === 'forage' ? 'nose' : 'eye'} key within 8`).join('; ')}.` });
+    }
+    steps.push({ kind: 'verdict', born: res.born, text: res.born ? (mode === 'naive' ? 'Born. Naive splicing checks nothing; whether it can live is up to the world.' : 'Born: every piece fits.') : 'Not born: pieces that do not fit are stopped before birth.' });
+    return steps;
+  }
+
   // One line about a creature, alive or dead.
   function statusLine(world, id) {
     const c = world.byId.get(id);
@@ -865,7 +926,7 @@ const TP = (() => {
   ];
 
   return { GRID, START, END, TOLERANCE, T, SETTINGS, TYPE_NAMES, DEFAULT_MIX, DEFAULT_BODY,
-    parse, express, fits, bindSensor, encodeGene, rng, hex, FOUNDERS, mutate, segments, mixAligned, mixNaive, conceive, World, P, tickCost, senseCells, experiment, gardenScore, pedigree, statusLine, MAX_GENOME };
+    parse, express, fits, bindSensor, encodeGene, rng, hex, FOUNDERS, mutate, segments, mixAligned, mixNaive, conceive, World, P, tickCost, senseCells, experiment, gardenScore, pedigree, statusLine, MAX_GENOME, labSteps };
 })();
 
 const TPTests = {
@@ -873,7 +934,7 @@ const TPTests = {
     let pass = 0, fail = 0;
     const ok = (c, name = '') => { if (c) pass++; else { fail++; console.error('FAIL', name, new Error().stack.split('\n')[2]); } };
     const eq = (a, b, name = '') => { ok(a === b, `${name} got ${JSON.stringify(a)} want ${JSON.stringify(b)}`); };
-    const tests = [this.genome, this.reproduction, this.world, this.experiment, this.pedigree, this.review];
+    const tests = [this.genome, this.reproduction, this.world, this.experiment, this.pedigree, this.review, this.lab];
     for (const t of tests) {
       try { t(ok, eq); } catch (e) { fail++; console.error('ERROR in', t.name, e.message); }
     }
@@ -1099,6 +1160,30 @@ const TPTests = {
     eq(TP.pedigree(w, 999999, 2)[0][0], null, 'unknown id');
     // a child's record keeps its conception, so the birth panel can show it after the parents die
     ok(child.conception && child.conception.plan.length > 0 && child.fit && child.origin.length === child.bytes.length, 'record keeps the conception');
+  },
+
+  // The reproduction lab: mix(A, B) one step at a time.
+  lab(ok, eq) {
+    const [S, V, U] = TP.FOUNDERS.map((f) => f.bytes);
+    const R = TP.rng(11);
+    const res = TP.conceive(S, V, 'aligned', R);
+    const steps = TP.labSteps(S, V, res, 'aligned');
+    eq(steps[0].kind, 'parents'); eq(steps[1].kind, 'coin');
+    const genes = steps.filter((x) => x.kind === 'gene');
+    eq(genes.length, res.conception.plan.length, 'one step per gene slot');
+    for (let k = 1; k < genes.length; k++) ok(genes[k].childEnd >= genes[k - 1].childEnd, 'genes fill the child in order');
+    ok(genes.every((g) => g.childEnd <= res.conception.bytes.length), 'gene ends inside the child');
+    eq(steps.slice(-3).map((x) => x.kind).join(), 'mutations,fit,verdict');
+    ok(steps.every((x) => typeof x.text === 'string' && x.text.length > 0), 'every step says something');
+    eq(steps[steps.length - 1].born, res.born);
+    // naive: the cut, then mutations and the verdict, no fit check
+    const rn = TP.conceive(S, U, 'naive', R);
+    eq(TP.labSteps(S, U, rn, 'naive').map((x) => x.kind).join(), 'parents,cut,mutations,verdict');
+    // an incompatible pair can fail, and the fit step says which lock found no key
+    let failedRes = null;
+    for (let i = 0; i < 100 && !failedRes; i++) { const r = TP.conceive(S, U, 'aligned', R); if (!r.born) failedRes = r; }
+    const fs = TP.labSteps(S, U, failedRes, 'aligned');
+    ok(/finds no (nose|eye) key/.test(fs.find((x) => x.kind === 'fit').text) && fs[fs.length - 1].born === false, 'failure explained');
   },
 
   // Findings of the final review, each pinned by a test.
@@ -1396,34 +1481,48 @@ const TPTests = {
 
   function drawBirth(now) {
     const rec = state.shown;
+    if (!rec) { drawConception(birthCanvas, null, 0, { empty: 'Waiting for the first conception…' }); return; }
+    if (state.birthPausedAt !== null) now = state.birthPausedAt;
+    const p = reduceMotion ? 1 : Math.min(1, (now - state.birthStart) / ANIM);
+    const w = state.worlds[rec.wi];
+    const lineageOf = (id) => (id ? (w.records.get(id) || {}).lineage : null);
+    drawConception(birthCanvas, rec, p, {
+      labels: [`Parent A  #${rec.parents[0]}`, `Parent B  #${rec.parents[1]}`, rec.born ? `Child  #${rec.childId}` : 'Child (not born)'],
+      lineages: [lineageOf(rec.parents[0]), lineageOf(rec.parents[1]), lineageOf(rec.childId)],
+    });
+    if (p >= 1 && state.follow && now - state.birthStart > ANIM + HOLD) {
+      const lc = state.worlds[state.birthWorld].lastConception;
+      if (lc && lc !== rec.source) showConception({ ...lc, wi: state.birthWorld, source: lc });
+    }
+  }
+
+  // Draw A + B -> C on a canvas at progress p (0..1). opts: labels, lineages, limit (child bytes shown), empty text.
+  function drawConception(canvas, rec, p, opts = {}) {
     const dpr = window.devicePixelRatio || 1;
-    const cssW = birthCanvas.clientWidth || 1000;
-    const x = birthCanvas.getContext('2d');
+    const cssW = canvas.clientWidth || 1000;
+    const x = canvas.getContext('2d');
     if (!rec) {
-      birthCanvas.style.height = '120px';
-      birthCanvas.width = Math.round(cssW * dpr); birthCanvas.height = Math.round(120 * dpr);
+      canvas.style.height = '120px';
+      canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(120 * dpr);
       x.setTransform(dpr, 0, 0, dpr, 0, 0);
       x.fillStyle = '#f7f3e8'; x.fillRect(0, 0, cssW, 120);
       x.fillStyle = '#5a554b'; x.font = '14px Tahoma, Verdana, sans-serif';
-      x.fillText('Waiting for the first conception…', 16, 60);
+      x.fillText(opts.empty || '', 16, 60);
       return;
     }
+    const limit = opts.limit === undefined ? Infinity : opts.limit;
     const A = rec.parentBytes[0], B = rec.parentBytes[1], C = rec.conception.bytes;
     const L = birthLayout(cssW, [A.length, B.length, C.length]);
     const hpx = Math.round(L.height * dpr);
-    if (birthCanvas.width !== Math.round(cssW * dpr) || birthCanvas.height !== hpx) {
-      birthCanvas.width = Math.round(cssW * dpr); birthCanvas.height = hpx; birthCanvas.style.height = `${L.height}px`;
+    if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== hpx) {
+      canvas.width = Math.round(cssW * dpr); canvas.height = hpx; canvas.style.height = `${L.height}px`;
     }
     x.setTransform(dpr, 0, 0, dpr, 0, 0);
     x.imageSmoothingEnabled = false;
     x.fillStyle = '#f7f3e8'; x.fillRect(0, 0, cssW, L.height);
-    if (state.birthPausedAt !== null) now = state.birthPausedAt;
-    const p = reduceMotion ? 1 : Math.min(1, (now - state.birthStart) / ANIM);
     const maps = [geneMap(A), geneMap(B), geneMap(C)];
     const cellXY = (k, i) => { const b = L.boxes[k]; return [b.x + (i % L.per) * L.cs, b.y + 40 + Math.floor(i / L.per) * L.cs]; };
-    const w = state.worlds[rec.wi];
-    const labels = [`Parent A  #${rec.parents[0]}`, `Parent B  #${rec.parents[1]}`, rec.born ? `Child  #${rec.childId}` : 'Child (not born)'];
-    const lineageOf = (id) => (w.records.get(id) || {}).lineage;
+    const labels = opts.labels || ['Parent A', 'Parent B', 'Child'];
     for (let k = 0; k < 3; k++) {
       const b = L.boxes[k];
       x.fillStyle = k < 2 ? PARENT[k] : '#3a362f';
@@ -1433,9 +1532,8 @@ const TPTests = {
       x.fillStyle = '#5a554b';
       const bytes = [A, B, C][k];
       x.fillText(`${bytes.length} bytes, ${maps[k].genes.filter((g) => !g.broken).length} genes`, b.x + 34, b.y + 33);
-      const id = k < 2 ? rec.parents[k] : rec.childId;
-      const lin = id ? lineageOf(id) : null;
-      if (lin && (k < 2 || p > 0.85)) x.drawImage(sprite(TP.express(bytes), creatureColor(lin, 0, 50), 32), b.x, b.y + 4);
+      const lin = opts.lineages ? opts.lineages[k] : null;
+      if (lin && (k < 2 || (p > 0.85 && rec.born))) x.drawImage(sprite(TP.express(bytes), creatureColor(lin, 0, 50), 32), b.x, b.y + 4);
     }
     // arrow between parents and child (wide layout)
     if (L.boxes[2].x > L.boxes[1].x) {
@@ -1457,6 +1555,7 @@ const TPTests = {
     for (let i = 0; i < C.length; i++) {
       const [tx, ty] = cellXY(2, i);
       x.strokeStyle = '#c9c3b6'; x.lineWidth = 1; x.strokeRect(tx + 0.5, ty + 0.5, L.cs - 2, L.cs - 2);
+      if (i >= limit) continue;
       const start = t0 + (t1 - t0) * 0.8 * (i / Math.max(1, C.length));
       const f = Math.max(0, Math.min(1, (p - start) / ((t1 - t0) * 0.2)));
       if (f <= 0) continue;
@@ -1511,10 +1610,6 @@ const TPTests = {
         x.fillStyle = `rgba(150,150,150,${0.9 - q * 0.4})`;
         for (let k = 0; k < 7; k++) { const a = (k / 7) * Math.PI * 2; x.beginPath(); x.arc(ex + 19 + Math.cos(a) * 10 * (0.6 + q), ey + 20 + Math.sin(a) * 8 * (0.6 + q), 7, 0, Math.PI * 2); x.fill(); }
       }
-    }
-    if (p >= 1 && state.follow && now - state.birthStart > ANIM + HOLD) {
-      const lc = state.worlds[state.birthWorld].lastConception;
-      if (lc && lc !== rec.source) showConception({ ...lc, wi: state.birthWorld, source: lc });
     }
   }
 
@@ -1656,10 +1751,88 @@ const TPTests = {
     if (!best) return;
     state.selected = { wi, id: best.id };
     renderSelection();
+    labPick(wi, best.id);
     const c = conceptionOf(wi, best.id);
     if (c) { state.follow = false; $('follow').classList.remove('on'); showConception(c); $('birthNote').textContent = `Showing how #${best.id} was conceived. Press "Follow latest" to go back.`; }
     else $('birthNote').textContent = `#${best.id} is a founder: it has no parents.`;
   }
+
+  // ---------- reproduction lab ----------
+  const lab = { picked: [], res: null, steps: [], idx: 0, seed: 1, A: null, B: null, garden: null };
+  function labPool() {
+    const founders = TP.FOUNDERS.map((f, k) => ({ key: 'f' + k, label: `${f.name} (founder)`, bytes: f.bytes, lineage: TP.FOUNDERS.map((_, j) => (j === k ? 1 : 0)) }));
+    return [...founders, ...lab.picked];
+  }
+  function renderLabSelects() {
+    const pool = labPool();
+    for (const [id, def] of [['labA', 'f0'], ['labB', 'f1']]) {
+      const sel = $(id), keep = sel.value || def;
+      sel.innerHTML = pool.map((p) => `<option value="${p.key}">${esc(p.label)}</option>`).join('');
+      sel.value = pool.some((p) => p.key === keep) ? keep : def;
+    }
+  }
+  function labPick(wi, id) {
+    const r = state.worlds[wi].records.get(id);
+    if (!r) return;
+    const key = `w${wi}-${id}`;
+    lab.picked = [{ key, label: `#${id} from ${MODE_NAMES[wi].toLowerCase()}`, bytes: r.bytes, lineage: r.lineage }, ...lab.picked.filter((p) => p.key !== key)].slice(0, 8);
+    renderLabSelects();
+  }
+  function labNew() {
+    const pool = labPool();
+    lab.A = pool.find((p) => p.key === $('labA').value) || pool[0];
+    lab.B = pool.find((p) => p.key === $('labB').value) || pool[1];
+    const mode = $('labMode').value;
+    lab.res = TP.conceive(lab.A.bytes, lab.B.bytes, mode, TP.rng(1000 + lab.seed++), { fitCheck: $('labFit').checked, mixEvolves: true });
+    lab.steps = TP.labSteps(lab.A.bytes, lab.B.bytes, lab.res, mode);
+    lab.idx = 0;
+    lab.garden = null;
+    renderLab();
+  }
+  function labView() {
+    const st = lab.steps[lab.idx], n = lab.res.conception.bytes.length;
+    switch (st.kind) {
+      case 'parents': return { p: 0.06, limit: 0 };
+      case 'coin': return { p: 0.12, limit: 0 };
+      case 'cut': return { p: 0.62, limit: n };
+      case 'gene': return { p: 0.62, limit: st.childEnd };
+      case 'mutations': return { p: 0.62, limit: n };
+      case 'fit': return { p: 0.84, limit: n };
+      default: return { p: 1, limit: n };
+    }
+  }
+  function drawLab() {
+    if (!lab.res) return;
+    const c = lab.res.conception, v = labView();
+    let fa = 0, fb = 0;
+    for (const o of c.origin) { if (o === 0) fa++; else if (o === 1) fb++; }
+    const wa = fa + fb ? fa / (fa + fb) : 0.5;
+    const childLin = lab.A.lineage.map((x, k) => x * wa + lab.B.lineage[k] * (1 - wa));
+    const done = lab.steps[lab.idx].kind === 'verdict';
+    drawConception($('labCanvas'), { parentBytes: [lab.A.bytes, lab.B.bytes], conception: c, fit: lab.res.fit, born: lab.res.born }, v.p, {
+      labels: [`Parent A: ${lab.A.label}`, `Parent B: ${lab.B.label}`, done ? (lab.res.born ? 'Child' : 'Child (not born)') : 'Child'],
+      lineages: [lab.A.lineage, lab.B.lineage, childLin], limit: v.limit,
+    });
+  }
+  function renderLab() {
+    const items = lab.steps.map((st, k) => `<li class="${k === lab.idx ? 'cur' : k > lab.idx ? 'later' : ''}">${esc(st.text)}</li>`);
+    const last = lab.steps[lab.idx];
+    if (last.kind === 'verdict' && lab.res.born) {
+      if (!lab.garden) lab.garden = [TP.gardenScore(lab.res.conception.bytes), TP.gardenScore(lab.A.bytes), TP.gardenScore(lab.B.bytes)];
+      const [g, ga, gb] = lab.garden.map((v) => v.toFixed(0));
+      const verdict = lab.garden[0] > lab.garden[1] && lab.garden[0] > lab.garden[2] ? 'better than both parents' : lab.garden[0] >= Math.min(lab.garden[1], lab.garden[2]) ? 'between its parents or level with one' : 'worse than both parents';
+      items.push(`<li class="cur">Common garden: alone on sparse plots the child survives ${g} of ${TP.P.gardenTicks} ticks, parent A ${ga} and parent B ${gb}: ${verdict}.</li>`);
+    }
+    $('labSteps').innerHTML = items.join('');
+    $('labBack').disabled = lab.idx === 0;
+    $('labNext').disabled = lab.idx >= lab.steps.length - 1;
+    drawLab();
+  }
+  $('labNew').addEventListener('click', labNew);
+  ['labA', 'labB', 'labMode', 'labFit'].forEach((id) => $(id).addEventListener('change', labNew));
+  $('labNext').addEventListener('click', () => { if (lab.idx < lab.steps.length - 1) { lab.idx++; renderLab(); } });
+  $('labBack').addEventListener('click', () => { if (lab.idx > 0) { lab.idx--; renderLab(); } });
+  $('labAll').addEventListener('click', () => { lab.idx = lab.steps.length - 1; renderLab(); });
 
   // ---------- charts ----------
   const CHARTS = [
@@ -1732,6 +1905,7 @@ const TPTests = {
     if (force || state.frame % 30 === 0) drawCharts();
     if (force || state.frame % 60 === 0) renderHappened();
     drawBirth(performance.now());
+    if (force || state.frame % 30 === 0) drawLab();
   }
   function step(n) {
     for (let k = 0; k < n; k++) for (const w of state.worlds) w.tick();
@@ -1779,7 +1953,9 @@ const TPTests = {
   worldCanvas.forEach((cv, wi) => cv.addEventListener('click', (ev) => selectAt(wi, ev)));
 
   legend();
+  renderLabSelects();
   reset();
+  labNew();
   window.__tp = { state, step: (n) => { step(n); state.birthStart = -1e9; drawAll(true); }, drawAll };
   // ?steps=N runs N ticks at once and pauses; &select also picks a child to inspect (for screenshots and links)
   const qs = new URLSearchParams(location.search);
