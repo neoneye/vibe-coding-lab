@@ -1737,15 +1737,60 @@ async function init3D() {
 function buildHost(i, link) {
   const P = HM.decode(link) || HM.decode(NS.HOSTS[i].link);
   P.armSpread = .1; P.elbowBend = 0; P.headTurn = 0; P.stance = .25;
+  if (P.face === 3 && P.maskStyle === 3) { P.maskStyle = 1; P.eyeSize = Math.max(P.eyeSize, 1.05); }   // a presenter with a sleeping face gets open eyes
   const f = makeHumanoid(P), g = new THREE.Group(); g.add(f.root); scene.add(g);
-  return { g, f, i, name: NS.HOSTS[i].name, seed: 1 + i * 2.37, talk: 0, look: 0, baseRot: 0, desk: true, el: 0, em0: f.MAT.accent.emissiveIntensity, gl0: f.MAT.glass.emissiveIntensity };
+  return { g, f, i, name: NS.HOSTS[i].name, seed: 1 + i * 2.37, talk: 0, look: 0, baseRot: 0, desk: true, cur: null, em0: f.MAT.accent.emissiveIntensity, gl0: f.MAT.glass.emissiveIntensity };
 }
-// Behind the desk the forearms rest on it, and the robot is raised or lowered so its elbows meet the desk top.
+// Behind the desk the robot is raised or lowered so that its elbows meet the desk top when the arms are at rest.
 function pose(h, desk) {
-  const f = h.f, up = desk ? -.22 : .04, sp = desk ? .2 : .1; h.desk = desk; h.el = desk ? -1.2 : -.2;
-  f.armL.rotation.set(up, 0, sp); f.armR.rotation.set(up, 0, -sp);
-  for (const a of [f.armL, f.armR]) { const e = a.userData.elbow; e.rotation.order = "YXZ"; e.rotation.x = h.el; e.rotation.y = desk ? -.5 : 0; }
-  h.g.position.y = desk ? DESK_Y + .075 - (f.shoulderY - f.upLen * Math.cos(up) * Math.cos(sp)) : 0;
+  const f = h.f; h.desk = desk; h.cur = null;
+  for (const a of [f.armL, f.armR]) a.userData.elbow.rotation.order = "YXZ";
+  h.g.position.y = desk ? DESK_Y + .075 - (f.shoulderY - f.upLen * Math.cos(.22) * Math.cos(.2)) : 0;
+}
+// Body language. A pose is [right arm, left arm, head, lean]: an arm is [swing forward (negative), out to the side, elbow bend
+// (negative), forearm turned inward (negative)], the head is [turn, nod, tilt], lean is [sideways, twist].
+// At the desk, swing + bend near -1.43 lays the forearm on the desk top.
+const POSES = {
+  rest: [   // forearms on the desk, never both the same
+    [[-.3, .16, -1.14, -.8], [-.14, .3, -1.27, -.2], [.1, .05, .09], [.03, .05]],
+    [[-.2, .24, -1.23, -.95], [-.26, .2, -1.18, -.9], [-.06, .1, -.07], [-.02, -.03]],
+    [[-.12, .34, -1.3, -.05], [-.34, .14, -1.1, -1.0], [.14, 0, .12], [.045, .08]],
+  ],
+  talk: [   // gestures made while speaking
+    [[-.55, .32, -1.95, -.25], [-.16, .28, -1.26, -.3], [.16, -.04, .1], [.03, .07]],        // one hand raised, palm out
+    [[-.75, .42, -1.5, .45], [-.7, .4, -1.55, .4], [0, -.06, -.06], [0, 0]],                 // both hands open and apart
+    [[-1.15, .12, -.55, -.15], [-.2, .26, -1.22, -.6], [.1, .06, -.1], [-.03, .1]],          // pointing at the viewer
+    [[-.35, .2, -2.25, -1.15], [-.18, .3, -1.25, -.25], [-.12, .08, .14], [.04, -.04]],      // hand to the chest
+    [[-.5, .5, -1.75, .1], [-.3, .16, -1.14, -.85], [.22, 0, .13], [.05, .1]],               // an open hand out to the side
+    [[-.62, .2, -1.6, -.6], [-.58, .22, -1.66, -.55], [.04, .12, .05], [0, -.03]],           // both hands up, close together, counting it off
+    [[-.3, .18, -1.14, -.8], [-.16, .3, -1.26, -.2], [-.05, .22, -.05], [-.02, 0]],          // down at the notes
+  ],
+  listen: [   // the one who is not speaking
+    [[-.3, .14, -2.35, -.75], [-.2, .26, -1.23, -.95], [0, .04, .16], [.05, 0]],             // chin on the hand
+    [[-.2, .24, -1.23, -1.0], [-.26, .2, -1.18, -.95], [0, .08, -.12], [-.03, 0]],           // hands folded
+    [[-.12, .36, -1.3, 0], [-.34, .14, -1.1, -1.05], [0, 0, .13], [.04, 0]],
+  ],
+  stand: [   // the reporter, on their feet
+    [[.05, .1, -.3, -.1], [-.45, .25, -1.85, -.35], [.12, 0, .1], [.02, .06]],               // one hand up, explaining
+    [[-.25, .3, -1.35, .3], [-.3, .28, -1.3, .25], [0, -.04, -.07], [0, 0]],                 // both hands open
+    [[.04, .12, -.35, -.2], [.08, .1, -.2, 0], [-.14, .05, -.11], [-.03, -.05]],             // arms down
+    [[-.9, .15, -.5, -.1], [.06, .12, -.3, -.2], [.2, 0, .08], [.03, .14]],                  // pointing behind
+  ],
+};
+const hash = (a, b) => { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); };
+const mirrorPose = p => [p[1], p[0], [-p[2][0], p[2][1], -p[2][2]], [-p[3][0], -p[3][1]]];
+// The pose a robot holds during beat k. Each robot has its own sequence, and every other one is mirrored.
+function poseFor(h, k, speaking) {
+  const r = hash(h.seed, k), set = !h.desk ? POSES.stand : speaking ? (hash(h.seed + 5, k) < .28 ? POSES.rest : POSES.talk) : hash(h.seed + 5, k) < .45 ? POSES.rest : POSES.listen;
+  const p = set[Math.min(set.length - 1, Math.floor(r * set.length))];
+  return hash(h.seed + 9, k) < .5 ? mirrorPose(p) : p;
+}
+const flat = p => [...p[0], ...p[1], ...p[2], ...p[3]];
+// Where the body should be at time t: hold a pose, then move to the next over the last part of the beat.
+function targetPose(h, t, speaking) {
+  const T = speaking ? 2.3 : h.desk ? 5.5 : 3, u = (t + h.seed * 3.7) / T, k = Math.floor(u), w = ease.io((u - k - .62) / .38);
+  const a = flat(poseFor(h, k, speaking)), b = flat(poseFor(h, k + 1, speaking));
+  return a.map((v, i) => v + (b[i] - v) * w);
 }
 const reporter = () => NS.reporterFor(S.anchor, S.co);
 function layout() {
@@ -1762,9 +1807,15 @@ function updateHosts(t, speaking) {
     const sp = i === speaking, s = h.seed, f = h.f;
     const env = sp ? clamp(.5 + .45 * Math.sin(t * 8.3 + s) * Math.sin(t * 2.9 + s * 1.7) + .25 * Math.sin(t * 13.1 + s)) : 0;
     h.talk += (env - h.talk) * .35;
-    f.pivot.rotation.set((sp ? .035 * Math.sin(t * 2.3 + s) : 0) + h.talk * .03, .07 * Math.sin(t * .6 + s) + (sp ? 0 : h.look), .015 * Math.sin(t * 1.1 + s));
-    h.g.rotation.y = h.baseRot + .025 * Math.sin(t * .45 + s);
-    if (h.desk) f.armR.userData.elbow.rotation.x = h.el - (sp ? .3 * Math.max(0, Math.sin(t * .8 + s)) ** 3 : 0);
+    // ease towards the target so that a change of speaker or shot never snaps
+    const tg = targetPose(h, t, sp); if (!h.cur) h.cur = tg.slice(); else for (let j = 0; j < tg.length; j++) h.cur[j] += (tg[j] - h.cur[j]) * .14;
+    const p = h.cur, beat = h.talk * .07 * Math.sin(t * 6.5 + s);
+    f.armR.rotation.set(p[0], 0, -p[1]); f.armL.rotation.set(p[4], 0, p[5]);
+    const eR = f.armR.userData.elbow, eL = f.armL.userData.elbow, up = x => x < -1.5 ? beat : 0;   // a raised forearm beats with the words
+    eR.rotation.x = p[2] + up(p[2]); eR.rotation.y = p[3]; eL.rotation.x = p[6] + up(p[6]); eL.rotation.y = p[7];
+    const look = sp ? 0 : h.look;
+    f.pivot.rotation.set(p[9] + (sp ? .04 * Math.sin(t * 2.3 + s) : 0) + h.talk * .03, p[8] * (look ? .4 : 1) + look + .06 * Math.sin(t * .6 + s), p[10] + .02 * Math.sin(t * 1.1 + s));
+    h.g.rotation.set(0, h.baseRot + p[12] + .02 * Math.sin(t * .45 + s), p[11]);
     f.MAT.accent.emissiveIntensity = h.em0 + h.talk * 1.4; f.MAT.glass.emissiveIntensity = h.gl0 + h.talk * .35;
   });
 }
