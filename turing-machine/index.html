@@ -327,6 +327,22 @@ const TM = (() => {
     return out.join('\n');
   }
 
+  // Remainder modulo ten: ten states for the remainder, then a few to write it in binary.
+  function modTenProgram() {
+    const out = ['; in state rN the digits read so far leave remainder N', '; reading digit d turns N into (2N + d) mod 10'];
+    for (let r = 0; r < 10; r++) for (let d = 0; d < 2; d++) out.push(`r${r} ${d} -> _ R r${(2 * r + d) % 10}`);
+    out.push('', '; end of the number: write the remainder in binary');
+    const need = new Set();
+    for (let r = 0; r < 10; r++) {
+      const b = r.toString(2);
+      out.push(b.length === 1 ? `r${r} _ -> ${b} N halt` : `r${r} _ -> ${b[0]} R put${b.slice(1)}`);
+      for (let i = 1; i < b.length; i++) need.add(b.slice(i));
+    }
+    out.push('', '; put followed by the digits still to be written');
+    [...need].sort((a, b) => b.length - a.length || (a < b ? -1 : 1)).forEach(t => out.push(t.length === 1 ? `put${t} _ -> ${t} N halt` : `put${t} _ -> ${t[0]} R put${t.slice(1)}`));
+    return out.join('\n');
+  }
+
   const EXAMPLES = [
     { id: 'increment', name: 'Binary increment', input: '1011',
       note: 'Adds one to a binary number: walk to the last digit, then carry leftwards. 1011 becomes 1100.',
@@ -339,6 +355,68 @@ right _ -> _ L carry
 carry 1 -> 0 L carry
 carry 0 -> 1 N halt
 carry _ -> 1 N halt` },
+    { id: 'reverse', name: 'Reverse the bits', input: '1101',
+      note: 'Writes the digits in the opposite order: 1101 becomes 1011. Takes the last remaining digit, marks its cell X, carries the digit to the end of the growing answer, and repeats. The X cells are erased at the end.',
+      program: `; go to the last digit
+right 0 -> 0 R right
+right 1 -> 1 R right
+right _ -> _ L take
+
+; take the last digit that is left and mark its cell
+take 0 -> X R carry0
+take 1 -> X R carry1
+take X -> X L take
+take _ -> _ R clean
+
+; carry it past the marks and the answer so far
+carry0 X -> X R carry0
+carry0 0 -> 0 R carry0
+carry0 1 -> 1 R carry0
+carry0 _ -> 0 L back
+carry1 X -> X R carry1
+carry1 0 -> 0 R carry1
+carry1 1 -> 1 R carry1
+carry1 _ -> 1 L back
+
+; walk back over the answer to the marks
+back 0 -> 0 L back
+back 1 -> 1 L back
+back X -> X L take
+
+; all digits taken: erase the marks
+clean X -> _ R clean
+clean 0 -> 0 N halt
+clean 1 -> 1 N halt
+clean _ -> _ N halt` },
+    { id: 'times10', name: 'Multiply by ten (binary)', input: '1101',
+      note: 'Multiplies a binary number by ten: 1101 (13) becomes 10000010 (130). Ten is 2 × 5. Appending a 0 doubles the number; one pass from right to left then multiplies by five, with the carry (0 to 4) held in the state.',
+      program: `; append a 0: that is times two
+right 0 -> 0 R right
+right 1 -> 1 R right
+right _ -> 0 L c0
+
+; times five, last digit first. In state cN the carry is N.
+; digit 0 gives N, digit 1 gives 5 + N: write its last bit, carry the rest
+c0 0 -> 0 L c0
+c0 1 -> 1 L c2
+c1 0 -> 1 L c0
+c1 1 -> 0 L c3
+c2 0 -> 0 L c1
+c2 1 -> 1 L c3
+c3 0 -> 1 L c1
+c3 1 -> 0 L c4
+c4 0 -> 0 L c2
+c4 1 -> 1 L c4
+
+; past the first digit: write out what is left of the carry
+c1 _ -> 1 L c0
+c2 _ -> 0 L c1
+c3 _ -> 1 L c1
+c4 _ -> 0 L c2
+c0 _ -> _ R halt` },
+    { id: 'mod10', name: 'Remainder modulo ten (binary)', input: '1100111',
+      note: 'Leaves the remainder of a binary number divided by ten: 1100111 (103) becomes 11 (3). Reads the digits from the left, erasing them. In state rN the remainder so far is N; each digit doubles it and adds the digit, modulo ten. At the end the remainder is written in binary.',
+      program: modTenProgram() },
     { id: 'add', name: 'Unary addition', input: '111+11',
       note: 'Numbers are written as rows of 1s. Turn the + into a 1, then erase one 1 from the end. 3 + 2 leaves five 1s.',
       program: `scan 1 -> 1 R scan
@@ -447,6 +525,13 @@ const TMTests = {
     let m = go('increment'); eq('increment 1011', [m.tapeString(), m.stateName, m.reason], ['1100', 'halt', 'halt-state']);
     m = go('increment', '111'); eq('increment 111', m.tapeString(), '1000');
     m = go('increment', ''); eq('increment empty', m.tapeString(), '1');
+    for (const w of ['1101', '1', '10', '0011010', '']) { m = go('reverse', w); eq(`reverse ${w}`, [m.tapeString(), m.stateName], [[...w].reverse().join(''), 'halt']); }
+    for (const n of [0, 1, 5, 7, 13, 100, 255, 1023, 4660]) {
+      m = go('times10', n.toString(2)); eq(`times10 ${n}`, [parseInt(m.tapeString(), 2), m.stateName, m.symbolAt(m.head) !== '_'], [n * 10, 'halt', true]);
+      m = go('mod10', n.toString(2)); eq(`mod10 ${n}`, [m.tapeString(), m.stateName], [(n % 10).toString(2), 'halt']);
+    }
+    m = go('times10', '0011'); eq('times10 keeps leading zeros harmless', parseInt(m.tapeString(), 2), 30);
+    m = go('mod10', ''); eq('mod10 empty', m.tapeString(), '0');
     m = go('add'); eq('add 3+2', m.tapeString(), '11111');
     m = go('copy'); eq('copy 111', m.tapeString(), '111_111');
     m = go('palindrome'); eq('palindrome 10101', m.stateName, 'accept');
