@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How Error Correction Works</title>
+<style>
+:root { color-scheme: dark; --bg:#11151b; --panel:#191f27; --line:#36404c; --text:#e7e5df; --muted:#a5afbb; --accent:#e5bc70;
+  --data:#5aa9ff; --par:#e5bc70; --bad:#ee6f64; --ok:#7fd89a; --gone:#7d8998; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 system-ui,-apple-system,sans-serif; }
+main { max-width:1100px; margin:auto; padding:32px 24px 56px; }
+h1 { margin:0; font:500 clamp(30px,5vw,46px)/1.15 Georgia,serif; letter-spacing:1px; }
+h2 { margin:0 0 12px; font-size:13px; letter-spacing:2px; text-transform:uppercase; color:var(--accent); font-weight:600; }
+p { margin:8px 0; }
+.eyebrow { font:11px ui-monospace,monospace; letter-spacing:3px; color:var(--accent); margin-bottom:10px; }
+.subtitle { color:var(--muted); max-width:820px; margin:10px 0 24px; }
+.hint { color:var(--muted); font-size:13px; }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:20px; min-width:0; }
+.prose { max-width:820px; }
+.prose li { margin:4px 0; }
+.row { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; margin:10px 0; }
+.grow { flex:1 1 220px; min-width:180px; }
+label { font-size:13px; color:var(--muted); }
+label.check { display:inline-flex; gap:6px; align-items:center; color:var(--text); }
+input[type=text], select, button { font:inherit; font-size:13px; color:var(--text); border:1px solid var(--line); border-radius:6px; }
+input[type=text], select { background:#0f141a; padding:7px 10px; max-width:100%; min-width:0; }
+input[type=text] { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+button { cursor:pointer; background:#293340; padding:7px 12px; white-space:nowrap; }
+button:hover { background:#394554; }
+input[type=range] { accent-color:var(--accent); width:100%; }
+input[type=checkbox] { accent-color:var(--accent); }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.sw { width:12px; height:12px; border-radius:3px; display:inline-block; flex:none; }
+.chips { display:flex; flex-wrap:wrap; gap:6px 16px; font-size:13px; color:var(--muted); margin:8px 0; }
+.chip { display:inline-flex; align-items:center; gap:6px; }
+.out { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin:10px 0; font-size:14px; overflow-wrap:anywhere; }
+.out b { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.good { color:var(--ok); } .fail { color:var(--bad); }
+/* bit and byte cells */
+.cells { display:flex; flex-wrap:wrap; gap:6px 10px; margin:10px 0; }
+.grp { display:inline-flex; gap:1px; padding:2px; border-radius:5px; border:1px solid transparent; }
+.grp.wrong { border-color:var(--bad); }
+.byte { display:inline-flex; flex-wrap:wrap; gap:2px 3px; padding:4px 6px; border-radius:8px; background:#141a21; }
+.c { width:17px; height:22px; border:0; border-radius:3px; padding:0; background:#293340; color:var(--text); font:12px ui-monospace,monospace; }
+.c.flip { background:var(--bad); color:#1b0f0d; font-weight:700; }
+.hx { width:34px; height:34px; border-radius:6px; padding:0; background:#141a21; font:12.5px ui-monospace,monospace; border:1.5px solid var(--data); }
+.hx.par { border-color:var(--par); }
+.hx.bad { background:var(--bad); color:#1b0f0d; font-weight:700; }
+.hx.gone { background:#3a4452; color:#cfd6de; border-style:dashed; }
+.meter { height:12px; border-radius:6px; background:#0c1014; border:1px solid var(--line); overflow:hidden; display:flex; }
+.meter div { height:100%; }
+canvas { display:block; border-radius:8px; background:#0c1014; border:1px solid var(--line); touch-action:none; }
+#poly { width:100%; aspect-ratio:900/320; cursor:grab; }
+.split { display:grid; grid-template-columns:minmax(0,360px) minmax(0,1fr); gap:20px; align-items:start; }
+.qrsplit { display:grid; grid-template-columns:minmax(0,480px) minmax(0,1fr); gap:20px; align-items:start; }
+@media (max-width:820px) { .split, .qrsplit { grid-template-columns:minmax(0,1fr); } }
+#venn { width:100%; max-width:360px; display:block; margin:auto; }
+#venn .bit { cursor:pointer; }
+#venn text { font:600 15px ui-monospace,monospace; fill:var(--text); text-anchor:middle; dominant-baseline:central; pointer-events:none; }
+#venn text.lab { font:11px system-ui,sans-serif; fill:var(--muted); }
+#qr { width:100%; aspect-ratio:1/1; background:#fff; cursor:crosshair; }
+table { border-collapse:collapse; font-size:13px; width:100%; }
+th, td { padding:5px 8px; border-bottom:1px solid var(--line); text-align:left; }
+th { color:var(--muted); font-weight:500; font-size:11px; letter-spacing:1px; text-transform:uppercase; }
+td.num, th.num { text-align:right; font-family:ui-monospace,monospace; }
+.strip { display:flex; flex-wrap:wrap; gap:2px; margin:8px 0; }
+.s { width:20px; height:20px; border-radius:3px; font:10px ui-monospace,monospace; display:inline-flex; align-items:center; justify-content:center; color:#10151b; }
+.s.hit { outline:2px solid var(--bad); outline-offset:-2px; background:#3b1c1a !important; color:var(--bad); }
+.cwrow { display:flex; align-items:center; gap:8px; margin:3px 0; font-size:13px; }
+@media (max-width:520px) { .s { width:17px; height:17px; font-size:9px; } .cwrow { flex-wrap:wrap; } .cwrow .strip { flex-wrap:nowrap; } }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; margin:12px 0; }
+.card { border:1px solid var(--line); border-radius:10px; padding:14px; font-size:14px; }
+.card b { color:var(--accent); display:block; margin-bottom:2px; }
+</style>
+</head>
+<body>
+<main>
+<div class="eyebrow">REDUNDANCY · CODES · REPAIR</div>
+<h1>How error correction works</h1>
+<p class="subtitle">A scratched CD still plays, a QR code with a logo over it still scans, and a space probe twenty billion kilometres away still gets its pictures home. The trick is the same every time: send more than the message, in a pattern that lets the receiver work out what was damaged and put it back. Everything on this page can be broken by clicking on it.</p>
+
+<div class="panel">
+  <h2>1 · Say it three times</h2>
+  <p class="prose">The simplest code: send every bit three times and let the receiver take a vote. One flipped copy is outvoted by the other two. It works, but it triples the size, and two flips in the same group still fool it.</p>
+  <div class="row">
+    <label>Message <input type="text" id="repText" value="Hi" maxlength="5" size="8"></label>
+    <button id="repNoise">Flip 5 % of the bits</button>
+    <button id="repFix">Undo damage</button>
+  </div>
+  <div class="cells" id="repCells"></div>
+  <div class="out" id="repOut"></div>
+  <p class="hint">Click any bit to flip it. Each group of three is one bit of the message; a red frame marks a group where the vote goes the wrong way.</p>
+</div>
+
+<div class="panel">
+  <h2>2 · Checks that overlap: the Hamming code</h2>
+  <div class="split">
+    <svg id="venn" viewBox="0 0 360 300"></svg>
+    <div>
+      <p>In 1950 Richard Hamming found a way to protect four bits with three extra ones instead of eight. Each extra bit makes the number of ones in its circle even. The circles overlap so that every bit sits in a different combination of them.</p>
+      <p>Flip one bit, and the circles it sits in turn odd. That combination points at exactly one position, so the receiver knows which bit to flip back. It never needs to know what the message was.</p>
+      <div class="chips"><span class="chip">solid ring: message bit</span><span class="chip">dashed ring: check bit</span><span class="chip">small numbers: positions 1 to 7</span><span class="chip">shaded circle: odd, so something in it is wrong</span></div>
+      <div class="row"><button id="hamNew">New message</button><button id="hamFix">Undo damage</button></div>
+      <div class="out" id="hamOut"></div>
+      <p class="hint">Click a bit to flip it in transit. Then flip a second one: the code now points confidently at the wrong bit. One error per seven bits is its limit, and this is the code inside server memory (ECC RAM) to this day.</p>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>3 · The idea behind Reed–Solomon: a curve through the data</h2>
+  <p class="prose">Hamming works on single bits. Real damage comes in clumps: a scratch, a smudge, a burst of static. In 1960 Irving Reed and Gustave Solomon treated the message as numbers on a curve instead. Three numbers fix a parabola. Send seven points of that parabola instead of three, and the receiver can lose track of some and still find the one curve that most points agree on.</p>
+  <canvas id="poly"></canvas>
+  <div class="row"><button id="polyNew">New numbers</button><button id="polyFix">Undo damage</button></div>
+  <div class="out" id="polyOut"></div>
+  <p class="hint">Drag any point up or down. Blue points are the message, yellow points are the extra ones. With seven points for a three-number message, any two can be wrong. Move a third and the receiver either gives up or, if your three happen to line up with two others, is fooled.</p>
+</div>
+
+<div class="panel">
+  <h2>4 · Reed–Solomon on bytes</h2>
+  <p class="prose">The real thing does the same with bytes instead of points on paper, using arithmetic in which the 256 byte values form a closed number system (so nothing ever rounds or overflows). The parity bytes below are computed exactly as in a QR code.</p>
+  <div class="row">
+    <label>Message <input type="text" id="rsText" value="Reed-Solomon" maxlength="20" size="22"></label>
+    <label class="grow">Parity bytes <span class="mono" id="rsParLab"></span><input type="range" id="rsPar" min="2" max="20" step="2" value="8"></label>
+    <button id="rsNoise">Damage 3 bytes</button>
+    <button id="rsFix">Undo damage</button>
+  </div>
+  <div class="cells" id="rsCells" style="gap:4px"></div>
+  <div class="meter" id="rsMeter"></div>
+  <div class="out" id="rsOut"></div>
+  <div class="chips">
+    <span class="chip"><span class="sw" style="border:1.5px solid var(--data)"></span>message byte</span>
+    <span class="chip"><span class="sw" style="border:1.5px solid var(--par)"></span>parity byte</span>
+    <span class="chip"><span class="sw" style="background:var(--bad)"></span>wrong value, position unknown (click once)</span>
+    <span class="chip"><span class="sw" style="background:#3a4452"></span>missing, position known (click twice)</span>
+  </div>
+  <p class="hint">A whole byte counts as one error whether one of its bits is wrong or all eight, which is why this code shrugs off clumps. Finding a wrong byte costs two parity bytes: one to locate it, one to fix it. A byte the receiver already knows is missing (an erasure) costs only one.</p>
+</div>
+
+<div class="panel">
+  <h2>5 · A QR code you can damage</h2>
+  <div class="qrsplit">
+    <div>
+      <canvas id="qr"></canvas>
+      <div class="chips" id="qrLegend"></div>
+    </div>
+    <div>
+      <div class="row">
+        <label class="grow">Text <input type="text" id="qrText" value="https://example.com/error-correction" maxlength="134" style="width:100%"></label>
+      </div>
+      <div class="row">
+        <label>Level <select id="qrLevel"><option value="L">L, repairs about 7 %</option><option value="M">M, about 15 %</option><option value="Q">Q, about 25 %</option><option value="H" selected>H, about 30 %</option></select></label>
+        <label>Show <select id="qrView"><option value="plain">as printed</option><option value="parts">the parts</option><option value="blocks">the blocks</option></select></label>
+      </div>
+      <div class="row">
+        <label>Brush <select id="qrBrush"><option value="white">white (sticker, glare)</option><option value="black">black (ink)</option><option value="flip">flip</option></select></label>
+        <label>Size <select id="qrSize"><option value="0">1</option><option value="1" selected>3</option><option value="2">5</option></select></label>
+        <label class="check"><input type="checkbox" id="qrMarks" checked>mark damage</label>
+      </div>
+      <div class="row">
+        <button data-q="logo">Logo in the middle</button><button data-q="scratch">Scratch</button><button data-q="noise">Speckle</button><button data-q="corner">Torn corner</button><button data-q="fix">Undo damage</button>
+      </div>
+      <div class="out" id="qrOut"></div>
+      <div style="overflow-x:auto"><table><thead><tr><th>Block</th><th class="num">Bytes</th><th class="num">Parity</th><th class="num">Damaged</th><th class="num">Limit</th><th>Result</th></tr></thead><tbody id="qrRows"></tbody></table></div>
+      <p class="hint" id="qrInfo"></p>
+    </div>
+  </div>
+  <div class="prose">
+    <p>Paint on the code. The reader below it works from the black and white squares alone, the way a phone does once it has found the code: it reads the format bits, undoes the mask, collects the bytes, and runs Reed–Solomon on each block.</p>
+    <ul>
+      <li><b>The three corner squares</b> are how a camera finds the code and its orientation. They carry no data and are not protected: damage them and a phone may never get as far as decoding. (The reader here is told where the grid is, so it carries on.)</li>
+      <li><b>The format bits</b> next to the corners say which level and mask were used. They are stored twice, each copy with its own small code that survives three wrong bits.</li>
+      <li><b>The mask</b> flips data squares in a regular pattern so the code has no large blank areas or stripes that confuse a camera.</li>
+      <li><b>The data</b> is split into blocks, each with its own parity bytes, and the blocks are shuffled together so that one blot is shared out among all of them.</li>
+      <li><b>A logo</b> is simply damage the designer chose. It works because level H can lose nearly a third of its bytes.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>6 · Spreading the damage: interleaving</h2>
+  <p class="prose">A code that can fix two bytes per block is useless against a scratch that wipes out six in a row, unless those six belong to different blocks. So the blocks are dealt out like cards: first byte of each, then second byte of each. A long burst on the medium becomes a few scattered errors in every block. CDs do this so thoroughly that a 2 mm scratch is inaudible.</p>
+  <div class="row">
+    <label class="check"><input type="checkbox" id="ilOn" checked>interleave</label>
+    <label class="grow">Scratch length <span class="mono" id="ilLenLab"></span><input type="range" id="ilLen" min="1" max="12" value="7"></label>
+    <label class="grow">Scratch position <input type="range" id="ilPos" min="0" max="39" value="9"></label>
+  </div>
+  <p class="hint">On the medium, in the order written:</p>
+  <div class="strip" id="ilStrip"></div>
+  <p class="hint">Sorted back into four blocks, each able to repair two bytes:</p>
+  <div id="ilRows"></div>
+  <div class="out" id="ilOut"></div>
+</div>
+
+<div class="panel">
+  <h2>7 · Where else it is used</h2>
+  <div class="cards">
+    <div class="card"><b>CDs, DVDs, Blu-ray</b>Two layers of Reed–Solomon with interleaving between them. A CD can repair a burst of about 4000 bits, a scratch 2.5 mm long, and hide longer ones by guessing the missing sound.</div>
+    <div class="card"><b>Server memory</b>ECC RAM stores 72 bits for every 64 using an extended Hamming code: it fixes any single flipped bit, from a cosmic ray for instance, and detects any two.</div>
+    <div class="card"><b>Disks and data centres</b>RAID 5 keeps one extra disk holding the XOR of the others, so any one disk can die. Cloud storage uses Reed–Solomon across machines: 10 data pieces plus 4 parity pieces survive the loss of any 4.</div>
+    <div class="card"><b>Deep space</b>Voyager's pictures from Saturn onwards came through Reed–Solomon wrapped around a convolutional code. The signal that arrives is far weaker than the noise in the receiver.</div>
+    <div class="card"><b>Wi-Fi, 5G, satellite TV</b>Modern links use LDPC and polar codes: thousands of overlapping parity checks, decoded by passing guesses back and forth until they agree. They get within a fraction of a decibel of the theoretical limit Claude Shannon proved in 1948.</div>
+    <div class="card"><b>Only detecting</b>The last digit of a barcode, an ISBN, a credit card or an IBAN is a check digit. It cannot repair anything; it only tells you to type the number again. Network packets carry a checksum for the same purpose and are simply sent again.</div>
+  </div>
+  <div class="prose">
+    <p>All of these rest on one idea, the <b>distance</b> between valid messages. If any two valid codewords differ in at least five places, then a codeword with two places damaged is still closer to the original than to any other, and the receiver can snap it back. Redundancy is what buys that distance; a good code buys a lot of it with few extra bits.</p>
+  </div>
+</div>
+
+<div class="panel prose">
+  <h2>What is simplified</h2>
+  <ul>
+    <li>The QR codes are real (versions 1 to 6, byte mode, all four levels) and match a reference encoder module for module. Larger versions, the numeric, alphanumeric and kanji modes, and the third mask-scoring rule are left out.</li>
+    <li>The QR reader here is given the grid. Finding a code in a photograph, at an angle, in bad light, is a separate problem that the error correction does not help with.</li>
+    <li>The “about 7, 15, 25, 30 %” figures are the share of bytes in each block that may be wrong. A blot does not hit the blocks evenly, so the damage a code survives depends on where it falls.</li>
+    <li>The curve in part 3 uses ordinary numbers and looks for the parabola that most points agree on by trying every triple. Real decoders work in a finite field and find the damaged positions directly from the parity checks, as the one in parts 4 and 5 does.</li>
+    <li>Beyond its limit a decoder usually notices and gives up, but now and then heavy damage lands close to a different valid codeword and is “repaired” to the wrong message. The page reports that when it happens.</li>
+  </ul>
+</div>
+</main>
+
+<script id="shared-code">
+// Codes used on the page: Hamming(7,4), Reed-Solomon over GF(256), and QR codes (versions 1 to 6, byte mode). No DOM in this block.
+const EC = (() => {
+  // ---- GF(256), the field QR codes use (x^8 + x^4 + x^3 + x^2 + 1) --------------------
+  const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
+  for (let i = 0, x = 1; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 256) x ^= 0x11d; }
+  for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
+  const mul = (a, b) => (a && b ? EXP[LOG[a] + LOG[b]] : 0);
+  const div = (a, b) => (a ? EXP[LOG[a] + 255 - LOG[b]] : 0);
+  const pow = (a, n) => (a ? EXP[(LOG[a] * n) % 255] : 0);
+
+  // ---- Reed-Solomon ---------------------------------------------------------------------
+  function rsGenerator(n) { // coefficients, highest power first
+    let g = [1];
+    for (let i = 0; i < n; i++) {
+      const next = new Array(g.length + 1).fill(0);
+      for (let j = 0; j < g.length; j++) { next[j] ^= g[j]; next[j + 1] ^= mul(g[j], EXP[i]); }
+      g = next;
+    }
+    return g;
+  }
+  function rsEncode(data, n) { // returns the n parity bytes
+    const g = rsGenerator(n), rem = new Array(n).fill(0);
+    for (const d of data) {
+      const f = d ^ rem.shift();
+      rem.push(0);
+      for (let j = 0; j < n; j++) rem[j] ^= mul(g[j + 1], f);
+    }
+    return rem;
+  }
+  function syndromes(cw, n) {
+    const s = [];
+    for (let j = 0; j < n; j++) { let v = 0; for (const c of cw) v = mul(v, EXP[j]) ^ c; s.push(v); }
+    return s;
+  }
+  // Solve a square linear system over GF(256); returns null if singular.
+  function solve(A, b) {
+    const n = b.length, M = A.map((r, i) => [...r, b[i]]);
+    for (let c = 0; c < n; c++) {
+      let p = c; while (p < n && !M[p][c]) p++;
+      if (p === n) return null;
+      [M[c], M[p]] = [M[p], M[c]];
+      const inv = div(1, M[c][c]);
+      for (let k = c; k <= n; k++) M[c][k] = mul(M[c][k], inv);
+      for (let r = 0; r < n; r++) if (r !== c && M[r][c]) { const f = M[r][c]; for (let k = c; k <= n; k++) M[r][k] ^= mul(f, M[c][k]); }
+    }
+    return M.map((r) => r[n]);
+  }
+  // Corrects up to (n - erasures) / 2 unknown errors plus the given erasures (positions known to be bad).
+  function rsDecode(received, n, erasures) {
+    erasures = erasures || [];
+    const cw = received.slice(), len = cw.length, X = (i) => EXP[(len - 1 - i) % 255];
+    for (const e of erasures) cw[e] = 0;
+    const S = syndromes(cw, n);
+    if (S.every((v) => !v)) return { ok: true, data: cw, errors: [], erasures };
+    if (erasures.length > n) return { ok: false, reason: "more erasures than parity bytes" };
+    // remove the erasures' contribution, leaving syndromes of the unknown errors
+    let T = S.slice();
+    for (const e of erasures) { const x = X(e), U = []; for (let j = 0; j + 1 < T.length; j++) U.push(T[j + 1] ^ mul(x, T[j])); T = U; }
+    // Berlekamp-Massey: the shortest recurrence that produces T gives the error locator
+    let C = [1], B = [1], L = 0, m = 1, b = 1;
+    for (let k = 0; k < T.length; k++) {
+      let d = T[k];
+      for (let i = 1; i <= L; i++) d ^= mul(C[i] || 0, T[k - i]);
+      if (!d) { m++; continue; }
+      const prev = C.slice(), f = div(d, b);
+      while (C.length < B.length + m) C.push(0);
+      for (let i = 0; i < B.length; i++) C[i + m] ^= mul(f, B[i]);
+      if (2 * L <= k) { L = k + 1 - L; B = prev; b = d; m = 1; } else m++;
+    }
+    if (2 * L > T.length) return { ok: false, reason: "too many errors" };
+    const errors = [];
+    for (let i = 0; i < len; i++) {
+      if (erasures.includes(i)) continue;
+      const xi = div(1, X(i));
+      let v = 0; for (let k = C.length - 1; k >= 0; k--) v = mul(v, xi) ^ C[k];
+      if (!v) errors.push(i);
+    }
+    if (errors.length !== L) return { ok: false, reason: "too many errors" };
+    const where = [...erasures, ...errors];
+    const mags = solve(where.map((_, j) => where.map((p) => pow(X(p), j))), S.slice(0, where.length));
+    if (!mags) return { ok: false, reason: "too many errors" };
+    where.forEach((p, k) => (cw[p] ^= mags[k]));
+    if (!syndromes(cw, n).every((v) => !v)) return { ok: false, reason: "too many errors" };
+    return { ok: true, data: cw, errors, erasures };
+  }
+
+  // ---- Hamming(7,4): positions 1..7, parity at 1, 2 and 4 --------------------------------
+  function hammingEncode(d) { // d: 4 bits -> 7 bits (index 0 is position 1)
+    const c = [0, 0, d[0], 0, d[1], d[2], d[3]];
+    c[0] = c[2] ^ c[4] ^ c[6]; c[1] = c[2] ^ c[5] ^ c[6]; c[3] = c[4] ^ c[5] ^ c[6];
+    return c;
+  }
+  function hammingDecode(c) {
+    const s = (c[0] ^ c[2] ^ c[4] ^ c[6]) | ((c[1] ^ c[2] ^ c[5] ^ c[6]) << 1) | ((c[3] ^ c[4] ^ c[5] ^ c[6]) << 2);
+    const fixed = c.slice();
+    if (s) fixed[s - 1] ^= 1;
+    return { syndrome: s, fixed, data: [fixed[2], fixed[4], fixed[5], fixed[6]] };
+  }
+
+  // ---- Polynomial picture: a parabola through 3 values, sampled at 7 points ---------------
+  const parabola = (y0, y1, y2) => (x) => y0 + (y1 - y0) * x + (y2 - 2 * y1 + y0) * x * (x - 1) / 2;
+  function fitParabola(ys) { // the parabola through any 3 points that agrees with the most points
+    let best = null;
+    for (let a = 0; a < ys.length; a++) for (let b = a + 1; b < ys.length; b++) for (let c = b + 1; c < ys.length; c++) {
+      const f = (x) => ys[a] * (x - b) * (x - c) / ((a - b) * (a - c)) + ys[b] * (x - a) * (x - c) / ((b - a) * (b - c)) + ys[c] * (x - a) * (x - b) / ((c - a) * (c - b));
+      const agree = ys.filter((y, x) => Math.abs(f(x) - y) < 1e-6).length;
+      if (!best || agree > best.agree) best = { f, agree };
+    }
+    return best;
+  }
+
+  // ---- QR codes ---------------------------------------------------------------------------
+  // Per version and level: [parity bytes per block, blocks in group 1, data bytes each, blocks in group 2, data bytes each]
+  const BLOCKS = {
+    1: { L: [7, 1, 19, 0, 0], M: [10, 1, 16, 0, 0], Q: [13, 1, 13, 0, 0], H: [17, 1, 9, 0, 0] },
+    2: { L: [10, 1, 34, 0, 0], M: [16, 1, 28, 0, 0], Q: [22, 1, 22, 0, 0], H: [28, 1, 16, 0, 0] },
+    3: { L: [15, 1, 55, 0, 0], M: [26, 1, 44, 0, 0], Q: [18, 2, 17, 0, 0], H: [22, 2, 13, 0, 0] },
+    4: { L: [20, 1, 80, 0, 0], M: [18, 2, 32, 0, 0], Q: [26, 2, 24, 0, 0], H: [16, 4, 9, 0, 0] },
+    5: { L: [26, 1, 108, 0, 0], M: [24, 2, 43, 0, 0], Q: [18, 2, 15, 2, 16], H: [22, 2, 11, 2, 12] },
+    6: { L: [18, 2, 68, 0, 0], M: [16, 4, 27, 0, 0], Q: [24, 4, 19, 0, 0], H: [28, 4, 15, 0, 0] },
+  };
+  const LEVEL_BITS = { L: 1, M: 0, Q: 3, H: 2 };
+  const MASKS = [
+    (x, y) => (x + y) % 2 === 0, (x, y) => y % 2 === 0, (x, y) => x % 3 === 0, (x, y) => (x + y) % 3 === 0,
+    (x, y) => (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0, (x, y) => (x * y) % 2 + (x * y) % 3 === 0,
+    (x, y) => ((x * y) % 2 + (x * y) % 3) % 2 === 0, (x, y) => ((x + y) % 2 + (x * y) % 3) % 2 === 0,
+  ];
+  const dataCapacity = (v, level) => { const b = BLOCKS[v][level]; return b[1] * b[2] + b[3] * b[4]; };
+  function formatBits(level, mask) {
+    const data = (LEVEL_BITS[level] << 3) | mask;
+    let rem = data;
+    for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+    return ((data << 10) | rem) ^ 0x5412;
+  }
+  // Where the 15 format bits live: two copies, [x, y] per bit.
+  function formatPlaces(size) {
+    const a = [], b = [];
+    for (let i = 0; i <= 5; i++) a.push([8, i]);
+    a.push([8, 7], [8, 8], [7, 8]);
+    for (let i = 9; i < 15; i++) a.push([14 - i, 8]);
+    for (let i = 0; i < 8; i++) b.push([size - 1 - i, 8]);
+    for (let i = 8; i < 15; i++) b.push([8, size - 15 + i]);
+    return [a, b];
+  }
+  // The fixed parts of the symbol: kind 1 finder (and separator), 2 timing, 3 alignment, 4 format, 5 dark module.
+  function skeleton(version) {
+    const size = 17 + 4 * version, mod = new Uint8Array(size * size), kind = new Uint8Array(size * size);
+    const set = (x, y, dark, k) => { if (x >= 0 && y >= 0 && x < size && y < size) { mod[y * size + x] = dark ? 1 : 0; kind[y * size + x] = k; } };
+    for (let i = 0; i < size; i++) { set(6, i, i % 2 === 0, 2); set(i, 6, i % 2 === 0, 2); }
+    for (const [cx, cy] of [[3, 3], [size - 4, 3], [3, size - 4]])
+      for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) { const d = Math.max(Math.abs(dx), Math.abs(dy)); set(cx + dx, cy + dy, d !== 2 && d !== 4, 1); }
+    if (version > 1) { const c = size - 7; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(c + dx, c + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1, 3); }
+    for (const copy of formatPlaces(size)) for (const [x, y] of copy) set(x, y, 0, 4);
+    set(8, size - 8, 1, 5);
+    return { size, mod, kind };
+  }
+  // The order in which data bits snake through the free modules.
+  function dataPath(size, kind) {
+    const path = [];
+    for (let right = size - 1; right >= 1; right -= 2) {
+      if (right === 6) right = 5;
+      for (let vert = 0; vert < size; vert++) for (let j = 0; j < 2; j++) {
+        const x = right - j, up = ((right + 1) & 2) === 0, y = up ? size - 1 - vert : vert;
+        if (!kind[y * size + x]) path.push(y * size + x);
+      }
+    }
+    return path;
+  }
+  // Which block and which byte of that block each transmitted codeword belongs to.
+  function blockLayout(version, level) {
+    const [ecLen, n1, d1, n2, d2] = BLOCKS[version][level], blocks = [], order = [];
+    for (let i = 0; i < n1 + n2; i++) blocks.push({ dataLen: i < n1 ? d1 : d2, ecLen });
+    const maxD = Math.max(d1, d2);
+    for (let i = 0; i < maxD; i++) blocks.forEach((b, k) => { if (i < b.dataLen) order.push({ block: k, index: i, ec: false }); });
+    for (let i = 0; i < ecLen; i++) blocks.forEach((b, k) => order.push({ block: k, index: b.dataLen + i, ec: true }));
+    return { blocks, order };
+  }
+  function penalty(size, mod) { // spec rules 1, 2 and 4
+    let p = 0, dark = 0;
+    for (let dir = 0; dir < 2; dir++) for (let a = 0; a < size; a++) {
+      let run = 0, last = -1;
+      for (let b = 0; b < size; b++) {
+        const v = dir ? mod[b * size + a] : mod[a * size + b];
+        if (v === last) { run++; if (run === 5) p += 3; else if (run > 5) p++; } else { run = 1; last = v; }
+      }
+    }
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const v = mod[y * size + x]; dark += v;
+      if (x + 1 < size && y + 1 < size && v === mod[y * size + x + 1] && v === mod[(y + 1) * size + x] && v === mod[(y + 1) * size + x + 1]) p += 3;
+    }
+    return p + Math.floor(Math.abs(dark * 20 - size * size * 10) / (size * size)) * 10;
+  }
+  function qrEncode(text, level, forceMask) {
+    const bytes = Array.from(new TextEncoder().encode(text));
+    let version = 1;
+    while (version <= 6 && dataCapacity(version, level) < bytes.length + 2) version++;
+    if (version > 6) return null;
+    const cap = dataCapacity(version, level), bits = [];
+    const put = (v, n) => { for (let i = n - 1; i >= 0; i--) bits.push((v >>> i) & 1); };
+    put(4, 4); put(bytes.length, 8); bytes.forEach((b) => put(b, 8));
+    put(0, Math.min(4, cap * 8 - bits.length));
+    while (bits.length % 8) bits.push(0);
+    const data = [];
+    for (let i = 0; i < bits.length; i += 8) data.push(parseInt(bits.slice(i, i + 8).join(""), 2));
+    for (let pad = 0xec; data.length < cap; pad ^= 0xec ^ 0x11) data.push(pad);
+    const { blocks, order } = blockLayout(version, level);
+    let at = 0;
+    for (const b of blocks) { const d = data.slice(at, at + b.dataLen); at += b.dataLen; b.bytes = d.concat(rsEncode(d, b.ecLen)); }
+    const stream = order.map((o) => blocks[o.block].bytes[o.index]);
+    const sk = skeleton(version), size = sk.size, path = dataPath(size, sk.kind);
+    const cwOf = new Int16Array(size * size).fill(-1);
+    path.forEach((m, i) => { const c = i >> 3; if (c < stream.length) { sk.mod[m] = (stream[c] >>> (7 - (i & 7))) & 1; cwOf[m] = c; } });
+    let best = null;
+    for (let mask = 0; mask < 8; mask++) {
+      if (forceMask != null && mask !== forceMask) continue;
+      const mod = sk.mod.slice();
+      for (const m of path) if (MASKS[mask](m % size, Math.floor(m / size))) mod[m] ^= 1;
+      const f = formatBits(level, mask);
+      for (const copy of formatPlaces(size)) copy.forEach(([x, y], i) => (mod[y * size + x] = (f >>> i) & 1));
+      const p = penalty(size, mod);
+      if (!best || p < best.p) best = { p, mod, mask };
+    }
+    return { version, level, size, mask: best.mask, modules: best.mod, kind: sk.kind, cwOf, order, blocks, bytes: bytes.length, capacity: cap - 2 };
+  }
+  // Reads a module grid of known version: format bits, unmasking, de-interleaving, Reed-Solomon, text.
+  function qrDecode(modules, version) {
+    const sk = skeleton(version), size = sk.size, places = formatPlaces(size);
+    let fmt = null;
+    for (const level of "LMQH") for (let mask = 0; mask < 8; mask++) {
+      const f = formatBits(level, mask);
+      for (const copy of places) {
+        let dist = 0; copy.forEach(([x, y], i) => (dist += modules[y * size + x] ^ ((f >>> i) & 1)));
+        if (dist <= 3 && (!fmt || dist < fmt.dist)) fmt = { level, mask, dist };
+      }
+    }
+    if (!fmt) return { ok: false, reason: "The format bits (error level and mask) are damaged beyond repair in both copies." };
+    const { blocks, order } = blockLayout(version, fmt.level), path = dataPath(size, sk.kind);
+    const stream = new Array(order.length).fill(0);
+    path.forEach((m, i) => { const c = i >> 3; if (c < stream.length) stream[c] |= (modules[m] ^ (MASKS[fmt.mask](m % size, Math.floor(m / size)) ? 1 : 0)) << (7 - (i & 7)); });
+    blocks.forEach((b) => (b.bytes = new Array(b.dataLen + b.ecLen).fill(0)));
+    order.forEach((o, i) => (blocks[o.block].bytes[o.index] = stream[i]));
+    const data = [];
+    let ok = true;
+    for (const b of blocks) {
+      const r = rsDecode(b.bytes, b.ecLen);
+      b.ok = r.ok; b.fixed = r.ok ? r.errors.length : null;
+      if (!r.ok) ok = false; else data.push(...r.data.slice(0, b.dataLen));
+    }
+    const out = { ok, level: fmt.level, mask: fmt.mask, formatErrors: fmt.dist, blocks, stream };
+    if (!ok) { out.reason = "At least one block has more damaged bytes than its parity can repair."; return out; }
+    const bit = (i) => (data[i >> 3] >>> (7 - (i & 7))) & 1, get = (at, n) => { let v = 0; for (let i = 0; i < n; i++) v = (v << 1) | bit(at + i); return v; };
+    if (get(0, 4) !== 4) { out.ok = false; out.reason = "Decoded bytes are not in byte mode."; return out; }
+    const n = get(4, 8), bytes = [];
+    for (let i = 0; i < n; i++) bytes.push(get(12 + i * 8, 8));
+    out.text = new TextDecoder().decode(new Uint8Array(bytes));
+    return out;
+  }
+  return { mul, div, pow, EXP, LOG, rsGenerator, rsEncode, rsDecode, syndromes, hammingEncode, hammingDecode, parabola, fitParabola, BLOCKS, MASKS, dataCapacity, formatBits, formatPlaces, skeleton, dataPath, blockLayout, qrEncode, qrDecode };
+})();
+
+const ECTests = {
+  run() {
+    let ok = true, seed = 12345;
+    const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296);
+    const check = (name, cond, extra) => { if (!cond) { ok = false; console.log("FAIL", name, extra === undefined ? "" : extra); } else console.log("ok  ", name); };
+    check("field: 2 * 142 = 1 and division undoes multiplication", EC.mul(2, 142) === 1 && EC.div(EC.mul(87, 201), 201) === 87);
+    check("generator for 7 parity bytes matches the QR spec", EC.rsGenerator(7).map((v) => EC.LOG[v]).join() === "0,87,229,146,149,238,102,21");
+    // Known vector: QR version 1-M "HELLO WORLD" data codewords and their parity
+    const hw = [32, 91, 11, 120, 209, 114, 220, 77, 67, 64, 236, 17, 236, 17, 236, 17];
+    check("parity of the HELLO WORLD example", EC.rsEncode(hw, 10).join() === "196,35,39,119,235,215,231,226,93,23", EC.rsEncode(hw, 10).join());
+    let good = true, overDetected = 0, overTotal = 0;
+    for (let trial = 0; trial < 400; trial++) {
+      const k = 4 + Math.floor(rnd() * 40), n = 2 + Math.floor(rnd() * 29);
+      const data = Array.from({ length: k }, () => Math.floor(rnd() * 256)), cw = data.concat(EC.rsEncode(data, n));
+      const pos = cw.map((_, i) => i).sort(() => rnd() - 0.5);
+      const e = Math.floor(rnd() * (n + 1)), v = Math.floor(rnd() * (Math.floor((n - e) / 2) + 1));
+      const bad = cw.slice(), era = pos.slice(0, e), err = pos.slice(e, e + v);
+      for (const p of era) bad[p] = Math.floor(rnd() * 256);
+      for (const p of err) bad[p] ^= 1 + Math.floor(rnd() * 255);
+      const r = EC.rsDecode(bad, n, era);
+      if (!r.ok || r.data.join() !== cw.join() || r.errors.slice().sort((a, b) => a - b).join() !== err.slice().sort((a, b) => a - b).join()) { good = false; console.log("trial", trial, k, n, e, v, r.reason); break; }
+      // one error too many must not silently return the original
+      const worse = cw.slice(), t = Math.floor(n / 2) + 1;
+      for (const p of pos.slice(0, t)) worse[p] ^= 1 + Math.floor(rnd() * 255);
+      const w = EC.rsDecode(worse, n);
+      overTotal++; if (!w.ok) overDetected++; else if (w.data.join() === cw.join()) good = false;
+    }
+    check("400 random error and erasure patterns within budget are repaired exactly", good);
+    check("beyond the budget, most failures are detected", overDetected / overTotal > 0.7, overDetected + "/" + overTotal);
+    let ham = true;
+    for (let d = 0; d < 16; d++) {
+      const bits = [d >> 3 & 1, d >> 2 & 1, d >> 1 & 1, d & 1], c = EC.hammingEncode(bits);
+      if (EC.hammingDecode(c).syndrome !== 0) ham = false;
+      for (let i = 0; i < 7; i++) { const x = c.slice(); x[i] ^= 1; const r = EC.hammingDecode(x); if (r.syndrome !== i + 1 || r.data.join() !== bits.join()) ham = false; }
+    }
+    check("Hamming(7,4) fixes every single-bit error and names the position", ham);
+    const two = EC.hammingEncode([1, 0, 1, 1]); two[0] ^= 1; two[5] ^= 1;
+    check("Hamming(7,4) gets two errors wrong", EC.hammingDecode(two).data.join() !== "1,0,1,1");
+    const f = EC.parabola(4, 7, 9), ys = [0, 1, 2, 3, 4, 5, 6].map(f); ys[1] += 5; ys[4] -= 3;
+    const fit = EC.fitParabola(ys);
+    check("parabola survives two wrong points out of seven", fit.agree === 5 && Math.abs(fit.f(1) - 7) < 1e-9 && Math.abs(fit.f(4) - f(4)) < 1e-9);
+    // QR
+    const total = { 1: 26, 2: 44, 3: 70, 4: 100, 5: 134, 6: 172 };
+    let tbl = true;
+    for (const v in EC.BLOCKS) {
+      const sk = EC.skeleton(+v), free = EC.dataPath(sk.size, sk.kind).length;
+      if (Math.floor(free / 8) !== total[v]) tbl = false;
+      for (const l of "LMQH") { const b = EC.BLOCKS[v][l]; if (b[1] * b[2] + b[3] * b[4] + b[0] * (b[1] + b[3]) !== total[v]) tbl = false; }
+    }
+    check("block tables add up to the free modules of each version", tbl);
+    check("format bits for M, mask 5 match the spec example", EC.formatBits("M", 5) === 0b100000011001110, EC.formatBits("M", 5).toString(2));
+    let qr = true;
+    for (const [text, level] of [["HELLO", "L"], ["https://example.com/a/long/path?x=1", "M"], ["Fejlkorrektion æøå ✓", "Q"], ["The quick brown fox jumps over the lazy dog 12345", "H"], ["x".repeat(130), "L"]]) {
+      const q = EC.qrEncode(text, level), d = EC.qrDecode(q.modules, q.version);
+      if (!d.ok || d.text !== text || d.level !== level || d.mask !== q.mask) { qr = false; console.log("qr", text, level, d.reason); }
+    }
+    check("QR codes of every level decode back to their text", qr);
+    check("too long a text is refused", EC.qrEncode("x".repeat(140), "L") === null && EC.qrEncode("x".repeat(60), "H") === null);
+    const q = EC.qrEncode("https://example.com/error-correction", "H"), dmg = q.modules.slice();
+    const lo = Math.floor(q.size * 0.36), hi = Math.ceil(q.size * 0.64);
+    for (let y = lo; y < hi; y++) for (let x = lo; x < hi; x++) dmg[y * q.size + x] = 0;
+    const dd = EC.qrDecode(dmg, q.version);
+    check("level H survives a logo over the centre", dd.ok && dd.text === "https://example.com/error-correction" && dd.blocks.some((b) => b.fixed > 0), dd.reason);
+    const qL = EC.qrEncode("https://example.com/error-correction", "L"), dL = qL.modules.slice();
+    for (let y = 9; y < qL.size - 9; y++) for (let x = 9; x < qL.size; x++) dL[y * qL.size + x] = 0;
+    check("level L does not survive heavy damage, and says so", EC.qrDecode(dL, qL.version).ok === false);
+    const fm = q.modules.slice();
+    for (const [x, y] of EC.formatPlaces(q.size)[0]) fm[y * q.size + x] = 0;
+    check("one ruined copy of the format bits is covered by the other", EC.qrDecode(fm, q.version).ok);
+    return ok;
+  },
+};
+</script>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const rnd = Math.random, enc = (s) => Array.from(new TextEncoder().encode(s)), dec = (b) => new TextDecoder().decode(new Uint8Array(b));
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const show = (s) => esc(s.replace(/[\u0000-\u001f\u007f-\u009f]/g, "·"));
+
+  // ---- 1 repetition --------------------------------------------------------------------
+  const R = { bits: [], flip: [] };
+  function repBuild() {
+    R.bits = enc($("repText").value || " ").flatMap((b) => Array.from({ length: 8 }, (_, i) => (b >> (7 - i)) & 1));
+    R.flip = new Array(R.bits.length * 3).fill(0);
+    repDraw();
+  }
+  function repDraw() {
+    let html = "";
+    const voted = [], first = [];
+    R.bits.forEach((bit, i) => {
+      const got = [0, 1, 2].map((k) => bit ^ R.flip[i * 3 + k]), v = got[0] + got[1] + got[2] >= 2 ? 1 : 0;
+      voted.push(v); first.push(got[0]);
+      if (i % 8 === 0) html += '<span class="byte">';
+      html += `<span class="grp ${v !== bit ? "wrong" : ""}">` + got.map((g, k) => `<button class="c ${R.flip[i * 3 + k] ? "flip" : ""}" data-i="${i * 3 + k}">${g}</button>`).join("") + "</span>";
+      if (i % 8 === 7) html += "</span>";
+    });
+    $("repCells").innerHTML = html;
+    const bytes = (bits) => { const o = []; for (let i = 0; i < bits.length; i += 8) o.push(parseInt(bits.slice(i, i + 8).join(""), 2)); return o; };
+    const n = R.flip.reduce((a, b) => a + b, 0), okV = voted.join("") === R.bits.join("");
+    $("repOut").innerHTML = `${n} of ${R.flip.length} bits flipped. Without the code (first copy only): <b>${show(dec(bytes(first)))}</b> · after the vote: <b class="${okV ? "good" : "fail"}">${show(dec(bytes(voted)))}</b>`;
+  }
+  $("repCells").onclick = (e) => { const b = e.target.closest(".c"); if (b) { R.flip[+b.dataset.i] ^= 1; repDraw(); } };
+  $("repText").oninput = repBuild;
+  $("repNoise").onclick = () => { R.flip = R.flip.map((f) => (rnd() < 0.05 ? 1 - f : f)); repDraw(); };
+  $("repFix").onclick = repBuild;
+
+  // ---- 2 hamming -----------------------------------------------------------------------
+  const H = { data: [1, 0, 1, 1], flip: [0, 0, 0, 0, 0, 0, 0] };
+  const HPOS = [[92, 92, "p1"], [268, 92, "p2"], [180, 82, "d1"], [180, 256, "p3"], [124, 182, "d2"], [236, 182, "d3"], [180, 142, "d4"]];
+  const HCIRC = [[140, 125, [0, 2, 4, 6], "#5aa9ff"], [220, 125, [1, 2, 5, 6], "#e5bc70"], [180, 195, [3, 4, 5, 6], "#c79bff"]];
+  function hamDraw() {
+    const sent = EC.hammingEncode(H.data), got = sent.map((b, i) => b ^ H.flip[i]), r = EC.hammingDecode(got);
+    let svg = "";
+    HCIRC.forEach(([x, y, members, col]) => {
+      const odd = members.reduce((a, i) => a ^ got[i], 0);
+      svg += `<circle cx="${x}" cy="${y}" r="88" fill="${odd ? "rgba(238,111,100,.24)" : "rgba(255,255,255,.03)"}" stroke="${col}" stroke-width="${odd ? 4 : 2}"/>`;
+    });
+    HPOS.forEach(([x, y, lab], i) => {
+      const par = lab[0] === "p";
+      svg += `<g class="bit" data-i="${i}"><circle cx="${x}" cy="${y}" r="17" fill="${H.flip[i] ? "#ee6f64" : "#1b222b"}" stroke="${r.syndrome === i + 1 ? "#ffffff" : "#aab4c0"}" stroke-width="${r.syndrome === i + 1 ? 4 : 1.8}" ${par && r.syndrome !== i + 1 ? 'stroke-dasharray="4 3"' : ""}/><text x="${x}" y="${y}" ${H.flip[i] ? 'style="fill:#1b0f0d"' : ""}>${got[i]}</text></g><text class="lab" x="${x + 25}" y="${y - 15}">${i + 1}</text>`;
+    });
+    $("venn").innerHTML = svg;
+    const n = H.flip.reduce((a, b) => a + b, 0), right = r.data.join("") === H.data.join("");
+    const odd = HCIRC.map((c, k) => (r.syndrome >> k) & 1), names = ["blue", "yellow", "violet"].filter((_, k) => odd[k]);
+    let msg = `Message <b>${H.data.join("")}</b>, sent as <b>${sent.join("")}</b>, received <b>${got.join("")}</b>. `;
+    if (!r.syndrome) msg += n ? `<span class="fail">All three circles are even, so the receiver sees nothing wrong, and reads <b>${r.data.join("")}</b>.</span>` : `<span class="good">All three circles are even: nothing to repair.</span>`;
+    else msg += `The ${names.join(" and ")} circle${names.length > 1 ? "s are" : " is"} odd. Only bit ${r.syndrome} sits in exactly ${names.length > 1 ? "those" : "that one"}, so it is flipped back (white ring). ` +
+      (right ? `<span class="good">Read as <b>${r.data.join("")}</b>: correct.</span>` : `<span class="fail">Read as <b>${r.data.join("")}</b>: wrong. With ${n} bits damaged the code blamed the wrong one.</span>`);
+    $("hamOut").innerHTML = msg;
+  }
+  $("venn").onclick = (e) => { const g = e.target.closest(".bit"); if (g) { H.flip[+g.dataset.i] ^= 1; hamDraw(); } };
+  $("hamNew").onclick = () => { H.data = H.data.map(() => (rnd() < 0.5 ? 1 : 0)); H.flip.fill(0); hamDraw(); };
+  $("hamFix").onclick = () => { H.flip.fill(0); hamDraw(); };
+
+  // ---- 3 parabola ----------------------------------------------------------------------
+  const P = { sent: [], got: [], drag: -1 };
+  function polyNew() {
+    for (;;) {
+      const y0 = 3 + Math.floor(rnd() * 14), d1 = Math.floor(rnd() * 9) - 4, d2 = rnd() < 0.5 ? -1 : 1, f = EC.parabola(y0, y0 + d1, y0 + 2 * d1 + d2);
+      const ys = [0, 1, 2, 3, 4, 5, 6].map(f);
+      if (ys.every((y) => y >= 2 && y <= 18) && Math.max(...ys) - Math.min(...ys) >= 5) { P.sent = ys; P.got = ys.slice(); break; }
+    }
+    polyDraw();
+  }
+  const PX = (x) => 70 + x * 126, PY = (y) => 300 - y * 14;
+  function polyDraw() {
+    const c = $("poly"), r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.round(w * 320 / 900);
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    const ctx = c.getContext("2d"), s = w / 900, fpx = (px) => Math.max(px, 10 * dpr / s);
+    ctx.setTransform(s, 0, 0, s, 0, 0); ctx.clearRect(0, 0, 900, 320);
+    ctx.strokeStyle = "#232b35"; ctx.lineWidth = 1; ctx.font = fpx(11) + "px ui-monospace, monospace"; ctx.fillStyle = "#7d8998"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let y = 0; y <= 20; y += 5) { ctx.beginPath(); ctx.moveTo(40, PY(y)); ctx.lineTo(880, PY(y)); ctx.stroke(); ctx.fillText(y, 32, PY(y)); }
+    const fit = EC.fitParabola(P.got), okFit = fit.agree >= 5;
+    if (okFit) {
+      ctx.strokeStyle = "#e7e5df"; ctx.lineWidth = 1.6; ctx.beginPath();
+      for (let i = 0; i <= 120; i++) { const x = -0.3 + i / 120 * 6.6; ctx[i ? "lineTo" : "moveTo"](PX(x), PY(fit.f(x))); }
+      ctx.stroke();
+    }
+    P.got.forEach((y, x) => {
+      const off = okFit && Math.abs(fit.f(x) - y) > 1e-6;
+      if (off) { ctx.strokeStyle = "#7fd89a"; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(PX(x), PY(y)); ctx.lineTo(PX(x), PY(fit.f(x))); ctx.stroke(); ctx.setLineDash([]); ctx.beginPath(); ctx.arc(PX(x), PY(fit.f(x)), 7, 0, 7); ctx.stroke(); }
+      ctx.fillStyle = off ? "#ee6f64" : x < 3 ? "#5aa9ff" : "#e5bc70";
+      ctx.beginPath(); ctx.arc(PX(x), PY(y), 9, 0, 7); ctx.fill();
+      ctx.fillStyle = "#e7e5df"; ctx.textAlign = "center"; ctx.font = "600 " + fpx(12) + "px ui-monospace, monospace";
+      ctx.fillText(y, PX(x), PY(y) + (PY(y) < 40 ? 22 : -20));
+    });
+    const moved = P.got.filter((y, x) => y !== P.sent[x]).length, read = okFit ? [0, 1, 2].map((x) => Math.round(fit.f(x))) : null;
+    const right = read && read.join() === P.sent.slice(0, 3).join();
+    $("polyOut").innerHTML = `Message <b>${P.sent.slice(0, 3).join(" ")}</b>, sent as <b>${P.sent.join(" ")}</b>, received <b>${P.got.join(" ")}</b>. ` +
+      (!okFit ? `<span class="fail">No parabola passes through five of the seven points. The receiver knows the message is damaged but cannot repair it.</span>`
+        : !moved ? `<span class="good">All seven points lie on one parabola.</span>`
+        : right ? `<span class="good">${fit.agree} points agree on one parabola; the ${7 - fit.agree} that do not are moved back onto it. Read as <b>${read.join(" ")}</b>.</span>`
+        : `<span class="fail">Five points agree on a parabola, but it is the wrong one. Read as <b>${read.join(" ")}</b>.</span>`);
+  }
+  const polyAt = (e) => { const r = $("poly").getBoundingClientRect(), k = 900 / r.width; return [(e.clientX - r.left) * k, (e.clientY - r.top) * k]; };
+  $("poly").onpointerdown = (e) => { const [x, y] = polyAt(e), i = Math.round((x - 70) / 126); if (i >= 0 && i < 7 && Math.abs(PY(P.got[i]) - y) < 40) { P.drag = i; $("poly").setPointerCapture(e.pointerId); } };
+  $("poly").onpointermove = (e) => { if (P.drag < 0) return; const [, y] = polyAt(e); P.got[P.drag] = Math.max(0, Math.min(20, Math.round((300 - y) / 14))); polyDraw(); };
+  $("poly").onpointerup = $("poly").onpointercancel = () => { P.drag = -1; };
+  $("polyNew").onclick = polyNew;
+  $("polyFix").onclick = () => { P.got = P.sent.slice(); polyDraw(); };
+
+  // ---- 4 reed-solomon bytes ------------------------------------------------------------
+  const S = { cw: [], st: [], val: [], k: 0 };
+  const hex = (v) => v.toString(16).toUpperCase().padStart(2, "0");
+  function rsBuild() {
+    const d = enc($("rsText").value || " "), n = +$("rsPar").value;
+    S.k = d.length; S.cw = d.concat(EC.rsEncode(d, n)); S.st = S.cw.map(() => 0); S.val = S.cw.slice();
+    rsDraw();
+  }
+  function rsDraw() {
+    const n = +$("rsPar").value;
+    $("rsParLab").textContent = n;
+    $("rsCells").innerHTML = S.cw.map((v, i) => `<button class="hx ${i >= S.k ? "par" : ""} ${S.st[i] === 1 ? "bad" : S.st[i] === 2 ? "gone" : ""}" data-i="${i}">${S.st[i] === 2 ? "?" : hex(S.val[i])}</button>`).join("");
+    const era = S.st.map((s, i) => (s === 2 ? i : -1)).filter((i) => i >= 0), errs = S.st.filter((s) => s === 1).length;
+    const r = EC.rsDecode(S.val, n, era), cost = 2 * errs + era.length;
+    $("rsMeter").innerHTML = `<div style="width:${Math.min(100, 100 * 2 * errs / n)}%;background:var(--bad)"></div><div style="width:${Math.max(0, Math.min(100 - 100 * 2 * errs / n, 100 * era.length / n))}%;background:var(--gone)"></div>`;
+    const raw = show(dec(S.val.slice(0, S.k).map((v, i) => (S.st[i] === 2 ? 63 : v))));
+    let msg = `${errs} wrong × 2 + ${era.length} missing × 1 = <b>${cost}</b> of <b>${n}</b> parity bytes used. Received: <b>${raw}</b> · `;
+    if (!r.ok) msg += `<span class="fail">Decoder gives up: ${r.reason}.</span>`;
+    else if (r.data.join() !== S.cw.join()) msg += `<span class="fail">Decoder is fooled and repairs to the wrong message: <b>${show(dec(r.data.slice(0, S.k)))}</b></span>`;
+    else msg += `<span class="good">repaired: <b>${show(dec(r.data.slice(0, S.k)))}</b></span>` + (r.errors.length ? ` The decoder located the wrong bytes by itself, at position${r.errors.length > 1 ? "s" : ""} ${r.errors.map((p) => p + 1).sort((a, b) => a - b).join(", ")}.` : "");
+    $("rsOut").innerHTML = msg;
+  }
+  function rsHit(i) { S.st[i] = 1; S.val[i] = S.cw[i] ^ (1 + Math.floor(rnd() * 255)); }
+  $("rsCells").onclick = (e) => {
+    const b = e.target.closest(".hx"); if (!b) return;
+    const i = +b.dataset.i;
+    if (S.st[i] === 0) rsHit(i); else if (S.st[i] === 1) S.st[i] = 2; else { S.st[i] = 0; S.val[i] = S.cw[i]; }
+    rsDraw();
+  };
+  $("rsText").oninput = rsBuild; $("rsPar").oninput = rsBuild; $("rsFix").onclick = rsBuild;
+  $("rsNoise").onclick = () => { const free = S.st.map((s, i) => (s ? -1 : i)).filter((i) => i >= 0).sort(() => rnd() - 0.5); free.slice(0, 3).forEach(rsHit); rsDraw(); };
+
+  // ---- 5 QR ----------------------------------------------------------------------------
+  const Q = { q: null, mod: null, stroke: null, quiet: 3 };
+  const PART = { 1: ["#b23a3a", "#f6dada", "corner squares"], 2: ["#7a4fc0", "#e6dcf6", "timing lines"], 3: ["#c9741f", "#f8e3cc", "alignment square"], 4: ["#2f8f55", "#d6f0df", "format bits"], 5: ["#2f8f55", "#d6f0df", ""], d: ["#1f5fae", "#d9e7f8", "data bytes"], e: ["#9a7412", "#f6ecc9", "parity bytes"] };
+  const HUES = [212, 32, 280, 150];
+  function qrBuild() {
+    const q = EC.qrEncode($("qrText").value, $("qrLevel").value);
+    if (!q) { $("qrOut").innerHTML = `<span class="fail">Too long for this page at this level. Shorten the text or lower the level.</span>`; return; }
+    Q.q = q; Q.mod = q.modules.slice();
+    Q.stream = q.order.map((o) => q.blocks[o.block].bytes[o.index]);
+    qrUpdate();
+  }
+  function qrDraw() {
+    const q = Q.q, c = $("qr"), r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1, n = q.size + 2 * Q.quiet;
+    const w = Math.max(n, Math.round(r.width * dpr / n) * n);
+    if (c.width !== w) { c.width = w; c.height = w; }
+    const ctx = c.getContext("2d"), m = w / n, view = $("qrView").value;
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, w);
+    for (let y = 0; y < q.size; y++) for (let x = 0; x < q.size; x++) {
+      const i = y * q.size + x, dark = Q.mod[i];
+      let col = dark ? "#000" : "#fff";
+      if (view === "parts") { const k = q.kind[i] || (q.cwOf[i] < 0 ? 0 : q.order[q.cwOf[i]].ec ? "e" : "d"); if (k) col = PART[k][dark ? 0 : 1]; }
+      else if (view === "blocks" && q.cwOf[i] >= 0) { const o = q.order[q.cwOf[i]], hue = HUES[o.block % 4]; col = `hsl(${hue} ${o.ec ? 35 : 75}% ${dark ? (o.ec ? 38 : 30) : 88}%)`; }
+      else if (view === "blocks" && !dark) col = "#fff";
+      ctx.fillStyle = col; ctx.fillRect((x + Q.quiet) * m, (y + Q.quiet) * m, m, m);
+      if ($("qrMarks").checked && dark !== q.modules[i]) { ctx.fillStyle = "#ff3b30"; ctx.beginPath(); ctx.arc((x + Q.quiet + 0.5) * m, (y + Q.quiet + 0.5) * m, m * 0.22, 0, 7); ctx.fill(); }
+    }
+    const lg = view === "parts" ? [1, 2, 3, 4, "d", "e"].map((k) => [PART[k][0], PART[k][2]]).concat(Q.q.version > 1 ? [["#000", "plain black and white: seven leftover filler modules"]] : []) : view === "blocks" ? q.blocks.map((b, k) => [`hsl(${HUES[k % 4]} 75% 30%)`, "block " + (k + 1)]).concat([["hsl(212 35% 38%)", "duller shade: parity bytes"]]) : [];
+    $("qrLegend").innerHTML = lg.filter((l) => q.version > 1 || l[1] !== "alignment square").map((l) => `<span class="chip"><span class="sw" style="background:${l[0]}"></span>${l[1]}</span>`).join("");
+  }
+  function qrUpdate() {
+    const q = Q.q, d = EC.qrDecode(Q.mod, q.version);
+    qrDraw();
+    let dmgMod = 0, finder = 0;
+    for (let i = 0; i < Q.mod.length; i++) if (Q.mod[i] !== q.modules[i]) { dmgMod++; if (q.kind[i] === 1) finder++; }
+    // damaged bytes per block, counted against what was printed
+    const hit = q.blocks.map(() => 0), cwBad = new Set();
+    for (let i = 0; i < Q.mod.length; i++) if (q.cwOf[i] >= 0 && Q.mod[i] !== q.modules[i]) cwBad.add(q.cwOf[i]);
+    cwBad.forEach((c) => hit[q.order[c].block]++);
+    let msg;
+    if (!d.ok) msg = `<span class="fail">Cannot be read.</span> ${d.reason}`;
+    else if (d.text !== $("qrText").value) msg = `<span class="fail">Read as the wrong text:</span> <b>${show(d.text)}</b>`;
+    else msg = `<span class="good">Reads:</span> <b>${show(d.text)}</b>` + (dmgMod ? ` · ${cwBad.size} damaged bytes repaired` : "");
+    if (finder > 4) msg += `<br><span class="fail">A corner square is damaged (${finder} modules).</span> A phone would probably fail to find this code at all.`;
+    $("qrOut").innerHTML = msg;
+    $("qrRows").innerHTML = q.blocks.map((b, k) => {
+      const lim = Math.floor(b.ecLen / 2), res = d.blocks ? d.blocks[k].ok : hit[k] <= lim;
+      return `<tr><td>${k + 1}</td><td class="num">${b.dataLen + b.ecLen}</td><td class="num">${b.ecLen}</td><td class="num">${hit[k]}</td><td class="num">${lim}</td><td class="${res ? "good" : "fail"}">${res ? (hit[k] ? "repaired" : "intact") : "lost"}</td></tr>`;
+    }).join("");
+    const total = q.order.length, par = q.blocks.reduce((a, b) => a + b.ecLen, 0);
+    $("qrInfo").textContent = `Version ${q.version}: ${q.size} × ${q.size} modules, mask ${q.mask}. ${total} bytes in all: ${total - par} for the message (${q.bytes} used) and ${par} parity, in ${q.blocks.length} block${q.blocks.length > 1 ? "s" : ""}. ${dmgMod} of ${q.size * q.size} modules damaged.`;
+  }
+  function qrPaint(x, y, mode, rad) {
+    const q = Q.q;
+    for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+      const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= q.size || yy >= q.size) continue;
+      const i = yy * q.size + xx;
+      if (mode === "flip") { if (Q.stroke && !Q.stroke.has(i)) { Q.stroke.add(i); Q.mod[i] ^= 1; } else if (!Q.stroke) Q.mod[i] ^= 1; }
+      else Q.mod[i] = mode === "black" ? 1 : 0;
+    }
+  }
+  const qrAt = (e) => { const r = $("qr").getBoundingClientRect(), n = Q.q.size + 2 * Q.quiet; return [Math.floor((e.clientX - r.left) / r.width * n) - Q.quiet, Math.floor((e.clientY - r.top) / r.height * n) - Q.quiet]; };
+  function qrStroke(e) { // paint every module between the last pointer position and this one
+    const [x, y] = qrAt(e), [px, py] = Q.last || [x, y], n = Math.max(Math.abs(x - px), Math.abs(y - py), 1);
+    for (let i = 0; i <= n; i++) qrPaint(Math.round(px + (x - px) * i / n), Math.round(py + (y - py) * i / n), $("qrBrush").value, +$("qrSize").value);
+    Q.last = [x, y];
+    qrUpdate();
+  }
+  $("qr").onpointerdown = (e) => { if (!Q.q) return; Q.stroke = new Set(); Q.last = null; $("qr").setPointerCapture(e.pointerId); qrStroke(e); };
+  $("qr").onpointermove = (e) => { if (Q.stroke) qrStroke(e); };
+  $("qr").onpointerup = $("qr").onpointercancel = () => { Q.stroke = null; };
+  const QACT = {
+    fix() { Q.mod = Q.q.modules.slice(); },
+    logo() { const s = Q.q.size, lo = Math.floor(s * 0.36), hi = Math.ceil(s * 0.64); for (let y = lo; y < hi; y++) for (let x = lo; x < hi; x++) Q.mod[y * s + x] = (x === lo || y === lo || x === hi - 1 || y === hi - 1) ? 1 : 0; },
+    noise() { for (let i = 0; i < Q.mod.length; i++) if (rnd() < 0.03) Q.mod[i] ^= 1; },
+    scratch() { const s = Q.q.size, y0 = 8 + rnd() * (s - 16), y1 = 8 + rnd() * (s - 16); for (let t = 0; t <= s * 3; t++) { const x = 9 + (s - 10) * t / (s * 3); qrPaint(Math.round(x), Math.round(y0 + (y1 - y0) * t / (s * 3)), "white", 0); qrPaint(Math.round(x), Math.round(y0 + (y1 - y0) * t / (s * 3)) + 1, "white", 0); } },
+    corner() { const s = Q.q.size, k = Math.round(s * 0.42); for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) if ((s - 1 - x) + (s - 1 - y) < k) Q.mod[y * s + x] = 0; },
+  };
+  document.querySelectorAll("[data-q]").forEach((b) => (b.onclick = () => { if (Q.q) { QACT[b.dataset.q](); qrUpdate(); } }));
+  $("qrText").oninput = qrBuild; $("qrLevel").onchange = qrBuild; $("qrView").onchange = qrDraw; $("qrMarks").onchange = qrDraw;
+
+  // ---- 6 interleaving ------------------------------------------------------------------
+  const IL_COL = ["#5aa9ff", "#e5bc70", "#c79bff", "#7fd89a"];
+  function ilDraw() {
+    const on = $("ilOn").checked, len = +$("ilLen").value, pos = Math.min(+$("ilPos").value, 40 - len);
+    $("ilLenLab").textContent = len + " bytes";
+    const at = (t) => (on ? { b: t % 4, i: Math.floor(t / 4) } : { b: Math.floor(t / 10), i: t % 10 });
+    const hits = [0, 0, 0, 0], hitCell = {};
+    let strip = "";
+    for (let t = 0; t < 40; t++) {
+      const { b, i } = at(t), h = t >= pos && t < pos + len;
+      if (h) { hits[b]++; hitCell[b + "-" + i] = true; }
+      strip += `<span class="s ${h ? "hit" : ""}" style="background:${IL_COL[b]}">${"ABCD"[b]}${i}</span>`;
+    }
+    $("ilStrip").innerHTML = strip;
+    $("ilRows").innerHTML = [0, 1, 2, 3].map((b) => `<div class="cwrow"><span class="strip" style="margin:0">${Array.from({ length: 10 }, (_, i) => `<span class="s ${hitCell[b + "-" + i] ? "hit" : ""}" style="background:${IL_COL[b]}">${"ABCD"[b]}${i}</span>`).join("")}</span><span class="${hits[b] <= 2 ? "good" : "fail"}">${hits[b]} damaged: ${hits[b] <= 2 ? (hits[b] ? "repaired" : "intact") : "lost"}</span></div>`).join("");
+    const lost = hits.filter((h) => h > 2).length;
+    $("ilOut").innerHTML = lost ? `<span class="fail">${lost} of 4 blocks cannot be repaired.</span> ${on ? "Even dealt out, this scratch is longer than 4 blocks × 2 bytes can absorb." : "The whole scratch landed in neighbouring bytes of the same block."}` : `<span class="good">Everything is recovered.</span> ${on && len > 2 ? "The scratch was dealt out, at most two bytes to each block." : ""}`;
+  }
+  ["ilOn", "ilLen", "ilPos"].forEach((id) => ($(id).oninput = ilDraw));
+
+  const params = new URLSearchParams(location.search);
+  if (params.get("view")) $("qrView").value = params.get("view");
+  repBuild(); hamDraw(); polyNew(); rsBuild(); qrBuild(); ilDraw();
+  if (params.get("demo")) { R.flip[1] = R.flip[10] = R.flip[11] = 1; repDraw(); H.flip[4] = 1; hamDraw(); P.got[1] += 5; P.got[4] -= 4; polyDraw(); rsHit(2); rsHit(7); S.st[12] = 2; rsDraw(); QACT.logo(); qrUpdate(); }
+  addEventListener("resize", () => { polyDraw(); if (Q.q) qrDraw(); });
+  window.__ec = { Q, QACT, qrUpdate };
+})();
+</script>
+</body>
+</html>
