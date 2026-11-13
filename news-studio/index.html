@@ -1746,6 +1746,25 @@ function pose(h, desk) {
   const f = h.f; h.desk = desk; h.cur = null;
   for (const a of [f.armL, f.armR]) a.userData.elbow.rotation.order = "YXZ";
   h.g.position.y = desk ? DESK_Y + .075 - (f.shoulderY - f.upLen * Math.cos(.22) * Math.cos(.2)) : 0;
+  if (!desk) return;
+  // With the forearms folded right up, whatever is still below the desk top is the elbow itself: lift the robot by that much.
+  h.g.rotation.set(0, 0, 0); f.armR.rotation.set(-.22, 0, -.2); f.armL.rotation.set(-.22, 0, .2);
+  let low = Infinity; for (const a of [f.armL, f.armR]) { a.userData.elbow.rotation.set(-2.7, 0, 0); low = Math.min(low, lowest(a)); }
+  if (low < DESK_Y + .006) h.g.position.y += DESK_Y + .006 - low;
+}
+// The lowest point of a forearm and hand, measured on the actual surface.
+const armBox = new THREE.Box3();
+function lowest(arm) { arm.updateWorldMatrix(true, true); return armBox.setFromObject(arm.userData.elbow, true).min.y; }
+// Nothing may pass through the desk top: bend each elbow up just far enough that the forearm and hand lie on it.
+function clearDesk(h) {
+  const lim = DESK_Y + .004;
+  for (const arm of [h.f.armR, h.f.armL]) {
+    const e = arm.userData.elbow, x0 = e.rotation.x;
+    if (lowest(arm) >= lim) continue;
+    let lo = 0, hi = Math.max(.1, x0 + 2.8);
+    for (let i = 0; i < 8; i++) { const mid = (lo + hi) / 2; e.rotation.x = x0 - mid; if (lowest(arm) >= lim) hi = mid; else lo = mid; }
+    e.rotation.x = x0 - hi;
+  }
 }
 // Body language. A pose is [right arm, left arm, head, lean]: an arm is [swing forward (negative), out to the side, elbow bend
 // (negative), forearm turned inward (negative)], the head is [turn, nod, tilt], lean is [sideways, twist].
@@ -1816,6 +1835,7 @@ function updateHosts(t, speaking) {
     const look = sp ? 0 : h.look;
     f.pivot.rotation.set(p[9] + (sp ? .04 * Math.sin(t * 2.3 + s) : 0) + h.talk * .03, p[8] * (look ? .4 : 1) + look + .06 * Math.sin(t * .6 + s), p[10] + .02 * Math.sin(t * 1.1 + s));
     h.g.rotation.set(0, h.baseRot + p[12] + .02 * Math.sin(t * .45 + s), p[11]);
+    if (h.desk) clearDesk(h);
     f.MAT.accent.emissiveIntensity = h.em0 + h.talk * 1.4; f.MAT.glass.emissiveIntensity = h.gl0 + h.talk * .35;
   });
 }
@@ -2108,7 +2128,7 @@ async function main() {
   // Review aid: ?from=wide&tp=.5 freezes a transition half way from that shot into the current one.
   if (Q.get("from") && Q.has("tp")) { drawSource(snap.getContext("2d"), { shot: Q.get("from"), story: S.story, t0: 0 }, now); trans = { name: NS.transitionFor(S.trans, ERA), t0: now, dur: 1 }; freezeP = clamp(parseFloat(Q.get("tp")) || 0, 0, .999); }
   syncUI(); $("msg").textContent = ""; draw();
-  window.__ns = { S, G, step: dt => tick(dt), go, nextSeg, draw, state: () => ({ cur, now, trans: trans && trans.name, size: [prog.width, prog.height, out.width, out.height] }) };
+  window.__ns = { S, G, hosts, lowest, step: dt => tick(dt), go, nextSeg, draw, state: () => ({ cur, now, trans: trans && trans.name, size: [prog.width, prog.height, out.width, out.height] }) };
   let last = performance.now();
   const loop = t => { const dt = Math.min(.1, (t - last) / 1000); last = t; if (running && freezeP === null && !Q.has("t")) tick(dt); else draw(); requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
