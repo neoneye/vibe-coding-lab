@@ -436,7 +436,7 @@ const NS = (() => {
   // The running order: titles, a greeting, then each story as anchor, over-shoulder graphic and its own material.
   // enter says how the picture gets there: "trans" is the chosen transition, "cut" a plain cut, "soft" a dissolve.
   function buildRundown(stories = STORIES) {
-    const r = [{ shot: "titles", dur: 6, story: 0, enter: "trans" }, { shot: "wide", dur: 5, story: 0, enter: "soft" }];
+    const r = [{ shot: "titles", dur: 6, story: 0, enter: "trans" }, { shot: "wide", dur: 9, story: 0, enter: "soft", entrance: true }];
     stories.forEach((s, i) => {
       r.push({ shot: "mcu", dur: 7, story: i, enter: i === 0 ? "cut" : "trans" });
       if (s.kind === "weather") { r.push({ shot: "weather", dur: 9, story: i, enter: "trans" }); return; }
@@ -455,6 +455,17 @@ const NS = (() => {
   // The segment after i; at the end go back to loopFrom (1 for breaking news, so the interruption card is not repeated).
   const advance = (len, i, loopFrom = 0) => i + 1 < len ? i + 1 : loopFrom;
   const storyAt = i => i < 0 ? BREAKING : STORIES[i];
+  // The walk to the desk at the start of the bulletin. A presenter waits off screen until `delay`, walks along the back of
+  // the desk at a steady pace, then takes `settle` seconds to turn to the camera and sit down to the desk.
+  const WALK = { speed: 1.2, from: 3.6, back: .34, settle: 1.3 };
+  function walkPlan(homeX, side, delay) { const fromX = side * WALK.from, arrive = delay + Math.abs(homeX - fromX) / WALK.speed; return { fromX, homeX, delay, arrive, done: arrive + WALK.settle }; }
+  // Where the presenter is e seconds into the entrance: mode, position along the desk, metres walked, and 0..1 through the settle.
+  function walkPhase(p, e) {
+    if (e < p.delay) return { mode: "off", x: p.fromX, dist: 0, u: 0 };
+    if (e < p.arrive) { const d = (e - p.delay) * WALK.speed; return { mode: "walk", x: p.fromX + Math.sign(p.homeX - p.fromX) * d, dist: d, u: 0 }; }
+    if (e < p.done) return { mode: "settle", x: p.homeX, dist: Math.abs(p.homeX - p.fromX), u: (e - p.arrive) / WALK.settle };
+    return { mode: "done", x: p.homeX, dist: Math.abs(p.homeX - p.fromX), u: 1 };
+  }
   const total = r => r.reduce((a, s) => a + s.dur, 0);
   // Which segment is on air at time t (seconds, loops), and how far into it.
   function locate(r, t) {
@@ -535,7 +546,7 @@ const NS = (() => {
     if (S.co === S.anchor) S.co = -1;
     return S;
   }
-  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, BREAKING, WORDS, CARDS, buildBreaking, advance, storyAt, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, soundPlan, transitionFor, logoFor, hueFor, reporterFor, speakerFor, parse };
+  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, BREAKING, WORDS, CARDS, buildBreaking, advance, storyAt, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, WALK, walkPlan, walkPhase, soundPlan, transitionFor, logoFor, hueFor, reporterFor, speakerFor, parse };
 })();
 
 const NSTests = {
@@ -578,6 +589,13 @@ const NSTests = {
     check("a longer transition stretches its sound", Math.max(...NS.soundPlan("wipe", 2).map(v => v.t + v.d)) > Math.max(...NS.soundPlan("wipe", .5).map(v => v.t + v.d)));
     check("the glitch sound is the same every time", JSON.stringify(NS.soundPlan("glitch", 1)) === JSON.stringify(NS.soundPlan("glitch", 1)));
     check("the stinger chord changes with the era", NS.soundPlan("stinger", .9, 0).some(v => v.wave === "square") && NS.soundPlan("stinger", .9, 3).some(v => v.wave === "sawtooth"));
+    check("the bulletin's first studio shot is the walk to the desk", r[1].shot === "wide" && r[1].entrance === true && r.filter(x => x.entrance).length === 1);
+    const wp = NS.walkPlan(0, -1, .4), w2 = NS.walkPlan(.68, 1, 1);
+    check("a presenter waits off screen, walks, settles, and is done", NS.walkPhase(wp, .2).mode === "off" && NS.walkPhase(wp, 1).mode === "walk" && NS.walkPhase(wp, wp.arrive + .1).mode === "settle" && NS.walkPhase(wp, wp.done + 1).mode === "done");
+    check("the walk starts off screen and ends at the presenter's place", NS.walkPhase(wp, .4).x === -NS.WALK.from && Math.abs(NS.walkPhase(wp, wp.arrive - 1e-6).x) < 1e-3 && NS.walkPhase(w2, w2.done).x === .68);
+    check("walking is at a steady pace", Math.abs((NS.walkPhase(wp, 2).x - NS.walkPhase(wp, 1).x) - NS.WALK.speed) < 1e-9 && NS.walkPhase(w2, 2).x < NS.walkPhase(w2, 1.5).x);
+    check("the settle runs from 0 to 1", NS.walkPhase(wp, wp.arrive).u === 0 && Math.abs(NS.walkPhase(wp, wp.arrive + NS.WALK.settle / 2).u - .5) < 1e-9);
+    check("everyone is at the desk before the entrance shot ends", wp.done < r[1].dur - 1 && w2.done < r[1].dur - 1);
     const b = NS.buildBreaking();
     check("breaking news opens on the interruption card", b[0].shot === "alert" && b.every(x => x.story === -1));
     check("breaking news goes to the anchor, then the reporter", b[1].shot === "mcu" && b.some(x => x.shot === "live") && b.some(x => x.shot === "field"));
@@ -1751,7 +1769,7 @@ function buildFigure() {
     const g = new THREE.Group(); g.position.set(hx, hipY, 0); g.rotation.z = legA;
     g.add(joint(P.pelvis === 0 || P.pelvis === 3 ? 2 : 0, Math.min(hjR, thighR * .95)));
     g.add(segment(P.thighType, thighLen, thighR, Math.max(kneeR * .8, thighR * .55), { mat: mat("thigh"), bulge: 1.04, seam, band }));
-    const k = new THREE.Group(); k.position.y = -thighLen; g.add(k);
+    const k = new THREE.Group(); g.userData.knee = k; k.position.y = -thighLen; g.add(k);
     k.add(joint(P.jointStyle, kneeR));
     if (P.lights === 3) k.add(ball(.008, MAT.accent, 0, 0, kneeR * .95));
     k.add(segment(P.shinType, shinLen, Math.max(calfR, kneeR * .7), ankleR, { mat: mat("shin"), calf: P.calf, bulge: 1.02, seam, band: P.stripes > .75 ? [.6, .64] : null }));
@@ -1816,7 +1834,7 @@ function buildFigure() {
 
   const height = chestTop + neckLen + head.hh * 1.86 + (P.headwear === 3 ? .03 : 0);
   const halfW = shoulderHalf + Math.sin(lerp(.07, 1.25, P.armSpread)) * (upLen + foLen + .17) + .06;
-  return { root, height, pivot, armL, armR, shoulderY, upLen, foLen, chestTop };
+  return { root, height, pivot, armL, armR, legL, legR, hipY, shoulderY, upLen, foLen, chestTop };
 }
 
 makeMaterials(); applyMaterials();
@@ -1859,7 +1877,7 @@ function buildHost(i, link) {
   const P = HM.decode(link) || HM.decode(NS.HOSTS[i].link);
   P.armSpread = .1; P.elbowBend = 0; P.headTurn = 0; P.stance = .25;
   if (P.face === 3 && P.maskStyle === 3) { P.maskStyle = 1; P.eyeSize = Math.max(P.eyeSize, 1.05); }   // a presenter with a sleeping face gets open eyes
-  const f = makeHumanoid(P), g = new THREE.Group(); g.add(f.root); scene.add(g);
+  const f = makeHumanoid(P), g = new THREE.Group(); g.rotation.order = "YXZ"; g.add(f.root); scene.add(g);
   return { g, f, i, name: NS.HOSTS[i].name, seed: 1 + i * 2.37, talk: 0, look: 0, baseRot: 0, desk: true, cur: null, em0: f.MAT.accent.emissiveIntensity, gl0: f.MAT.glass.emissiveIntensity };
 }
 // Behind the desk the robot is raised or lowered so that its elbows meet the desk top when the arms are at rest.
@@ -1938,15 +1956,50 @@ const reporter = () => NS.reporterFor(S.anchor, S.co, S.rep);
 function layout() {
   const a = S.anchor, co = S.co, rep = reporter(); host(a); host(rep); if (co >= 0) host(co);
   hosts.forEach((h, i) => { h.g.visible = i === a || i === co || i === rep; h.look = 0; });
-  const put = (h, x, rot, desk) => { pose(h, desk); h.g.position.x = x; h.g.position.z = 0; h.baseRot = rot; };
+  const put = (h, x, rot, desk) => { pose(h, desk); h.g.position.x = x; h.g.position.z = 0; h.baseRot = rot; h.homeX = x; h.homeY = h.g.position.y; legs(h, 0, 0); };
   put(hosts[a], co >= 0 ? -.68 : 0, co >= 0 ? .12 : 0, true);
   if (co >= 0) { put(hosts[co], .68, -.12, true); hosts[a].look = .4; hosts[co].look = -.4; }
   put(hosts[rep], REP_X, 0, false);
+}
+// Swing the legs: a is the hip swing of the left leg (forward is negative), the right leg does the opposite; lift bends the knee of the leg coming forward.
+function legs(h, a, lift) {
+  const { legL, legR } = h.f; legL.rotation.x = a; legR.rotation.x = -a;
+  legL.userData.knee.rotation.x = lift > 0 ? lift : 0; legR.userData.knee.rotation.x = lift < 0 ? -lift : 0;
+}
+// The entrance: e seconds in, put this presenter where the walk plan says and move the body accordingly.
+// Returns true while the walk still owns the arms.
+const READY = [-.3, .2, -2.05, -.45, -.3, .2, -2.05, -.45, 0, 0, 0, 0, 0];
+function walkIn(h, e, plan) {
+  const w = NS.walkPhase(plan, e), f = h.f, g = h.g, dir = Math.sign(plan.homeX - plan.fromX) || 1, face = dir * Math.PI / 2;
+  g.position.x = w.x;
+  if (w.mode === "off" || w.mode === "walk") {
+    const stride = 2 * (f.hipY - .08) * Math.sin(.42), ph = w.dist / stride * Math.PI, s = Math.sin(ph), c = Math.cos(ph);
+    g.position.z = -NS.WALK.back; g.position.y = .012 * Math.cos(2 * ph) - .012; g.rotation.set(.05, face, 0);
+    legs(h, -.42 * s, .85 * Math.max(0, c) * (c > 0 ? 1 : 0) - .85 * Math.max(0, -c));
+    const arm = .38 * s; h.cur = [-arm - .05, .1, -.4, 0, arm - .05, .1, -.4, 0, 0, -.03, 0, 0, 0];
+    f.armR.rotation.set(h.cur[0], 0, -.1); f.armL.rotation.set(h.cur[4], 0, .1);
+    for (const a of [f.armR, f.armL]) { a.userData.elbow.rotation.x = -.4 - .15 * Math.abs(s); a.userData.elbow.rotation.y = 0; }
+    f.pivot.rotation.set(-.03, -dir * .25 * ease.io((w.dist - (Math.abs(plan.homeX - plan.fromX) - 1.2)) / 1), 0);   // glances at the camera on the last steps
+    return true;
+  }
+  // settle: turn to the camera and step up to the desk, lift the forearms clear, then sit down to it
+  const turn = ease.io(w.u / .6), sit = ease.io((w.u - .4) / .6);
+  if (!h.cur) h.cur = READY.slice();
+  g.position.z = -NS.WALK.back * (1 - turn); g.position.y = h.homeY * sit; legs(h, 0, 0);
+  if (w.u < .55) {
+    for (let j = 0; j < READY.length; j++) h.cur[j] += (READY[j] - h.cur[j]) * .16;
+    const p = h.cur; f.armR.rotation.set(p[0], 0, -p[1]); f.armL.rotation.set(p[4], 0, p[5]);
+    f.armR.userData.elbow.rotation.set(p[2], p[3], 0); f.armL.userData.elbow.rotation.set(p[6], p[7], 0);
+    g.rotation.set(.05 * (1 - turn), face + (h.baseRot - face) * turn, 0); f.pivot.rotation.set(0, -dir * .25 * (1 - turn), 0);
+    return true;
+  }
+  return false;
 }
 function updateHosts(t, speaking) {
   hosts.forEach((h, i) => {
     if (!h.g.visible) return;
     const sp = i === speaking, s = h.seed, f = h.f;
+    if (entrance && h.desk && walkIn(h, now - entrance.t0, entrance.plans[i])) return;
     const env = sp ? clamp(.5 + .45 * Math.sin(t * 8.3 + s) * Math.sin(t * 2.9 + s * 1.7) + .25 * Math.sin(t * 13.1 + s)) : 0;
     h.talk += (env - h.talk) * .35;
     // ease towards the target so that a change of speaker or shot never snaps
@@ -2113,11 +2166,18 @@ const rundown = NS.buildRundown();
 let now = 0, cur = { shot: "titles", story: 0, t0: 0, dur: 0, idx: 0 }, trans = null, freezeP = null, ready = false, frameNo = 0, running = true;
 const story = () => NS.storyAt(cur.story);
 const brkRun = NS.buildBreaking();
+let entrance = null;   // set while the presenters walk to the desk: { t0, plans by host, end }
+// The anchor comes in from the left a moment before the co-anchor comes in from the right.
+function startEntrance() {
+  layout(); const plans = []; plans[S.anchor] = NS.walkPlan(hosts[S.anchor].homeX, -1, .5); if (S.co >= 0) plans[S.co] = NS.walkPlan(hosts[S.co].homeX, 1, 1.1);
+  entrance = { t0: now, plans, end: Math.max(...plans.filter(Boolean).map(p => p.done)) };
+}
 let rd = rundown, saved = null;   // rd is the running order on air; saved is where breaking news cut in
 const tickerOn = () => S.brk || (S.ticker ?? ERA.ticker), clockOn = () => S.clock ?? ERA.clock;
 const scale = c => { const k = c.canvas.height / 1080; c.setTransform(k, 0, 0, k, 0, 0); c.globalAlpha = 1; c.globalCompositeOperation = "source-over"; };
 
 function speakerOf(st, tl) {
+  if (entrance && now - entrance.t0 < entrance.end) return -1;   // nobody speaks until everyone is at the desk
   if (st.shot === "field") return reporter();
   if (st.shot === "live") return tl % 6 < 2.6 ? S.anchor : reporter();
   return NS.speakerFor(S.anchor, S.co, st.story);
@@ -2183,10 +2243,11 @@ function draw(target = out) {
 function go(shot, st, enter, dur = 0, idx = cur.idx) {
   const name = enter === "cut" ? "cut" : enter === "soft" ? "dissolve" : TR[enter] ? enter : NS.transitionFor(S.trans, ERA);
   if (name !== "cut" && ready) { drawSource(snap.getContext("2d"), cur, now - cur.t0); trans = { name, t0: now, dur: S.dur }; playSound(name); if (NS.CARDS.includes(shot)) playSound(shot); } else trans = null;
+  if (entrance) { entrance = null; layout(); }
   cur = { shot, story: st, t0: now, dur, idx }; if (ready && (shot === "field" || shot === "live")) paintLocation(NS.storyAt(st));
   syncUI();
 }
-function nextSeg(enter) { const i = NS.advance(rd.length, cur.idx, rd === brkRun ? 1 : 0), s = rd[i]; go(s.shot, s.story, enter || s.enter, s.dur, i); }
+function nextSeg(enter) { const i = NS.advance(rd.length, cur.idx, rd === brkRun ? 1 : 0), s = rd[i]; go(s.shot, s.story, enter || s.enter, s.dur, i); if (s.entrance && ready) startEntrance(); }
 // Breaking news overrules whatever is on air: an interruption card, then the breaking story until it is switched off,
 // then a card handing back to the programme at the point where it was interrupted.
 function setBreaking(on) {
@@ -2197,6 +2258,7 @@ function setBreaking(on) {
 function nextStory() { if (rd === brkRun) return nextSeg("trans"); let i = cur.idx; do i = (i + 1) % rundown.length; while (rundown[i].shot !== "mcu"); go("mcu", rundown[i].story, "trans", rundown[i].dur, i); }
 function tick(dt) {
   now += dt;
+  if (entrance && now - entrance.t0 > entrance.end + .5) { entrance = null; }
   if (cur.dur > 0 && now - cur.t0 >= cur.dur && (S.auto || NS.CARDS.includes(cur.shot))) {
     if (cur.shot === "return") { const sv = saved || { shot: "wide", story: 0, idx: 1 }; saved = null; go(sv.shot, sv.story, "soft", S.auto ? rundown[sv.idx].dur : 0, sv.idx); }
     else if (cur.shot === "alert" && !S.auto) go("mcu", -1, "cut", 0, 1);
@@ -2296,11 +2358,12 @@ async function main() {
   else if (S.shot) { const i = rundown.findIndex(x => x.shot === S.shot && x.story === S.story); cur = { shot: S.shot, story: S.story, t0: 0, dur: S.shot === "return" ? 3.5 : 0, idx: Math.max(0, i) }; }
   else cur = { ...rundown[0], t0: 0, idx: 0 };
   paintLocation(story());
+  if (Q.has("walk")) { now = 0; startEntrance(); }   // review aid: ?shot=wide&walk&t=2.5 freezes the entrance
   now = Math.max(0, parseFloat(Q.get("t")) || 0);
   // Review aid: ?from=wide&tp=.5 freezes a transition half way from that shot into the current one.
   if (Q.get("from") && Q.has("tp")) { drawSource(snap.getContext("2d"), { shot: Q.get("from"), story: S.story, t0: 0 }, now); trans = { name: NS.transitionFor(S.trans, ERA), t0: now, dur: 1 }; freezeP = clamp(parseFloat(Q.get("tp")) || 0, 0, .999); }
   syncUI(); $("msg").textContent = ""; draw();
-  window.__ns = { S, G, hosts, lowest, setBreaking, audio, schedule, noiseBuffer, step: dt => tick(dt), go, nextSeg, draw, state: () => ({ cur, now, trans: trans && trans.name, size: [prog.width, prog.height, out.width, out.height] }) };
+  window.__ns = { S, G, hosts, entrance: () => entrance, lowest, setBreaking, audio, schedule, noiseBuffer, step: dt => tick(dt), go, nextSeg, draw, state: () => ({ cur, now, trans: trans && trans.name, size: [prog.width, prog.height, out.width, out.height] }) };
   let last = performance.now();
   const loop = t => { const dt = Math.min(.1, (t - last) / 1000); last = t; if (running && freezeP === null && !Q.has("t")) tick(dt); else draw(); requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
