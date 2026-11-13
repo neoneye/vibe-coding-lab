@@ -26,6 +26,7 @@
   #eras { grid-template-columns: repeat(5, 1fr); } #shots { grid-template-columns: repeat(2, 1fr); } .two { grid-template-columns: 1fr 1fr; } .three { grid-template-columns: repeat(3, 1fr); }
   button { background: #222834; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 7px 6px; font: inherit; cursor: pointer; }
   button:hover { border-color: #46506a; } button.on { background: var(--acc); border-color: var(--acc); color: #06101f; font-weight: 600; }
+  button.alarm { background: #7d0f18; border-color: #a81822; font-weight: 600; } button.alarm:hover { border-color: #e04450; } button.alarm.on { background: #e3202c; border-color: #e3202c; color: #fff; }
   .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin: 0 0 8px; }
   .checks.one { grid-template-columns: 1fr; } .checks label { display: flex; align-items: center; gap: 6px; } .checks input { accent-color: var(--acc); margin: 0; }
   .note { color: var(--dim); font-size: 12.5px; margin: -2px 0 8px; min-height: 0; } .note:empty { display: none; }
@@ -45,6 +46,7 @@
     <h1>News Studio</h1>
     <p class="sub">A television news bulletin with robot presenters, dressed in the graphics of five decades. Pick an era, a transition and a logo, and let the running order play.</p>
     <div id="onair"></div>
+    <div class="btns"><button id="brk" class="alarm" title="B">Breaking news</button></div>
 
     <section>
       <h2>Era</h2>
@@ -89,7 +91,6 @@
       <div class="checks">
         <label><input type="checkbox" id="banner"> Lower third</label><label><input type="checkbox" id="ticker"> Ticker</label>
         <label><input type="checkbox" id="bug"> Logo in corner</label><label><input type="checkbox" id="clock"> Clock</label>
-        <label><input type="checkbox" id="brk"> Breaking news</label>
       </div>
       <label class="row"><span>Headline</span><input type="text" id="head" spellcheck="false"></label>
       <label class="row"><span>Second line</span><input type="text" id="sub" spellcheck="false"></label>
@@ -97,7 +98,7 @@
 
     <section>
       <div class="btns three"><button id="save">Save image</button><button id="full">Full screen</button><button id="hide" title="H">Hide panel</button></div>
-      <p class="note">Keys: space plays or pauses the running order, → next story, T plays the transition, B breaking news, H shows or hides this panel.</p>
+      <p class="note">Keys: space plays or pauses the running order, → next story, T plays the transition, B starts or ends breaking news, H shows or hides this panel.</p>
       <p class="note">The stories are invented. The presenters are built from <a href="../humanoid-creator/">Humanoid Creator</a> links, and the station is not a real one.</p>
     </section>
   </aside>
@@ -366,7 +367,7 @@ const HMTests = {
 const NS = (() => {
   // res is the picture size the era is rendered at before it is scaled to the screen (the "period picture" look).
   const ERAS = [
-    { id: "198x", label: "1980s", aspect: [4, 3], res: [640, 480], hue: 218, logo: "stripes", trans: "squeeze", ticker: false, clock: false, show: "THE SIX O'CLOCK REPORT", flash: "BULLETIN", clock12: true },
+    { id: "198x", label: "1980s", aspect: [4, 3], res: [640, 480], hue: 218, logo: "stripes", trans: "squeeze", ticker: false, clock: false, show: "THE SIX O'CLOCK REPORT", flash: "SPECIAL BULLETIN", clock12: true },
     { id: "199x", label: "1990s", aspect: [4, 3], res: [800, 600], hue: 228, logo: "chrome", trans: "flip", ticker: false, clock: true, show: "NIGHTLY REPORT", flash: "SPECIAL REPORT", clock12: true },
     { id: "200x", label: "2000s", aspect: [16, 9], res: [1024, 576], hue: 212, logo: "globe", trans: "stinger", ticker: true, clock: true, show: "WORLD UPDATE", flash: "BREAKING NEWS", clock12: true },
     { id: "201x", label: "2010s", aspect: [16, 9], res: [1920, 1080], hue: 356, logo: "tile", trans: "stinger", ticker: true, clock: true, show: "NEWS TONIGHT", flash: "BREAKING", clock12: false },
@@ -409,6 +410,11 @@ const NS = (() => {
     "Library adds 3,000 titles to its lending shelf", "Chess final ends in a draw after 211 moves", "Power demand hits a ten-year low",
     "Museum of Early Computing opens new wing", "Marathon route changed to avoid the old quarter",
   ];
+  // The story that breaking news mode puts on air, and the words around it.
+  const BREAKING = { slug: "BREAKING", icon: "storm", hue: 356, kind: "live", place: "CENTRAL SUBSTATION", head: "Power cut darkens the city centre", sub: "Trams are stopped and engineers are on site",
+    points: ["The lights went out at 6.42 this evening", "Hospitals are running on their own power", "Engineers expect to restore supply within the hour"] };
+  const WORDS = { interrupt: "We interrupt this broadcast", stay: "Stay with us for the latest", back: "We now return to", developing: "This is a developing story", more: "More details as they come in" };
+  const CARDS = ["alert", "return"];
   const SHOTS = [["titles", "Titles"], ["wide", "Wide"], ["mcu", "Anchor"], ["ots", "Over shoulder"], ["live", "Double box"], ["field", "Reporter"], ["full", "Full screen"], ["weather", "Weather"]];
 
   const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
@@ -435,6 +441,14 @@ const NS = (() => {
     r.push({ shot: "wide", dur: 6, story: stories.length - 1, enter: "trans" });
     return r;
   }
+  // Breaking news: the interruption card once, then anchor, double box, reporter, graphic and wide shot round and round.
+  function buildBreaking() {
+    return [{ shot: "alert", dur: 4.5, story: -1, enter: "flash" }, { shot: "mcu", dur: 8, story: -1, enter: "cut" }, { shot: "live", dur: 6, story: -1, enter: "trans" },
+      { shot: "field", dur: 7, story: -1, enter: "cut" }, { shot: "full", dur: 8, story: -1, enter: "trans" }, { shot: "wide", dur: 5, story: -1, enter: "trans" }];
+  }
+  // The segment after i; at the end go back to loopFrom (1 for breaking news, so the interruption card is not repeated).
+  const advance = (len, i, loopFrom = 0) => i + 1 < len ? i + 1 : loopFrom;
+  const storyAt = i => i < 0 ? BREAKING : STORIES[i];
   const total = r => r.reduce((a, s) => a + s.dur, 0);
   // Which segment is on air at time t (seconds, loops), and how far into it.
   function locate(r, t) {
@@ -470,7 +484,7 @@ const NS = (() => {
       colour: has(COLOURS, q.get("colour")) ? q.get("colour") : "era",
       name: (q.get("name") || "RBN").slice(0, 8), num: (q.get("num") ?? "7").slice(0, 2),
       anchor: int("anchor", 1, 1, 3) - 1, co: int("co", 0, 0, 3) - 1,
-      shot: has(SHOTS, q.get("shot")) ? q.get("shot") : "", story: int("story", 1, 1, STORIES.length) - 1,
+      shot: has(SHOTS, q.get("shot")) || CARDS.includes(q.get("shot")) ? q.get("shot") : "", story: int("story", 1, 1, STORIES.length) - 1,
       auto: q.get("auto") !== "0" && !q.get("shot"),
       banner: q.get("banner") !== "0", ticker: q.has("ticker") ? q.get("ticker") !== "0" : null, bug: q.get("bug") !== "0", clock: q.has("clock") ? q.get("clock") !== "0" : null,
       brk: q.get("brk") === "1", period: q.get("period") !== "0", head: q.get("head") || "", sub: q.get("sub") || "",
@@ -478,7 +492,7 @@ const NS = (() => {
     if (S.co === S.anchor) S.co = -1;
     return S;
   }
-  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, transitionFor, logoFor, hueFor, reporterFor, speakerFor, parse };
+  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, BREAKING, WORDS, CARDS, buildBreaking, advance, storyAt, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, transitionFor, logoFor, hueFor, reporterFor, speakerFor, parse };
 })();
 
 const NSTests = {
@@ -513,6 +527,13 @@ const NSTests = {
     check("era default resolves per era", NS.transitionFor("era", ERAS[0]) === "squeeze" && NS.transitionFor("iris", ERAS[0]) === "iris" && NS.logoFor("era", ERAS[4]) === "minimal" && NS.hueFor("era", ERAS[3]) === 356 && NS.hueFor("green", ERAS[3]) === 150);
     check("the reporter is whoever is not at the desk", NS.reporterFor(0, -1) === 1 && NS.reporterFor(1, -1) === 0 && NS.reporterFor(0, 1) === 2 && NS.reporterFor(2, 0) === 1);
     check("two anchors alternate stories", NS.speakerFor(0, 2, 0) === 0 && NS.speakerFor(0, 2, 1) === 2 && NS.speakerFor(0, -1, 1) === 0);
+    const b = NS.buildBreaking();
+    check("breaking news opens on the interruption card", b[0].shot === "alert" && b.every(x => x.story === -1));
+    check("breaking news goes to the anchor, then the reporter", b[1].shot === "mcu" && b.some(x => x.shot === "live") && b.some(x => x.shot === "field"));
+    check("breaking news loops without repeating the card", (() => { let i = 0; const seen = []; for (let n = 0; n < 12; n++) { i = NS.advance(b.length, i, 1); seen.push(b[i].shot); } return !seen.includes("alert") && seen.filter(x => x === "mcu").length >= 2; })());
+    check("the ordinary rundown loops to the start", NS.advance(r.length, r.length - 1) === 0 && NS.advance(r.length, 3) === 4);
+    check("story -1 is the breaking story", NS.storyAt(-1) === NS.BREAKING && NS.storyAt(0) === STORIES[0] && NS.BREAKING.kind === "live");
+    check("the cards can be asked for by address", NS.parse("?shot=alert").shot === "alert" && NS.parse("?shot=return").shot === "return" && NS.parse("?shot=nope").shot === "");
     const P = NS.parse("?era=199x&trans=flip&logo=chrome&name=KXYZ&num=4&anchor=3&co=1&shot=ots&story=2&brk=1");
     check("address settings are read", P.era === "199x" && P.trans === "flip" && P.logo === "chrome" && P.name === "KXYZ" && P.num === "4" && P.anchor === 2 && P.co === 0 && P.shot === "ots" && P.story === 1 && P.brk && !P.auto);
     const D = NS.parse("?era=1066&trans=nope&anchor=9&co=3&story=99");
@@ -843,15 +864,20 @@ function lowerThird(c, k, d, o = {}) {
 // ── ticker ──
 const crawlW = new Map();
 function ticker(c, t, clock) {
-  const e = G.e, T = theme(), h = TICK_H[e], y = H - h, items = NS.TICKER; let x0 = 0, x1 = W;
+  const e = G.e, T = theme(), h = TICK_H[e], y = H - h, brk = G.brk, items = brk ? G.brkItems : NS.TICKER; let x0 = 0, x1 = W;
   c.save();
   if (e === 0) { c.fillStyle = "rgba(0,0,0,.88)"; c.fillRect(0, y, W, h); }
   else if (e === 1) { c.fillStyle = vgrad(c, y, H, [[0, T.pri], [1, T.priD]]); c.fillRect(0, y, W, h); c.fillStyle = T.acc; c.fillRect(0, y, W, 4); }
   else if (e === 2) { c.fillStyle = vgrad(c, y, H, [[0, "#2a3f7c"], [.5, "#0c1638"], [1, "#04081a"]]); c.fillRect(0, y, W, h); c.fillStyle = "rgba(255,255,255,.16)"; c.fillRect(0, y, W, h * .42); c.fillStyle = T.acc; c.fillRect(0, y, W, 3); }
   else if (e === 3) { c.fillStyle = "#fff"; c.fillRect(0, y, W, h); }
   else { c.fillStyle = "rgba(8,10,20,.84)"; c.fillRect(0, y, W, h); }
+  if (brk) { c.fillStyle = e >= 3 ? "#c8101e" : vgrad(c, y, H, [[0, "#e8242f"], [1, "#96000f"]]); c.fillRect(0, y, W, h); if (e === 2) { c.fillStyle = "rgba(255,255,255,.16)"; c.fillRect(0, y, W, h * .42); } }
   const ty = y + h * .5;
-  if (e >= 2) {
+  if (brk) {
+    // breaking news takes over the ticker in every era: a red band with the alert word in a white box
+    const label = NS.ERAS[e].flash, fo = { size: 28, fam: SANS, w: 800, it: false }; setFont(c, 28, fo); const lw = c.measureText(label).width + 52;
+    c.fillStyle = "#fff"; c.fillRect(0, y, lw, h); text(c, label, 26, ty + 2, { ...fo, base: "middle", col: "#b00012" }); x0 = lw + 10;
+  } else if (e >= 2) {
     const label = e === 2 ? "HEADLINES" : "LATEST"; setFont(c, e === 2 ? 28 : 26, { w: e === 4 ? 700 : undefined }); const lw = c.measureText(label).width + 56;
     if (e === 2) { c.fillStyle = vgrad(c, y, H, [[0, "#ff6a55"], [1, "#a8000f"]]); c.beginPath(); c.moveTo(0, y); c.lineTo(lw + 24, y); c.lineTo(lw, H); c.lineTo(0, H); c.closePath(); c.fill(); }
     else if (e === 3) { c.fillStyle = T.pri; c.fillRect(0, y, lw, h); }
@@ -860,11 +886,11 @@ function ticker(c, t, clock) {
   }
   if (clock) {
     setFont(c, 30, { fam: SANS, w: 700 }); const cw = c.measureText(clock).width + 48; x1 = W - cw;
-    c.fillStyle = e === 3 ? "#1b1b20" : e === 2 ? vgrad(c, y, H, [[0, T.priL], [1, T.pri]]) : e === 4 ? "rgba(255,255,255,.1)" : "rgba(255,255,255,.14)"; c.fillRect(x1, y + (e === 2 ? 3 : 0), cw, h);
+    c.fillStyle = brk ? "rgba(0,0,0,.4)" : e === 3 ? "#1b1b20" : e === 2 ? vgrad(c, y, H, [[0, T.priL], [1, T.pri]]) : e === 4 ? "rgba(255,255,255,.1)" : "rgba(255,255,255,.14)"; c.fillRect(x1, y + (e === 2 ? 3 : 0), cw, h);
     text(c, clock, x1 + cw / 2, ty + 2, { size: 30, fam: SANS, w: 700, base: "middle", align: "center" });
   }
   c.beginPath(); c.rect(x0, y, x1 - x0 - 8, h); c.clip();
-  const size = [34, 34, 32, 34, 28][e], col = e === 3 ? "#111" : "#fff", fo = e === 0 ? { fam: '"Courier New", Courier, monospace', w: 700 } : e === 1 ? { fam: SANS, w: 700, it: true } : e === 4 ? { w: 500 } : { fam: SANS, w: e === 2 ? 700 : 600 };
+  const size = [34, 34, 32, 34, 28][e], col = e === 3 && !brk ? "#111" : "#fff", fo = e === 0 ? { fam: '"Courier New", Courier, monospace', w: 700 } : e === 1 ? { fam: SANS, w: 700, it: true } : e === 4 ? { w: 500 } : { fam: SANS, w: e === 2 ? 700 : 600 };
   if (e === 3) {
     // one headline at a time, sliding up
     const n = Math.floor(t / 5), u = t / 5 - n, p = ease.out(u / .09), q = ease.in((u - .93) / .07);
@@ -992,12 +1018,12 @@ function weather(c, t, st, tickerOn) {
 
 // ── double box ──
 // Where the two pictures go. The caller renders the studio into [0] and the reporter into [1].
-function doubleBoxRects() {
-  const e = G.e, gap = e < 2 ? 36 : 48, bw = (W - 2 * MX - gap) / 2, bh = bw * (e < 2 ? .86 : .68), y = (H - bh) / 2 - (e < 2 ? 60 : 76);
+function doubleBoxRects(tk) {
+  const e = G.e, gap = e < 2 ? 36 : 48, bw = (W - 2 * MX - gap) / 2, bh = bw * (e < 2 ? .86 : .68), y = (H - bh) / 2 - (e < 2 ? (tk ? 112 : 60) : 76);
   return [{ x: MX, y, w: bw, h: bh }, { x: MX + bw + gap, y, w: bw, h: bh }];
 }
-function doubleBox(c, t, st, pics, names) {
-  const e = G.e, T = theme(), R = doubleBoxRects();
+function doubleBox(c, t, st, pics, names, tk) {
+  const e = G.e, T = theme(), R = doubleBoxRects(tk);
   backdrop(c, W, H, t);
   R.forEach((r, i) => {
     c.save();
@@ -1014,6 +1040,50 @@ function doubleBox(c, t, st, pics, names) {
     else if (e === 3) { setFont(c, 30); const lw = Math.min(r.w, c.measureText(lab).width + 44); c.fillStyle = i ? T.pri : "#fff"; c.fillRect(r.x, ly, lw, 52); text(c, lab, r.x + 22, ly + 37, { size: 30, col: i ? "#fff" : "#111", max: lw - 30 }); }
     else text(c, lab, r.x + 28, ly + 48, { size: 28, w: 600, col: "rgba(255,255,255,.85)", max: r.w - 56 });
   });
+}
+
+// ── the interruption card, and the card that hands back to the programme ──
+function alertCard(c, t, back) {
+  const e = G.e, era = NS.ERAS[e], hue = back ? G.hue : 356, T = theme(hue), cx = W / 2, cy = H * .5, mw = W - 2 * MX;
+  const top = back ? NS.WORDS.back : NS.WORDS.interrupt, big = back ? era.show : era.flash, low = back ? "" : NS.WORDS.stay.replace("us", G.name + " " + G.num);
+  const gold = T.acc === "#ffffff" ? "#fff" : T.acc, k1 = ease.out(t / .5), k2 = ease.out((t - .3) / .6), k3 = ease.out((t - 1.2) / .6);
+  backdrop(c, W, H, t * 2.4, hue);
+  if (e === 4 && !back) { c.fillStyle = "rgba(150,8,22,.72)"; c.fillRect(0, 0, W, H); }
+  if (!back && e < 3) { c.fillStyle = `rgba(255,255,255,${(.3 * Math.max(0, Math.sin(t * 5)) ** 6).toFixed(3)})`; c.fillRect(0, 0, W, H); }
+  c.save(); c.globalAlpha = k1; drawLogo(c, cx, H * .17, e === 4 ? 70 : 96, { shadow: e !== 3 }); c.restore();
+  c.save();
+  if (e === 0) {
+    text(c, top.toUpperCase().slice(0, Math.floor(t * 34)), cx, cy - 120, { size: 54, align: "center", max: mw, shadow: [4, 4] });
+    if (t > .9 && (back || t < 1.6 || Math.sin(t * 9) > -.5)) text(c, big, cx, cy + 50, { size: 150, align: "center", max: mw, col: T.acc, shadow: [8, 8] });
+    if (t > 1.7) text(c, low.toUpperCase(), cx, cy + 170, { size: 44, align: "center", max: mw, shadow: [4, 4] });
+  } else if (e === 1) {
+    c.globalAlpha = k1; text(c, top, cx, cy - 120, { size: 60, align: "center", max: mw, shadow: [3, 3, "rgba(0,0,0,.6)"] }); c.globalAlpha = 1;
+    c.save(); c.beginPath(); c.rect(cx - mw / 2 * k2, cy - 100, mw * k2, 220); c.clip();
+    for (const y of [cy - 88, cy + 92]) { c.fillStyle = hgrad(c, MX, W - MX, [[0, "rgba(255,220,120,0)"], [.5, gold], [1, "rgba(255,220,120,0)"]]); c.fillRect(MX, y, mw, 6); }
+    text(c, big, cx, cy + 52, { size: 150, align: "center", max: mw, shadow: [6, 6, "rgba(0,0,0,.6)"] }); c.restore();
+    c.globalAlpha = k3; text(c, low, cx, cy + 175, { size: 42, align: "center", max: mw, fam: SANS, w: 500 });
+  } else if (e === 2) {
+    c.globalAlpha = k1; text(c, top, cx, cy - 125, { size: 52, align: "center", max: mw, shadow: [2, 3, "rgba(0,0,0,.5)"] });
+    const p = ease.back((t - .3) / .7); c.globalAlpha = clamp((t - .3) * 3); c.translate(cx, cy); c.scale(.6 + .4 * p, .6 + .4 * p); c.translate(-cx, -cy);
+    rr(c, MX, cy - 95, mw, 190, 22); c.fillStyle = back ? vgrad(c, cy - 95, cy + 95, [[0, T.priL], [.45, T.pri], [1, T.priD]]) : vgrad(c, cy - 95, cy + 95, [[0, "#ff6a5a"], [.45, "#d8141f"], [1, "#7c000c"]]); c.fill();
+    c.lineWidth = 3; c.strokeStyle = "rgba(255,255,255,.7)"; c.stroke(); c.save(); c.clip(); c.fillStyle = "rgba(255,255,255,.2)"; c.fillRect(MX, cy - 95, mw, 84);
+    const sx = MX + ((t * .45) % 1.6 - .3) * mw; c.fillStyle = hgrad(c, sx, sx + mw * .2, [[0, "rgba(255,255,255,0)"], [.5, "rgba(255,255,255,.45)"], [1, "rgba(255,255,255,0)"]]); c.fillRect(sx, cy - 95, mw * .2, 190); c.restore();
+    text(c, big, cx, cy + 50, { size: 140, align: "center", max: mw - 80, shadow: [4, 6, "rgba(0,0,0,.5)"] });
+    c.setTransform(c.canvas.height / 1080, 0, 0, c.canvas.height / 1080, 0, 0); c.globalAlpha = k3; text(c, low, cx, cy + 180, { size: 42, align: "center", max: mw, fam: SANS, w: 600 });
+  } else if (e === 3) {
+    setFont(c, 36); const tw = spaced(c, top.toUpperCase(), 0, 0, 8, false); c.globalAlpha = k1; c.fillStyle = "#fff"; c.textBaseline = "alphabetic"; spaced(c, top.toUpperCase(), cx - tw / 2, cy - 140, 8); c.globalAlpha = 1;
+    c.save(); c.beginPath(); c.rect(0, cy - 105, W * ease.io((t - .25) / .6), 210); c.clip(); c.fillStyle = "#fff"; c.fillRect(0, cy - 105, W, 210);
+    text(c, big, cx, cy + 55, { size: 160, align: "center", max: mw, col: hsl(hue, 80, 38) }); c.restore();
+    c.globalAlpha = k3; text(c, low, cx, cy + 175, { size: 40, align: "center", max: mw, w: 400 });
+  } else {
+    setFont(c, 30, { w: 500 }); const tw = spaced(c, top.toUpperCase(), 0, 0, 10, false); c.globalAlpha = k1; c.textBaseline = "alphabetic";
+    if (!back) { c.beginPath(); c.arc(cx - tw / 2 - 30, cy - 150, 9, 0, TAU); c.fillStyle = `rgba(255,80,80,${.5 + .5 * Math.sin(t * 6)})`; c.fill(); }
+    c.fillStyle = "rgba(255,255,255,.85)"; spaced(c, top.toUpperCase(), cx - tw / 2, cy - 140, 10); c.globalAlpha = 1;
+    c.save(); c.beginPath(); c.rect(0, cy - 110, W, 190); c.clip(); c.translate(0, (1 - k2) * 200); text(c, big, cx, cy + 50, { size: 170, align: "center", max: mw }); c.restore();
+    c.fillStyle = gold; c.fillRect(cx - W * .22 * ease.io((t - .6) / .9), cy + 96, W * .44 * ease.io((t - .6) / .9), 3);
+    c.globalAlpha = k3; text(c, low, cx, cy + 165, { size: 34, align: "center", max: mw, w: 400, col: "rgba(255,255,255,.8)" });
+  }
+  c.restore();
 }
 
 // ── opening titles ──
@@ -1959,8 +2029,10 @@ function render3D(c, shot, speaker, tl, x, y, w, h, pw, ph) {
 const out = $("out"), live = mk(16, 16), snap = mk(16, 16), prog = mk(16, 16), boxA = mk(16, 16), boxB = mk(16, 16), noise = mk(256, 256);
 const rundown = NS.buildRundown();
 let now = 0, cur = { shot: "titles", story: 0, t0: 0, dur: 0, idx: 0 }, trans = null, freezeP = null, ready = false, frameNo = 0, running = true;
-const story = () => NS.STORIES[cur.story];
-const tickerOn = () => S.ticker ?? ERA.ticker, clockOn = () => S.clock ?? ERA.clock;
+const story = () => NS.storyAt(cur.story);
+const brkRun = NS.buildBreaking();
+let rd = rundown, saved = null;   // rd is the running order on air; saved is where breaking news cut in
+const tickerOn = () => S.brk || (S.ticker ?? ERA.ticker), clockOn = () => S.clock ?? ERA.clock;
 const scale = c => { const k = c.canvas.height / 1080; c.setTransform(k, 0, 0, k, 0, 0); c.globalAlpha = 1; c.globalCompositeOperation = "source-over"; };
 
 function speakerOf(st, tl) {
@@ -1970,22 +2042,24 @@ function speakerOf(st, tl) {
 }
 // Paint the picture for one shot, without banners.
 function drawSource(c, st, tl) {
-  const s = NS.STORIES[st.story], tk = tickerOn(), k = c.canvas.height / 1080; scale(c);
+  const s = NS.storyAt(st.story), tk = tickerOn(), k = c.canvas.height / 1080; scale(c);
   if (st.shot === "titles") titles(c, tl);
+  else if (st.shot === "alert" || st.shot === "return") alertCard(c, tl, st.shot === "return");
   else if (st.shot === "full") fullScreen(c, tl, s, tk);
   else if (st.shot === "weather") weather(c, tl, s.days ? s : NS.STORIES.find(x => x.days), tk);
   else if (st.shot === "live") {
-    const R = doubleBoxRects(), pw = Math.round(R[0].w * k), ph = Math.round(R[0].h * k);
+    const R = doubleBoxRects(tk), pw = Math.round(R[0].w * k), ph = Math.round(R[0].h * k);
     for (const b of [boxA, boxB]) if (b.width !== pw || b.height !== ph) { b.width = pw; b.height = ph; }
     render3D(boxA.getContext("2d"), "mcu", S.anchor, tl, 0, 0, pw, ph, pw, ph); render3D(boxB.getContext("2d"), "mcu", reporter(), tl, 0, 0, pw, ph, pw, ph);
-    doubleBox(c, tl, s, [boxA, boxB], ["STUDIO", s.place || "ON LOCATION"]);
+    doubleBox(c, tl, s, [boxA, boxB], ["STUDIO", s.place || "ON LOCATION"], tk);
   } else render3D(c, st.shot === "field" ? "mcu" : st.shot, speakerOf(st, tl), tl, 0, 0, W, H, c.canvas.width, c.canvas.height);
 }
 // Banners, ticker, logo and clock sit on top of whatever the mixer is doing, as they do on air.
 function overlays(c) {
   const st = cur, tl = now - st.t0, s = story(), tk = tickerOn(), ck = clockOn() ? NS.clockText(ERA, new Date()) : "";
-  if (st.shot === "titles") return;
+  if (st.shot === "titles" || NS.CARDS.includes(st.shot)) return;
   const dur = S.auto ? st.dur : 0, env = NS.envelope(tl, dur), d = { slug: s.slug, head: S.head || s.head, sub: S.sub || s.sub }, o = { ticker: tk, t: now };
+  if (S.brk) G.brkItems = [d.head, d.sub, NS.WORDS.developing, NS.WORDS.more];
   const sp = hosts[speakerOf(st, 0)], role = S.co >= 0 ? "Co-anchor, " + G.name + " News" : "Anchor, " + G.name + " News";
   if (st.shot === "ots") otsBox(c, NS.envelope(tl, dur, .3), s, now, tk);
   if (S.banner) {
@@ -2027,14 +2101,25 @@ function draw(target = out) {
 function go(shot, st, enter, dur = 0, idx = cur.idx) {
   const name = enter === "cut" ? "cut" : enter === "soft" ? "dissolve" : TR[enter] ? enter : NS.transitionFor(S.trans, ERA);
   if (name !== "cut" && ready) { drawSource(snap.getContext("2d"), cur, now - cur.t0); trans = { name, t0: now, dur: S.dur }; } else trans = null;
-  cur = { shot, story: st, t0: now, dur, idx }; if (ready && (shot === "field" || shot === "live")) paintLocation(NS.STORIES[st]);
+  cur = { shot, story: st, t0: now, dur, idx }; if (ready && (shot === "field" || shot === "live")) paintLocation(NS.storyAt(st));
   syncUI();
 }
-function nextSeg(enter) { const i = (cur.idx + 1) % rundown.length, s = rundown[i]; go(s.shot, s.story, enter || s.enter, s.dur, i); }
-function nextStory() { let i = cur.idx; do i = (i + 1) % rundown.length; while (rundown[i].shot !== "mcu"); go("mcu", rundown[i].story, "trans", rundown[i].dur, i); }
+function nextSeg(enter) { const i = NS.advance(rd.length, cur.idx, rd === brkRun ? 1 : 0), s = rd[i]; go(s.shot, s.story, enter || s.enter, s.dur, i); }
+// Breaking news overrules whatever is on air: an interruption card, then the breaking story until it is switched off,
+// then a card handing back to the programme at the point where it was interrupted.
+function setBreaking(on) {
+  if (on === S.brk) return; S.brk = G.brk = on;
+  if (on) { if (!NS.CARDS.includes(cur.shot) && cur.story >= 0) saved = { shot: cur.shot, story: cur.story, idx: cur.idx }; rd = brkRun; go("alert", -1, "flash", brkRun[0].dur, 0); }
+  else { rd = rundown; go("return", saved ? saved.story : 0, "flash", 3.5, saved ? saved.idx : 0); }
+}
+function nextStory() { if (rd === brkRun) return nextSeg("trans"); let i = cur.idx; do i = (i + 1) % rundown.length; while (rundown[i].shot !== "mcu"); go("mcu", rundown[i].story, "trans", rundown[i].dur, i); }
 function tick(dt) {
   now += dt;
-  if (S.auto && cur.dur > 0 && now - cur.t0 >= cur.dur) nextSeg();
+  if (cur.dur > 0 && now - cur.t0 >= cur.dur && (S.auto || NS.CARDS.includes(cur.shot))) {
+    if (cur.shot === "return") { const sv = saved || { shot: "wide", story: 0, idx: 1 }; saved = null; go(sv.shot, sv.story, "soft", S.auto ? rundown[sv.idx].dur : 0, sv.idx); }
+    else if (cur.shot === "alert" && !S.auto) go("mcu", -1, "cut", 0, 1);
+    else nextSeg();
+  }
   draw();
 }
 
@@ -2075,14 +2160,16 @@ function syncUI() {
   for (const k in shotBtns) shotBtns[k].classList.toggle("on", k === cur.shot);
   for (const k in eraBtns) eraBtns[k].classList.toggle("on", k === S.era);
   $("auto").checked = S.auto; $("ticker").checked = tickerOn(); $("clock").checked = clockOn();
-  const s = story(); $("onair").textContent = `${NS.SHOTS.find(x => x[0] === cur.shot)[1]} · ${cur.shot === "titles" ? ERA.show : s.slug + ": " + s.head}`;
+  const s = story(), label = (NS.SHOTS.find(x => x[0] === cur.shot) || [0, cur.shot === "alert" ? "Interruption" : "Hand back"])[1];
+  $("onair").textContent = `${label} · ${cur.shot === "titles" || cur.shot === "return" ? ERA.show : s.slug + ": " + (S.head || s.head)}`;
+  $("brk").textContent = S.brk ? "End breaking news" : "Breaking news"; $("brk").classList.toggle("on", S.brk);
   $("head").placeholder = s.head; $("sub").placeholder = s.sub;
   $("transNote").textContent = S.trans === "era" ? "The " + ERA.label + " use: " + NS.TRANSITIONS.find(t => t[0] === ERA.trans)[1].toLowerCase() + "." : "";
   $("logoNote").textContent = S.logo === "era" ? "The " + ERA.label + " use: " + NS.LOGOS.find(t => t[0] === ERA.logo)[1].toLowerCase() + "." : "";
 }
 function buildUI() {
   for (const e of NS.ERAS) { const b = el("button", { textContent: e.id, title: e.label, onclick: () => { if (S.era === e.id) return; S.era = e.id; restyle(); syncUI(); } }); eraBtns[e.id] = b; $("eras").append(b); }
-  for (const [id, label] of NS.SHOTS) { const b = el("button", { textContent: label, onclick: () => { S.auto = false; const i = rundown.findIndex(x => x.shot === id && x.story === cur.story); go(id, cur.story, "trans", 0, i >= 0 ? i : cur.idx); } }); shotBtns[id] = b; $("shots").append(b); }
+  for (const [id, label] of NS.SHOTS) { const b = el("button", { textContent: label, onclick: () => { S.auto = false; const st = NS.CARDS.includes(cur.shot) ? (S.brk ? -1 : saved ? saved.story : 0) : cur.story, i = rd.findIndex(x => x.shot === id && x.story === st); go(id, st, "trans", 0, i >= 0 ? i : cur.idx); } }); shotBtns[id] = b; $("shots").append(b); }
   select("trans", [["era", "Era default"], ...NS.TRANSITIONS], S.trans, v => { S.trans = v; nextSeg("trans"); });
   select("logo", [["era", "Era default"], ...NS.LOGOS], S.logo, v => { S.logo = v; restyle(); syncUI(); });
   select("colour", NS.COLOURS, S.colour, v => { S.colour = v; restyle(); });
@@ -2096,7 +2183,7 @@ function buildUI() {
   const chk = (id, get, set) => { $(id).checked = get(); $(id).onchange = () => { set($(id).checked); syncUI(); }; };
   chk("auto", () => S.auto, v => { S.auto = v; if (v) nextSeg(); });
   chk("banner", () => S.banner, v => { S.banner = v; }); chk("ticker", tickerOn, v => { S.ticker = v; }); chk("bug", () => S.bug, v => { S.bug = v; });
-  chk("clock", clockOn, v => { S.clock = v; }); chk("brk", () => S.brk, v => { S.brk = v; G.brk = v; }); chk("period", () => S.period, v => { S.period = v; resize(); });
+  chk("clock", clockOn, v => { S.clock = v; }); $("brk").onclick = () => setBreaking(!S.brk); chk("period", () => S.period, v => { S.period = v; resize(); });
   $("link").onchange = () => {
     const m = /h1\.\d+\.[A-Za-z0-9_-]+/.exec($("link").value), P = m && HM.decode(m[0]);
     if (!P) { $("linkNote").textContent = $("link").value.trim() ? "That is not a Humanoid Creator link." : ""; return; }
@@ -2109,7 +2196,7 @@ function buildUI() {
     if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
     if (e.key === " ") { S.auto = !S.auto; if (S.auto) nextSeg(); syncUI(); e.preventDefault(); }
     else if (e.key === "ArrowRight") nextStory(); else if (e.key === "t") nextSeg("trans");
-    else if (e.key === "h") { document.body.classList.toggle("bare"); resize(); } else if (e.key === "b") { S.brk = G.brk = !S.brk; $("brk").checked = S.brk; }
+    else if (e.key === "h") { document.body.classList.toggle("bare"); resize(); } else if (e.key === "b") setBreaking(!S.brk);
   });
   addEventListener("resize", resize); document.addEventListener("fullscreenchange", resize);
 }
@@ -2121,14 +2208,15 @@ async function main() {
   try { await init3D(); } catch (err) { $("msg").textContent = "This page needs WebGL to draw the studio. " + err.message; return; }
   for (let i = 0; i < 3; i++) hosts.push(buildHost(i, NS.HOSTS[i].link));
   layout(); ready = true; restyle();
-  if (S.shot) { const i = rundown.findIndex(x => x.shot === S.shot && x.story === S.story); cur = { shot: S.shot, story: S.story, t0: 0, dur: 0, idx: Math.max(0, i) }; }
+  if (S.brk) { rd = brkRun; saved = { shot: "mcu", story: 0, idx: 2 }; const i = brkRun.findIndex(x => x.shot === S.shot); cur = S.shot && S.shot !== "return" ? { shot: S.shot, story: -1, t0: 0, dur: 0, idx: Math.max(1, i) } : { ...brkRun[0], t0: 0, idx: 0 }; }
+  else if (S.shot) { const i = rundown.findIndex(x => x.shot === S.shot && x.story === S.story); cur = { shot: S.shot, story: S.story, t0: 0, dur: S.shot === "return" ? 3.5 : 0, idx: Math.max(0, i) }; }
   else cur = { ...rundown[0], t0: 0, idx: 0 };
   paintLocation(story());
   now = Math.max(0, parseFloat(Q.get("t")) || 0);
   // Review aid: ?from=wide&tp=.5 freezes a transition half way from that shot into the current one.
   if (Q.get("from") && Q.has("tp")) { drawSource(snap.getContext("2d"), { shot: Q.get("from"), story: S.story, t0: 0 }, now); trans = { name: NS.transitionFor(S.trans, ERA), t0: now, dur: 1 }; freezeP = clamp(parseFloat(Q.get("tp")) || 0, 0, .999); }
   syncUI(); $("msg").textContent = ""; draw();
-  window.__ns = { S, G, hosts, lowest, step: dt => tick(dt), go, nextSeg, draw, state: () => ({ cur, now, trans: trans && trans.name, size: [prog.width, prog.height, out.width, out.height] }) };
+  window.__ns = { S, G, hosts, lowest, setBreaking, step: dt => tick(dt), go, nextSeg, draw, state: () => ({ cur, now, trans: trans && trans.name, size: [prog.width, prog.height, out.width, out.height] }) };
   let last = performance.now();
   const loop = t => { const dt = Math.min(.1, (t - last) / 1000); last = t; if (running && freezeP === null && !Q.has("t")) tick(dt); else draw(); requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
