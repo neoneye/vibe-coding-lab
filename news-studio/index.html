@@ -46,7 +46,7 @@
     <h1>News Studio</h1>
     <p class="sub">A television news bulletin with robot presenters, dressed in the graphics of five decades. Pick an era, a transition and a logo, and let the running order play.</p>
     <div id="onair"></div>
-    <div class="btns"><button id="brk" class="alarm" title="B">Breaking news</button></div>
+    <div class="btns"><button id="brk" class="alarm">Breaking news</button></div>
 
     <section>
       <h2>Era</h2>
@@ -59,7 +59,8 @@
       <label class="row"><span>Style</span><select id="trans"></select></label>
       <p class="note" id="transNote"></p>
       <label class="row durrow"><span>Length</span><input type="range" id="dur" min="0.2" max="3" step="0.1"><output id="durOut"></output></label>
-      <div class="btns two"><button id="take" title="T">Play transition</button><button id="next" title="Right arrow">Next story</button></div>
+      <div class="checks one"><label><input type="checkbox" id="sound"> Sound effects</label></div>
+      <div class="btns two"><button id="take">Play transition</button><button id="next">Next story</button></div>
     </section>
 
     <section>
@@ -98,7 +99,8 @@
     </section>
 
     <section>
-      <div class="btns three"><button id="save">Save image</button><button id="full">Full screen</button><button id="hide" title="H">Hide panel</button></div>
+      <div class="btns three"><button id="save">Save image</button><button id="full">Full screen</button><button id="hide">Hide panel</button></div>
+      <p class="note">Sound starts after your first click or key press; browsers do not allow it earlier.</p>
       <p class="note">Keys: space plays or pauses the running order, → next story, T plays the transition, B starts or ends breaking news, H shows or hides this panel.</p>
       <p class="note">The stories are invented. The presenters are built from <a href="../humanoid-creator/">Humanoid Creator</a> links, and the station is not a real one.</p>
     </section>
@@ -477,6 +479,43 @@ const NS = (() => {
   // With two anchors they take the stories in turn.
   const speakerFor = (anchor, co, story) => co >= 0 && story % 2 === 1 ? co : anchor;
 
+  // The sound of a transition, as a list of events for the synthesiser. D is the transition's length in seconds.
+  // tone: an oscillator gliding from f0 to f1. noise: filtered noise with the filter sweeping from f0 to f1.
+  // env "swell" rises to a peak (at `peak` of its length) and falls; "pluck" starts loud and dies away. pan runs from a to b.
+  function soundPlan(name, D = .9, e = 2) {
+    const ev = [], tone = (t, d, f0, f1, g, o = {}) => ev.push({ k: "tone", t, d, f0, f1: f1 || f0, g, wave: "sine", env: "swell", peak: .5, pan: [0, 0], ...o });
+    const noise = (t, d, f0, f1, g, o = {}) => ev.push({ k: "noise", t, d, f0, f1: f1 || f0, g, ft: "bandpass", q: 1.5, env: "swell", peak: .5, pan: [0, 0], ...o });
+    const h = i => { const x = Math.sin(i * 127.1 + 3.3) * 43758.5453; return x - Math.floor(x); };
+    if (name === "dissolve") { noise(0, D, 700, 1700, .32, { q: .7 }); tone(0, D, 440, 440, .1); tone(0, D, 660, 660, .07); }
+    else if (name === "fade") { tone(0, D / 2, 220, 110, .3, { peak: .7 }); tone(D / 2, D / 2, 110, 220, .3, { peak: .3 }); }
+    else if (name === "flash") { noise(0, D * .42, 900, 7000, .3, { peak: .97 }); for (const f of [1760, 2637]) tone(D * .4, .7, f, f, .12, { env: "pluck" }); noise(D * .4, .3, 5000, 5000, .18, { ft: "highpass", env: "pluck" }); }
+    else if (name === "wipe") noise(0, D, 400, 3200, .5, { q: 1.3, pan: [-.8, .8] });
+    else if (name === "clock") { for (let i = 0; i < 8; i++) tone(i * D / 8, .035, 1800, 1800, .28, { wave: "square", env: "pluck" }); tone(D, .6, 1319, 1319, .3, { env: "pluck" }); }
+    else if (name === "iris") { tone(0, D, 190, 950, .3); noise(0, D, 300, 1200, .2, { q: .8 }); }
+    else if (name === "blinds") for (let i = 0; i < 12; i++) noise(i * D / 12, .05, 2600, 2600, .4, { ft: "highpass", env: "pluck" });
+    else if (name === "checker") for (let i = 0; i < 8; i++) tone(i * D / 8, .08, [523, 659, 784, 1047][i % 4] * (i < 4 ? 1 : 1.5), 0, .26, { wave: "square", env: "pluck" });
+    else if (name === "push") { noise(0, D, 250, 1600, .34, { ft: "lowpass", q: .7, pan: [.6, -.6] }); tone(D * .88, .28, 95, 45, .4, { env: "pluck" }); }
+    else if (name === "squeeze") { tone(0, D * .55, 170, 1500, .28, { wave: "sawtooth", peak: .8 }); noise(D * .5, D * .5, 1800, 450, .5, { q: 1.3, pan: [0, .9], peak: .3 }); }
+    else if (name === "flip") { noise(0, D / 2, 450, 2600, .5, { q: 1.3, peak: .8 }); noise(D / 2, D / 2, 2600, 450, .5, { q: 1.3, peak: .2 }); tone(0, D, 280, 560, .12); }
+    else if (name === "mosaic") for (let i = 0; i < 12; i++) { const s = i < 6 ? i : 11 - i; tone(i * D / 12, D / 12, 880 * Math.pow(2, -s / 3), 0, .24, { wave: "square", env: "pluck" }); }
+    else if (name === "stinger") {
+      noise(0, D * .5, 300, 4500, .3, { peak: .95, pan: [-.5, 0] }); tone(D * .5, .55, 115, 48, .5, { env: "pluck" });
+      const wave = e < 2 ? "square" : e === 4 ? "triangle" : "sawtooth", root = [196, 208, 220, 233, 262][e];
+      for (const r of [1, 1.26, 1.5, 2]) tone(D * .5, 1.0, root * r, 0, e < 2 ? .05 : .08, { wave, env: "pluck" });
+      noise(D * .5, .45, 6000, 6000, .14, { ft: "highpass", env: "pluck" });
+    }
+    else if (name === "whip") noise(D * .15, D * .7, 600, 5200, .5, { q: 1.1, peak: .35, pan: [.9, -.9] });
+    else if (name === "glitch") for (let i = 0; i < 12; i++) { const t = h(i) * D * .9, d = .03 + h(i + 20) * .06; if (i % 2) noise(t, d, 500 + h(i + 40) * 5000, 0, .5, { env: "pluck", q: 2 }); else tone(t, d, 90 + h(i + 60) * 2600, 0, .26, { wave: "square", env: "pluck" }); }
+    else if (name === "alert") {
+      // the sting under the interruption card: three rising stabs and a held chord over a drum
+      const wave = e < 2 ? "square" : "sawtooth", g = e < 2 ? .05 : .075;
+      [[0, 392], [.2, 494], [.4, 587]].forEach(([t, f]) => { for (const r of [1, 1.5]) tone(D * .4 + t, .18, f * r, 0, g, { wave, env: "pluck" }); tone(D * .4 + t, .2, 98, 60, .3, { env: "pluck" }); });
+      for (const f of [392, 587, 784, 988]) tone(D * .4 + .6, 1.6, f, 0, g, { wave, env: "pluck" }); tone(D * .4 + .6, .7, 98, 45, .45, { env: "pluck" });
+    }
+    else if (name === "return") { tone(D * .4, .9, 784, 0, .28, { env: "pluck" }); tone(D * .4 + .22, 1.2, 1047, 0, .28, { env: "pluck" }); }
+    return ev;
+  }
+
   // Settings from the address, e.g. ?era=199x&trans=flip&logo=chrome&name=RBN&num=7&anchor=2&co=1&shot=ots&story=2
   function parse(search) {
     const q = new URLSearchParams(search), int = (k, d, a, b) => { const v = parseInt(q.get(k), 10); return Number.isFinite(v) ? clamp(v, a, b) : d; };
@@ -491,12 +530,12 @@ const NS = (() => {
       shot: has(SHOTS, q.get("shot")) || CARDS.includes(q.get("shot")) ? q.get("shot") : "", story: int("story", 1, 1, STORIES.length) - 1,
       auto: q.get("auto") !== "0" && !q.get("shot"),
       banner: q.get("banner") !== "0", ticker: q.has("ticker") ? q.get("ticker") !== "0" : null, bug: q.get("bug") !== "0", clock: q.has("clock") ? q.get("clock") !== "0" : null,
-      brk: q.get("brk") === "1", period: q.get("period") !== "0", head: q.get("head") || "", sub: q.get("sub") || "",
+      brk: q.get("brk") === "1", sound: q.get("sound") !== "0", period: q.get("period") !== "0", head: q.get("head") || "", sub: q.get("sub") || "",
     };
     if (S.co === S.anchor) S.co = -1;
     return S;
   }
-  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, BREAKING, WORDS, CARDS, buildBreaking, advance, storyAt, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, transitionFor, logoFor, hueFor, reporterFor, speakerFor, parse };
+  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, BREAKING, WORDS, CARDS, buildBreaking, advance, storyAt, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, soundPlan, transitionFor, logoFor, hueFor, reporterFor, speakerFor, parse };
 })();
 
 const NSTests = {
@@ -533,6 +572,12 @@ const NSTests = {
     check("the reporter is whoever is not at the desk", NS.reporterFor(0, -1) === 1 && NS.reporterFor(1, -1) === 0 && NS.reporterFor(0, 1) === 2 && NS.reporterFor(2, 0) === 1);
     check("a chosen reporter is used unless they are at the desk", NS.reporterFor(0, 1, 4) === 4 && NS.reporterFor(0, 4, 4) === 1 && NS.reporterFor(3, -1, 3) === 0 && NS.reporterFor(0, -1, 99) === 1);
     check("two anchors alternate stories", NS.speakerFor(0, 2, 0) === 0 && NS.speakerFor(0, 2, 1) === 2 && NS.speakerFor(0, -1, 1) === 0);
+    check("every transition but the cut has a sound", TRANSITIONS.every(([id]) => (NS.soundPlan(id, .9).length > 0) === (id !== "cut")));
+    check("sound events are well formed", [...TRANSITIONS.map(t => t[0]), "alert", "return"].every(id => NS.soundPlan(id, .9).every(v => v.t >= 0 && v.d > 0 && v.f0 > 20 && v.f1 > 20 && v.g > 0 && v.g <= .5 && Math.abs(v.pan[0]) <= 1 && Math.abs(v.pan[1]) <= 1)));
+    check("a transition's sound lasts about as long as the transition", TRANSITIONS.every(([id]) => [.3, .9, 2.5].every(D => NS.soundPlan(id, D).every(v => v.t <= D + .01 && v.t + v.d <= D + 1.6))));
+    check("a longer transition stretches its sound", Math.max(...NS.soundPlan("wipe", 2).map(v => v.t + v.d)) > Math.max(...NS.soundPlan("wipe", .5).map(v => v.t + v.d)));
+    check("the glitch sound is the same every time", JSON.stringify(NS.soundPlan("glitch", 1)) === JSON.stringify(NS.soundPlan("glitch", 1)));
+    check("the stinger chord changes with the era", NS.soundPlan("stinger", .9, 0).some(v => v.wave === "square") && NS.soundPlan("stinger", .9, 3).some(v => v.wave === "sawtooth"));
     const b = NS.buildBreaking();
     check("breaking news opens on the interruption card", b[0].shot === "alert" && b.every(x => x.story === -1));
     check("breaking news goes to the anchor, then the reporter", b[1].shot === "mcu" && b.some(x => x.shot === "live") && b.some(x => x.shot === "field"));
@@ -2033,6 +2078,35 @@ function render3D(c, shot, speaker, tl, x, y, w, h, pw, ph) {
   c.drawImage(glc, 0, glc.height - ph, pw, ph, x, y, w, h);
 }
 
+// ───────────────────────── sound ─────────────────────────
+// Transition sounds are synthesised from NS.soundPlan. Browsers only allow sound after a click or key press,
+// so the audio context is made on the first one.
+const audio = { ctx: null, out: null, meter: null, noise: null };
+function noiseBuffer(ctx) { const b = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = b.getChannelData(0), r = rnd(5); for (let i = 0; i < d.length; i++) d[i] = r() * 2 - 1; return b; }
+function audioInit() {
+  if (audio.ctx) return; const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+  const ctx = audio.ctx = new AC(), comp = ctx.createDynamicsCompressor(); audio.out = ctx.createGain(); audio.out.gain.value = .8; audio.meter = ctx.createAnalyser(); audio.meter.fftSize = 2048;
+  audio.out.connect(comp); comp.connect(audio.meter); audio.meter.connect(ctx.destination); audio.noise = noiseBuffer(ctx);
+}
+// Schedule a plan's events on a context, starting at t0. Also used with an offline context to check the sounds.
+function schedule(ctx, dest, noise, events, t0) {
+  for (const v of events) {
+    const t = t0 + v.t, end = t + v.d, g = ctx.createGain(), pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null; let src;
+    if (v.k === "tone") { src = ctx.createOscillator(); src.type = v.wave; src.frequency.setValueAtTime(v.f0, t); src.frequency.exponentialRampToValueAtTime(v.f1, end); src.connect(g); }
+    else { src = ctx.createBufferSource(); src.buffer = noise; src.loop = true; const f = ctx.createBiquadFilter(); f.type = v.ft; f.Q.value = v.q; f.frequency.setValueAtTime(v.f0, t); f.frequency.exponentialRampToValueAtTime(v.f1, end); src.connect(f); f.connect(g); }
+    g.gain.setValueAtTime(0, t);
+    if (v.env === "pluck") { g.gain.linearRampToValueAtTime(v.g, t + .006); g.gain.exponentialRampToValueAtTime(.0008, end); }
+    else { g.gain.linearRampToValueAtTime(v.g, t + Math.max(.01, v.d * v.peak)); g.gain.linearRampToValueAtTime(0, end); }
+    if (pan) { pan.pan.setValueAtTime(v.pan[0], t); pan.pan.linearRampToValueAtTime(v.pan[1], end); g.connect(pan); pan.connect(dest); } else g.connect(dest);
+    src.start(t); src.stop(end + .02);
+  }
+}
+function playSound(name) {
+  if (!S.sound || !audio.ctx || name === "cut") return;
+  if (audio.ctx.state === "suspended") audio.ctx.resume();
+  schedule(audio.ctx, audio.out, audio.noise, NS.soundPlan(name, S.dur, G.e), audio.ctx.currentTime + .03);
+}
+
 // ───────────────────────── the vision mixer ─────────────────────────
 const out = $("out"), live = mk(16, 16), snap = mk(16, 16), prog = mk(16, 16), boxA = mk(16, 16), boxB = mk(16, 16), noise = mk(256, 256);
 const rundown = NS.buildRundown();
@@ -2108,7 +2182,7 @@ function draw(target = out) {
 // Change shot. enter is "cut", "soft" (a dissolve), "trans" (the chosen transition) or a transition id.
 function go(shot, st, enter, dur = 0, idx = cur.idx) {
   const name = enter === "cut" ? "cut" : enter === "soft" ? "dissolve" : TR[enter] ? enter : NS.transitionFor(S.trans, ERA);
-  if (name !== "cut" && ready) { drawSource(snap.getContext("2d"), cur, now - cur.t0); trans = { name, t0: now, dur: S.dur }; } else trans = null;
+  if (name !== "cut" && ready) { drawSource(snap.getContext("2d"), cur, now - cur.t0); trans = { name, t0: now, dur: S.dur }; playSound(name); if (NS.CARDS.includes(shot)) playSound(shot); } else trans = null;
   cur = { shot, story: st, t0: now, dur, idx }; if (ready && (shot === "field" || shot === "live")) paintLocation(NS.storyAt(st));
   syncUI();
 }
@@ -2190,6 +2264,8 @@ function buildUI() {
   $("name").value = S.name; $("num").value = S.num; $("name").oninput = () => { S.name = $("name").value.trim().slice(0, 8); restyle(); }; $("num").oninput = () => { S.num = $("num").value.trim().slice(0, 2); restyle(); };
   $("head").value = S.head; $("sub").value = S.sub; $("head").oninput = () => { S.head = $("head").value; }; $("sub").oninput = () => { S.sub = $("sub").value; };
   const chk = (id, get, set) => { $(id).checked = get(); $(id).onchange = () => { set($(id).checked); syncUI(); }; };
+  chk("sound", () => S.sound, v => { S.sound = v; if (v) audioInit(); });
+  for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => { if (S.sound) audioInit(); }, { capture: true });
   chk("auto", () => S.auto, v => { S.auto = v; if (v) nextSeg(); });
   chk("banner", () => S.banner, v => { S.banner = v; }); chk("ticker", tickerOn, v => { S.ticker = v; }); chk("bug", () => S.bug, v => { S.bug = v; });
   chk("clock", clockOn, v => { S.clock = v; }); $("brk").onclick = () => setBreaking(!S.brk); chk("period", () => S.period, v => { S.period = v; resize(); });
@@ -2224,7 +2300,7 @@ async function main() {
   // Review aid: ?from=wide&tp=.5 freezes a transition half way from that shot into the current one.
   if (Q.get("from") && Q.has("tp")) { drawSource(snap.getContext("2d"), { shot: Q.get("from"), story: S.story, t0: 0 }, now); trans = { name: NS.transitionFor(S.trans, ERA), t0: now, dur: 1 }; freezeP = clamp(parseFloat(Q.get("tp")) || 0, 0, .999); }
   syncUI(); $("msg").textContent = ""; draw();
-  window.__ns = { S, G, hosts, lowest, setBreaking, step: dt => tick(dt), go, nextSeg, draw, state: () => ({ cur, now, trans: trans && trans.name, size: [prog.width, prog.height, out.width, out.height] }) };
+  window.__ns = { S, G, hosts, lowest, setBreaking, audio, schedule, noiseBuffer, step: dt => tick(dt), go, nextSeg, draw, state: () => ({ cur, now, trans: trans && trans.name, size: [prog.width, prog.height, out.width, out.height] }) };
   let last = performance.now();
   const loop = t => { const dt = Math.min(.1, (t - last) / 1000); last = t; if (running && freezeP === null && !Q.has("t")) tick(dt); else draw(); requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
