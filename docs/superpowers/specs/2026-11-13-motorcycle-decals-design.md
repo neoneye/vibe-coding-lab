@@ -31,6 +31,10 @@ A design tool for motorcycle artwork: stripes, flames, arrows and more on a 3D s
 - Double-click on the bike moves the selected layer there.
 - Export: bike PNG rendered at 2400×1500 from a camera refitted to centre the bike; decal sheet as SVG in millimetres and as PNG.
 
+## Loaded models (added later the same day)
+
+A .glb file can be loaded by button or drag and drop; it never leaves the browser. The model is turned so its longest horizontal axis is the bike's length, scaled to 2.05 m and stood on the ground; Rotate 90° and Flip correct a wrong guess. Parts are listed by material (by mesh when there are fewer than four materials). Each part is unpainted, painted as a named panel, or painted with the panel chosen per triangle from its position. Painted triangles are rebuilt with side-projected UVs into a 4096² atlas, split left and right by their z sign. Panel outlines for the sheet and pinstripes are traced from a rasterised silhouette.
+
 ## Non-goals
 
 No real brand logos, no pricing, no riding, no share links.
