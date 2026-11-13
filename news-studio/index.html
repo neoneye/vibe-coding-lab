@@ -75,7 +75,8 @@
       <h2>Presenters</h2>
       <label class="row"><span>Anchor</span><select id="anchor"></select></label>
       <label class="row"><span>Co-anchor</span><select id="co"></select></label>
-      <p class="note">Whoever is not at the desk reports from the field.</p>
+      <label class="row"><span>Reporter</span><select id="rep"></select></label>
+      <p class="note">Automatic sends the first robot that is not at the desk. A robot at the desk cannot also report.</p>
       <label class="row"><span>Other robot</span><input type="text" id="link" placeholder="Paste a Humanoid Creator link" spellcheck="false"></label>
       <p class="note" id="linkNote"></p>
     </section>
@@ -384,11 +385,14 @@ const NS = (() => {
     ["circle", "Channel ring"], ["tile", "Flat tile"], ["minimal", "Minimal wordmark"],
   ];
   const COLOURS = [["era", "Era default", -1], ["blue", "Blue", 216], ["red", "Red", 356], ["green", "Green", 150], ["purple", "Purple", 272], ["orange", "Orange", 24], ["teal", "Teal", 186]];
-  // The three robots are Humanoid Creator share links.
+  // The robots are Humanoid Creator share links.
   const HOSTS = [
     { name: "ARIA-7", link: "h1.82.4LddgHMDAQG3kZE03C5DLQE3D8N6Q2odoIoCtAKafYEBz8kBAGB5gx3-AlSacAACF682gQEwmBNqdNAtAW8KGgET6ZMTS4ACA3J-AB8aUoAAAAAA" },
     { name: "KODA-3", link: "h1.82.kM2lUZkFBgJ8qsPLEG3ruwQ2TLPMycFkRz4B3AMLHd4Bzk8CAr1gRpFKAZBhRgMBUydOqgGQ9KYP8fHkAvSPiAEXtEFwWZYBAOJ2SB8aUoAABQAA" },
     { name: "NOVA-5", link: "h1.82.41aJRHMDAQBZUlKQAo4SxgR0Z64iz3iZVEACfABO1HoArBgDAUhvzbJ_AYFOnQABpjxETQEpA0oF8fnmA0cD0gGJcKiJ_UwAAE4rYx8aUoAAAwAA" },
+    { name: "ZETA-9", link: "h1.82.3wCCeYkDAgDBeDcVV4l7WwRBvMCnUhZuPawAUwWrXx8AumsAALqCf4GoAj8xgQMDi2qlBAGZ7F0JBWu_AF0JWAHwJzqg8rQBARXCBB8aUoAABAAA" },
+    { name: "ORIN-4", link: "h1.82.ItZTq9sCBgBLslGFrF4EyAMgEllUlHNbYTYDYQStKpgDNpoAAC-zPYdxAIY0FAAANWqN0wBAN9bdc-cOAdwCEgPWZ8pB_xwAATUVHh8aUoAAAQAA" },
+    { name: "LYRA-2", link: "h1.82.FZJDl9UEAwCiiDe0V8AGeQE5HomYQ6sUqWUBLgPQNUQAzYEDATobn2NJA0q3sAMCPCwjjQFw3sgMBbwZAeUG7gBm4cHwk1wBAVa_YB8aUoAABAAA" },
   ];
   // All stories are invented. kind: "live" has a field reporter, "full" a full-screen graphic, "weather" the forecast.
   const STORIES = [
@@ -468,8 +472,8 @@ const NS = (() => {
   const transitionFor = (choice, e) => choice === "era" || !has(TRANSITIONS, choice) ? e.trans : choice;
   const logoFor = (choice, e) => choice === "era" || !has(LOGOS, choice) ? e.logo : choice;
   const hueFor = (choice, e) => { const c = COLOURS.find(x => x[0] === choice); return !c || c[2] < 0 ? e.hue : c[2]; };
-  // Who reports from the field: the first robot that is not at the desk.
-  const reporterFor = (anchor, co) => [0, 1, 2].find(i => i !== anchor && i !== co);
+  // Who reports from the field: the chosen robot, or else the first one that is not at the desk.
+  const reporterFor = (anchor, co, pick = -1) => pick >= 0 && pick < HOSTS.length && pick !== anchor && pick !== co ? pick : HOSTS.findIndex((h, i) => i !== anchor && i !== co);
   // With two anchors they take the stories in turn.
   const speakerFor = (anchor, co, story) => co >= 0 && story % 2 === 1 ? co : anchor;
 
@@ -483,7 +487,7 @@ const NS = (() => {
       logo: has(LOGOS, q.get("logo")) ? q.get("logo") : "era",
       colour: has(COLOURS, q.get("colour")) ? q.get("colour") : "era",
       name: (q.get("name") || "RBN").slice(0, 8), num: (q.get("num") ?? "7").slice(0, 2),
-      anchor: int("anchor", 1, 1, 3) - 1, co: int("co", 0, 0, 3) - 1,
+      anchor: int("anchor", 1, 1, HOSTS.length) - 1, co: int("co", 0, 0, HOSTS.length) - 1, rep: int("rep", 0, 0, HOSTS.length) - 1,
       shot: has(SHOTS, q.get("shot")) || CARDS.includes(q.get("shot")) ? q.get("shot") : "", story: int("story", 1, 1, STORIES.length) - 1,
       auto: q.get("auto") !== "0" && !q.get("shot"),
       banner: q.get("banner") !== "0", ticker: q.has("ticker") ? q.get("ticker") !== "0" : null, bug: q.get("bug") !== "0", clock: q.has("clock") ? q.get("clock") !== "0" : null,
@@ -505,8 +509,9 @@ const NSTests = {
     check("the two oldest eras are 4:3, the rest 16:9", ERAS.map(e => e.aspect.join(":")).join() === "4:3,4:3,16:9,16:9,16:9");
     check("era picture sizes match their aspect", ERAS.every(e => Math.abs(e.res[0] / e.res[1] - e.aspect[0] / e.aspect[1]) < .01));
     check("transition and logo ids are unique", new Set(TRANSITIONS.map(t => t[0])).size === TRANSITIONS.length && new Set(LOGOS.map(t => t[0])).size === LOGOS.length);
-    check("the three host links decode to full robots", HOSTS.every(h => { const P = HM.decode(h.link); return P && Object.keys(P).length === HM.PARAMS.length; }));
-    check("the three hosts differ", new Set(HOSTS.map(h => h.link)).size === 3);
+    check("six hosts, with names of their own", HOSTS.length === 6 && new Set(HOSTS.map(h => h.name)).size === 6);
+    check("the host links decode to full robots", HOSTS.every(h => { const P = HM.decode(h.link); return P && Object.keys(P).length === HM.PARAMS.length; }));
+    check("the hosts differ", new Set(HOSTS.map(h => h.link)).size === HOSTS.length);
     check("a host link survives a round trip", HOSTS.every(h => HM.encode(HM.decode(h.link)) === h.link));
 
     const r = NS.buildRundown();
@@ -526,6 +531,7 @@ const NSTests = {
     check("clock is 12-hour before 2010 and 24-hour after", NS.clockText(ERAS[1], new Date(2000, 0, 1, 18, 4)) === "6:04 PM" && NS.clockText(ERAS[3], new Date(2000, 0, 1, 18, 4)) === "18:04" && NS.clockText(ERAS[0], new Date(2000, 0, 1, 0, 9)) === "12:09 AM");
     check("era default resolves per era", NS.transitionFor("era", ERAS[0]) === "squeeze" && NS.transitionFor("iris", ERAS[0]) === "iris" && NS.logoFor("era", ERAS[4]) === "minimal" && NS.hueFor("era", ERAS[3]) === 356 && NS.hueFor("green", ERAS[3]) === 150);
     check("the reporter is whoever is not at the desk", NS.reporterFor(0, -1) === 1 && NS.reporterFor(1, -1) === 0 && NS.reporterFor(0, 1) === 2 && NS.reporterFor(2, 0) === 1);
+    check("a chosen reporter is used unless they are at the desk", NS.reporterFor(0, 1, 4) === 4 && NS.reporterFor(0, 4, 4) === 1 && NS.reporterFor(3, -1, 3) === 0 && NS.reporterFor(0, -1, 99) === 1);
     check("two anchors alternate stories", NS.speakerFor(0, 2, 0) === 0 && NS.speakerFor(0, 2, 1) === 2 && NS.speakerFor(0, -1, 1) === 0);
     const b = NS.buildBreaking();
     check("breaking news opens on the interruption card", b[0].shot === "alert" && b.every(x => x.story === -1));
@@ -536,8 +542,8 @@ const NSTests = {
     check("the cards can be asked for by address", NS.parse("?shot=alert").shot === "alert" && NS.parse("?shot=return").shot === "return" && NS.parse("?shot=nope").shot === "");
     const P = NS.parse("?era=199x&trans=flip&logo=chrome&name=KXYZ&num=4&anchor=3&co=1&shot=ots&story=2&brk=1");
     check("address settings are read", P.era === "199x" && P.trans === "flip" && P.logo === "chrome" && P.name === "KXYZ" && P.num === "4" && P.anchor === 2 && P.co === 0 && P.shot === "ots" && P.story === 1 && P.brk && !P.auto);
-    const D = NS.parse("?era=1066&trans=nope&anchor=9&co=3&story=99");
-    check("bad address settings fall back", D.era === "200x" && D.trans === "era" && D.anchor === 2 && D.co === -1 && D.story === STORIES.length - 1 && D.auto);
+    const D = NS.parse("?era=1066&trans=nope&anchor=99&co=6&story=99&rep=5");
+    check("bad address settings fall back", D.era === "200x" && D.trans === "era" && D.anchor === 5 && D.co === -1 && D.rep === 4 && D.story === STORIES.length - 1 && D.auto);
     return ok;
   }
 };
@@ -1881,9 +1887,11 @@ function targetPose(h, t, speaking) {
   const a = flat(poseFor(h, k, speaking)), b = flat(poseFor(h, k + 1, speaking));
   return a.map((v, i) => v + (b[i] - v) * w);
 }
-const reporter = () => NS.reporterFor(S.anchor, S.co);
+// Robots are built the first time they are needed.
+const host = i => hosts[i] || (hosts[i] = buildHost(i, NS.HOSTS[i].link));
+const reporter = () => NS.reporterFor(S.anchor, S.co, S.rep);
 function layout() {
-  const a = S.anchor, co = S.co, rep = reporter();
+  const a = S.anchor, co = S.co, rep = reporter(); host(a); host(rep); if (co >= 0) host(co);
   hosts.forEach((h, i) => { h.g.visible = i === a || i === co || i === rep; h.look = 0; });
   const put = (h, x, rot, desk) => { pose(h, desk); h.g.position.x = x; h.g.position.z = 0; h.baseRot = rot; };
   put(hosts[a], co >= 0 ? -.68 : 0, co >= 0 ? .12 : 0, true);
@@ -2012,7 +2020,7 @@ function buildSet() {
 // Point the camera for a shot. tl is seconds into the shot, so every shot drifts a little.
 function aim(shot, speaker, tl, aspect) {
   const wide = aspect > 1.5;
-  if (shot === "wide") { camera.fov = wide ? 25 : 29; camera.position.set(Math.sin(tl * .15) * .1, 1.5, 5.3 - Math.min(tl, 12) * .04); camera.lookAt(0, 1.34, 0); return; }
+  if (shot === "wide") { camera.fov = wide ? 25 : 29; camera.position.set(Math.sin(tl * .15) * .1, 1.45, 5.3 - Math.min(tl, 12) * .04); camera.lookAt(0, 1.2, 0); return; }
   const h = hosts[speaker], top = h.g.position.y + h.f.height, x = h.g.position.x, sh = shot === "ots" ? (G.e === 3 ? .5 : wide ? .43 : .3) : 0;
   camera.fov = 24; camera.position.set(x * (x > 50 ? 1 : .45) + sh, top - .34, 2.8 - Math.min(tl, 10) * .012); camera.lookAt(x + sh, top - .44, 0);
 }
@@ -2060,7 +2068,7 @@ function overlays(c) {
   if (st.shot === "titles" || NS.CARDS.includes(st.shot)) return;
   const dur = S.auto ? st.dur : 0, env = NS.envelope(tl, dur), d = { slug: s.slug, head: S.head || s.head, sub: S.sub || s.sub }, o = { ticker: tk, t: now };
   if (S.brk) G.brkItems = [d.head, d.sub, NS.WORDS.developing, NS.WORDS.more];
-  const sp = hosts[speakerOf(st, 0)], role = S.co >= 0 ? "Co-anchor, " + G.name + " News" : "Anchor, " + G.name + " News";
+  const spi = speakerOf(st, 0), sp = hosts[spi], role = (spi === S.co ? "Co-anchor, " : "Anchor, ") + G.name + " News";
   if (st.shot === "ots") otsBox(c, NS.envelope(tl, dur, .3), s, now, tk);
   if (S.banner) {
     if (st.shot === "mcu") lowerThird(c, env, d, o);
@@ -2176,6 +2184,7 @@ function buildUI() {
   const hostOpts = NS.HOSTS.map((h, i) => [String(i), `Robot ${i + 1} · ${h.name}`]);
   select("anchor", hostOpts, String(S.anchor), v => { S.anchor = +v; if (S.co === S.anchor) { S.co = -1; $("co").value = "-1"; } layout(); });
   select("co", [["-1", "None"], ...hostOpts], String(S.co), v => { S.co = +v === S.anchor ? -1 : +v; $("co").value = String(S.co); layout(); });
+  select("rep", [["-1", "Automatic"], ...hostOpts], String(S.rep), v => { S.rep = +v; layout(); });
   $("dur").value = S.dur; $("durOut").textContent = S.dur.toFixed(1) + " s"; $("dur").oninput = () => { S.dur = +$("dur").value; $("durOut").textContent = S.dur.toFixed(1) + " s"; };
   $("take").onclick = () => nextSeg("trans"); $("next").onclick = () => nextStory();
   $("name").value = S.name; $("num").value = S.num; $("name").oninput = () => { S.name = $("name").value.trim().slice(0, 8); restyle(); }; $("num").oninput = () => { S.num = $("num").value.trim().slice(0, 2); restyle(); };
@@ -2206,7 +2215,6 @@ async function main() {
   { const c = noise.getContext("2d"), d = c.createImageData(256, 256), r = rnd(99); for (let i = 0; i < d.data.length; i += 4) { const v = 128 + (r() - .5) * 150; d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255; } c.putImageData(d, 0, 0); }
   restyle(); buildUI();
   try { await init3D(); } catch (err) { $("msg").textContent = "This page needs WebGL to draw the studio. " + err.message; return; }
-  for (let i = 0; i < 3; i++) hosts.push(buildHost(i, NS.HOSTS[i].link));
   layout(); ready = true; restyle();
   if (S.brk) { rd = brkRun; saved = { shot: "mcu", story: 0, idx: 2 }; const i = brkRun.findIndex(x => x.shot === S.shot); cur = S.shot && S.shot !== "return" ? { shot: S.shot, story: -1, t0: 0, dur: 0, idx: Math.max(1, i) } : { ...brkRun[0], t0: 0, idx: 0 }; }
   else if (S.shot) { const i = rundown.findIndex(x => x.shot === S.shot && x.story === S.story); cur = { shot: S.shot, story: S.story, t0: 0, dur: S.shot === "return" ? 3.5 : 0, idx: Math.max(0, i) }; }
