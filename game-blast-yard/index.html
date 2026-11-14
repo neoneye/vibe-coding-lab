@@ -38,6 +38,21 @@
   kbd { background: #232a34; border: 1px solid #3a4452; border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; font: 600 12.5px ui-monospace, Menlo, monospace; color: #e8edf3; }
   .c1 { color: var(--p1); font-weight: 700; } .c2 { color: var(--p2); font-weight: 700; }
   #foot { padding: 5px 16px; color: var(--muted); font-size: 12.5px; background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 6px 18px; flex-wrap: wrap; justify-content: center; }
+  #net { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(8,10,14,.55); }
+  #net.open { display: flex; }
+  #net .box { background: #141920; border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; width: min(560px, 94vw); max-height: 96%; overflow-y: auto; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+  #net h2 { margin: 0 0 6px; font-size: 20px; }
+  #net p { margin: 6px 0; color: #b9c2cc; }
+  #net textarea { width: 100%; height: 74px; background: #0d1116; color: #cfe3ff; border: 1px solid #3a4452; border-radius: 8px; padding: 6px 8px; font: 11.5px/1.35 ui-monospace, Menlo, monospace; resize: vertical; word-break: break-all; }
+  #net button { background: #232a34; color: var(--text); border: 1px solid #3a4452; border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
+  #net button:hover { border-color: #56637a; }
+  #net button.main { background: #3a2f17; border-color: #e6b65c; color: #ffe3a8; }
+  #net .btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 2px; }
+  #net .err { color: #ff8f7a; min-height: 1.4em; }
+  #net label { display: flex; gap: 8px; align-items: flex-start; color: #b9c2cc; margin: 8px 0; }
+  #net .step { color: #ffd98a; font-weight: 600; margin-top: 10px; }
+  #netbar { color: #8fd19e; }
+  #netbar.wait { color: #ffb469; }
   @media (max-width: 700px) { .stats { display: none; } #msg h1 { font-size: 26px; } }
 </style>
 </head>
@@ -48,11 +63,11 @@
     <div id="mid"><div id="clock">1:40</div><div id="round">Round 1</div></div>
     <div class="pl right" id="hud2"><span class="stats"></span><span class="pips"></span><span class="name">BLUE</span></div>
   </div>
-  <div id="wrap"><canvas id="cv"></canvas><div id="msg"></div></div>
+  <div id="wrap"><canvas id="cv"></canvas><div id="msg"></div><div id="net"></div></div>
   <div id="foot">
     <span><span class="c1">Red</span> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Space</kbd></span>
     <span><span class="c2">Blue</span> <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> + <kbd>Enter</kbd></span>
-    <span><kbd>T</kbd> turn controls</span><span><kbd>P</kbd> pause</span><span><kbd>M</kbd> sound</span><span><kbd>R</kbd> new match</span>
+    <span><kbd>T</kbd> turn controls</span><span><kbd>P</kbd> pause</span><span><kbd>M</kbd> sound</span><span><kbd>R</kbd> new match</span><span><kbd>N</kbd> network game</span><span id="netbar"></span>
   </div>
 </div>
 
@@ -276,6 +291,43 @@ const BY = (() => {
   }
   function nextRound(g) { if (g.matchOver) { g.wins = [0, 0]; g.round = 0; g.matchOver = false; } startRound(g); }
 
+  // One tick for a networked game, where "next round" has to happen on the same tick for both: go is part of the input.
+  function step(g, inputs) {
+    if (g.phase === "over" && g.overT > 0.6 && inputs.some(i => i && i.go)) { nextRound(g); g.events.push({ type: "roundStart" }); return; }
+    tick(g, inputs);
+  }
+  // A fingerprint of everything that matters, to notice two linked games drifting apart.
+  function stateHash(g) {
+    let h = 2166136261;
+    const add = v => { h ^= v & 0xffff; h = Math.imul(h, 16777619); h ^= (v >> 16) & 0xffff; h = Math.imul(h, 16777619); };
+    add(g.round); add(g.wins[0]); add(g.wins[1]); add(g.phase === "over" ? 1 : 0);
+    for (const p of g.players) { add(Math.round(p.x * 4096)); add(Math.round(p.y * 4096)); add(p.alive ? 1 : 0); add(p.bombs); add(p.range); add(Math.round(p.speed * 100)); add(p.kick ? 1 : 0); }
+    for (const b of g.bombs) { add(Math.round(b.x * 4096)); add(Math.round(b.y * 4096)); add(Math.round(b.t * 1000)); add(b.owner); }
+    for (let i = 0; i < W * H; i++) add(g.grid[i] + g.item[i] * 8 + g.hidden[i] * 64 + (g.fl[i] > 0 ? 512 : 0));
+    return h >>> 0;
+  }
+  // ---- two browsers, one game ----
+  // Both run the same simulation and only swap key presses. My keys for tick n are sent `delay` ticks ahead, and a tick
+  // is only simulated once the other side's keys for it have arrived, so both sides compute exactly the same game.
+  function createLink(me, delay) { const D = delay || 3; return { me, D, L: 0, sent: D, mine: {}, theirs: {}, myHash: {}, theirHash: {}, desync: false }; }
+  // Try to simulate one tick. sampleFn gives my keys, send transmits a message. Returns false while waiting for the other side.
+  function linkStep(link, g, sampleFn, send) {
+    if (link.sent <= link.L + link.D) { const k = sampleFn(); link.mine[link.sent] = k; send({ t: "i", n: link.sent, d: [k.dx | 0, k.dy | 0, k.bomb ? 1 : 0, k.go ? 1 : 0] }); link.sent++; }
+    const L = link.L, live = L >= link.D;
+    if (live && !link.theirs[L]) return false;
+    const a = live ? link.mine[L] : {}, b = live ? link.theirs[L] : {};
+    step(g, link.me === 0 ? [a, b] : [b, a]);
+    delete link.mine[L]; delete link.theirs[L];
+    link.L++;
+    if (link.L % 120 === 0) { const h = stateHash(g); send({ t: "h", n: link.L, h }); compare(link, link.L, h, link.theirHash); link.myHash[link.L] = h; }
+    return true;
+  }
+  function compare(link, n, h, other) { if (other[n] !== undefined) { if (other[n] !== h) link.desync = true; delete other[n]; delete link.myHash[n]; } }
+  function linkReceive(link, m) {
+    if (m.t === "i") link.theirs[m.n] = { dx: m.d[0], dy: m.d[1], bomb: !!m.d[2], go: !!m.d[3] };
+    else if (m.t === "h") { link.theirHash[m.n] = m.h; if (link.myHash[m.n] !== undefined) compare(link, m.n, link.myHash[m.n], link.theirHash); }
+  }
+
   // ---- keyboard: held keys (most recent wins) plus a queue of presses, so a tap shorter than a tick still counts ----
   function createInput() { return { held: [], taps: [], bombs: 0 }; }
   function keyDown(inp, dir) { if (!inp.held.includes(dir)) { inp.held.push(dir); if (inp.taps.length < 4) inp.taps.push(dir); } }
@@ -294,7 +346,7 @@ const BY = (() => {
   }
 
   return { W, H, TICK, FUSE, FLAME, ROUND, DROP, FALL, FLOOR, PILLAR, CRATE, FALLEN, ITEMS, SPIRAL, SPAWN, KEYMAP,
-    createGame, startRound, nextRound, tick, placeBomb, bombAt, solid, createInput, keyDown, keyUp, bombDown, clearInput, sample };
+    createGame, startRound, nextRound, tick, step, stateHash, createLink, linkStep, linkReceive, placeBomb, bombAt, solid, createInput, keyDown, keyUp, bombDown, clearInput, sample };
 })();
 
 // ---- tests: node test.mjs ----
@@ -416,6 +468,29 @@ const BYTests = {
         if (g.phase === "over" && g.overT > 0.5) { rounds++; if (g.winner >= 0) wins++; BY.nextRound(g); }
       }
       check("random play for " + rounds + " rounds keeps everything in its place", !bad && rounds > 20, bad || wins + " won, " + (rounds - wins) + " drawn");
+    }
+    {
+      // two linked games with messages arriving late and in bursts: both must play out the very same match
+      const r = (() => { let a = 777; return () => (a = (a * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff; })();
+      const G = [BY.createGame(42), BY.createGame(42)], K = [BY.createLink(0), BY.createLink(1)], wire = [[], []], seen = [{}, {}];
+      let now = 0, stalls = 0, rounds = 0, held = [{}, {}];
+      for (let k = 0; k < 40000; k++) {
+        now++;
+        for (let i = 0; i < 2; i++) {
+          while (wire[i].length && wire[i][0].at <= now) BY.linkReceive(K[i], wire[i].shift().m);
+          if (r() < 0.12) continue;                                   // this side's clock skips a beat
+          if (k % 11 === 0) { const d = [[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]][Math.floor(r() * 5)]; held[i] = { dx: d[0], dy: d[1] }; }
+          const sample = () => ({ dx: held[i].dx, dy: held[i].dy, bomb: r() < 0.03, go: r() < 0.2 });
+          const send = m => { const q = wire[1 - i]; q.push({ at: Math.max(now + 1 + Math.floor(r() * 5), q.length ? q[q.length - 1].at : 0), m }); };
+          if (BY.linkStep(K[i], G[i], sample, send)) { seen[i][K[i].L] = BY.stateHash(G[i]); if (i === 0 && G[0].events.some(e => e.type === "roundStart")) rounds++; G[i].events.length = 0; } else stalls++;
+        }
+      }
+      const upto = Math.min(K[0].L, K[1].L); let same = true;
+      for (let n = 1; n <= upto; n++) if (seen[0][n] !== seen[1][n]) { same = false; break; }
+      check("two linked games stay identical tick for tick", same && upto > 20000 && !K[0].desync && !K[1].desync, upto + " ticks, " + rounds + " rounds, " + stalls + " waits");
+      check("the link plays on into further rounds", rounds >= 3 && G[0].round === G[1].round);
+      const A = BY.createGame(3), B = BY.createGame(3); B.players[1].x += 0.001;
+      check("a difference between the two games is noticed", BY.stateHash(A) !== BY.stateHash(B));
     }
     console.log(ok ? "all tests passed" : "SOME TESTS FAILED");
     return ok;
@@ -631,6 +706,7 @@ const BYTests = {
       else if (e.type === "kick") tone(160, 320, .07, .12, "triangle");
       else if (e.type === "die") { tone(500, 60, .6, .2, "sawtooth"); burst(e.x, e.y, 16, [COL[e.id].suit, "#333", "#ddd"], 4); }
       else if (e.type === "land") { noise(.18, .3, 500, 80); shake = Math.min(1.5, shake + .25); burst(e.x, e.y, 4, ["#b9ad9f", "#8f8377"], 3); }
+      else if (e.type === "roundStart") { mode = "play"; parts = []; showMsg(); }
       else if (e.type === "roundEnd") { mode = "over"; showMsg(); if (e.winner >= 0) { tone(440, 440, .12, .12, "triangle"); setTimeout(() => tone(660, 660, .2, .12, "triangle"), 130); } }
     }
     g.events.length = 0;
@@ -654,7 +730,9 @@ const BYTests = {
     const m = $("msg");
     if ((mode === "play" && !paused) || q.has("shot")) { m.innerHTML = ""; return; }
     let h = "";
-    if (paused) h = "<h2>Paused</h2><p class='go'>Press <kbd>P</kbd> to carry on</p>";
+    if (net.active && net.link && net.link.desync) h = "<h2>The two games have drifted apart</h2><p class='go'>" + (net.role === 0 ? "Press <kbd>R</kbd> to start the match again" : "Waiting for the host to start the match again") + "</p>";
+    else if (net.active && mode === "title") h = "<h2>Connected</h2><p>Waiting for the host to start.</p>";
+    else if (paused) h = "<h2>Paused</h2><p class='go'>Press <kbd>P</kbd> to carry on</p>";
     else if (mode === "title") {
       const d = DIRNAME[turn];
       h = "<h1>BLAST YARD</h1><p>Two players, one keyboard. Lay bombs, blow up crates, collect what was inside, and catch the other one in a blast. First to " + g.target + " rounds.</p>" +
@@ -663,7 +741,7 @@ const BYTests = {
         "<tr><td class='c2'>Blue</td><td><kbd>↑</kbd> <kbd>←</kbd> <kbd>↓</kbd> <kbd>→</kbd></td><td><kbd>Enter</kbd></td></tr></table>" +
         "<p>The yard is seen from a corner: <kbd>W</kbd>/<kbd>↑</kbd> walks " + d[0] + ", <kbd>D</kbd>/<kbd>→</kbd> " + d[1] + ", <kbd>S</kbd>/<kbd>↓</kbd> " + d[2] + ", <kbd>A</kbd>/<kbd>←</kbd> " + d[3] + ". Press <kbd>T</kbd> to turn the controls the other way.</p>" +
         "<p>💣&nbsp;one more bomb · 🔥&nbsp;longer blast · ⚡&nbsp;faster · 👟&nbsp;walk into a bomb to kick it. When the clock runs out the yard closes in.</p>" +
-        "<p class='go'>Press <kbd>Space</kbd> or <kbd>Enter</kbd> to start</p>";
+        "<p class='go'>Press <kbd>Space</kbd> or <kbd>Enter</kbd> to start, or <kbd>N</kbd> to play against another computer</p>";
     } else if (mode === "over") {
       const w = g.winner, cls = w >= 0 ? "c" + (w + 1) : "";
       if (g.matchOver) h = `<h2><span class="${cls}">${NAMES[w]}</span> wins the match ${g.wins[w]}–${g.wins[1 - w]}</h2><p class='go'>Press <kbd>Space</kbd> or <kbd>Enter</kbd> for a new match</p>`;
@@ -679,31 +757,124 @@ const BYTests = {
     if (mode === "title") { mode = "play"; inputs.forEach(BY.clearInput); showMsg(); }
     else if (mode === "over" && g.overT > .6) { BY.nextRound(g); parts = []; mode = "play"; inputs.forEach(BY.clearInput); showMsg(); }
   }
+  const typing = e => /^(TEXTAREA|INPUT|BUTTON|SELECT)$/.test(e.target && e.target.tagName || "");
   window.addEventListener("keydown", e => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.code === "Escape" && $("net").classList.contains("open")) { closePanel(); return; }
+    if (typing(e) || $("net").classList.contains("open")) return;   // the network panel has the keyboard
     audio();
     const k = KEYS[e.code];
-    if (k) { e.preventDefault(); BY.keyDown(inputs[k[0]], k[1]); return; }   // a repeat for a key not held re-registers it
+    // over the network each computer steers one figure, with either set of keys
+    if (k) { e.preventDefault(); BY.keyDown(inputs[net.active ? 0 : k[0]], k[1]); return; }   // a repeat for a key not held re-registers it
     if (e.code in BOMB) {
       e.preventDefault(); if (e.repeat) return;
-      if (mode === "play" && !paused) BY.bombDown(inputs[BOMB[e.code]]); else if (!paused && (e.code === "Space" || e.code === "Enter")) advance();
+      if (mode === "play" && !paused) BY.bombDown(inputs[net.active ? 0 : BOMB[e.code]]);
+      else if (net.active) { if (mode === "over") netGo = true; }
+      else if (!paused && (e.code === "Space" || e.code === "Enter")) advance();
       return;
     }
     if (e.repeat) return;
-    if (e.code === "KeyP" && mode === "play") { paused = !paused; showMsg(); }
+    if (e.code === "KeyP" && mode === "play" && !net.active) { paused = !paused; showMsg(); }
     else if (e.code === "KeyM") mute = !mute;
     else if (e.code === "KeyT") { turn = 1 - turn; try { localStorage.setItem("blastyard.turn", String(turn)); } catch (err) {} showMsg(); }
-    else if (e.code === "KeyR") { g = BY.createGame((Date.now() & 0xffff) + 1); parts = []; paused = false; mode = "title"; showMsg(); }
+    else if (e.code === "KeyN") openPanel();
+    else if (e.code === "KeyR") { if (net.active) { if (net.role === 0) netStart(); } else { g = BY.createGame((Date.now() & 0xffff) + 1); parts = []; paused = false; mode = "title"; showMsg(); } }
   });
-  window.addEventListener("keyup", e => { const k = KEYS[e.code]; if (k) BY.keyUp(inputs[k[0]], k[1]); });
+  window.addEventListener("keyup", e => { const k = KEYS[e.code]; if (k) BY.keyUp(inputs[net.active ? 0 : k[0]], k[1]); });
   window.addEventListener("blur", () => inputs.forEach(BY.clearInput));
+
+  // ---- network: two browsers connected directly with WebRTC ----
+  // There is no server to introduce them, so the players pass two codes to each other by hand (chat, mail, anything):
+  // the host's invitation and the guest's reply. After that the browsers talk to each other and only swap key presses.
+  const net = { pc: null, ch: null, role: -1, active: false, link: null, epoch: 0, stall: 0, told: false };
+  let netGo = false;
+  const b64 = bytes => { let t = ""; for (let i = 0; i < bytes.length; i++) t += String.fromCharCode(bytes[i]); return btoa(t).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+  const unb64 = str => { const t = atob(str.replace(/-/g, "+").replace(/_/g, "/")), out = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) out[i] = t.charCodeAt(i); return out; };
+  async function pack(desc) {
+    const json = JSON.stringify({ t: desc.type, s: desc.sdp });
+    if (window.CompressionStream) { const z = new Blob([json]).stream().pipeThrough(new CompressionStream("deflate-raw")); return "BY1." + b64(new Uint8Array(await new Response(z).arrayBuffer())); }
+    return "BY0." + b64(new TextEncoder().encode(json));
+  }
+  async function unpack(code) {
+    code = String(code).replace(/\s+/g, "");
+    const kind = code.slice(0, 4);
+    if (kind !== "BY1." && kind !== "BY0.") throw new Error("That does not look like a Blast Yard code.");
+    let json;
+    try {
+      const bytes = unb64(code.slice(4));
+      json = kind === "BY1." ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).text() : new TextDecoder().decode(bytes);
+      const o = JSON.parse(json); return { type: o.t, sdp: o.s };
+    } catch (e) { throw new Error("The code is damaged or incomplete. Copy all of it."); }
+  }
+  function newPeer(stun) {
+    netClose();
+    if (!window.RTCPeerConnection) throw new Error("This browser cannot make direct connections.");
+    net.pc = new RTCPeerConnection({ iceServers: stun ? [{ urls: "stun:stun.l.google.com:19302" }] : [] });
+    return net.pc;
+  }
+  // every address this browser can be reached at goes into the code, so wait until they have all been found
+  const gathered = pc => new Promise(res => { if (pc.iceGatheringState === "complete") return res(); const done = () => { if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); } }; const t = setTimeout(res, 3000); pc.addEventListener("icegatheringstatechange", done); });
+  function wire(ch) {
+    net.ch = ch;
+    ch.onopen = () => { net.active = true; closePanel(); inputs.forEach(BY.clearInput); if (net.role === 0) netStart(); else { mode = "title"; showMsg(); } };
+    ch.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (err) { return; } if (m.t === "start") { net.epoch = m.e; begin(m.seed); } else if (m.e === net.epoch && net.link) BY.linkReceive(net.link, m); };
+    ch.onclose = () => { if (net.ch === ch) netLost(); };
+  }
+  async function netHost(stun) { const pc = newPeer(stun); net.role = 0; wire(pc.createDataChannel("blast-yard")); await pc.setLocalDescription(await pc.createOffer()); await gathered(pc); return pack(pc.localDescription); }
+  async function netAccept(code) { const d = await unpack(code); if (d.type !== "answer") throw new Error("That is an invitation, not a reply. Paste the code the other player sent back."); await net.pc.setRemoteDescription(d); }
+  async function netJoin(code, stun) {
+    const d = await unpack(code); if (d.type !== "offer") throw new Error("That is a reply, not an invitation. Paste the host's code.");
+    const pc = newPeer(stun); net.role = 1; pc.ondatachannel = e => wire(e.channel);
+    await pc.setRemoteDescription(d); await pc.setLocalDescription(await pc.createAnswer()); await gathered(pc); return pack(pc.localDescription);
+  }
+  function netSend(m) { m.e = net.epoch; if (net.ch && net.ch.readyState === "open") net.ch.send(JSON.stringify(m)); }
+  function netStart() { net.epoch++; const seed = (Math.random() * 65536) | 0; netSend({ t: "start", seed }); begin(seed); }
+  function begin(seed) { g = BY.createGame(seed); net.link = BY.createLink(net.role); net.told = false; net.stall = 0; netGo = false; parts = []; paused = false; mode = "play"; acc = 0; inputs.forEach(BY.clearInput); showMsg(); }
+  function netClose() { const pc = net.pc, ch = net.ch; net.pc = net.ch = net.link = null; net.active = false; net.role = -1; try { if (ch) ch.close(); if (pc) pc.close(); } catch (e) {} }
+  function netLost() { netClose(); g = BY.createGame((Date.now() & 0xffff) + 2); parts = []; mode = "title"; showMsg(); $("msg").innerHTML = "<div class='box'><h2>Connection lost</h2><p>The other player is gone. Press <kbd>N</kbd> to connect again, or <kbd>Space</kbd> to play on this keyboard.</p></div>"; }
+
+  // the panel that walks both players through the exchange of codes
+  function closePanel() { $("net").classList.remove("open"); $("net").innerHTML = ""; }
+  function openPanel(view) {
+    const el = $("net"); el.classList.add("open");
+    const stunBox = "<label><input type='checkbox' id='stun' checked> <span>Play across the internet. This asks a public address server (Google STUN) how this computer can be reached; nothing about the game goes through it. Untick it if both computers are on the same network.</span></label>";
+    const foot = "<p class='err' id='nerr'></p><div class='btns'><button id='nclose'>Close</button></div>";
+    if (net.active) el.innerHTML = "<div class='box'><h2>Network game</h2><p>Connected. You are <span class='c" + (net.role + 1) + "'>" + NAMES[net.role] + "</span>.</p><div class='btns'><button id='ndrop'>Disconnect</button><button id='nclose'>Close</button></div></div>";
+    else if (view === "host") el.innerHTML = "<div class='box'><h2>Host a game</h2><p class='step'>1. Send this invitation to the other player</p><textarea id='ncode' readonly>working…</textarea><div class='btns'><button id='ncopy'>Copy invitation</button></div><p class='step'>2. Paste the reply they send back</p><textarea id='nin' placeholder='BY1.…'></textarea><div class='btns'><button id='ngo' class='main'>Connect</button></div>" + foot + "</div>";
+    else if (view === "join") el.innerHTML = "<div class='box'><h2>Join a game</h2><p class='step'>1. Paste the invitation the host sent you</p><textarea id='nin' placeholder='BY1.…'></textarea><div class='btns'><button id='ngo' class='main'>Make my reply</button></div><div id='nreply' style='display:none'><p class='step'>2. Send this reply back to the host</p><textarea id='ncode' readonly></textarea><div class='btns'><button id='ncopy'>Copy reply</button></div><p>The game starts by itself once the host has pasted it.</p></div>" + foot + "</div>";
+    else el.innerHTML = "<div class='box'><h2>Play against another computer</h2><p>The two browsers connect directly to each other. There is no server to introduce them, so you swap two short codes by chat or mail: one player hosts and sends an invitation, the other answers with a reply. The host plays <span class='c1'>Red</span>, the guest <span class='c2'>Blue</span>, and each steers with either set of keys.</p>" + stunBox + "<div class='btns'><button id='nhost' class='main'>Host a game</button><button id='njoin'>Join a game</button></div>" + foot + "</div>";
+    const on = (id, f) => { const b = $(id); if (b) b.onclick = () => Promise.resolve().then(f).catch(e => { const er = $("nerr"); if (er) er.textContent = e.message || String(e); }); };
+    const stun = () => net.stun !== false;
+    on("nclose", closePanel); on("ndrop", () => { netLost(); closePanel(); });
+    on("nhost", async () => { net.stun = $("stun").checked; openPanel("host"); $("ncode").value = await netHost(stun()); });
+    on("njoin", () => { net.stun = $("stun").checked; openPanel("join"); });
+    on("ncopy", async () => { const t = $("ncode"); t.select(); try { await navigator.clipboard.writeText(t.value); $("ncopy").textContent = "Copied"; } catch (e) { $("nerr").textContent = "Select the code and copy it by hand."; } });
+    on("ngo", async () => {
+      const code = $("nin").value; if (!code.trim()) throw new Error("Paste the code first.");
+      if (view === "host") { await netAccept(code); $("nerr").textContent = "Connecting…"; }
+      else { $("ncode").value = await netJoin(code, stun()); $("nreply").style.display = "block"; }
+    });
+  }
+  function netBar() {
+    const el = $("netbar"), t = !net.active ? "" : net.stall > .4 ? "Waiting for the other player…" : "Connected · you are " + NAMES[net.role];
+    if (el.textContent !== t) el.textContent = t; el.classList.toggle("wait", net.stall > .4);
+  }
 
   // ---- main loop: fixed 60 Hz simulation ----
   function sim(dt) {
     clock += dt;
     if (mode === "title" || paused) return;
     acc += dt;
-    while (acc >= BY.TICK) {
+    if (net.active && net.link) {
+      const mine = () => { const k = BY.sample(inputs[0], turn); k.go = netGo; netGo = false; return k; };
+      let waited = true;
+      while (acc >= BY.TICK) {
+        if (!BY.linkStep(net.link, g, mine, netSend)) { acc = Math.min(acc, BY.TICK); break; }   // the other side's keys are not here yet
+        acc -= BY.TICK; waited = false; handleEvents();
+      }
+      net.stall = waited && acc >= BY.TICK ? net.stall + dt : 0;
+      if (net.link.desync && !net.told) { net.told = true; showMsg(); }
+    } else while (acc >= BY.TICK) {
       acc -= BY.TICK;
       BY.tick(g, mode === "play" ? [BY.sample(inputs[0], turn), BY.sample(inputs[1], turn)] : []);
       handleEvents();
@@ -715,7 +886,7 @@ const BYTests = {
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min(.1, (now - last) / 1000); last = now;
-    sim(dt); hud(); draw();
+    sim(dt); hud(); netBar(); draw();
   }
   if (q.has("shot")) {   // a staged scene for the gallery picture
     mode = "play";
@@ -729,7 +900,7 @@ const BYTests = {
   showMsg(); hud(); draw();
   requestAnimationFrame(frame);
   // for testing in a hidden tab: drive the game by hand
-  window.__by = { get g() { return g; }, inputs, BY, start() { mode = "play"; showMsg(); }, step(sec) { const n = Math.round(sec * 60); for (let k = 0; k < n; k++) sim(1 / 60); hud(); draw(); }, state: () => ({ mode, paused, turn }) };
+  window.__by = { get g() { return g; }, inputs, BY, net, netHost, netJoin, netAccept, openPanel, start() { mode = "play"; showMsg(); }, step(sec) { const n = Math.round(sec * 60); for (let k = 0; k < n; k++) sim(1 / 60); hud(); netBar(); draw(); }, state: () => ({ mode, paused, turn }) };
 })();
 </script>
 </body>
