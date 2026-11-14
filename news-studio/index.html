@@ -439,7 +439,7 @@ const NS = (() => {
     const r = [{ shot: "titles", dur: 6, story: 0, enter: "trans" }, { shot: "wide", dur: 9, story: 0, enter: "soft", entrance: true }];
     stories.forEach((s, i) => {
       r.push({ shot: "mcu", dur: 7, story: i, enter: i === 0 ? "cut" : "trans" });
-      if (s.kind === "weather") { r.push({ shot: "weather", dur: 9, story: i, enter: "trans" }); return; }
+      if (s.kind === "weather") { r.push({ shot: "weather", dur: WEATHER_DUR, story: i, enter: "trans" }); return; }
       r.push({ shot: "ots", dur: 6, story: i, enter: "cut" });
       if (s.kind === "live") r.push({ shot: "live", dur: 6, story: i, enter: "trans" }, { shot: "field", dur: 7, story: i, enter: "cut" });
       else r.push({ shot: "full", dur: 8, story: i, enter: "trans" });
@@ -487,6 +487,31 @@ const NS = (() => {
   const hueFor = (choice, e) => { const c = COLOURS.find(x => x[0] === choice); return !c || c[2] < 0 ? e.hue : c[2]; };
   // Who reports from the field: the chosen robot, or else the first one that is not at the desk.
   const reporterFor = (anchor, co, pick = -1) => pick >= 0 && pick < HOSTS.length && pick !== anchor && pick !== co ? pick : HOSTS.findIndex((h, i) => i !== anchor && i !== co);
+  // Who presents the weather: the first robot with no other job.
+  const weatherFor = (anchor, co, rep) => HOSTS.findIndex((h, i) => i !== anchor && i !== co && i !== rep);
+  // The forecast is explained day by day: a greeting, the same time on each day, then a summing-up.
+  const WEATHER_DUR = 17;
+  function weatherPlan(n, dur = WEATHER_DUR) { const intro = 2, outro = 2.2; return { intro, outro, per: Math.max(.5, (dur - intro - outro) / Math.max(1, n)) }; }
+  // Which day is being explained tl seconds into the forecast: -1 during the greeting, n once the last day is done.
+  function weatherDay(tl, n, dur = WEATHER_DUR) { const p = weatherPlan(n, dur); return tl < p.intro ? -1 : Math.min(n, Math.floor((tl - p.intro) / p.per)); }
+  // What the weather presenter says: one line for the greeting, one for each day, one to sum up.
+  const DAY_NAMES = { MON: "Monday", TUE: "Tuesday", WED: "Wednesday", THU: "Thursday", FRI: "Friday", SAT: "Saturday", SUN: "Sunday" };
+  function forecastLines(days) {
+    const name = d => DAY_NAMES[d[0]] || d[0], wet = d => d[1] === "rain" || d[1] === "storm";
+    const lines = ["Here is how the next " + ["", "one", "two", "three", "four", "five", "six", "seven"][days.length] + " days look."];
+    days.forEach((d, i) => {
+      const prev = days[i - 1], diff = prev ? d[2] - prev[2] : 0;
+      const temp = (diff <= -2 ? "cooler, " : diff >= 2 ? "warmer, " : "") + d[2] + " degrees";
+      let sky;
+      if (!prev) sky = name(d) + " starts " + { sun: "dry and sunny", cloud: "cloudy", rain: "wet", storm: "stormy" }[d[1]];
+      else if (prev[1] === d[1]) sky = name(d) + " stays " + { sun: "sunny", cloud: "cloudy", rain: "wet", storm: "stormy" }[d[1]];
+      else sky = { sun: "The sun is back on " + name(d), cloud: "Cloud moves in on " + name(d), rain: "Rain arrives on " + name(d), storm: "Thunderstorms on " + name(d) }[d[1]];
+      lines.push(sky + ", " + temp + ".");   // short enough for the caption in every era; the low is on the card
+    });
+    const warm = days.reduce((a, d) => d[2] > a[2] ? d : a), firstWet = days.find(wet);
+    lines.push("Warmest " + name(warm) + " at " + warm[2] + ". " + (firstWet ? "Umbrellas from " + name(firstWet) + "." : "Dry all week."));
+    return lines;
+  }
   // With two anchors they take the stories in turn.
   const speakerFor = (anchor, co, story) => co >= 0 && story % 2 === 1 ? co : anchor;
 
@@ -546,7 +571,7 @@ const NS = (() => {
     if (S.co === S.anchor) S.co = -1;
     return S;
   }
-  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, BREAKING, WORDS, CARDS, buildBreaking, advance, storyAt, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, WALK, walkPlan, walkPhase, soundPlan, transitionFor, logoFor, hueFor, reporterFor, speakerFor, parse };
+  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, BREAKING, WORDS, CARDS, buildBreaking, advance, storyAt, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, WALK, walkPlan, walkPhase, soundPlan, transitionFor, logoFor, hueFor, reporterFor, speakerFor, weatherFor, WEATHER_DUR, weatherPlan, weatherDay, forecastLines, parse };
 })();
 
 const NSTests = {
@@ -569,6 +594,14 @@ const NSTests = {
     check("every story gets an anchor shot", STORIES.every((s, i) => r.some(x => x.shot === "mcu" && x.story === i)));
     check("live stories get the double box then the reporter", STORIES.every((s, i) => s.kind !== "live" || r.findIndex(x => x.shot === "field" && x.story === i) === r.findIndex(x => x.shot === "live" && x.story === i) + 1));
     check("the weather story goes to the forecast", r.some(x => x.shot === "weather" && STORIES[x.story].kind === "weather"));
+    {
+      const days = STORIES.find(x => x.days).days, n = days.length, L = NS.forecastLines(days), P = NS.weatherPlan(n);
+      check("the forecast gets a greeting, a line per day and a summing-up", L.length === n + 2 && L.every(x => x.length > 10 && x.length <= 48), L.map(x => x.length).join(","));
+      check("each day's line names the day and its temperature", days.every((d, i) => L[i + 1].includes(String(d[2])) && L[i + 1].toUpperCase().includes(d[0])));
+      check("the summing-up warns of the first wet day", L[n + 1].includes("Thursday") && L[n + 1].includes("Monday"), L[n + 1]);
+      check("the days are explained in order within the forecast's time", NS.weatherDay(0, n) === -1 && NS.weatherDay(P.intro + .01, n) === 0 && NS.weatherDay(P.intro + P.per * (n - 1) + .01, n) === n - 1 && NS.weatherDay(NS.WEATHER_DUR - .5, n) === n && P.intro + P.per * n + P.outro <= NS.WEATHER_DUR + 1e-9);
+      check("the weather presenter has no other job", NS.weatherFor(0, 1, 2) === 3 && NS.weatherFor(0, -1, 1) === 2 && NS.weatherFor(2, 0, 1) === 3);
+    }
     check("cuts stay inside a story", r.every((x, i) => x.enter !== "cut" || i === 0 || r[i - 1].story === x.story));
     const T = NS.total(r);
     check("locate finds the first and last segment", NS.locate(r, 0).index === 0 && NS.locate(r, T - .01).index === r.length - 1);
@@ -867,6 +900,7 @@ function storyArt(c, st, x, y, w, h, t = 0) {
 
 // ── lower third ──
 const TICK_H = [58, 58, 72, 66, 58];
+const WX_W = .72;   // share of the picture width the forecast keeps when a presenter stands beside it
 const L3_H = [150, 136, 142, 152, 162];
 // k is 0..1 visibility. d = { slug, head, sub }. o.w narrows it (name supers), o.ticker says a ticker is below.
 function lowerThird(c, k, d, o = {}) {
@@ -1062,15 +1096,18 @@ function fullScreen(c, t, st, tickerOn) {
 }
 
 // ── weather ──
-function weather(c, t, st, tickerOn) {
+// o.pres leaves the right of the picture free for the presenter, o.l3 keeps clear of the caption, o.day is the day being explained.
+function weather(c, t, st, tickerOn, o = {}) {
   const e = G.e, T = theme(st.hue), bot = H - (tickerOn ? TICK_H[e] : 0), top = e < 2 ? H * .1 : 130;
   backdrop(c, W, H, t, st.hue);
   text(c, e === 0 ? "THE WEATHER" : "FIVE-DAY FORECAST", MX, top + 60, { size: 70, shadow: e < 3 ? [4, 4, "rgba(0,0,0,.6)"] : null, max: W - 2 * MX - 300 });
   text(c, st.head, MX, top + 116, { size: 36, w: e === 4 ? 400 : undefined, col: e === 3 ? "#fff" : T.acc === "#ffffff" ? T.priL : T.acc, max: W - 2 * MX, shadow: e < 3 ? [3, 3, "rgba(0,0,0,.6)"] : null });
-  const n = st.days.length, gap = 22, cw = (W - 2 * MX - gap * (n - 1)) / n, cy = top + 170, ch = bot - cy - 50;
+  const n = st.days.length, gap = o.pres ? 16 : 22, cw = ((W - 2 * MX) * (o.pres ? WX_W : 1) - gap * (n - 1)) / n, cy = top + 170;
+  const ch = (o.l3 ? H - (tickerOn ? TICK_H[e] : 0) - (e < 2 ? H * .075 : 34) - L3_H[e] - 62 : bot - 50) - cy, day = o.day ?? -2, on = day >= 0 && day < n;
   st.days.forEach((d, i) => {
     const k = ease.out((t - .5 - i * .25) / .5); if (k <= 0) return;
-    const x = MX + i * (cw + gap); c.save(); c.globalAlpha = e === 0 ? 1 : k; if (e > 0) c.translate(0, (1 - k) * 60);
+    const x = MX + i * (cw + gap), hot = i === day; c.save(); c.globalAlpha = (e === 0 ? 1 : k) * (on && !hot ? .62 : 1); if (e > 0) c.translate(0, (1 - k) * 60);
+    if (hot) { c.translate(0, -12); c.lineWidth = e === 0 ? 10 : 6; c.strokeStyle = e === 3 ? hsl(st.hue, 75, 34) : e === 0 ? "#ffe14a" : T.acc === "#ffffff" ? "#ffe9a0" : T.acc; if (e === 2 || e === 4) { rr(c, x - 7, cy - 7, cw + 14, ch + 14, e === 4 ? 34 : 24); c.stroke(); } else c.strokeRect(x - 7, cy - 7, cw + 14, ch + 14); }
     if (e === 0) { c.fillStyle = hsl(st.hue, 70, 18, .9); c.fillRect(x, cy, cw, ch); c.lineWidth = 6; c.strokeStyle = "#fff"; c.strokeRect(x, cy, cw, ch); }
     else if (e === 1) { c.fillStyle = vgrad(c, cy, cy + ch, [[0, hsl(st.hue, 80, 45, .9)], [1, hsl(st.hue, 85, 14, .9)]]); c.fillRect(x, cy, cw, ch); c.fillStyle = T.acc; c.fillRect(x, cy, cw, 6); }
     else if (e === 2) { rr(c, x, cy, cw, ch, 18); c.fillStyle = vgrad(c, cy, cy + ch, [[0, "rgba(120,170,255,.55)"], [.5, "rgba(20,40,110,.75)"], [1, "rgba(4,10,40,.85)"]]); c.fill(); c.lineWidth = 3; c.strokeStyle = "rgba(255,255,255,.6)"; c.stroke(); }
@@ -1078,9 +1115,10 @@ function weather(c, t, st, tickerOn) {
     else { rr(c, x, cy, cw, ch, 28); c.fillStyle = "rgba(255,255,255,.09)"; c.fill(); c.lineWidth = 1.5; c.strokeStyle = "rgba(255,255,255,.18)"; c.stroke(); }
     const ink = e === 3 ? "#111" : "#fff";
     text(c, d[0], x + cw / 2, cy + 56, { size: 44, align: "center", shadow: e < 3 ? [3, 3, "rgba(0,0,0,.5)"] : null });
+    const z = Math.min(1, cw / 230, ch / 520);
     icon(c, d[1], x + cw / 2, cy + ch * .46, Math.min(cw * .62, ch * .4), d[1] === "sun" ? (e === 3 ? "#f2a900" : "#ffd84a") : ink);
-    text(c, d[2] + "°", x + cw / 2, cy + ch - 86, { size: 78, align: "center", col: ink, it: false, fam: SANS, w: 700 });
-    text(c, "low " + d[3] + "°", x + cw / 2, cy + ch - 34, { size: 30, align: "center", col: e === 3 ? "#555" : "rgba(255,255,255,.75)", it: false, fam: SANS, w: 500 });
+    text(c, d[2] + "°", x + cw / 2, cy + ch - 86 * z, { size: 78 * z, align: "center", col: ink, it: false, fam: SANS, w: 700 });
+    text(c, "low " + d[3] + "°", x + cw / 2, cy + ch - 34 * z, { size: 30 * z, align: "center", col: e === 3 ? "#555" : "rgba(255,255,255,.75)", it: false, fam: SANS, w: 500 });
     c.restore();
   });
 }
@@ -1846,7 +1884,7 @@ const $ = id => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
 const S = NS.parse(location.search);
 let ERA = NS.era(S.era);
-const DESK_Y = 1.0, REP_X = 60;
+const DESK_Y = 1.0, REP_X = 60, WX_X = 120;
 let renderer, scene, camera, keyLight, rimLight, fillLight, setGroup = null, wallTex, screenTex, plateTex, locTex;
 const hosts = [];
 const glc = mk(16, 16), wallCv = mk(2048, 870), screenCv = mk(640, 360), plateCv = mk(1024, 256), locCv = mk(1024, 576);
@@ -1854,7 +1892,7 @@ const col = (h, s, l) => new THREE.Color().setHSL((((h % 360) + 360) % 360) / 36
 
 async function init3D() {
   const { RoomEnvironment } = await import("three/addons/environments/RoomEnvironment.js");
-  renderer = new THREE.WebGLRenderer({ canvas: glc, antialias: true, preserveDrawingBuffer: true });
+  renderer = new THREE.WebGLRenderer({ canvas: glc, antialias: true, preserveDrawingBuffer: true, alpha: true });
   renderer.setPixelRatio(1); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.NeutralToneMapping; renderer.toneMappingExposure = 1;
   scene = new THREE.Scene(); scene.background = new THREE.Color(0x030407);
@@ -1946,20 +1984,37 @@ function poseFor(h, k, speaking) {
 const flat = p => [...p[0], ...p[1], ...p[2], ...p[3]];
 // Where the body should be at time t: hold a pose, then move to the next over the last part of the beat.
 function targetPose(h, t, speaking) {
+  if (h.wx && cur.shot === "weather") return wxPose(now - cur.t0);
   const T = speaking ? 2.3 : h.desk ? 5.5 : 3, u = (t + h.seed * 3.7) / T, k = Math.floor(u), w = ease.io((u - k - .62) / .38);
   const a = flat(poseFor(h, k, speaking)), b = flat(poseFor(h, k + 1, speaking));
   return a.map((v, i) => v + (b[i] - v) * w);
 }
+// The weather presenter stands to the right of the forecast and points at each day with the arm nearest to it,
+// looking at the board first and then back at the viewer. The first day is the furthest away, so the arm reaches out flat
+// for it and comes up and in for the days close by.
+function wxPose(tl) {
+  const n = NS.STORIES.find(x => x.days).days.length, P = NS.weatherPlan(n), d = NS.weatherDay(tl, n);
+  if (d < 0) return flat(POSES.stand[1]);
+  if (d >= n) return flat([[-.25, .3, -1.35, .3], [-.45, .25, -1.85, -.35], [.06, -.03, .08], [0, .1]]);
+  const k = n > 1 ? d / (n - 1) : 1, u = (tl - P.intro - d * P.per) / P.per, board = u < .55;
+  return [-.3 - .25 * k, WXA.out0 + (WXA.out1 - WXA.out0) * k, WXA.el0 + (WXA.el1 - WXA.el0) * k, -.15,
+    .06, .12, -.3, -.2,
+    board ? WXA.head : .1, board ? .03 : -.03, board ? -.06 : .07,
+    board ? .03 : 0, board ? WXA.twist : -.04];
+}
+const WXA = { out0: 1.42, out1: .95, el0: -.12, el1: -1.15, head: -.6, twist: -.22 };
 // Robots are built the first time they are needed.
 const host = i => hosts[i] || (hosts[i] = buildHost(i, NS.HOSTS[i].link));
 const reporter = () => NS.reporterFor(S.anchor, S.co, S.rep);
+const weatherHost = () => NS.weatherFor(S.anchor, S.co, reporter());
 function layout() {
-  const a = S.anchor, co = S.co, rep = reporter(); host(a); host(rep); if (co >= 0) host(co);
-  hosts.forEach((h, i) => { h.g.visible = i === a || i === co || i === rep; h.look = 0; });
+  const a = S.anchor, co = S.co, rep = reporter(), wx = weatherHost(); host(a); host(rep); if (co >= 0) host(co); if (wx >= 0) host(wx);
+  hosts.forEach((h, i) => { h.g.visible = i === a || i === co || i === rep || i === wx; h.look = 0; h.wx = i === wx; });
   const put = (h, x, rot, desk) => { pose(h, desk); h.g.position.x = x; h.g.position.z = 0; h.baseRot = rot; h.homeX = x; h.homeY = h.g.position.y; legs(h, 0, 0); };
   put(hosts[a], co >= 0 ? -.68 : 0, co >= 0 ? .12 : 0, true);
   if (co >= 0) { put(hosts[co], .68, -.12, true); hosts[a].look = .4; hosts[co].look = -.4; }
   put(hosts[rep], REP_X, 0, false);
+  if (wx >= 0) put(hosts[wx], WX_X, -.28, false);
 }
 // Swing the legs: a is the hip swing of the left leg (forward is negative), the right leg does the opposite; lift bends the knee of the leg coming forward.
 function legs(h, a, lift) {
@@ -2120,6 +2175,10 @@ function aim(shot, speaker, tl, aspect) {
   const wide = aspect > 1.5;
   if (shot === "wide") { camera.fov = wide ? 25 : 29; camera.position.set(Math.sin(tl * .15) * .1, 1.45, 5.3 - Math.min(tl, 12) * .04); camera.lookAt(0, 1.2, 0); return; }
   const h = hosts[speaker], top = h.g.position.y + h.f.height, x = h.g.position.x, sh = shot === "ots" ? (G.e === 3 ? .5 : wide ? .43 : .3) : 0;
+  if (shot === "wx") {   // head to thigh, standing at the right-hand edge of the picture
+    const vis = 1.5, off = vis * aspect * .355, sway = Math.sin(tl * .2) * .02;
+    camera.fov = 24; camera.position.set(x - off + sway, top + .33 - vis / 2, vis / 2 / Math.tan(12 * Math.PI / 180)); camera.lookAt(x - off, top + .33 - vis / 2, 0); return;
+  }
   camera.fov = 24; camera.position.set(x * (x > 50 ? 1 : .45) + sh, top - .34, 2.8 - Math.min(tl, 10) * .012); camera.lookAt(x + sh, top - .44, 0);
 }
 // Render one camera into a rectangle of a 2D canvas. pw, ph are the pixels to render.
@@ -2177,6 +2236,7 @@ const tickerOn = () => S.brk || (S.ticker ?? ERA.ticker), clockOn = () => S.cloc
 const scale = c => { const k = c.canvas.height / 1080; c.setTransform(k, 0, 0, k, 0, 0); c.globalAlpha = 1; c.globalCompositeOperation = "source-over"; };
 
 function speakerOf(st, tl) {
+  if (st.shot === "weather") return weatherHost();
   if (entrance && now - entrance.t0 < entrance.end) return -1;   // nobody speaks until everyone is at the desk
   if (st.shot === "field") return reporter();
   if (st.shot === "live") return tl % 6 < 2.6 ? S.anchor : reporter();
@@ -2188,8 +2248,12 @@ function drawSource(c, st, tl) {
   if (st.shot === "titles") titles(c, tl);
   else if (st.shot === "alert" || st.shot === "return") alertCard(c, tl, st.shot === "return");
   else if (st.shot === "full") fullScreen(c, tl, s, tk);
-  else if (st.shot === "weather") weather(c, tl, s.days ? s : NS.STORIES.find(x => x.days), tk);
-  else if (st.shot === "live") {
+  else if (st.shot === "weather") {
+    // the forecast is a graphic; the presenter is shot against nothing and laid over it, as with a blue screen
+    const ws = s.days ? s : NS.STORIES.find(x => x.days), wx = weatherHost();
+    weather(c, tl, ws, tk, { pres: wx >= 0, l3: wx >= 0 && S.banner, day: wx >= 0 ? NS.weatherDay(tl, ws.days.length) : -2 });
+    if (wx >= 0) { const bg = scene.background; scene.background = null; renderer.setClearColor(0x000000, 0); scale(c); render3D(c, "wx", wx, tl, 0, 0, W, H, c.canvas.width, c.canvas.height); scene.background = bg; }
+  } else if (st.shot === "live") {
     const R = doubleBoxRects(tk), pw = Math.round(R[0].w * k), ph = Math.round(R[0].h * k);
     for (const b of [boxA, boxB]) if (b.width !== pw || b.height !== ph) { b.width = pw; b.height = ph; }
     render3D(boxA.getContext("2d"), "mcu", S.anchor, tl, 0, 0, pw, ph, pw, ph); render3D(boxB.getContext("2d"), "mcu", reporter(), tl, 0, 0, pw, ph, pw, ph);
@@ -2210,6 +2274,11 @@ function overlays(c) {
     else if (st.shot === "field") lowerThird(c, env, { head: hosts[reporter()].name, sub: "Reporting from " + (s.place || "the scene").toLowerCase().replace(/\b[a-z]/g, m => m.toUpperCase()) }, { ...o, w: .62 });
     else if (st.shot === "live") lowerThird(c, env, { head: d.head, sub: d.sub }, o);
     else if (st.shot === "wide" && S.brk) lowerThird(c, env, d, o);
+    else if (st.shot === "weather" && weatherHost() >= 0) {   // what the presenter is saying about the day in hand
+      const ws = s.days ? s : NS.STORIES.find(x => x.days), n = ws.days.length, L = NS.forecastLines(ws.days), P = NS.weatherPlan(n), day = NS.weatherDay(tl, n);
+      const u = day < 0 ? tl / P.intro : day >= n ? 1 : (tl - P.intro - day * P.per) / P.per, k = Math.min(clamp(u / .12), day >= 0 && day < n ? clamp((1 - u) / .1) : 1, clamp(tl / .6), dur > 0 ? clamp((dur - .3 - tl) / .4) : 1);
+      lowerThird(c, k, { slug: ws.slug, head: L[day + 1], sub: hosts[weatherHost()].name + " · Weather" }, { ...o, w: WX_W });
+    }
   }
   if (st.shot === "field" || st.shot === "live") liveTag(c, now, st.shot === "field" ? s.place || "ON LOCATION" : "");
   if (tk) ticker(c, now, ck);
