@@ -38,7 +38,7 @@ Amiga-demo-style two-player shooter on a torus. Shots stick, bounce or carve hol
 
 ### Wrecking Ball
 
-Swing a crane-hung wrecking ball into a stone castle, a Mesoamerican pyramid, a wooden Trojan horse or a red-brick apartment block, all generated block by block. A mortar-bond model cracks blocks loose under impact and drops whatever loses its footing. Grab the ball on its chain with the mouse, drive the crane with the keys, synthesised thuds, clatter and crane motor. A second player can join from another computer with a demolition machine of their own: the browsers connect directly over WebRTC after swapping two codes, the host's computer runs the physics and the guest steers the red crane. Three.js + Rapier.
+Swing a crane-hung wrecking ball into a stone castle, a Mesoamerican pyramid, a wooden Trojan horse or a red-brick apartment block, all generated block by block. A mortar-bond model cracks blocks loose under impact and drops whatever loses its footing. Grab the ball on its chain with the mouse, drive the crane with the keys, synthesised thuds, clatter and crane motor, and a soundtrack (M toggles it). A second player can join from another computer with a demolition machine of their own: the browsers connect directly over WebRTC after swapping two codes, the host's computer runs the physics and the guest steers the red crane. Three.js + Rapier.
 
 ![wrecking-ball](wrecking-ball/screenshot1.jpg)
 
