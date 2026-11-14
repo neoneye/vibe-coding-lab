@@ -37,6 +37,21 @@
   #hint { position: absolute; right: 12px; bottom: 10px; font-size: 11px; color: rgba(255,255,255,0.55); z-index: 2; text-align: right; line-height: 1.4; }
   #err { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); background: #3a1a1a; padding: 16px 20px; border-radius: 8px; display: none; max-width: 420px; z-index: 5; font-size: 13px; }
   #loading { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 14px; color: #a9a49a; z-index: 3; }
+  #net { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(8,10,14,.55); z-index: 6; }
+  #net.open { display: flex; }
+  #net .box { background: #141920; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 18px 22px; width: min(560px, 94vw); max-height: 94%; overflow-y: auto; box-sizing: border-box; box-shadow: 0 12px 40px rgba(0,0,0,.5); font-size: 13px; line-height: 1.45; }
+  #net h3 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+  #net p { margin: 6px 0; color: #cfcac0; }
+  #net textarea { width: 100%; height: 74px; box-sizing: border-box; background: #0d1116; color: #cfe3ff; border: 1px solid #3a4452; border-radius: 8px; padding: 6px 8px; font: 11.5px/1.35 ui-monospace, Menlo, monospace; resize: vertical; word-break: break-all; }
+  #net button { padding: 7px 12px; font-size: 13px; }
+  #net button.main { background: #6b4a20; border-color: #e0a458; }
+  #net .btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 2px; }
+  #net .err { color: #ff8f7a; min-height: 1.4em; }
+  #net .pick { display: flex; gap: 8px; align-items: flex-start; color: #cfcac0; margin: 8px 0; font-size: 13px; }
+  #net .pick input { accent-color: #e0a458; margin-top: 3px; }
+  #net .stepn { color: #e0a458; font-weight: 600; margin-top: 10px; }
+  .m1 { color: #f0b62a; font-weight: 600; } .m2 { color: #e26a4f; font-weight: 600; }
+  button:disabled, input:disabled { opacity: .4; cursor: default; }
   @media (max-width: 520px) { #panel { width: calc(100% - 24px); max-height: 55%; } }
 </style>
 </head>
@@ -51,6 +66,13 @@
     <div class="body">
       <div class="grid2" id="assetButtons"></div>
       <div class="row"><button id="btnReset">Reset</button><button id="btnShove">Shove (space)</button></div>
+    </div>
+  </div>
+  <div class="card" id="cardNet">
+    <h2>Two players <span class="chev">&#9662;</span></h2>
+    <div class="body">
+      <p class="sub" id="netInfo"></p>
+      <div class="row"><button id="btnNet">Network game</button></div>
     </div>
   </div>
   <div class="card" id="cardBall">
@@ -104,6 +126,7 @@
 <div id="hint">drag empty space to orbit &middot; shift/right-drag to pan &middot; wheel to zoom<br>drag the ball to pull it back</div>
 <div id="loading">Loading Three.js and Rapier&hellip;</div>
 <div id="err"></div>
+<div id="net"></div>
 <script id="shared-code">
 // ============================================================================
 // Wreck — pure geometry + collapse model. No DOM, no imports; runs in Node.
@@ -868,9 +891,8 @@ scene.add(grid);
 const W = Wreck;
 const state = {
   asset: 'castle',
-  mass: 3, radius: 0.9, cable: 12,
+  mass: 3, radius: 0.9,
   mortar: 1, slowmo: 1, shadows: true, follow: false, view: 'orbit',
-  crane: { x: 0, z: 32, heading: Math.PI, slew: 0, luff: 40 * DEG, boomLen: 20, mast: 3.5 },
 };
 const keys = new Set();
 let world = null, eventQueue = null, structure = null, asset = null;
@@ -879,12 +901,8 @@ let loose = [];            // indices of released blocks with live bodies
 let preSpeed2 = new Float32Array(0); // squared speed of each loose block before the step
 let clatterAt = new Float32Array(0);  // simulation time of each block's last clatter
 let boxMesh = null, cylMesh = null;
-let ballBody = null, ballCol = null, hookBody = null, rope = null;
-let ballMesh = null, chainMesh = null, hookMesh = null, cabMesh = null, cabFrame = null;
 const CHAIN_PITCH = 0.42, CHAIN_MAX = 64;
 const COLLIDER_GAP = 0.01; // half of the mortar joint left between block colliders
-let grabbed = false, grabPlaneY = 0;
-let hookPos = new THREE.Vector3();
 let centre = new THREE.Vector3(0, 6, 0);
 let impactsPerStep = 0;
 
@@ -894,36 +912,46 @@ const blockMat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0.
 const tmpM = new THREE.Matrix4(), tmpP = new THREE.Vector3(), tmpQ = new THREE.Quaternion(), tmpS = new THREE.Vector3(), tmpC = new THREE.Color();
 
 // -------------------------------------------------------------------- crane
-const craneGroup = new THREE.Group();
-const slewGroup = new THREE.Group();
-const boomGroup = new THREE.Group();
-{
-  const steel = new THREE.MeshStandardMaterial({ color: 0xd9a21b, roughness: 0.6, metalness: 0.3 });
+// A machine is one crane with its hook, chain and ball. There is always the first one; the second joins in a
+// two-player network game and is steered from the other computer.
+const BOOM_LEN = 20, MAST = 3.5;
+function buildMachine(paint, linePaint) {
+  const m = {
+    crane: { x: 0, z: 32, heading: Math.PI, slew: 0, luff: 40 * DEG, boomLen: BOOM_LEN, mast: MAST },
+    cable: 12,
+    group: new THREE.Group(), slewGroup: new THREE.Group(), boomGroup: new THREE.Group(),
+    cabMesh: null, cabFrame: null, hookMesh: null, chainMesh: null, ballMesh: null,
+    hookPos: new THREE.Vector3(), hookBody: null, ballBody: null, ballCol: null, rope: null,
+    grabbed: false, grabPlaneY: 0, grabTarget: new THREE.Vector3(),
+    ctl: { fwd: 0, turn: 0, slew: 0, luff: 0, hoist: 0 },   // what its operator is holding down
+    prevVel: { x: 0, y: 0, z: 0 }, prevPos: { x: 0, y: 0, z: 0 }, broke: false,
+  };
+  const steel = new THREE.MeshStandardMaterial({ color: paint, roughness: 0.6, metalness: 0.3 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.8 });
   for (const sx of [-1.4, 1.4]) {
     const t = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 7), dark);
     t.position.set(sx, 0.6, 0); t.castShadow = true; t.receiveShadow = true;
-    craneGroup.add(t);
+    m.group.add(t);
   }
   const deck = new THREE.Mesh(new THREE.BoxGeometry(4, 0.6, 5), steel);
   deck.position.y = 1.5; deck.castShadow = true;
-  craneGroup.add(deck);
-  slewGroup.position.y = 1.8;
+  m.group.add(deck);
+  m.slewGroup.position.y = 1.8;
   const house = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.8, 4.5), steel);
   house.position.set(0, 0.9, -1.2); house.castShadow = true;
-  slewGroup.add(house);
-  cabMesh = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.5, 1.6), new THREE.MeshStandardMaterial({ color: 0x3a5f7a, roughness: 0.3, metalness: 0.4 }));
-  cabMesh.position.set(1.0, 2.5, 1.2); cabMesh.castShadow = true;
-  slewGroup.add(cabMesh);
+  m.slewGroup.add(house);
+  m.cabMesh = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.5, 1.6), new THREE.MeshStandardMaterial({ color: 0x3a5f7a, roughness: 0.3, metalness: 0.4 }));
+  m.cabMesh.position.set(1.0, 2.5, 1.2); m.cabMesh.castShadow = true;
+  m.slewGroup.add(m.cabMesh);
   // operator's cab seen from inside: pillars, roof rim, sill, dashboard, levers
-  cabFrame = new THREE.Group();
-  cabFrame.position.copy(cabMesh.position);
-  cabFrame.visible = false;
+  m.cabFrame = new THREE.Group();
+  m.cabFrame.position.copy(m.cabMesh.position);
+  m.cabFrame.visible = false;
   {
     const bar = (sx, sy, sz, x, y, z, mat = dark) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
-      m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; cabFrame.add(m);
-      return m;
+      const part = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+      part.position.set(x, y, z); part.castShadow = true; part.receiveShadow = true; m.cabFrame.add(part);
+      return part;
     };
     const hx = 0.66, hz = 0.76, hy = 0.75;                     // half extents of the cab
     for (const x of [-hx, hx]) for (const z of [-hz, hz]) bar(0.07, 1.5, 0.07, x, 0, z);
@@ -940,18 +968,18 @@ const boomGroup = new THREE.Group();
       g.position.set(x, -0.45, 0.15); g.rotation.x = 0.35;
       const st = new THREE.Mesh(lever, dark); st.position.y = 0.17; g.add(st);
       const k = new THREE.Mesh(knob, steel); k.position.y = 0.36; g.add(k);
-      cabFrame.add(g);
+      m.cabFrame.add(g);
     }
   }
-  slewGroup.add(cabFrame);
+  m.slewGroup.add(m.cabFrame);
   const weight = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.6, 1.8), dark);
   weight.position.set(0, 0.9, -4.2); weight.castShadow = true;
-  slewGroup.add(weight);
-  boomGroup.position.set(0, state.crane.mast - 1.8, 0.8);
-  slewGroup.add(boomGroup);
-  craneGroup.add(slewGroup);
+  m.slewGroup.add(weight);
+  m.boomGroup.position.set(0, MAST - 1.8, 0.8);
+  m.slewGroup.add(m.boomGroup);
+  m.group.add(m.slewGroup);
   // lattice boom along local +Z
-  const L = state.crane.boomLen, pts = [];
+  const L = BOOM_LEN, pts = [];
   const seg = 2.0, w0 = 0.7, w1 = 0.35;
   const cornersAt = (z) => { const w = w0 + (w1 - w0) * (z / L); return [[-w, -w, z], [w, -w, z], [w, w, z], [-w, w, z]]; };
   let prev = cornersAt(0);
@@ -966,39 +994,48 @@ const boomGroup = new THREE.Group();
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  boomGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xf0b62a })));
+  m.boomGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: linePaint })));
   const tipBox = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.9), steel);
-  tipBox.position.z = L; boomGroup.add(tipBox);
-  hookMesh = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 8), dark);
-  scene.add(hookMesh);
+  tipBox.position.z = L; m.boomGroup.add(tipBox);
+  m.hookMesh = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 8), dark);
+  scene.add(m.hookMesh);
   // chain: oval torus links laid along the cable, alternating 90 degrees
   const linkGeo = new THREE.TorusGeometry(0.15, 0.045, 8, 14);
   linkGeo.scale(1.55, 1, 1);
-  chainMesh = new THREE.InstancedMesh(linkGeo, new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.45, metalness: 0.85 }), CHAIN_MAX);
-  chainMesh.castShadow = true;
-  chainMesh.frustumCulled = false;
-  chainMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  scene.add(chainMesh);
-  ballMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), new THREE.MeshStandardMaterial({ color: 0x1c1c1e, roughness: 0.35, metalness: 0.75 }));
-  ballMesh.castShadow = true;
-  scene.add(ballMesh);
+  m.chainMesh = new THREE.InstancedMesh(linkGeo, new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.45, metalness: 0.85 }), CHAIN_MAX);
+  m.chainMesh.castShadow = true;
+  m.chainMesh.frustumCulled = false;
+  m.chainMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(m.chainMesh);
+  m.ballMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), new THREE.MeshStandardMaterial({ color: 0x1c1c1e, roughness: 0.35, metalness: 0.75 }));
+  m.ballMesh.castShadow = true;
+  scene.add(m.ballMesh);
+  scene.add(m.group);
+  return m;
 }
-scene.add(craneGroup);
+const machines = [buildMachine(0xd9a21b, 0xf0b62a), buildMachine(0xb8402f, 0xe26a4f)];
+let my = machines[0];     // the machine this computer steers
+let twoUp = false;        // true while the second machine is in play
+const inPlay = () => twoUp ? machines : machines.slice(0, 1);
+function showMachine(m, on) { for (const o of [m.group, m.hookMesh, m.chainMesh, m.ballMesh]) o.visible = on; }
+showMachine(machines[1], false);
 
-function boomTip(out) {
-  const c = state.crane, a = c.heading + c.slew;
+function boomTip(out, m = my) {
+  const c = m.crane, a = c.heading + c.slew;
   const horiz = c.boomLen * Math.cos(c.luff);
   // boom pivot is 0.8 m ahead of the slew axis; tips along the boom direction
   out.set(c.x + Math.sin(a) * (horiz + 0.8), c.mast + c.boomLen * Math.sin(c.luff), c.z + Math.cos(a) * (horiz + 0.8));
   return out;
 }
 function updateCraneVisual() {
-  const c = state.crane;
-  craneGroup.position.set(c.x, 0, c.z);
-  craneGroup.rotation.y = c.heading;
-  slewGroup.rotation.y = c.slew;
-  boomGroup.rotation.x = -c.luff;
-  hookMesh.position.copy(hookPos);
+  for (const m of inPlay()) {
+    const c = m.crane;
+    m.group.position.set(c.x, 0, c.z);
+    m.group.rotation.y = c.heading;
+    m.slewGroup.rotation.y = c.slew;
+    m.boomGroup.rotation.x = -c.luff;
+    m.hookMesh.position.copy(m.hookPos);
+  }
 }
 
 // ------------------------------------------------------------------ camera
@@ -1010,26 +1047,26 @@ const HINTS = {
   cab: 'operator&rsquo;s seat &middot; drag to look around &middot; double-click to recentre<br>wheel to zoom &middot; drag the ball to pull it back &middot; C changes view',
   ball: 'riding the ball &middot; space shoves it<br>wheel to zoom &middot; C changes view',
 };
-const CAB_EYE = new THREE.Vector3(1.05, 2.55, 0.7);  // slewGroup local, seated at the back of the cab
+const CAB_EYE = new THREE.Vector3(1.05, 2.55, 0.7);  // my.slewGroup local, seated at the back of the cab
 let fpFov = 50;
 const head = { yaw: 0, pitch: 0 };
 let snapGaze = true;  // next camera update jumps straight to the wanted gaze
 const cabGaze = new THREE.Vector3(0, 0, 1), camDir = new THREE.Vector3();
 function setView(name) {
   if (!VIEWS.includes(name)) return;
-  if (grabbed || dragging || panning) endPointer();
+  if (my.grabbed || dragging || panning) endPointer();
   state.view = name;
   const fp = name !== 'orbit';
   camera.near = fp ? 0.05 : 0.5;
   camera.fov = fp ? fpFov : 50;
   camera.updateProjectionMatrix();
-  cabMesh.visible = name !== 'cab';
-  cabFrame.visible = name === 'cab';
-  chainMesh.visible = name !== 'ball';  // the chain rises right in front of the rider and blocks the view
+  my.cabMesh.visible = name !== 'cab';
+  my.cabFrame.visible = name === 'cab';
+  my.chainMesh.visible = name !== 'ball';  // the chain rises right in front of the rider and blocks the view
   if (name === 'cab') { head.yaw = 0; head.pitch = 0; }
   snapGaze = true;
-  if (name === 'ball' && ballBody) {
-    const p = ballBody.translation(), v = ballBody.linvel();
+  if (name === 'ball' && my.ballBody) {
+    const p = my.ballBody.translation(), v = my.ballBody.linvel();
     ballHeading = W.view.ballGaze([v.x, v.y, v.z], [centre.x - p.x, 0, centre.z - p.z]);
   }
   $('hint').innerHTML = HINTS[name];
@@ -1038,10 +1075,10 @@ function setView(name) {
 function cycleView() { setView(VIEWS[(VIEWS.indexOf(state.view) + 1) % VIEWS.length]); }
 function updateCamera(dt = 1 / 60) {
   if (state.view === 'cab') return updateCabCamera(dt);
-  if (state.view === 'ball' && ballBody) return updateBallCamera(dt);
-  const tgt = state.follow && ballBody ? tmpP.copy(ballBody.translation()) : centre;
+  if (state.view === 'ball' && my.ballBody) return updateBallCamera(dt);
+  const tgt = state.follow && my.ballBody ? tmpP.copy(my.ballBody.translation()) : centre;
   cam.base.lerp(tgt, 0.15);
-  if (state.follow && ballBody) cam.pan.multiplyScalar(0.92);
+  if (state.follow && my.ballBody) cam.pan.multiplyScalar(0.92);
   cam.target.addVectors(cam.base, cam.pan);
   const ce = Math.cos(cam.el);
   camera.position.set(cam.target.x + cam.dist * Math.sin(cam.az) * ce, cam.target.y + cam.dist * Math.sin(cam.el), cam.target.z + cam.dist * Math.cos(cam.az) * ce);
@@ -1049,10 +1086,10 @@ function updateCamera(dt = 1 / 60) {
 }
 // Operator's eye in the cab: watches the ball (smoothed), plus the head offset.
 function updateCabCamera(dt) {
-  craneGroup.updateMatrixWorld(true);
-  camera.position.copy(CAB_EYE).applyMatrix4(slewGroup.matrixWorld);
-  if (ballBody) {
-    camDir.copy(ballBody.translation()).sub(camera.position).normalize();
+  my.group.updateMatrixWorld(true);
+  camera.position.copy(CAB_EYE).applyMatrix4(my.slewGroup.matrixWorld);
+  if (my.ballBody) {
+    camDir.copy(my.ballBody.translation()).sub(camera.position).normalize();
     cabGaze.lerp(camDir, snapGaze ? 1 : 1 - Math.exp(-dt / 0.25)).normalize();
     snapGaze = false;
   }
@@ -1065,7 +1102,7 @@ function updateCabCamera(dt) {
 const BALL_CAM = { up: 0.35, back: 1.1, side: 0, pitch: -4 * DEG };
 let ballHeading = [0, -1];
 function updateBallCamera(dt) {
-  const p = ballBody.translation(), v = ballBody.linvel();
+  const p = my.ballBody.translation(), v = my.ballBody.linvel();
   const want = W.view.ballGaze([v.x, v.y, v.z], [centre.x - p.x, 0, centre.z - p.z]);
   ballHeading = W.view.smoothDir(ballHeading, want, dt, 0.3);
   const [hx, hz] = ballHeading, r = state.radius;
@@ -1086,7 +1123,7 @@ function disposeWorld() {
   if (boxMesh) { scene.remove(boxMesh); boxMesh.dispose(); boxMesh = null; }
   if (cylMesh) { scene.remove(cylMesh); cylMesh.dispose(); cylMesh = null; }
   bodies = []; colliderToBlock = new Map(); loose = [];
-  ballBody = null; ballCol = null; hookBody = null; rope = null; grabbed = false;
+  for (const m of machines) { m.ballBody = null; m.ballCol = null; m.hookBody = null; m.rope = null; m.grabbed = false; }
 }
 
 function blockColor(i, out) {
@@ -1107,7 +1144,8 @@ function writeInstance(i, pos, rot) {
   (b.shape === 'cyl' ? cylMesh : boxMesh).setMatrixAt(b.inst, tmpM);
 }
 
-function loadAsset(name) {
+function loadAsset(name, fromHost = false) {
+  if (net.active && net.role === 1 && !fromHost) return;   // the guest's target is whatever the host has loaded
   disposeWorld();
   state.asset = name;
   asset = W.assets[name].build();
@@ -1156,30 +1194,36 @@ function loadAsset(name) {
   if (cylMesh.instanceColor) cylMesh.instanceColor.needsUpdate = true;
   scene.add(boxMesh, cylMesh);
 
-  // crane, hook, ball
-  const c = state.crane;
-  c.x = asset.craneStart.pos[0]; c.z = asset.craneStart.pos[2]; c.heading = asset.craneStart.heading; c.slew = 0;
-  boomTip(hookPos);
-  hookBody = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(hookPos.x, hookPos.y, hookPos.z));
-  makeBall();
+  // cranes, hooks, balls: the second machine starts on the opposite side of the target
+  inPlay().forEach((m, k) => {
+    const c = m.crane, sgn = k === 0 ? 1 : -1;
+    c.x = sgn * asset.craneStart.pos[0]; c.z = sgn * asset.craneStart.pos[2]; c.heading = asset.craneStart.heading + (k === 0 ? 0 : Math.PI); c.slew = 0;
+    boomTip(m.hookPos, m);
+    m.hookBody = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(m.hookPos.x, m.hookPos.y, m.hookPos.z));
+    makeBall(m);
+  });
   updateCraneVisual();
   $('vBlocks').textContent = blocks.length;
   for (const btn of document.querySelectorAll('#assetButtons button')) btn.classList.toggle('on', btn.dataset.asset === name);
+  netLoaded();
 }
 
-function makeBall() {
-  if (ballBody) { world.removeRigidBody(ballBody); ballBody = null; rope = null; }
+function makeBall(m = my) {
+  if (!m.hookBody) return;
+  if (m.ballBody) { world.removeRigidBody(m.ballBody); m.ballBody = null; m.rope = null; }
   const r = state.radius;
-  const start = hookPos.clone(); start.y = Math.max(r + 0.1, hookPos.y - state.cable);
-  ballBody = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(start.x, start.y, start.z).setLinearDamping(0.05).setAngularDamping(0.2).setCcdEnabled(true));
+  const start = m.hookPos.clone(); start.y = Math.max(r + 0.1, m.hookPos.y - m.cable);
+  m.ballBody = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(start.x, start.y, start.z).setLinearDamping(0.05).setAngularDamping(0.2).setCcdEnabled(true));
   const density = state.mass * 1000 / (4 / 3 * Math.PI * r ** 3);
-  ballCol = world.createCollider(RAPIER.ColliderDesc.ball(r).setDensity(density).setFriction(0.5).setRestitution(0.1).setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(2e4), ballBody);
-  makeRope();
-  ballMesh.scale.setScalar(r);
+  m.ballCol = world.createCollider(RAPIER.ColliderDesc.ball(r).setDensity(density).setFriction(0.5).setRestitution(0.1).setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(2e4), m.ballBody);
+  m.grabbed = false;
+  makeRope(m);
+  m.ballMesh.scale.setScalar(r);
 }
-function makeRope() {
-  if (rope) { world.removeImpulseJoint(rope, true); rope = null; }
-  rope = world.createImpulseJoint(RAPIER.JointData.rope(state.cable, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }), hookBody, ballBody, true);
+function makeRope(m = my) {
+  if (!m.ballBody) return;
+  if (m.rope) { world.removeImpulseJoint(m.rope, true); m.rope = null; }
+  m.rope = world.createImpulseJoint(RAPIER.JointData.rope(m.cable, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }), m.hookBody, m.ballBody, true);
 }
 
 // --------------------------------------------------------------- stepping
@@ -1221,15 +1265,18 @@ function releaseBlocks(idx, vel, at) {
 let simTime = 0;
 function physicsStep() {
   simTime += DT;
-  const c = state.crane;
-  // hook follows the boom tip with a little lag
-  boomTip(tmpP);
-  hookPos.lerp(tmpP, 0.12);
-  hookBody.setNextKinematicTranslation({ x: hookPos.x, y: hookPos.y, z: hookPos.z });
-  if (grabbed) applyGrab();
-  const bv = ballBody.linvel();
-  const prevVel = { x: bv.x, y: bv.y, z: bv.z };
-  const bp = ballBody.translation();
+  const ms = inPlay();
+  for (const m of ms) {
+    // hook follows the boom tip with a little lag
+    boomTip(tmpP, m);
+    m.hookPos.lerp(tmpP, 0.12);
+    m.hookBody.setNextKinematicTranslation({ x: m.hookPos.x, y: m.hookPos.y, z: m.hookPos.z });
+    if (m.grabbed) applyGrab(m);
+    const bv = m.ballBody.linvel(), bp = m.ballBody.translation();
+    m.prevVel = { x: bv.x, y: bv.y, z: bv.z };
+    m.prevPos = { x: bp.x, y: bp.y, z: bp.z };
+    m.broke = false;
+  }
   // speeds of the loose blocks before the step: after it, a block that has
   // just landed is already stopped and would not count as moving
   for (const i of loose) {
@@ -1246,48 +1293,46 @@ function physicsStep() {
   // Collect every contact of this step first and apply the strongest hits
   // first, so a weak event cannot release a block (through spill) before the
   // big one that actually struck it is processed.
-  const hits = [];
-  let groundThud = 0, clatterBest = 0, clatterIdx = -1;
+  const hits = [];   // [force, block, the machine whose ball it was, or null]
+  let groundThud = 0, thudBy = null, clatterBest = 0, clatterIdx = -1;
   eventQueue.drainContactForceEvents(e => {
     impactsPerStep++;
     const f = e.totalForceMagnitude() / 1000;
     if (f > stats.maxForce) stats.maxForce = f;
     const c1 = e.collider1(), c2 = e.collider2();
-    const fromBall = c1 === ballCol.handle || c2 === ballCol.handle;
+    const by = ms.find(m => c1 === m.ballCol.handle || c2 === m.ballCol.handle) || null;
     const i1 = colliderToBlock.get(c1), i2 = colliderToBlock.get(c2);
-    if (i1 === undefined && i2 === undefined && fromBall) groundThud = Math.max(groundThud, f); // ball on the ground
+    if (i1 === undefined && i2 === undefined && by && f > groundThud) { groundThud = f; thudBy = by; } // ball on the ground
     for (const i of [i1, i2]) {
       if (i === undefined) continue;
-      hits.push([f, i, fromBall]);
+      hits.push([f, i, by]);
       // clatter only from debris that is actually moving: a settled pile still
       // presses on the ground above the event threshold while it jitters to sleep
-      if (!fromBall && structure.released[i] && f > clatterBest && bodies[i] && preSpeed2[i] > 1.0 && simTime - clatterAt[i] > 0.3) { clatterBest = f; clatterIdx = i; }
+      if (!by && structure.released[i] && f > clatterBest && bodies[i] && preSpeed2[i] > 1.0 && simTime - clatterAt[i] > 0.3) { clatterBest = f; clatterIdx = i; }
     }
   });
   hits.sort((a, b) => b[0] - a[0]);
   // strongest ball-on-block contact of the step drives the impact sound
   const strongest = hits.find(h => h[2]);
-  const ballSpeed = Math.hypot(prevVel.x, prevVel.y, prevVel.z);
-  if (ballSpeed > 0.8) {
-    if (strongest && strongest[0] > 60) playImpact(strongest[0], asset.blocks[strongest[1]].mat, bodies[strongest[1]] ? bodies[strongest[1]].translation() : bp);
-    else if (groundThud > 80) playImpact(groundThud * 0.5, 'stone', bp);
-  }
-  if (clatterIdx >= 0 && bodies[clatterIdx]) { clatterAt[clatterIdx] = simTime; playClatter(clatterBest, asset.blocks[clatterIdx].mat, bodies[clatterIdx].translation()); }
-  let ballBroke = false;
-  for (const [f, i, fromBall] of hits) {
+  if (strongest && strongest[0] > 60 && Math.hypot(strongest[2].prevVel.x, strongest[2].prevVel.y, strongest[2].prevVel.z) > 0.8) {
+    sfx('impact', strongest[0], asset.blocks[strongest[1]].mat, bodies[strongest[1]] ? bodies[strongest[1]].translation() : strongest[2].prevPos);
+  } else if (groundThud > 80 && Math.hypot(thudBy.prevVel.x, thudBy.prevVel.y, thudBy.prevVel.z) > 0.8) sfx('impact', groundThud * 0.5, 'stone', thudBy.prevPos);
+  if (clatterIdx >= 0 && bodies[clatterIdx]) { clatterAt[clatterIdx] = simTime; sfx('clatter', clatterBest, asset.blocks[clatterIdx].mat, bodies[clatterIdx].translation()); }
+  for (const [f, i, by] of hits) {
     if (structure.released[i]) continue;
     const rel = structure.hit(i, f);
     if (rel.length) {
-      releaseBlocks(rel, fromBall ? punchVelocity(i, prevVel, bp) : null, bp);
-      if (fromBall) ballBroke = true;
+      releaseBlocks(rel, by ? punchVelocity(i, by.prevVel, by.prevPos) : null, by ? by.prevPos : null);
+      if (by) by.broke = true;
     } else damaged.push(i);
   }
   // the fixed wall absorbed the ball's momentum in the solver; hand part of it
   // back so the ball ploughs through the blocks it just broke loose
-  if (ballBroke && !grabbed) ballBody.setLinvel({ x: prevVel.x * 0.55, y: prevVel.y * 0.55, z: prevVel.z * 0.55 }, true);
+  for (const m of ms) if (m.broke && !m.grabbed) m.ballBody.setLinvel({ x: m.prevVel.x * 0.55, y: m.prevVel.y * 0.55, z: m.prevVel.z * 0.55 }, true);
   for (const i of damaged) {
     const b = asset.blocks[i];
     (b.shape === 'cyl' ? cylMesh : boxMesh).setColorAt(b.inst, blockColor(i, tmpC));
+    net.dirty.add(i);
   }
   if (damaged.length) { boxMesh.instanceColor.needsUpdate = true; if (cylMesh.instanceColor) cylMesh.instanceColor.needsUpdate = true; }
 
@@ -1302,6 +1347,7 @@ function physicsStep() {
       const b = asset.blocks[i];
       (b.shape === 'cyl' ? cylMesh : boxMesh).setMatrixAt(b.inst, tmpM);
       loose[k] = loose[loose.length - 1]; loose.pop();
+      net.dirty.add(i);
       continue;
     }
     if (rb.isSleeping()) asleep++;
@@ -1311,13 +1357,20 @@ function physicsStep() {
   stats.asleep = asleep;
 }
 
-function shove(strength = 1) {
-  if (!ballBody || grabbed) return;
-  const p = ballBody.translation();
+// Push a ball towards the target. On the guest's computer this is a request to the host.
+function shove(strength = 1, m = my) {
+  if (net.active && net.role === 1) { net.shoves++; return; }
+  if (!m.ballBody || m.grabbed) return;
+  const p = m.ballBody.translation();
   const d = new THREE.Vector3(-p.x, 0, -p.z);
   if (d.lengthSq() < 1e-6) d.set(0, 0, -1);
   d.normalize().multiplyScalar(state.mass * 1000 * 7 * strength);
-  ballBody.applyImpulse({ x: d.x, y: 0, z: d.z }, true);
+  m.ballBody.applyImpulse({ x: d.x, y: 0, z: d.z }, true);
+}
+// A sound heard on both computers: played here, and passed on to the guest.
+function sfx(kind, force, mat, pos) {
+  (kind === 'impact' ? playImpact : playClatter)(force, mat, pos);
+  if (net.active && net.role === 0) netSend({ t: 's', k: kind, f: Math.round(force), mat, p: [pos.x, pos.y, pos.z].map(v => +v.toFixed(1)) });
 }
 
 // ------------------------------------------------------------------ audio
@@ -1568,7 +1621,6 @@ const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 let dragging = false, panning = false, lastX = 0, lastY = 0;
 const panRight = new THREE.Vector3(), panUp = new THREE.Vector3();
-const grabTarget = new THREE.Vector3();
 
 function pointerToNdc(e) {
   ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
@@ -1584,14 +1636,27 @@ function panBy(dx, dy) {
   cam.pan.x = clamp(cam.pan.x, -r, r);
   cam.pan.z = clamp(cam.pan.z, -r, r);
 }
-function applyGrab() {
+function applyGrab(m = my) {
   // keep the ball on the sphere of cable length around the hook
-  const v = grabTarget.clone().sub(hookPos);
-  const L = state.cable;
+  const v = m.grabTarget.clone().sub(m.hookPos);
+  const L = m.cable;
   if (v.length() > L) v.setLength(L);
-  const p = v.add(hookPos);
+  const p = v.add(m.hookPos);
   p.y = Math.max(state.radius + 0.05, p.y);
-  ballBody.setNextKinematicTranslation({ x: p.x, y: p.y, z: p.z });
+  m.ballBody.setNextKinematicTranslation({ x: p.x, y: p.y, z: p.z });
+}
+// Taking hold of a ball and letting it go. The guest only says where it is holding its ball; the host does the rest.
+function grabStart(m) {
+  m.grabbed = true;
+  if (!(net.active && net.role === 1)) m.ballBody.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+}
+function grabEnd(m) {
+  if (m.grabbed && m.ballBody && !(net.active && net.role === 1)) {
+    m.ballBody.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+    m.ballBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    m.ballBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+  m.grabbed = false;
 }
 renderer.domElement.addEventListener('pointerdown', e => {
   lastX = e.clientX; lastY = e.clientY;
@@ -1603,12 +1668,11 @@ renderer.domElement.addEventListener('pointerdown', e => {
   }
   pointerToNdc(e);
   raycaster.setFromCamera(ndc, camera);
-  if (ballBody && raycaster.intersectObject(ballMesh).length) {
-    grabbed = true;
-    playClink(ballBody.translation(), 1);
-    grabPlaneY = ballBody.translation().y;
-    grabTarget.copy(ballBody.translation());
-    ballBody.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+  if (my.ballBody && raycaster.intersectObject(my.ballMesh).length) {
+    playClink(my.ballBody.translation(), 1);
+    my.grabPlaneY = my.ballBody.translation().y;
+    my.grabTarget.copy(my.ballBody.translation());
+    grabStart(my);
   } else {
     dragging = true;
   }
@@ -1617,12 +1681,12 @@ renderer.domElement.addEventListener('pointerdown', e => {
 renderer.domElement.addEventListener('pointermove', e => {
   if (panning) {
     panBy(e.clientX - lastX, e.clientY - lastY);
-  } else if (grabbed) {
+  } else if (my.grabbed) {
     pointerToNdc(e);
     raycaster.setFromCamera(ndc, camera);
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -grabPlaneY);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -my.grabPlaneY);
     const hit = new THREE.Vector3();
-    if (raycaster.ray.intersectPlane(plane, hit)) grabTarget.copy(hit);
+    if (raycaster.ray.intersectPlane(plane, hit)) my.grabTarget.copy(hit);
   } else if (dragging && state.view === 'cab') {
     head.yaw = W.view.clampHead(head.yaw + (e.clientX - lastX) * 0.004, 0).yaw;
     head.pitch = clamp(head.pitch + (e.clientY - lastY) * 0.004, -1.3, 1.3);
@@ -1633,13 +1697,9 @@ renderer.domElement.addEventListener('pointermove', e => {
   lastX = e.clientX; lastY = e.clientY;
 });
 function endPointer() {
-  if (grabbed && ballBody) {
-    playClink(ballBody.translation(), 0.6);
-    ballBody.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
-    ballBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
-    ballBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
-  }
-  grabbed = false; dragging = false; panning = false;
+  if (my.grabbed && my.ballBody) playClink(my.ballBody.translation(), 0.6);
+  grabEnd(my);
+  dragging = false; panning = false;
 }
 renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
 renderer.domElement.addEventListener('pointerup', endPointer);
@@ -1651,7 +1711,8 @@ renderer.domElement.addEventListener('wheel', e => {
 }, { passive: false });
 renderer.domElement.addEventListener('dblclick', () => { if (state.view === 'cab') { head.yaw = 0; head.pitch = 0; } });
 window.addEventListener('keydown', e => {
-  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
+  if (e.code === 'Escape' && $('net').classList.contains('open')) { closePanel(); return; }
+  if ($('net').classList.contains('open') || (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName))) return;
   if (e.code === 'KeyC') { if (!e.repeat) cycleView(); return; }
   if (e.code === 'Space') { shove(); e.preventDefault(); return; }
   keys.add(e.code);
@@ -1660,29 +1721,46 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
 
+function readKeys() {
+  return {
+    fwd: (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0),
+    turn: (keys.has('ArrowLeft') ? 1 : 0) - (keys.has('ArrowRight') ? 1 : 0),
+    slew: (keys.has('KeyA') ? 1 : 0) - (keys.has('KeyD') ? 1 : 0),
+    luff: (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0),
+    hoist: (keys.has('KeyE') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0),
+  };
+}
+// Move one machine by what its operator is holding down.
+function applyControls(m, ctl, dt) {
+  const c = m.crane;
+  if (ctl.fwd) { c.x += Math.sin(c.heading) * ctl.fwd * 3.5 * dt; c.z += Math.cos(c.heading) * ctl.fwd * 3.5 * dt; }
+  if (ctl.turn) c.heading += ctl.turn * 0.5 * dt;
+  if (ctl.slew) c.slew += ctl.slew * 0.6 * dt;
+  if (ctl.luff) c.luff = clamp(c.luff + ctl.luff * 0.35 * dt, 15 * DEG, 80 * DEG);
+  if (ctl.hoist) { const L = clamp(m.cable + ctl.hoist * 2.5 * dt, 4, 20); if (L !== m.cable) { m.cable = L; makeRope(m); } }
+}
+// The sliders show the machine this computer steers.
+function reflectSliders() {
+  $('sSlew').value = Math.round(my.crane.slew / DEG); $('sLuff').value = Math.round(my.crane.luff / DEG); $('sCable').value = my.cable.toFixed(1);
+  updateLabels();
+}
 function driveCrane(dt) {
-  const c = state.crane;
-  const fwd = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
-  const turn = (keys.has('ArrowLeft') ? 1 : 0) - (keys.has('ArrowRight') ? 1 : 0);
-  const slew = (keys.has('KeyA') ? 1 : 0) - (keys.has('KeyD') ? 1 : 0);
-  const luff = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
-  const hoist = (keys.has('KeyE') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0);
-  if (fwd) { c.x += Math.sin(c.heading) * fwd * 3.5 * dt; c.z += Math.cos(c.heading) * fwd * 3.5 * dt; }
-  if (turn) c.heading += turn * 0.5 * dt;
-  if (slew) { c.slew += slew * 0.6 * dt; $('sSlew').value = Math.round(c.slew / DEG); }
-  if (luff) { c.luff = clamp(c.luff + luff * 0.35 * dt, 15 * DEG, 80 * DEG); $('sLuff').value = Math.round(c.luff / DEG); }
-  if (hoist) { const L = clamp(state.cable + hoist * 2.5 * dt, 4, 20); if (L !== state.cable) { state.cable = L; $('sCable').value = L.toFixed(1); makeRope(); } }
-  if (slew || luff || hoist) updateLabels();
-  updateCraneAudio(dt, { fwd, turn, slew, luff, hoist });
+  const ctl = readKeys();
+  my.ctl = ctl;
+  if (!(net.active && net.role === 1)) {            // the guest's machine is moved by the host
+    for (const m of inPlay()) applyControls(m, m.ctl, dt);
+    if (ctl.slew || ctl.luff || ctl.hoist) reflectSliders();
+  }
+  updateCraneAudio(dt, ctl);
 }
 
 // --------------------------------------------------------------------- ui
 function updateLabels() {
   $('vMass').textContent = state.mass.toFixed(1) + ' t';
   $('vRadius').textContent = state.radius.toFixed(2) + ' m';
-  $('vCable').textContent = state.cable.toFixed(1) + ' m';
-  $('vSlew').textContent = Math.round(state.crane.slew / DEG) + '°';
-  $('vLuff').textContent = Math.round(state.crane.luff / DEG) + '°';
+  $('vCable').textContent = my.cable.toFixed(1) + ' m';
+  $('vSlew').textContent = Math.round(my.crane.slew / DEG) + '°';
+  $('vLuff').textContent = Math.round(my.crane.luff / DEG) + '°';
   $('vMortar').textContent = '×' + state.mortar.toFixed(2);
   $('vSlow').textContent = state.slowmo.toFixed(2) + '×';
 }
@@ -1695,11 +1773,11 @@ for (const name of Object.keys(W.assets)) {
 }
 $('btnReset').addEventListener('click', () => loadAsset(state.asset));
 $('btnShove').addEventListener('click', () => shove());
-$('sMass').addEventListener('input', e => { state.mass = +e.target.value; updateLabels(); ballCol.setDensity(state.mass * 1000 / (4 / 3 * Math.PI * state.radius ** 3)); });
-$('sRadius').addEventListener('input', e => { state.radius = +e.target.value; updateLabels(); makeBall(); });
-$('sCable').addEventListener('input', e => { state.cable = +e.target.value; updateLabels(); makeRope(); });
-$('sSlew').addEventListener('input', e => { state.crane.slew = +e.target.value * DEG; updateLabels(); });
-$('sLuff').addEventListener('input', e => { state.crane.luff = +e.target.value * DEG; updateLabels(); });
+$('sMass').addEventListener('input', e => { state.mass = +e.target.value; updateLabels(); for (const m of inPlay()) m.ballCol.setDensity(state.mass * 1000 / (4 / 3 * Math.PI * state.radius ** 3)); netCfg(); });
+$('sRadius').addEventListener('input', e => { state.radius = +e.target.value; updateLabels(); for (const m of inPlay()) makeBall(m); netCfg(); });
+$('sCable').addEventListener('input', e => { my.cable = +e.target.value; updateLabels(); if (net.active && net.role === 1) net.set.cable = my.cable; else makeRope(my); });
+$('sSlew').addEventListener('input', e => { my.crane.slew = +e.target.value * DEG; updateLabels(); if (net.active && net.role === 1) net.set.slew = my.crane.slew; });
+$('sLuff').addEventListener('input', e => { my.crane.luff = +e.target.value * DEG; updateLabels(); if (net.active && net.role === 1) net.set.luff = my.crane.luff; });
 $('sMortar').addEventListener('input', e => {
   const k = Math.pow(10, +e.target.value);
   const ratio = k / state.mortar;
@@ -1727,11 +1805,13 @@ const stats = { asleep: 0, fps: 0, maxForce: 0, clatters: 0, impacts: 0 };
 let acc = 0, last = performance.now(), fpsAcc = 0, fpsN = 0, statTimer = 0;
 function syncVisuals(dt) {
   updateCraneVisual();
-  const bp = ballBody.translation();
-  ballMesh.position.set(bp.x, bp.y, bp.z);
-  const br = ballBody.rotation();
-  ballMesh.quaternion.set(br.x, br.y, br.z, br.w);
-  layoutChain(hookPos, ballMesh.position);
+  for (const m of inPlay()) {
+    const bp = m.ballBody.translation();
+    m.ballMesh.position.set(bp.x, bp.y, bp.z);
+    const br = m.ballBody.rotation();
+    m.ballMesh.quaternion.set(br.x, br.y, br.z, br.w);
+    layoutChain(m);
+  }
   sun.target.position.copy(centre);
   sun.position.set(centre.x + 40, 70, centre.z + 30);
   updateCamera(dt);
@@ -1741,9 +1821,10 @@ function syncVisuals(dt) {
 // follow that curve.
 const chainA = new THREE.Vector3(), chainB = new THREE.Vector3(), chainD = new THREE.Vector3(), chainT = new THREE.Vector3(), chainN = new THREE.Vector3();
 const chainQ = new THREE.Quaternion(), chainQ2 = new THREE.Quaternion(), chainS = new THREE.Vector3(1, 1, 1), X_AXIS = new THREE.Vector3(1, 0, 0);
-function layoutChain(from, to) {
+function layoutChain(m) {
+  const from = m.hookPos, to = m.ballMesh.position, chainMesh = m.chainMesh;
   const c = chainD.subVectors(to, from).length();
-  const L = state.cable;
+  const L = m.cable;
   const sag = c < L - 0.05 ? Math.sqrt(Math.max(0, 3 * c * (L - c) / 8)) : 0;
   // bow direction: gravity with the along-chord part removed; sideways when the chord is vertical
   chainN.set(0, -1, 0);
@@ -1766,26 +1847,300 @@ function layoutChain(from, to) {
   chainMesh.instanceMatrix.needsUpdate = true;
 }
 function updateStats() {
-  $('vLoose').textContent = loose.length + ' / ' + structure.released.reduce((a, b) => a + b, 0);
-  $('vAsleep').textContent = stats.asleep;
-  $('vImpacts').textContent = impactsPerStep;
+  const g = net.active && net.role === 1 ? net.hostStats : null;   // the guest shows the host's numbers
+  $('vLoose').textContent = g ? g.loose + ' / ' + g.released : loose.length + ' / ' + structure.released.reduce((a, b) => a + b, 0);
+  $('vAsleep').textContent = g ? g.asleep : stats.asleep;
+  $('vImpacts').textContent = g ? g.impacts : impactsPerStep;
   $('vFps').textContent = stats.fps.toFixed(0);
+}
+// One frame of the simulation. The host (and a single player) runs the physics; the guest only reports its controls.
+function tick(real) {
+  driveCrane(real);
+  if (net.active && net.role === 1) { netGuestTick(real); return; }
+  acc += real;
+  let steps = 0;
+  while (acc >= DT && steps < 2) { physicsStep(); acc -= DT; steps++; }
+  if (acc > DT) acc = 0;
+  if (steps > 0) netHostTick();
 }
 function frame(now) {
   requestAnimationFrame(frame);
   const real = Math.min(0.05, (now - last) / 1000);
   last = now;
-  driveCrane(real);
-  acc += real;
-  let steps = 0;
-  while (acc >= DT && steps < 2) { physicsStep(); acc -= DT; steps++; }
-  if (acc > DT) acc = 0;
+  tick(real);
   syncVisuals(real);
   renderer.render(scene, camera);
   fpsAcc += real; fpsN++;
   statTimer += real;
   if (statTimer > 0.25) { stats.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; statTimer = 0; updateStats(); }
 }
+
+// ---------------------------------------------------------------- network
+// Two players, two computers, two machines on the same target. The browsers are connected directly with WebRTC;
+// there is no server to introduce them, so the players pass two codes to each other by hand (chat, mail, anything):
+// the host's invitation and the guest's reply.
+// Physics engines do not promise the same result on two different computers, so only the host simulates. The guest
+// sends what its operator is doing (keys held, where the ball is being held, slider settings) and the host sends back
+// where everything is, about 30 times a second: both machines, and every block that moved, broke or was damaged.
+const net = {
+  pc: null, ch: null, role: -1, active: false, stun: true,
+  dirty: new Set(),              // host: blocks to report whether or not they are moving (damaged, gone, just settled)
+  wasAwake: new Uint8Array(0),   // host: blocks that were moving at the last report
+  cursor: 0, frame: 0, loads: 0,
+  hostLoad: -1, hostStats: null, dmg: new Uint8Array(0), lastSnap: 0,   // guest
+  shoves: 0, set: {}, sendAcc: 0,                                        // guest: requests waiting to be sent
+};
+const b64 = bytes => { let t = ''; for (let i = 0; i < bytes.length; i++) t += String.fromCharCode(bytes[i]); return btoa(t).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64 = str => { const t = atob(str.replace(/-/g, '+').replace(/_/g, '/')), out = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) out[i] = t.charCodeAt(i); return out; };
+async function pack(desc) {
+  const json = JSON.stringify({ t: desc.type, s: desc.sdp });
+  if (window.CompressionStream) {
+    const z = new Blob([json]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    return 'WB1.' + b64(new Uint8Array(await new Response(z).arrayBuffer()));
+  }
+  return 'WB0.' + b64(new TextEncoder().encode(json));
+}
+async function unpack(code) {
+  code = String(code).replace(/\s+/g, '');
+  const kind = code.slice(0, 4);
+  if (kind !== 'WB1.' && kind !== 'WB0.') throw new Error('That does not look like a Wrecking Ball code.');
+  try {
+    const bytes = unb64(code.slice(4));
+    const json = kind === 'WB1.'
+      ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text()
+      : new TextDecoder().decode(bytes);
+    const o = JSON.parse(json);
+    return { type: o.t, sdp: o.s };
+  } catch (e) { throw new Error('The code is damaged or incomplete. Copy all of it.'); }
+}
+function newPeer(stun) {
+  netClose();
+  if (!window.RTCPeerConnection) throw new Error('This browser cannot make direct connections.');
+  net.pc = new RTCPeerConnection({ iceServers: stun ? [{ urls: 'stun:stun.l.google.com:19302' }] : [] });
+  return net.pc;
+}
+// every address this browser can be reached at goes into the code, so wait until they have all been found
+const gathered = pc => new Promise(res => {
+  if (pc.iceGatheringState === 'complete') return res();
+  const t = setTimeout(res, 3000);
+  pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } });
+});
+function wire(ch) {
+  net.ch = ch;
+  ch.binaryType = 'arraybuffer';
+  ch.onopen = () => { closePanel(); netBegin(); };
+  ch.onmessage = e => {
+    if (typeof e.data !== 'string') { if (net.role === 1) applySnapshot(e.data); return; }
+    let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (net.role === 0 && m.t === 'in') guestInput(m);
+    else if (net.role === 1 && m.t === 'cfg') hostConfig(m);
+    else if (net.role === 1 && m.t === 's' && Array.isArray(m.p)) (m.k === 'impact' ? playImpact : playClatter)(+m.f || 0, W.MATERIALS[m.mat] ? m.mat : 'stone', { x: +m.p[0] || 0, y: +m.p[1] || 0, z: +m.p[2] || 0 });
+  };
+  ch.onclose = () => { if (net.ch === ch) netEnd('The other player is gone: connection lost.'); };
+}
+async function netHost(stun) {
+  const pc = newPeer(stun); net.role = 0;
+  wire(pc.createDataChannel('wrecking-ball'));
+  await pc.setLocalDescription(await pc.createOffer()); await gathered(pc);
+  return pack(pc.localDescription);
+}
+async function netAccept(code) {
+  const d = await unpack(code);
+  if (d.type !== 'answer') throw new Error('That is an invitation, not a reply. Paste the code the other player sent back.');
+  await net.pc.setRemoteDescription(d);
+}
+async function netJoin(code, stun) {
+  const d = await unpack(code);
+  if (d.type !== 'offer') throw new Error("That is a reply, not an invitation. Paste the host's code.");
+  const pc = newPeer(stun); net.role = 1; pc.ondatachannel = e => wire(e.channel);
+  await pc.setRemoteDescription(d); await pc.setLocalDescription(await pc.createAnswer()); await gathered(pc);
+  return pack(pc.localDescription);
+}
+function netSend(m) { if (net.ch && net.ch.readyState === 'open') net.ch.send(typeof m === 'string' || m instanceof ArrayBuffer ? m : JSON.stringify(m)); }
+function netClose() {
+  const pc = net.pc, ch = net.ch;
+  net.pc = net.ch = null; net.active = false; net.role = -1;
+  try { if (ch) ch.close(); if (pc) pc.close(); } catch (e) {}
+}
+// Which machine this computer steers, and which controls belong to the host alone.
+function netRoles(msg) {
+  my = machines[net.active && net.role === 1 ? 1 : 0];
+  for (const m of machines) { m.cabMesh.visible = true; m.cabFrame.visible = false; m.chainMesh.visible = true; m.grabbed = false; }
+  showMachine(machines[1], twoUp);
+  const guest = net.active && net.role === 1;
+  for (const el of [...document.querySelectorAll('#assetButtons button'), $('btnReset'), $('sMass'), $('sRadius'), $('sMortar'), $('sSlow')]) el.disabled = guest;
+  $('netInfo').innerHTML = msg || (!net.active ? 'A second computer can join with a machine of its own.'
+    : net.role === 0 ? 'Connected. You are the host and drive the <span class="m1">yellow</span> machine; the other player drives the <span class="m2">red</span> one.'
+    : 'Connected. You drive the <span class="m2">red</span> machine. The host chooses the target, the ball and the mortar.');
+  $('btnNet').classList.toggle('on', net.active);
+}
+function netBegin() {
+  net.active = true; twoUp = true; net.hostLoad = -1; net.hostStats = null; net.shoves = 0; net.set = {}; net.frame = 0;
+  netRoles();
+  if (net.role === 0) loadAsset(state.asset);          // a fresh target for the two of them; tells the guest which
+  else { loadAsset(state.asset, true); cam.az += Math.PI; }   // something to look at, from the guest's side, until the host says which
+  setView(state.view); reflectSliders();
+}
+function netEnd(msg) {
+  netClose(); twoUp = false;
+  netRoles(msg);
+  loadAsset(state.asset);
+  setView(state.view); reflectSliders();
+}
+// Called at the end of every loadAsset.
+function netLoaded() {
+  net.dirty.clear(); net.wasAwake = new Uint8Array(asset.blocks.length); net.dmg = new Uint8Array(asset.blocks.length); net.cursor = 0; net.loads++;
+  netCfg();
+}
+function netCfg() { if (net.active && net.role === 0) netSend({ t: 'cfg', asset: state.asset, n: net.loads, mass: state.mass, radius: state.radius }); }
+
+// ---- host side
+function guestInput(m) {
+  const g = machines[1];
+  if (!g.ballBody || !Array.isArray(m.c)) return;
+  const ax = k => Math.sign(+m.c[k] || 0);
+  g.ctl = { fwd: ax(0), turn: ax(1), slew: ax(2), luff: ax(3), hoist: ax(4) };
+  const num = v => typeof v === 'number' && isFinite(v);
+  if (m.set) {
+    if (num(m.set.slew)) g.crane.slew = clamp(m.set.slew, -Math.PI, Math.PI);
+    if (num(m.set.luff)) g.crane.luff = clamp(m.set.luff, 15 * DEG, 80 * DEG);
+    if (num(m.set.cable)) { g.cable = clamp(m.set.cable, 4, 20); makeRope(g); }
+  }
+  for (let k = Math.min(3, m.sh | 0); k > 0; k--) shove(1, g);
+  if (Array.isArray(m.g) && m.g.every(num)) { g.grabTarget.set(m.g[0], m.g[1], m.g[2]); if (!g.grabbed) grabStart(g); }
+  else if (g.grabbed) grabEnd(g);
+}
+// One report: a header, both machines, then the blocks.
+// A block is 16 bytes: its number, a flag byte, its damage, where it is to the centimetre, and three parts of its
+// rotation (the fourth follows from the other three; its sign is in the flag byte).
+const SNAP_HEAD = 12, SNAP_MACH = 68, SNAP_BLOCK = 16, SNAP_BLOCKS = 900;
+const cm = x => clamp(Math.round(x * 100), -32767, 32767);
+function buildSnapshot() {
+  const list = [];
+  for (const i of net.dirty) { if (list.length >= SNAP_BLOCKS) break; list.push(i); }
+  for (const i of list) net.dirty.delete(i);
+  const awake = [];
+  for (const i of loose) {
+    if (bodies[i].isSleeping()) { if (net.wasAwake[i]) { net.wasAwake[i] = 0; net.dirty.add(i); } }   // its resting place goes out with the next report
+    else { net.wasAwake[i] = 1; awake.push(i); }
+  }
+  // when more blocks are moving than fit, they take turns
+  const room = Math.max(100, SNAP_BLOCKS - list.length);
+  if (awake.length <= room) list.push(...awake);
+  else { for (let k = 0; k < room; k++) list.push(awake[(net.cursor + k) % awake.length]); net.cursor = (net.cursor + room) % awake.length; }
+  const buf = new ArrayBuffer(SNAP_HEAD + 2 * SNAP_MACH + list.length * SNAP_BLOCK), v = new DataView(buf);
+  v.setUint8(0, 1); v.setUint16(2, list.length, true); v.setUint16(4, loose.length, true);
+  v.setUint16(6, structure.released.reduce((a, b) => a + b, 0), true); v.setUint16(8, stats.asleep, true); v.setUint16(10, Math.min(65535, impactsPerStep), true);
+  let o = SNAP_HEAD;
+  for (const m of machines) {
+    const c = m.crane, p = m.ballBody.translation(), q = m.ballBody.rotation();
+    for (const x of [c.x, c.z, c.heading, c.slew, c.luff, m.cable, m.hookPos.x, m.hookPos.y, m.hookPos.z, p.x, p.y, p.z, q.x, q.y, q.z, q.w, m.grabbed ? 1 : 0]) { v.setFloat32(o, x, true); o += 4; }
+  }
+  for (const i of list) {
+    const rb = bodies[i];
+    v.setUint16(o, i, true);
+    if (!rb) v.setUint8(o + 2, 1);                       // fell off the world
+    else {
+      const t = rb.translation(), r = rb.rotation(), hp = structure.hp[i];
+      v.setUint8(o + 3, hp > 0 ? Math.min(255, Math.round(255 * structure.damage[i] / hp)) : 0);
+      v.setUint8(o + 2, r.w < 0 ? 2 : 0);
+      v.setInt16(o + 4, cm(t.x), true); v.setInt16(o + 6, cm(t.y), true); v.setInt16(o + 8, cm(t.z), true);
+      v.setInt16(o + 10, Math.round(r.x * 32767), true); v.setInt16(o + 12, Math.round(r.y * 32767), true); v.setInt16(o + 14, Math.round(r.z * 32767), true);
+    }
+    o += SNAP_BLOCK;
+  }
+  return buf;
+}
+function netHostTick() {
+  if (!net.active || net.role !== 0 || !twoUp) return;
+  if (++net.frame % 2) return;                                   // every other frame: about 30 reports a second
+  if (net.ch.bufferedAmount > 1e6) return;                       // the line is behind: skip, nothing is lost, it goes out later
+  netSend(buildSnapshot());
+}
+
+// ---- guest side
+function hostConfig(m) {
+  if (!W.assets[m.asset]) return;
+  const num = (v, a, b, d) => typeof v === 'number' && isFinite(v) ? clamp(v, a, b) : d;
+  const radius = num(m.radius, 0.5, 1.5, state.radius), fresh = m.n !== net.hostLoad;
+  state.mass = num(m.mass, 0.5, 10, state.mass);
+  if (fresh) { net.hostLoad = m.n; state.radius = radius; loadAsset(m.asset, true); }
+  else if (radius !== state.radius) { state.radius = radius; for (const k of machines) makeBall(k); }
+  $('sMass').value = state.mass; $('sRadius').value = state.radius; updateLabels();
+}
+function applySnapshot(buf) {
+  const v = new DataView(buf);
+  if (!asset || !machines[1].ballBody || buf.byteLength < SNAP_HEAD + 2 * SNAP_MACH || v.getUint8(0) !== 1) return;
+  const n = v.getUint16(2, true);
+  if (buf.byteLength !== SNAP_HEAD + 2 * SNAP_MACH + n * SNAP_BLOCK) return;
+  net.hostStats = { loose: v.getUint16(4, true), released: v.getUint16(6, true), asleep: v.getUint16(8, true), impacts: v.getUint16(10, true) };
+  const now = performance.now(), dt = clamp((now - net.lastSnap) / 1000, 1 / 60, 0.25); net.lastSnap = now;
+  let o = SNAP_HEAD;
+  for (const m of machines) {
+    const f = []; for (let k = 0; k < 17; k++) { f.push(v.getFloat32(o, true)); o += 4; }
+    const c = m.crane; c.x = f[0]; c.z = f[1]; c.heading = f[2];
+    // sliders being dragged on this computer are not pulled back while the request is on its way
+    if (m !== my || !('slew' in net.set)) c.slew = f[3];
+    if (m !== my || !('luff' in net.set)) c.luff = f[4];
+    if (m !== my || !('cable' in net.set)) m.cable = f[5];
+    m.hookPos.set(f[6], f[7], f[8]);
+    // the ball's body is only a place to keep where the ball is: nothing is simulated here. Its speed is worked out
+    // from the last two reports, for the view that rides the ball.
+    const p = m.ballBody.translation();
+    m.ballBody.setLinvel({ x: (f[9] - p.x) / dt, y: (f[10] - p.y) / dt, z: (f[11] - p.z) / dt }, false);
+    m.ballBody.setTranslation({ x: f[9], y: f[10], z: f[11] }, false);
+    m.ballBody.setRotation({ x: f[12], y: f[13], z: f[14], w: f[15] }, false);
+  }
+  let recolour = false;
+  for (let k = 0; k < n; k++, o += SNAP_BLOCK) {
+    const i = v.getUint16(o, true), b = asset.blocks[i];
+    if (!b) continue;
+    const mesh = b.shape === 'cyl' ? cylMesh : boxMesh;
+    const flags = v.getUint8(o + 2);
+    if (flags & 1) { tmpM.makeScale(0, 0, 0); mesh.setMatrixAt(b.inst, tmpM); continue; }
+    const qx = v.getInt16(o + 10, true) / 32767, qy = v.getInt16(o + 12, true) / 32767, qz = v.getInt16(o + 14, true) / 32767;
+    const qw = Math.sqrt(Math.max(0, 1 - qx * qx - qy * qy - qz * qz)) * (flags & 2 ? -1 : 1);
+    writeInstance(i, { x: v.getInt16(o + 4, true) / 100, y: v.getInt16(o + 6, true) / 100, z: v.getInt16(o + 8, true) / 100 }, { x: qx, y: qy, z: qz, w: qw });
+    const d = v.getUint8(o + 3);
+    if (d !== net.dmg[i]) { net.dmg[i] = d; structure.damage[i] = d / 255 * structure.hp[i]; mesh.setColorAt(b.inst, blockColor(i, tmpC)); recolour = true; }
+  }
+  boxMesh.instanceMatrix.needsUpdate = true; cylMesh.instanceMatrix.needsUpdate = true;
+  if (recolour) { boxMesh.instanceColor.needsUpdate = true; if (cylMesh.instanceColor) cylMesh.instanceColor.needsUpdate = true; }
+  if (!(document.activeElement && document.activeElement.type === 'range')) reflectSliders();
+}
+function netGuestTick(real) {
+  net.sendAcc += real;
+  if (net.sendAcc < 1 / 30) return;
+  net.sendAcc = 0;
+  const c = my.ctl, t = my.grabTarget;
+  netSend({ t: 'in', c: [c.fwd, c.turn, c.slew, c.luff, c.hoist], g: my.grabbed ? [t.x, t.y, t.z] : null, sh: net.shoves, set: net.set });
+  net.shoves = 0; net.set = {};
+}
+
+// the panel that walks both players through the exchange of codes
+function closePanel() { $('net').classList.remove('open'); $('net').innerHTML = ''; }
+function openPanel(view) {
+  const el = $('net'); el.classList.add('open');
+  const stunBox = "<label class='pick'><input type='checkbox' id='stun' checked> <span>Play across the internet. This asks a public address server (Google STUN) how this computer can be reached; nothing about the game goes through it. Untick it if both computers are on the same network.</span></label>";
+  const foot = "<p class='err' id='nerr'></p><div class='btns'><button id='nclose'>Close</button></div>";
+  if (net.active) el.innerHTML = "<div class='box'><h3>Network game</h3><p>Connected. You drive the <span class='m" + (net.role + 1) + "'>" + (net.role ? 'red' : 'yellow') + "</span> machine.</p><div class='btns'><button id='ndrop'>Disconnect</button><button id='nclose'>Close</button></div></div>";
+  else if (view === 'host') el.innerHTML = "<div class='box'><h3>Host a game</h3><p class='stepn'>1. Send this invitation to the other player</p><textarea id='ncode' readonly>working…</textarea><div class='btns'><button id='ncopy'>Copy invitation</button></div><p class='stepn'>2. Paste the reply they send back</p><textarea id='nin' placeholder='WB1.…'></textarea><div class='btns'><button id='ngo' class='main'>Connect</button></div>" + foot + "</div>";
+  else if (view === 'join') el.innerHTML = "<div class='box'><h3>Join a game</h3><p class='stepn'>1. Paste the invitation the host sent you</p><textarea id='nin' placeholder='WB1.…'></textarea><div class='btns'><button id='ngo' class='main'>Make my reply</button></div><div id='nreply' style='display:none'><p class='stepn'>2. Send this reply back to the host</p><textarea id='ncode' readonly></textarea><div class='btns'><button id='ncopy'>Copy reply</button></div><p>The game starts by itself once the host has pasted it.</p></div>" + foot + "</div>";
+  else el.innerHTML = "<div class='box'><h3>Two players, two machines</h3><p>A second computer joins with a demolition machine of its own, on the other side of the target. The two browsers connect directly to each other. There is no server to introduce them, so you swap two short codes by chat or mail: one player hosts and sends an invitation, the other answers with a reply.</p><p>The host drives the <span class='m1'>yellow</span> machine and chooses the target, the ball and the mortar. The guest drives the <span class='m2'>red</span> one with the same keys and can grab and shove its own ball. The host's computer does the physics, so that is the one that should be the faster of the two.</p>" + stunBox + "<div class='btns'><button id='nhost' class='main'>Host a game</button><button id='njoin'>Join a game</button></div>" + foot + "</div>";
+  const on = (id, f) => { const b = $(id); if (b) b.onclick = () => Promise.resolve().then(f).catch(e => { const er = $('nerr'); if (er) er.textContent = e.message || String(e); }); };
+  on('nclose', closePanel);
+  on('ndrop', () => { netEnd(); closePanel(); });
+  on('nhost', async () => { net.stun = $('stun').checked; openPanel('host'); $('ncode').value = await netHost(net.stun); });
+  on('njoin', () => { net.stun = $('stun').checked; openPanel('join'); });
+  on('ncopy', async () => { const t = $('ncode'); t.select(); try { await navigator.clipboard.writeText(t.value); $('ncopy').textContent = 'Copied'; } catch (e) { $('nerr').textContent = 'Select the code and copy it by hand.'; } });
+  on('ngo', async () => {
+    const code = $('nin').value; if (!code.trim()) throw new Error('Paste the code first.');
+    if (view === 'host') { await netAccept(code); $('nerr').textContent = 'Connecting…'; }
+    else { $('ncode').value = await netJoin(code, net.stun); $('nreply').style.display = 'block'; }
+  });
+}
+$('btnNet').addEventListener('click', () => openPanel());
+netRoles();
 
 loadAsset('castle');
 updateLabels();
@@ -1798,6 +2153,11 @@ requestAnimationFrame(frame);
 window.__wreck = {
   load: loadAsset,
   step(n = 1) { for (let i = 0; i < n; i++) physicsStep(); syncVisuals(); renderer.render(scene, camera); },
+  // one frame as the page's own loop would run it, for a tab whose loop is not running
+  tick(n = 1) { for (let i = 0; i < n; i++) tick(DT); syncVisuals(DT); renderer.render(scene, camera); },
+  net, netHost, netJoin, netAccept, machines, get my() { return my; },
+  // where a block is drawn, to compare the two computers of a network game
+  blockAt(i) { const b = asset.blocks[i]; (b.shape === 'cyl' ? cylMesh : boxMesh).getMatrixAt(b.inst, tmpM); tmpM.decompose(tmpP, tmpQ, tmpS); return [tmpP.x, tmpP.y, tmpP.z, tmpS.x].map(v => +v.toFixed(2)); },
   shove,
   stats() { return { blocks: asset.blocks.length, released: structure.released.reduce((a, b) => a + b, 0), loose: loose.length, asleep: stats.asleep, maxForceKN: stats.maxForce, hp0: structure.hp[0], clatters: stats.clatters, impacts: stats.impacts }; },
   get structure() { return structure; },
@@ -1809,8 +2169,8 @@ window.__wreck = {
   drive(dt) { driveCrane(dt); },
   keys,
   get craneAudio() { return craneAudio; },
-  ballScreen() { const p = tmpP.copy(ballBody.translation()).project(camera); return { x: (p.x + 1) / 2 * window.innerWidth, y: (1 - p.y) / 2 * window.innerHeight, w: window.innerWidth, h: window.innerHeight }; },
-  get grabbed() { return grabbed; },
+  ballScreen() { const p = tmpP.copy(my.ballBody.translation()).project(camera); return { x: (p.x + 1) / 2 * window.innerWidth, y: (1 - p.y) / 2 * window.innerHeight, w: window.innerWidth, h: window.innerHeight }; },
+  get grabbed() { return my.grabbed; },
   setView,
   get view() { return state.view; },
   head,
