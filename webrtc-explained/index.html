@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How WebRTC works</title>
+<style>
+  :root {
+    --bg: #f6f4ef; --card: #ffffff; --ink: #1d2126; --soft: #5b6470; --line: #d9d5cb;
+    --a: #1f6feb; --a-bg: #e7f0ff; --b: #b4531a; --b-bg: #fdeede; --ok: #1a7f4b; --ok-bg: #e2f5ea; --warn: #9a6700; --warn-bg: #fff5d6; --bad: #c0352b;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a; --card: #1b2028; --ink: #e6e3dc; --soft: #9aa3ad; --line: #323a45;
+      --a: #6ea8ff; --a-bg: #1a2a44; --b: #f0a469; --b-bg: #3a2616; --ok: #5fd08f; --ok-bg: #16301f; --warn: #e3b341; --warn-bg: #33290f; --bad: #ff8478;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 28px 18px 80px; }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0 0 10px; letter-spacing: -0.01em; }
+  h2 { font-size: 24px; margin: 46px 0 8px; line-height: 1.25; }
+  h3 { font-size: 17px; margin: 0 0 6px; }
+  p { margin: 10px 0; }
+  .lead { font-size: 19px; color: var(--soft); max-width: 720px; }
+  .n { display: inline-block; min-width: 1.7em; height: 1.7em; line-height: 1.7em; text-align: center; border-radius: 50%; background: var(--ink); color: var(--bg); font-size: 14px; font-weight: 700; margin-right: 8px; vertical-align: 2px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin: 14px 0; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 14px 0; }
+  .cols .card { margin: 0; }
+  .note { border-left: 4px solid var(--warn); background: var(--warn-bg); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+  .alice { color: var(--a); font-weight: 700; } .bob { color: var(--b); font-weight: 700; }
+  code, .mono { font-family: var(--mono); font-size: 13px; }
+  code { background: rgba(127,127,127,.16); padding: 1px 5px; border-radius: 4px; }
+  svg text { font: 13px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
+  svg .soft { fill: var(--soft); font-size: 12px; }
+  figure { margin: 16px 0; } figure svg { width: 100%; height: auto; display: block; }
+  figcaption { color: var(--soft); font-size: 14px; margin-top: 6px; }
+  button { font: inherit; font-size: 14px; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 13px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--soft); }
+  button.main { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 600; }
+  button.on { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 4px; }
+  textarea, input[type=text] { width: 100%; font: 12px/1.4 var(--mono); background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  textarea { height: 86px; resize: vertical; word-break: break-all; }
+  input[type=text] { font: inherit; font-size: 15px; }
+  .err { color: var(--bad); min-height: 1.3em; font-size: 14px; margin: 4px 0; }
+  .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 99px; background: rgba(127,127,127,.18); color: var(--soft); white-space: nowrap; }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); } .tag.busy { background: var(--warn-bg); color: var(--warn); }
+  /* step-through */
+  #stage { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .peer { border: 2px solid var(--line); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+  .peer.a { border-color: var(--a); background: var(--a-bg); } .peer.b { border-color: var(--b); background: var(--b-bg); }
+  .peer h3 { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; font-size: 13px; margin-top: 4px; }
+  .kv span:nth-child(odd) { color: var(--soft); } .kv span:nth-child(even) { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+  #steps { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 6px; }
+  #steps li { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; background: var(--card); opacity: .55; }
+  #steps li.done, #steps li.now { opacity: 1; } #steps li.now { border-color: var(--ink); }
+  #steps li b { display: block; }
+  #steps li .what { color: var(--soft); font-size: 14px; }
+  .sdp { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; display: grid; gap: 3px; }
+  .sdp div { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 10px; font-size: 13px; align-items: start; }
+  .sdp div code { background: none; padding: 0; overflow-wrap: anywhere; font-size: 12px; }
+  .sdp div span { color: var(--soft); }
+  details { margin-top: 6px; } details summary { cursor: pointer; color: var(--soft); font-size: 13px; }
+  details pre { font: 11.5px/1.4 var(--mono); overflow-x: auto; background: var(--bg); padding: 8px; border-radius: 8px; margin: 6px 0 0; max-height: 240px; }
+  /* live */
+  #connectBox .path { display: none; } #connectBox.host .path.host, #connectBox.join .path.join { display: block; }
+  #connectBox.linked .setup { display: none; } #connectBox:not(.linked) .linkedOnly { display: none; }
+  .stepn { font-weight: 600; margin: 12px 0 4px; }
+  .pick { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--soft); margin: 8px 0; }
+  .pick input { margin-top: 5px; }
+  .offline { opacity: .5; pointer-events: none; }
+  #chatLog { height: 190px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--bg); display: flex; flex-direction: column; gap: 4px; }
+  #chatLog div { max-width: 82%; padding: 4px 10px; border-radius: 12px; overflow-wrap: anywhere; }
+  #chatLog .me { align-self: flex-end; background: var(--a-bg); } #chatLog .them { align-self: flex-start; background: var(--b-bg); } #chatLog .sys { align-self: center; color: var(--soft); font-size: 13px; }
+  .chatRow { display: flex; gap: 8px; margin-top: 8px; } .chatRow input { flex: 1; }
+  #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 16px; text-align: center; color: var(--soft); }
+  #drop.over { border-color: var(--ok); background: var(--ok-bg); }
+  #files { display: grid; gap: 6px; margin-top: 10px; }
+  #files .f { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 14px; display: grid; gap: 4px; }
+  #files .f .bar { height: 5px; border-radius: 3px; background: rgba(127,127,127,.2); overflow: hidden; } #files .f .bar i { display: block; height: 100%; width: 0; background: var(--ok); }
+  #files .f img { max-width: 220px; max-height: 160px; border-radius: 6px; }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { position: relative; background: #0b0d10; border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 9; }
+  .tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile .cap { position: absolute; left: 8px; bottom: 6px; font-size: 12px; color: #fff; background: rgba(0,0,0,.55); padding: 1px 8px; border-radius: 99px; }
+  .tile .off { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #8b949e; font-size: 14px; background: #0b0d10; text-align: center; padding: 8px; }
+  #stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; font-size: 14px; }
+  #stats span:nth-child(odd) { color: var(--soft); } #stats span:nth-child(even) { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; } th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; } th { color: var(--soft); font-weight: 600; }
+  @media (max-width: 620px) { #stage, .tiles { grid-template-columns: 1fr; } h1 { font-size: 27px; } .sdp div { grid-template-columns: 1fr; gap: 0; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>How two browsers talk to each other without a server in between</h1>
+  <p class="lead">WebRTC lets one browser send video, sound, messages and files straight to another. This page shows how the connection is made, step by step with a real one, and then lets you connect two browsers by hand and use it.</p>
+
+  <h2><span class="n">1</span>Why it is hard</h2>
+  <p>A web page can call out to a server, but nothing can call a web page. Your computer usually sits behind a router that shares one public address among every device in the house, and the router only lets in traffic that answers something sent out first. Two browsers that both sit behind such routers cannot simply dial each other: neither knows the other's address, and neither router would let a stranger in.</p>
+  <figure>
+    <svg viewBox="0 0 860 190" role="img" aria-label="Two computers, each behind a home router, with the internet between them">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--bad)"/></marker></defs>
+      <g fill="none" stroke="var(--line)" stroke-width="2">
+        <rect x="10" y="20" width="250" height="150" rx="14"/><rect x="600" y="20" width="250" height="150" rx="14"/>
+      </g>
+      <text x="24" y="42" class="soft">Alice's home network</text><text x="614" y="42" class="soft">Bob's home network</text>
+      <rect x="28" y="78" width="110" height="56" rx="8" fill="var(--a-bg)" stroke="var(--a)" stroke-width="2"/><text x="83" y="103" text-anchor="middle" font-weight="700">Alice</text><text x="83" y="121" text-anchor="middle" class="soft">192.168.1.20</text>
+      <rect x="722" y="78" width="110" height="56" rx="8" fill="var(--b-bg)" stroke="var(--b)" stroke-width="2"/><text x="777" y="103" text-anchor="middle" font-weight="700">Bob</text><text x="777" y="121" text-anchor="middle" class="soft">10.0.0.7</text>
+      <rect x="176" y="78" width="70" height="56" rx="8" fill="var(--card)" stroke="var(--soft)" stroke-width="2"/><text x="211" y="103" text-anchor="middle">router</text><text x="211" y="121" text-anchor="middle" class="soft">NAT</text>
+      <rect x="614" y="78" width="70" height="56" rx="8" fill="var(--card)" stroke="var(--soft)" stroke-width="2"/><text x="649" y="103" text-anchor="middle">router</text><text x="649" y="121" text-anchor="middle" class="soft">NAT</text>
+      <g stroke="var(--soft)" stroke-width="2"><line x1="138" y1="106" x2="176" y2="106"/><line x1="684" y1="106" x2="722" y2="106"/></g>
+      <text x="430" y="62" text-anchor="middle" class="soft">the internet</text>
+      <text x="270" y="160" class="soft">public: 203.0.113.5</text><text x="590" y="160" text-anchor="end" class="soft">public: 198.51.100.9</text>
+      <g style="color:var(--bad)" stroke="currentColor" stroke-width="2" fill="none"><line x1="250" y1="96" x2="560" y2="96" marker-end="url(#ar)" stroke-dasharray="6 5"/><line x1="610" y1="118" x2="300" y2="118" marker-end="url(#ar)" stroke-dasharray="6 5"/></g>
+      <text x="580" y="100" fill="var(--bad)" style="fill:var(--bad)" font-weight="700">✕</text><text x="276" y="122" style="fill:var(--bad)" font-weight="700">✕</text>
+    </svg>
+    <figcaption>Each computer only knows its private address; the router shows the outside world a public one. Each router turns away traffic it was not expecting.</figcaption>
+  </figure>
+
+  <h2><span class="n">2</span>The three things a connection needs</h2>
+  <div class="cols">
+    <div class="card"><h3>A description of each side</h3><p>What each browser wants to send (data, sound, video, in which formats) and the fingerprint of the encryption key it will use. This is a block of text called SDP. The first one is the <b>offer</b>, the reply to it is the <b>answer</b>.</p></div>
+    <div class="card"><h3>Addresses to try</h3><p>Every way the browser might be reached: its address on the local network, and its public address as seen from outside. Each is an <b>ICE candidate</b>. The two browsers then try every pair until one gets through.</p></div>
+    <div class="card"><h3>A way to pass those across</h3><p>The offer and answer have to reach the other side before any connection exists. This is <b>signalling</b>, and WebRTC leaves it entirely to you. Most sites use a server for it. On this page it is you, with copy and paste.</p></div>
+  </div>
+  <p>The trick that gets through the routers: once both sides know each other's candidates, <em>both</em> start sending small test packets to each other at the same moment. Each router sees its own computer sending out first, so it lets the replies in. This is often called hole punching.</p>
+
+  <h2><span class="n">3</span>Watch a real connection being made</h2>
+  <p>Below, <span class="alice">Alice</span> and <span class="bob">Bob</span> are two real WebRTC connections inside this one page. Nothing is faked: the text shown is what your browser actually produced. Here the offer and answer are carried across by the page itself; in section 5 you carry them.</p>
+  <div class="card">
+    <div id="stage">
+      <div class="peer a"><h3><span>Alice</span><span class="tag" id="aState">idle</span></h3><div class="kv" id="aInfo"></div></div>
+      <div class="peer b"><h3><span>Bob</span><span class="tag" id="bState">idle</span></h3><div class="kv" id="bInfo"></div></div>
+    </div>
+    <div class="btns"><button class="main" id="demoNext">Start</button><button id="demoAll">Run all steps</button><button id="demoReset">Start over</button><span class="err" id="demoErr"></span></div>
+    <ol id="steps"></ol>
+  </div>
+
+  <h2><span class="n">4</span>So is there really no server?</h2>
+  <p>Honestly: it depends on which part you mean.</p>
+  <table>
+    <tr><th>Part</th><th>Usual way</th><th>On this page</th></tr>
+    <tr><td><b>Signalling</b><br>passing offer and answer</td><td>A web server both browsers are connected to</td><td>No server. You copy two codes across by chat or mail.</td></tr>
+    <tr><td><b>STUN</b><br>finding your public address</td><td>A small public server answers one question: &ldquo;what address do you see me coming from?&rdquo;</td><td>Optional, and only needed across the internet. It never sees your data and is not involved after the answer. On one network you can switch it off.</td></tr>
+    <tr><td><b>TURN</b><br>relay of last resort</td><td>When hole punching fails (some company and mobile networks), a relay server forwards everything</td><td>None. If both networks are of the strict kind, the two browsers here cannot connect.</td></tr>
+    <tr><td><b>The data itself</b></td><td colspan="2">Goes directly from one browser to the other, encrypted. Each side checks the other's key against the fingerprint that came with the offer or answer, so nobody in the middle can listen in unless they also changed the codes you passed across.</td></tr>
+  </table>
+  <div class="note">So: a server is not needed to <em>carry</em> anything, and on a shared network none is used at all. Across the internet one small question is asked of a public STUN server. What a server normally adds is convenience: it passes the codes for you.</div>
+
+  <h2><span class="n">5</span>Connect two browsers yourself</h2>
+  <p>Open this page in a second browser: another computer, a phone, or just another window. One of you hosts, the other joins. The codes are the offer and the answer from section 3, compressed.</p>
+  <div class="card" id="connectBox">
+    <div class="setup">
+      <label class="pick"><input type="checkbox" id="stun" checked><span>Across the internet: ask a public STUN server (Google's) for this computer's public address. Untick it if both browsers are on the same network or the same computer.</span></label>
+      <div class="btns start"><button class="main" id="bHost">Host: make an invitation</button><button id="bJoin">Join: I have an invitation</button></div>
+      <div class="path host">
+        <p class="stepn">1. Send this invitation to the other person</p>
+        <textarea id="hostCode" readonly placeholder="working…"></textarea>
+        <div class="btns"><button id="hostCopy">Copy invitation</button><span class="tag" id="hostSize"></span></div>
+        <p class="stepn">2. Paste the reply they send back</p>
+        <textarea id="hostIn" placeholder="RTC1.…"></textarea>
+        <div class="btns"><button class="main" id="hostGo">Connect</button><button class="back">Back</button></div>
+      </div>
+      <div class="path join">
+        <p class="stepn">1. Paste the invitation you were sent</p>
+        <textarea id="joinIn" placeholder="RTC1.…"></textarea>
+        <div class="btns"><button class="main" id="joinGo">Make my reply</button><button class="back">Back</button></div>
+        <div id="joinReply" style="display:none">
+          <p class="stepn">2. Send this reply back</p>
+          <textarea id="joinCode" readonly></textarea>
+          <div class="btns"><button id="joinCopy">Copy reply</button><span class="tag" id="joinSize"></span></div>
+          <p>The connection opens by itself once the host has pasted it.</p>
+        </div>
+      </div>
+    </div>
+    <div class="linkedOnly"><div class="btns"><span class="tag ok">connected</span><span id="linkedText"></span><button id="bDrop">Disconnect</button></div></div>
+    <p class="err" id="netErr"></p>
+  </div>
+
+  <div id="live" class="offline">
+    <h3 style="margin-top:22px">Chat</h3>
+    <p>Text goes over a <b>data channel</b>: a two-way pipe for whatever bytes you like. This one is set to deliver every message, in order.</p>
+    <div class="card">
+      <div id="chatLog"><div class="sys">Messages appear here once connected.</div></div>
+      <div class="chatRow"><input type="text" id="chatIn" placeholder="Type a message" maxlength="2000"><button class="main" id="chatSend">Send</button></div>
+    </div>
+
+    <h3 style="margin-top:22px">File sharing</h3>
+    <p>A second data channel carries files. A file is cut into 16 KB pieces, sent in order and put back together on the other side. The sender waits whenever the channel's queue fills up, so a large file does not swamp the connection.</p>
+    <div class="card">
+      <div id="drop">Drop a file here, or <button id="filePick">choose a file</button><input type="file" id="fileIn" hidden></div>
+      <div id="files"></div>
+    </div>
+
+    <h3 style="margin-top:22px">Camera and sound</h3>
+    <p>Video and sound do not use data channels. They travel as <b>media tracks</b>, which may drop a late frame instead of waiting for it, and adjust their quality to the connection. Room for one sound track and one video track each way was agreed in the offer and answer, so switching the camera on later needs no new exchange of codes.</p>
+    <div class="card">
+      <div class="tiles">
+        <div class="tile"><video id="vLocal" autoplay playsinline muted></video><div class="off" id="vLocalOff">Your camera is off</div><span class="cap">You</span></div>
+        <div class="tile"><video id="vRemote" autoplay playsinline></video><div class="off" id="vRemoteOff">The other side is not sending video</div><span class="cap" id="remoteCap">Them</span></div>
+      </div>
+      <div class="btns"><button id="bCam">Camera</button><button id="bMic">Microphone</button><button id="bPattern" title="A moving picture made by this page, for when there is no camera or both browsers are on one computer">Test pattern</button><button id="bTone" title="A quiet tone made by this page, in place of a microphone">Test tone</button></div>
+      <p class="err" id="mediaErr"></p>
+      <p style="color:var(--soft);font-size:14px;margin:0">With both browsers on one computer, a microphone will howl: use the test tone, or headphones.</p>
+    </div>
+
+    <h3 style="margin-top:22px">What the connection looks like</h3>
+    <div class="card"><div id="stats"><span>State</span><span>not connected</span></div></div>
+  </div>
+
+  <h2><span class="n">6</span>What is inside a code</h2>
+  <p>A code from section 5 is nothing secret or magic. It is the offer or answer text, squeezed with ordinary compression and written in letters that survive being pasted into a chat. Paste one here to read it.</p>
+  <div class="card">
+    <textarea id="peekIn" placeholder="Paste an invitation or a reply (RTC1.…)"></textarea>
+    <div class="btns"><button id="peekGo">Read it</button><span class="err" id="peekErr"></span></div>
+    <div id="peekOut"></div>
+  </div>
+
+  <h2><span class="n">7</span>Things worth knowing</h2>
+  <div class="cols">
+    <div class="card"><h3>A code is for one connection</h3><p>The offer and answer belong to one attempt. If it fails or you close the page, start again with fresh codes.</p></div>
+    <div class="card"><h3>Why making a code takes a moment</h3><p>The browser waits until it has found all its addresses, so that they fit in one code. Sites with a signalling server send each address as it is found instead, which is faster.</p></div>
+    <div class="card"><h3>Two is easy, ten is not</h3><p>Every pair needs its own connection. Calls with many people usually send everything through a server in the middle, which is no longer peer to peer.</p></div>
+    <div class="card"><h3>Your address is visible</h3><p>The other browser learns an address it can reach you at. That is how a direct connection works. Browsers hide local addresses behind random <code>.local</code> names where they can.</p></div>
+  </div>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const q = new URLSearchParams(location.search);
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const size = n => n < 1024 ? Math.round(n) + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
+
+  // Every address the browser can be reached at goes into the description, so wait until they have all been found.
+  const gathered = pc => new Promise(res => {
+    if (pc.iceGatheringState === "complete") return res();
+    const t = setTimeout(res, 4000);
+    pc.addEventListener("icegatheringstatechange", () => { if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); } });
+  });
+  const until = (pc, ok, ms = 8000) => new Promise((res, rej) => {
+    if (ok()) return res();
+    const t = setTimeout(() => rej(new Error("That took too long.")), ms), check = () => { if (ok()) { clearTimeout(t); res(); } };
+    for (const ev of ["connectionstatechange", "iceconnectionstatechange", "signalingstatechange"]) pc.addEventListener(ev, check);
+  });
+
+  // ---- reading a description -------------------------------------------------
+  // Pick out the lines of an SDP text that matter and say what each one is for.
+  function explainCandidate(line) {
+    const p = line.replace(/^a=candidate:/, "").split(" "), proto = (p[2] || "").toLowerCase(), addr = p[4], port = p[5], typ = p[7];
+    const where = typ === "host" ? (/\.local$/.test(addr) ? "this computer on its own network, hidden behind a random .local name" : "this computer's address on its own network")
+      : typ === "srflx" ? "the public address a STUN server saw" : typ === "relay" ? "a relay server" : typ === "prflx" ? "an address found during the checks" : typ;
+    return "An address to try (" + proto + ", port " + port + "): " + where + ".";
+  }
+  function readSdp(sdp) {
+    const out = [], lines = sdp.split(/\r?\n/).filter(Boolean);
+    let codecs = 0, seen = {};
+    const once = (k, line, note) => { if (!seen[k]) { seen[k] = 1; out.push([line, note]); } };
+    for (const l of lines) {
+      if (l.startsWith("m=")) {
+        const kind = l.slice(2).split(" ")[0];
+        out.push([l, kind === "application" ? "A section for data channels." : "A section for " + kind + ": room for one " + (kind === "audio" ? "sound" : "video") + " track each way."]);
+      } else if (l.startsWith("a=ice-ufrag:")) once("u", l, "A name for the test packets, so each side knows the packets are for this connection.");
+      else if (l.startsWith("a=ice-pwd:")) once("p", l, "The password that goes with it.");
+      else if (l.startsWith("a=fingerprint:")) once("f", l, "The fingerprint of this browser's encryption key. The other side refuses to talk to any other key.");
+      else if (l.startsWith("a=setup:")) once("s", l, l.endsWith("actpass") ? "Either side may start the encryption handshake." : l.endsWith("active") ? "This side will start the encryption handshake." : "This side waits for the encryption handshake.");
+      else if (l.startsWith("a=candidate:")) out.push([l, explainCandidate(l)]);
+      else if (l.startsWith("a=sctp-port:")) out.push([l, "Data channels run over a protocol called SCTP, inside the encrypted link."]);
+      else if (l.startsWith("a=rtpmap:")) codecs++;
+    }
+    if (codecs) out.push(["a=rtpmap:… (" + codecs + " lines)", "The sound and video formats this browser can use. The two sides settle on ones they share."]);
+    return out;
+  }
+  function sdpHtml(sdp, title) {
+    return "<div class='sdp'>" + readSdp(sdp).map(([l, n]) => "<div><code>" + esc(l.length > 96 ? l.slice(0, 94) + "…" : l) + "</code><span>" + esc(n) + "</span></div>").join("") + "</div>" +
+      "<details><summary>" + esc(title) + ": all " + sdp.split(/\r?\n/).filter(Boolean).length + " lines</summary><pre>" + esc(sdp) + "</pre></details>";
+  }
+
+  // ---- what a finished connection looks like (from getStats) -----------------
+  async function route(pc) {
+    const st = await pc.getStats(), by = {}; st.forEach(r => { by[r.id] = r; });
+    let pair = null, transport = null;
+    st.forEach(r => { if (r.type === "transport") transport = r; });
+    if (transport && transport.selectedCandidatePairId) pair = by[transport.selectedCandidatePairId];
+    if (!pair) st.forEach(r => { if (r.type === "candidate-pair" && (r.selected || (r.nominated && r.state === "succeeded"))) pair = r; });
+    const cand = id => { const c = by[id]; return c ? { type: c.candidateType, proto: c.protocol, addr: (c.address || c.ip || "hidden") + ":" + c.port } : null; };
+    return { pair, transport, local: pair && cand(pair.localCandidateId), remote: pair && cand(pair.remoteCandidateId), all: st };
+  }
+  const TYPE = { host: "direct, on the local network", srflx: "direct, through the routers (public address from STUN)", prflx: "direct, through the routers", relay: "through a relay server" };
+
+  // ---- section 3: Alice and Bob in one page ----------------------------------
+  const demo = { a: null, b: null, ch: null, got: null, at: 0, busy: false };
+  const STEPS = [
+    { t: "Alice writes an offer", w: "She opens a data channel, asks the browser to describe what she wants, and waits until it has listed her addresses.",
+      run: async () => {
+        demo.a = new RTCPeerConnection(); demo.ch = demo.a.createDataChannel("demo"); watch();
+        await demo.a.setLocalDescription(await demo.a.createOffer()); await gathered(demo.a);
+        return sdpHtml(demo.a.localDescription.sdp, "Alice's offer");
+      } },
+    { t: "The offer is carried to Bob", w: "This is signalling. Here the page hands it over; between two computers it is a server, or you.",
+      run: async () => {
+        demo.b = new RTCPeerConnection(); watch();
+        demo.b.ondatachannel = e => { e.channel.onmessage = m => { demo.got = m.data; }; };
+        await demo.b.setRemoteDescription(demo.a.localDescription);
+        return "<div class='sdp'><div><code>bob.setRemoteDescription(offer)</code><span>Bob now knows what Alice wants, her key's fingerprint and where to try reaching her.</span></div></div>";
+      } },
+    { t: "Bob writes an answer", w: "The same kind of text, in reply: what he agrees to, his own key's fingerprint, his own addresses.",
+      run: async () => { await demo.b.setLocalDescription(await demo.b.createAnswer()); await gathered(demo.b); return sdpHtml(demo.b.localDescription.sdp, "Bob's answer"); } },
+    { t: "The answer is carried back to Alice", w: "The second and last thing that has to be passed across. From here on nobody else is needed.",
+      run: async () => { await demo.a.setRemoteDescription(demo.b.localDescription); return "<div class='sdp'><div><code>alice.setRemoteDescription(answer)</code><span>Both sides now hold both descriptions.</span></div></div>"; } },
+    { t: "Each tries the other's addresses", w: "Both send test packets to every address of the other, at the same time, until a pair gets through.",
+      run: async () => {
+        await until(demo.a, () => ["connected", "completed"].includes(demo.a.iceConnectionState));
+        const r = await route(demo.a);
+        return "<div class='sdp'><div><code>" + esc(r.local ? r.local.type + " " + r.local.proto + " " + r.local.addr + "  ⇄  " + r.remote.type + " " + r.remote.addr : "a working pair was found") + "</code><span>The pair of addresses that got through" + (r.local ? ": " + (TYPE[r.local.type] || r.local.type) : "") + ".</span></div></div>";
+      } },
+    { t: "An encrypted link opens, and Alice says hello", w: "The two exchange keys over the path just found, check them against the fingerprints, and the data channel opens.",
+      run: async () => {
+        if (demo.ch.readyState !== "open") await new Promise((res, rej) => { demo.ch.onopen = res; setTimeout(() => rej(new Error("The channel did not open.")), 8000); });
+        demo.ch.send("Hello Bob, this is Alice.");
+        for (let k = 0; k < 80 && !demo.got; k++) await new Promise(r => setTimeout(r, 25));
+        const r = await route(demo.a), tr = r.transport || {};
+        return "<div class='sdp'><div><code>" + esc("Bob received: “" + (demo.got || "…") + "”") + "</code><span>Sent by Alice straight to Bob over the data channel.</span></div>" +
+          (tr.dtlsCipher ? "<div><code>" + esc((tr.tlsVersion ? "DTLS " + ({ FEFD: "1.2", FEFC: "1.3" }[tr.tlsVersion] || tr.tlsVersion) + ", " : "") + tr.dtlsCipher) + "</code><span>How the link is encrypted.</span></div>" : "") + "</div>";
+      } },
+  ];
+  function watch() {
+    const show = (pc, st, info) => {
+      const s = pc ? (pc.connectionState || pc.iceConnectionState) : "idle";
+      $(st).textContent = s; $(st).className = "tag" + (s === "connected" ? " ok" : pc && s !== "closed" ? " busy" : "");
+      $(info).innerHTML = pc ? "<span>offer / answer</span><span>" + pc.signalingState + "</span><span>finding addresses</span><span>" + pc.iceGatheringState + "</span><span>reaching the other side</span><span>" + pc.iceConnectionState + "</span>" : "";
+    };
+    const upd = () => { show(demo.a, "aState", "aInfo"); show(demo.b, "bState", "bInfo"); };
+    for (const pc of [demo.a, demo.b]) if (pc && !pc._w) { pc._w = 1; for (const ev of ["connectionstatechange", "iceconnectionstatechange", "signalingstatechange", "icegatheringstatechange"]) pc.addEventListener(ev, upd); }
+    upd();
+  }
+  function drawSteps() {
+    $("steps").innerHTML = STEPS.map((s, i) => "<li id='st" + i + "' class='" + (i < demo.at ? "done" : "") + "'><b>" + (i + 1) + ". " + s.t + "</b><span class='what'>" + s.w + "</span><div class='out'></div></li>").join("");
+    $("demoNext").textContent = demo.at === 0 ? "Start" : "Next step"; $("demoNext").disabled = false; $("demoAll").disabled = false;
+  }
+  function demoReset() {
+    for (const pc of [demo.a, demo.b]) if (pc) pc.close();
+    demo.a = demo.b = demo.ch = demo.got = null; demo.at = 0; demo.busy = false; $("demoErr").textContent = "";
+    drawSteps(); watch();
+  }
+  async function demoStep() {
+    if (demo.busy || demo.at >= STEPS.length) return false;
+    demo.busy = true; $("demoErr").textContent = "";
+    const i = demo.at, li = $("st" + i); li.classList.add("now");
+    try {
+      li.querySelector(".out").innerHTML = await STEPS[i].run();
+      li.classList.remove("now"); li.classList.add("done"); demo.at++;
+      $("demoNext").textContent = demo.at >= STEPS.length ? "Done" : "Next step"; $("demoNext").disabled = demo.at >= STEPS.length; $("demoAll").disabled = demo.at >= STEPS.length;
+      watch(); demo.busy = false; return true;
+    } catch (e) { $("demoErr").textContent = e.message || String(e); li.classList.remove("now"); demo.busy = false; return false; }
+  }
+  async function demoAll() { while (demo.at < STEPS.length && await demoStep()) await new Promise(r => setTimeout(r, q.has("shot") ? 0 : 350)); }
+  $("demoNext").onclick = demoStep; $("demoAll").onclick = demoAll; $("demoReset").onclick = demoReset;
+
+  // ---- codes: a description, compressed, in letters that survive a chat -------
+  const b64 = bytes => { let t = ""; for (let i = 0; i < bytes.length; i++) t += String.fromCharCode(bytes[i]); return btoa(t).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+  const unb64 = str => { const t = atob(str.replace(/-/g, "+").replace(/_/g, "/")), out = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) out[i] = t.charCodeAt(i); return out; };
+  async function pack(desc) {
+    const json = JSON.stringify({ t: desc.type, s: desc.sdp });
+    if (window.CompressionStream) { const z = new Blob([json]).stream().pipeThrough(new CompressionStream("deflate-raw")); return "RTC1." + b64(new Uint8Array(await new Response(z).arrayBuffer())); }
+    return "RTC0." + b64(new TextEncoder().encode(json));
+  }
+  async function unpack(code) {
+    code = String(code).replace(/\s+/g, "");
+    const kind = code.slice(0, 5);
+    if (kind !== "RTC1." && kind !== "RTC0.") throw new Error("That does not look like a code from this page.");
+    try {
+      const bytes = unb64(code.slice(5));
+      const json = kind === "RTC1." ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).text() : new TextDecoder().decode(bytes);
+      const o = JSON.parse(json); if (typeof o.s !== "string") throw 0;
+      return { type: o.t, sdp: o.s };
+    } catch (e) { throw new Error("The code is damaged or incomplete. Copy all of it."); }
+  }
+
+  // ---- section 5: a real connection between two browsers ----------------------
+  const net = { pc: null, chat: null, file: null, role: -1, linked: false, tx: {}, remote: new MediaStream(), local: { audio: null, video: null }, src: { audio: "", video: "" }, statTimer: 0, last: null };
+  const box = $("connectBox");
+  function fail(e) { $("netErr").textContent = e && e.message || String(e || ""); }
+  function newPeer() {
+    drop(true);
+    if (!window.RTCPeerConnection) throw new Error("This browser has no WebRTC.");
+    const pc = net.pc = new RTCPeerConnection({ iceServers: $("stun").checked ? [{ urls: "stun:stun.l.google.com:19302" }] : [] });
+    pc.addEventListener("connectionstatechange", () => { if (net.pc === pc && ["failed", "closed"].includes(pc.connectionState)) lost(pc.connectionState === "failed" && !net.linked ? "The two browsers could not reach each other. If they are on different networks, tick the STUN box on both; some networks cannot be crossed without a relay." : "The connection ended."); });
+    return pc;
+  }
+  // Room for one sound track and one video track each way is part of the very first offer, so that either side can
+  // start sending later with replaceTrack and no further exchange of codes.
+  function useTransceivers(pc, make) {
+    if (make) { net.tx.audio = pc.addTransceiver("audio", { direction: "sendrecv" }); net.tx.video = pc.addTransceiver("video", { direction: "sendrecv" }); }
+    else for (const t of pc.getTransceivers()) { t.direction = "sendrecv"; net.tx[t.receiver.track.kind] = t; }
+    net.remote = new MediaStream([net.tx.audio.receiver.track, net.tx.video.receiver.track]);
+    $("vRemote").srcObject = net.remote;
+  }
+  function wireChat(ch) {
+    net.chat = ch;
+    ch.onopen = () => linked();
+    ch.onclose = () => { if (net.chat === ch) lost("The other side left."); };
+    ch.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (err) { return; } if (m.t === "say") say("them", String(m.text).slice(0, 2000)); else if (m.t === "media") theirMedia(m); };
+  }
+  function wireFile(ch) { net.file = ch; ch.binaryType = "arraybuffer"; ch.bufferedAmountLowThreshold = 262144; ch.onmessage = e => fileIn(e.data); }
+  async function host() {
+    const pc = newPeer(); net.role = 0;
+    wireChat(pc.createDataChannel("chat")); wireFile(pc.createDataChannel("file"));
+    useTransceivers(pc, true);
+    await pc.setLocalDescription(await pc.createOffer()); await gathered(pc);
+    return pack(pc.localDescription);
+  }
+  async function accept(code) {
+    const d = await unpack(code);
+    if (d.type !== "answer") throw new Error("That is an invitation, not a reply. Paste the code the other person sent back.");
+    if (!net.pc) throw new Error("Make an invitation first.");
+    await net.pc.setRemoteDescription(d);
+  }
+  async function join(code) {
+    const d = await unpack(code);
+    if (d.type !== "offer") throw new Error("That is a reply, not an invitation. Paste the host's code.");
+    const pc = newPeer(); net.role = 1;
+    pc.ondatachannel = e => { if (e.channel.label === "chat") wireChat(e.channel); else if (e.channel.label === "file") wireFile(e.channel); };
+    await pc.setRemoteDescription(d);
+    useTransceivers(pc, false);
+    await pc.setLocalDescription(await pc.createAnswer()); await gathered(pc);
+    return pack(pc.localDescription);
+  }
+  function linked() {
+    net.linked = true; box.className = "card linked"; $("live").classList.remove("offline"); fail("");
+    $("linkedText").textContent = net.role === 0 ? "You are the host." : "You joined.";
+    $("chatLog").innerHTML = ""; say("sys", "Connected. Say hello.");
+    clearInterval(net.statTimer); net.statTimer = setInterval(stats, 1000); stats();
+  }
+  function drop(quiet) {
+    clearInterval(net.statTimer);
+    for (const k of ["audio", "video"]) setTrack(k, null, "");
+    const pc = net.pc; net.pc = net.chat = net.file = null; net.linked = false; net.tx = {}; net.last = null; rx = null;
+    try { if (pc) pc.close(); } catch (e) {}
+    $("vRemote").srcObject = null; theirMedia({});
+    $("live").classList.add("offline"); box.className = "card";
+    $("joinReply").style.display = "none"; for (const id of ["hostCode", "hostIn", "joinIn", "joinCode"]) $(id).value = "";
+    $("stats").innerHTML = "<span>State</span><span>not connected</span>";
+    if (!quiet) fail("");
+  }
+  function lost(msg) { const was = net.linked; drop(true); fail(msg); if (was) say("sys", msg); }
+  const ui = f => () => Promise.resolve().then(f).catch(fail);
+  $("bHost").onclick = ui(async () => { fail(""); box.className = "card host"; $("hostCode").value = ""; const c = await host(); $("hostCode").value = c; $("hostSize").textContent = c.length + " characters"; });
+  $("bJoin").onclick = () => { fail(""); box.className = "card join"; };
+  for (const b of document.querySelectorAll(".back")) b.onclick = () => drop();
+  $("hostGo").onclick = ui(async () => { if (!$("hostIn").value.trim()) throw new Error("Paste the reply first."); await accept($("hostIn").value); fail("Connecting…"); });
+  $("joinGo").onclick = ui(async () => { if (!$("joinIn").value.trim()) throw new Error("Paste the invitation first."); fail(""); const c = await join($("joinIn").value); $("joinCode").value = c; $("joinSize").textContent = c.length + " characters"; $("joinReply").style.display = "block"; });
+  const copy = (src, btn) => ui(async () => { $(src).select(); try { await navigator.clipboard.writeText($(src).value); $(btn).textContent = "Copied"; } catch (e) { throw new Error("Select the code and copy it by hand."); } });
+  $("hostCopy").onclick = copy("hostCode", "hostCopy"); $("joinCopy").onclick = copy("joinCode", "joinCopy");
+  $("bDrop").onclick = () => drop();
+
+  // chat
+  function say(who, text) { const d = document.createElement("div"); d.className = who; d.textContent = text; $("chatLog").appendChild(d); $("chatLog").scrollTop = 1e9; }
+  function sendChat(text) { text = String(text).trim(); if (!text || !net.chat || net.chat.readyState !== "open") return false; net.chat.send(JSON.stringify({ t: "say", text })); say("me", text); return true; }
+  $("chatSend").onclick = () => { if (sendChat($("chatIn").value)) $("chatIn").value = ""; };
+  $("chatIn").addEventListener("keydown", e => { if (e.key === "Enter") $("chatSend").click(); });
+
+  // files: a header, the pieces, an end mark
+  const CHUNK = 16384;
+  let rx = null;
+  function fileRow(name, total, mine) {
+    const el = document.createElement("div"); el.className = "f";
+    el.innerHTML = "<div><b></b> <span class='tag'></span></div><div class='bar'><i></i></div>";
+    el.querySelector("b").textContent = name; $("files").prepend(el);
+    const tag = el.querySelector(".tag"), bar = el.querySelector("i");
+    return { el, set(done) { bar.style.width = (total ? 100 * done / total : 100) + "%"; tag.textContent = (mine ? "sending " : "receiving ") + size(done) + " of " + size(total); }, done(text) { bar.style.width = "100%"; tag.textContent = text; tag.className = "tag ok"; } };
+  }
+  async function sendFile(file) {
+    const ch = net.file; if (!ch || ch.readyState !== "open") throw new Error("Not connected.");
+    const row = fileRow(file.name, file.size, true);
+    ch.send(JSON.stringify({ name: file.name, size: file.size, type: file.type }));
+    for (let at = 0; at < file.size; at += CHUNK) {
+      if (ch.readyState !== "open") throw new Error("The connection ended while sending.");
+      // the channel keeps its own queue: when it is long, wait for it to drain
+      if (ch.bufferedAmount > 1048576) await new Promise(res => { ch.onbufferedamountlow = () => { ch.onbufferedamountlow = null; res(); }; });
+      ch.send(await file.slice(at, at + CHUNK).arrayBuffer());
+      row.set(Math.min(file.size, at + CHUNK));
+    }
+    ch.send(JSON.stringify({ end: true }));
+    row.done("sent, " + size(file.size));
+  }
+  function fileIn(data) {
+    if (typeof data === "string") {
+      let m; try { m = JSON.parse(data); } catch (e) { return; }
+      if (m.end && rx) {
+        const blob = new Blob(rx.parts, { type: rx.type }), url = URL.createObjectURL(blob), a = document.createElement("a");
+        a.href = url; a.download = rx.name; a.textContent = "Save " + rx.name;
+        rx.row.done("received, " + size(blob.size)); rx.row.el.appendChild(a);
+        if (/^image\//.test(rx.type)) { const img = new Image(); img.src = url; img.alt = rx.name; rx.row.el.appendChild(img); }
+        rx = null;
+      } else if (typeof m.name === "string") {
+        const name = m.name.replace(/[\\/]/g, "_").slice(0, 200) || "file", total = Math.max(0, +m.size || 0);
+        rx = { name, type: typeof m.type === "string" ? m.type.slice(0, 100) : "", total, got: 0, parts: [], row: fileRow(name, total, false) };
+      }
+    } else if (rx) { rx.parts.push(data); rx.got += data.byteLength; rx.row.set(rx.got); }
+  }
+  let sending = Promise.resolve();
+  const queueFile = f => { sending = sending.then(() => sendFile(f)).catch(fail); return sending; };
+  $("filePick").onclick = () => $("fileIn").click();
+  $("fileIn").onchange = e => { for (const f of e.target.files) queueFile(f); e.target.value = ""; };
+  const dz = $("drop");
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add("over"); }; dz.ondragleave = () => dz.classList.remove("over");
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("over"); for (const f of e.dataTransfer.files) queueFile(f); };
+
+  // camera and sound
+  function setTrack(kind, track, src) {
+    const old = net.local[kind]; if (old && old !== track) old.stop();
+    if (kind === "video" && net.patternTimer && src !== "pattern") { clearInterval(net.patternTimer); net.patternTimer = 0; }
+    if (kind === "audio" && net.tone && src !== "tone") { net.tone.close(); net.tone = null; }
+    net.local[kind] = track; net.src[kind] = track ? src : "";
+    if (net.tx[kind]) net.tx[kind].sender.replaceTrack(track).catch(fail);
+    if (kind === "video") { $("vLocal").srcObject = track ? new MediaStream([track]) : null; $("vLocalOff").style.display = track ? "none" : ""; }
+    $("bCam").classList.toggle("on", net.src.video === "camera"); $("bPattern").classList.toggle("on", net.src.video === "pattern");
+    $("bMic").classList.toggle("on", net.src.audio === "mic"); $("bTone").classList.toggle("on", net.src.audio === "tone");
+    if (net.chat && net.chat.readyState === "open") net.chat.send(JSON.stringify({ t: "media", video: !!net.local.video, audio: !!net.local.audio }));
+  }
+  function theirMedia(m) {
+    $("vRemoteOff").style.display = m.video ? "none" : "";
+    $("remoteCap").textContent = "Them" + (m.audio ? " · sound on" : "");
+    if (m.video || m.audio) $("vRemote").play().catch(() => {});
+  }
+  async function device(kind, src) {
+    if (net.src[kind] === src) return setTrack(kind, null, "");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("This page cannot use the " + (kind === "video" ? "camera" : "microphone") + " here. Browsers only allow it on https, localhost or a file opened from disk.");
+    let s;
+    try { s = await navigator.mediaDevices.getUserMedia(kind === "video" ? { video: { width: 640, height: 360 } } : { audio: true }); }
+    catch (e) { throw new Error((kind === "video" ? "Camera" : "Microphone") + " not available: " + (e.name === "NotAllowedError" ? "permission was not given." : e.name === "NotFoundError" ? "none was found." : e.message)); }
+    setTrack(kind, s.getTracks()[0], src);
+  }
+  // A moving picture drawn by the page, sent in place of a camera.
+  function pattern() {
+    if (net.src.video === "pattern") return setTrack("video", null, "");
+    const c = document.createElement("canvas"); c.width = 640; c.height = 360;
+    const g = c.getContext("2d"), cols = ["#f5f5f5", "#f1e04a", "#39d0d8", "#3fc45a", "#d64fd0", "#e2483d", "#3a66e0"], t0 = performance.now();
+    const paint = () => {
+      const t = (performance.now() - t0) / 1000;
+      cols.forEach((col, i) => { g.fillStyle = col; g.fillRect(i * 640 / 7, 0, 640 / 7 + 1, 360); });
+      g.fillStyle = "#111"; g.fillRect(0, 250, 640, 110);
+      g.fillStyle = "#fff"; g.beginPath(); g.arc(320 + 240 * Math.sin(t * 1.3), 305, 26, 0, 7); g.fill();
+      g.font = "bold 30px sans-serif"; g.textAlign = "center"; g.fillText("test pattern  " + t.toFixed(1) + " s", 320, 240);
+    };
+    paint(); net.patternTimer = setInterval(paint, 66);   // a timer, not animation frames: it keeps going in a background tab
+    setTrack("video", c.captureStream(15).getVideoTracks()[0], "pattern");
+  }
+  function tone() {
+    if (net.src.audio === "tone") return setTrack("audio", null, "");
+    const ac = new (window.AudioContext || window.webkitAudioContext)(), o = ac.createOscillator(), lfo = ac.createOscillator(), lg = ac.createGain(), gn = ac.createGain(), out = ac.createMediaStreamDestination();
+    o.frequency.value = 330; lfo.frequency.value = 0.7; lg.gain.value = 60; lfo.connect(lg); lg.connect(o.frequency); gn.gain.value = 0.08; o.connect(gn); gn.connect(out); o.start(); lfo.start();
+    setTrack("audio", out.stream.getAudioTracks()[0], "tone"); net.tone = ac;
+  }
+  const media = f => () => { $("mediaErr").textContent = ""; Promise.resolve().then(f).catch(e => { $("mediaErr").textContent = e.message || String(e); }); };
+  $("bCam").onclick = media(() => device("video", "camera")); $("bMic").onclick = media(() => device("audio", "mic"));
+  $("bPattern").onclick = media(pattern); $("bTone").onclick = media(tone);
+
+  // the connection, as the browser reports it
+  async function stats() {
+    const pc = net.pc; if (!pc || !net.linked) return;
+    let r; try { r = await route(pc); } catch (e) { return; }
+    if (net.pc !== pc) return;
+    const tr = r.transport || {}, p = r.pair || {}, now = performance.now(), rows = [];
+    const sent = tr.bytesSent ?? p.bytesSent ?? 0, got = tr.bytesReceived ?? p.bytesReceived ?? 0;
+    let rate = "";
+    if (net.last) { const dt = (now - net.last.t) / 1000; rate = " (now " + size((sent - net.last.sent) / dt) + "/s out, " + size((got - net.last.got) / dt) + "/s in)"; }
+    net.last = { t: now, sent, got };
+    rows.push(["State", pc.connectionState]);
+    if (r.local) rows.push(["Route", TYPE[r.local.type] || r.local.type], ["This side", r.local.type + " · " + r.local.proto + " · " + r.local.addr], ["Other side", r.remote.type + " · " + r.remote.addr]);
+    if (p.currentRoundTripTime != null) rows.push(["Round trip", (p.currentRoundTripTime * 1000).toFixed(0) + " ms"]);
+    rows.push(["Carried so far", size(sent) + " out, " + size(got) + " in" + rate]);
+    if (tr.dtlsCipher) rows.push(["Encryption", tr.dtlsCipher + (tr.srtpCipher ? " · media: " + tr.srtpCipher : "")]);
+    let vid = ""; r.all.forEach(s => { if (s.type === "inbound-rtp" && s.kind === "video" && s.frameWidth) vid = s.frameWidth + "×" + s.frameHeight + (s.framesPerSecond ? " at " + Math.round(s.framesPerSecond) + " frames/s" : ""); });
+    if (vid) rows.push(["Video arriving", vid]);
+    $("stats").innerHTML = rows.map(([k, v]) => "<span>" + esc(k) + "</span><span>" + esc(v) + "</span>").join("");
+  }
+
+  // ---- section 6 ----
+  $("peekGo").onclick = () => { $("peekErr").textContent = ""; unpack($("peekIn").value).then(d => {
+    $("peekOut").innerHTML = "<p>This is an <b>" + (d.type === "offer" ? "offer (an invitation)" : "answer (a reply)") + "</b>: " + d.sdp.length + " characters of text packed into " + $("peekIn").value.replace(/\s+/g, "").length + ".</p>" + sdpHtml(d.sdp, "The whole text");
+  }).catch(e => { $("peekErr").textContent = e.message; $("peekOut").innerHTML = ""; }); };
+
+  drawSteps(); watch();
+  if (q.has("shot")) demoAll();
+  // for testing two tabs against each other
+  window.__rtc = { net, host, join, accept, sendChat, queueFile, pattern, tone, setTrack, demo, demoAll, drop, stats };
+})();
+</script>
+</body>
+</html>
