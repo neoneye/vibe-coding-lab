@@ -51,6 +51,21 @@
   }
   #status .gameover { color: #ff453a; font-weight: 600; }
   #board { display: block; }
+  #net { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(8,8,10,.6); z-index: 5; }
+  #net.open { display: flex; }
+  #net .box { background: var(--panel); border: 1px solid #3a3a3c; border-radius: 12px; padding: 18px 22px; width: min(560px, 94vw); max-height: 94vh; overflow-y: auto; box-sizing: border-box; box-shadow: 0 12px 40px rgba(0,0,0,.5); font-size: 14px; line-height: 1.45; }
+  #net h2 { margin: 0 0 6px; font-size: 19px; }
+  #net p { margin: 6px 0; color: #c7c7cc; }
+  #net textarea { width: 100%; height: 74px; box-sizing: border-box; background: #161618; color: #cfe3ff; border: 1px solid #48484a; border-radius: 8px; padding: 6px 8px; font: 11.5px/1.35 ui-monospace, Menlo, monospace; resize: vertical; word-break: break-all; }
+  #net button { background: #3a3a3c; color: var(--text); border: 1px solid #48484a; border-radius: 6px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
+  #net button:hover { border-color: var(--muted); }
+  #net button.main { border-color: var(--p1); color: var(--p1); }
+  #net .btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 2px; }
+  #net .err { color: #ff6961; min-height: 1.4em; }
+  #net label { display: flex; gap: 8px; align-items: flex-start; color: #c7c7cc; margin: 8px 0; }
+  #net .step { color: #ffd60a; font-weight: 600; margin-top: 10px; }
+  .c1 { color: var(--p1); font-weight: 600; } .c2 { color: var(--p2); font-weight: 600; }
+  #hud select:disabled, #hud button:disabled { opacity: .45; cursor: default; }
   #testreport {
     font-family: ui-monospace, monospace;
     white-space: pre-wrap;
@@ -79,9 +94,12 @@
   <button id="btnStep" title="single step (bots only)">Step</button>
   <button id="btnPath" title="P">Show AI path</button>
   <button id="btnMusic" title="M">Music</button>
+  <button id="btnNet" title="N">Network game</button>
+  <button id="btnGiveUp" style="display:none">Give up</button>
 </div>
 <div id="status"></div>
 <canvas id="board"></canvas>
+<div id="net"></div>
 
 <script id="shared-code">
 "use strict";
@@ -2162,6 +2180,147 @@ SnakeTests.add("hybrid: duel vs monte carlo runs clean and deterministic", () =>
   assert(path.length >= 2, "duel planned path present");
   for (let i = 1; i < path.length; i++) assertEq(manhattan(path[i - 1], path[i]), 1, `gap at ${i}`);
 });
+
+// ---------------------------------------------------------------------------
+// Network play: two humans on two computers. Not in the Swift original.
+// The game is turn-based, so nothing is timed: for every step each living
+// player commits one movement, and when both commitments are in, both
+// computers resolve them the same way. A commitment cannot be changed, which
+// is what keeps the two games identical however the messages cross.
+// If a movement turns out to be a collision (preventHumanCollisions), that
+// player's commitment is dropped and the attempt number goes up: they choose
+// again while the other player's commitment stands.
+// ---------------------------------------------------------------------------
+const NET_KEYS = ["player1", "player2"];
+function netCreate(levelName, seed) {
+  const gs = { ...gameStateCreate(levelName, "human", "human"), foodRngSeed: String(seed) };
+  const env = new GameEnvironment(gs);
+  env.reset();
+  return { env, attempt: 0, commits: { player1: null, player2: null }, over: false, desync: false, blocked: null };
+}
+function netStateHash(link) {
+  const gs = link.env.gameState;
+  const body = (p) => bodyPositionArray(p.snakeBody).map(posKey).join(";") + "/" + p.snakeBody.head.direction + "/" + p.causesOfDeath.join("+");
+  const text = [gs.numberOfSteps, link.attempt, gs.foodPosition ? posKey(gs.foodPosition) : "-", gs.foodRngSeed, body(gs.player1), body(gs.player2)].join("|");
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619) >>> 0;
+  return h;
+}
+function netCanCommit(link, key) {
+  return !link.over && playerIsAliveAndHuman(link.env.gameState[key]) && link.commits[key] === null;
+}
+// A movement into a wall or into the player's own body is refused before it is committed: it can never
+// become possible, whatever the other player does. (Running into the other snake depends on their move.)
+function netMoveIsOpen(link, key, movement) {
+  if (movement === "giveUp") return true;
+  if (movement === "dontMove") return false;
+  const gs = link.env.gameState, body = bodyStateForTick(gs[key].snakeBody, movement, "doNothing");
+  return !levelIsWall(gsLevel(gs), body.head.position) && !bodyIsEatingItself(body);
+}
+// Commit a movement ("moveForward" | "moveCCW" | "moveCW" | "giveUp") for the given step and attempt.
+// Returns "ignored" | "waiting" | "blocked" | "stepped" | "over".
+function netCommit(link, key, movement, step, attempt) {
+  const gs = link.env.gameState;
+  if (step !== gs.numberOfSteps || attempt !== link.attempt || !netCanCommit(link, key)) return "ignored";
+  link.commits[key] = movement;
+  link.blocked = null;
+  // Giving up does not wait for the other player. They cannot have stepped past this point without this
+  // player's commitment, so both computers end the game in the same state.
+  if (movement === "giveUp") {
+    link.env.gameState = gsUpdatePlayer(gs, key, playerKill(gs[key], "gaveUp"));
+    link.commits = { player1: null, player2: null };
+    link.over = true;
+    return "over";
+  }
+  const need = NET_KEYS.filter((k) => playerIsAliveAndHuman(gs[k]));
+  if (need.some((k) => link.commits[k] === null)) return "waiting";
+  let trial = gs;
+  for (const k of need) trial = gsUpdatePlayer(trial, k, playerUpdate(trial[k], { pendingMovement: link.commits[k] }));
+  trial = preventHumanCollisions(trial);
+  const stopped = need.filter((k) => trial[k].pendingMovement === "dontMove");
+  if (stopped.length > 0) {
+    for (const k of stopped) link.commits[k] = null;
+    link.attempt++;
+    link.blocked = stopped;
+    return "blocked";
+  }
+  link.env.step({ player1: trial.player1.pendingMovement, player2: trial.player2.pendingMovement });
+  link.commits = { player1: null, player2: null };
+  link.attempt = 0;
+  const after = link.env.gameState;
+  if (!playerIsAlive(after.player1) || !playerIsAlive(after.player2)) { link.over = true; return "over"; }
+  return "stepped";
+}
+
+SnakeTests.add("net: a step happens only when both players have committed", () => {
+  const link = netCreate("Level 0", 5);
+  assertEq(netCommit(link, "player1", "moveForward", 0, 0), "waiting");
+  assertEq(link.env.gameState.numberOfSteps, 0);
+  assertEq(netCommit(link, "player1", "moveCW", 0, 0), "ignored", "a commitment cannot be changed");
+  assertEq(netCommit(link, "player2", "moveForward", 0, 0), "stepped");
+  assertEq(link.env.gameState.numberOfSteps, 1);
+  assertEq(link.env.gameState.player1.snakeBody.head.position, { x: 7, y: 7 });
+  assertEq(netCommit(link, "player2", "moveForward", 0, 0), "ignored", "a commitment for an old step");
+});
+SnakeTests.add("net: a blocked movement is chosen again, the other one stands", () => {
+  const link = netCreate("Level 0", 5);
+  netCommit(link, "player1", "moveForward", 0, 0); netCommit(link, "player2", "moveForward", 0, 0);   // P1 now faces the wall
+  assert(!netMoveIsOpen(link, "player1", "moveForward"), "the wall ahead is not open");
+  assert(netMoveIsOpen(link, "player1", "moveCW"), "turning is");
+  assertEq(netCommit(link, "player2", "moveCW", 1, 0), "waiting");
+  assertEq(netCommit(link, "player1", "moveForward", 1, 0), "blocked");
+  assertEq(link.blocked, ["player1"]);
+  assertEq(link.attempt, 1);
+  assertEq(link.commits.player2, "moveCW");
+  assertEq(netCommit(link, "player1", "moveCW", 1, 0), "ignored", "the old attempt number");
+  assertEq(netCommit(link, "player1", "moveCW", 1, 1), "stepped");
+  assertEq(link.env.gameState.numberOfSteps, 2);
+  assertEq(link.attempt, 0);
+});
+SnakeTests.add("net: giving up ends the game for both", () => {
+  const link = netCreate("Level 0", 5);
+  assertEq(netCommit(link, "player1", "moveForward", 0, 0), "waiting");
+  assertEq(netCommit(link, "player2", "giveUp", 0, 0), "over", "at once, whether or not the other has chosen");
+  assertEq(link.env.gameState.numberOfSteps, 0);
+  assert(link.over && !playerIsAlive(link.env.gameState.player2) && playerIsAlive(link.env.gameState.player1));
+  assertEq(netCommit(link, "player1", "moveForward", 0, 0), "ignored");
+});
+SnakeTests.add("net: two computers stay identical however the messages cross", () => {
+  // Each side commits its own random movements and hears about the other's after a random delay.
+  const rng = new LCRNG(4242n);
+  const MOVES = ["moveForward", "moveCCW", "moveCW"];
+  for (const levelName of ["Level 0", "Level 1", "Level 3"]) {
+    const links = [netCreate(levelName, 77), netCreate(levelName, 77)];
+    const wire = [[], []];   // messages on their way to side 0 and side 1
+    let steps = 0;
+    for (let round = 0; round < 6000 && !links[0].over; round++) {
+      for (let side = 0; side < 2; side++) {
+        const link = links[side], key = NET_KEYS[side];
+        while (wire[side].length > 0 && rng.randomInt(3) > 0) {
+          const m = wire[side].shift();
+          assertEq(m.h, netStateHash(link), `${levelName}: states differ at step ${m.n}`);
+          netCommit(link, NET_KEYS[1 - side], m.m, m.n, m.k);
+        }
+        if (netCanCommit(link, key) && rng.randomInt(2) === 0) {
+          const open = MOVES.filter((m) => netMoveIsOpen(link, key, m));
+          const m = open.length === 0 || rng.randomInt(400) === 0 ? "giveUp" : open[rng.randomInt(open.length)];
+          const msg = { m, n: link.env.gameState.numberOfSteps, k: link.attempt, h: netStateHash(link) };
+          netCommit(link, key, m, msg.n, msg.k);
+          wire[1 - side].push(msg);
+        }
+      }
+      steps = links[0].env.gameState.numberOfSteps;
+    }
+    for (let side = 0; side < 2; side++) for (const m of wire[side]) netCommit(links[side], NET_KEYS[1 - side], m.m, m.n, m.k);
+    assertEq(netStateHash(links[0]), netStateHash(links[1]), `${levelName}: final states differ`);
+    assertEq(links[0].over, links[1].over);
+    assert(steps > 10, `${levelName}: only ${steps} steps were played`);
+  }
+});
+SnakeTests.add("net: a different food seed is a different game", () => {
+  const a = netCreate("Level 0", 1), b = netCreate("Level 0", 2);
+  assert(netStateHash(a) !== netStateHash(b));
+});
 </script>
 
 <script>
@@ -2241,6 +2400,8 @@ const worker = createBotWorker(onBotResult);
 // Game lifecycle
 // --------------------------------------------------------------------------
 function newGame() {
+  if (net.active) { if (net.role === 0) netStart(); return; }   // over the network only the host starts a game
+  net.lost = "";
   const levelName = document.getElementById("levelSelect").value;
   const role1 = document.getElementById("role1").value;
   const role2 = document.getElementById("role2").value;
@@ -2300,7 +2461,7 @@ function botsAreReady() {
 
 function tryStep() {
   const env = app.env;
-  if (!env || app.gameOverMessage) return;
+  if (!env || app.gameOverMessage || net.active) return;   // a network game steps when both commitments are in
   if (env.stepControlMode === "reachedTheEnd") return finishGame();
   if (!botsAreReady()) return;
 
@@ -2352,6 +2513,7 @@ function finishGame() {
     collisionWithOpponent: "ran into the opponent",
     stuckInALoop: "got stuck in a loop",
     noMoreFood: "ran out of food",
+    gaveUp: "gave up",
   };
   const parts = [];
   const dead = [];
@@ -2384,7 +2546,7 @@ function finishGame() {
 // Undo / pause / path toggle
 // --------------------------------------------------------------------------
 function doUndo() {
-  if (!app.env) return;
+  if (!app.env || net.active) return;   // no taking back a move the other player has seen
   app.paused = true; // Swift undo() stops auto-stepping
   const gs = app.env.undo();
   if (!gs) { updateButtons(); return; }
@@ -2563,10 +2725,23 @@ function updateStatus() {
   for (const [key, label] of [["player1", "P1"], ["player2", "P2"]]) {
     if (gs[key].isInstalled) bits.push(`${label} length ${bodyLength(gs[key].snakeBody)}`);
   }
+  if (net.active) bits.push(`you are <span class="c${net.role + 1}">Player ${net.role + 1}</span>`);
   if (app.gameOverMessage) {
-    statusEl.innerHTML = `${bits.join(" · ")} · <span class="gameover">${app.gameOverMessage}</span> Press Enter to restart.`;
+    const again = !net.active ? "Press Enter to restart." : net.role === 0 ? "Press Enter for a new game." : "The host can start a new game.";
+    statusEl.innerHTML = `${bits.join(" · ")} · <span class="gameover">${app.gameOverMessage}</span> ${again}`;
     return;
   }
+  if (net.active) {
+    const link = net.link, me = NET_KEYS[net.role], other = NET_KEYS[1 - net.role];
+    if (link.desync) bits.push('<span class="gameover">the two games have drifted apart</span>' + (net.role === 0 ? " Press Enter for a new game." : ""));
+    else if (link.commits[me] !== null) bits.push("waiting for the other player");
+    else if (net.note) bits.push(net.note);
+    else if (link.blocked && link.blocked.includes(me)) bits.push("that way was blocked, choose again");
+    else bits.push(link.commits[other] !== null ? "your move, the other player has chosen" : "your move");
+    statusEl.innerHTML = bits.join(" · ");
+    return;
+  }
+  if (net.lost) bits.push(net.lost);
   const thinking = app.inflight.player1 !== null || app.inflight.player2 !== null;
   if (thinking) bits.push("AI thinking…");
   else if (app.env.stepControlMode === "stepRequiresHumanInput") bits.push("waiting for input");
@@ -2581,6 +2756,10 @@ function updateButtons() {
   const autonomous = app.env && app.env.stepControlMode === "stepAutonomous";
   document.getElementById("btnPause").disabled = !autonomous;
   document.getElementById("btnStep").disabled = !autonomous;
+  for (const id of ["role1", "role2", "btnUndo"]) document.getElementById(id).disabled = net.active;
+  for (const id of ["levelSelect", "btnRestart"]) document.getElementById(id).disabled = net.active && net.role !== 0;
+  document.getElementById("btnNet").classList.toggle("active", net.active);
+  document.getElementById("btnGiveUp").style.display = net.active && net.link && !net.link.over ? "" : "none";
 }
 
 // --------------------------------------------------------------------------
@@ -2591,6 +2770,9 @@ const KEY_DIRECTION_P2 = { w: "up", s: "down", a: "left", d: "right" };
 
 document.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const panel = document.getElementById("net").classList.contains("open");
+  if (e.key === "Escape" && panel) return closePanel();
+  if (panel || /^(TEXTAREA|INPUT|SELECT)$/.test(e.target?.tagName ?? "")) return;   // the network panel has the keyboard
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (key in KEY_DIRECTION_P1 || key === " ") e.preventDefault();
   kickMusic();
@@ -2600,7 +2782,13 @@ document.addEventListener("keydown", (e) => {
   if (key === "z") return doUndo();
   if (key === " ") return togglePause();
   if (key === "p") return togglePath();
+  if (key === "n") return openPanel();
   if (!app.env || app.gameOverMessage) return;
+  if (net.active) {   // over the network each computer steers one snake, with either set of keys
+    const direction = KEY_DIRECTION_P1[key] ?? KEY_DIRECTION_P2[key];
+    if (direction) netMove(direction);
+    return;
+  }
 
   const route = (playerKey, direction) => {
     const p = app.env.gameState[playerKey];
@@ -2618,11 +2806,166 @@ document.getElementById("btnPause").addEventListener("click", togglePause);
 document.getElementById("btnStep").addEventListener("click", singleStep);
 document.getElementById("btnPath").addEventListener("click", togglePath);
 document.getElementById("btnMusic").addEventListener("click", toggleMusic);
+document.getElementById("btnNet").addEventListener("click", () => openPanel());
+document.getElementById("btnGiveUp").addEventListener("click", () => netMove("giveUp"));
 document.addEventListener("click", kickMusic);
 document.getElementById("levelSelect").addEventListener("change", newGame);
 document.getElementById("role1").addEventListener("change", newGame);
 document.getElementById("role2").addEventListener("change", newGame);
 window.addEventListener("resize", render);
+
+// --------------------------------------------------------------------------
+// Network game: two browsers connected directly with WebRTC.
+// There is no server to introduce them, so the players pass two codes to each
+// other by hand (chat, mail, anything): the host's invitation and the guest's
+// reply. After that the browsers only swap the movements each player commits
+// (see netCommit in the shared code). The host is Player 1, the guest Player 2.
+// --------------------------------------------------------------------------
+const net = { pc: null, ch: null, role: -1, active: false, link: null, epoch: 0, stun: true, note: "", lost: "" };
+const b64 = (bytes) => { let t = ""; for (let i = 0; i < bytes.length; i++) t += String.fromCharCode(bytes[i]); return btoa(t).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+const unb64 = (str) => { const t = atob(str.replace(/-/g, "+").replace(/_/g, "/")), out = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) out[i] = t.charCodeAt(i); return out; };
+async function pack(desc) {
+  const json = JSON.stringify({ t: desc.type, s: desc.sdp });
+  if (window.CompressionStream) {
+    const z = new Blob([json]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+    return "SN1." + b64(new Uint8Array(await new Response(z).arrayBuffer()));
+  }
+  return "SN0." + b64(new TextEncoder().encode(json));
+}
+async function unpack(code) {
+  code = String(code).replace(/\s+/g, "");
+  const kind = code.slice(0, 4);
+  if (kind !== "SN1." && kind !== "SN0.") throw new Error("That does not look like a Snake code.");
+  try {
+    const bytes = unb64(code.slice(4));
+    const json = kind === "SN1."
+      ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).text()
+      : new TextDecoder().decode(bytes);
+    const o = JSON.parse(json);
+    return { type: o.t, sdp: o.s };
+  } catch (e) { throw new Error("The code is damaged or incomplete. Copy all of it."); }
+}
+function newPeer(stun) {
+  netClose();
+  if (!window.RTCPeerConnection) throw new Error("This browser cannot make direct connections.");
+  net.pc = new RTCPeerConnection({ iceServers: stun ? [{ urls: "stun:stun.l.google.com:19302" }] : [] });
+  return net.pc;
+}
+// Every address this browser can be reached at goes into the code, so wait until they have all been found.
+const gathered = (pc) => new Promise((res) => {
+  if (pc.iceGatheringState === "complete") return res();
+  const t = setTimeout(res, 3000);
+  pc.addEventListener("icegatheringstatechange", () => { if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); } });
+});
+function wire(ch) {
+  net.ch = ch;
+  ch.onopen = () => {
+    net.active = true; net.lost = "";
+    closePanel();
+    if (net.role === 0) netStart();
+    else netBegin(document.getElementById("levelSelect").value, 0);   // a board to look at until the host's start arrives
+  };
+  ch.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (m.t === "start") { net.epoch = m.e; if (LEVEL_NAMES.includes(m.level)) netBegin(m.level, m.seed); return; }
+    if (m.t !== "c" || m.e !== net.epoch || !net.link) return;
+    const link = net.link;
+    if (m.n === link.env.gameState.numberOfSteps && m.k === link.attempt && m.h !== netStateHash(link)) link.desync = true;
+    netAfter(netCommit(link, NET_KEYS[1 - net.role], m.m, m.n, m.k));
+  };
+  ch.onclose = () => { if (net.ch === ch) netLost(); };
+}
+async function netHost(stun) {
+  const pc = newPeer(stun); net.role = 0;
+  wire(pc.createDataChannel("snake"));
+  await pc.setLocalDescription(await pc.createOffer()); await gathered(pc);
+  return pack(pc.localDescription);
+}
+async function netAccept(code) {
+  const d = await unpack(code);
+  if (d.type !== "answer") throw new Error("That is an invitation, not a reply. Paste the code the other player sent back.");
+  await net.pc.setRemoteDescription(d);
+}
+async function netJoin(code, stun) {
+  const d = await unpack(code);
+  if (d.type !== "offer") throw new Error("That is a reply, not an invitation. Paste the host's code.");
+  const pc = newPeer(stun); net.role = 1; pc.ondatachannel = (e) => wire(e.channel);
+  await pc.setRemoteDescription(d); await pc.setLocalDescription(await pc.createAnswer()); await gathered(pc);
+  return pack(pc.localDescription);
+}
+function netSend(m) { m.e = net.epoch; if (net.ch && net.ch.readyState === "open") net.ch.send(JSON.stringify(m)); }
+function netStart() {
+  net.epoch++;
+  const level = document.getElementById("levelSelect").value, seed = (Math.random() * 4294967296) >>> 0;
+  netSend({ t: "start", level, seed });
+  netBegin(level, seed);
+}
+function netBegin(level, seed) {
+  net.link = netCreate(level, seed); net.note = "";
+  app.env = net.link.env;
+  app.requestSerial++;   // drop anything the bots were still working out
+  app.inflight = { player1: null, player2: null };
+  app.pendingHuman = { player1: "dontMove", player2: "dontMove" };
+  app.gameOverMessage = null; app.paused = false; app.stepOnceRequested = false;
+  worker.postMessage({ type: "reset" });
+  document.getElementById("levelSelect").value = level;
+  render(); updateStatus(); updateButtons();
+}
+// Commit this computer's movement: a direction key, or "giveUp".
+function netMove(direction) {
+  const link = net.link, key = NET_KEYS[net.role];
+  if (!net.active || !link || link.desync || !netCanCommit(link, key)) return;
+  const movement = direction === "giveUp" ? "giveUp" : headMoveTowardDirection(link.env.gameState[key].snakeBody.head, direction);
+  if (movement === "dontMove") return;   // straight back into its own neck
+  if (!netMoveIsOpen(link, key, movement)) { net.note = "that way is blocked"; updateStatus(); return; }
+  net.note = "";
+  const msg = { t: "c", m: movement, n: link.env.gameState.numberOfSteps, k: link.attempt, h: netStateHash(link) };
+  const result = netCommit(link, key, movement, msg.n, msg.k);
+  netSend(msg);
+  netAfter(result);
+}
+function netAfter(result) {
+  if (result === "over") finishGame();
+  render(); updateStatus(); updateButtons();
+}
+function netClose() {
+  const pc = net.pc, ch = net.ch;
+  net.pc = net.ch = net.link = null; net.active = false; net.role = -1;
+  try { if (ch) ch.close(); if (pc) pc.close(); } catch (e) {}
+}
+function netLost() {
+  netClose();
+  newGame();
+  net.lost = "the other player is gone, connection lost";   // shown until the next game is started
+  updateStatus();
+}
+
+// The panel that walks both players through the exchange of codes.
+function closePanel() { const el = document.getElementById("net"); el.classList.remove("open"); el.innerHTML = ""; }
+function openPanel(view) {
+  const el = document.getElementById("net"), $ = (id) => document.getElementById(id);
+  el.classList.add("open");
+  const stunBox = "<label><input type='checkbox' id='stun' checked> <span>Play across the internet. This asks a public address server (Google STUN) how this computer can be reached; nothing about the game goes through it. Untick it if both computers are on the same network.</span></label>";
+  const foot = "<p class='err' id='nerr'></p><div class='btns'><button id='nclose'>Close</button></div>";
+  if (net.active) el.innerHTML = "<div class='box'><h2>Network game</h2><p>Connected. You are <span class='c" + (net.role + 1) + "'>Player " + (net.role + 1) + "</span>.</p><div class='btns'><button id='ndrop'>Disconnect</button><button id='nclose'>Close</button></div></div>";
+  else if (view === "host") el.innerHTML = "<div class='box'><h2>Host a game</h2><p class='step'>1. Send this invitation to the other player</p><textarea id='ncode' readonly>working…</textarea><div class='btns'><button id='ncopy'>Copy invitation</button></div><p class='step'>2. Paste the reply they send back</p><textarea id='nin' placeholder='SN1.…'></textarea><div class='btns'><button id='ngo' class='main'>Connect</button></div>" + foot + "</div>";
+  else if (view === "join") el.innerHTML = "<div class='box'><h2>Join a game</h2><p class='step'>1. Paste the invitation the host sent you</p><textarea id='nin' placeholder='SN1.…'></textarea><div class='btns'><button id='ngo' class='main'>Make my reply</button></div><div id='nreply' style='display:none'><p class='step'>2. Send this reply back to the host</p><textarea id='ncode' readonly></textarea><div class='btns'><button id='ncopy'>Copy reply</button></div><p>The game starts by itself once the host has pasted it.</p></div>" + foot + "</div>";
+  else el.innerHTML = "<div class='box'><h2>Play against another computer</h2><p>The two browsers connect directly to each other. There is no server to introduce them, so you swap two short codes by chat or mail: one player hosts and sends an invitation, the other answers with a reply.</p><p>The host is <span class='c1'>Player 1</span> and picks the level, the guest is <span class='c2'>Player 2</span>. Each steers with the arrow keys or WASD. The game is turn-based: both choose a direction, then both snakes move together.</p>" + stunBox + "<div class='btns'><button id='nhost' class='main'>Host a game</button><button id='njoin'>Join a game</button></div>" + foot + "</div>";
+  const on = (id, f) => { const b = $(id); if (b) b.onclick = () => Promise.resolve().then(f).catch((e) => { const er = $("nerr"); if (er) er.textContent = e.message || String(e); }); };
+  on("nclose", closePanel);
+  on("ndrop", () => { netClose(); newGame(); closePanel(); });
+  on("nhost", async () => { net.stun = $("stun").checked; openPanel("host"); $("ncode").value = await netHost(net.stun); });
+  on("njoin", () => { net.stun = $("stun").checked; openPanel("join"); });
+  on("ncopy", async () => { const t = $("ncode"); t.select(); try { await navigator.clipboard.writeText(t.value); $("ncopy").textContent = "Copied"; } catch (e) { $("nerr").textContent = "Select the code and copy it by hand."; } });
+  on("ngo", async () => {
+    const code = $("nin").value; if (!code.trim()) throw new Error("Paste the code first.");
+    if (view === "host") { await netAccept(code); $("nerr").textContent = "Connecting…"; }
+    else { $("ncode").value = await netJoin(code, net.stun); $("nreply").style.display = "block"; }
+  });
+}
+// For testing: drive the network game by hand.
+window.__snake = { app, net, netHost, netJoin, netAccept, netMove, openPanel };
+
 
 // --------------------------------------------------------------------------
 // Boot

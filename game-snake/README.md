@@ -14,6 +14,20 @@ moves beyond it.
 When a human is playing, the game is turn-based: it waits for your key each
 step, and **undo** lets you backtrack out of certain death — that's the puzzle.
 
+## Two players on two computers
+
+**Network game** (or `N`) connects two browsers directly with WebRTC, with no
+server in between. One player hosts and sends an invitation code by chat or
+mail, the other pastes it and sends a reply code back; after that the game
+starts. The host is Player 1 and picks the level, the guest is Player 2, and
+each steers with the arrow keys or WASD.
+
+Play stays turn-based: both players choose a direction, then both snakes move
+together. A choice cannot be changed once made, and there is no undo. A move
+into a wall or into yourself is refused; a move into the other snake is
+refused once both choices are known, and only that player chooses again.
+**Give up** ends the game in the other player's favour.
+
 ## Controls
 
 | Key | Action |
@@ -25,6 +39,7 @@ step, and **undo** lets you backtrack out of certain death — that's the puzzle
 | Enter | Restart |
 | P | Toggle AI path overlay |
 | M | Toggle music |
+| N | Network game |
 
 ## Bots
 

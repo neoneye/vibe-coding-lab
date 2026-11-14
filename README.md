@@ -50,7 +50,7 @@ A homage to Porrasturvat's Stair Dismount. A ragdoll stands on top of a straight
 
 ### Snake MCTS
 
-Browser port of [SwiftSnakeEngine](https://github.com/neoneye/SwiftSnakeEngine), a two-player snake puzzle with a Monte Carlo tree search opponent running in a Web Worker. Shows the bot's planned path, supports undo, and ships a tournament harness for pitting bot configurations against each other in Node.
+Browser port of [SwiftSnakeEngine](https://github.com/neoneye/SwiftSnakeEngine), a two-player snake puzzle with a Monte Carlo tree search opponent running in a Web Worker. Shows the bot's planned path, supports undo, and ships a tournament harness for pitting bot configurations against each other in Node. Two people can also play each other from two computers: the browsers connect directly over WebRTC after swapping an invitation code and a reply code, with no server in between.
 
 ![game-snake](game-snake/screenshot1.jpg)
 
