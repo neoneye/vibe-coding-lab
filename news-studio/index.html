@@ -503,6 +503,13 @@ const NS = (() => {
     for (let d = 0; d < n; d++) { const t0 = p.intro + d * p.per; f += r(t0 + p.per * .46); if (d < n - 1) f -= r(t0 + p.per - T * .7); }
     return clamp(f);
   }
+  // The presenter starts close to the forecast and steps aside (0 to 1) once the days on its far side are done,
+  // so that the last days, the ones nearest to them, are in the clear while they are explained.
+  const WEATHER_NEAR = 2;   // how many days at the presenter's end of the forecast they step aside for
+  function weatherStep(tl, n, dur = WEATHER_DUR) {
+    const p = weatherPlan(n, dur), d = Math.max(0, n - WEATHER_NEAR);
+    return d === 0 ? 1 : ease.io((tl - (p.intro + d * p.per - .9)) / 1.1);
+  }
   // What the weather presenter says: one line for the greeting, one for each day, one to sum up.
   const DAY_NAMES = { MON: "Monday", TUE: "Tuesday", WED: "Wednesday", THU: "Thursday", FRI: "Friday", SAT: "Saturday", SUN: "Sunday" };
   function forecastLines(days) {
@@ -510,7 +517,7 @@ const NS = (() => {
     const lines = ["Here is how the next " + ["", "one", "two", "three", "four", "five", "six", "seven"][days.length] + " days look."];
     days.forEach((d, i) => {
       const prev = days[i - 1], diff = prev ? d[2] - prev[2] : 0;
-      const temp = (diff <= -2 ? "cooler, " : diff >= 2 ? "warmer, " : "") + d[2] + " degrees";
+      const temp = (diff <= -2 ? "cooler, " : diff >= 2 ? "warmer, " : "") + d[2] + "°";
       let sky;
       if (!prev) sky = name(d) + " starts " + { sun: "dry and sunny", cloud: "cloudy", rain: "wet", storm: "stormy" }[d[1]];
       else if (prev[1] === d[1]) sky = name(d) + " stays " + { sun: "sunny", cloud: "cloudy", rain: "wet", storm: "stormy" }[d[1]];
@@ -518,7 +525,7 @@ const NS = (() => {
       lines.push(sky + ", " + temp + ".");   // short enough for the caption in every era; the low is on the card
     });
     const warm = days.reduce((a, d) => d[2] > a[2] ? d : a), firstWet = days.find(wet);
-    lines.push("Warmest " + name(warm) + " at " + warm[2] + ". " + (firstWet ? "Umbrellas from " + name(firstWet) + "." : "Dry all week."));
+    lines.push("Warmest " + name(warm) + ", " + warm[2] + "°. " + (firstWet ? "Rain from " + name(firstWet) + "." : "Dry all week."));
     return lines;
   }
   // With two anchors they take the stories in turn.
@@ -580,7 +587,7 @@ const NS = (() => {
     if (S.co === S.anchor) S.co = -1;
     return S;
   }
-  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, BREAKING, WORDS, CARDS, buildBreaking, advance, storyAt, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, WALK, walkPlan, walkPhase, soundPlan, transitionFor, logoFor, hueFor, reporterFor, speakerFor, weatherFor, WEATHER_DUR, weatherPlan, weatherDay, weatherFacing, forecastLines, parse };
+  return { ERAS, TRANSITIONS, LOGOS, COLOURS, HOSTS, STORIES, BREAKING, WORDS, CARDS, buildBreaking, advance, storyAt, TICKER, SHOTS, clamp, ease, era, buildRundown, total, locate, envelope, clockText, WALK, walkPlan, walkPhase, soundPlan, transitionFor, logoFor, hueFor, reporterFor, speakerFor, weatherFor, WEATHER_DUR, weatherPlan, weatherDay, weatherFacing, weatherStep, forecastLines, parse };
 })();
 
 const NSTests = {
@@ -605,12 +612,14 @@ const NSTests = {
     check("the weather story goes to the forecast", r.some(x => x.shot === "weather" && STORIES[x.story].kind === "weather"));
     {
       const days = STORIES.find(x => x.days).days, n = days.length, L = NS.forecastLines(days), P = NS.weatherPlan(n);
-      check("the forecast gets a greeting, a line per day and a summing-up", L.length === n + 2 && L.every(x => x.length > 10 && x.length <= 48), L.map(x => x.length).join(","));
+      check("the forecast gets a greeting, a line per day and a summing-up", L.length === n + 2 && L.every(x => x.length > 10 && x.length <= 40), L.map(x => x.length).join(","));
       check("each day's line names the day and its temperature", days.every((d, i) => L[i + 1].includes(String(d[2])) && L[i + 1].toUpperCase().includes(d[0])));
       check("the summing-up warns of the first wet day", L[n + 1].includes("Thursday") && L[n + 1].includes("Monday"), L[n + 1]);
       check("the days are explained in order within the forecast's time", NS.weatherDay(0, n) === -1 && NS.weatherDay(P.intro + .01, n) === 0 && NS.weatherDay(P.intro + P.per * (n - 1) + .01, n) === n - 1 && NS.weatherDay(NS.WEATHER_DUR - .5, n) === n && P.intro + P.per * n + P.outro <= NS.WEATHER_DUR + 1e-9);
       check("the weather presenter faces the viewer, then the board for each day, then the viewer again",
         NS.weatherFacing(0, n) === 1 && NS.weatherFacing(NS.WEATHER_DUR - .1, n) === 1 && [...Array(n).keys()].every(d => NS.weatherFacing(P.intro + (d + .25) * P.per, n) === 0 && NS.weatherFacing(P.intro + (d + .8) * P.per, n) === 1));
+      check("the presenter steps aside after the far days and before the near ones are explained",
+        NS.weatherStep(0, n) === 0 && NS.weatherStep(P.intro + (n - 2 - .5) * P.per, n) === 0 && NS.weatherStep(P.intro + (n - 2) * P.per + .3, n) === 1 && NS.weatherStep(NS.WEATHER_DUR, n) === 1);
       check("the weather presenter has no other job", NS.weatherFor(0, 1, 2) === 3 && NS.weatherFor(0, -1, 1) === 2 && NS.weatherFor(2, 0, 1) === 3);
     }
     check("cuts stay inside a story", r.every((x, i) => x.enter !== "cut" || i === 0 || r[i - 1].story === x.story));
@@ -2193,7 +2202,7 @@ function aim(shot, speaker, tl, aspect) {
   if (shot === "wide") { camera.fov = wide ? 25 : 29; camera.position.set(Math.sin(tl * .15) * .1, 1.45, 5.3 - Math.min(tl, 12) * .04); camera.lookAt(0, 1.2, 0); return; }
   const h = hosts[speaker], top = h.g.position.y + h.f.height, x = h.g.position.x, sh = shot === "ots" ? (G.e === 3 ? .5 : wide ? .43 : .3) : 0;
   if (shot === "wx") {   // head to thigh, standing near the right-hand edge of the picture with room for the hands
-    const vis = 1.5, off = vis * aspect / 2 - (wide ? .6 : .4), sway = Math.sin(tl * .2) * .02;
+    const vis = 1.5, step = NS.weatherStep(tl, NS.STORIES.find(q => q.days).days.length), off = vis * aspect / 2 - (wide ? .6 - .32 * step : .4 - .16 * step), sway = Math.sin(tl * .2) * .02;
     camera.fov = 24; camera.position.set(x - off + sway, top + .33 - vis / 2, vis / 2 / Math.tan(12 * Math.PI / 180)); camera.lookAt(x - off, top + .33 - vis / 2, 0); return;
   }
   camera.fov = 24; camera.position.set(x * (x > 50 ? 1 : .45) + sh, top - .34, 2.8 - Math.min(tl, 10) * .012); camera.lookAt(x + sh, top - .44, 0);
