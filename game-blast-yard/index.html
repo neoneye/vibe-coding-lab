@@ -67,7 +67,7 @@
   <div id="foot">
     <span><span class="c1">Red</span> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Space</kbd></span>
     <span><span class="c2">Blue</span> <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> + <kbd>Enter</kbd></span>
-    <span><kbd>T</kbd> turn controls</span><span><kbd>P</kbd> pause</span><span><kbd>M</kbd> sound</span><span><kbd>R</kbd> new match</span><span><kbd>N</kbd> network game</span><span id="netbar"></span>
+    <span><kbd>P</kbd> pause</span><span><kbd>M</kbd> sound</span><span><kbd>R</kbd> new match</span><span><kbd>N</kbd> network game</span><span id="netbar"></span>
   </div>
 </div>
 
@@ -105,7 +105,7 @@ const BY = (() => {
   const SPIRAL = spiral();
   // Blocks come down two at a time, a cell and its opposite across the middle, so neither corner is reached first.
   const PAIRS = (() => { const out = [], seen = new Uint8Array(W * H); for (const a of SPIRAL) { if (seen[a]) continue; const b = W * H - 1 - a; seen[a] = seen[b] = 1; out.push(a === b ? [a] : [a, b]); } return out; })();
-  const SPAWN = [[0, H - 1], [W - 1, 0]];   // the left and right corners of the diamond on screen
+  const SPAWN = [[0, H - 1], [W - 1, 0]];   // bottom left and top right
 
   function createGame(seed, opts) {
     const o = Object.assign({ target: 3, crates: 0.8, itemChance: 0.42 }, opts || {});
@@ -507,58 +507,63 @@ const BYTests = {
   const COL = [{ suit: "#e2553f", dark: "#9c2f20", light: "#ff9a84" }, { suit: "#3f8fe2", dark: "#1f548f", light: "#9accff" }];
   const NAMES = ["Red", "Blue"];
   let g = BY.createGame(q.has("seed") ? +q.get("seed") : (Date.now() & 0xffff));
-  let mode = "title", paused = false, turn = 0, mute = false, shake = 0, clock = 0, acc = 0, last = performance.now();
+  let mode = "title", paused = false, mute = false, shake = 0, clock = 0, acc = 0, last = performance.now();
   const inputs = [BY.createInput(), BY.createInput()];
   let parts = [];
-  try { turn = localStorage.getItem("blastyard.turn") === "1" ? 1 : 0; } catch (e) {}
 
-  // ---- isometric view: 2:1 diamond tiles ----
-  const TW = 32, TH = 16, WALL = 16, PIL = 18, CRT = 14;   // blocks are kept low so that little hides behind them
-  const view = { s: 1, ox: 0, oy: 0, cw: 0, ch: 0 };
+  // ---- the view: a camera straight above the middle of the yard ----
+  // Everything has a height, so with perspective the blocks and figures lean away from the middle, and a slight
+  // barrel distortion (the fish eye) bends the edges of the yard. Lengths are in cells; z is height above the ground.
+  const CAM = 9, FISH = .07, WALL = .5, PIL = .55, CRT = .45;   // camera height, strength of the fish eye, block heights
+  const CX = (W - 1) / 2, CY = (H - 1) / 2, RAD = Math.hypot(CX + 1.5, CY + 1.5);
+  const view = { s: 1, u: 1, ox: 0, oy: 0, cw: 0, ch: 0 };
+  // Where a point lands, in cells from the middle of the picture, and how large a cell appears there.
+  function lens(x, y, z) {
+    const m = CAM / (CAM - (z || 0)), px = (x - CX) * m, py = (y - CY) * m, f = 1 / (1 + FISH * (px * px + py * py) / (RAD * RAD));
+    return [px * f, py * f, m * f];
+  }
   function fit() {
     const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     const cw = Math.max(200, Math.round(r.width) || 960), ch = Math.max(150, Math.round(r.height) || 560);
     const bw = Math.round(cw * dpr), bh = Math.round(ch * dpr);
     if (cv.width !== bw || cv.height !== bh) { cv.width = bw; cv.height = bh; }
-    const x0 = (-1.5 - (H - 0.5)) * TW, x1 = (W - 0.5 + 1.5) * TW, y0 = -3 * TH - WALL - 8, y1 = (W + H - 1) * TH + 26;
-    view.s = Math.min(cw / (x1 - x0 + 24), ch / (y1 - y0 + 16));
-    view.ox = cw / 2 - view.s * (x0 + x1) / 2; view.oy = ch / 2 - view.s * (y0 + y1) / 2;
-    view.cw = cw; view.ch = ch; view.dpr = dpr;
+    const ex = lens(W + .5, CY, WALL)[0], ey = lens(CX, H + .5, WALL)[1];   // the outer top edge of the wall, half way along each side
+    view.u = Math.min((cw - 16) / (2 * ex), (ch - 16) / (2 * ey)); view.s = view.u / 40;
+    view.ox = cw / 2; view.oy = ch / 2; view.cw = cw; view.ch = ch; view.dpr = dpr;
   }
-  const P = (x, y, z) => [view.ox + (x - y) * TW * view.s, view.oy + ((x + y) * TH - (z || 0)) * view.s];
+  // Screen position of a point, and in [2] the pixels a cell takes up there.
+  const P = (x, y, z) => { const l = lens(x, y, z); return [view.ox + l[0] * view.u, view.oy + l[1] * view.u, l[2] * view.u]; };
   function poly(pts, fill, stroke) {
     ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath();
     if (fill) { ctx.fillStyle = fill; ctx.fill(); }
     if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
   }
-  // A box standing on cell (x, y): r is its half-width in cells, z0..z1 its height in pixels.
-  function box(x, y, r, z0, z1, top, left, right, edge) {
-    poly([P(x - r, y + r, z1), P(x + r, y + r, z1), P(x + r, y + r, z0), P(x - r, y + r, z0)], left, edge);
-    poly([P(x + r, y - r, z1), P(x + r, y + r, z1), P(x + r, y + r, z0), P(x + r, y - r, z0)], right, edge);
+  // A box standing on cell (x, y): r is its half-width, z0..z1 its height. From above only the two sides that face
+  // the middle of the yard can be seen. sideY is the colour of the sides across the picture, sideX of those up and down it.
+  function box(x, y, r, z0, z1, top, sideY, sideX, edge) {
+    if (Math.abs(y - CY) > 1e-9) { const fy = y > CY ? y - r : y + r; poly([P(x - r, fy, z1), P(x + r, fy, z1), P(x + r, fy, z0), P(x - r, fy, z0)], sideY, edge); }
+    if (Math.abs(x - CX) > 1e-9) { const fx = x > CX ? x - r : x + r; poly([P(fx, y - r, z1), P(fx, y + r, z1), P(fx, y + r, z0), P(fx, y - r, z0)], sideX, edge); }
     poly([P(x - r, y - r, z1), P(x + r, y - r, z1), P(x + r, y + r, z1), P(x - r, y + r, z1)], top, edge);
   }
   const hash = (x, y) => { const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return v - Math.floor(v); };
-  function ellipse(x, y, rx, ry, fill) { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, 2 * Math.PI); ctx.fillStyle = fill; ctx.fill(); }
+  function ellipse(x, y, rx, ry, fill, ang) { ctx.beginPath(); ctx.ellipse(x, y, Math.max(0, rx), Math.max(0, ry), ang || 0, 0, 2 * Math.PI); ctx.fillStyle = fill; ctx.fill(); }
+  // A flat disc at a height: rx, ry in cells, turned by ang.
+  function disc(x, y, z, rx, ry, fill, ang) { const p = P(x, y, z); ellipse(p[0], p[1], rx * p[2], ry * p[2], fill, ang); return p; }
+  const far = (x, y) => -Math.hypot(x - CX, y - CY);   // drawing order: the furthest from the middle first
 
   function drawGround() {
     const s = view.s;
-    // the slab the yard stands on
-    poly([P(-1.5, H - .5, 0), P(W - .5, H - .5, 0), P(W - .5, H - .5, -22), P(-1.5, H - .5, -22)], "#5b4630");
-    poly([P(W - .5, -1.5, 0), P(W - .5, H - .5, 0), P(W - .5, H - .5, -22), P(W - .5, -1.5, -22)], "#463523");
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const h = hash(x, y), c = (x + y) & 1;
-      poly([P(x - .5, y - .5), P(x + .5, y - .5), P(x + .5, y + .5), P(x - .5, y + .5)], c ? "#6c9f48" : "#74a84e", "rgba(40,70,30,.35)");
-      if (h > .55) { const p = P(x - .2 + h * .4, y - .15 + hash(y, x) * .3); ctx.fillStyle = "rgba(50,90,35,.55)"; ctx.fillRect(p[0], p[1], 2.2 * s, 1.2 * s); ctx.fillRect(p[0] + 5 * s, p[1] + 2 * s, 1.6 * s, 1 * s); }
+    for (let y = -1; y <= H; y++) for (let x = -1; x <= W; x++) {
+      const out = x < 0 || y < 0 || x >= W || y >= H, h = hash(x, y), c = (x + y) & 1;
+      poly([P(x - .5, y - .5), P(x + .5, y - .5), P(x + .5, y + .5), P(x - .5, y + .5)], out ? "#4a4d56" : c ? "#6c9f48" : "#74a84e", out ? null : "rgba(40,70,30,.35)");
+      if (!out && h > .55) { const p = P(x - .2 + h * .4, y - .15 + hash(y, x) * .3); ctx.fillStyle = "rgba(50,90,35,.55)"; ctx.fillRect(p[0], p[1], 2.2 * s, 1.2 * s); ctx.fillRect(p[0] + 5 * s, p[1] + 2 * s, 1.6 * s, 1 * s); }
     }
-    // the wall along the two far sides
-    for (let x = -1; x < W; x++) box(x, -1, .5, 0, WALL, "#a9adb6", "#80848e", "#666a74", "rgba(30,32,40,.35)");
-    for (let y = 0; y < H; y++) box(-1, y, .5, 0, WALL, "#a9adb6", "#80848e", "#666a74", "rgba(30,32,40,.35)");
   }
+  const drawWall = (x, y) => box(x, y, .5, 0, WALL, "#a9adb6", "#80848e", "#666a74", "rgba(30,32,40,.35)");
   function drawPillar(x, y, fallen) {
     if (fallen) box(x, y, .5, 0, PIL, "#8f8377", "#6c6258", "#544b43", "rgba(20,18,16,.4)");
     else box(x, y, .5, 0, PIL, "#c3c6ce", "#92959f", "#73767f", "rgba(30,32,40,.4)");
-    const a = P(x - .5, y + .5, PIL / 2), b = P(x + .5, y + .5, PIL / 2), c = P(x + .5, y - .5, PIL / 2);
-    ctx.strokeStyle = "rgba(30,32,40,.3)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.lineTo(c[0], c[1]); ctx.stroke();
+    poly([P(x - .36, y - .36, PIL), P(x + .36, y - .36, PIL), P(x + .36, y + .36, PIL), P(x - .36, y + .36, PIL)], fallen ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.16)", "rgba(30,32,40,.25)");
   }
   function drawCrate(x, y, burn) {
     const k = burn > 0 ? burn / BY.FLAME : 1, r = .43;
@@ -566,82 +571,81 @@ const BYTests = {
     ctx.globalAlpha = burn > 0 ? .35 + .65 * k : 1;
     box(x, y, r, 0, CRT, mix("#d2a25a", "#6b4a2a"), mix("#b07d3e", "#4a321c"), mix("#8f6230", "#372414"), "rgba(50,30,10,.55)");
     ctx.strokeStyle = "rgba(60,36,12,.6)"; ctx.lineWidth = Math.max(1, 1.4 * view.s);
-    let a = P(x - r, y + r, CRT), b = P(x + r, y + r, 0); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
-    a = P(x + r, y + r, CRT); b = P(x + r, y - r, 0); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
-    a = P(x - r, y, CRT); b = P(x + r, y, CRT); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    const L = (x0, y0, x1, y1) => { const a = P(x + x0 * r, y + y0 * r, CRT), b = P(x + x1 * r, y + y1 * r, CRT); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); };
+    ctx.beginPath(); L(-1, -.34, 1, -.34); L(-1, .34, 1, .34); L(-.72, -1, .72, 1); ctx.stroke();   // planks and a brace on the lid
     ctx.globalAlpha = 1;
   }
   function drawBomb(b) {
-    const s = view.s, pulse = 1 + .09 * Math.sin((BY.FUSE - b.t) * (6 + 10 * (1 - b.t / BY.FUSE))), p = P(b.x, b.y, 0);
-    ellipse(p[0], p[1] + 1 * s, 12 * s, 6 * s, "rgba(0,0,0,.35)");
-    const r = 11 * s * pulse, cy = p[1] - 10 * s;
-    const gr = ctx.createRadialGradient(p[0] - r * .35, cy - r * .4, r * .1, p[0], cy, r);
+    const pulse = 1 + .09 * Math.sin((BY.FUSE - b.t) * (6 + 10 * (1 - b.t / BY.FUSE)));
+    disc(b.x, b.y, 0, .34, .34, "rgba(0,0,0,.35)");
+    const p = P(b.x, b.y, .3), r = .3 * p[2] * pulse, s = p[2] / 40;
+    const gr = ctx.createRadialGradient(p[0] - r * .35, p[1] - r * .4, r * .1, p[0], p[1], r);
     gr.addColorStop(0, "#6c7686"); gr.addColorStop(.45, "#252a33"); gr.addColorStop(1, "#090b0f");
-    ellipse(p[0], cy, r, r, gr);
-    ctx.strokeStyle = COL[b.owner].suit; ctx.lineWidth = 2 * s; ctx.beginPath(); ctx.ellipse(p[0], cy + r * .1, r * .98, r * .32, 0, 0.1, Math.PI - 0.1); ctx.stroke();
-    ctx.strokeStyle = "#8a6b3c"; ctx.lineWidth = 2 * s; ctx.beginPath(); ctx.moveTo(p[0], cy - r); ctx.quadraticCurveTo(p[0] + 4 * s, cy - r - 6 * s, p[0] + 7 * s, cy - r - 5 * s); ctx.stroke();
+    ellipse(p[0], p[1], r, r, gr);
+    ctx.strokeStyle = COL[b.owner].suit; ctx.lineWidth = 2.4 * s; ctx.beginPath(); ctx.arc(p[0], p[1], r * .72, 0, 2 * Math.PI); ctx.stroke();
+    const t = P(b.x, b.y, .6), e = P(b.x + .13, b.y - .1, .74);
+    ellipse(t[0], t[1], 3.2 * s, 3.2 * s, "#5d6470");
+    ctx.strokeStyle = "#8a6b3c"; ctx.lineWidth = 2 * s; ctx.beginPath(); ctx.moveTo(t[0], t[1]); ctx.lineTo(e[0], e[1]); ctx.stroke();
     const f = .6 + .4 * Math.sin(clock * 40 + b.id);
-    ellipse(p[0] + 7 * s, cy - r - 5 * s, 3.2 * s * f, 3.2 * s * f, "#ffe27a"); ellipse(p[0] + 7 * s, cy - r - 5 * s, 1.5 * s, 1.5 * s, "#fff");
+    ellipse(e[0], e[1], 3.4 * s * f, 3.4 * s * f, "#ffe27a"); ellipse(e[0], e[1], 1.6 * s, 1.6 * s, "#fff");
   }
   function drawItem(x, y, kind) {
-    const s = view.s, bob = Math.sin(clock * 3 + x + y) * 2, p = P(x, y, 12 + bob), col = ["", "#3b4350", "#e2632f", "#e6c23a", "#52b36b"][kind];
-    ellipse(P(x, y)[0], P(x, y)[1], 9 * s, 4.5 * s, "rgba(0,0,0,.3)");
-    ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(s, s);
-    ctx.beginPath(); ctx.roundRect(-10, -11, 20, 20, 5); ctx.fillStyle = "#f3efe2"; ctx.fill(); ctx.lineWidth = 2.2; ctx.strokeStyle = col; ctx.stroke();
-    ctx.fillStyle = col;
+    const bob = Math.sin(clock * 3 + x + y) * .04, p = P(x, y, .16 + bob), col = ["", "#3b4350", "#e2632f", "#e6c23a", "#52b36b"][kind];
+    disc(x, y, 0, .3, .3, "rgba(0,0,0,.3)");
+    ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(p[2] / 36, p[2] / 36);
+    ctx.beginPath(); ctx.roundRect(-10, -10, 20, 20, 5); ctx.fillStyle = "#f3efe2"; ctx.fill(); ctx.lineWidth = 2.2; ctx.strokeStyle = col; ctx.stroke();
+    ctx.fillStyle = col; ctx.translate(0, 1);
     if (kind === 1) { ctx.beginPath(); ctx.arc(-.5, 0.5, 5.4, 0, 7); ctx.fill(); ctx.fillRect(2, -7.5, 2, 4); }
     else if (kind === 2) { ctx.beginPath(); ctx.moveTo(0, -8); ctx.bezierCurveTo(7, -1, 6, 7, 0, 7); ctx.bezierCurveTo(-6, 7, -7, -1, 0, -8); ctx.fill(); ctx.fillStyle = "#ffd76a"; ctx.beginPath(); ctx.arc(0, 3, 2.6, 0, 7); ctx.fill(); }
     else if (kind === 3) { ctx.beginPath(); ctx.moveTo(2, -8); ctx.lineTo(-5, 1); ctx.lineTo(-1, 1); ctx.lineTo(-3, 8); ctx.lineTo(5, -2); ctx.lineTo(1, -2); ctx.closePath(); ctx.fill(); }
     else { ctx.beginPath(); ctx.moveTo(-5, -7); ctx.lineTo(-1, -7); ctx.lineTo(-1, 1); ctx.lineTo(6, 2); ctx.lineTo(6, 6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill(); }
     ctx.restore();
   }
-  function drawFlame(x, y, t) {
-    const s = view.s, k = Math.min(1, t / BY.FLAME * 1.6), p = P(x, y);
+  // The glow on the ground, drawn under the blocks.
+  function drawGlow(x, y, t) {
+    const k = Math.min(1, t / BY.FLAME * 1.6), p = P(x, y), r = .9 * p[2];
     ctx.save(); ctx.globalCompositeOperation = "lighter";
-    const gl = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], 34 * s);
+    const gl = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r);
     gl.addColorStop(0, `rgba(255,220,120,${.75 * k})`); gl.addColorStop(1, "rgba(255,90,20,0)");
-    ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(1, .5); ctx.translate(-p[0], -p[1]); ellipse(p[0], p[1], 34 * s, 34 * s, gl); ctx.restore();
-    ctx.restore();
-    for (let n = 0; n < 4; n++) {
-      const h = hash(x * 7 + n, y * 3 + n), ph = clock * (9 + h * 6) + h * 9, fx = p[0] + (h - .5) * 26 * s + Math.sin(ph) * 2 * s, fy = p[1] + (hash(n, x + y) - .5) * 9 * s;
-      const ht = (26 + 20 * h + 8 * Math.sin(ph * 1.7)) * s * k, wd = (7 + 5 * h) * s * k;
-      const gr = ctx.createLinearGradient(0, fy, 0, fy - ht);
-      gr.addColorStop(0, "rgba(255,246,190,.95)"); gr.addColorStop(.45, "rgba(255,160,40,.9)"); gr.addColorStop(1, "rgba(220,50,20,0)");
-      ctx.fillStyle = gr; ctx.beginPath(); ctx.moveTo(fx - wd, fy); ctx.quadraticCurveTo(fx - wd, fy - ht * .5, fx, fy - ht); ctx.quadraticCurveTo(fx + wd, fy - ht * .5, fx + wd, fy); ctx.quadraticCurveTo(fx, fy + wd * .6, fx - wd, fy); ctx.fill();
+    ellipse(p[0], p[1], r, r, gl); ctx.restore();
+  }
+  // Tongues of flame rising towards the camera: each is a few blobs, one above the other, hot at the foot.
+  function drawFlame(x, y, t) {
+    const k = Math.min(1, t / BY.FLAME * 1.6);
+    const LAY = [[.02, .27, "rgba(240,90,25,.75)"], [.3, .2, "rgba(255,150,35,.85)"], [.6, .13, "rgba(255,215,90,.9)"], [.9, .07, "rgba(255,248,205,.95)"]];
+    for (let l = 0; l < LAY.length; l++) for (let n = 0; n < 4; n++) {
+      const h = hash(x * 7 + n, y * 3 + n), ph = clock * (9 + h * 6) + h * 9, z = LAY[l][0] * (.7 + .5 * h + .2 * Math.sin(ph * 1.7)) * k;
+      const fx = x + (h - .5) * .62 + Math.sin(ph) * .04 * (1 + l), fy = y + (hash(n, x + y) - .5) * .62 + Math.cos(ph * .8) * .04 * (1 + l);
+      disc(fx, fy, z, LAY[l][1] * k * (.8 + .5 * h), LAY[l][1] * k * (.8 + .5 * h), LAY[l][2]);
     }
   }
-  function drawPlayer(p, ghost) {
-    const s = view.s, c = COL[p.id], base = P(p.x, p.y, 0);
+  // A figure seen from above: boots, shoulders and arms, then the helmet nearest the camera.
+  function drawPlayer(p) {
+    const c = COL[p.id];
     let squash = 1, alpha = 1;
     if (!p.alive) { squash = Math.max(.15, 1 - p.deadT * 2.2); alpha = Math.max(0, 1 - p.deadT * 1.1); if (alpha <= 0) return; }
-    const sdx = p.dir[0] - p.dir[1], sdy = p.dir[0] + p.dir[1];           // which way the figure faces on screen
-    const step = p.moving ? Math.sin(p.walk * 7) : 0, bob = p.moving ? Math.abs(Math.sin(p.walk * 7)) * 2 : 0;
-    ctx.save(); ctx.globalAlpha = alpha * (ghost || 1);
-    if (!ghost) ellipse(base[0], base[1], 11 * s, 5.5 * s, "rgba(0,0,0,.35)");
-    ctx.translate(base[0], base[1]); ctx.scale(s * 1.22, s * 1.22 * squash);
-    // boots
-    ellipse(-4.5 + step * 2, -2 - Math.max(0, step) * 2.5, 4, 2.6, "#2b2f38"); ellipse(4.5 - step * 2, -2 - Math.max(0, -step) * 2.5, 4, 2.6, "#2b2f38");
-    ctx.translate(0, -bob);
-    // body
-    const bg = ctx.createLinearGradient(-9, 0, 9, 0); bg.addColorStop(0, c.light); bg.addColorStop(.45, c.suit); bg.addColorStop(1, c.dark);
-    ctx.fillStyle = bg; ctx.beginPath(); ctx.roundRect(-8.5, -22, 17, 19, 7); ctx.fill();
-    ctx.fillStyle = "#2b2f38"; ctx.fillRect(-8.5, -10, 17, 2.6);
-    // arms
-    ellipse(-9.5, -13 - step * 2, 3, 4.6, c.dark); ellipse(9.5, -13 + step * 2, 3, 4.6, c.dark);
-    // head and helmet
-    ellipse(0, -28, 8.2, 7.8, "#f0c9a0");
-    ctx.fillStyle = c.suit; ctx.beginPath(); ctx.arc(0, -29.5, 9, Math.PI, 0); ctx.lineTo(10.5, -29); ctx.lineTo(-10.5, -29); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = c.dark; ctx.fillRect(-10.5, -30.2, 21, 2.2);
-    if (sdy >= 0) {
-      const ex = sdx * 2.6;
-      ellipse(ex - 3, -26.2, 1.5, 2, "#1c1f26"); ellipse(ex + 3, -26.2, 1.5, 2, "#1c1f26");
-      ellipse(sdx * 3.5, -36.5, 2.6, 2.2, "#ffe27a");
-    } else { ctx.fillStyle = c.suit; ctx.beginPath(); ctx.arc(0, -28, 8.6, 0, Math.PI); ctx.fill(); }
+    const a = Math.atan2(p.dir[1], p.dir[0]), ca = Math.cos(a), sa = Math.sin(a);
+    const G = 1.2, at = (f, s, z, rx, ry, fill) => disc(p.x + G * (f * ca - s * sa), p.y + G * (f * sa + s * ca), z * squash, G * rx, G * ry, fill, a);   // f forward, s to the figure's right
+    const step = p.moving ? Math.sin(p.walk * 7) : 0, bob = p.moving ? Math.abs(Math.sin(p.walk * 7)) * .04 : 0;
+    ctx.save(); ctx.globalAlpha = alpha;
+    disc(p.x, p.y, 0, .36, .36, "rgba(0,0,0,.35)");
+    at(.04 + step * .15, .13, .04, .15, .09, "#2b2f38"); at(.04 - step * .15, -.13, .04, .15, .09, "#2b2f38");                 // boots
+    at(-.19, 0, .4 + bob, .1, .17, "#2b2f38");                                                                               // pack
+    at(.02 - step * .12, .3, .42 + bob, .1, .085, c.dark); at(.02 + step * .12, -.3, .42 + bob, .1, .085, c.dark);             // arms
+    const b = P(p.x, p.y, (.46 + bob) * squash), bg = ctx.createLinearGradient(b[0] - .3 * b[2], b[1] - .3 * b[2], b[0] + .3 * b[2], b[1] + .3 * b[2]);
+    bg.addColorStop(0, c.light); bg.addColorStop(.5, c.suit); bg.addColorStop(1, c.dark);
+    at(0, 0, .46 + bob, .19, .29, bg);                                                                                       // shoulders
+    at(.1, 0, .78 + bob, .17, .18, "#f0c9a0");                                                                               // face, showing in front of the helmet
+    at(.17, .075, .8 + bob, .03, .035, "#1c1f26"); at(.17, -.075, .8 + bob, .03, .035, "#1c1f26");
+    const h = at(0, 0, .86 + bob, .215, .215, c.suit);
+    ctx.strokeStyle = c.dark; ctx.lineWidth = Math.max(1, .045 * h[2]); ctx.beginPath(); ctx.arc(h[0], h[1], .2 * G * h[2], 0, 2 * Math.PI); ctx.stroke();
+    at(-.03, 0, .9 + bob, .09, .09, c.light);
+    at(.2, 0, .9 + bob, .055, .055, "#ffe27a");                                                                              // lamp
     ctx.restore();
   }
   function drawFalling(f) {
-    const x = f.i % W, y = (f.i / W) | 0, k = f.t / BY.FALL, z = k * k * 520, p = P(x, y);
-    ellipse(p[0], p[1], 26 * view.s * (1 - k * .6), 13 * view.s * (1 - k * .6), `rgba(0,0,0,${.15 + .35 * (1 - k)})`);
+    const x = f.i % W, y = (f.i / W) | 0, k = f.t / BY.FALL, z = k * k * 5;
+    disc(x, y, 0, .62 * (1 - k * .6), .62 * (1 - k * .6), `rgba(0,0,0,${.15 + .35 * (1 - k)})`);
     box(x, y, .5, z, z + PIL, "#8f8377", "#6c6258", "#544b43", "rgba(20,18,16,.4)");
   }
 
@@ -654,26 +658,28 @@ const BYTests = {
     ctx.save();
     if (shake > 0.01) ctx.translate((Math.random() - .5) * shake * 9 * view.s, (Math.random() - .5) * shake * 6 * view.s);
     drawGround();
+    // on the ground and under everything: the glow of the flames and the things to pick up
+    for (let i = 0; i < W * H; i++) { const x = i % W, y = (i / W) | 0; if (g.fl[i] > 0) drawGlow(x, y, g.fl[i]); if (!g.grid[i] && g.item[i]) drawItem(x, y, g.item[i]); }
+    // the blocks, from the edge inwards: a block nearer the middle leans over the foot of the one behind it
     const list = [];
+    for (let x = -1; x <= W; x++) { list.push([far(x, -1), () => drawWall(x, -1)], [far(x, H), () => drawWall(x, H)]); }
+    for (let y = 0; y < H; y++) { list.push([far(-1, y), () => drawWall(-1, y)], [far(W, y), () => drawWall(W, y)]); }
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const i = y * W + x, c = g.grid[i], k = x + y;
-      if (c === BY.PILLAR || c === BY.FALLEN) list.push([k, () => drawPillar(x, y, c === BY.FALLEN)]);
-      else if (c === BY.CRATE) list.push([k, () => drawCrate(x, y, g.burn[i])]);
-      else if (g.item[i]) list.push([k - .2, () => drawItem(x, y, g.item[i])]);
-      if (g.fl[i] > 0) list.push([k + .3, () => drawFlame(x, y, g.fl[i])]);
+      const i = y * W + x, c = g.grid[i];
+      if (c === BY.PILLAR || c === BY.FALLEN) list.push([far(x, y), () => drawPillar(x, y, c === BY.FALLEN)]);
+      else if (c === BY.CRATE) list.push([far(x, y), () => drawCrate(x, y, g.burn[i])]);
     }
-    for (const b of g.bombs) list.push([b.x + b.y + .05, () => drawBomb(b)]);
-    for (const p of g.players) list.push([p.x + p.y + .1, () => drawPlayer(p)]);
-    for (const f of g.falling) list.push([(f.i % W) + ((f.i / W) | 0) + .4, () => drawFalling(f)]);
     list.sort((a, b) => a[0] - b[0]);
     for (const o of list) o[1]();
-    // a faint copy of the players and bombs on top, so they can still be made out behind a block
-    ctx.globalAlpha = .3; for (const b of g.bombs) drawBomb(b); ctx.globalAlpha = 1;
-    for (const p of g.players) drawPlayer(p, .3);
+    // bombs and figures stand taller than the blocks, so they go on top; then the flames, and the blocks coming down
+    for (const b of g.bombs) drawBomb(b);
+    for (const p of [...g.players].sort((a, b) => far(a.x, a.y) - far(b.x, b.y))) drawPlayer(p);
+    for (let i = 0; i < W * H; i++) if (g.fl[i] > 0) drawFlame(i % W, (i / W) | 0, g.fl[i]);
+    for (const f of g.falling) drawFalling(f);
     for (const pt of parts) {
-      const p = P(pt.x, pt.y, pt.z);
+      const p = P(pt.x, pt.y, pt.z / 32), r = pt.r * p[2] / 40;
       ctx.globalAlpha = Math.min(1, pt.life * 2.5); ctx.fillStyle = pt.col;
-      ctx.fillRect(p[0] - pt.r * view.s / 2, p[1] - pt.r * view.s / 2, pt.r * view.s, pt.r * view.s);
+      ctx.fillRect(p[0] - r / 2, p[1] - r / 2, r, r);
     }
     ctx.globalAlpha = 1;
     ctx.restore();
@@ -725,7 +731,6 @@ const BYTests = {
     const ck = $("clock"); if (ck.textContent !== txt) ck.textContent = txt; ck.classList.toggle("hot", left < 15);
     const rt = "Round " + g.round + " · first to " + g.target; if ($("round").textContent !== rt) $("round").textContent = rt;
   }
-  const DIRNAME = [["up-right", "down-right", "down-left", "up-left"], ["up-left", "up-right", "down-right", "down-left"]];
   function showMsg() {
     const m = $("msg");
     if ((mode === "play" && !paused) || q.has("shot")) { m.innerHTML = ""; return; }
@@ -734,12 +739,10 @@ const BYTests = {
     else if (net.active && mode === "title") h = "<h2>Connected</h2><p>Waiting for the host to start.</p>";
     else if (paused) h = "<h2>Paused</h2><p class='go'>Press <kbd>P</kbd> to carry on</p>";
     else if (mode === "title") {
-      const d = DIRNAME[turn];
       h = "<h1>BLAST YARD</h1><p>Two players, one keyboard. Lay bombs, blow up crates, collect what was inside, and catch the other one in a blast. First to " + g.target + " rounds.</p>" +
         "<table><tr><th></th><th>Walk</th><th>Bomb</th></tr>" +
         "<tr><td class='c1'>Red</td><td><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></td><td><kbd>Space</kbd></td></tr>" +
         "<tr><td class='c2'>Blue</td><td><kbd>↑</kbd> <kbd>←</kbd> <kbd>↓</kbd> <kbd>→</kbd></td><td><kbd>Enter</kbd></td></tr></table>" +
-        "<p>The yard is seen from a corner: <kbd>W</kbd>/<kbd>↑</kbd> walks " + d[0] + ", <kbd>D</kbd>/<kbd>→</kbd> " + d[1] + ", <kbd>S</kbd>/<kbd>↓</kbd> " + d[2] + ", <kbd>A</kbd>/<kbd>←</kbd> " + d[3] + ". Press <kbd>T</kbd> to turn the controls the other way.</p>" +
         "<p>💣&nbsp;one more bomb · 🔥&nbsp;longer blast · ⚡&nbsp;faster · 👟&nbsp;walk into a bomb to kick it. When the clock runs out the yard closes in.</p>" +
         "<p class='go'>Press <kbd>Space</kbd> or <kbd>Enter</kbd> to start, or <kbd>N</kbd> to play against another computer</p>";
     } else if (mode === "over") {
@@ -776,7 +779,6 @@ const BYTests = {
     if (e.repeat) return;
     if (e.code === "KeyP" && mode === "play" && !net.active) { paused = !paused; showMsg(); }
     else if (e.code === "KeyM") mute = !mute;
-    else if (e.code === "KeyT") { turn = 1 - turn; try { localStorage.setItem("blastyard.turn", String(turn)); } catch (err) {} showMsg(); }
     else if (e.code === "KeyN") openPanel();
     else if (e.code === "KeyR") { if (net.active) { if (net.role === 0) netStart(); } else { g = BY.createGame((Date.now() & 0xffff) + 1); parts = []; paused = false; mode = "title"; showMsg(); } }
   });
@@ -866,7 +868,7 @@ const BYTests = {
     if (mode === "title" || paused) return;
     acc += dt;
     if (net.active && net.link) {
-      const mine = () => { const k = BY.sample(inputs[0], turn); k.go = netGo; netGo = false; return k; };
+      const mine = () => { const k = BY.sample(inputs[0], 0); k.go = netGo; netGo = false; return k; };
       let waited = true;
       while (acc >= BY.TICK) {
         if (!BY.linkStep(net.link, g, mine, netSend)) { acc = Math.min(acc, BY.TICK); break; }   // the other side's keys are not here yet
@@ -876,7 +878,7 @@ const BYTests = {
       if (net.link.desync && !net.told) { net.told = true; showMsg(); }
     } else while (acc >= BY.TICK) {
       acc -= BY.TICK;
-      BY.tick(g, mode === "play" ? [BY.sample(inputs[0], turn), BY.sample(inputs[1], turn)] : []);
+      BY.tick(g, mode === "play" ? [BY.sample(inputs[0], 0), BY.sample(inputs[1], 0)] : []);
       handleEvents();
     }
     shake *= Math.pow(.02, dt);
@@ -900,7 +902,7 @@ const BYTests = {
   showMsg(); hud(); draw();
   requestAnimationFrame(frame);
   // for testing in a hidden tab: drive the game by hand
-  window.__by = { get g() { return g; }, inputs, BY, net, netHost, netJoin, netAccept, openPanel, start() { mode = "play"; showMsg(); }, step(sec) { const n = Math.round(sec * 60); for (let k = 0; k < n; k++) sim(1 / 60); hud(); netBar(); draw(); }, state: () => ({ mode, paused, turn }) };
+  window.__by = { get g() { return g; }, inputs, BY, net, netHost, netJoin, netAccept, openPanel, start() { mode = "play"; showMsg(); }, step(sec) { const n = Math.round(sec * 60); for (let k = 0; k < n; k++) sim(1 / 60); hud(); netBar(); draw(); }, state: () => ({ mode, paused }) };
 })();
 </script>
 </body>
