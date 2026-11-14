@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blast Yard</title>
+<style>
+  :root { --bg: #10141a; --panel: #171c24; --line: #2a323d; --text: #dde3ea; --muted: #8b95a1; --p1: #e2553f; --p2: #3f8fe2; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; overflow: hidden; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #hud { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .pl { display: flex; gap: 6px 14px; align-items: center; flex-wrap: wrap; min-width: 0; }
+  .pl.right { justify-content: flex-end; }
+  .pl .name { font-weight: 700; letter-spacing: .5px; }
+  #hud1 .name { color: var(--p1); } #hud2 .name { color: var(--p2); }
+  .pips { display: inline-flex; gap: 4px; }
+  .pip { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; opacity: .45; }
+  .pip.on { background: currentColor; opacity: 1; }
+  #hud1 .pips { color: var(--p1); } #hud2 .pips { color: var(--p2); }
+  .stats { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .stats b { color: var(--text); font-weight: 600; }
+  #mid { text-align: center; font-variant-numeric: tabular-nums; }
+  #clock { font-size: 22px; font-weight: 700; }
+  #clock.hot { color: #ff7a4d; }
+  #round { color: var(--muted); font-size: 12px; }
+  #wrap { position: relative; flex: 1 1 auto; min-height: 0; }
+  #cv { display: block; width: 100%; height: 100%; }
+  #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  #msg .box { background: rgba(14,18,24,.9); border: 1px solid var(--line); border-radius: 14px; padding: 20px 28px; text-align: center; max-width: min(620px, 92vw); box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+  #msg h1 { margin: 0 0 4px; font-size: 34px; letter-spacing: 2px; }
+  #msg h2 { margin: 0 0 6px; font-size: 24px; }
+  #msg p { margin: 6px 0; color: #b9c2cc; }
+  #msg .go { color: #ffd98a; font-weight: 600; margin-top: 12px; }
+  #msg table { margin: 10px auto 4px; border-collapse: collapse; text-align: left; }
+  #msg td, #msg th { padding: 3px 12px; }
+  #msg th { color: var(--muted); font-weight: 500; }
+  kbd { background: #232a34; border: 1px solid #3a4452; border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; font: 600 12.5px ui-monospace, Menlo, monospace; color: #e8edf3; }
+  .c1 { color: var(--p1); font-weight: 700; } .c2 { color: var(--p2); font-weight: 700; }
+  #foot { padding: 5px 16px; color: var(--muted); font-size: 12.5px; background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 6px 18px; flex-wrap: wrap; justify-content: center; }
+  @media (max-width: 700px) { .stats { display: none; } #msg h1 { font-size: 26px; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div class="pl" id="hud1"><span class="name">RED</span><span class="pips"></span><span class="stats"></span></div>
+    <div id="mid"><div id="clock">1:40</div><div id="round">Round 1</div></div>
+    <div class="pl right" id="hud2"><span class="stats"></span><span class="pips"></span><span class="name">BLUE</span></div>
+  </div>
+  <div id="wrap"><canvas id="cv"></canvas><div id="msg"></div></div>
+  <div id="foot">
+    <span><span class="c1">Red</span> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Space</kbd></span>
+    <span><span class="c2">Blue</span> <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> + <kbd>Enter</kbd></span>
+    <span><kbd>T</kbd> turn controls</span><span><kbd>P</kbd> pause</span><span><kbd>M</kbd> sound</span><span><kbd>R</kbd> new match</span>
+  </div>
+</div>
+
+<script id="shared-code">
+// Blast Yard engine. Pure logic, no DOM. Positions are in cells; a cell's centre is at whole numbers.
+const BY = (() => {
+  "use strict";
+  const W = 13, H = 11, TICK = 1 / 60;
+  const FUSE = 2.3, FLAME = 0.5, ROUND = 100, DROP = 0.32, FALL = 0.55, CHAIN = 0.07;
+  const FLOOR = 0, PILLAR = 1, CRATE = 2, FALLEN = 3;
+  const ITEMS = ["", "bomb", "flame", "speed", "kick"];
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  // The order in which the yard closes in at the end of a round: round the outside, spiralling inwards.
+  function spiral() {
+    const out = [], seen = new Uint8Array(W * H);
+    let x = 0, y = 0, d = 0;
+    const step = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+    for (let n = 0; n < W * H; n++) {
+      out.push(y * W + x); seen[y * W + x] = 1;
+      let nx = x + step[d][0], ny = y + step[d][1];
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H || seen[ny * W + nx]) { d = (d + 1) % 4; nx = x + step[d][0]; ny = y + step[d][1]; }
+      x = nx; y = ny;
+    }
+    return out;
+  }
+  const SPIRAL = spiral();
+  // Blocks come down two at a time, a cell and its opposite across the middle, so neither corner is reached first.
+  const PAIRS = (() => { const out = [], seen = new Uint8Array(W * H); for (const a of SPIRAL) { if (seen[a]) continue; const b = W * H - 1 - a; seen[a] = seen[b] = 1; out.push(a === b ? [a] : [a, b]); } return out; })();
+  const SPAWN = [[0, H - 1], [W - 1, 0]];   // the left and right corners of the diamond on screen
+
+  function createGame(seed, opts) {
+    const o = Object.assign({ target: 3, crates: 0.8, itemChance: 0.42 }, opts || {});
+    const g = { W, H, seed: seed | 0, wins: [0, 0], round: 0, target: o.target, opts: o, events: [], matchOver: false };
+    g.rng = mulberry32(g.seed * 2654435761 + 17);
+    startRound(g);
+    return g;
+  }
+  function startRound(g) {
+    g.round++;
+    g.grid = new Uint8Array(W * H); g.item = new Uint8Array(W * H); g.hidden = new Uint8Array(W * H);
+    g.fl = new Float32Array(W * H); g.burn = new Float32Array(W * H);
+    g.bombs = []; g.falling = []; g.time = 0; g.phase = "play"; g.endT = -1; g.overT = 0; g.winner = -2; g.dropN = 0; g.bombId = 0;
+    const safe = new Set();
+    for (const s of SPAWN) for (const d of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) safe.add((s[0] + d[0]) + "," + (s[1] + d[1]));
+    const weights = [0, 3, 3, 2, 1];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (x % 2 === 1 && y % 2 === 1) { g.grid[i] = PILLAR; continue; }
+      if (safe.has(x + "," + y)) continue;
+      if (g.rng() < g.opts.crates) {
+        g.grid[i] = CRATE;
+        if (g.rng() < g.opts.itemChance) { let r = g.rng() * 9, k = 1; while (r >= weights[k]) { r -= weights[k]; k++; } g.hidden[i] = k; }
+      }
+    }
+    g.players = SPAWN.map((s, id) => ({ id, x: s[0], y: s[1], dir: id === 0 ? [1, 0] : [0, 1], alive: true, bombs: 1, range: 2, speed: 3.4, kick: false, moving: false, walk: 0, deadT: 0 }));
+  }
+
+  const solid = (g, x, y) => x < 0 || y < 0 || x >= W || y >= H || g.grid[y * W + x] !== FLOOR;
+  function bombAt(g, x, y) { for (const b of g.bombs) if (Math.round(b.x) === x && Math.round(b.y) === y) return b; return null; }
+  function blocked(g, p, x, y) { if (solid(g, x, y)) return true; const b = bombAt(g, x, y); return !!b && !b.pass.includes(p.id); }
+
+  // Walk one step. Movement is along one axis; a player between two lanes slides into the one that lets them through.
+  function movePlayer(g, p, dx, dy, step) {
+    p.dir = [dx, dy];
+    const A = dx ? "x" : "y", O = dx ? "y" : "x", d = dx || dy;
+    const isB = (a, o) => dx ? blocked(g, p, a, o) : blocked(g, p, o, a);
+    let lane = Math.round(p[O]); const off = p[O] - lane, ca = Math.round(p[A]);
+    if (Math.abs(off) > 1e-6) {
+      let target = lane;
+      if (isB(ca + d, lane)) { const alt = lane + Math.sign(off); if (!isB(ca, alt) && !isB(ca + d, alt)) target = alt; else return false; }
+      const mv = Math.min(step, Math.abs(p[O] - target));
+      p[O] += Math.sign(target - p[O]) * mv; step -= mv;
+      if (Math.abs(p[O] - target) < 1e-6) p[O] = target;
+      if (step <= 1e-9) return true;
+      lane = target;
+    }
+    let na = p[A] + d * step;
+    if (isB(ca + d, lane)) {
+      const rel = (p[A] - ca) * d;
+      if (rel >= -1e-6) { if (rel < 0.05) tryKick(g, p, dx, dy); return false; }
+      if ((na - ca) * d > 0) na = ca;
+    }
+    p[A] = na;
+    return true;
+  }
+  function tryKick(g, p, dx, dy) {
+    if (!p.kick) return;
+    const cx = Math.round(p.x) + dx, cy = Math.round(p.y) + dy, b = bombAt(g, cx, cy);
+    if (!b || b.vx || b.vy) return;
+    if (bombStop(g, b, cx + dx, cy + dy)) return;
+    b.vx = dx; b.vy = dy; b.pass = [];
+    g.events.push({ type: "kick", x: cx, y: cy });
+  }
+  // Would a sliding bomb be stopped by this cell?
+  function bombStop(g, b, x, y) {
+    if (solid(g, x, y)) return true;
+    const o = bombAt(g, x, y); if (o && o !== b) return true;
+    return g.players.some(p => p.alive && Math.round(p.x) === x && Math.round(p.y) === y);
+  }
+  function placeBomb(g, p) {
+    const x = Math.round(p.x), y = Math.round(p.y);
+    if (bombAt(g, x, y) || g.bombs.filter(b => b.owner === p.id).length >= p.bombs) return false;
+    g.bombs.push({ id: ++g.bombId, x, y, vx: 0, vy: 0, owner: p.id, t: FUSE, range: p.range,
+      pass: g.players.filter(q => q.alive && Math.round(q.x) === x && Math.round(q.y) === y).map(q => q.id) });
+    g.events.push({ type: "place", x, y });
+    return true;
+  }
+  function flameCell(g, x, y) {
+    const i = y * W + x;
+    g.fl[i] = FLAME;
+    if (g.item[i]) { g.item[i] = 0; g.events.push({ type: "itemBurn", x, y }); }
+    for (const b of g.bombs) if (Math.round(b.x) === x && Math.round(b.y) === y) b.t = Math.min(b.t, CHAIN);
+  }
+  function explode(g, b) {
+    const bx = Math.round(b.x), by = Math.round(b.y);
+    g.bombs.splice(g.bombs.indexOf(b), 1);
+    g.events.push({ type: "boom", x: bx, y: by, range: b.range });
+    flameCell(g, bx, by);
+    for (const d of DIRS) for (let k = 1; k <= b.range; k++) {
+      const x = bx + d[0] * k, y = by + d[1] * k;
+      if (x < 0 || y < 0 || x >= W || y >= H) break;
+      const i = y * W + x, c = g.grid[i];
+      if (c === PILLAR || c === FALLEN) break;
+      if (c === CRATE) { if (g.burn[i] <= 0) { g.burn[i] = FLAME; g.events.push({ type: "crate", x, y }); } break; }
+      flameCell(g, x, y);
+    }
+  }
+  function kill(g, p, why) {
+    if (!p.alive) return;
+    p.alive = false; p.deadT = 0;
+    g.events.push({ type: "die", id: p.id, x: p.x, y: p.y, why });
+    if (g.endT < 0) g.endT = 1.1;
+  }
+
+  // One tick. inputs[i] = { dx, dy, bomb } for player i.
+  function tick(g, inputs) {
+    const dt = TICK;
+    if (g.phase === "over") {   // the round is decided; let what is in the air come down
+      g.overT += dt; fade(g, dt); for (const p of g.players) if (!p.alive) p.deadT += dt;
+      for (const f of g.falling) { f.t -= dt; if (f.t <= 0) { g.grid[f.i] = FALLEN; g.events.push({ type: "land", x: f.i % W, y: (f.i / W) | 0 }); } }
+      g.falling = g.falling.filter(f => f.t > 0);
+      return;
+    }
+    g.time += dt;
+    g.players.forEach((p, i) => {
+      if (!p.alive) { p.deadT += dt; return; }
+      const inp = inputs && inputs[i] || {};
+      if (inp.bomb) placeBomb(g, p);
+      p.moving = false;
+      if (inp.dx || inp.dy) { const dx = inp.dx ? Math.sign(inp.dx) : 0, dy = dx ? 0 : Math.sign(inp.dy); p.moving = movePlayer(g, p, dx, dy, p.speed * dt); }
+      if (p.moving) p.walk += dt * p.speed;
+      const i2 = Math.round(p.y) * W + Math.round(p.x), it = g.item[i2];
+      if (it) {
+        g.item[i2] = 0;
+        if (it === 1) p.bombs = Math.min(8, p.bombs + 1); else if (it === 2) p.range = Math.min(9, p.range + 1);
+        else if (it === 3) p.speed = Math.min(6.2, p.speed + 0.55); else p.kick = true;
+        g.events.push({ type: "pickup", id: p.id, item: ITEMS[it], x: p.x, y: p.y });
+      }
+    });
+    // bombs: let go of players who have stepped off, slide, burn down
+    for (const b of g.bombs) {
+      b.pass = b.pass.filter(id => { const p = g.players[id]; return p.alive && Math.max(Math.abs(p.x - b.x), Math.abs(p.y - b.y)) < 0.9; });
+      if (b.vx || b.vy) {
+        const A = b.vx ? "x" : "y", v = b.vx || b.vy, c = Math.round(b[A]), before = (b[A] - c) * v;
+        let n = b[A] + v * 7.5 * dt;
+        if (before <= 1e-9 && (n - c) * v > 0) {
+          const nx = Math.round(b.x) + b.vx, ny = Math.round(b.y) + b.vy;
+          if (bombStop(g, b, nx, ny)) { n = c; b.vx = b.vy = 0; }
+        }
+        b[A] = n;
+      }
+      if (g.fl[Math.round(b.y) * W + Math.round(b.x)] > 0) b.t = Math.min(b.t, CHAIN);
+      b.t -= dt;
+    }
+    for (let guard = 0; guard < 200; guard++) { const b = g.bombs.find(q => q.t <= 0); if (!b) break; explode(g, b); }
+    fade(g, dt);
+    // the yard closes in
+    if (g.time >= ROUND) {
+      while (g.dropN < PAIRS.length && g.time >= ROUND + g.dropN * DROP) {
+        for (const i of PAIRS[g.dropN++]) if (g.grid[i] !== PILLAR && g.grid[i] !== FALLEN) { g.falling.push({ i, t: FALL }); g.events.push({ type: "drop", x: i % W, y: (i / W) | 0 }); }
+      }
+    }
+    for (const f of g.falling) {
+      f.t -= dt;
+      if (f.t <= 0) {
+        const x = f.i % W, y = (f.i / W) | 0;
+        g.grid[f.i] = FALLEN; g.item[f.i] = 0; g.hidden[f.i] = 0; g.burn[f.i] = 0; g.fl[f.i] = 0;
+        g.bombs = g.bombs.filter(b => !(Math.round(b.x) === x && Math.round(b.y) === y));
+        for (const p of g.players) if (p.alive && Math.round(p.x) === x && Math.round(p.y) === y) kill(g, p, "crush");
+        g.events.push({ type: "land", x, y });
+      }
+    }
+    g.falling = g.falling.filter(f => f.t > 0);
+    for (const p of g.players) if (p.alive && g.fl[Math.round(p.y) * W + Math.round(p.x)] > 0) kill(g, p, "flame");
+    if (g.endT >= 0) {
+      g.endT -= dt;
+      if (g.endT <= 0) {
+        const alive = g.players.filter(p => p.alive);
+        g.winner = alive.length === 1 ? alive[0].id : -1;
+        if (g.winner >= 0) g.wins[g.winner]++;
+        g.matchOver = g.wins.some(w => w >= g.target);
+        g.phase = "over"; g.overT = 0;
+        g.events.push({ type: "roundEnd", winner: g.winner });
+      }
+    }
+  }
+  function fade(g, dt) {
+    for (let i = 0; i < W * H; i++) {
+      if (g.fl[i] > 0) g.fl[i] = Math.max(0, g.fl[i] - dt);
+      if (g.burn[i] > 0) { g.burn[i] -= dt; if (g.burn[i] <= 0) { g.burn[i] = 0; if (g.grid[i] === CRATE) { g.grid[i] = FLOOR; g.item[i] = g.hidden[i]; g.hidden[i] = 0; } } }
+    }
+  }
+  function nextRound(g) { if (g.matchOver) { g.wins = [0, 0]; g.round = 0; g.matchOver = false; } startRound(g); }
+
+  // ---- keyboard: held keys (most recent wins) plus a queue of presses, so a tap shorter than a tick still counts ----
+  function createInput() { return { held: [], taps: [], bombs: 0 }; }
+  function keyDown(inp, dir) { if (!inp.held.includes(dir)) { inp.held.push(dir); if (inp.taps.length < 4) inp.taps.push(dir); } }
+  function keyUp(inp, dir) { const k = inp.held.indexOf(dir); if (k >= 0) inp.held.splice(k, 1); }
+  function bombDown(inp) { if (inp.bombs < 3) inp.bombs++; }
+  function clearInput(inp) { inp.held.length = 0; inp.taps.length = 0; inp.bombs = 0; }
+  // dir is one of "u", "r", "d", "l" as printed on the keys. turn 0: up walks up-right on screen; turn 1: up walks up-left.
+  const KEYMAP = [{ u: [0, -1], r: [1, 0], d: [0, 1], l: [-1, 0] }, { u: [-1, 0], r: [0, -1], d: [1, 0], l: [0, 1] }];
+  function sample(inp, turn) {
+    let dir = null;
+    while (inp.taps.length) { const t = inp.taps.shift(); if (!inp.held.includes(t)) { dir = t; break; } }   // a key already let go still gets its tick
+    if (!dir && inp.held.length) dir = inp.held[inp.held.length - 1];
+    const v = dir ? KEYMAP[turn ? 1 : 0][dir] : [0, 0], bomb = inp.bombs > 0;
+    if (bomb) inp.bombs--;
+    return { dx: v[0], dy: v[1], bomb };
+  }
+
+  return { W, H, TICK, FUSE, FLAME, ROUND, DROP, FALL, FLOOR, PILLAR, CRATE, FALLEN, ITEMS, SPIRAL, SPAWN, KEYMAP,
+    createGame, startRound, nextRound, tick, placeBomb, bombAt, solid, createInput, keyDown, keyUp, bombDown, clearInput, sample };
+})();
+
+// ---- tests: node test.mjs ----
+const BYTests = {
+  run() {
+    let ok = true;
+    const check = (name, cond, info) => { if (!cond) ok = false; console.log((cond ? "ok   " : "FAIL ") + name + (info !== undefined ? "  [" + info + "]" : "")); };
+    const { W, H } = BY, I = (x, y) => y * W + x;
+    const run = (g, n, f) => { for (let k = 0; k < n; k++) BY.tick(g, f ? f(k) : []); };
+    const empty = () => { const g = BY.createGame(1); for (let i = 0; i < W * H; i++) if (g.grid[i] === BY.CRATE) { g.grid[i] = 0; g.hidden[i] = 0; } return g; };
+    {
+      const g = BY.createGame(5);
+      check("pillars stand on every other cell", g.grid[I(1, 1)] === BY.PILLAR && g.grid[I(3, 5)] === BY.PILLAR && g.grid[I(2, 2)] !== BY.PILLAR);
+      check("both corners are clear to start in", BY.SPAWN.every(s => [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].every(d => { const x = s[0] + d[0], y = s[1] + d[1]; return x < 0 || y < 0 || x >= W || y >= H || g.grid[I(x, y)] === 0; })));
+      const crates = g.grid.reduce((a, c) => a + (c === BY.CRATE), 0);
+      check("the yard is full of crates", crates > 60, crates);
+      const h = BY.createGame(5);
+      check("the same seed gives the same yard", g.grid.join() === h.grid.join() && g.hidden.join() === h.hidden.join());
+    }
+    {
+      const g = empty(), p = g.players[0];
+      g.grid[I(2, H - 1)] = BY.CRATE; g.hidden[I(2, H - 1)] = 2;
+      BY.tick(g, [{ bomb: true }]);
+      check("a bomb is laid under the player", g.bombs.length === 1 && g.bombs[0].x === 0 && g.bombs[0].y === H - 1);
+      run(g, 50, () => [{ dy: -1 }]);          // walk away up the edge
+      check("the player can walk off their own bomb", p.y < H - 2 + 0.01, p.y.toFixed(2));
+      run(g, 30, () => [{ dy: 1 }]);
+      check("but not back on to it", p.y <= H - 2 + 1e-6 && p.y > H - 2.2, p.y.toFixed(2));
+      run(g, 6, () => [{ dy: -1 }]); run(g, 20, () => [{ dy: -1 }]);
+      run(g, 70);
+      check("it goes off after the fuse", g.bombs.length === 0 && g.time > BY.FUSE);
+      check("flame is stopped by a crate and burns it", g.grid[I(2, H - 1)] === 0 && g.item[I(2, H - 1)] === 2);
+      check("the player who walked clear is alive", p.alive);
+      check("the pillar is untouched", g.grid[I(1, H - 2)] === BY.PILLAR);
+    }
+    {
+      const g = empty(), p = g.players[0];
+      BY.tick(g, [{ bomb: true }]);
+      run(g, 200);
+      check("standing on your own bomb is fatal", !p.alive);
+      run(g, 80);
+      check("the other player wins the round", g.phase === "over" && g.winner === 1 && g.wins[1] === 1);
+      BY.nextRound(g);
+      check("the next round starts fresh and keeps the score", g.phase === "play" && g.round === 2 && g.wins[1] === 1 && g.players[0].alive);
+    }
+    {
+      const g = empty();
+      g.players[0].x = 4; g.players[0].y = 0; g.players[1].x = 6; g.players[1].y = 0;
+      g.bombs.push({ id: 1, x: 5, y: 0, vx: 0, vy: 0, owner: 0, t: 0.05, range: 2, pass: [] });
+      run(g, 100);
+      check("both caught in one blast is a draw", g.phase === "over" && g.winner === -1 && g.wins[0] === 0 && g.wins[1] === 0);
+    }
+    {
+      const g = empty();
+      g.bombs.push({ id: 1, x: 4, y: 4, vx: 0, vy: 0, owner: 0, t: 0.05, range: 3, pass: [] });
+      g.bombs.push({ id: 2, x: 6, y: 4, vx: 0, vy: 0, owner: 1, t: 2, range: 3, pass: [] });
+      run(g, 12);
+      check("one bomb sets off the next", g.bombs.length === 0 && g.fl[I(9, 4)] > 0);
+    }
+    {
+      const g = empty(), p = g.players[0];
+      p.kick = true; p.x = 2; p.y = 0;
+      g.bombs.push({ id: 1, x: 3, y: 0, vx: 0, vy: 0, owner: 1, t: 2, range: 1, pass: [] });
+      run(g, 40, () => [{ dx: 1 }]);
+      const b = g.bombs[0];
+      check("a kicked bomb slides away ahead of the player", b && b.x > 6 && b.x > p.x + 1, b && b.x.toFixed(2));
+      run(g, 60);
+      check("it stops in the middle of the cell before the other player", g.bombs[0] && g.bombs[0].x === W - 2 && g.bombs[0].vx === 0, g.bombs[0] && g.bombs[0].x);
+    }
+    {
+      const g = empty(), p = g.players[0];
+      g.item[I(1, H - 1)] = 1; g.item[I(2, H - 1)] = 3;
+      const s0 = p.speed;
+      run(g, 60, () => [{ dx: 1 }]);
+      check("walking over items picks them up", p.bombs === 2 && p.speed > s0 && g.item[I(1, H - 1)] === 0);
+    }
+    {
+      const g = empty(), p = g.players[0];
+      p.x = 0; p.y = 0.3;      // between two lanes, wanting to go right along the top row
+      run(g, 30, () => [{ dx: 1 }]);
+      check("a player between lanes slides into one and carries on", p.y === 0 && p.x > 1, p.x.toFixed(2) + "," + p.y);
+    }
+    {
+      const g = empty();
+      g.players[0].x = 6; g.players[0].y = 5 - 1; g.players[1].x = 6; g.players[1].y = 6;
+      g.time = BY.ROUND - 0.01;
+      run(g, Math.ceil((W * H * BY.DROP + 2) * 60));
+      const open = g.grid.reduce((a, c) => a + (c === 0), 0);
+      check("when the clock runs out the yard closes in until someone is caught", open < 12 && g.phase === "over" && g.grid[0] === BY.FALLEN, open);
+      const h2 = empty(); h2.time = BY.ROUND - 0.01;
+      run(h2, 60 * 20);
+      check("the closing yard reaches both starting corners at the same moment", h2.phase === "over" && h2.winner === -1, h2.winner);
+    }
+    {
+      const inp = BY.createInput();
+      BY.keyDown(inp, "r"); BY.keyUp(inp, "r");
+      const a = BY.sample(inp, 0), b = BY.sample(inp, 0);
+      check("a tap shorter than a tick still moves one tick", a.dx === 1 && b.dx === 0 && b.dy === 0);
+      BY.keyDown(inp, "u"); BY.keyDown(inp, "l");
+      check("the latest key held wins", BY.sample(inp, 0).dx === -1);
+      BY.keyUp(inp, "l");
+      check("letting it go falls back to the other", BY.sample(inp, 0).dy === -1 && BY.sample(inp, 1).dx === -1);
+      BY.bombDown(inp); BY.bombDown(inp);
+      check("each bomb press is used once", BY.sample(inp, 0).bomb && BY.sample(inp, 0).bomb && !BY.sample(inp, 0).bomb);
+    }
+    {
+      // two players mashing keys at random for many rounds: nothing may leave the yard, stand in a wall or go missing
+      const g = BY.createGame(99), r = (() => { let a = 12345; return () => (a = (a * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff; })();
+      let bad = "", rounds = 0, wins = 0, cur = [{}, {}];
+      for (let k = 0; k < 120000 && !bad; k++) {
+        if (k % 14 === 0) cur = [0, 1].map(() => { const d = [[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]][Math.floor(r() * 5)]; return { dx: d[0], dy: d[1], bomb: r() < 0.25 }; });
+        BY.tick(g, cur); g.events.length = 0;
+        for (const p of g.players) {
+          if (!(p.x >= 0 && p.x <= W - 1 && p.y >= 0 && p.y <= H - 1)) bad = "player left the yard at tick " + k;
+          else if (p.alive && g.grid[I(Math.round(p.x), Math.round(p.y))] !== 0) bad = "player inside a block at tick " + k;
+          else if (Math.abs(p.x - Math.round(p.x)) > 1e-6 && Math.abs(p.y - Math.round(p.y)) > 1e-6) bad = "player off both lanes at tick " + k;
+        }
+        for (const b of g.bombs) if (g.grid[I(Math.round(b.x), Math.round(b.y))] !== 0) bad = "bomb inside a block at tick " + k;
+        if (g.phase === "over" && g.overT > 0.5) { rounds++; if (g.winner >= 0) wins++; BY.nextRound(g); }
+      }
+      check("random play for " + rounds + " rounds keeps everything in its place", !bad && rounds > 20, bad || wins + " won, " + (rounds - wins) + " drawn");
+    }
+    console.log(ok ? "all tests passed" : "SOME TESTS FAILED");
+    return ok;
+  },
+};
+</script>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const { W, H } = BY, q = new URLSearchParams(location.search);
+  const cv = $("cv"), ctx = cv.getContext("2d");
+  const COL = [{ suit: "#e2553f", dark: "#9c2f20", light: "#ff9a84" }, { suit: "#3f8fe2", dark: "#1f548f", light: "#9accff" }];
+  const NAMES = ["Red", "Blue"];
+  let g = BY.createGame(q.has("seed") ? +q.get("seed") : (Date.now() & 0xffff));
+  let mode = "title", paused = false, turn = 0, mute = false, shake = 0, clock = 0, acc = 0, last = performance.now();
+  const inputs = [BY.createInput(), BY.createInput()];
+  let parts = [];
+  try { turn = localStorage.getItem("blastyard.turn") === "1" ? 1 : 0; } catch (e) {}
+
+  // ---- isometric view: 2:1 diamond tiles ----
+  const TW = 32, TH = 16, WALL = 16, PIL = 18, CRT = 14;   // blocks are kept low so that little hides behind them
+  const view = { s: 1, ox: 0, oy: 0, cw: 0, ch: 0 };
+  function fit() {
+    const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const cw = Math.max(200, Math.round(r.width) || 960), ch = Math.max(150, Math.round(r.height) || 560);
+    const bw = Math.round(cw * dpr), bh = Math.round(ch * dpr);
+    if (cv.width !== bw || cv.height !== bh) { cv.width = bw; cv.height = bh; }
+    const x0 = (-1.5 - (H - 0.5)) * TW, x1 = (W - 0.5 + 1.5) * TW, y0 = -3 * TH - WALL - 8, y1 = (W + H - 1) * TH + 26;
+    view.s = Math.min(cw / (x1 - x0 + 24), ch / (y1 - y0 + 16));
+    view.ox = cw / 2 - view.s * (x0 + x1) / 2; view.oy = ch / 2 - view.s * (y0 + y1) / 2;
+    view.cw = cw; view.ch = ch; view.dpr = dpr;
+  }
+  const P = (x, y, z) => [view.ox + (x - y) * TW * view.s, view.oy + ((x + y) * TH - (z || 0)) * view.s];
+  function poly(pts, fill, stroke) {
+    ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+  }
+  // A box standing on cell (x, y): r is its half-width in cells, z0..z1 its height in pixels.
+  function box(x, y, r, z0, z1, top, left, right, edge) {
+    poly([P(x - r, y + r, z1), P(x + r, y + r, z1), P(x + r, y + r, z0), P(x - r, y + r, z0)], left, edge);
+    poly([P(x + r, y - r, z1), P(x + r, y + r, z1), P(x + r, y + r, z0), P(x + r, y - r, z0)], right, edge);
+    poly([P(x - r, y - r, z1), P(x + r, y - r, z1), P(x + r, y + r, z1), P(x - r, y + r, z1)], top, edge);
+  }
+  const hash = (x, y) => { const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return v - Math.floor(v); };
+  function ellipse(x, y, rx, ry, fill) { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, 2 * Math.PI); ctx.fillStyle = fill; ctx.fill(); }
+
+  function drawGround() {
+    const s = view.s;
+    // the slab the yard stands on
+    poly([P(-1.5, H - .5, 0), P(W - .5, H - .5, 0), P(W - .5, H - .5, -22), P(-1.5, H - .5, -22)], "#5b4630");
+    poly([P(W - .5, -1.5, 0), P(W - .5, H - .5, 0), P(W - .5, H - .5, -22), P(W - .5, -1.5, -22)], "#463523");
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const h = hash(x, y), c = (x + y) & 1;
+      poly([P(x - .5, y - .5), P(x + .5, y - .5), P(x + .5, y + .5), P(x - .5, y + .5)], c ? "#6c9f48" : "#74a84e", "rgba(40,70,30,.35)");
+      if (h > .55) { const p = P(x - .2 + h * .4, y - .15 + hash(y, x) * .3); ctx.fillStyle = "rgba(50,90,35,.55)"; ctx.fillRect(p[0], p[1], 2.2 * s, 1.2 * s); ctx.fillRect(p[0] + 5 * s, p[1] + 2 * s, 1.6 * s, 1 * s); }
+    }
+    // the wall along the two far sides
+    for (let x = -1; x < W; x++) box(x, -1, .5, 0, WALL, "#a9adb6", "#80848e", "#666a74", "rgba(30,32,40,.35)");
+    for (let y = 0; y < H; y++) box(-1, y, .5, 0, WALL, "#a9adb6", "#80848e", "#666a74", "rgba(30,32,40,.35)");
+  }
+  function drawPillar(x, y, fallen) {
+    if (fallen) box(x, y, .5, 0, PIL, "#8f8377", "#6c6258", "#544b43", "rgba(20,18,16,.4)");
+    else box(x, y, .5, 0, PIL, "#c3c6ce", "#92959f", "#73767f", "rgba(30,32,40,.4)");
+    const a = P(x - .5, y + .5, PIL / 2), b = P(x + .5, y + .5, PIL / 2), c = P(x + .5, y - .5, PIL / 2);
+    ctx.strokeStyle = "rgba(30,32,40,.3)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.lineTo(c[0], c[1]); ctx.stroke();
+  }
+  function drawCrate(x, y, burn) {
+    const k = burn > 0 ? burn / BY.FLAME : 1, r = .43;
+    const mix = (a, b) => burn > 0 ? b : a;
+    ctx.globalAlpha = burn > 0 ? .35 + .65 * k : 1;
+    box(x, y, r, 0, CRT, mix("#d2a25a", "#6b4a2a"), mix("#b07d3e", "#4a321c"), mix("#8f6230", "#372414"), "rgba(50,30,10,.55)");
+    ctx.strokeStyle = "rgba(60,36,12,.6)"; ctx.lineWidth = Math.max(1, 1.4 * view.s);
+    let a = P(x - r, y + r, CRT), b = P(x + r, y + r, 0); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+    a = P(x + r, y + r, CRT); b = P(x + r, y - r, 0); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+    a = P(x - r, y, CRT); b = P(x + r, y, CRT); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  function drawBomb(b) {
+    const s = view.s, pulse = 1 + .09 * Math.sin((BY.FUSE - b.t) * (6 + 10 * (1 - b.t / BY.FUSE))), p = P(b.x, b.y, 0);
+    ellipse(p[0], p[1] + 1 * s, 12 * s, 6 * s, "rgba(0,0,0,.35)");
+    const r = 11 * s * pulse, cy = p[1] - 10 * s;
+    const gr = ctx.createRadialGradient(p[0] - r * .35, cy - r * .4, r * .1, p[0], cy, r);
+    gr.addColorStop(0, "#6c7686"); gr.addColorStop(.45, "#252a33"); gr.addColorStop(1, "#090b0f");
+    ellipse(p[0], cy, r, r, gr);
+    ctx.strokeStyle = COL[b.owner].suit; ctx.lineWidth = 2 * s; ctx.beginPath(); ctx.ellipse(p[0], cy + r * .1, r * .98, r * .32, 0, 0.1, Math.PI - 0.1); ctx.stroke();
+    ctx.strokeStyle = "#8a6b3c"; ctx.lineWidth = 2 * s; ctx.beginPath(); ctx.moveTo(p[0], cy - r); ctx.quadraticCurveTo(p[0] + 4 * s, cy - r - 6 * s, p[0] + 7 * s, cy - r - 5 * s); ctx.stroke();
+    const f = .6 + .4 * Math.sin(clock * 40 + b.id);
+    ellipse(p[0] + 7 * s, cy - r - 5 * s, 3.2 * s * f, 3.2 * s * f, "#ffe27a"); ellipse(p[0] + 7 * s, cy - r - 5 * s, 1.5 * s, 1.5 * s, "#fff");
+  }
+  function drawItem(x, y, kind) {
+    const s = view.s, bob = Math.sin(clock * 3 + x + y) * 2, p = P(x, y, 12 + bob), col = ["", "#3b4350", "#e2632f", "#e6c23a", "#52b36b"][kind];
+    ellipse(P(x, y)[0], P(x, y)[1], 9 * s, 4.5 * s, "rgba(0,0,0,.3)");
+    ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(s, s);
+    ctx.beginPath(); ctx.roundRect(-10, -11, 20, 20, 5); ctx.fillStyle = "#f3efe2"; ctx.fill(); ctx.lineWidth = 2.2; ctx.strokeStyle = col; ctx.stroke();
+    ctx.fillStyle = col;
+    if (kind === 1) { ctx.beginPath(); ctx.arc(-.5, 0.5, 5.4, 0, 7); ctx.fill(); ctx.fillRect(2, -7.5, 2, 4); }
+    else if (kind === 2) { ctx.beginPath(); ctx.moveTo(0, -8); ctx.bezierCurveTo(7, -1, 6, 7, 0, 7); ctx.bezierCurveTo(-6, 7, -7, -1, 0, -8); ctx.fill(); ctx.fillStyle = "#ffd76a"; ctx.beginPath(); ctx.arc(0, 3, 2.6, 0, 7); ctx.fill(); }
+    else if (kind === 3) { ctx.beginPath(); ctx.moveTo(2, -8); ctx.lineTo(-5, 1); ctx.lineTo(-1, 1); ctx.lineTo(-3, 8); ctx.lineTo(5, -2); ctx.lineTo(1, -2); ctx.closePath(); ctx.fill(); }
+    else { ctx.beginPath(); ctx.moveTo(-5, -7); ctx.lineTo(-1, -7); ctx.lineTo(-1, 1); ctx.lineTo(6, 2); ctx.lineTo(6, 6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill(); }
+    ctx.restore();
+  }
+  function drawFlame(x, y, t) {
+    const s = view.s, k = Math.min(1, t / BY.FLAME * 1.6), p = P(x, y);
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    const gl = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], 34 * s);
+    gl.addColorStop(0, `rgba(255,220,120,${.75 * k})`); gl.addColorStop(1, "rgba(255,90,20,0)");
+    ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(1, .5); ctx.translate(-p[0], -p[1]); ellipse(p[0], p[1], 34 * s, 34 * s, gl); ctx.restore();
+    ctx.restore();
+    for (let n = 0; n < 4; n++) {
+      const h = hash(x * 7 + n, y * 3 + n), ph = clock * (9 + h * 6) + h * 9, fx = p[0] + (h - .5) * 26 * s + Math.sin(ph) * 2 * s, fy = p[1] + (hash(n, x + y) - .5) * 9 * s;
+      const ht = (26 + 20 * h + 8 * Math.sin(ph * 1.7)) * s * k, wd = (7 + 5 * h) * s * k;
+      const gr = ctx.createLinearGradient(0, fy, 0, fy - ht);
+      gr.addColorStop(0, "rgba(255,246,190,.95)"); gr.addColorStop(.45, "rgba(255,160,40,.9)"); gr.addColorStop(1, "rgba(220,50,20,0)");
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.moveTo(fx - wd, fy); ctx.quadraticCurveTo(fx - wd, fy - ht * .5, fx, fy - ht); ctx.quadraticCurveTo(fx + wd, fy - ht * .5, fx + wd, fy); ctx.quadraticCurveTo(fx, fy + wd * .6, fx - wd, fy); ctx.fill();
+    }
+  }
+  function drawPlayer(p, ghost) {
+    const s = view.s, c = COL[p.id], base = P(p.x, p.y, 0);
+    let squash = 1, alpha = 1;
+    if (!p.alive) { squash = Math.max(.15, 1 - p.deadT * 2.2); alpha = Math.max(0, 1 - p.deadT * 1.1); if (alpha <= 0) return; }
+    const sdx = p.dir[0] - p.dir[1], sdy = p.dir[0] + p.dir[1];           // which way the figure faces on screen
+    const step = p.moving ? Math.sin(p.walk * 7) : 0, bob = p.moving ? Math.abs(Math.sin(p.walk * 7)) * 2 : 0;
+    ctx.save(); ctx.globalAlpha = alpha * (ghost || 1);
+    if (!ghost) ellipse(base[0], base[1], 11 * s, 5.5 * s, "rgba(0,0,0,.35)");
+    ctx.translate(base[0], base[1]); ctx.scale(s * 1.22, s * 1.22 * squash);
+    // boots
+    ellipse(-4.5 + step * 2, -2 - Math.max(0, step) * 2.5, 4, 2.6, "#2b2f38"); ellipse(4.5 - step * 2, -2 - Math.max(0, -step) * 2.5, 4, 2.6, "#2b2f38");
+    ctx.translate(0, -bob);
+    // body
+    const bg = ctx.createLinearGradient(-9, 0, 9, 0); bg.addColorStop(0, c.light); bg.addColorStop(.45, c.suit); bg.addColorStop(1, c.dark);
+    ctx.fillStyle = bg; ctx.beginPath(); ctx.roundRect(-8.5, -22, 17, 19, 7); ctx.fill();
+    ctx.fillStyle = "#2b2f38"; ctx.fillRect(-8.5, -10, 17, 2.6);
+    // arms
+    ellipse(-9.5, -13 - step * 2, 3, 4.6, c.dark); ellipse(9.5, -13 + step * 2, 3, 4.6, c.dark);
+    // head and helmet
+    ellipse(0, -28, 8.2, 7.8, "#f0c9a0");
+    ctx.fillStyle = c.suit; ctx.beginPath(); ctx.arc(0, -29.5, 9, Math.PI, 0); ctx.lineTo(10.5, -29); ctx.lineTo(-10.5, -29); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = c.dark; ctx.fillRect(-10.5, -30.2, 21, 2.2);
+    if (sdy >= 0) {
+      const ex = sdx * 2.6;
+      ellipse(ex - 3, -26.2, 1.5, 2, "#1c1f26"); ellipse(ex + 3, -26.2, 1.5, 2, "#1c1f26");
+      ellipse(sdx * 3.5, -36.5, 2.6, 2.2, "#ffe27a");
+    } else { ctx.fillStyle = c.suit; ctx.beginPath(); ctx.arc(0, -28, 8.6, 0, Math.PI); ctx.fill(); }
+    ctx.restore();
+  }
+  function drawFalling(f) {
+    const x = f.i % W, y = (f.i / W) | 0, k = f.t / BY.FALL, z = k * k * 520, p = P(x, y);
+    ellipse(p[0], p[1], 26 * view.s * (1 - k * .6), 13 * view.s * (1 - k * .6), `rgba(0,0,0,${.15 + .35 * (1 - k)})`);
+    box(x, y, .5, z, z + PIL, "#8f8377", "#6c6258", "#544b43", "rgba(20,18,16,.4)");
+  }
+
+  function draw() {
+    fit();
+    const dpr = view.dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const bgc = ctx.createLinearGradient(0, 0, 0, view.ch); bgc.addColorStop(0, "#1b2634"); bgc.addColorStop(1, "#0d1117");
+    ctx.fillStyle = bgc; ctx.fillRect(0, 0, view.cw, view.ch);
+    ctx.save();
+    if (shake > 0.01) ctx.translate((Math.random() - .5) * shake * 9 * view.s, (Math.random() - .5) * shake * 6 * view.s);
+    drawGround();
+    const list = [];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x, c = g.grid[i], k = x + y;
+      if (c === BY.PILLAR || c === BY.FALLEN) list.push([k, () => drawPillar(x, y, c === BY.FALLEN)]);
+      else if (c === BY.CRATE) list.push([k, () => drawCrate(x, y, g.burn[i])]);
+      else if (g.item[i]) list.push([k - .2, () => drawItem(x, y, g.item[i])]);
+      if (g.fl[i] > 0) list.push([k + .3, () => drawFlame(x, y, g.fl[i])]);
+    }
+    for (const b of g.bombs) list.push([b.x + b.y + .05, () => drawBomb(b)]);
+    for (const p of g.players) list.push([p.x + p.y + .1, () => drawPlayer(p)]);
+    for (const f of g.falling) list.push([(f.i % W) + ((f.i / W) | 0) + .4, () => drawFalling(f)]);
+    list.sort((a, b) => a[0] - b[0]);
+    for (const o of list) o[1]();
+    // a faint copy of the players and bombs on top, so they can still be made out behind a block
+    ctx.globalAlpha = .3; for (const b of g.bombs) drawBomb(b); ctx.globalAlpha = 1;
+    for (const p of g.players) drawPlayer(p, .3);
+    for (const pt of parts) {
+      const p = P(pt.x, pt.y, pt.z);
+      ctx.globalAlpha = Math.min(1, pt.life * 2.5); ctx.fillStyle = pt.col;
+      ctx.fillRect(p[0] - pt.r * view.s / 2, p[1] - pt.r * view.s / 2, pt.r * view.s, pt.r * view.s);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ---- particles, sound ----
+  function burst(x, y, n, cols, power) {
+    for (let k = 0; k < n; k++) parts.push({ x: x + (Math.random() - .5) * .5, y: y + (Math.random() - .5) * .5, z: 6 + Math.random() * 16, vx: (Math.random() - .5) * power, vy: (Math.random() - .5) * power, vz: 60 + Math.random() * 150, life: .5 + Math.random() * .5, col: cols[k % cols.length], r: 2 + Math.random() * 3 });
+  }
+  let actx = null;
+  function audio() { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } if (actx && actx.state === "suspended") actx.resume(); }
+  function tone(f0, f1, dur, vol, type) {
+    if (!actx || mute) return; const t = actx.currentTime, o = actx.createOscillator(), a = actx.createGain();
+    o.type = type || "square"; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    a.gain.setValueAtTime(vol, t); a.gain.exponentialRampToValueAtTime(.0005, t + dur); o.connect(a); a.connect(actx.destination); o.start(t); o.stop(t + dur + .02);
+  }
+  function noise(dur, vol, f0, f1) {
+    if (!actx || mute) return; const t = actx.currentTime, n = Math.floor(actx.sampleRate * dur), buf = actx.createBuffer(1, n, actx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = actx.createBufferSource(), fl = actx.createBiquadFilter(), a = actx.createGain(); src.buffer = buf; fl.type = "lowpass";
+    fl.frequency.setValueAtTime(f0, t); fl.frequency.exponentialRampToValueAtTime(f1, t + dur); a.gain.setValueAtTime(vol, t); a.gain.exponentialRampToValueAtTime(.0005, t + dur);
+    src.connect(fl); fl.connect(a); a.connect(actx.destination); src.start(t);
+  }
+  function handleEvents() {
+    for (const e of g.events) {
+      if (e.type === "place") tone(220, 150, .08, .12);
+      else if (e.type === "boom") { noise(.55, .5, 1800, 90); tone(120, 35, .35, .35, "sine"); shake = Math.min(1.5, shake + .7); burst(e.x, e.y, 10, ["#ffd76a", "#ff8a3c", "#fff3c4"], 5); }
+      else if (e.type === "crate") burst(e.x, e.y, 9, ["#c9984f", "#8f6230", "#5a3c1c"], 4);
+      else if (e.type === "pickup") { tone(520, 1040, .14, .12, "triangle"); burst(e.x, e.y, 6, ["#fff", COL[e.id].light], 2); }
+      else if (e.type === "kick") tone(160, 320, .07, .12, "triangle");
+      else if (e.type === "die") { tone(500, 60, .6, .2, "sawtooth"); burst(e.x, e.y, 16, [COL[e.id].suit, "#333", "#ddd"], 4); }
+      else if (e.type === "land") { noise(.18, .3, 500, 80); shake = Math.min(1.5, shake + .25); burst(e.x, e.y, 4, ["#b9ad9f", "#8f8377"], 3); }
+      else if (e.type === "roundEnd") { mode = "over"; showMsg(); if (e.winner >= 0) { tone(440, 440, .12, .12, "triangle"); setTimeout(() => tone(660, 660, .2, .12, "triangle"), 130); } }
+    }
+    g.events.length = 0;
+  }
+
+  // ---- HUD and messages ----
+  function hud() {
+    for (let i = 0; i < 2; i++) {
+      const el = $("hud" + (i + 1)), p = g.players[i];
+      let pips = ""; for (let k = 0; k < g.target; k++) pips += `<i class="pip${k < g.wins[i] ? " on" : ""}"></i>`;
+      const pe = el.querySelector(".pips"); if (pe.dataset.v !== pips) { pe.innerHTML = pips; pe.dataset.v = pips; }
+      const st = `💣 <b>${p.bombs}</b>  🔥 <b>${p.range}</b>  ⚡ <b>${Math.round((p.speed - 3.4) / .55)}</b>${p.kick ? "  👟" : ""}`;
+      const se = el.querySelector(".stats"); if (se.dataset.v !== st) { se.innerHTML = st; se.dataset.v = st; }
+    }
+    const left = Math.max(0, BY.ROUND - g.time), txt = left > 0 ? Math.floor(left / 60) + ":" + String(Math.floor(left % 60)).padStart(2, "0") : "CLOSING IN";
+    const ck = $("clock"); if (ck.textContent !== txt) ck.textContent = txt; ck.classList.toggle("hot", left < 15);
+    const rt = "Round " + g.round + " · first to " + g.target; if ($("round").textContent !== rt) $("round").textContent = rt;
+  }
+  const DIRNAME = [["up-right", "down-right", "down-left", "up-left"], ["up-left", "up-right", "down-right", "down-left"]];
+  function showMsg() {
+    const m = $("msg");
+    if ((mode === "play" && !paused) || q.has("shot")) { m.innerHTML = ""; return; }
+    let h = "";
+    if (paused) h = "<h2>Paused</h2><p class='go'>Press <kbd>P</kbd> to carry on</p>";
+    else if (mode === "title") {
+      const d = DIRNAME[turn];
+      h = "<h1>BLAST YARD</h1><p>Two players, one keyboard. Lay bombs, blow up crates, collect what was inside, and catch the other one in a blast. First to " + g.target + " rounds.</p>" +
+        "<table><tr><th></th><th>Walk</th><th>Bomb</th></tr>" +
+        "<tr><td class='c1'>Red</td><td><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></td><td><kbd>Space</kbd></td></tr>" +
+        "<tr><td class='c2'>Blue</td><td><kbd>↑</kbd> <kbd>←</kbd> <kbd>↓</kbd> <kbd>→</kbd></td><td><kbd>Enter</kbd></td></tr></table>" +
+        "<p>The yard is seen from a corner: <kbd>W</kbd>/<kbd>↑</kbd> walks " + d[0] + ", <kbd>D</kbd>/<kbd>→</kbd> " + d[1] + ", <kbd>S</kbd>/<kbd>↓</kbd> " + d[2] + ", <kbd>A</kbd>/<kbd>←</kbd> " + d[3] + ". Press <kbd>T</kbd> to turn the controls the other way.</p>" +
+        "<p>💣&nbsp;one more bomb · 🔥&nbsp;longer blast · ⚡&nbsp;faster · 👟&nbsp;walk into a bomb to kick it. When the clock runs out the yard closes in.</p>" +
+        "<p class='go'>Press <kbd>Space</kbd> or <kbd>Enter</kbd> to start</p>";
+    } else if (mode === "over") {
+      const w = g.winner, cls = w >= 0 ? "c" + (w + 1) : "";
+      if (g.matchOver) h = `<h2><span class="${cls}">${NAMES[w]}</span> wins the match ${g.wins[w]}–${g.wins[1 - w]}</h2><p class='go'>Press <kbd>Space</kbd> or <kbd>Enter</kbd> for a new match</p>`;
+      else h = (w >= 0 ? `<h2><span class="${cls}">${NAMES[w]}</span> takes round ${g.round}</h2>` : "<h2>Nobody wins that one</h2>") + `<p><span class="c1">Red ${g.wins[0]}</span> – <span class="c2">${g.wins[1]} Blue</span></p><p class='go'>Press <kbd>Space</kbd> or <kbd>Enter</kbd> for the next round</p>`;
+    }
+    m.innerHTML = "<div class='box'>" + h + "</div>";
+  }
+
+  // ---- keyboard ----
+  const KEYS = { KeyW: [0, "u"], KeyD: [0, "r"], KeyS: [0, "d"], KeyA: [0, "l"], ArrowUp: [1, "u"], ArrowRight: [1, "r"], ArrowDown: [1, "d"], ArrowLeft: [1, "l"] };
+  const BOMB = { Space: 0, KeyF: 0, Enter: 1, NumpadEnter: 1, Slash: 1, Numpad0: 1 };
+  function advance() {   // Space or Enter on a message screen
+    if (mode === "title") { mode = "play"; inputs.forEach(BY.clearInput); showMsg(); }
+    else if (mode === "over" && g.overT > .6) { BY.nextRound(g); parts = []; mode = "play"; inputs.forEach(BY.clearInput); showMsg(); }
+  }
+  window.addEventListener("keydown", e => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    audio();
+    const k = KEYS[e.code];
+    if (k) { e.preventDefault(); BY.keyDown(inputs[k[0]], k[1]); return; }   // a repeat for a key not held re-registers it
+    if (e.code in BOMB) {
+      e.preventDefault(); if (e.repeat) return;
+      if (mode === "play" && !paused) BY.bombDown(inputs[BOMB[e.code]]); else if (!paused && (e.code === "Space" || e.code === "Enter")) advance();
+      return;
+    }
+    if (e.repeat) return;
+    if (e.code === "KeyP" && mode === "play") { paused = !paused; showMsg(); }
+    else if (e.code === "KeyM") mute = !mute;
+    else if (e.code === "KeyT") { turn = 1 - turn; try { localStorage.setItem("blastyard.turn", String(turn)); } catch (err) {} showMsg(); }
+    else if (e.code === "KeyR") { g = BY.createGame((Date.now() & 0xffff) + 1); parts = []; paused = false; mode = "title"; showMsg(); }
+  });
+  window.addEventListener("keyup", e => { const k = KEYS[e.code]; if (k) BY.keyUp(inputs[k[0]], k[1]); });
+  window.addEventListener("blur", () => inputs.forEach(BY.clearInput));
+
+  // ---- main loop: fixed 60 Hz simulation ----
+  function sim(dt) {
+    clock += dt;
+    if (mode === "title" || paused) return;
+    acc += dt;
+    while (acc >= BY.TICK) {
+      acc -= BY.TICK;
+      BY.tick(g, mode === "play" ? [BY.sample(inputs[0], turn), BY.sample(inputs[1], turn)] : []);
+      handleEvents();
+    }
+    shake *= Math.pow(.02, dt);
+    for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; p.vz -= 520 * dt; if (p.z < 0) { p.z = 0; p.vz *= -.35; p.vx *= .5; p.vy *= .5; } p.life -= dt; }
+    parts = parts.filter(p => p.life > 0);
+  }
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dt = Math.min(.1, (now - last) / 1000); last = now;
+    sim(dt); hud(); draw();
+  }
+  if (q.has("shot")) {   // a staged scene for the gallery picture
+    mode = "play";
+    for (const [x, y] of [[4, 4], [5, 4], [6, 4], [7, 4], [8, 4], [6, 2], [6, 3], [6, 5], [6, 6], [4, 6], [5, 6], [7, 6], [8, 6], [4, 5], [8, 5], [2, 6], [3, 6], [8, 2], [8, 3], [10, 4], [9, 4]]) { g.grid[y * W + x] = 0; g.hidden[y * W + x] = 0; }
+    g.item[6 * W + 4] = 2; g.item[2 * W + 8] = 3; g.item[6 * W + 7] = 4;
+    Object.assign(g.players[0], { x: 4, y: 5.6, dir: [0, 1], moving: true, walk: .3, bombs: 3, range: 3 }); Object.assign(g.players[1], { x: 10.4, y: 4, dir: [1, 0], moving: true, walk: .5, bombs: 2, range: 4, kick: true });
+    g.bombs.push({ id: 1, x: 6, y: 4, vx: 0, vy: 0, owner: 0, t: .02, range: 3, pass: [] }, { id: 2, x: 2, y: 6, vx: 0, vy: 0, owner: 0, t: 1.4, range: 3, pass: [] }, { id: 3, x: 8, y: 6, vx: 0, vy: 0, owner: 1, t: 2, range: 4, pass: [] });
+    g.time = 37; for (let k = 0; k < 9; k++) { BY.tick(g, []); handleEvents(); clock += 1 / 60; for (const p of parts) { p.x += p.vx / 60; p.y += p.vy / 60; p.z += p.vz / 60; } }
+    paused = true;
+  }
+  showMsg(); hud(); draw();
+  requestAnimationFrame(frame);
+  // for testing in a hidden tab: drive the game by hand
+  window.__by = { get g() { return g; }, inputs, BY, start() { mode = "play"; showMsg(); }, step(sec) { const n = Math.round(sec * 60); for (let k = 0; k < n; k++) sim(1 / 60); hud(); draw(); }, state: () => ({ mode, paused, turn }) };
+})();
+</script>
+</body>
+</html>
