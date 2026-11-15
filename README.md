@@ -123,6 +123,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [pendulum](pendulum/) -- double and triple pendulum with trails, sonified through Web Audio with a spectrogram.
 - [perlin-noise](perlin-noise/) -- seamlessly tiling noise with fixed-point Perlin and simplex backends, octaves and shaping modes.
 - [pulleys](pulleys/) -- see highlights.
+- [rusty-metal](rusty-metal/) -- rusty metal textures with a slider for everything. One map says when each point of the sheet starts to rust, with head starts at pinholes, seams, rivets and scratches; an age slider sweeps through it, so young orange rust sits at the spreading edges and dark old oxide in the cores. 89 parameters cover the corrosion, rust colour, pits, grain and flake layers, the bare steel, a paint coat that chips and blisters, runs and halos, plates and rivets, scratches, a worn stencil (text, hazard stripes, trefoil, arrow, ring), and the light. Ten presets from flash rust to a ship's hull; every tile wraps and exports lit or as colour, height, normal and mask maps up to 4096 px.
 - [shortest-path](shortest-path/) -- see highlights.
 - [skin-texture](skin-texture/) -- procedural tiling skin with veins, freckles, pores, vitiligo and bump-mapped lighting.
 - [slime-mold](slime-mold/) -- Physarum agents with pheromone deposit, diffusion and decay; click to drop food.
