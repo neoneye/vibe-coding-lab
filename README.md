@@ -174,6 +174,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 
 - [audio-bird-synth](audio-bird-synth/) -- birdsong synthesizer with species presets, mutating phrases and call-and-response.
 - [audio-cat-synth](audio-cat-synth/) -- two synthesized cats argue in hisses, growls, yowls and spits.
+- [audio-fft-landscape](audio-fft-landscape/) -- an FFT analyser that draws the last ten seconds of sound as a 3D landscape and hunts persistent tones, made for tracking down a faint 5 kHz noise in a house that comes and goes. Microphone (with the browser's noise suppression off), audio file or a built-in demo room. Tones are found by comparing each frequency with the median of its neighbours; a watch band is logged for up to twelve hours with start and stop times and automatic captures. Replay turns the kept part up and the rest down with a short-time Fourier filter, at any speed, and saves WAV. Own FFT, WebGL2 height field, 62 parameters, no libraries.
 - [audio-fft-transcribe](audio-fft-transcribe/) -- live microphone spectrogram of the last 10 seconds with speech-to-text from the Web Speech API.
 - [audio-singularity](audio-singularity/) -- see highlights.
 - [audio-text-to-speech-amiga](audio-text-to-speech-amiga/) -- a recreation of the Amiga "Say" formant synthesizer with speed, pitch, mouth and throat knobs.
