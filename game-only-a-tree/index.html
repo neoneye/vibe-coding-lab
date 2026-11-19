@@ -160,6 +160,7 @@ const duv = new Float32Array(W * H);
 const barMask = new Uint8Array(W * H);
 const treeMask = new Uint8Array(W * H);
 const openMask = new Uint8Array(W * H);     // no glass here
+const wet = new Float32Array(W * H);          // trails that running drops leave on the glass
 const curtA = new Uint8Array(W * H);        // curtain hanging in front of the glass
 const leafD = new Float32Array(W * H);      // how much leaf the moonlight has to pass through
 const leafT = new Float32Array(W * H);
@@ -561,6 +562,20 @@ function render(v) {
     if (!openMask[i] && !barMask[i]) fb[i] = fb[i] * 0.93 + 10 + (Math.sin((x + y * 1.4) * 0.11) > 0.93 ? 3 : 0);
     else if (openMask[i]) fb[i] *= 0.82;
   }
+  // rain on the glass: wet trails, and drops that catch the light along their lower edge
+  if (v.drops) {
+    for (let y = WIN.y0; y < WIN.y1; y++) for (let x = WIN.x0; x < WIN.x1; x++) {
+      const i = y * W + x;
+      if (wet[i] > 0.02 && !barMask[i]) fb[i] += wet[i] * (9 + 30 * fl);
+    }
+    for (const d of v.drops) {
+      const X = Math.round(d.x), Y = Math.round(d.y), i = Y * W + X;
+      if (!inWin(X, Y) || barMask[i]) continue;
+      const glint = (14 + 34 * moonVis + 150 * fl) * Math.min(1, 0.45 + d.m * 0.5);
+      if (d.m > 0.85 && Y > WIN.y0 && !barMask[i - W]) { fb[i - W] *= 0.62; fb[i] += glint; }
+      else fb[i] += glint * 0.6;
+    }
+  }
   if (v.smear) {                                               // what the bird left on the glass
     const m = v.smear;
     for (let dy = -3; dy <= 9; dy++) for (let dx = -3; dx <= 3; dx++) {
@@ -744,6 +759,10 @@ function sfxThunder(loud) {    // a crack if it is close, then a long rumble tha
   s.connect(f); f.connect(g); g.connect(A.master); s.start(t, Math.random()); s.stop(t + 5.1);
   thump(t, 0.5 * loud, 60);
 }
+function sfxDrop() {           // one drop on the pane
+  if (!A.ctx) return;
+  burst(A.ctx.currentTime + 0.005 + Math.random() * 0.05, 0.012, 3200 + Math.random() * 2500, 8, 0.05 + Math.random() * 0.05);
+}
 function sfxBird() {
   if (!A.ctx) return;
   const t = A.ctx.currentTime + 0.01;
@@ -829,7 +848,7 @@ const G = {
   surgeT: 8, surge: 0,
   wind: 0, gust: 0, tapT: 0, jolt: 0, fear: 0,
   playT: 0, rain: 0, rainSeed: 0, flashT: 9, bolt: null, thunderAt: 0, thunderLoud: 0, nextStrike: 30, nextBird: 90, bird: null, smear: null,
-  branchCd: 12, startle: 0, startleT: 9, thought: '', thoughtT: -1, thoughtD: 1,
+  drops: [], branchCd: 12, startle: 0, startleT: 9, thought: '', thoughtT: -1, thoughtD: 1,
   curl: 0, t: 0, closes: 0, tune: false, tuneTab: 'calm', tuneBlend: null
 };
 const pick = a => a[(Math.random() * a.length) | 0];
@@ -850,6 +869,7 @@ function strike(closed) {
 function weather(dt, closed) {
   G.playT += dt;
   G.rain += (smooth(0.46, 0.7, fbm(G.playT * 0.011 + G.rainSeed, 9.3)) - G.rain) * Math.min(1, dt * 0.5);
+  rainOnGlass(dt);
   G.nextStrike -= dt * (1 + 1.5 * G.rain);
   if (G.nextStrike <= 0) { G.nextStrike = 22 + Math.random() * 50; strike(closed); }
   if (G.thunderAt > 0 && G.playT >= G.thunderAt) {
@@ -887,7 +907,43 @@ function weather(dt, closed) {
   }
   if (!closed && G.thoughtT > 0) G.thoughtT = 0;
 }
+// Drops on the pane. Small ones sit where they land; once one has gathered enough water it runs,
+// in fits and starts, wanders a little, swallows the drops in its way and leaves a wet trail.
+function rainOnGlass(dt) {
+  const D = G.drops;
+  for (let i = WIN.y0 * W; i < WIN.y1 * W; i++) if (wet[i] > 0) wet[i] = wet[i] < 0.02 ? 0 : wet[i] * (1 - dt * 0.35);
+  let n = G.rain * (9 + 14 * G.gust) * dt;                    // gusts throw more of it at the window
+  while (D.length < 170 && (n >= 1 || Math.random() < n)) {
+    n -= 1;
+    const x = WIN.x0 + Math.random() * WW, y = WIN.y0 + Math.random() * WH, i = (y | 0) * W + (x | 0);
+    if (openMask[i] || barMask[i]) continue;
+    D.push({ x, y, m: 0.3 + Math.random() * Math.random() * 1.1, v: 0, hold: 0, ph: Math.random() * 9 });
+    if (Math.random() < 0.25) sfxDrop();
+  }
+  for (let k = D.length - 1; k >= 0; k--) {
+    const d = D[k];
+    d.m += G.rain * dt * 0.05;                                 // fine spray keeps feeding it
+    if (d.m < 1) { d.m -= dt * 0.012 * (1 - G.rain); if (d.m < 0.2) D.splice(k, 1); continue; }
+    if (d.hold > 0) { d.hold -= dt; continue; }
+    if (d.m < 1.7 && Math.random() < dt * 1.3) { d.hold = 0.15 + Math.random() * 0.9; d.v = 0; continue; }
+    d.v += ((d.m - 0.8) * 34 - d.v) * Math.min(1, dt * 4);
+    const y0 = d.y;
+    d.y += d.v * dt; d.x += (Math.sin(d.y * 0.6 + d.ph) * 3 + G.wind * 2.5) * dt;
+    for (let y = Math.round(y0); y <= Math.round(d.y); y++) {
+      const X = Math.round(d.x);
+      if (X >= WIN.x0 && X < WIN.x1 && y >= WIN.y0 && y < WIN.y1) wet[y * W + X] = 1;
+    }
+    d.m -= (d.y - y0) * 0.006;                                 // the trail costs water
+    for (let j = D.length - 1; j >= 0; j--) {                  // swallow whatever is in the way
+      const o = D[j];
+      if (o !== d && Math.abs(o.x - d.x) < 1.6 && o.y > y0 - 0.5 && o.y < d.y + 1.5) { d.m += o.m * 0.8; D.splice(j, 1); if (j < k) k--; }
+    }
+    const X = Math.round(d.x), Y = Math.round(d.y);
+    if (Y >= WIN.y1 - 1 || X < WIN.x0 || X >= WIN.x1 || openMask[Y * W + X]) D.splice(D.indexOf(d), 1);
+  }
+}
 function newNight() {
+  G.drops = []; wet.fill(0);
   G.playT = 0; G.rain = 0; G.rainSeed = Math.random() * 100; G.flashT = 9; G.bolt = null; G.thunderAt = 0; G.nextStrike = 18 + Math.random() * 30;
   G.nextBird = 60 + Math.random() * 100; G.bird = null; G.smear = null; G.branchCd = 12; G.startle = 0; G.startleT = 9; G.thought = ''; G.thoughtT = -1;
   G.state = 'play'; G.hour = 0; G.creep = 0; G.shown = 0; G.lid = 0; G.depth = 0; G.surgeT = 9; G.surge = 0;
@@ -984,7 +1040,7 @@ function draw() {
   const dawn = s === 'win' || s === 'waking' ? 1 : clamp((G.hour - 5) * 0.3, 0, 0.3);
   const view = { p: blendParams(s === 'title' || s === 'win' || s === 'waking' ? 0 : visualCreep()), time: G.time, dawn, lid: G.lid, curl: G.fear, wind: G.wind, gust: G.gust,
     fl: flashAt(G.flashT), bolt: G.flashT < 0.2 ? G.bolt : null, rain: s === 'play' ? G.rain : 0, bird: s === 'play' ? G.bird : null,
-    smear: s === 'play' ? G.smear : null, shake: s === 'play' && G.startleT < 1.1 ? G.startle : 0 };
+    smear: s === 'play' ? G.smear : null, drops: s === 'play' ? G.drops : null, shake: s === 'play' && G.startleT < 1.1 ? G.startle : 0 };
   if (s === 'title') view.dark = 0.5;
   if (s === 'reveal') {
     view.p = blendParams(1); view.inside = true; view.curl = 1;
