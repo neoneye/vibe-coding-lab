@@ -794,6 +794,8 @@ PING</code></pre>
 <li><b>The preflight carries no body and no cookies</b>, only <code>Access-Control-Request-Method</code> and <code>Access-Control-Request-Headers</code> (lower-cased, sorted). The server answers with the methods and headers it allows.</li>
 <li><b><code>Access-Control-Max-Age</code></b> lets the browser remember the answer per URL. Without it, about 5 seconds; Chromium caps it at 2 hours, Firefox at 24.</li>
 <li><b><code>OPTIONS</code> is older than CORS:</b> an HTTP method for "what can I do here?". A plain <code>OPTIONS</code> request is answered with an <code>Allow: GET, POST, …</code> header, and <code>OPTIONS *</code> asks about the whole server.</li>
+<li><b>Your own script can send <code>OPTIONS</code></b> with <code>fetch(url, { method: 'OPTIONS' })</code> or <code>xhr.open('OPTIONS', url)</code>. To another site that is itself a non-simple request, so the browser first sends a preflight <code>OPTIONS</code> asking whether it may send yours: two <code>OPTIONS</code> in a row (recorded below). The server must allow <code>OPTIONS</code> in <code>Access-Control-Allow-Methods</code>, and its <code>Allow</code> header is readable only if it is listed in <code>Access-Control-Expose-Headers</code>.</li>
+<li><b>A script can't forge a preflight.</b> <code>Origin</code> and <code>Access-Control-Request-*</code> are forbidden request headers: setting them throws no error, the browser just sends its own. <code>no-cors</code> mode allows only GET, HEAD and POST, <code>TRACE</code> is refused outright, and <code>OPTIONS *</code> can't be written as a URL at all; HTML forms, <code>sendBeacon</code> and <code>&lt;a ping&gt;</code> can't send <code>OPTIONS</code> either. Outside the browser (<code>curl -X OPTIONS</code>, Node.js, Python) none of this applies.</li>
 </ul>
 <p class="small">MDN's example as the server saw it, from Chromium 156 (trimmed). The second identical request sent no new <code>OPTIONS</code>; in a headless Firefox run it did:</p>
 <pre class="wire"><code>OPTIONS /preflight HTTP/1.1
@@ -813,6 +815,14 @@ X-PINGOTHER: pingpong
 Content-Type: text/xml
 
 &lt;person&gt;&lt;name&gt;Arun&lt;/name&gt;&lt;/person&gt;</code></pre>
+<p class="small">One <code>fetch(url, { method: 'OPTIONS' })</code> from Chromium 156, as the server saw it (trimmed):</p>
+<pre class="wire"><code>OPTIONS /opt-fetch HTTP/1.1          <span class="c">← the browser's preflight</span>
+Origin: http://localhost:8765
+Access-Control-Request-Method: OPTIONS
+
+OPTIONS /opt-fetch HTTP/1.1          <span class="c">← your request</span>
+Origin: http://localhost:8765</code></pre>
+<p class="small">When that server allowed only <code>GET, POST, PUT</code>, only the first request arrived and the script got <code>TypeError: Failed to fetch</code>.</p>
 </div>
 <div class="demo">
 <p class="small" style="margin-top:0">The first two buttons send MDN's request to <code>httpbin.org</code>, which allows any header and caches its answer for an hour. A preflight costs one extra round trip, so the first request is slower than the repeat.</p>
@@ -823,6 +833,16 @@ Content-Type: text/xml
 <button id="pfBad">X-PINGOTHER to example.com</button>
 </div>
 <div class="log" id="pfLog"></div>
+<p class="small" style="margin-top:14px">Sending <code>OPTIONS</code> yourself:</p>
+<div class="btns">
+<button id="optFetch">fetch() OPTIONS to httpbin.org</button>
+<button id="optXhr">XHR OPTIONS to httpbin.org</button>
+<button id="optSelf">OPTIONS to this site's server</button>
+<button id="optForge">Forge Origin and preflight headers</button>
+<button id="optNoCors">OPTIONS in no-cors mode</button>
+<button id="optTrace">TRACE</button>
+</div>
+<div class="log" id="optLog"></div>
 </div>
 </div>
 </div>
@@ -1956,6 +1976,46 @@ $('pfFirst').onclick = () => { pfUrl = 'https://httpbin.org/post?n=' + Date.now(
 $('pfAgain').onclick = () => { if (!pfUrl) { logTo($('pfLog'), 'press "New URL" first', 'bad'); return; } pfSend('same URL (preflight answer cached)', pfUrl, MDN_REQ()); };
 $('pfSimple').onclick = () => pfSend('simple POST, text/plain', 'https://httpbin.org/post?s=' + Date.now(), { method: 'POST', body: 'hello' });
 $('pfBad').onclick = () => pfSend('example.com', 'https://example.com/?n=' + Date.now(), MDN_REQ());
+
+// sending OPTIONS yourself
+const optLog = (t, c) => logTo($('optLog'), t, c);
+$('optFetch').onclick = async () => {
+  const t0 = performance.now();
+  try {
+    const r = await fetch('https://httpbin.org/anything?n=' + Date.now(), { method: 'OPTIONS' });
+    optLog(`fetch OPTIONS: status ${r.status} after ${(performance.now() - t0).toFixed(0)} ms (a preflight OPTIONS went first). Readable headers: ${[...r.headers.keys()].join(', ') || 'none'}; access-control-allow-methods reads ${r.headers.get('access-control-allow-methods')}, because httpbin doesn't expose it`, 'ok');
+  } catch (e) { optLog('fetch OPTIONS: ' + e.name + ' ' + e.message, 'bad'); }
+};
+$('optXhr').onclick = () => {
+  const x = new XMLHttpRequest(), t0 = performance.now();
+  x.open('OPTIONS', 'https://httpbin.org/anything?n=' + Date.now());
+  x.onload = () => optLog(`XHR OPTIONS: status ${x.status} after ${(performance.now() - t0).toFixed(0)} ms; getAllResponseHeaders() gives: ${x.getAllResponseHeaders().trim().split(/\r?\n/).map((l) => l.split(':')[0]).join(', ') || 'nothing'}`, 'ok');
+  x.onerror = () => optLog('XHR OPTIONS: error event', 'bad');
+  x.send();
+};
+$('optSelf').onclick = async () => {
+  try {
+    const r = await fetch('../index.html?n=' + Date.now(), { method: 'OPTIONS' });
+    optLog(`same-site OPTIONS: no preflight; status ${r.status}${r.headers.get('allow') ? ', Allow: ' + r.headers.get('allow') : ', no Allow header'} (what this depends on: the server, here ${location.host || 'a file'})`, r.ok ? 'ok' : '');
+  } catch (e) { optLog('same-site OPTIONS: ' + e.name + ' ' + e.message + (location.protocol === 'file:' ? ' (file:// has no server to ask)' : ''), 'bad'); }
+};
+$('optForge').onclick = async () => {
+  try {
+    const r = await fetch('https://httpbin.org/anything?n=' + Date.now(), { method: 'POST', body: 'hi', headers: { 'Origin': 'https://evil.example', 'Access-Control-Request-Method': 'DELETE' } });
+    const j = await r.json();
+    const h = j.headers || {};
+    optLog(`no error thrown, but httpbin received Origin: ${h.Origin || '(none)'} and Access-Control-Request-Method: ${h['Access-Control-Request-Method'] || '(none)'}: the browser dropped the forged ones`, 'ok');
+  } catch (e) { optLog('forged headers: ' + e.name + ' ' + e.message, 'bad'); }
+};
+$('optNoCors').onclick = async () => {
+  try { await fetch('https://httpbin.org/anything', { method: 'OPTIONS', mode: 'no-cors' }); optLog('no-cors OPTIONS was sent?!', 'ok'); }
+  catch (e) { optLog('no-cors OPTIONS: ' + e.name + ': ' + e.message, 'bad'); }
+};
+$('optTrace').onclick = async () => {
+  try { await fetch('https://httpbin.org/anything', { method: 'TRACE' }); optLog('TRACE was sent?!', 'ok'); }
+  catch (e) { optLog('TRACE: ' + e.name + ': ' + e.message, 'bad'); }
+};
+
 
 window.__ifr = { runTarget, TARGETS, runPeek, freezeTest, trkVisit, buildSandbox, runFetch, FETCHES, cdnLoad, errTest, imgTest, sriRun, buildSvgTiles, buildPdfTiles, makePdf, runCss, CSSTESTS };
 </script>
