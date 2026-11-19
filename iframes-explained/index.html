@@ -42,6 +42,12 @@
   .closer .q { font-size: 15px; }
   .closer .demo .btns { margin-top: 0; }
   .closer .log { height: 210px; }
+  .svgtiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(330px, 100%), 1fr)); gap: 12px; margin-top: 12px; }
+  .svgtile { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px 10px; background: var(--bg); min-width: 0; }
+  .svgtile .lbl { font: 12.5px/1.4 var(--mono); margin-bottom: 6px; }
+  .svgtile .box { aspect-ratio: 320 / 120; }
+  .svgtile .box > * { display: block; width: 100%; height: 100%; border: 0; }
+  .svgtile .exp { font-size: 13px; color: var(--soft); margin-top: 6px; }
   .note { border-left: 4px solid var(--warn); background: var(--warn-bg); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; }
   .answer { border-left: 4px solid var(--ok); background: var(--ok-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; }
   .answer p { margin: 6px 0; }
@@ -563,6 +569,24 @@ app.get('/proxy', async (req, res) =&gt; {
 <div class="log" id="sriLog" style="height:300px"></div>
 </div>
 </div>
+</div>
+
+<div class="card" id="cl-svg">
+<h3>SVG that pulls in fonts and images from another server</h3>
+<p class="q"><b>It depends on how the SVG gets into the page.</b> The same small SVG file is shown below in three ways. It contains an <code>@import</code> of a Google font, an <code>&lt;image&gt;</code> from <code>httpbin.org</code> and a <code>&lt;script&gt;</code> that turns the background green.</p>
+<div class="closer" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+<ul>
+<li><b>SVG as an image is sealed.</b> In <code>&lt;img&gt;</code>, a CSS <code>background-image</code> or a favicon, it loads nothing from any server, not even your own, apart from <code>data:</code> URLs inside it, and runs no script. An image must not be able to track its viewers or run code. That is why a logo with a web font shows the wrong font as an <code>&lt;img&gt;</code>: turn the text into paths, or embed the font as a <code>data:</code> URL.</li>
+<li><b>SVG as a document is an iframe.</b> In <code>&lt;object&gt;</code>, <code>&lt;embed&gt;</code> or <code>&lt;iframe&gt;</code>, or opened on its own, it loads everything and runs its scripts. From another site, it runs as that site, behind the same wall.</li>
+<li><b>Inline <code>&lt;svg&gt;</code> is part of your page.</b> Its <code>&lt;image&gt;</code> follows the <code>&lt;img&gt;</code> rules, its fonts need CORS like any web font, your Content Security Policy (<code>img-src</code>, <code>font-src</code>) applies, and scripts added with <code>innerHTML</code> don't run. Its <code>&lt;style&gt;</code> is not scoped: it styles your whole page.</li>
+</ul>
+<ul>
+<li><b><code>&lt;use&gt;</code> is same-origin only.</b> An icon sprite on a CDN is refused even though the CDN sends CORS headers. Copy the sprite to your own site, or inline the symbols.</li>
+<li><b>Uploaded SVGs are a classic security hole.</b> Opened directly from your domain, the script inside runs as your site, with its cookies. Serve uploads from a separate domain, send <code>Content-Security-Policy: script-src 'none'</code> with them, or only ever show them through <code>&lt;img&gt;</code>.</li>
+<li><b>No <code>integrity</code> here.</b> Fonts, images and <code>&lt;use&gt;</code> files have no hash attribute. A swapped image or font can't run code in your page, though; a swapped SVG in <code>&lt;object&gt;</code> can only act inside its own frame.</li>
+</ul>
+</div>
+<div class="svgtiles" id="svgTiles"></div>
 </div>
 
 <div class="card" id="cl-nocors">
@@ -1457,7 +1481,50 @@ $('sriTop').onclick = () => sriRun('Hash on react-dom only', (t) => ({ [RD]: t[R
 $('sriBadDep').onclick = () => sriRun('Wrong hash for scheduler', (t, us) => Object.fromEntries(us.map((u) => [u, u.includes('/scheduler@') ? 'sha384-' + 'A'.repeat(64) : t[u]])));
 $('sriAll').onclick = () => sriRun('Hashes for all three', (t) => ({ ...t }));
 
-window.__ifr = { runTarget, TARGETS, runPeek, freezeTest, trkVisit, buildSandbox, runFetch, FETCHES, cdnLoad, errTest, imgTest, sriRun };
+// ------------------------------------------------------------------ 6 svg with external resources
+const SVG_FILE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 120" width="320" height="120">
+<style>@import url("https://fonts.googleapis.com/css2?family=Lobster&amp;display=block");
+.svgdemo-f { font: 34px Lobster, ui-monospace, Menlo, monospace; fill: #2a1a10 }
+.svgdemo-s { font: 15px -apple-system, Helvetica, Arial, sans-serif; fill: #2a1a10 }</style>
+<rect id="svgdemoBg" width="320" height="120" rx="10" fill="#e6e1d6"/>
+<rect x="212" y="12" width="96" height="96" fill="#fff" stroke="#2a1a10" stroke-dasharray="4 3" stroke-opacity=".4"/>
+<image href="https://httpbin.org/image/png" x="212" y="12" width="96" height="96"/>
+<text class="svgdemo-f" x="14" y="52">Web font?</text>
+<text id="svgdemoJs" class="svgdemo-s" x="14" y="94">script: did not run</text>
+<script>document.getElementById('svgdemoJs').textContent = 'script: ran'; document.getElementById('svgdemoBg').setAttribute('fill', '#bfe8c4');<\/script>
+<symbol id="dot" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#7a3fb0"/></symbol>
+</svg>`;
+function buildSvgTiles() {
+  const url = URL.createObjectURL(new Blob([SVG_FILE], { type: 'image/svg+xml' }));
+  const tiles = [
+    { lbl: '&lt;img src="file.svg"&gt;', make: () => { const i = new Image(); i.alt = 'SVG as an image'; i.src = url; return i; },
+      exp: 'Fallback font, an empty or broken picture, grey background: nothing was fetched and the script did not run.' },
+    { lbl: '&lt;object data="file.svg"&gt;', make: () => { const o = document.createElement('object'); o.type = 'image/svg+xml'; o.data = url; return o; },
+      exp: 'Lobster font, the pig and a green background: a full document that fetched both and ran its script.' },
+    { lbl: 'inline &lt;svg&gt; (via innerHTML)', make: () => { const d = document.createElement('div'); d.innerHTML = SVG_FILE.replace(/svgdemo(Bg|Js)/g, 'svgdemoIn$1'); const v = d.firstElementChild; v.removeAttribute('width'); v.removeAttribute('height'); return v; },
+      exp: 'Font and pig load as parts of this page; the script did not run, because innerHTML never runs scripts.' },
+    { lbl: '&lt;use href="…#symbol"&gt;', make: () => {
+        const d = document.createElement('div');
+        d.innerHTML = `<svg viewBox="0 0 320 120"><rect width="320" height="120" rx="10" fill="#e6e1d6"/>
+          <text x="20" y="104" style="font:14px -apple-system,Helvetica,Arial,sans-serif;fill:#2a1a10">jsDelivr sprite</text>
+          <rect x="34" y="18" width="64" height="64" fill="none" stroke="#2a1a10" stroke-dasharray="4 3" stroke-opacity=".4"/>
+          <use href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/bootstrap-icons.svg#heart" x="34" y="18" width="64" height="64" fill="#c0352b"/>
+          <text x="186" y="104" style="font:14px -apple-system,Helvetica,Arial,sans-serif;fill:#2a1a10">same origin</text>
+          <rect x="202" y="18" width="64" height="64" fill="none" stroke="#2a1a10" stroke-dasharray="4 3" stroke-opacity=".4"/>
+          <use href="${url}#dot" x="202" y="18" width="64" height="64"/></svg>`;
+        return d.firstElementChild; },
+      exp: 'Left, a heart from a CDN sprite: refused, the box stays empty. Right, a symbol from a same-origin file: drawn.' },
+  ];
+  $('svgTiles').replaceChildren(...tiles.map((t) => {
+    const el = document.createElement('div'); el.className = 'svgtile';
+    el.innerHTML = `<div class="lbl">${t.lbl}</div><div class="box"></div><div class="exp">${t.exp}</div>`;
+    el.querySelector('.box').append(t.make());
+    return el;
+  }));
+}
+buildSvgTiles();
+
+window.__ifr = { runTarget, TARGETS, runPeek, freezeTest, trkVisit, buildSandbox, runFetch, FETCHES, cdnLoad, errTest, imgTest, sriRun, buildSvgTiles };
 </script>
 </body>
 </html>
