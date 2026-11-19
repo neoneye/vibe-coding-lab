@@ -54,6 +54,7 @@
   .bar > i { display: block; height: 100%; width: 0; background: var(--a); transition: width .1s; }
   .bar.down > i { background: var(--ok); }
   pre.wire { font-size: 11.5px; max-height: 260px; overflow: auto; }
+  a.pinglink { font-size: 14px; padding: 6px 2px; }
   .leakbox input[type=text] { font: 16px var(--mono); padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); width: 100%; max-width: 260px; }
   .leakbox .shown { font: 22px/1.4 Leak, var(--mono); min-height: 1.4em; margin: 8px 0; overflow-wrap: anywhere; }
   .pdftile .box > iframe { border: 1px solid var(--line); border-radius: 6px; background: #fff; }
@@ -768,11 +769,16 @@ Sec-Fetch-Site: cross-site
 PING</code></pre>
 </div>
 <div class="demo">
-<p class="small" style="margin-top:0">This link opens the gallery in the small frame below and pings <code>httpbin.org/anything/ping-demo</code>. The page can't read a reply, but it can look in Resource Timing, where Chromium lists the ping with <code>initiatorType: "ping"</code>. DevTools → Network shows the POST itself.</p>
-<p><a id="pingLink" href="../index.html" target="pingFrame" ping="https://httpbin.org/anything/ping-demo">Open the gallery (with ping)</a></p>
-<iframe name="pingFrame" title="ping link target" style="height:150px"></iframe>
+<p class="small" style="margin-top:0">The frame starts as a "Hello world" <code>srcdoc</code> page, same origin as this one, so the parent can read it. Each link navigates the frame <em>and</em> pings <code>httpbin.org/anything/ping-demo</code>. The two are independent: the ping does not change the frame, and the link target alone decides whether the parent can still read it. The log times both from the click; Chromium lists the ping in Resource Timing with <code>initiatorType: "ping"</code>.</p>
+<div class="btns">
+<a class="pinglink" href="../index.html" target="pingFrame" ping="https://httpbin.org/anything/ping-demo">The gallery (same site)</a>
+<a class="pinglink" href="https://example.com/" target="pingFrame" ping="https://httpbin.org/anything/ping-demo">example.com (another site)</a>
+<button id="pingReset">Back to Hello world</button>
+</div>
+<iframe name="pingFrame" id="pingFrame" title="ping link target" style="height:150px"></iframe>
+<p class="small" id="pingRead"></p>
 <p class="small soft" id="pingSupport"></p>
-<div class="log" id="pingLog" style="height:90px"></div>
+<div class="log" id="pingLog" style="height:130px"></div>
 </div>
 </div>
 </div>
@@ -1895,12 +1901,34 @@ $('pingSupport').textContent = 'This browser: the ping attribute ' + ('ping' in 
   (/Firefox\//.test(navigator.userAgent) ? '; Firefox keeps the attribute but sends nothing unless browser.send_pings is on.' : '; Chromium and Safari send the POST.');
 
 const pingSeen = new Set();
-$('pingLink').addEventListener('click', () => setTimeout(() => {
-  const found = performance.getEntriesByType('resource').filter((e) => e.initiatorType === 'ping' && !pingSeen.has(e));
-  found.forEach((e) => pingSeen.add(e));
-  if (found.length) found.forEach((e) => logTo($('pingLog'), `Resource Timing: a "ping" request to ${e.name}, ${e.duration.toFixed(0)} ms, status hidden (${e.responseStatus ?? 0})`, 'ok'));
-  else logTo($('pingLog'), 'no ping in Resource Timing: this browser did not send one, or does not list pings there', 'bad');
-}, 1500));
+let pingT0 = null;
+const pingHello = () => childDoc('<h3>Hello world</h3><p>I am a srcdoc page with the same origin as my parent, so it can read me.</p>');
+function pingReadable() {
+  const f = $('pingFrame');
+  let d = null, why = '';
+  try { d = f.contentDocument; } catch (e) { why = e.name; }
+  const after = pingT0 === null ? '' : ` (frame loaded ${(performance.now() - pingT0).toFixed(0)} ms after the click)`;
+  if (d) {
+    const txt = (d.title || d.body?.innerText || '').trim().split('\n')[0].slice(0, 50);
+    $('pingRead').innerHTML = `<span class="tag ok">parent can read the frame</span> “${esc(txt)}”`;
+    if (pingT0 !== null) logTo($('pingLog'), `frame now shows “${txt}”: readable${after}`, 'ok');
+  } else {
+    $('pingRead').innerHTML = `<span class="tag bad">parent can't read the frame</span> contentDocument is ${why || 'null'}: another origin`;
+    if (pingT0 !== null) logTo($('pingLog'), `frame now shows another origin: not readable${after}`, 'bad');
+  }
+}
+$('pingFrame').addEventListener('load', pingReadable);
+$('pingReset').onclick = () => { pingT0 = null; $('pingFrame').srcdoc = pingHello(); $('pingFrame').removeAttribute('src'); };
+$('pingFrame').srcdoc = pingHello();
+document.querySelectorAll('.pinglink').forEach((a) => a.addEventListener('click', () => {
+  pingT0 = performance.now();
+  setTimeout(() => {
+    const found = performance.getEntriesByType('resource').filter((e) => e.initiatorType === 'ping' && !pingSeen.has(e));
+    found.forEach((e) => pingSeen.add(e));
+    if (found.length) found.forEach((e) => logTo($('pingLog'), `ping to ${e.name.replace('https://', '')}: started ${(e.startTime - pingT0).toFixed(0)} ms after the click, took ${e.duration.toFixed(0)} ms, reply hidden`, ''));
+    else logTo($('pingLog'), 'no ping in Resource Timing: this browser did not send one, or does not list pings there', 'bad');
+  }, 2500);
+}));
 
 // ------------------------------------------------------------------ 6 preflight
 let pfUrl = null;
