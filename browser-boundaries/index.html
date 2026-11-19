@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>
+// The CSP 'self' demo loads this page as its own child with ?csp-self-child: write a policy, then <plaintext> turns the rest of the page into inert text.
+if (location.search === '?csp-self-child') document.write('<meta http-equiv="Content-Security-Policy" content="script-src \'self\'"><plaintext hidden>');
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browser Boundaries</title>
 <style>
@@ -52,7 +56,7 @@
   .pdftile .box { aspect-ratio: auto; height: 250px; }
   #cssTable td:first-child { min-width: 220px; }
   .deftiles iframe { height: 150px; }
-  #mimeTable code, #orbTable code { white-space: nowrap; }
+  #mimeTable code, #orbTable code, #selfTable .tag { white-space: nowrap; }
   .enctiles { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
   .enctiles iframe { height: 84px; background: #fff; }
   .enctiles .hex { font: 11.5px var(--mono); color: var(--soft); overflow-wrap: anywhere; margin-top: 4px; }
@@ -1061,6 +1065,25 @@ Origin: http://localhost:8765</code></pre>
 <div class="tablewrap"><table id="cspTable">
 <thead><tr><th>Test</th><th>No policy</th><th><code>default-src 'self'; script-src 'nonce-…'</code></th><th>… plus <code>https://cdn.jsdelivr.net</code> for scripts, <code>img-src *</code>, <code>connect-src https://httpbin.org</code></th></tr></thead>
 <tbody><tr><td colspan="4" class="soft">not run yet</td></tr></tbody>
+</table></div>
+<p class="q" id="def-csp-self" style="margin-top:22px"><b>What <code>'self'</code> covers, and what it trusts too much.</b> <code>script-src 'self'</code> is the most common script rule. It reads as "only my own scripts", but the browser takes it to mean "any URL on my origin, whatever it serves".</p>
+<div class="closer even">
+<ul>
+<li><b>It means this page's origin:</b> scheme, host and port. Not <code>www.</code> or other subdomains, not another port, and not <code>127.0.0.1</code> when the page is <code>localhost</code>. The quotes matter: <code>self</code> without them is a host named "self".</li>
+<li><b>It covers URLs only.</b> Inline scripts, <code>onclick="…"</code> handlers, <code>javascript:</code> URLs and <code>eval</code> still need a nonce, a hash or an <code>'unsafe-…'</code> keyword. <code>blob:</code> and <code>data:</code> URLs never match <code>'self'</code>, not even a blob URL the page made itself.</li>
+<li><b>Two details from CSP Level 3:</b> on an <code>http://</code> page, <code>'self'</code> also allows <code>https://</code> and <code>wss://</code> on the same host, since upgrading is safe. A same-origin script that redirects elsewhere is checked again at the final URL, so an open redirect on your site does not get around it.</li>
+</ul>
+<ul>
+<li><b>The weakness:</b> CSP limits what injected HTML can do, after the attacker has slipped in a <code>&lt;script src="…"&gt;</code>. Under <code>'self'</code> the attacker only needs one URL on your origin whose response the JavaScript engine will parse: a JSONP endpoint (<code>?callback=alert(1)//</code>), a user upload served from your origin (any type runs without <a href="#def-nosniff"><code>nosniff</code></a>), an error page that echoes input, an old library with "script gadgets" such as AngularJS 1.x, or a forgotten test page.</li>
+<li><b>The fix is a strict policy:</b> a 2016 Google study of real policies ("CSP Is Dead, Long Live CSP!", Weichselbaum et al.) found about 95% of host allowlists could be bypassed. It recommends <code>script-src 'nonce-…' 'strict-dynamic'; object-src 'none'; base-uri 'none'</code>: only scripts carrying this page load's nonce run, plus what they load. <code>'strict-dynamic'</code> makes the browser ignore <code>'self'</code> and host names. An injected tag has no nonce, so even a same-origin file fails.</li>
+<li><b>Elsewhere <code>'self'</code> is a good fit:</b> <code>img-src</code>, <code>connect-src</code>, <code>form-action</code> and <code>frame-ancestors 'self'</code> limit data, not code.</li>
+</ul>
+</div>
+<p class="small">Live: a child page whose only rule is <code>script-src 'self'</code>. It is this page loaded again with <code>?csp-self-child</code>: a line at the top writes the policy and then an old <code>&lt;plaintext&gt;</code> tag, which turns the rest of the page into inert text. Its own scripts would be blocked too, so this page reaches into it (they share an origin) and adds each script itself. (A <code>blob:</code> or <code>srcdoc</code> child would not do: Firefox 160 then matches nothing as <code>'self'</code>.) A <code>securitypolicyviolation</code> event means CSP blocked it.</p>
+<div class="btns"><button id="defSelfRun">Try the scripts under <code>script-src 'self'</code></button></div>
+<div class="tablewrap"><table id="selfTable">
+<thead><tr><th>The child tries</th><th>Result</th><th>How we know</th></tr></thead>
+<tbody><tr><td colspan="3" class="soft">not run yet</td></tr></tbody>
 </table></div>
 </div>
 
@@ -2546,6 +2569,68 @@ $('defCspRun').onclick = async () => {
     if (k === 'violations') return `<td>${r.violations || 0}</td>`;
     return r[k] === undefined ? '<td class="soft">pending</td>' : r[k] ? '<td><span class="tag ok">allowed</span></td>' : '<td><span class="tag bad">blocked</span></td>';
   }).join('')}</tr>`).join('');
+};
+
+// ------------------------------------------------------------------ 7 defences: CSP 'self'
+function selfTests() {
+  const L = location, port = L.port ? +L.port : (L.protocol === 'https:' ? 443 : 80);
+  const rnd = () => '?' + Math.random().toString(36).slice(2);
+  const t = [
+    { label: 'an inline <code>&lt;script&gt;</code>', kind: 'inline' },
+    { label: 'an inline <code>onclick="…"</code> handler', kind: 'handler' },
+    { label: '<code>eval("1 + 1")</code>', kind: 'eval' },
+    { label: 'a <code>blob:</code> script this page created', kind: 'src', url: () => URL.createObjectURL(new Blob(['parent.__selfRan = true'], { type: 'text/javascript' })) },
+    { label: 'a <code>data:</code> script', kind: 'src', url: () => 'data:text/javascript,parent.__selfRan=true' },
+    { label: 'dayjs from <code>cdn.jsdelivr.net</code>', kind: 'src', url: () => 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js' + rnd() },
+    { label: `same host, another port: <code>${esc(L.hostname)}:${port + 1}</code>`, kind: 'src', url: () => `${L.protocol}//${L.hostname}:${port + 1}/x.js` },
+    { label: `a subdomain: <code>www.${esc(L.hostname)}</code>`, kind: 'src', url: () => `${L.protocol}//www.${L.host}/x.js` },
+  ];
+  if (L.protocol === 'http:') t.push({ label: `the same host over <code>https://</code>`, kind: 'src', url: () => `https://${L.host}/x.js` + rnd() });
+  t.push(
+    { label: 'this repository\'s <code>README.md</code>, same origin (<code>text/markdown</code>)', kind: 'src', url: () => new URL('../README.md', L.href).href + rnd(), self: true },
+    { label: 'this very page, same origin (<code>text/html</code>)', kind: 'src', url: () => L.href.split('#')[0].split('?')[0] + rnd(), self: true },
+  );
+  return t;
+}
+async function runSelfTests() {
+  const f = document.createElement('iframe'); f.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;border:0';
+  // A real same-origin page, not a blob: or srcdoc child: Firefox gives those no usable 'self'.
+  f.src = location.pathname + '?csp-self-child';
+  await new Promise((r) => { f.onload = r; document.body.append(f); });
+  const w = f.contentWindow, d = f.contentDocument;
+  let viol = [], errs = [];
+  d.addEventListener('securitypolicyviolation', (e) => viol.push(e.effectiveDirective || e.violatedDirective));
+  w.addEventListener('error', (e) => errs.push(e.message));
+  const rows = [];
+  for (const t of selfTests()) {
+    viol = []; errs = []; window.__selfRan = false;
+    let ev = null, ran = null;
+    if (t.kind === 'inline') { const s = d.createElement('script'); s.textContent = 'parent.__selfRan = true'; d.body.append(s); ran = window.__selfRan; }
+    else if (t.kind === 'handler') { const b = d.createElement('button'); b.setAttribute('onclick', 'parent.__selfRan = true'); d.body.append(b); b.click(); ran = window.__selfRan; }
+    else if (t.kind === 'eval') { try { ran = w.eval('1 + 1') === 2; } catch (e) { ran = false; errs.push(e.name); } }
+    else {
+      ev = await new Promise((res) => {
+        const s = d.createElement('script'); s.onload = () => res('load'); s.onerror = () => res('error');
+        s.src = t.url(); d.body.append(s); setTimeout(() => res('timeout'), 6000);
+      });
+    }
+    await sleep(120);
+    let result, how;
+    if (viol.length) { result = '<span class="tag ok">blocked by CSP</span>'; how = `<code>securitypolicyviolation</code> for <code>${esc(viol[0])}</code>`; }
+    else if (ran === true) { result = '<span class="tag bad">ran</span>'; how = 'it set a flag in this page'; }
+    else if (ran === false) { result = '<span class="tag ok">blocked</span>'; how = errs.length ? esc(errs[0]) : 'nothing happened'; }
+    else if (ev === 'load' && errs.length) { result = '<span class="tag bad">allowed, parsed as JavaScript</span>'; how = `no violation; the engine parsed it and threw <code>${esc(errs[0])}</code>`; }
+    else if (ev === 'load') { result = '<span class="tag bad">allowed, ran</span>'; how = 'no violation, <code>load</code> fired'; }
+    else { result = '<span class="tag warn">allowed by CSP, load failed</span>'; how = 'no violation, then a network <code>error</code> (nothing is served there)'; }
+    rows.push(`<tr><td>${t.label}</td><td>${result}</td><td>${how}</td></tr>`);
+  }
+  f.remove();
+  return rows;
+}
+$('defSelfRun').onclick = async () => {
+  const body = $('selfTable').tBodies[0];
+  body.innerHTML = '<tr><td colspan="3" class="soft">running…</td></tr>';
+  body.innerHTML = (await runSelfTests()).join('');
 };
 
 // ------------------------------------------------------------------ 7 defences: nosniff live
