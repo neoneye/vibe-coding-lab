@@ -69,6 +69,17 @@
             margin: 10px 0 2px;
         }
         .panel .group[hidden] { display: none; }
+        .panel button {
+            margin-top: 6px;
+            background: #2a1414;
+            color: #eaa;
+            border: 1px solid #633;
+            border-radius: 4px;
+            padding: 3px 10px;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .panel button:hover { background: #3a1a1a; }
         .panel h3 {
             font-size: 0.95rem;
             margin: 14px 0 6px;
@@ -164,6 +175,7 @@
                     <option value="black">1 · Black eyes</option>
                     <option value="swap">2 · Swap eye / mouth</option>
                     <option value="both">1 + 2</option>
+                    <option value="leak">3 · Leaking eyes</option>
                 </select>
             </label>
             <div class="group" id="blackGroup" hidden>
@@ -174,6 +186,16 @@
                 <label class="slider">Glint <input type="range" id="hGlint" min="0" max="100" value="60"><span class="val" id="hGlintVal">60</span></label>
                 <label class="slider">Sockets <input type="range" id="hSocket" min="0" max="100" value="40"><span class="val" id="hSocketVal">40</span></label>
                 <label class="slider">Tears <input type="range" id="hTears" min="0" max="100" value="0"><span class="val" id="hTearsVal">0</span></label>
+            </div>
+            <div class="group" id="leakGroup" hidden>
+                <h4>Leaking liquid</h4>
+                <label class="slider">Flow <input type="range" id="lFlow" min="0" max="100" value="50"><span class="val" id="lFlowVal">50</span></label>
+                <label class="slider">Runniness <input type="range" id="lSpeed" min="10" max="300" value="100"><span class="val" id="lSpeedVal">100</span></label>
+                <label class="slider">Thickness <input type="range" id="lThick" min="40" max="250" value="100"><span class="val" id="lThickVal">100</span></label>
+                <label class="slider">Gloss <input type="range" id="lGloss" min="0" max="100" value="60"><span class="val" id="lGlossVal">60</span></label>
+                <label class="slider">Dries (s) <input type="range" id="lDry" min="5" max="120" value="45"><span class="val" id="lDryVal">45</span></label>
+                <label><input type="checkbox" id="lDrip" checked> Drip off the jaw</label>
+                <button type="button" id="lWipe">Wipe face</button>
             </div>
             <div class="group" id="swapGroup" hidden>
                 <h4>Swap eye / mouth</h4>
@@ -309,8 +331,15 @@
         const mode = document.getElementById('horrorMode').value;
         return {
             on:     mode !== 'off',
-            black:  mode === 'black' || mode === 'both',
+            black:  mode === 'black' || mode === 'both' || mode === 'leak',
             swap:   mode === 'swap'  || mode === 'both',
+            leak:   mode === 'leak',
+            flow:   num('lFlow') / 100,
+            runny:  num('lSpeed') / 100,
+            thick:  num('lThick') / 100,
+            gloss:  num('lGloss') / 100,
+            dry:    num('lDry'),
+            drip:   document.getElementById('lDrip').checked,
             dark:   num('hDark') / 100,
             size:   num('hSize') / 100,
             soft:   num('hSoft') / 100,
@@ -470,6 +499,346 @@
         ctx.restore();
     }
 
+    // ---- Mode 3: black liquid leaking from the eyes ----
+    //
+    // The liquid lives on the face mesh: every trail point is stored as a
+    // triangle of MediaPipe's tessellation plus barycentric weights, so it
+    // sticks to the skin and follows head turns, blinks and an open mouth.
+    // Each stream has a head (a bead of volume V) that is fed from the eye
+    // for a while, runs straight down the image (gravity) when V is above
+    // its pinning threshold, and lays down a trail that costs volume. A
+    // head that runs off the face outline hangs at the jaw and sheds
+    // falling drops; a head that crosses a hole (eye, open mouth) floats
+    // over it in screen space until it lands on skin again.
+
+    let TRIS = null;   // landmark triplets of the face mesh
+    let OVAL = null;   // face outline landmarks, in order
+    const LIDS = [
+        [33, 7, 163, 144, 145, 153, 154, 155, 133],    // lower lid of L_EYE
+        [362, 382, 381, 380, 374, 373, 390, 249, 263], // lower lid of R_EYE
+    ];
+    const leak = { streams: [], drops: [], spawn: [0, 0], lastT: 0 };
+
+    function resetLeak() {
+        leak.streams.length = 0;
+        leak.drops.length = 0;
+        leak.spawn = [0, 0];
+    }
+
+    // This frame's mesh in canvas pixels. `front` is the winding sign of
+    // camera-facing triangles (it flips with the mirror view); the scale
+    // s is the distance between the eye centres.
+    function meshFrame(lm, W, H) {
+        const P = lm.map(p => [p.x * W, p.y * H, p.z * W]);
+        const n = TRIS.length / 3;
+        const area = new Float32Array(n);
+        const slope = new Float32Array(n * 2);
+        let sum = 0;
+        for (let t = 0; t < n; t++) {
+            const a = P[TRIS[t * 3]], b = P[TRIS[t * 3 + 1]], c = P[TRIS[t * 3 + 2]];
+            const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+            const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+            area[t] = ux * vy - uy * vx;
+            sum += area[t];
+            // Surface normal, turned towards the camera (MediaPipe z is
+            // smaller nearer the camera). Gravity (0,1,0) projected onto
+            // the skin's tangent plane, seen in the image, is
+            // (−nx·ny, 1 − ny²): flow bends around the nose and cheeks.
+            let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+            const nl = Math.hypot(nx, ny, nz) || 1;
+            if (nz > 0) { nx = -nx; ny = -ny; }
+            nx /= nl; ny /= nl;
+            slope[t * 2] = -nx * ny;
+            slope[t * 2 + 1] = 1 - ny * ny;
+        }
+        const el = eyeShape(lm, L_EYE, W, H), er = eyeShape(lm, R_EYE, W, H);
+        const s = Math.max(10, Math.hypot(er.cx - el.cx, er.cy - el.cy));
+        return { P, area, slope, front: Math.sign(sum) || 1, s, oval: OVAL.map(i => P[i]) };
+    }
+
+    function facing(m, t) { return m.area[t] * m.front > 0; }
+
+    function bary(m, t, x, y) {
+        const a = m.P[TRIS[t * 3]], b = m.P[TRIS[t * 3 + 1]], c = m.P[TRIS[t * 3 + 2]];
+        const d = m.area[t];
+        const w0 = ((b[0] - x) * (c[1] - y) - (b[1] - y) * (c[0] - x)) / d;
+        const w1 = ((c[0] - x) * (a[1] - y) - (c[1] - y) * (a[0] - x)) / d;
+        const w2 = 1 - w0 - w1;
+        const e = -1e-4;
+        return (w0 >= e && w1 >= e && w2 >= e) ? { t, w0, w1, w2 } : null;
+    }
+
+    // Find the camera-facing triangle under (x, y); try the hint first.
+    function locate(m, x, y, hint) {
+        if (hint != null && facing(m, hint)) {
+            const r = bary(m, hint, x, y);
+            if (r) return r;
+        }
+        const n = m.area.length;
+        for (let t = 0; t < n; t++) {
+            if (!facing(m, t)) continue;
+            const r = bary(m, t, x, y);
+            if (r) return r;
+        }
+        return null;
+    }
+
+    function place(m, a) {
+        const P = m.P, i = a.t * 3;
+        const A = P[TRIS[i]], B = P[TRIS[i + 1]], C = P[TRIS[i + 2]];
+        return [a.w0 * A[0] + a.w1 * B[0] + a.w2 * C[0],
+                a.w0 * A[1] + a.w1 * B[1] + a.w2 * C[1]];
+    }
+
+    function insidePoly(poly, x, y) {
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const [xi, yi] = poly[i], [xj, yj] = poly[j];
+            if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+        }
+        return inside;
+    }
+
+    // Widths are stored relative to the face scale s, before Thickness.
+    const trailW = V => 0.022 + 0.038 * Math.sqrt(Math.max(V, 0));
+    const headR  = V => 0.024 + 0.032 * Math.sqrt(Math.max(V, 0));
+
+    function headPos(m, h) {
+        return h.anchor ? place(m, h.anchor) : [h.fx, h.fy];
+    }
+
+    function stepLeak(m, W, H, p, now) {
+        const dt = Math.min(0.05, Math.max(0, (now - leak.lastT) / 1000));
+        leak.lastT = now;
+        const s = m.s;
+
+        // New streams appear along the lower lids
+        const active = leak.streams.filter(st => st.supply > 0).length;
+        for (let eye = 0; eye < 2; eye++) {
+            leak.spawn[eye] += dt * (0.08 + 0.5 * p.flow) * (p.flow > 0 ? 1 : 0);
+            if (leak.spawn[eye] < 1) continue;
+            leak.spawn[eye] -= 1 + Math.random() * 0.5;
+            if (active >= 3 + 8 * p.flow) continue;
+            const lid = LIDS[eye];
+            const k = lid[Math.floor(Math.random() * lid.length)];
+            const x = m.P[k][0], y = m.P[k][1] + s * 0.03;
+            const anchor = locate(m, x, y, null);
+            if (!anchor) continue;
+            leak.streams.push({
+                eye,
+                pts: [{ ...anchor, w: trailW(0.4) }],
+                head: { anchor, fx: x, fy: y, V: 0.4, pin: 0.3, wob: 0, hanging: false, alive: true, dir: [0, 1] },
+                supply: 2 + Math.random() * 7,
+                Q: 0.15 + 0.45 * p.flow,
+                seed: Math.random() * 100,
+                lastGrow: now,
+                alpha: 1,
+            });
+        }
+        while (leak.streams.length > 80) leak.streams.shift();
+
+        // Wet tracks on screen: new drips are drawn into them
+        const wet = [];
+        for (const st of leak.streams) {
+            for (let i = 0; i < st.pts.length; i += 2) {
+                const [x, y] = place(m, st.pts[i]);
+                wet.push(x, y, st);
+            }
+        }
+        const R = s * 0.09;
+
+        for (const st of leak.streams) {
+            const h = st.head;
+            if (st.supply > 0) {
+                h.V += st.Q * dt;
+                st.supply -= dt;
+                st.lastGrow = now;
+            }
+            if (!h.alive) continue;
+
+            if (h.hanging) {
+                // Bead hanging under the jaw: shed a drop when heavy enough
+                if (p.drip && h.V > 0.7) {
+                    const [x, y] = headPos(m, h);
+                    leak.drops.push({ x, y: y + headR(h.V) * s * p.thick, vy: 0, V: h.V * 0.6 });
+                    h.V *= 0.4;
+                }
+                h.V = Math.min(h.V, 1.6);
+            } else if (h.V > h.pin * (h.onWet ? 0.5 : 1)) {
+                h.wob += (Math.random() - 0.5) * 4 * dt;
+                h.wob *= 1 - 0.6 * dt;
+                h.wob = Math.max(-0.5, Math.min(0.5, h.wob));
+                // Downhill on the skin under the head, plus a meander
+                let gx = 0, gy = 1;
+                if (h.anchor) {
+                    gx = m.slope[h.anchor.t * 2];
+                    gy = Math.max(0.15, m.slope[h.anchor.t * 2 + 1]);
+                }
+                const steep = Math.hypot(gx, gy);
+                const [x0, y0] = headPos(m, h);
+                let ex = gx / steep + h.wob, ey = gy / steep;
+                // Pulled sideways into the nearest wet track just below,
+                // where it also runs with less pinning
+                let best = R * R, bx = 0;
+                for (let i = 0; i < wet.length; i += 3) {
+                    if (wet[i + 2] === st) continue;
+                    const ddx = wet[i] - x0, ddy = wet[i + 1] - y0;
+                    if (ddy < 0 || ddy > R) continue;
+                    const d2 = ddx * ddx + ddy * ddy;
+                    if (d2 < best) { best = d2; bx = ddx; }
+                }
+                h.onWet = best < R * R;
+                if (h.onWet) ex += 1.5 * bx / R;
+                const len = Math.hypot(ex, ey);
+                const dx = ex / len, dy = ey / len;
+                const speed = Math.min(s * 1.2,
+                    s * 0.45 * p.runny * (h.V - h.pin * (h.onWet ? 0.5 : 1)) * Math.max(0.35, steep));
+                const x = x0 + dx * speed * dt, y = y0 + dy * speed * dt;
+                h.V -= 0.3 * (speed * dt) / s;
+                h.dir = [dx, dy];
+                st.lastGrow = now;
+
+                const a = locate(m, x, y, h.anchor ? h.anchor.t : null);
+                if (a) {
+                    h.anchor = a;
+                    const last = st.pts[st.pts.length - 1];
+                    const [lx, ly] = place(m, last);
+                    if (Math.hypot(x - lx, y - ly) > Math.max(1.5, s * 0.012) && st.pts.length < 600) {
+                        st.pts.push({ ...a, w: trailW(h.V) });
+                    }
+                } else if (insidePoly(m.oval, x, y)) {
+                    // Over a hole (eye or open mouth): float across it
+                    h.anchor = null;
+                    h.fx = x; h.fy = y;
+                } else {
+                    h.hanging = true;   // ran off the face: stay at the edge
+                }
+            } else {
+                // Pinned: soaks slowly into its trail, then may move again
+                h.V -= 0.02 * dt;
+                h.pin = 0.22 + Math.random() * 0.16;
+            }
+            if (h.V <= 0.04 && st.supply <= 0) h.alive = false;
+        }
+
+        // Drying: a stream that hasn't grown for `dry` seconds fades out
+        for (const st of leak.streams) {
+            const idle = (now - st.lastGrow) / 1000;
+            if (idle > p.dry) st.alpha = Math.max(0, 1 - (idle - p.dry) / 4);
+        }
+        leak.streams = leak.streams.filter(st => st.alpha > 0);
+
+        const g = s * 14;
+        for (const d of leak.drops) {
+            d.vy += g * dt;
+            d.y += d.vy * dt;
+        }
+        leak.drops = leak.drops.filter(d => d.y < H + s);
+    }
+
+    function glossSpot(x, y, r, a) {
+        if (a <= 0) return;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(255,255,255,${a})`);
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+
+    function drawLeak(m, p) {
+        const s = m.s, k = s * p.thick;
+        const LX = -0.6, LY = -0.8;   // light from the upper left
+        ctx.save();
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+
+        // Liquid welling up along each lower lid while that eye is leaking
+        for (let eye = 0; eye < 2; eye++) {
+            const fed = leak.streams.filter(st => st.eye === eye && st.supply > 0).length;
+            const level = Math.min(1, 0.35 * fed);
+            if (level <= 0) continue;
+            ctx.strokeStyle = `rgba(4,2,3,${0.9 * level + 0.1})`;
+            ctx.lineWidth = s * 0.045 * p.thick * (0.5 + 0.5 * level);
+            ctx.beginPath();
+            LIDS[eye].forEach((i, j) => {
+                const [x, y] = m.P[i];
+                const yy = y + s * 0.012;
+                j ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy);
+            });
+            ctx.stroke();
+        }
+
+        for (const st of leak.streams) {
+            // Screen points plus the live head, split into visible runs
+            const q = st.pts.map(a => [...place(m, a), a.w * k, facing(m, a.t)]);
+            const h = st.head;
+            if (h.alive && h.anchor) q.push([...place(m, h.anchor), trailW(h.V) * k, facing(m, h.anchor.t)]);
+            const runs = [];
+            let run = [];
+            for (const pt of q) {
+                if (pt[3]) run.push(pt);
+                else { if (run.length > 1) runs.push(run); run = []; }
+            }
+            if (run.length > 1) runs.push(run);
+
+            for (const r of runs) {
+                const left = [], right = [], shine = [];
+                for (let i = 0; i < r.length; i++) {
+                    const a = r[Math.max(0, i - 1)], b = r[Math.min(r.length - 1, i + 1)];
+                    let tx = b[0] - a[0], ty = b[1] - a[1];
+                    const tl = Math.hypot(tx, ty) || 1;
+                    tx /= tl; ty /= tl;
+                    let nx = -ty, ny = tx;
+                    const w = r[i][2] / 2;
+                    left.push([r[i][0] + nx * w, r[i][1] + ny * w]);
+                    right.push([r[i][0] - nx * w, r[i][1] - ny * w]);
+                    if (nx * LX + ny * LY < 0) { nx = -nx; ny = -ny; }
+                    shine.push([r[i][0] + nx * w * 0.45, r[i][1] + ny * w * 0.45]);
+                }
+                ctx.fillStyle = `rgba(4,2,3,${0.96 * st.alpha})`;
+                tracePoly(ctx, left.concat(right.reverse()));
+                ctx.fill();
+                // Rounded start where the stream leaves the lid
+                ctx.beginPath();
+                ctx.arc(r[0][0], r[0][1], r[0][2] / 2, 0, Math.PI * 2);
+                ctx.fill();
+
+                const avgW = r.reduce((t, v) => t + v[2], 0) / r.length;
+                if (p.gloss > 0 && avgW > 3) {
+                    ctx.strokeStyle = `rgba(255,255,255,${0.22 * p.gloss * st.alpha})`;
+                    ctx.lineWidth = avgW * 0.14;
+                    ctx.beginPath();
+                    shine.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+                    ctx.stroke();
+                }
+            }
+
+            // The head: a bead stretched along its motion, longer when hanging
+            if (h.alive && h.V > 0.04 && (!h.anchor || facing(m, h.anchor.t))) {
+                const [x, y] = headPos(m, h);
+                const r = headR(h.V) * k;
+                const stretch = h.hanging ? 1.3 + 0.5 * Math.min(1, h.V) : 1.2;
+                const ang = h.hanging ? 0 : Math.atan2(h.dir[0], h.dir[1]);
+                ctx.fillStyle = `rgba(4,2,3,${0.97 * st.alpha})`;
+                ctx.beginPath();
+                ctx.ellipse(x, y + r * (stretch - 1) * 0.6, r, r * stretch, -ang, 0, Math.PI * 2);
+                ctx.fill();
+                glossSpot(x - r * 0.35, y - r * 0.2, r * 0.45, 0.7 * p.gloss * st.alpha);
+            }
+        }
+
+        for (const d of leak.drops) {
+            const r = headR(d.V) * k;
+            const stretch = 1 + Math.min(1.5, d.vy / (s * 6));
+            ctx.fillStyle = 'rgba(4,2,3,0.97)';
+            ctx.beginPath();
+            ctx.ellipse(d.x, d.y, r / Math.sqrt(stretch), r * stretch, 0, 0, Math.PI * 2);
+            ctx.fill();
+            glossSpot(d.x - r * 0.3, d.y - r * 0.3, r * 0.4, 0.7 * p.gloss);
+        }
+        ctx.restore();
+    }
+
     // Paste src into a w×h box centred on (cx, cy), masked by an ellipse
     // whose edge fades over `feather` (0 = hard, 1 = fades from centre).
     const scratch = document.createElement('canvas');
@@ -578,6 +947,13 @@
         const { FaceLandmarker, FilesetResolver } = await import(
             "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
         );
+
+        // Face mesh triangles: the tessellation lists each triangle as
+        // three consecutive edges a→b, b→c, c→a.
+        const tess = FaceLandmarker.FACE_LANDMARKS_TESSELATION;
+        TRIS = new Int32Array(tess.length);
+        tess.forEach((e, i) => { TRIS[i] = e.start; });
+        OVAL = FaceLandmarker.FACE_LANDMARKS_FACE_OVAL.map(e => e.start);
 
         const resolver = await FilesetResolver.forVisionTasks(
             "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
@@ -739,6 +1115,14 @@
                             }
                         }
 
+                        // Horror mode 3: the liquid keeps flowing while
+                        // Space is held, it just isn't drawn.
+                        if (hp.leak && TRIS) {
+                            const m = meshFrame(lm, W, H);
+                            stepLeak(m, W, H, hp, performance.now());
+                            if (!spaceHeld) drawLeak(m, hp);
+                        }
+
                         frameNo++;
 
                         // ---- Overlay ----
@@ -775,12 +1159,16 @@
     const horrorMode = document.getElementById('horrorMode');
     function syncHorror() {
         const m = horrorMode.value;
-        document.getElementById('blackGroup').hidden = !(m === 'black' || m === 'both');
+        document.getElementById('blackGroup').hidden = !(m === 'black' || m === 'both' || m === 'leak');
+        document.getElementById('leakGroup').hidden  = m !== 'leak';
+        resetLeak();
+        leak.lastT = performance.now();
         document.getElementById('swapGroup').hidden  = !(m === 'swap'  || m === 'both');
         document.getElementById('atmoGroup').hidden  = m === 'off';
         tearStart = performance.now();
     }
     horrorMode.addEventListener('change', syncHorror);
+    document.getElementById('lWipe').addEventListener('click', resetLeak);
     document.getElementById('hTears').addEventListener('input', e => {
         // Let fresh tears run down again rather than appear at full length
         if (+e.target.value === 0) tearStart = performance.now();
