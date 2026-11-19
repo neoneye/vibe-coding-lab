@@ -323,6 +323,13 @@
                 <label class="slider">Edge <input type="range" id="bgEdge" min="0" max="100" value="40"><span class="val" id="bgEdgeVal">40</span></label>
                 <div class="note" id="bgNote"></div>
             </div>
+            <label class="fx"><input type="checkbox" id="bgFace"> Face + neck only</label>
+            <div class="group" data-fx="bgFace" hidden>
+                <label class="slider">Neck <input type="range" id="bgNeck" min="0" max="150" value="60"><span class="val" id="bgNeckVal">60</span></label>
+                <label><input type="checkbox" id="bgZoom" checked> Zoom to fit</label>
+                <label class="slider">Fit size <input type="range" id="bgFit" min="30" max="100" value="85"><span class="val" id="bgFitVal">85</span></label>
+                <label class="slider">Smoothing <input type="range" id="bgSmooth" min="0" max="98" value="85"><span class="val" id="bgSmoothVal">85</span></label>
+            </div>
         </div>
     </div>
     <video id="video" autoplay playsinline hidden></video>
@@ -1878,7 +1885,115 @@
         }
     }
 
-    function replaceBackground(W, H, mirror, mode, edge) {
+    // ---- Face + neck only, and zoom to fit ----
+    //
+    // The keep region is built from the landmarks in the face's own frame
+    // (up = chin → forehead): the face outline pushed outwards, more
+    // upwards to take in the hair, plus a neck that tapers down from the
+    // jaw. It is generous on purpose: the person mask still decides the
+    // exact outline, this only removes the shoulders and body.
+
+    const keepC = document.createElement('canvas');
+    const keepCtx = keepC.getContext('2d');
+
+    function headFrame(lm, W, H) {
+        const P = i => [lm[i].x * W, lm[i].y * H];
+        const top = P(10), chin = P(152);
+        let ux = top[0] - chin[0], uy = top[1] - chin[1];
+        const hF = Math.hypot(ux, uy) || 1;
+        ux /= hF; uy /= hF;
+        const jl = P(172), jr = P(397);
+        const jaw = Math.hypot(jr[0] - jl[0], jr[1] - jl[1]);
+        const cl = P(234), cr = P(454);
+        const faceW = Math.hypot(cr[0] - cl[0], cr[1] - cl[1]);
+        return { P, top, chin, ux, uy, hF, jl, jr, jaw, faceW,
+                 cx: (top[0] + chin[0]) / 2, cy: (top[1] + chin[1]) / 2 };
+    }
+
+    function drawHeadNeckMask(lm, W, H, neck) {
+        if (!OVAL) return;
+        if (keepC.width !== W || keepC.height !== H) { keepC.width = W; keepC.height = H; }
+        keepCtx.clearRect(0, 0, W, H);
+        const f = headFrame(lm, W, H);
+        const head = OVAL.map(i => {
+            const [x, y] = f.P(i);
+            const dx = x - f.cx, dy = y - f.cy;
+            const up = (dx * f.ux + dy * f.uy) / (f.hF / 2);
+            const k = 1.3 + 0.45 * Math.max(0, up);
+            return [f.cx + dx * k, f.cy + dy * k];
+        });
+        const sx = -f.uy, sy = f.ux;   // across the face
+        const bx = f.chin[0] - f.ux * neck * f.hF, by = f.chin[1] - f.uy * neck * f.hF;
+        const wN = f.jaw * 0.36;
+        const neckPoly = [f.jl, f.jr, [bx + sx * wN, by + sy * wN], [bx - sx * wN, by - sy * wN]];
+        // Order the bottom corners to match the jaw corners
+        if ((f.jr[0] - f.jl[0]) * sx + (f.jr[1] - f.jl[1]) * sy < 0) neckPoly.push(neckPoly.splice(2, 1)[0]);
+
+        const off = W * 4;
+        keepCtx.save();
+        keepCtx.shadowColor = '#fff';
+        keepCtx.shadowBlur = f.hF * 0.06;
+        keepCtx.shadowOffsetX = off;
+        keepCtx.fillStyle = '#fff';
+        for (const poly of neck > 0 ? [head, neckPoly] : [head]) {
+            tracePoly(keepCtx, poly, -off);
+            keepCtx.fill();
+        }
+        keepCtx.restore();
+    }
+
+    // Smoothed view transform: centre (cx, cy) and magnification k
+    const zoom = { cx: 0, cy: 0, k: 0 };
+    const zoomC = document.createElement('canvas');
+    const zoomCtx = zoomC.getContext('2d');
+
+    function zoomToFace(lm, W, H, fit, smooth, bg) {
+        const f = headFrame(lm, W, H);
+        const neck = num('bgNeck') / 100;
+        // Head + neck extent: hair above the forehead to the neck cut
+        const topX = f.top[0] + f.ux * f.hF * 0.45, topY = f.top[1] + f.uy * f.hF * 0.45;
+        const botX = f.chin[0] - f.ux * Math.max(0.15, neck) * f.hF;
+        const botY = f.chin[1] - f.uy * Math.max(0.15, neck) * f.hF;
+        const regionH = Math.hypot(topX - botX, topY - botY);
+        const regionW = f.faceW * 1.35;
+        const k = Math.min(fit * H / regionH, fit * W / regionW);
+        const cx = (topX + botX) / 2, cy = (topY + botY) / 2;
+
+        if (zoom.k === 0) {
+            Object.assign(zoom, { cx, cy, k });
+        } else {
+            const a = 1 - smooth;
+            zoom.cx += (cx - zoom.cx) * a;
+            zoom.cy += (cy - zoom.cy) * a;
+            zoom.k *= Math.pow(k / zoom.k, a);
+        }
+
+        if (zoomC.width !== W || zoomC.height !== H) { zoomC.width = W; zoomC.height = H; }
+        zoomCtx.drawImage(canvas, 0, 0);
+
+        // Source rectangle, clipped to the frame (with the destination
+        // adjusted to match), so no browser has to extrapolate.
+        let sw = W / zoom.k, sh = H / zoom.k;
+        let sx = zoom.cx - sw / 2, sy = zoom.cy - sh / 2;
+        let dx = 0, dy = 0, dw = W, dh = H;
+        const k2 = zoom.k;
+        if (sx < 0) { dx -= sx * k2; dw += sx * k2; sw += sx; sx = 0; }
+        if (sy < 0) { dy -= sy * k2; dh += sy * k2; sh += sy; sy = 0; }
+        if (sx + sw > W) { const o = sx + sw - W; sw -= o; dw -= o * k2; }
+        if (sy + sh > H) { const o = sy + sh - H; sh -= o; dh -= o * k2; }
+
+        ctx.fillStyle = bg === 'color' ? document.getElementById('bgColor').value
+                      : bg === 'fog' ? '#07090c' : '#000';
+        ctx.fillRect(0, 0, W, H);
+        if (sw > 1 && sh > 1) {
+            ctx.save();
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(zoomC, sx, sy, sw, sh, dx, dy, dw, dh);
+            ctx.restore();
+        }
+    }
+
+    function replaceBackground(W, H, mirror, mode, edge, keepLm) {
         if (!vision) return;
         if (segState === 'idle') loadSegmenter();
         if (segState !== 'ready') return;
@@ -1914,6 +2029,11 @@
         if (mirror) { personCtx.translate(W, 0); personCtx.scale(-1, 1); }
         personCtx.drawImage(segMaskC, 0, 0, W, H);
         personCtx.restore();
+        if (keepLm) {
+            // Face + neck only: also cut away shoulders and body
+            drawHeadNeckMask(keepLm, W, H, num('bgNeck') / 100);
+            personCtx.drawImage(keepC, 0, 0);
+        }
         personCtx.globalCompositeOperation = 'source-over';
 
         if (mode === 'blur') {
@@ -1994,6 +2114,7 @@
 
         let lastT = -1;
         const seenErrors = new Set();
+        let lastFaceLm = null;
 
         function loop() {
             if (video.currentTime !== lastT) {
@@ -2011,23 +2132,38 @@
                 ctx.drawImage(video, 0, 0, W, H);
                 ctx.restore();
 
-                // Background removal comes first, so every crop and
-                // effect below works on the cut-out person.
-                const bg = document.getElementById('bgMode').value;
-                if (bg !== 'camera' && !spaceHeld) {
-                    replaceBackground(W, H, mirror, bg, num('bgEdge') / 100);
-                }
-
-                // Detect face
+                // Detect the face first: the face + neck cut-out needs
+                // its landmarks. They must match the canvas orientation.
+                let faceLm = null;
                 try {
                     const res = faceLandmarker.detectForVideo(video, performance.now());
                     if (res.faceLandmarks?.length > 0) {
-                        // Landmarks must match the canvas orientation
-                        const lm = res.faceLandmarks[0].map(p => ({
+                        faceLm = res.faceLandmarks[0].map(p => ({
                             x: mirror ? 1 - p.x : p.x,
                             y: p.y,
                             z: p.z
                         }));
+                        lastFaceLm = faceLm;
+                    }
+                } catch (err) {
+                    if (!seenErrors.has(err.message)) {
+                        seenErrors.add(err.message);
+                        console.warn(err);
+                    }
+                }
+
+                // Background removal comes next, so every crop and
+                // effect below works on the cut-out person.
+                const bg = document.getElementById('bgMode').value;
+                const faceOnly = on('bgFace');
+                if ((bg !== 'camera' || faceOnly) && !spaceHeld) {
+                    replaceBackground(W, H, mirror, bg === 'camera' ? 'black' : bg,
+                                      num('bgEdge') / 100, faceOnly ? lastFaceLm : null);
+                }
+
+                try {
+                    if (faceLm) {
+                        const lm = faceLm;
 
                         // Read settings
                         const eSrc  = document.getElementById('eyeSource').value;
@@ -2182,6 +2318,11 @@
                 }
 
                 if (hp.on && !spaceHeld) drawAtmosphere(W, H, hp);
+
+                // Zoom to fit: last, so it frames everything drawn above
+                if (faceOnly && on('bgZoom') && !spaceHeld && lastFaceLm) {
+                    zoomToFace(lastFaceLm, W, H, num('bgFit') / 100, num('bgSmooth') / 100, bg);
+                }
             }
             requestAnimationFrame(loop);
         }
@@ -2224,10 +2365,12 @@
 
     const bgMode = document.getElementById('bgMode');
     function syncBg() {
-        document.getElementById('bgGroup').hidden = bgMode.value === 'camera';
+        const faceOnly = document.getElementById('bgFace').checked;
+        document.getElementById('bgGroup').hidden = bgMode.value === 'camera' && !faceOnly;
         document.getElementById('bgColor').parentElement.hidden = bgMode.value !== 'color';
     }
     bgMode.addEventListener('change', syncBg);
+    document.getElementById('bgFace').addEventListener('change', () => { zoom.k = 0; syncBg(); });
     syncBg();
 
     // ---- Keyboard ----
