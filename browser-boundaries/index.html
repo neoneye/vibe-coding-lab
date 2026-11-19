@@ -52,6 +52,7 @@
   .pdftile .box { aspect-ratio: auto; height: 250px; }
   #cssTable td:first-child { min-width: 220px; }
   .deftiles iframe { height: 150px; }
+  #mimeTable code, #orbTable code { white-space: nowrap; }
   .enctiles { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
   .enctiles iframe { height: 84px; background: #fff; }
   .enctiles .hex { font: 11.5px var(--mono); color: var(--soft); overflow-wrap: anywhere; margin-top: 4px; }
@@ -1071,8 +1072,10 @@ Origin: http://localhost:8765</code></pre>
 <ul>
 <li><b>Scripts:</b> with <code>nosniff</code>, a script must carry a JavaScript type. Without it, browsers still run JavaScript sent as <code>text/plain</code> or even <code>text/html</code>, for old servers. Image, audio, video and CSV types are refused as scripts either way.</li>
 <li><b>Stylesheets</b> must be <code>text/css</code> when cross-origin (and in standards mode); <code>nosniff</code> also ends the <a href="#cl-quirks">quirks-mode exception</a>.</li>
-<li><b>Opaque Response Blocking</b> (Chromium and Firefox) adds a newer layer: a cross-origin response that looks like HTML, JSON or XML is not handed to <code>&lt;img&gt;</code>, <code>&lt;script&gt;</code> or <code>&lt;video&gt;</code> at all, so it never even reaches the page's memory, where a Spectre-style attack could read it.</li>
-<li><b>Send it on everything</b>, together with correct types. It costs nothing.</li>
+<li><b>Why so forgiving?</b> Classic <code>&lt;script src&gt;</code> never checked the type, and old servers labelled JavaScript badly: PHP sends <code>text/html</code> unless told otherwise, and Apache and IIS setups used <code>text/plain</code> or <code>application/octet-stream</code>. Too many working pages still depend on that to switch it off. The strict checks went into newer features instead: a <code>type="module"</code> script must be served as JavaScript, with no exceptions and no header needed.</li>
+<li><b>JSON hijacking, 2006:</b> an attacker page loaded <code>&lt;script src="https://bank.example/api/accounts"&gt;</code>. The browser sent the victim's cookies, the JSON array came back, and a JSON array is valid JavaScript. Engines of the time let the page redefine <code>Array</code> and read the values as they were built. Engines closed that hole around 2009, and sites began prefixing JSON with <code>)]}'</code> or <code>while(1);</code> so that it could not run as a script.</li>
+<li><b>Spectre (2018) brought it back in a new form:</b> no JavaScript trick is needed if the bytes merely land in the attacker page's memory. <b>Opaque Response Blocking</b> (ORB, the successor of CORB) is the answer: a cross-origin response loaded by <code>&lt;script&gt;</code>, <code>&lt;img&gt;</code> or <code>&lt;video&gt;</code> without CORS is dropped before it reaches the page if it looks like HTML, JSON or XML. The second table shows that "looks like" means different things in Chromium and Firefox. JSON arrays, the hijacking payload, still get through in Chromium unless the server sends <code>nosniff</code>.</li>
+<li><b>Send it on everything</b>, together with correct types. It costs nothing. jsDelivr, unpkg, cdnjs, GitHub's API and httpbin all send it today.</li>
 </ul>
 <p class="small">Recorded in Chromium 156 against a local server that sent a one-line script (or rule) with each type, with and without <code>nosniff</code>:</p>
 <div class="tablewrap"><table id="mimeTable">
@@ -1086,11 +1089,27 @@ Origin: http://localhost:8765</code></pre>
 <tr><td><code>image/png</code>, <code>text/csv</code></td><td><span class="tag bad">refused</span></td><td><span class="tag bad">refused</span></td></tr>
 <tr><td>stylesheet: <code>text/css</code> / <code>text/plain</code></td><td><span class="tag ok">applied</span> / <span class="tag bad">ignored</span></td><td><span class="tag ok">applied</span> / <span class="tag bad">ignored</span></td></tr>
 </tbody></table></div>
+<p class="small">ORB, recorded in Chromium 156 and Firefox 160: the same local server, <b>no</b> <code>nosniff</code>, loading a JSON body with <code>&lt;script src&gt;</code> from another origin. "Delivered" means the script engine received the bytes. A JSON array then runs and does nothing; a JSON object or a prefixed file is a syntax error, reported only as "Script error.". "Blocked" means the element's <code>error</code> event fired and the page never got the bytes (Chromium's DevTools calls it <code>net::ERR_BLOCKED_BY_ORB</code>).</p>
+<div class="tablewrap"><table id="orbTable">
+<thead><tr><th>Body</th><th>Served as</th><th>Chromium 156</th><th>Firefox 160</th></tr></thead>
+<tbody>
+<tr><td>Real JavaScript</td><td>any type in the first table</td><td><span class="tag warn">ran</span></td><td><span class="tag warn">ran</span></td></tr>
+<tr><td rowspan="2">JSON array<br><code>[{…}]</code></td><td><code>text/javascript</code></td><td><span class="tag warn">delivered</span></td><td><span class="tag warn">delivered</span></td></tr>
+<tr><td><code>application/json</code>, <code>text/html</code>, <code>text/plain</code>, <code>application/octet-stream</code></td><td><span class="tag bad">delivered</span></td><td><span class="tag ok">blocked</span></td></tr>
+<tr><td rowspan="2">JSON object<br><code>{…}</code></td><td><code>text/javascript</code></td><td><span class="tag ok">blocked</span></td><td><span class="tag warn">delivered</span>, syntax error</td></tr>
+<tr><td>the other four</td><td><span class="tag ok">blocked</span></td><td><span class="tag ok">blocked</span></td></tr>
+<tr><td rowspan="2">Prefixed JSON<br><code>)]}'{…}</code></td><td><code>text/javascript</code></td><td><span class="tag ok">blocked</span></td><td><span class="tag warn">delivered</span>, syntax error</td></tr>
+<tr><td>the other four</td><td><span class="tag ok">blocked</span></td><td><span class="tag ok">blocked</span></td></tr>
+</tbody></table></div>
+<p class="small">Chromium sniffs the body: anything that looks like a JSON object or a protective prefix is blocked, even under a JavaScript label, but a JSON array passes under any label because it is also valid JavaScript. Firefox trusts a JavaScript label completely, and blocks any other label whose body parses as JSON or doesn't parse as JavaScript. With <code>nosniff</code>, every non-JavaScript label is refused in both, so the JSON-array gap in Chromium closes.</p>
 </div>
 <div class="demo">
 <p class="small" style="margin-top:0">Live: the same left-pad file, once from jsDelivr (<code>text/javascript</code>) and once from raw.githubusercontent.com (<code>text/plain</code> plus <code>nosniff</code>).</p>
 <div class="btns"><button id="defSniffCdn">From jsDelivr</button><button id="defSniffRaw">From raw.githubusercontent.com</button></div>
 <div class="log" id="defSniffLog" style="height:150px"></div>
+<p class="small">Live: public JSON from jsDelivr (<code>application/json</code> plus <code>nosniff</code>) loaded the hijacking way, with <code>&lt;script src&gt;</code>, and then the intended way, with <code>fetch()</code>. jsDelivr allows CORS, so the data was never secret; the point is which door works.</p>
+<div class="btns"><button id="defOrbRun">Load JSON as a script, then fetch it</button></div>
+<div class="log" id="defOrbLog" style="height:150px"></div>
 </div>
 </div>
 </div>
@@ -2542,6 +2561,28 @@ async function sniffTry(label, url) {
 }
 $('defSniffCdn').onclick = () => sniffTry('jsDelivr, text/javascript', 'https://cdn.jsdelivr.net/npm/left-pad@1.3.0/index.js');
 $('defSniffRaw').onclick = () => sniffTry('raw.githubusercontent.com, text/plain', 'https://raw.githubusercontent.com/left-pad/left-pad/master/index.js');
+const ORB_COUNTRIES = 'https://cdn.jsdelivr.net/npm/world-countries@5.1.0/countries.json';
+const ORB_PKG = 'https://cdn.jsdelivr.net/npm/left-pad@1.3.0/package.json';
+async function orbScript(log, label, url) {
+  const errs = [];
+  const onErr = (e) => { errs.push(e.message); e.preventDefault(); };
+  addEventListener('error', onErr);
+  const ok = await addScript(url + '?v=' + Date.now());
+  await sleep(50);
+  removeEventListener('error', onErr);
+  if (!ok) logTo(log, `<script src> ${label}: blocked, the error event fired and the page never saw a byte`, 'ok');
+  else logTo(log, `<script src> ${label}: delivered to the script engine` + (errs.length ? ` (then "${errs[0]}")` : ''), 'bad');
+}
+$('defOrbRun').onclick = async () => {
+  const log = $('defOrbLog');
+  await orbScript(log, 'countries.json, a JSON array', ORB_COUNTRIES);
+  await orbScript(log, 'package.json, a JSON object', ORB_PKG);
+  try {
+    const r = await fetch(ORB_COUNTRIES);
+    const j = await r.json();
+    logTo(log, `fetch() countries.json: CORS allows it, read ${j.length} countries; the first is ${j[0].name.common}`, 'ok');
+  } catch (e) { logTo(log, 'fetch() failed: ' + e.message, 'bad'); }
+};
 
 // ------------------------------------------------------------------ 7 defences: SameSite
 const SS_COOKIES = ['bb_strict=1; SameSite=Strict; Secure; Path=/', 'bb_lax=1; SameSite=Lax; Secure; Path=/', 'bb_none=1; SameSite=None; Secure; Path=/', 'bb_unset=1; Secure; Path=/'];
