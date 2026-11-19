@@ -417,7 +417,7 @@ const ANKLE_Y = 152;
 const FEET = [{ cx: 100, dir: 1, kx: 95, ox: 0, oy: 0, c: 1, s: 0, spread: 0, ty: [0, 0, 0, 0, 0] }, { cx: 162, dir: -1, kx: 168, ox: 0, oy: 0, c: 1, s: 0, spread: 0, ty: [0, 0, 0, 0, 0] }];
 // toes from the big one outward: x offset, rx, ry, centre y
 const TOES = [[11.4, 3.2, 4.6, 126.5], [4.9, 2.2, 4.1, 127.5], [-1.2, 2.1, 4.0, 128.6], [-7.0, 2.0, 3.6, 130.2], [-12.4, 1.9, 3.2, 132.2]];
-function poseFeet(time, curl, lift) {
+function poseFeet(time, curl, lift, shake) {
   // every half minute or so the right foot comes over and scratches the left one
   const sp = (time + 19) % 29;
   const scr = smooth(0, 0.9, sp) * (1 - smooth(3.6, 4.5, sp)) * (1 - curl);
@@ -430,6 +430,7 @@ function poseFeet(time, curl, lift) {
     if (n === 1) { f.ox = -31 * scr; th -= 0.2 * scr; f.oy += Math.sin(time * 12) * 2.6 * rub - 2 * scr; }
     else { th += 0.1 * scr + Math.sin(time * 12) * 0.025 * rub; }
     th += (n === 0 ? 1 : -1) * 0.1 * curl;                     // and turn in toward each other
+    th += Math.sin(time * 53 + n * 2) * 0.06 * shake; f.ox += Math.sin(time * 47 + n * 3) * 1.3 * shake;   // trembling
     f.c = Math.cos(th); f.s = Math.sin(th);
     f.spread = smooth(0.35, 0.75, vnoise(time * 0.23 + n * 17, 4.2)) * (1 - curl) * (1 - scr * (1 - n));
     f.toe = 1 - 0.28 * curl;                                   // toes clench: shorter and tucked down
@@ -467,7 +468,7 @@ const FONT = {
   Z: '111001010100111', 0: '111101101101111', 1: '010110010010111', 2: '110001010100111', 3: '110001010001110',
   4: '101101111001001', 5: '111100110001110', 6: '011100111101111', 7: '111001010010010', 8: '111101111101111',
   9: '111101111001110', '.': '000000000000010', ',': '000000000010100', ':': '000010000010000',
-  "'": '010010000000000', '-': '000000111000000', '!': '010010010000010', '?': '110001010000010'
+  "'": '010010000000000', '-': '000000111000000', z: '000000110010011', '!': '010010010000010', '?': '110001010000010'
 };
 function text(s, x, y, val, scale, center) {
   scale = scale || 1;
@@ -495,7 +496,8 @@ function render(v) {
 
   // outside
   const mx = WIN.x0 + p.moonX * WW, my = WIN.y0 + p.moonY * WH, mr = p.moonR;
-  const cloudAt = (x, y) => smooth(0.62 - p.clouds * 0.42, 0.9 - p.clouds * 0.3, fbm((x + time * 1.6) * 0.022, y * 0.05 + 5));
+  const fl = v.fl || 0, rain = v.rain || 0, cl8 = Math.min(1, p.clouds + 0.45 * rain);
+  const cloudAt = (x, y) => smooth(0.62 - cl8 * 0.42, 0.9 - cl8 * 0.3, fbm((x + time * 1.6) * 0.022, y * 0.05 + 5));
   const moonVis = (1 - 0.65 * cloudAt(mx, my)) * (1 - dawn * 0.8);
   for (let y = WIN.y0; y < WIN.y1; y++) {
     const ground = WIN.y1 - 4;
@@ -512,7 +514,7 @@ function render(v) {
         const dn = (ld + 0.2 * (leafD[i - 1] + leafD[i + 1] + leafD[i - W] + leafD[i + W])) / 1.8;
         T = Math.exp(-1.15 * dn);
         const fwd = Math.exp(-d / (mr * 4)) + 0.25 * Math.exp(-d / 60);
-        sc8 = moonVis * (14 + 190 * fwd) * (1 - T) * Math.exp(-0.75 * dn) + dawn * 30 * (1 - T);
+        sc8 = moonVis * (14 + 190 * fwd) * (1 - T) * Math.exp(-0.75 * dn) + (dawn * 30 + fl * 45) * (1 - T);
       }
       leafT[i] = T;
       if (y > ground + Math.sin(x * 0.045) * 1.6) { fb[i] = 2 + dawn * 12 + sc8 * 0.5; continue; }
@@ -523,8 +525,34 @@ function render(v) {
         const disc = 232 - 34 * smooth(0.45, 0.7, fbm(x * 0.33 + 40, y * 0.33)) ;
         s += (disc * (1 - 0.6 * c) - s) * clamp(mr + 0.5 - d, 0, 1);
       }
-      s = s * (1 - dawn * 0.45) + dawn * (150 + 70 * (y - WIN.y0) / WH);
+      s = s * (1 - dawn * 0.45) + dawn * (150 + 70 * (y - WIN.y0) / WH) + fl * 150;
+      if (v.bolt) { const bd = Math.abs(x - v.bolt[y]); s += bd < 0.8 ? 255 : 90 * Math.exp(-bd / 2.5); }
       fb[i] = s * T + sc8 + (T < 1 ? 2 : 0);
+    }
+  }
+  // rain: short slanted streaks falling past the glass
+  const inWin = (x, y) => x >= WIN.x0 && x < WIN.x1 && y >= WIN.y0 && y < WIN.y1;
+  for (let k = 0, n = Math.round(rain * 110); k < n; k++) {
+    const sp = 95 + 70 * hash2(k, 5), sl = 0.25 + (v.wind || 0) * 0.5;
+    const rx = WIN.x0 + hash2(k, 11) * (WW + 20) - 10, ry = WIN.y0 + (hash2(k, 29) * WH + time * sp) % WH;
+    for (let j = 0; j < 4; j++) {
+      const X = Math.round(rx - j * sl), Y = Math.round(ry - j);
+      if (inWin(X, Y) && !barMask[Y * W + X]) fb[Y * W + X] += (treeMask[Y * W + X] ? 5 : 15) * (1 + fl * 2);
+    }
+  }
+  // a bird: flaps in from the dark, hits the glass, slides off
+  if (v.bird) {
+    const b = v.bird, hit = b.t >= 0.7, k = Math.min(1, b.t / 0.7);
+    const sz = hit ? 10 : 1 + 9 * k * k, fall = hit ? Math.max(0, b.t - 0.9) : 0;
+    const bx = b.x - (1 - k) * 46, by = b.y + (1 - k) * 12 + 70 * fall * fall;
+    const flap = hit ? (b.t < 0.9 ? 0.2 : 1.2) : Math.sin(b.t * 34) * 0.9;
+    const put = (x, y) => { x = Math.round(x); y = Math.round(y); if (inWin(x, y) && !barMask[y * W + x]) fb[y * W + x] = 2; };
+    for (let a = -sz * 0.45; a <= sz * 0.45; a += 0.5) for (let c = -sz * 0.22; c <= sz * 0.22; c += 0.5) put(bx + a, by + c);
+    for (let side = -1; side <= 1; side += 2) for (let r = 0; r < sz * 1.5; r += 0.5) {
+      const w = Math.max(0.5, sz * 0.3 * (1 - r / (sz * 1.5)));
+      for (let c = -w; c <= w; c += 0.5) put(bx + c + side * r * 0.25, by - Math.sin(flap) * r * side * (hit && fall ? 0.3 : 1) - Math.cos(flap) * r * 0.15 * side + side * r * Math.cos(flap) * 0.9 * 0);
+      put(bx + side * r * Math.cos(flap), by - r * Math.sin(flap));
+      put(bx + side * r * Math.cos(flap), by - r * Math.sin(flap) + 1);
     }
   }
   // the glass adds a little haze; the open gap is the bare night
@@ -532,6 +560,15 @@ function render(v) {
     const i = y * W + x;
     if (!openMask[i] && !barMask[i]) fb[i] = fb[i] * 0.93 + 10 + (Math.sin((x + y * 1.4) * 0.11) > 0.93 ? 3 : 0);
     else if (openMask[i]) fb[i] *= 0.82;
+  }
+  if (v.smear) {                                               // what the bird left on the glass
+    const m = v.smear;
+    for (let dy = -3; dy <= 9; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const X = Math.round(m.x) + dx, Y = Math.round(m.y) + dy;
+      if (!inWin(X, Y) || barMask[Y * W + X]) continue;
+      const q = dy <= 2 ? (dx * dx + dy * dy) / 9 : (dx * dx) / 2 + (dy - 2) / 9;
+      if (q < 1) fb[Y * W + X] += 16 * m.a * (1 - q) * (0.6 + 0.4 * hash2(X, Y));
+    }
   }
   drawCurtains(time, v.wind || 0, v.gust || 0);
 
@@ -541,7 +578,7 @@ function render(v) {
     const i = ((WIN.y0 + vv * WH) | 0) * W + ((WIN.x0 + u * WW) | 0);
     return barMask[i] || treeMask[i] ? 0 : leafT[i] * (curtA[i] ? 0.45 : 1) * (openMask[i] ? 1.15 : 1);
   };
-  poseFeet(time, v.curl || 0, v.footLift || 0);
+  poseFeet(time, v.curl || 0, v.footLift || 0, v.shake || 0);
   FEET.forEach((f, n) => { LEGS[n].lx = f.cx + f.ox; LEGS[n].ls = -(f.oy + 9); });
   shadeDuvet();
   for (let y = BED_Y; y < H; y++) {
@@ -552,7 +589,7 @@ function render(v) {
       if (!sh) continue;
       const u = 0.5 + ((x - 150 + 34 * z) / s) / WW;
       const L = (lightAt(u - pen, vv) + lightAt(u + pen, vv) + lightAt(u, vv - pen * 1.5) + lightAt(u, vv + pen * 1.5)) * 0.25;
-      let lit = L * moonVis + dawn * 0.5;
+      let lit = L * (moonVis + fl * 1.1) + dawn * 0.5;
       if (y > ANKLE_Y - 14 && lit > 0.01) {                   // the feet throw their shadow toward you, toes last
         let sh2 = 0;
         for (const f of FEET) {
@@ -597,6 +634,11 @@ function render(v) {
   // the duvet lies over the legs
   for (let y = 136; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; if (duvShade[i]) fb[i] = duv[i]; }
 
+  // lightning: for an instant the whole room is there
+  if (fl > 0) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!inWin(x, y) || curtA[y * W + x]) fb[y * W + x] = fb[y * W + x] * (1 + 2 * fl) + 5 * fl;
+  }
+
   // it is in the room
   if (v.inside) for (let i = 0; i < W * H; i++) if (treeMask[i]) fb[i] = 0;
 
@@ -615,7 +657,8 @@ function render(v) {
         const c = 1 - nx * nx;
         const top = lid * (H / 2 + 16) - 14 * c, bot = H - lid * (H / 2 + 16) + 14 * c;
         const k = Math.min(y - top, bot - y);
-        val *= clamp(k / 5, 0, 1);
+        const open = clamp(k / 5, 0, 1);
+        val = val * open + fl * 24 * (1 - open);              // lightning shows through closed eyelids
       }
       out[y * W + x] = val;
     }
@@ -651,6 +694,13 @@ function initAudio() {
   const blp = ctx.createBiquadFilter(); blp.type = 'lowpass'; blp.frequency.value = 2800;
   A.breath = ctx.createGain(); A.breath.gain.value = 0; A.breathNext = 0;
   bs.connect(A.breathBp); A.breathBp.connect(blp); blp.connect(A.breath); A.breath.connect(A.master); bs.start(0, 0.7);
+  // rain: hiss plus a lower body, always running, level set from the weather
+  const rs = ctx.createBufferSource(); rs.buffer = nb; rs.loop = true;
+  const rh = ctx.createBiquadFilter(); rh.type = 'highpass'; rh.frequency.value = 2200;
+  const rb = ctx.createBiquadFilter(); rb.type = 'bandpass'; rb.frequency.value = 700; rb.Q.value = 0.5;
+  const rbg = ctx.createGain(); rbg.gain.value = 0.35;
+  A.rain = ctx.createGain(); A.rain.gain.value = 0;
+  rs.connect(rh); rh.connect(A.rain); rs.connect(rb); rb.connect(rbg); rbg.connect(A.rain); A.rain.connect(A.master); rs.start(0, 1.3);
 }
 function burst(when, dur, freq, q, gain, type) {
   if (!A.ctx) return;
@@ -681,6 +731,31 @@ function sfxTwig(g) {          // a twig touching the glass, much lighter than a
   const f = burst(t, 0.022, 2400 + Math.random() * 1400, 14, 0.5 * k);
   thump(t, 0.05 * k, 330);
 }
+function sfxThunder(loud) {    // a crack if it is close, then a long rumble that rolls away
+  if (!A.ctx) return;
+  const ctx = A.ctx, t = ctx.currentTime + 0.02;
+  if (loud > 0.55) burst(t, 0.25, 1800, 0.6, 0.55 * loud);
+  const s = ctx.createBufferSource(); s.buffer = A.noise; s.loop = true;
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(700, t); f.frequency.exponentialRampToValueAtTime(90, t + 4);
+  const g = ctx.createGain(), G0 = 0.9 * (0.35 + 0.65 * loud);
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(G0, t + 0.06);
+  for (let k = 1; k < 18; k++) g.gain.linearRampToValueAtTime(G0 * (0.35 + 0.65 * Math.random()) * Math.exp(-k * 0.25 / 1.4), t + 0.06 + k * 0.25);
+  g.gain.linearRampToValueAtTime(0.0001, t + 5);
+  s.connect(f); f.connect(g); g.connect(A.master); s.start(t, Math.random()); s.stop(t + 5.1);
+  thump(t, 0.5 * loud, 60);
+}
+function sfxBird() {
+  if (!A.ctx) return;
+  const t = A.ctx.currentTime + 0.01;
+  thump(t, 0.6, 130); burst(t, 0.06, 650, 2, 0.6);
+  for (let k = 0; k < 6; k++) burst(t + 0.12 + k * 0.075, 0.035, 1800, 1.5, 0.16 * (1 - k / 7));
+}
+function sfxBranch() {         // a whole branch against the pane: a knock and the glass rattling after it
+  if (!A.ctx) return;
+  const t = A.ctx.currentTime + 0.01;
+  thump(t, 0.4, 170); burst(t, 0.07, 950, 5, 0.6);
+  for (let k = 1; k < 5; k++) burst(t + k * 0.045, 0.02, 2600, 12, 0.2 / k);
+}
 function sfxSting(v) { if (!A.ctx) return; const t = A.ctx.currentTime + 0.01; burst(t, 0.5, 700, 0.7, v * 0.5, 'lowpass'); thump(t, v * 0.7); }
 function sfxDeath() {
   if (!A.ctx) return;
@@ -702,6 +777,7 @@ function synthLevel(c, closed, dt) {
     A.scratchBp.frequency.setTargetAtTime(1700 + Math.random() * 2600, now, 0.05);
   }
   A.drone.gain.setTargetAtTime(c * c * 0.22 * k, now, 0.3);
+  A.rain.gain.setTargetAtTime(G.rain * 0.075 * (closed ? 1.3 : 1), now, 0.4);
   if (c > 0.3) {
     A.beatT -= dt;
     if (A.beatT <= 0) {
@@ -728,6 +804,7 @@ function synthSilence() {
   if (!A.ctx) return;
   const now = A.ctx.currentTime;
   A.breath.gain.cancelScheduledValues(now); A.breath.gain.setTargetAtTime(0, now, 0.03); A.breathNext = 0;
+  A.rain.gain.setTargetAtTime(0, now, 0.05);
   A.breathBp.frequency.cancelScheduledValues(now);
   A.scratch.gain.cancelScheduledValues(now); A.scratch.gain.setTargetAtTime(0, now, 0.01);
   A.drone.gain.cancelScheduledValues(now); A.drone.gain.setTargetAtTime(0, now, 0.01);
@@ -751,9 +828,68 @@ const G = {
   depth: 0,            // how deeply asleep
   surgeT: 8, surge: 0,
   wind: 0, gust: 0, tapT: 0, jolt: 0, fear: 0,
+  playT: 0, rain: 0, rainSeed: 0, flashT: 9, bolt: null, thunderAt: 0, thunderLoud: 0, nextStrike: 30, nextBird: 90, bird: null, smear: null,
+  branchCd: 12, startle: 0, startleT: 9, thought: '', thoughtT: -1, thoughtD: 1,
   curl: 0, t: 0, closes: 0, tune: false, tuneTab: 'calm', tuneBlend: null
 };
+const pick = a => a[(Math.random() * a.length) | 0];
+function startle(a) { G.startle = Math.max(G.startle, a); G.startleT = 0; }
+function think(t, d) { G.thought = t; G.thoughtD = d || 2.6; G.thoughtT = G.thoughtD; }
+function flashAt(t) { return t < 0.06 ? 1 : t < 0.12 ? 0.25 : t < 0.2 ? 0.9 : t < 1.5 ? 0.9 * Math.exp(-(t - 0.2) / 0.16) : 0; }
+function strike(closed) {
+  G.flashT = 0;
+  const b = new Float32Array(H); let x = WIN.x0 + 12 + Math.random() * (WW - 24);
+  for (let y = WIN.y0; y < WIN.y1; y++) { x += (Math.random() - 0.5) * 5 + (Math.random() < 0.08 ? (Math.random() - 0.5) * 14 : 0); b[y] = x; }
+  G.bolt = b;
+  const delay = 0.5 + Math.random() * 2.6;
+  G.thunderAt = G.playT + delay; G.thunderLoud = 1 - delay / 4;
+  startle(closed ? 0.6 : 1);
+  if (closed) think('WHAT WAS THAT?', 1.5);
+}
+// weather and the things that go bump: rain spells, lightning, a bird, a branch thrown at the pane
+function weather(dt, closed) {
+  G.playT += dt;
+  G.rain += (smooth(0.46, 0.7, fbm(G.playT * 0.011 + G.rainSeed, 9.3)) - G.rain) * Math.min(1, dt * 0.5);
+  G.nextStrike -= dt * (1 + 1.5 * G.rain);
+  if (G.nextStrike <= 0) { G.nextStrike = 22 + Math.random() * 50; strike(closed); }
+  if (G.thunderAt > 0 && G.playT >= G.thunderAt) {
+    G.thunderAt = 0; sfxThunder(G.thunderLoud);
+    if (closed) think(pick(['ONLY THUNDER', 'THUNDER. JUST THUNDER.']), 2.4);
+  }
+  G.nextBird -= dt;
+  if (G.nextBird <= 0) { G.nextBird = 90 + Math.random() * 120; G.bird = { t: 0, x: WIN.x0 + 16 + Math.random() * 60, y: WIN.y0 + 12 + Math.random() * 30, hit: false }; }
+  if (G.bird) {
+    const b = G.bird; b.t += dt;
+    if (!b.hit && b.t >= 0.7) { b.hit = true; sfxBird(); startle(closed ? 0.7 : 1); G.smear = { x: b.x, y: b.y, a: 1 }; if (closed) think('WHAT WAS THAT?', 2.2); }
+    if (b.t > 2.4) G.bird = null;
+  }
+  if (G.smear) { G.smear.a -= dt / 45; if (G.smear.a <= 0) G.smear = null; }
+  G.branchCd -= dt;
+  if (G.gust > 0.8 && G.branchCd <= 0) {
+    G.branchCd = 10 + Math.random() * 14; G.jolt = 2.4; sfxBranch(); startle(0.65);
+    if (closed) think('WHAT IS THAT?', 1.8);
+  }
+  // a fright holds for a moment, then lets go: it was only a branch
+  G.startleT += dt;
+  if (G.startleT > 1.7 && G.startle > 0) {
+    const was = G.startle; G.startle = Math.max(0, G.startle - dt * 2.5);
+    if (closed && was > 0.3 && G.startle <= 0.3 && G.thoughtT <= 0) think(pick(['ONLY A BRANCH', 'JUST THE WIND', "IT'S NOTHING"]), 2.2);
+  }
+  // what goes through the head with the eyes shut
+  G.thoughtT -= dt;
+  if (closed && G.thoughtT < -1.3) {
+    const c = G.creep;
+    if (c > 0.8) think(pick(['OPEN YOUR EYES', 'IT IS RIGHT THERE', "DON'T MOVE"]), 1.8);
+    else if (c > 0.5) think(pick(["I CAN'T SLEEP", 'SOMETHING IS SCRATCHING', "IT'S ONLY A TREE. ONLY A TREE."]), 2.4);
+    else if (c > 0.28) think(pick(['WHAT IS THAT?', 'DID IT MOVE?', "I CAN'T SLEEP"]), 2.4);
+    else if (G.depth > 0.45) think('ZzZz', 3);
+    else if (G.rain > 0.5 && Math.random() < 0.5) think("IT'S RAINING", 2.2);
+  }
+  if (!closed && G.thoughtT > 0) G.thoughtT = 0;
+}
 function newNight() {
+  G.playT = 0; G.rain = 0; G.rainSeed = Math.random() * 100; G.flashT = 9; G.bolt = null; G.thunderAt = 0; G.nextStrike = 18 + Math.random() * 30;
+  G.nextBird = 60 + Math.random() * 100; G.bird = null; G.smear = null; G.branchCd = 12; G.startle = 0; G.startleT = 9; G.thought = ''; G.thoughtT = -1;
   G.state = 'play'; G.hour = 0; G.creep = 0; G.shown = 0; G.lid = 0; G.depth = 0; G.surgeT = 9; G.surge = 0;
   G.curl = 0; G.fear = 0; G.t = 0; G.closes = 0; G.wasClosed = false; G.needRelease = false; G.held = false;
   initAudio(); clockPlay();
@@ -779,9 +915,9 @@ function update(dt) {
   G.t += dt;
   G.curl = Math.max(0, G.curl - dt * 0.5);
   // fear: a jolt when the eyes open on something bad, and a steady dread while it is in view
-  const fearT = G.state === 'play' ? clamp(smooth(0.3, 0.9, visualCreep()) * 0.85 + G.curl + (G.surge > 0 ? 0.6 : 0), 0, 1)
+  const fearT = G.state === 'play' ? clamp(smooth(0.3, 0.9, visualCreep()) * 0.85 + G.curl + G.startle + (G.surge > 0 ? 0.6 : 0), 0, 1)
     : G.state === 'taken' || G.state === 'reveal' ? 1 : 0;
-  G.fear += (fearT - G.fear) * Math.min(1, dt * (fearT > G.fear ? 9 : 1.2));
+  G.fear += (fearT - G.fear) * Math.min(1, dt * (fearT > G.fear ? 9 : 2));
   if (G.state === 'play' || G.state === 'win') breathe(G.fear, G.lid > 0.95);
   const s = G.state;
   let wantClosed = false;
@@ -791,7 +927,9 @@ function update(dt) {
   G.lid = clamp(G.lid + (wantClosed ? 1 : -1) * dt * 7, 0, 1);
   const closed = G.lid > 0.95;
 
+  G.flashT += dt;
   if (s === 'play') {
+    weather(dt, closed);
     if (closed) {
       if (!G.wasClosed) G.closes++;
       G.depth = Math.min(1, G.depth + dt / 7);
@@ -844,7 +982,9 @@ function draw() {
     return;
   }
   const dawn = s === 'win' || s === 'waking' ? 1 : clamp((G.hour - 5) * 0.3, 0, 0.3);
-  const view = { p: blendParams(s === 'title' || s === 'win' || s === 'waking' ? 0 : visualCreep()), time: G.time, dawn, lid: G.lid, curl: G.fear, wind: G.wind, gust: G.gust };
+  const view = { p: blendParams(s === 'title' || s === 'win' || s === 'waking' ? 0 : visualCreep()), time: G.time, dawn, lid: G.lid, curl: G.fear, wind: G.wind, gust: G.gust,
+    fl: flashAt(G.flashT), bolt: G.flashT < 0.2 ? G.bolt : null, rain: s === 'play' ? G.rain : 0, bird: s === 'play' ? G.bird : null,
+    smear: s === 'play' ? G.smear : null, shake: s === 'play' && G.startleT < 1.1 ? G.startle : 0 };
   if (s === 'title') view.dark = 0.5;
   if (s === 'reveal') {
     view.p = blendParams(1); view.inside = true; view.curl = 1;
@@ -863,7 +1003,15 @@ function draw() {
     if (G.lid < 0.3) {
       text(clockString(G.hour), 6, 6, 120, 1);
       if (G.closes === 0) text('PRESS SPACE TO CLOSE YOUR EYES', W / 2, 170, 120, 1, true);
-    } else if (G.lid > 0.95 && G.closes <= 2) { text('LISTEN', W / 2, 84, 26, 1, true); text('PRESS SPACE TO OPEN YOUR EYES', W / 2, 94, 18, 1, true); }
+    } else if (G.lid > 0.95) {
+      if (G.thoughtT > 0) {                                    // the inner monologue
+        const a = Math.min(1, (G.thoughtD - G.thoughtT) / 0.35, G.thoughtT / 0.5), val = 12 + 140 * a;
+        if (G.thought === 'ZzZz') {
+          for (let k = 0; k < 4; k++) text('ZzZz'[k], W / 2 - 18 + k * 10, Math.round(92 - k * 5 + Math.sin(G.time * 1.6 + k) * 1.5), val * (0.45 + 0.18 * k), 2);
+        } else text(G.thought, W / 2, 84, val, 1, true);
+      }
+      if (G.closes <= 2) text('PRESS SPACE TO OPEN YOUR EYES', W / 2, 168, 18, 1, true);
+    }
   } else if (s === 'win') {
     text('06:00', 114, 46, 20, 3, true);
     text('MORNING.', 114, 70, 20, 1, true);
