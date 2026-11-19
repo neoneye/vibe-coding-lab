@@ -73,7 +73,7 @@
 const W = 320, H = 180;
 const WIN = { x0: 70, y0: 18, x1: 250, y1: 104 };          // glass, x1/y1 exclusive
 const WW = WIN.x1 - WIN.x0, WH = WIN.y1 - WIN.y0;
-const BED_Y = 136, BLANKET_Y = 153;
+const BED_Y = 136;
 const OPEN = 18;                                             // the lower left sash is pushed up this far
 const TARGET_ANGLE = -1.35;                                  // "toward the bed": left and slightly up
 
@@ -155,6 +155,8 @@ const smooth = (a, b, v) => { v = clamp((v - a) / (b - a), 0, 1); return v * v *
 const fb = new Float32Array(W * H);
 const staticBase = new Float32Array(W * H);
 const bedShade = new Float32Array(W * H);     // 0 = not bed
+const duvShade = new Float32Array(W * H);     // 0 = not duvet, else how its surface faces the window
+const duv = new Float32Array(W * H);
 const barMask = new Uint8Array(W * H);
 const treeMask = new Uint8Array(W * H);
 const openMask = new Uint8Array(W * H);     // no glass here
@@ -163,6 +165,54 @@ const leafD = new Float32Array(W * H);      // how much leaf the moonlight has t
 const leafT = new Float32Array(W * H);
 const out = new Uint8ClampedArray(W * H);
 
+// The duvet: a soft height field over the legs, rebuilt every frame so that it follows them.
+// Its far edge is a rolled rim that the feet stick out from.
+const LEGS = [{ fx: 100, hx: 86, lx: 100, ls: 0 }, { fx: 162, hx: 188, lx: 162, ls: 0 }];   // lx: ankle now, ls: how far it is pushed out
+const duvH = new Float32Array(W * H);
+function duvetEdge(x) {
+  let e = 146, drag = 0;
+  for (const l of LEGS) {
+    const q = (x - l.lx) / 11, q2 = (x - l.lx) / 24, w = Math.exp(-q2 * q2);
+    e -= 3.5 * Math.exp(-q * q) + 0.32 * l.ls * w;             // lifted over the shin, tugged along when it slides out
+    drag += (l.lx - l.fx) * w;
+  }
+  return e + 2.2 * Math.sin((x - drag * 0.6) * 0.045 + 1) + 1.2 * Math.sin((x - drag * 0.6) * 0.13 + 2);
+}
+function duvetH(x, y, e) {
+  const d = y - e;
+  if (d < 0) return 0;
+  const zz = d / (H - e);
+  let h = 3.5 * smooth(0, 5, d), sx = x, sy = y;
+  for (const l of LEGS) {
+    const cx = l.lx + (l.hx - l.lx) * Math.pow(zz, 0.8), w = 10 * (1 + 1.5 * zz), q = (x - cx) / w, k = (zz - 0.62) / 0.2;
+    const g = Math.exp(-q * q);
+    h += (6 + 11 * zz + 5 * Math.exp(-k * k) + 0.35 * l.ls * (1 - zz)) * g;   // shin, with the knee a little higher
+    const pull = Math.exp(-q * q * 0.35) * (1 - zz);                          // the cloth near a leg is dragged with it
+    sx -= (l.lx - l.fx) * pull * 0.8; sy += l.ls * pull * 0.9;
+  }
+  h += 5 * fbm(sx * 0.035, sy * 0.09);                                        // soft filling
+  const cr = 1 - Math.abs(2 * vnoise(sx * 0.025 + sy * 0.05, sy * 0.11 - sx * 0.02 + 7) - 1);
+  h -= 3.5 * cr * cr * cr;                                                    // creases
+  const t = (y - BED_Y) / (H - BED_Y), side = Math.min(x - (40 - 46 * t), 232 + 46 * t - x);
+  h -= 7 * (1 - smooth(0, 9, side));                                          // falls away over the sides of the bed
+  return h;
+}
+function shadeDuvet() {
+  for (let x = 0; x < W; x++) {
+    const e = duvetEdge(x);
+    for (let y = BED_Y - 1; y < H; y++) {
+      const i = y * W + x;
+      duvShade[i] = bedShade[i] && y >= e ? 1 : 0;
+      duvH[i] = bedShade[i] ? duvetH(x, y, e) : 0;
+    }
+  }
+  for (let y = BED_Y; y < H; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x;
+    if (!duvShade[i]) continue;
+    const d = (y < H - 1 ? duvH[i + W] : duvH[i] * 2 - duvH[i - W]) - duvH[i - W], e = duvH[i - 1] - duvH[i + 1];
+    duvShade[i] = clamp(0.5 + 0.22 * d + 0.17 * e, 0.05, 2.2) * (0.88 + 0.12 * bedShade[i]);
+  }
+}
 function buildStatic() {
   // glazing bars: a mullion between the two halves, each half 2 x 3 panes under a transom
   const panes = [[WIN.x0, 158], [163, WIN.x1]];
@@ -208,14 +258,6 @@ function buildStatic() {
       const xl = 40 - 46 * t, xr = 232 + 46 * t;
       if (x >= xl && x <= xr) {
         let s = 0.8 + 0.4 * fbm(x * 0.045 + 3, z * 5);
-        if (y >= BLANKET_Y) {
-          const zz = (y - BLANKET_Y) / (H - BLANKET_Y);
-          for (const [fx, hx] of [[100, 88], [162, 184]]) {
-            const cx = fx + (hx - fx) * zz, w = 9 * (1 + 1.6 * zz);
-            const q = (x - cx) / w, h = Math.exp(-q * q);
-            s *= 1 + 0.25 * h + 0.5 * h * clamp(q, -1, 1);
-          }
-        }
         bedShade[i] = s;
       }
     }
@@ -372,22 +414,34 @@ function drawCurtains(time, wind, gust) {
 // ---------------------------------------------------------------------------
 // feet. Each foot rocks about the ankle, and the toes spread and wiggle.
 const ANKLE_Y = 152;
-const FEET = [{ cx: 100, dir: 1, c: 1, s: 0, spread: 0, ty: [0, 0, 0, 0, 0] }, { cx: 162, dir: -1, c: 1, s: 0, spread: 0, ty: [0, 0, 0, 0, 0] }];
+const FEET = [{ cx: 100, dir: 1, kx: 95, ox: 0, oy: 0, c: 1, s: 0, spread: 0, ty: [0, 0, 0, 0, 0] }, { cx: 162, dir: -1, kx: 168, ox: 0, oy: 0, c: 1, s: 0, spread: 0, ty: [0, 0, 0, 0, 0] }];
 // toes from the big one outward: x offset, rx, ry, centre y
 const TOES = [[11.4, 3.2, 4.6, 126.5], [4.9, 2.2, 4.1, 127.5], [-1.2, 2.1, 4.0, 128.6], [-7.0, 2.0, 3.6, 130.2], [-12.4, 1.9, 3.2, 132.2]];
 function poseFeet(time, curl, lift) {
+  // every half minute or so the right foot comes over and scratches the left one
+  const sp = (time + 19) % 29;
+  const scr = smooth(0, 0.9, sp) * (1 - smooth(3.6, 4.5, sp)) * (1 - curl);
+  const rub = smooth(0.8, 1, scr);
   FEET.forEach((f, n) => {
-    const th = (fbm(time * 0.16 + n * 31, 1.7) - 0.5) * 0.42 + Math.sin(time * 0.9 + n * 2) * 0.02;
-    f.c = Math.cos(th); f.s = Math.sin(th); f.lift = lift;
-    f.spread = smooth(0.35, 0.75, vnoise(time * 0.23 + n * 17, 4.2)) * (1 - curl);
-    const wig = smooth(0.55, 0.8, vnoise(time * 0.31 + n * 9, 8.8));
-    for (let k = 0; k < 5; k++) f.ty[k] = curl * 2 + wig * Math.sin(time * 7.5 + k * 1.25 + n) * 1.1 - f.spread * 0.6;
+    let th = (fbm(time * 0.16 + n * 31, 1.7) - 0.5) * 0.42 * (1 - scr) + Math.sin(time * 0.9 + n * 2) * 0.02;
+    // now and then a leg is pushed further out from under the duvet, and the shin shows
+    const slide = Math.max(smooth(0.35, 0.7, vnoise(time * 0.06 + n * 13, 2.2)) * (1 - curl), n === 1 ? scr : 0);
+    f.ox = 0; f.oy = -9 + lift + curl * 3 - slide * 7;                          // afraid: the feet pull back
+    if (n === 1) { f.ox = -31 * scr; th -= 0.2 * scr; f.oy += Math.sin(time * 12) * 2.6 * rub - 2 * scr; }
+    else { th += 0.1 * scr + Math.sin(time * 12) * 0.025 * rub; }
+    th += (n === 0 ? 1 : -1) * 0.1 * curl;                     // and turn in toward each other
+    f.c = Math.cos(th); f.s = Math.sin(th);
+    f.spread = smooth(0.35, 0.75, vnoise(time * 0.23 + n * 17, 4.2)) * (1 - curl) * (1 - scr * (1 - n));
+    f.toe = 1 - 0.28 * curl;                                   // toes clench: shorter and tucked down
+    const wig = smooth(0.55, 0.8, vnoise(time * 0.31 + n * 9, 8.8)) * (1 - curl) + (n === 0 ? rub * 0.8 : 0);
+    for (let k = 0; k < 5; k++) f.ty[k] = curl * 2.3 + wig * Math.sin(time * 7.5 + k * 1.25 + n) * 1.1 - f.spread * 0.6;
   });
 }
 function inFoot(f, x, y) {
-  y -= f.lift;
-  const rx = x - f.cx, ry = y - ANKLE_Y;
+  y -= f.oy;
+  const rx = x - f.cx - f.ox, ry = y - ANKLE_Y;
   const dx = rx * f.c + ry * f.s; y = ANKLE_Y - rx * f.s + ry * f.c;
+  if (y > ANKLE_Y + 3) return false;
   if (y >= 128 - f.dir * dx * 0.2) {
     const hw = y < 136 ? 14.5 : y < 150 ? 14.5 - (y - 136) * 0.46 : 8 + (y - 150) * 0.2;
     if (Math.abs(dx) <= hw) return true;
@@ -396,7 +450,7 @@ function inFoot(f, x, y) {
   const sp = 1 + 0.2 * f.spread;
   for (let k = 0; k < 5; k++) {
     const t = TOES[k];
-    const qx = (dx - f.dir * t[0] * sp) / t[1], qy = (y - t[3] - f.ty[k]) / t[2];
+    const qx = (dx - f.dir * t[0] * sp) / t[1], qy = (y - t[3] - f.ty[k]) / (t[2] * f.toe);
     if (qx * qx + qy * qy <= 1) return true;
   }
   return false;
@@ -488,33 +542,48 @@ function render(v) {
     return barMask[i] || treeMask[i] ? 0 : leafT[i] * (curtA[i] ? 0.45 : 1) * (openMask[i] ? 1.15 : 1);
   };
   poseFeet(time, v.curl || 0, v.footLift || 0);
+  FEET.forEach((f, n) => { LEGS[n].lx = f.cx + f.ox; LEGS[n].ls = -(f.oy + 9); });
+  shadeDuvet();
   for (let y = BED_Y; y < H; y++) {
     const t = (y - BED_Y) / (H - BED_Y), z = 1 - Math.pow(1 - t, 1.8);
     const vv = 0.985 - z * 1.07, s = 1 + z * 1.25, pen = (0.6 + 2.2 * z) / WW;
-    const blanket = y >= BLANKET_Y;
     for (let x = 0; x < W; x++) {
       const i = y * W + x, sh = bedShade[i];
       if (!sh) continue;
       const u = 0.5 + ((x - 150 + 34 * z) / s) / WW;
       const L = (lightAt(u - pen, vv) + lightAt(u + pen, vv) + lightAt(u, vv - pen * 1.5) + lightAt(u, vv + pen * 1.5)) * 0.25;
       let lit = L * moonVis + dawn * 0.5;
-      if (y > ANKLE_Y - 4 && lit > 0.01) {                    // the feet throw their shadow toward you, toes last
-        const q = y - (ANKLE_Y - 4);
+      if (y > ANKLE_Y - 14 && lit > 0.01) {                   // the feet throw their shadow toward you, toes last
         let sh2 = 0;
         for (const f of FEET) {
-          const fx = f.cx + (x - f.cx + 0.55 * q) / (1 + 0.012 * q), fy = ANKLE_Y - 4 - q / 1.02;
-          if (Math.abs(fx - f.cx) < 24) sh2 += (inFoot(f, fx - 0.5, fy) ? 0.5 : 0) + (inFoot(f, fx + 0.5, fy) ? 0.5 : 0);
+          const base = ANKLE_Y - 4 + f.oy, q = y - base;
+          if (q <= 0) continue;
+          const c0 = f.cx + f.ox, fx = c0 + (x - c0 + 0.55 * q) / (1 + 0.012 * q), fy = base - q / 1.02;
+          if (Math.abs(fx - c0) < 24) sh2 += (inFoot(f, fx - 0.5, fy) ? 0.5 : 0) + (inFoot(f, fx + 0.5, fy) ? 0.5 : 0);
         }
         lit *= 1 - 0.85 * Math.min(1, sh2);
       }
-      fb[i] = blanket ? (8 + lit * 88) * sh : (12 + lit * 128) * (0.9 + 0.1 * sh);
-      if (y === BLANKET_Y) fb[i] += 5 + lit * 30;
+      fb[i] = (12 + lit * 128) * (0.9 + 0.1 * sh);
+      if (duvShade[i]) duv[i] = 6 + (lit * 130 + 36 + dawn * 30) * duvShade[i];
+    }
+  }
+
+  // lower legs lying on the sheet, from the ankle back to where the duvet covers them
+  for (const f of FEET) {
+    const ax = f.cx + f.ox, ay = ANKLE_Y + f.oy, ky = 186;
+    for (let y = Math.floor(ay) - 1; y < 178; y++) {
+      const tt = clamp((y - ay) / (ky - ay), 0, 1), cxl = ax + (f.kx - ax) * tt, hw = 7.4 + 5 * tt;
+      for (let x = Math.ceil(cxl - hw); x <= cxl + hw; x++) {
+        if (x < 0 || x >= W) continue;
+        const i = y * W + x, q = (x - cxl) / hw;
+        fb[i] = 13 + dawn * 50 + (16 + 0.55 * fb[i]) * (1 - 0.75 * q * q) + (q > 0.7 ? 14 * moonVis : 0);
+      }
     }
   }
 
   // feet, lit from behind: light catches the top of every toe and both of its sides
   for (const f of FEET) {
-    for (let y = 112; y < BLANKET_Y + 1; y++) for (let x = f.cx - 24; x <= f.cx + 24; x++) {
+    for (let y = 92; y < 170; y++) for (let x = Math.round(f.cx + f.ox) - 24; x <= f.cx + f.ox + 24; x++) {
       if (!inFoot(f, x, y)) continue;
       let val = 19 + dawn * 60;
       if (!inFoot(f, x, y - 1)) val = 20 + 150 * moonVis + dawn * 60;
@@ -524,6 +593,9 @@ function render(v) {
       fb[y * W + x] = val;
     }
   }
+
+  // the duvet lies over the legs
+  for (let y = 136; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; if (duvShade[i]) fb[i] = duv[i]; }
 
   // it is in the room
   if (v.inside) for (let i = 0; i < W * H; i++) if (treeMask[i]) fb[i] = 0;
@@ -573,6 +645,12 @@ function initAudio() {
   A.drone = ctx.createGain(); A.drone.gain.value = 0;
   for (const f of [55, 58.3, 82.9]) { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.connect(lp); o.start(); }
   lp.connect(A.drone); A.drone.connect(A.master);
+  // breath: the same noise through a soft band that opens on the way in and closes on the way out
+  const bs = ctx.createBufferSource(); bs.buffer = nb; bs.loop = true;
+  A.breathBp = ctx.createBiquadFilter(); A.breathBp.type = 'bandpass'; A.breathBp.frequency.value = 900; A.breathBp.Q.value = 0.9;
+  const blp = ctx.createBiquadFilter(); blp.type = 'lowpass'; blp.frequency.value = 2800;
+  A.breath = ctx.createGain(); A.breath.gain.value = 0; A.breathNext = 0;
+  bs.connect(A.breathBp); A.breathBp.connect(blp); blp.connect(A.breath); A.breath.connect(A.master); bs.start(0, 0.7);
 }
 function burst(when, dur, freq, q, gain, type) {
   if (!A.ctx) return;
@@ -633,9 +711,24 @@ function synthLevel(c, closed, dt) {
     }
   }
 }
+function breathe(fear, closed) {       // schedules one breath at a time; fear makes it quick, shallow and loud
+  if (!A.ctx) return;
+  const now = A.ctx.currentTime;
+  if (A.breathNext > now + 0.12) return;
+  const t0 = Math.max(now + 0.02, A.breathNext), k = 1 - 0.62 * fear;
+  const tin = 1.5 * k, tout = 1.9 * k, t1 = t0 + tin + 0.15 * k;
+  const amp = (0.05 + 0.12 * fear) * (closed ? 1.4 : 1), g = A.breath.gain, f = A.breathBp.frequency;
+  g.setValueAtTime(0.0001, t0); g.linearRampToValueAtTime(amp, t0 + tin * 0.6); g.linearRampToValueAtTime(amp * 0.12, t0 + tin);
+  f.setValueAtTime(950, t0); f.linearRampToValueAtTime(1750, t0 + tin);
+  g.setValueAtTime(amp * 0.12, t1); g.linearRampToValueAtTime(amp * 1.25, t1 + tout * 0.22); g.linearRampToValueAtTime(0.0001, t1 + tout);
+  f.setValueAtTime(820, t1); f.linearRampToValueAtTime(420, t1 + tout);
+  A.breathNext = t1 + tout + 0.9 * k * k;
+}
 function synthSilence() {
   if (!A.ctx) return;
   const now = A.ctx.currentTime;
+  A.breath.gain.cancelScheduledValues(now); A.breath.gain.setTargetAtTime(0, now, 0.03); A.breathNext = 0;
+  A.breathBp.frequency.cancelScheduledValues(now);
   A.scratch.gain.cancelScheduledValues(now); A.scratch.gain.setTargetAtTime(0, now, 0.01);
   A.drone.gain.cancelScheduledValues(now); A.drone.gain.setTargetAtTime(0, now, 0.01);
 }
@@ -657,12 +750,12 @@ const G = {
   lid: 0, held: false, needRelease: false, wasClosed: false,
   depth: 0,            // how deeply asleep
   surgeT: 8, surge: 0,
-  wind: 0, gust: 0, tapT: 0, jolt: 0,
+  wind: 0, gust: 0, tapT: 0, jolt: 0, fear: 0,
   curl: 0, t: 0, closes: 0, tune: false, tuneTab: 'calm', tuneBlend: null
 };
 function newNight() {
   G.state = 'play'; G.hour = 0; G.creep = 0; G.shown = 0; G.lid = 0; G.depth = 0; G.surgeT = 9; G.surge = 0;
-  G.curl = 0; G.t = 0; G.closes = 0; G.wasClosed = false; G.needRelease = true;
+  G.curl = 0; G.fear = 0; G.t = 0; G.closes = 0; G.wasClosed = false; G.needRelease = false; G.held = false;
   initAudio(); clockPlay();
 }
 function visualCreep() { return clamp(G.hour / 6 * 0.4 + G.shown * 0.7, 0, 1); }
@@ -684,7 +777,12 @@ function update(dt) {
     if (G.tapT <= 0) { G.tapT = 0.16 + Math.random() * (1.1 - 0.7 * G.gust); G.jolt = 1; sfxTwig(G.gust); }
   }
   G.t += dt;
-  G.curl = Math.max(0, G.curl - dt * 0.8);
+  G.curl = Math.max(0, G.curl - dt * 0.5);
+  // fear: a jolt when the eyes open on something bad, and a steady dread while it is in view
+  const fearT = G.state === 'play' ? clamp(smooth(0.3, 0.9, visualCreep()) * 0.85 + G.curl + (G.surge > 0 ? 0.6 : 0), 0, 1)
+    : G.state === 'taken' || G.state === 'reveal' ? 1 : 0;
+  G.fear += (fearT - G.fear) * Math.min(1, dt * (fearT > G.fear ? 9 : 1.2));
+  if (G.state === 'play' || G.state === 'win') breathe(G.fear, G.lid > 0.95);
   const s = G.state;
   let wantClosed = false;
   if (s === 'play') wantClosed = G.held && !G.needRelease;
@@ -746,7 +844,7 @@ function draw() {
     return;
   }
   const dawn = s === 'win' || s === 'waking' ? 1 : clamp((G.hour - 5) * 0.3, 0, 0.3);
-  const view = { p: blendParams(s === 'title' || s === 'win' || s === 'waking' ? 0 : visualCreep()), time: G.time, dawn, lid: G.lid, curl: G.curl, wind: G.wind, gust: G.gust };
+  const view = { p: blendParams(s === 'title' || s === 'win' || s === 'waking' ? 0 : visualCreep()), time: G.time, dawn, lid: G.lid, curl: G.fear, wind: G.wind, gust: G.gust };
   if (s === 'title') view.dark = 0.5;
   if (s === 'reveal') {
     view.p = blendParams(1); view.inside = true; view.curl = 1;
@@ -756,7 +854,7 @@ function draw() {
   render(view);
   if (s === 'title') {
     text('ONLY A TREE', W / 2, 26, 235, 3, true);
-    const L = ['HOLD SPACE TO CLOSE YOUR EYES', 'TIME ONLY PASSES WHILE YOU SLEEP', '',
+    const L = ['PRESS SPACE TO CLOSE YOUR EYES, AGAIN TO OPEN THEM', 'TIME ONLY PASSES WHILE YOU SLEEP', '',
       'IT ONLY MOVES WHEN YOU ARE NOT LOOKING', 'LISTEN. OPEN YOUR EYES BEFORE IT REACHES THE GLASS',
       'WATCH IT UNTIL IT IS QUIET AGAIN', '', 'LAST UNTIL 06:00'];
     L.forEach((l, k) => text(l, W / 2, 62 + k * 9, 175, 1, true));
@@ -764,8 +862,8 @@ function draw() {
   } else if (s === 'play') {
     if (G.lid < 0.3) {
       text(clockString(G.hour), 6, 6, 120, 1);
-      if (G.closes === 0) text('HOLD SPACE TO CLOSE YOUR EYES', W / 2, 170, 120, 1, true);
-    } else if (G.lid > 0.95 && G.closes <= 2) text('LISTEN', W / 2, 87, 26, 1, true);
+      if (G.closes === 0) text('PRESS SPACE TO CLOSE YOUR EYES', W / 2, 170, 120, 1, true);
+    } else if (G.lid > 0.95 && G.closes <= 2) { text('LISTEN', W / 2, 84, 26, 1, true); text('PRESS SPACE TO OPEN YOUR EYES', W / 2, 94, 18, 1, true); }
   } else if (s === 'win') {
     text('06:00', 114, 46, 20, 3, true);
     text('MORNING.', 114, 70, 20, 1, true);
@@ -805,9 +903,9 @@ function loop(ts) {
 function press() {
   if (G.tune) return;
   if (G.state === 'title' || (G.state === 'dead' && G.t > 1.2) || (G.state === 'win' && G.t > 2)) { newNight(); return; }
-  G.held = true;
+  if (G.state === 'play' || G.state === 'taken') G.held = !G.held;      // one press shuts the eyes, the next opens them
 }
-function release() { G.held = false; G.needRelease = false; }
+function release() {}
 addEventListener('keydown', e => {
   if (e.target && e.target.tagName === 'INPUT') return;
   if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); if (!e.repeat) press(); }
@@ -818,7 +916,6 @@ addEventListener('keyup', e => { if (e.code === 'Space' || e.code === 'Enter') r
 canvas.addEventListener('pointerdown', e => { e.preventDefault(); press(); });
 addEventListener('pointerup', release);
 addEventListener('pointercancel', release);
-addEventListener('blur', release);
 addEventListener('resize', resize);
 document.getElementById('btnMute').onclick = e => { setMuted(!muted); e.target.blur(); };
 document.getElementById('btnTune').onclick = e => { setTune(!G.tune); e.target.blur(); };
