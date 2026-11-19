@@ -433,6 +433,55 @@ function drawTree(p, time, opt) {
 }
 
 // ---------------------------------------------------------------------------
+// Someone standing by the right curtain. Only lightning shows them, as a plain human silhouette,
+// and every strike finds them standing differently.
+const figMask = new Uint8Array(W * H);
+const ARMS = [[0.08, 0.03], [0.14, -0.05], [0.8, -0.75], [0.3, 2.7], [2.4, 2.9], [1.45, 1.5], [0.5, 0.9]];   // down, down, on hip, to the face, raised, held out, loose
+function randomFigure() {
+  const r = Math.random;
+  return { x: 288 + r() * 6, h: 88 + r() * 20, build: 0.82 + r() * 0.26, tilt: (r() - 0.5) * 0.5, lean: (r() - 0.5) * 0.12,
+    stance: r(), hair: r() < 0.4 ? 1 : 0, coat: r() < 0.3 ? 1 : 0, armL: ARMS[(r() * ARMS.length) | 0], armR: ARMS[(r() * ARMS.length) | 0] };
+}
+function drawFigure(f) {
+  figMask.fill(0);
+  const disc = (x, y, r) => {
+    for (let yy = Math.floor(y - r); yy <= Math.ceil(y + r); yy++) for (let xx = Math.floor(x - r); xx <= Math.ceil(x + r); xx++) {
+      if (xx < 0 || xx >= W || yy < 0 || yy >= H) continue;
+      const dx = xx - x, dy = yy - y;
+      if (dx * dx + dy * dy <= r * r) figMask[yy * W + xx] = 1;
+    }
+  };
+  const cap = (x0, y0, x1, y1, w0, w1) => {
+    const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 1.5) + 1;
+    for (let i = 0; i <= n; i++) { const t = i / n; disc(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, (w0 + (w1 - w0) * t) / 2); }
+  };
+  const feetY = 142, u = f.h / 100, top = feetY - f.h, b = f.build;
+  const at = y => f.x + f.lean * (feetY - y);                  // the body's centre line, leaning slightly
+  const ys = top + 18 * u, yw = top + 38 * u, yh = top + 50 * u, sh = 12.5 * u * b;
+  const hx = at(top + 7 * u) + f.tilt * 5 * u, hy = top + 7 * u;
+  for (let yy = -7 * u; yy <= 7 * u; yy += 0.5) for (let xx = -5.6 * u; xx <= 5.6 * u; xx += 0.5)   // head
+    if (xx * xx / (5.6 * 5.6 * u * u) + yy * yy / (49 * u * u) <= 1) disc(hx + xx, hy + yy, 0.5);
+  if (f.hair) for (let yy = -7 * u; yy <= 10 * u; yy += 0.5) disc(hx, hy + yy, (6.2 + Math.max(0, yy) * 0.12) * u);   // hair to the shoulders
+  cap(hx, hy + 5 * u, at(ys), ys, 4.6 * u, 5.2 * u);                                              // neck
+  cap(at(ys) - sh + 3 * u, ys + 2 * u, at(ys) + sh - 3 * u, ys + 2 * u, 7 * u, 7 * u);            // shoulders
+  for (let y = ys; y <= yh; y += 0.5) {                                                           // torso
+    const t = (y - ys) / (yh - ys), hw = t < 0.62 ? sh + (9 * u * b - sh) * (t / 0.62) : 9 * u * b + (10 * u * b - 9 * u * b) * ((t - 0.62) / 0.38);
+    cap(at(y) - hw + 1, y, at(y) + hw - 1, y, 2, 2);
+  }
+  if (f.coat) for (let y = yh; y <= top + 72 * u; y += 0.5) { const hw = (10 + (y - yh) / u * 0.14) * u * b; cap(at(y) - hw, y, at(y) + hw, y, 2, 2); }
+  for (const side of [-1, 1]) {
+    const kx = at(top + 74 * u) + side * (5 + f.stance * 2.5) * u * b, fx = f.x + side * (4.5 + f.stance * 6) * u * b;
+    cap(at(yh) + side * 5 * u * b, yh, kx, top + 74 * u, 8.5 * u * b, 6.8 * u * b);              // thigh
+    cap(kx, top + 74 * u, fx, feetY - 2 * u, 6.8 * u * b, 5 * u);                                 // shin
+    cap(fx, feetY - 1.5 * u, fx + side * 4.5 * u, feetY - 1 * u, 3.2 * u, 2.6 * u);               // foot
+    const a = side < 0 ? f.armL : f.armR, sx = at(ys) + side * sh * 0.92, sy = ys + 3 * u;
+    const ex = sx + side * Math.sin(a[0]) * 19 * u, ey = sy + Math.cos(a[0]) * 19 * u;
+    const wx = ex + side * Math.sin(a[1]) * 18 * u, wy = ey + Math.cos(a[1]) * 18 * u;
+    cap(sx, sy, ex, ey, 5.6 * u * b, 4.6 * u * b); cap(ex, ey, wx, wy, 4.6 * u * b, 3.8 * u); disc(wx, wy, 2.5 * u);   // arm and hand
+  }
+}
+
+// ---------------------------------------------------------------------------
 // curtains: pinned at the rod, pushed into the room by the wind, most on the open side
 function drawCurtains(time, wind, gust) {
   curtA.fill(0);
@@ -708,6 +757,18 @@ function render(v) {
     if (!inWin(x, y) || curtA[y * W + x]) fb[y * W + x] = fb[y * W + x] * (1 + 2 * fl) + 5 * fl;
   }
 
+  // ...and whoever is standing by the curtain: black against the lit wall, with the flash catching the side toward the window
+  if (fl > 0.02 && v.figure) {
+    drawFigure(v.figure);
+    const a = Math.min(1, fl * 3);
+    for (let y = 8; y < 146; y++) for (let x = 262; x < W; x++) {
+      const i = y * W + x;
+      if (!figMask[i]) { if (x > 275) fb[i] += 20 * fl; continue; }   // the wall behind them takes the flash
+      const rim = !figMask[i - 1] ? 26 + 130 * fl : !figMask[i - 2] ? 8 + 40 * fl : 1;
+      fb[i] += (rim - fb[i]) * a;
+    }
+  }
+
   // it is in the room
   if (v.inside) for (let i = 0; i < W * H; i++) if (treeMask[i]) fb[i] = 0;
 
@@ -902,7 +963,7 @@ const G = {
   surgeT: 8, surge: 0,
   wind: 0, gust: 0, tapT: 0, jolt: 0, tapFinger: 1, fear: 0,
   playT: 0, rain: 0, rainSeed: 0, flashT: 9, bolt: null, thunderAt: 0, thunderLoud: 0, nextStrike: 30, nextBird: 90, bird: null, smear: null,
-  drops: [], branchCd: 12, startle: 0, startleT: 9, thought: '', thoughtT: -1, thoughtD: 1,
+  drops: [], figure: null, branchCd: 12, startle: 0, startleT: 9, thought: '', thoughtT: -1, thoughtD: 1,
   curl: 0, t: 0, closes: 0, tune: false, tuneTab: 'calm', tuneBlend: null
 };
 const pick = a => a[(Math.random() * a.length) | 0];
@@ -914,6 +975,7 @@ function strike(closed) {
   const b = new Float32Array(H); let x = WIN.x0 + 12 + Math.random() * (WW - 24);
   for (let y = WIN.y0; y < WIN.y1; y++) { x += (Math.random() - 0.5) * 5 + (Math.random() < 0.08 ? (Math.random() - 0.5) * 14 : 0); b[y] = x; }
   G.bolt = b;
+  G.figure = randomFigure();                                   // someone is there, and never the same way twice
   const delay = 0.5 + Math.random() * 2.6;
   G.thunderAt = G.playT + delay; G.thunderLoud = 1 - delay / 4;
   startle(closed ? 0.6 : 1);
@@ -997,7 +1059,7 @@ function rainOnGlass(dt) {
   }
 }
 function newNight() {
-  G.drops = []; wet.fill(0);
+  G.drops = []; wet.fill(0); G.figure = null;
   G.playT = 0; G.rain = 0; G.rainSeed = Math.random() * 100; G.flashT = 9; G.bolt = null; G.thunderAt = 0; G.nextStrike = 18 + Math.random() * 30;
   G.nextBird = 60 + Math.random() * 100; G.bird = null; G.smear = null; G.branchCd = 12; G.startle = 0; G.startleT = 9; G.thought = ''; G.thoughtT = -1;
   G.state = 'play'; G.hour = 0; G.creep = 0; G.shown = 0; G.lid = 0; G.depth = 0; G.surgeT = 9; G.surge = 0;
@@ -1094,7 +1156,7 @@ function draw() {
   const dawn = s === 'win' || s === 'waking' ? 1 : clamp((G.hour - 5) * 0.3, 0, 0.3);
   const view = { p: blendParams(s === 'title' || s === 'win' || s === 'waking' ? 0 : visualCreep()), time: G.time, dawn, lid: G.lid, curl: G.fear, wind: G.wind, gust: G.gust, tap: Math.min(1, G.jolt), tapFinger: G.tapFinger,
     fl: flashAt(G.flashT), bolt: G.flashT < 0.2 ? G.bolt : null, rain: s === 'play' ? G.rain : 0, bird: s === 'play' ? G.bird : null,
-    smear: s === 'play' ? G.smear : null, drops: s === 'play' ? G.drops : null, shake: s === 'play' && G.startleT < 1.1 ? G.startle : 0 };
+    smear: s === 'play' ? G.smear : null, figure: s === 'play' ? G.figure : null, drops: s === 'play' ? G.drops : null, shake: s === 'play' && G.startleT < 1.1 ? G.startle : 0 };
   if (s === 'title') view.dark = 0.5;
   if (s === 'reveal') {
     view.p = blendParams(1); view.inside = true; view.curl = 1;
