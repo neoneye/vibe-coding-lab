@@ -70,6 +70,7 @@ if (location.search === '?csp-self-child') document.write('<meta http-equiv="Con
   .bar > i { display: block; height: 100%; width: 0; background: var(--a); transition: width .1s; }
   .bar.down > i { background: var(--ok); }
   pre.wire { font-size: 11.5px; max-height: 260px; overflow: auto; }
+  textarea.b64src { display: block; width: 100%; box-sizing: border-box; font: 12px/1.45 var(--mono); color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px; resize: vertical; }
   a.pinglink { font-size: 14px; padding: 6px 2px; }
   .seq { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 8px; }
   .seq li { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 10px; align-items: start; }
@@ -168,7 +169,7 @@ if (location.search === '?csp-self-child') document.write('<meta http-equiv="Con
 <main>
 
 <h1>Browser boundaries</h1>
-<p class="lead">A web page is built from pieces of other sites: another page in an <code>&lt;iframe&gt;</code>, data from <code>fetch()</code>, a library from a CDN, images, fonts, SVG. For each piece the browser decides what your page may show, read, run or send across the line between one origin and another. This page maps those boundaries with live experiments. It starts with iframes: can the parent tell how long the child took to load, or that it is a 404? How do the two pages talk? What can iframes do that few people know about, including tracking you? Then the alternatives: <code>fetch()</code> and CORS, scripts and <code>integrity</code> from a CDN, <code>no-cors</code>, XMLHttpRequest, beacons and pings, preflights, SVG, PDF, CSS, older HTML in quirks mode, character encodings and <code>blob:</code> URLs. Finally the defences a site switches on itself: framing rules, <code>sandbox</code>, Content Security Policy, <code>nosniff</code> and <code>SameSite</code> cookies.</p>
+<p class="lead">A web page is built from pieces of other sites: another page in an <code>&lt;iframe&gt;</code>, data from <code>fetch()</code>, a library from a CDN, images, fonts, SVG. For each piece the browser decides what your page may show, read, run or send across the line between one origin and another. This page maps those boundaries with live experiments. It starts with iframes: can the parent tell how long the child took to load, or that it is a 404? How do the two pages talk? What can iframes do that few people know about, including tracking you? Then the alternatives: <code>fetch()</code> and CORS, scripts and <code>integrity</code> from a CDN, <code>no-cors</code>, XMLHttpRequest, beacons and pings, preflights, SVG, PDF, CSS, older HTML in quirks mode, character encodings, <code>blob:</code> URLs and pages in base64. Finally the defences a site switches on itself: framing rules, <code>sandbox</code>, Content Security Policy, <code>nosniff</code> and <code>SameSite</code> cookies.</p>
 <div class="note" id="fileNote" hidden>You opened this page from a <code>file://</code> path. Most experiments work, but the ones that load real pages need a web server to show HTTP status codes. Run <code>python3 -m http.server</code> in the repository folder and open it over <code>http://localhost:8000/browser-boundaries/</code>.</div>
 
 <!-- ============================================================ 1 -->
@@ -990,6 +991,50 @@ Origin: http://localhost:8765</code></pre>
 </div>
 <div class="obview"><img id="obImgEl" alt=""><iframe id="obFrameEl" title="blob iframe"></iframe></div>
 <div class="log" id="obLog" style="height:260px"></div>
+</div>
+</div>
+</div>
+
+<div class="card" id="cl-b64">
+<h3>A page in base64: <code>data:</code> URLs, and what HTTP won't decode</h3>
+<div class="closer">
+<div>
+<p class="q">Can a page be sent as base64? Only inside a URL. <code>data:text/html;base64,PGgxPkhpPC9oMT4=</code> carries the whole page in the address itself (RFC 2397, 1998), so there is no server and no request. A web server, though, can't send base64 and expect the browser to decode it: HTTP has no such encoding.</p>
+<ul>
+<li><b>The format:</b> <code>data:</code>, a type, optional <code>;charset=…</code>, optional <code>;base64</code>, a comma, then the data. Without <code>;base64</code> the data is percent-encoded text. Base64 turns every 3 bytes into 4 characters, so the URL is a third bigger than the file.</li>
+<li><b>It works inside pages:</b> an <code>&lt;iframe&gt;</code>, <code>&lt;img&gt;</code>, a CSS background, a font, a download link. A <code>data:</code> document gets a new <b>opaque origin</b> (<code>self.origin</code> is <code>"null"</code>), so it can't read the page that made it, nor that page it. The same HTML as a <a href="#cl-blob"><code>blob:</code> URL</a> runs as your site.</li>
+<li><b>It can't take over the tab.</b> Until 2017 a phishing email could link to a <code>data:</code> page that looked exactly like a bank's login, with an address bar starting <code>data:text/html,https://bank…</code>. Chrome 60 and Firefox 59 stopped pages from sending the whole tab to a <code>data:</code> URL, whether by script or by a link the user clicks; Chromium logs "Not allowed to navigate top frame to data URL". Typing or pasting one into the address bar still works.</li>
+<li><b>HTTP has no base64.</b> <code>Content-Encoding</code> means compression, and browsers only undo <code>gzip</code>, <code>deflate</code>, <code>br</code> and <code>zstd</code>; an unknown value is ignored and the base64 text is shown as is. <code>Content-Transfer-Encoding: base64</code> is an email header; the web ignores it.</li>
+<li><b>MHTML, the "save as one file" format,</b> is an email message with base64 parts. Browsers open it from a local file, but in my tests neither would show one served over HTTP.</li>
+<li><b><code>btoa()</code> only takes Latin-1.</b> <code>btoa("é")</code> works, <code>btoa("€")</code> throws. For real text, encode to UTF-8 bytes first (<code>TextEncoder</code>), then base64 the bytes, and write <code>;charset=utf-8</code> in the URL.</li>
+<li><b>Base64 hides things from filters.</b> A filter that looks for <code>&lt;script&gt;</code> won't recognise <code>PHNjcmlwdD4=</code>, which is the same text in base64. And a CSP that allows <code>data:</code> in <code>script-src</code> lets injected markup run any script it can encode, which is why the <a href="#def-csp-self"><code>'self'</code> demo</a> blocks it.</li>
+</ul>
+<p class="small">Recorded against a local server that sent one small page each way:</p>
+<div class="tablewrap"><table id="b64Table">
+<thead><tr><th>How the page arrives</th><th>Chromium 156</th><th>Firefox 160</th></tr></thead>
+<tbody>
+<tr><td>base64 body with <code>Content-Encoding: base64</code></td><td><span class="tag bad">raw base64 shown</span></td><td><span class="tag bad">raw base64 shown</span></td></tr>
+<tr><td>base64 body with <code>Content-Transfer-Encoding: base64</code></td><td><span class="tag bad">raw base64 shown</span></td><td><span class="tag bad">raw base64 shown</span></td></tr>
+<tr><td>MHTML (<code>multipart/related</code>, base64 part) over HTTP</td><td><span class="tag bad">not shown</span></td><td><span class="tag bad">not shown</span></td></tr>
+<tr><td><code>data:</code> URL in an <code>&lt;iframe&gt;</code></td><td><span class="tag ok">shown</span>, origin <code>null</code></td><td><span class="tag ok">shown</span>, origin <code>null</code></td></tr>
+<tr><td>the page script sets <code>location.href</code> to a <code>data:</code> URL</td><td><span class="tag bad">refused</span></td><td><span class="tag bad">refused</span></td></tr>
+<tr><td>the user clicks a link to a <code>data:</code> URL</td><td><span class="tag bad">refused</span></td><td class="soft">not tested</td></tr>
+<tr><td>the user types the <code>data:</code> URL</td><td class="soft">not tested</td><td><span class="tag ok">shown</span></td></tr>
+</tbody></table></div>
+<p class="small">The two untested cells are tool limits, not browser results: headless Firefox can't click, and the test browser's tools can't type a <code>data:</code> URL.</p>
+</div>
+<div class="demo">
+<p class="small" style="margin-top:0">Edit the page, then encode it. The script inside reports its origin and tries to read this page.</p>
+<textarea id="b64Src" class="b64src" rows="6" spellcheck="false" aria-label="HTML to encode"></textarea>
+<div class="btns">
+<button id="b64Encode">Encode and show in an iframe</button>
+<button id="b64Btoa">btoa() vs UTF-8 bytes</button>
+<a id="b64Open" href="#" class="small">Open it in this tab</a>
+<a id="b64Down" href="#" download="hello-from-base64.html" class="small">Download it</a>
+</div>
+<pre class="wire" id="b64Url" style="max-height:110px;white-space:pre-wrap;word-break:break-all">(press Encode)</pre>
+<iframe id="b64Frame" title="data URL iframe" style="height:110px"></iframe>
+<div class="log" id="b64Log" style="height:160px"></div>
 </div>
 </div>
 </div>
@@ -2413,6 +2458,56 @@ function obMake() {
 }
 const obNeed = () => { if (!obState.text) obMake(); };
 $('obMake').onclick = obMake;
+
+// ------------------------------------------------------------------ closer look: base64 / data: URLs
+const b64Log = (t, c) => logTo($('b64Log'), t, c);
+$('b64Src').value = `<!doctype html><meta charset="utf-8">
+<h1 style="font:600 18px sans-serif;margin:8px">Hello from base64 €</h1>
+<p id="o" style="font:12px monospace;margin:8px"></p>
+<script>
+let r; try { r = parent.document.title; } catch (e) { r = e.name; }
+document.getElementById('o').textContent = 'origin: ' + self.origin + ', reading the parent: ' + r;
+parent.postMessage({ type: 'b64', origin: self.origin, r }, '*');
+<\/script>`;
+function bytesToBase64(bytes) {
+  if (bytes.toBase64) return bytes.toBase64();
+  let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function b64Url() {
+  const bytes = new TextEncoder().encode($('b64Src').value);
+  const url = 'data:text/html;charset=utf-8;base64,' + bytesToBase64(bytes);
+  return { bytes, url };
+}
+addEventListener('message', (e) => {
+  if (e.source !== $('b64Frame').contentWindow || !e.data || e.data.type !== 'b64') return;
+  b64Log(`the frame says: origin ${JSON.stringify(e.data.origin)}, reading this page threw ${e.data.r}`, 'ok');
+});
+$('b64Encode').onclick = () => {
+  const { bytes, url } = b64Url();
+  $('b64Url').textContent = url;
+  $('b64Open').href = url; $('b64Down').href = url;
+  $('b64Frame').src = url;
+  const comma = url.indexOf(',') + 1;
+  b64Log(`${bytes.length} bytes of UTF-8 became ${url.length - comma} base64 characters (×${((url.length - comma) / bytes.length).toFixed(2)})`);
+  $('b64Frame').onload = () => {
+    let d = null; try { d = $('b64Frame').contentDocument; } catch (e) { d = e.name; }
+    b64Log(`this page reading the frame: contentDocument is ${d === null ? 'null' : d}`, 'ok');
+  };
+};
+$('b64Open').onclick = (e) => {
+  if ($('b64Open').getAttribute('href') === '#') { e.preventDefault(); $('b64Encode').click(); }
+  b64Log('asked to open the data: URL in this tab; if nothing happened, the browser refused (the console says why)');
+};
+$('b64Down').onclick = (e) => { if ($('b64Down').getAttribute('href') === '#') { e.preventDefault(); $('b64Encode').click(); } };
+$('b64Btoa').onclick = () => {
+  for (const s of ['café', 'café €']) {
+    try { b64Log(`btoa(${JSON.stringify(s)}) = ${btoa(s)}`, 'ok'); }
+    catch (e) { b64Log(`btoa(${JSON.stringify(s)}) throws ${e.name}: "€" is not Latin-1`, 'bad'); }
+  }
+  const b = bytesToBase64(new TextEncoder().encode('café €'));
+  b64Log(`UTF-8 bytes first: ${b}, and back: ${JSON.stringify(new TextDecoder().decode(Uint8Array.from(atob(b), (c) => c.charCodeAt(0))))}`, 'ok');
+};
 $('obFetch').onclick = async () => {
   obNeed();
   try { const r = await fetch(obState.text); obLog(`fetch: status ${r.status}, type ${r.headers.get('content-type')}, text "${await r.text()}"`, 'ok'); }
