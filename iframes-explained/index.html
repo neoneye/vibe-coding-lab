@@ -429,7 +429,7 @@ Access-Control-Allow-Credentials: true</code></pre>
 <p>These load real files from <code>cdn.jsdelivr.net</code>, <code>api.github.com</code> and <code>httpbin.org</code>.</p>
 <div class="cols two">
 <div class="card"><h3>Classic <code>&lt;script src&gt;</code></h3>
-<p class="small">Needs no CORS: the browser runs whatever comes back. Add <code>integrity</code> (Subresource Integrity) and the browser refuses a file whose hash differs, so a hacked CDN can't swap the code.</p>
+<p class="small">Needs no CORS: the browser runs whatever comes back. Add <code>integrity</code> (Subresource Integrity) and the browser refuses a file whose hash differs, so a hacked CDN can't swap the code. It checks that one file only; <a href="#cl-sri">see what it covers</a>.</p>
 <pre><code>&lt;script src="https://cdn.jsdelivr.net/npm/
   dayjs@1.11.13/dayjs.min.js"
   integrity="sha384-DpVxUeeB…"
@@ -501,7 +501,7 @@ app.get('/proxy', async (req, res) =&gt; {
 </table>
 </div>
 
-<h3 style="margin-top:22px">A closer look at three of them</h3>
+<h3 style="margin-top:22px">A closer look</h3>
 
 <div class="card" id="cl-script">
 <h3>Classic <code>&lt;script src&gt;</code>: no CORS, so can I load JavaScript from any website?</h3>
@@ -516,7 +516,7 @@ app.get('/proxy', async (req, res) =&gt; {
 <li><b>It runs with all of your page's powers.</b> It can read the page, form fields as they are typed, <code>localStorage</code> and cookies not marked <code>HttpOnly</code>, and send them anywhere. Whoever controls that file controls your page, today and every time it changes. In 2024 the <code>polyfill.io</code> domain changed owner, and the script that over 100 000 sites loaded from it started sending some of their visitors to scam sites.</li>
 <li><b>The other site sees your visitors.</b> Every page view requests the file, with the user's IP address and your origin in <code>Referer</code>. That is how third-party analytics scripts work.</li>
 </ul>
-<p class="small">So: load scripts only from sources you trust, pin an exact version, add <code>integrity</code>, or copy the file to your own server.</p>
+<p class="small">So: load scripts only from sources you trust, pin an exact version, add <code>integrity</code> (and know <a href="#cl-sri">what it covers</a>), or copy the file to your own server.</p>
 </div>
 <div class="demo">
 <div class="btns">
@@ -525,6 +525,42 @@ app.get('/proxy', async (req, res) =&gt; {
 <button id="scrJson">A JSON API as a script</button>
 </div>
 <div class="log" id="scrLog"></div>
+</div>
+</div>
+</div>
+
+<div class="card" id="cl-sri">
+<h3>What <code>integrity</code> covers, and what happens when a dependency changes</h3>
+<div class="closer">
+<div>
+<p class="q"><b>Exactly one file.</b> The browser hashes the bytes of the one response the tag asked for and compares them with the attribute. Anything that script loads afterwards (its <code>import</code>s, <code>import()</code>, scripts it adds, <code>fetch()</code>, workers, wasm, CSS, fonts) is not checked, unless it carries a hash of its own.</p>
+<ul>
+<li><b>Dependencies bundled into the file are covered.</b> <code>dayjs.min.js</code> and most "browser" or UMD builds contain all the code they need. A published npm version never changes, so <code>dayjs@1.11.13</code> stays the same bytes however its dependencies move on, and the hash keeps matching.</li>
+<li><b>Dependencies loaded at run time are not.</b> ES module builds often import each package as a separate file. jsDelivr's <code>react-dom@18.3.1/+esm</code> starts with <code>import … from "/npm/react@18.3.1/+esm"</code> and <code>"/npm/scheduler@0.23.2/+esm"</code>: a hash on react-dom says nothing about those two.</li>
+<li><b>When the hashed file changes, it fails safe.</b> The browser refuses to run it: the page loses the library, but nobody can slip code in. That happens with an unpinned URL (<code>dayjs@1</code>, <code>dayjs</code>) after a new release, and with files the CDN generates, such as <code>+esm</code> bundles and auto-minified files, which can be rebuilt with a newer bundler. jsDelivr writes "Do NOT use SRI with dynamically generated files!" at the top of them. A file the package itself ships (<code>/dist/…min.js</code>) is the safe kind to hash.</li>
+<li><b>Cross-origin integrity needs CORS.</b> To hash a file the browser must be allowed to read it, so the tag needs <code>crossorigin="anonymous"</code> and the CDN must send <code>Access-Control-Allow-Origin</code>.</li>
+<li><b>A whole module tree can be covered</b> with the <code>integrity</code> section of an import map, which gives a hash for every module URL, however it is reached. <code>&lt;link rel="modulepreload" integrity="…"&gt;</code> does the same one module at a time.</li>
+</ul>
+<pre><code>&lt;script type="importmap"&gt;
+{ "integrity": {
+  "https://cdn.jsdelivr.net/npm/react-dom@18.3.1/+esm":
+    "sha384-…",
+  "https://cdn.jsdelivr.net/npm/react@18.3.1/+esm":
+    "sha384-…",
+  "https://cdn.jsdelivr.net/npm/scheduler@0.23.2/+esm":
+    "sha384-…" } }
+&lt;/script&gt;</code></pre>
+<p class="small"><b>In practice:</b> one bundled, version-pinned file with <code>integrity</code>; or bundle the code yourself and serve it from your own site; or let your build tool write an import map with hashes for every module.</p>
+</div>
+<div class="demo">
+<p class="small" style="margin-top:0">Each button imports react-dom in a fresh child page with its own import map. First the parent reads react-dom's <code>import</code> lines and hashes today's files, as a build tool would.</p>
+<div class="btns">
+<button id="sriNone">No hashes</button>
+<button id="sriTop">Hash react-dom only</button>
+<button id="sriBadDep">Wrong hash for scheduler</button>
+<button id="sriAll">Hash all three</button>
+</div>
+<div class="log" id="sriLog" style="height:300px"></div>
 </div>
 </div>
 </div>
@@ -1357,7 +1393,71 @@ document.addEventListener('visibilitychange', () => {
   } else logTo($('bcLog'), `welcome back: ${bcSent} beacon${bcSent === 1 ? '' : 's'} sent while the tab was hidden`, 'ok');
 });
 
-window.__ifr = { runTarget, TARGETS, runPeek, freezeTest, trkVisit, buildSandbox, runFetch, FETCHES, cdnLoad, errTest, imgTest };
+// ------------------------------------------------------------------ 6 integrity and module trees
+const RD = 'https://cdn.jsdelivr.net/npm/react-dom@18.3.1/+esm';
+let sriTree = null; // { url: hash } for react-dom and everything it imports
+async function sha384(buf) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-384', buf));
+  let b = ''; for (const x of d) b += String.fromCharCode(x);
+  return 'sha384-' + btoa(b);
+}
+const short = (u) => u.replace('https://cdn.jsdelivr.net/npm/', '');
+const andList = (xs) => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
+async function readTree() {
+  if (sriTree) return sriTree;
+  const tree = {}, queue = [RD];
+  while (queue.length) {
+    const u = queue.shift();
+    if (u in tree) continue;
+    const buf = await (await fetch(u)).arrayBuffer();
+    tree[u] = await sha384(buf);
+    const deps = [...new TextDecoder().decode(buf).matchAll(/(?:from|import)\s*"(\/npm\/[^"]+)"/g)].map((m) => new URL(m[1], u).href);
+    if (deps.length) logTo($('sriLog'), `${short(u)} imports ${deps.map(short).join(' and ')}`);
+    queue.push(...deps);
+  }
+  logTo($('sriLog'), `hashed today's ${Object.keys(tree).length} files`);
+  return (sriTree = tree);
+}
+function sriChild(arg) {
+  const files = () => performance.getEntriesByType('resource').filter((e) => e.name.includes('cdn.jsdelivr.net')).map((e) => e.name);
+  import(arg.url).then(
+    (m) => parent.postMessage({ type: 'sri', ok: true, files: files(), what: typeof m.createPortal }, '*'),
+    (e) => parent.postMessage({ type: 'sri', ok: false, files: files(), msg: e.message }, '*'));
+}
+let sriBusy = false;
+async function sriRun(label, pick) {
+  if (sriBusy) return; sriBusy = true;
+  const log = $('sriLog');
+  try {
+    if (!crypto.subtle) { logTo(log, 'crypto.subtle needs a secure context (https or localhost)', 'bad'); return; }
+    const tree = await readTree();
+    const urls = Object.keys(tree);
+    const map = pick(tree, urls);
+    const im = JSON.stringify({ integrity: map });
+    const f = document.createElement('iframe');
+    f.title = 'integrity test'; f.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;border:0';
+    const got = new Promise((res) => {
+      const on = (e) => { if (e.source === f.contentWindow && e.data && e.data.type === 'sri') { removeEventListener('message', on); res(e.data); } };
+      addEventListener('message', on);
+      setTimeout(() => { removeEventListener('message', on); res(null); }, 20000);
+    });
+    f.srcdoc = childDoc(`<script type="importmap">${im}<\/script>`, sriChild, { url: RD });
+    document.body.append(f);
+    const r = await got;
+    f.remove();
+    const checked = urls.filter((u) => u in map).length;
+    if (!r) logTo(log, `${label}: no answer within 20 s`, 'bad');
+    else if (r.ok) logTo(log, `${label}: loaded. ${r.files.length} files fetched, ${checked} of them checked against a hash` + (checked < urls.length ? `; ${andList(urls.filter((u) => !(u in map)).map(short))} could have been anything` : ''), checked === urls.length ? 'ok' : '');
+    else logTo(log, `${label}: refused. ${r.msg}. The console names the file whose hash did not match.`, 'bad');
+  } catch (e) { logTo(log, `${label}: ${e.message}`, 'bad'); }
+  finally { sriBusy = false; }
+}
+$('sriNone').onclick = () => sriRun('No hashes', () => ({}));
+$('sriTop').onclick = () => sriRun('Hash on react-dom only', (t) => ({ [RD]: t[RD] }));
+$('sriBadDep').onclick = () => sriRun('Wrong hash for scheduler', (t, us) => Object.fromEntries(us.map((u) => [u, u.includes('/scheduler@') ? 'sha384-' + 'A'.repeat(64) : t[u]])));
+$('sriAll').onclick = () => sriRun('Hashes for all three', (t) => ({ ...t }));
+
+window.__ifr = { runTarget, TARGETS, runPeek, freezeTest, trkVisit, buildSandbox, runFetch, FETCHES, cdnLoad, errTest, imgTest, sriRun };
 </script>
 </body>
 </html>
