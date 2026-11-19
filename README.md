@@ -189,6 +189,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [game-burger-assembly](game-burger-assembly/) -- C64-style burger stacking at 320x200.
 - [game-carrier-shadow](game-carrier-shadow/) -- Minesweeper deduction meets Battleship with moving ships and an air layer; escort tankers through Hormuz.
 - [game-moat](game-moat/) -- MOAT: keep twelve crocodiles alive and everybody else out. Heaters, feeding, staff.
+- [game-only-a-tree](game-only-a-tree/) -- Only a Tree: a horror game in 320×180 pixel art with 256 greys. You lie in bed with your feet at the bottom of the screen, facing a split window with a tree outside and the moon behind it throwing the tree's shadow across the bed. Hold Space to close your eyes: time only passes while you sleep, and the tree only changes while you are not looking, so you listen (a ticking clock, scratching, taps on the glass) and open your eyes before it reaches the window, then watch it until it is quiet. Last until 06:00. The tree is procedural with 22 parameters (crookedness, droop, reach toward the bed, finger twigs, leaves, hanging things, hollows in the trunk, moon, clouds) and a panel for editing the start-of-night tree and the tree at its worst; the game blends between the two.
 - [game-schorched-earth](game-schorched-earth/) -- turn-based artillery in the spirit of Scorched Earth, hotseat or against the AI.
 - [game-scifi-rpg](game-scifi-rpg/) -- a stick-figure sci-fi RPG with inventory and quests.
 - [game-snake](game-snake/) -- see highlights.
