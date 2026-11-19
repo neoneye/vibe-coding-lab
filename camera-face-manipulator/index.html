@@ -323,9 +323,8 @@
                 <label class="slider">Edge <input type="range" id="bgEdge" min="0" max="100" value="40"><span class="val" id="bgEdgeVal">40</span></label>
                 <div class="note" id="bgNote"></div>
             </div>
-            <label class="fx"><input type="checkbox" id="bgFace"> Face + neck only</label>
+            <label class="fx"><input type="checkbox" id="bgFace"> Face only</label>
             <div class="group" data-fx="bgFace" hidden>
-                <label class="slider">Neck <input type="range" id="bgNeck" min="0" max="150" value="60"><span class="val" id="bgNeckVal">60</span></label>
                 <label><input type="checkbox" id="bgZoom" checked> Zoom to fit</label>
                 <label class="slider">Fit size <input type="range" id="bgFit" min="30" max="100" value="85"><span class="val" id="bgFitVal">85</span></label>
                 <label class="slider">Smoothing <input type="range" id="bgSmooth" min="0" max="98" value="85"><span class="val" id="bgSmoothVal">85</span></label>
@@ -1885,16 +1884,22 @@
         }
     }
 
-    // ---- Face + neck only, and zoom to fit ----
+    // ---- Face only, and zoom to fit ----
     //
     // The keep region is built from the landmarks in the face's own frame
-    // (up = chin → forehead): the face outline pushed outwards, more
-    // upwards to take in the hair, plus a neck that tapers down from the
-    // jaw. It is generous on purpose: the person mask still decides the
-    // exact outline, this only removes the shoulders and body.
+    // (u across, v up from chin to forehead): the face outline, widened
+    // and raised above the eyes to take in hair and ears, and tight along
+    // the jaw so the neck and body are cut away. The person mask still
+    // decides the outline of the hair. The face outline itself is always
+    // added back from the camera frame, so the face is never lost even
+    // where the segmenter is unsure.
 
     const keepC = document.createElement('canvas');
     const keepCtx = keepC.getContext('2d');
+    const faceMaskC = document.createElement('canvas');
+    const faceMaskCtx = faceMaskC.getContext('2d');
+    const faceLayerC = document.createElement('canvas');
+    const faceLayerCtx = faceLayerC.getContext('2d');
 
     function headFrame(lm, W, H) {
         const P = i => [lm[i].x * W, lm[i].y * H];
@@ -1910,36 +1915,64 @@
                  cx: (top[0] + chin[0]) / 2, cy: (top[1] + chin[1]) / 2 };
     }
 
-    function drawHeadNeckMask(lm, W, H, neck) {
-        if (!OVAL) return;
-        if (keepC.width !== W || keepC.height !== H) { keepC.width = W; keepC.height = H; }
-        keepCtx.clearRect(0, 0, W, H);
-        const f = headFrame(lm, W, H);
-        const head = OVAL.map(i => {
+    // Fill polygons white with a soft edge onto a mask canvas
+    function softMask(c, cc, polys, blur, W, H) {
+        if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+        cc.clearRect(0, 0, W, H);
+        const off = W * 4;
+        cc.save();
+        cc.shadowColor = '#fff';
+        cc.shadowBlur = blur;
+        cc.shadowOffsetX = off;
+        cc.fillStyle = '#fff';
+        for (const poly of polys) {
+            tracePoly(cc, poly, -off);
+            cc.fill();
+        }
+        cc.restore();
+    }
+
+    function headPoly(f) {
+        const sx = -f.uy, sy = f.ux;   // across the face
+        return OVAL.map(i => {
             const [x, y] = f.P(i);
             const dx = x - f.cx, dy = y - f.cy;
-            const up = (dx * f.ux + dy * f.uy) / (f.hF / 2);
-            const k = 1.3 + 0.45 * Math.max(0, up);
-            return [f.cx + dx * k, f.cy + dy * k];
+            const u = dx * sx + dy * sy;
+            const v = (dx * f.ux + dy * f.uy) / (f.hF / 2);   // −1 chin … 1 forehead
+            let su, sv;
+            if (v > 0) {
+                su = 1.25; sv = 1.55;             // hair and the tops of the ears
+            } else {
+                // Ears at mid height, tight along the jaw and chin
+                sv = 0.99;
+                su = 0.99 + 0.25 * Math.min(1, Math.max(0, (v + 0.4) / 0.4));
+            }
+            const uu = u * su, vv = v * sv * f.hF / 2;
+            return [f.cx + sx * uu + f.ux * vv, f.cy + sy * uu + f.uy * vv];
         });
-        const sx = -f.uy, sy = f.ux;   // across the face
-        const bx = f.chin[0] - f.ux * neck * f.hF, by = f.chin[1] - f.uy * neck * f.hF;
-        const wN = f.jaw * 0.36;
-        const neckPoly = [f.jl, f.jr, [bx + sx * wN, by + sy * wN], [bx - sx * wN, by - sy * wN]];
-        // Order the bottom corners to match the jaw corners
-        if ((f.jr[0] - f.jl[0]) * sx + (f.jr[1] - f.jl[1]) * sy < 0) neckPoly.push(neckPoly.splice(2, 1)[0]);
+    }
 
-        const off = W * 4;
-        keepCtx.save();
-        keepCtx.shadowColor = '#fff';
-        keepCtx.shadowBlur = f.hF * 0.06;
-        keepCtx.shadowOffsetX = off;
-        keepCtx.fillStyle = '#fff';
-        for (const poly of neck > 0 ? [head, neckPoly] : [head]) {
-            tracePoly(keepCtx, poly, -off);
-            keepCtx.fill();
-        }
-        keepCtx.restore();
+    function drawHeadMask(lm, W, H) {
+        const f = headFrame(lm, W, H);
+        softMask(keepC, keepCtx, [headPoly(f)], f.hF * 0.02, W, H);
+    }
+
+    // The face outline from the current frame, to lay back over the cut-out
+    function drawFaceLayer(lm, W, H) {
+        const f = headFrame(lm, W, H);
+        // Shrunk a little so the soft edge stays on skin, not the wall
+        const face = OVAL.map(i => {
+            const [x, y] = f.P(i);
+            return [f.cx + (x - f.cx) * 0.96, f.cy + (y - f.cy) * 0.96];
+        });
+        softMask(faceMaskC, faceMaskCtx, [face], f.hF * 0.02, W, H);
+        if (faceLayerC.width !== W || faceLayerC.height !== H) { faceLayerC.width = W; faceLayerC.height = H; }
+        faceLayerCtx.globalCompositeOperation = 'source-over';
+        faceLayerCtx.clearRect(0, 0, W, H);
+        faceLayerCtx.drawImage(canvas, 0, 0);
+        faceLayerCtx.globalCompositeOperation = 'destination-in';
+        faceLayerCtx.drawImage(faceMaskC, 0, 0);
+        faceLayerCtx.globalCompositeOperation = 'source-over';
     }
 
     // Smoothed view transform: centre (cx, cy) and magnification k
@@ -1949,11 +1982,9 @@
 
     function zoomToFace(lm, W, H, fit, smooth, bg) {
         const f = headFrame(lm, W, H);
-        const neck = num('bgNeck') / 100;
-        // Head + neck extent: hair above the forehead to the neck cut
+        // Head extent: hair above the forehead down to just under the chin
         const topX = f.top[0] + f.ux * f.hF * 0.45, topY = f.top[1] + f.uy * f.hF * 0.45;
-        const botX = f.chin[0] - f.ux * Math.max(0.15, neck) * f.hF;
-        const botY = f.chin[1] - f.uy * Math.max(0.15, neck) * f.hF;
+        const botX = f.chin[0] - f.ux * f.hF * 0.05, botY = f.chin[1] - f.uy * f.hF * 0.05;
         const regionH = Math.hypot(topX - botX, topY - botY);
         const regionW = f.faceW * 1.35;
         const k = Math.min(fit * H / regionH, fit * W / regionW);
@@ -2029,10 +2060,14 @@
         if (mirror) { personCtx.translate(W, 0); personCtx.scale(-1, 1); }
         personCtx.drawImage(segMaskC, 0, 0, W, H);
         personCtx.restore();
-        if (keepLm) {
-            // Face + neck only: also cut away shoulders and body
-            drawHeadNeckMask(keepLm, W, H, num('bgNeck') / 100);
+        if (keepLm && OVAL) {
+            // Face only: cut away neck, shoulders and body, then always
+            // put the whole face back on top
+            drawHeadMask(keepLm, W, H);
             personCtx.drawImage(keepC, 0, 0);
+            personCtx.globalCompositeOperation = 'source-over';
+            drawFaceLayer(keepLm, W, H);
+            personCtx.drawImage(faceLayerC, 0, 0);
         }
         personCtx.globalCompositeOperation = 'source-over';
 
@@ -2132,7 +2167,7 @@
                 ctx.drawImage(video, 0, 0, W, H);
                 ctx.restore();
 
-                // Detect the face first: the face + neck cut-out needs
+                // Detect the face first: the face-only cut-out needs
                 // its landmarks. They must match the canvas orientation.
                 let faceLm = null;
                 try {
