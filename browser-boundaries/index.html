@@ -769,10 +769,11 @@ Sec-Fetch-Site: cross-site
 PING</code></pre>
 </div>
 <div class="demo">
-<p class="small" style="margin-top:0">The frame starts as a "Hello world" <code>srcdoc</code> page, same origin as this one, so the parent can read it. Each link navigates the frame <em>and</em> pings <code>httpbin.org/anything/ping-demo</code>. The two are independent: the ping does not change the frame, and the link target alone decides whether the parent can still read it. The log times both from the click; Chromium lists the ping in Resource Timing with <code>initiatorType: "ping"</code>.</p>
+<p class="small" style="margin-top:0">The frame starts as a "Hello world" <code>srcdoc</code> page, same origin as this one, so the parent can read it. Each link navigates the frame <em>and</em> pings <code>httpbin.org/anything/ping-demo</code>. The two are independent: the ping does not change the frame, the link target alone decides whether the parent can still read it, and the navigation never waits for the ping (try the slow ping server). The log times both from the click; Chromium lists the ping in Resource Timing with <code>initiatorType: "ping"</code>.</p>
 <div class="btns">
 <a class="pinglink" href="../index.html" target="pingFrame" ping="https://httpbin.org/anything/ping-demo">The gallery (same site)</a>
 <a class="pinglink" href="https://example.com/" target="pingFrame" ping="https://httpbin.org/anything/ping-demo">example.com (another site)</a>
+<a class="pinglink" href="../index.html" target="pingFrame" ping="https://httpbin.org/delay/3">The gallery, with a ping server that takes 3 s</a>
 <button id="pingReset">Back to Hello world</button>
 </div>
 <iframe name="pingFrame" id="pingFrame" title="ping link target" style="height:150px"></iframe>
@@ -1922,12 +1923,21 @@ $('pingReset').onclick = () => { pingT0 = null; $('pingFrame').srcdoc = pingHell
 $('pingFrame').srcdoc = pingHello();
 document.querySelectorAll('.pinglink').forEach((a) => a.addEventListener('click', () => {
   pingT0 = performance.now();
-  setTimeout(() => {
-    const found = performance.getEntriesByType('resource').filter((e) => e.initiatorType === 'ping' && !pingSeen.has(e));
-    found.forEach((e) => pingSeen.add(e));
-    if (found.length) found.forEach((e) => logTo($('pingLog'), `ping to ${e.name.replace('https://', '')}: started ${(e.startTime - pingT0).toFixed(0)} ms after the click, took ${e.duration.toFixed(0)} ms, reply hidden`, ''));
-    else logTo($('pingLog'), 'no ping in Resource Timing: this browser did not send one, or does not list pings there', 'bad');
-  }, 2500);
+  const t0 = pingT0;
+  let waited = 0, any = false;
+  const poll = setInterval(() => {
+    waited += 500;
+    // a ping's Resource Timing entry appears only when its reply has arrived
+    const found = performance.getEntriesByType('resource').filter((e) => e.initiatorType === 'ping' && !pingSeen.has(e) && e.startTime >= t0 - 5);
+    found.forEach((e) => {
+      pingSeen.add(e); any = true;
+      logTo($('pingLog'), `ping to ${e.name.replace('https://', '')}: started ${(e.startTime - t0).toFixed(0)} ms after the click, finished at ${(e.responseEnd - t0).toFixed(0)} ms, reply hidden`, '');
+    });
+    if (any || waited >= 8000) {
+      clearInterval(poll);
+      if (!any) logTo($('pingLog'), 'no ping in Resource Timing after 8 s: this browser did not send one, or does not list pings there', 'bad');
+    }
+  }, 500);
 }));
 
 // ------------------------------------------------------------------ 6 preflight
