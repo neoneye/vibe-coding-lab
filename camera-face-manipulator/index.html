@@ -51,7 +51,24 @@
             border-radius: 8px;
             padding: 16px;
             min-width: 180px;
+            max-height: calc(100% - 24px);
+            overflow-y: auto;
         }
+        .panel.left {
+            right: auto;
+            left: 12px;
+            width: 230px;
+        }
+        .panel h3.horror { color: #e33; }
+        .panel h4 {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin: 10px 0 2px;
+        }
+        .panel .group[hidden] { display: none; }
         .panel h3 {
             font-size: 0.95rem;
             margin: 14px 0 6px;
@@ -68,7 +85,7 @@
             min-width: 80px;
         }
         .panel label.slider .val {
-            min-width: 2ch;
+            min-width: 3ch;
             text-align: right;
             color: #fa0;
             font-variant-numeric: tabular-nums;
@@ -137,6 +154,47 @@
             <label class="slider">Mouth <input type="range" id="delayM" min="1" max="30" value="1"><span class="val" id="delayMVal">1</span></label>
             <div class="hint">
                 Hold <kbd>Space</kbd> to see original
+            </div>
+        </div>
+        <div class="panel left">
+            <h3 class="horror">Horror</h3>
+            <label>Mode
+                <select id="horrorMode">
+                    <option value="off" selected>Off</option>
+                    <option value="black">1 · Black eyes</option>
+                    <option value="swap">2 · Swap eye / mouth</option>
+                    <option value="both">1 + 2</option>
+                </select>
+            </label>
+            <div class="group" id="blackGroup" hidden>
+                <h4>Black eyes</h4>
+                <label class="slider">Darkness <input type="range" id="hDark" min="0" max="100" value="100"><span class="val" id="hDarkVal">100</span></label>
+                <label class="slider">Size <input type="range" id="hSize" min="70" max="170" value="110"><span class="val" id="hSizeVal">110</span></label>
+                <label class="slider">Soft edge <input type="range" id="hSoft" min="0" max="100" value="15"><span class="val" id="hSoftVal">15</span></label>
+                <label class="slider">Glint <input type="range" id="hGlint" min="0" max="100" value="60"><span class="val" id="hGlintVal">60</span></label>
+                <label class="slider">Sockets <input type="range" id="hSocket" min="0" max="100" value="40"><span class="val" id="hSocketVal">40</span></label>
+                <label class="slider">Tears <input type="range" id="hTears" min="0" max="100" value="0"><span class="val" id="hTearsVal">0</span></label>
+            </div>
+            <div class="group" id="swapGroup" hidden>
+                <h4>Swap eye / mouth</h4>
+                <label>Eye
+                    <select id="hSwapEye">
+                        <option value="left" selected>L</option>
+                        <option value="right">R</option>
+                        <option value="both">Both</option>
+                    </select>
+                </label>
+                <label class="slider">Eye size <input type="range" id="hEyeScale" min="50" max="300" value="160"><span class="val" id="hEyeScaleVal">160</span></label>
+                <label class="slider">Mouth size <input type="range" id="hMouthScale" min="30" max="150" value="90"><span class="val" id="hMouthScaleVal">90</span></label>
+                <label class="slider">Feather <input type="range" id="hFeather" min="0" max="100" value="40"><span class="val" id="hFeatherVal">40</span></label>
+                <label><input type="checkbox" id="hSmudge" checked> Skin over originals</label>
+            </div>
+            <div class="group" id="atmoGroup" hidden>
+                <h4>Atmosphere</h4>
+                <label class="slider">Desaturate <input type="range" id="hDesat" min="0" max="100" value="50"><span class="val" id="hDesatVal">50</span></label>
+                <label class="slider">Sickly tint <input type="range" id="hTint" min="0" max="100" value="30"><span class="val" id="hTintVal">30</span></label>
+                <label class="slider">Vignette <input type="range" id="hVig" min="0" max="100" value="60"><span class="val" id="hVigVal">60</span></label>
+                <label class="slider">Flicker <input type="range" id="hFlick" min="0" max="100" value="0"><span class="val" id="hFlickVal">0</span></label>
             </div>
         </div>
     </div>
@@ -243,6 +301,277 @@
         ctx.fillText('mouth', mb.cx - 14, mb.y - 4);
     }
 
+    // ---- Horror ----
+
+    const num = id => +document.getElementById(id).value;
+
+    function readHorror() {
+        const mode = document.getElementById('horrorMode').value;
+        return {
+            on:     mode !== 'off',
+            black:  mode === 'black' || mode === 'both',
+            swap:   mode === 'swap'  || mode === 'both',
+            dark:   num('hDark') / 100,
+            size:   num('hSize') / 100,
+            soft:   num('hSoft') / 100,
+            glint:  num('hGlint') / 100,
+            socket: num('hSocket') / 100,
+            tears:  num('hTears') / 100,
+            swapEye:    document.getElementById('hSwapEye').value,
+            eyeScale:   num('hEyeScale') / 100,
+            mouthScale: num('hMouthScale') / 100,
+            feather:    num('hFeather') / 100,
+            smudge:     document.getElementById('hSmudge').checked,
+            desat:  num('hDesat') / 100,
+            tint:   num('hTint') / 100,
+            vig:    num('hVig') / 100,
+            flick:  num('hFlick') / 100,
+        };
+    }
+
+    // Outline of the eye opening (the L_EYE / R_EYE lists walk the lid
+    // contour in order), its centroid and its extent in canvas pixels.
+    function eyeShape(lm, idx, W, H) {
+        const pts = idx.map(i => [lm[i].x * W, lm[i].y * H]);
+        let cx = 0, cy = 0;
+        let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+        for (const [x, y] of pts) {
+            cx += x; cy += y;
+            x1 = Math.min(x1, x); x2 = Math.max(x2, x);
+            y1 = Math.min(y1, y); y2 = Math.max(y2, y);
+        }
+        cx /= pts.length; cy /= pts.length;
+        return { pts, cx, cy, ew: x2 - x1, eh: y2 - y1 };
+    }
+
+    function tracePoly(c, pts, dx = 0) {
+        c.beginPath();
+        pts.forEach(([x, y], k) => k ? c.lineTo(x + dx, y) : c.moveTo(x + dx, y));
+        c.closePath();
+    }
+
+    // Iris centre (landmarks 468 / 473 in the 478-point model), falling
+    // back to the lid centroid if the iris points are missing.
+    function irisCentre(lm, e, W, H) {
+        if (lm.length < 478) return [e.cx, e.cy];
+        let best = null, bestD = Infinity;
+        for (const i of [468, 473]) {
+            const x = lm[i].x * W, y = lm[i].y * H;
+            const d = (x - e.cx) ** 2 + (y - e.cy) ** 2;
+            if (d < bestD) { bestD = d; best = [x, y]; }
+        }
+        return best;
+    }
+
+    // Mode 1, drawn before the regions are captured so that the black
+    // eyes travel with the crops (lag, swap, flips, eye ↔ mouth).
+    function drawBlackEye(lm, idx, W, H, p) {
+        const e = eyeShape(lm, idx, W, H);
+        const ew = Math.max(e.ew, 1);
+
+        // Sunken sockets: a soft bruise-dark halo around the eye
+        if (p.socket > 0) {
+            ctx.save();
+            ctx.translate(e.cx, e.cy + ew * 0.05);
+            ctx.scale(ew * 0.95, ew * 0.7);
+            const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+            g.addColorStop(0,   `rgba(30,8,18,${0.8 * p.socket})`);
+            g.addColorStop(0.5, `rgba(30,8,18,${0.45 * p.socket})`);
+            g.addColorStop(1,   'rgba(30,8,18,0)');
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(0, 0, 1, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        // The eye opening, scaled about its centroid, filled black. The
+        // soft edge is a shadow cast from a copy drawn off-canvas, since
+        // shadowBlur works in every browser (ctx.filter does not).
+        const poly = e.pts.map(([x, y]) =>
+            [e.cx + (x - e.cx) * p.size, e.cy + (y - e.cy) * p.size]);
+        if (p.dark > 0) {
+            const off = W * 4;
+            ctx.save();
+            ctx.shadowColor = `rgba(0,0,0,${p.dark})`;
+            ctx.shadowBlur = p.soft * ew * 0.25;
+            ctx.shadowOffsetX = off;
+            ctx.fillStyle = '#000';
+            tracePoly(ctx, poly, -off);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        // Wet glint: two highlights that follow the gaze, clipped to the
+        // opening so they vanish when the eye closes.
+        if (p.glint > 0) {
+            const [ix, iy] = irisCentre(lm, e, W, H);
+            ctx.save();
+            tracePoly(ctx, poly);
+            ctx.clip();
+            const spot = (x, y, r, a) => {
+                const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+                g.addColorStop(0,   `rgba(255,255,255,${a})`);
+                g.addColorStop(0.4, `rgba(255,255,255,${a * 0.6})`);
+                g.addColorStop(1,   'rgba(255,255,255,0)');
+                ctx.fillStyle = g;
+                ctx.fillRect(x - r, y - r, r * 2, r * 2);
+            };
+            spot(ix - ew * 0.09, iy - ew * 0.08, ew * 0.09, 0.9 * p.glint);
+            spot(ix + ew * 0.07, iy + ew * 0.04, ew * 0.04, 0.5 * p.glint);
+            ctx.restore();
+        }
+    }
+
+    // Black tears running from the lower lid down the face. They are
+    // drawn after pasting, at the eye positions, and grow in over a few
+    // seconds whenever horror mode is switched on.
+    let tearStart = performance.now();
+
+    function drawTear(lm, idx, lidIdx, seed, W, H, p, now) {
+        const e = eyeShape(lm, idx, W, H);
+        const ew = Math.max(e.ew, 1);
+        const top = lm[10], chin = lm[152];
+        let dx = (chin.x - top.x) * W, dy = (chin.y - top.y) * H;
+        const faceH = Math.hypot(dx, dy) || 1;
+        dx /= faceH; dy /= faceH;
+        const nx = -dy, ny = dx;
+
+        const grow = Math.min(1, (now - tearStart) / 4000);
+        const len = p.tears * faceH * 0.55 * grow;
+        if (len < 1) return;
+
+        const x0 = lm[lidIdx].x * W, y0 = lm[lidIdx].y * H;
+        const amp = ew * 0.06;
+        const N = 24, left = [], right = [];
+        let ex = x0, ey = y0;
+        for (let k = 0; k <= N; k++) {
+            const s = k / N;
+            const along = s * len;
+            const lat = (Math.sin(s * 6 + seed) * amp
+                       + Math.sin(s * 17 + seed * 3) * amp * 0.3) * s;
+            const w = ew * (0.08 * (1 - s) + 0.03) / 2;
+            const x = x0 + dx * along + nx * lat;
+            const y = y0 + dy * along + ny * lat;
+            left.push([x + nx * w, y + ny * w]);
+            right.push([x - nx * w, y - ny * w]);
+            ex = x; ey = y;
+        }
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.92)';
+        tracePoly(ctx, left.concat(right.reverse()));
+        ctx.fill();
+        // Swelling drop at the end of the trail
+        const r = ew * 0.05 * (1 + 0.2 * Math.sin(now / 400 + seed));
+        ctx.beginPath();
+        ctx.ellipse(ex + dx * r * 0.6, ey + dy * r * 0.6, r, r * 1.35,
+                    Math.atan2(dy, dx) - Math.PI / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    // Paste src into a w×h box centred on (cx, cy), masked by an ellipse
+    // whose edge fades over `feather` (0 = hard, 1 = fades from centre).
+    const scratch = document.createElement('canvas');
+    const sctx = scratch.getContext('2d');
+
+    function pasteFeather(dctx, src, cx, cy, w, h, fx, fy, feather) {
+        w = Math.max(1, Math.round(w));
+        h = Math.max(1, Math.round(h));
+        scratch.width = w;   // also clears and resets state
+        scratch.height = h;
+        sctx.save();
+        sctx.translate(w / 2, h / 2);
+        sctx.scale(fx ? -1 : 1, fy ? -1 : 1);
+        sctx.drawImage(src, -w / 2, -h / 2, w, h);
+        sctx.restore();
+        sctx.globalCompositeOperation = 'destination-in';
+        sctx.translate(w / 2, h / 2);
+        sctx.scale(w / 2, h / 2);
+        const g = sctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+        g.addColorStop(0, '#000');
+        g.addColorStop(Math.min(0.995, Math.max(0, 1 - feather)), '#000');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        sctx.fillStyle = g;
+        sctx.fillRect(-1, -1, 2, 2);
+        dctx.drawImage(scratch, Math.round(cx - w / 2), Math.round(cy - h / 2));
+    }
+
+    // Skin tone around a region: samples a ring just outside its box and
+    // averages the 40th–90th brightness percentile, which skips brows,
+    // lashes and shadows.
+    function skinTone(b, W, H) {
+        const rx = b.w * 0.6, ry = b.h * 0.6;
+        const x0 = Math.max(0, Math.floor(b.cx - rx - 1));
+        const y0 = Math.max(0, Math.floor(b.cy - ry - 1));
+        const x1 = Math.min(W, Math.ceil(b.cx + rx + 1));
+        const y1 = Math.min(H, Math.ceil(b.cy + ry + 1));
+        const bw = x1 - x0, bh = y1 - y0;
+        if (bw < 2 || bh < 2) return null;
+        const d = ctx.getImageData(x0, y0, bw, bh).data;
+        const s = [];
+        for (let k = 0; k < 48; k++) {
+            const a = k / 48 * Math.PI * 2;
+            const x = Math.min(bw - 1, Math.max(0, Math.round(b.cx + Math.cos(a) * rx - x0)));
+            const y = Math.min(bh - 1, Math.max(0, Math.round(b.cy + Math.sin(a) * ry - y0)));
+            const o = (y * bw + x) * 4;
+            s.push([d[o], d[o + 1], d[o + 2], d[o] * 0.3 + d[o + 1] * 0.59 + d[o + 2] * 0.11]);
+        }
+        s.sort((p, q) => p[3] - q[3]);
+        const pick = s.slice(Math.floor(s.length * 0.4), Math.ceil(s.length * 0.9));
+        const avg = [0, 1, 2].map(c => Math.round(pick.reduce((t, v) => t + v[c], 0) / pick.length));
+        return `${avg[0]},${avg[1]},${avg[2]}`;
+    }
+
+    function fillSkin(b, rgb) {
+        if (!rgb) return;
+        ctx.save();
+        ctx.translate(b.cx, b.cy);
+        ctx.scale(b.w / 2, b.h / 2);
+        const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+        g.addColorStop(0,    `rgba(${rgb},1)`);
+        g.addColorStop(0.55, `rgba(${rgb},1)`);
+        g.addColorStop(1,    `rgba(${rgb},0)`);
+        ctx.fillStyle = g;
+        ctx.fillRect(-1, -1, 2, 2);
+        ctx.restore();
+    }
+
+    // Whole-frame grade: desaturate, sickly tint, vignette, flicker.
+    let flickLevel = 0;
+
+    function drawAtmosphere(W, H, p) {
+        ctx.save();
+        if (p.desat > 0) {
+            ctx.globalCompositeOperation = 'saturation';
+            ctx.fillStyle = `rgba(128,128,128,${p.desat})`;
+            ctx.fillRect(0, 0, W, H);
+        }
+        if (p.tint > 0) {
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.fillStyle = `rgba(170,205,180,${p.tint})`;
+            ctx.fillRect(0, 0, W, H);
+        }
+        ctx.globalCompositeOperation = 'source-over';
+        if (p.vig > 0) {
+            const R = Math.hypot(W, H) / 2;
+            const g = ctx.createRadialGradient(W / 2, H / 2, R * 0.35, W / 2, H / 2, R);
+            g.addColorStop(0, 'rgba(0,0,0,0)');
+            g.addColorStop(1, `rgba(0,0,0,${Math.min(1, p.vig * 1.1)})`);
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, W, H);
+        }
+        if (p.flick > 0) {
+            // A failing bulb: low-passed jitter plus occasional dropouts
+            flickLevel = flickLevel * 0.7 + Math.random() * 0.3;
+            let a = flickLevel * 0.35 * p.flick;
+            if (Math.random() < 0.04 * p.flick) a = 0.5 + 0.4 * p.flick;
+            ctx.fillStyle = `rgba(0,0,0,${a})`;
+            ctx.fillRect(0, 0, W, H);
+        }
+        ctx.restore();
+    }
+
     // ---- Init ----
 
     try {
@@ -286,6 +615,7 @@
             if (video.currentTime !== lastT) {
                 lastT = video.currentTime;
                 const W = canvas.width, H = canvas.height;
+                const hp = readHorror();
 
                 // Draw video, mirrored unless camera view is selected
                 const mirror = document.getElementById('mirrorView').checked;
@@ -326,6 +656,13 @@
                         const mb = bbox(lm, LIPS, W, H, 12);
                         const nb = bbox(lm, NOSE, W, H, 10);
 
+                        // Horror mode 1 goes into the frame before capture,
+                        // so the black eyes move with every crop.
+                        if (hp.black && !spaceHeld) {
+                            drawBlackEye(lm, L_EYE, W, H, hp);
+                            drawBlackEye(lm, R_EYE, W, H, hp);
+                        }
+
                         // Capture this frame's regions before pasting anything
                         const slot = ring[frameNo % RING];
                         copyRegion(slot.l.c, slot.l.ctx, canvas, lb);
@@ -355,9 +692,51 @@
                             const rightCrop = eSrc === 'left'  ? srcR.l
                                             : eSrc === 'right' ? srcR.r
                                             : eSwap ? srcR.l : srcR.r;
-                            pasteRegion(ctx, leftCrop.c, lb, eFX, eFY);
-                            pasteRegion(ctx, rightCrop.c, rb, eFX, eFY);
-                            pasteRegion(ctx, srcM.m.c, mb, mFX, mFY);
+                            if (!hp.swap) {
+                                pasteRegion(ctx, leftCrop.c, lb, eFX, eFY);
+                                pasteRegion(ctx, rightCrop.c, rb, eFX, eFY);
+                                pasteRegion(ctx, srcM.m.c, mb, mFX, mFY);
+                            } else {
+                                // Horror mode 2: the chosen eye(s) and the
+                                // mouth trade places, each scaled and
+                                // pasted with a feathered edge.
+                                const useL = hp.swapEye !== 'right';
+                                const useR = hp.swapEye !== 'left';
+                                const vacated = [mb];
+                                if (useL) vacated.push(lb);
+                                if (useR) vacated.push(rb);
+                                if (hp.smudge) {
+                                    // Sample every tone first, then paint,
+                                    // so one patch can't tint another.
+                                    const tones = vacated.map(b => skinTone(b, W, H));
+                                    vacated.forEach((b, k) => fillSkin(b, tones[k]));
+                                }
+                                if (!useL) pasteRegion(ctx, leftCrop.c, lb, eFX, eFY);
+                                if (!useR) pasteRegion(ctx, rightCrop.c, rb, eFX, eFY);
+
+                                const f = hp.feather;
+                                const mw = mb.w * hp.mouthScale, mh = mb.h * hp.mouthScale;
+                                for (const [use, b] of [[useL, lb], [useR, rb]]) {
+                                    if (use) pasteFeather(ctx, srcM.m.c, b.cx, b.cy, mw, mh, mFX, mFY, f);
+                                }
+
+                                const eyes = [];
+                                if (useL) eyes.push([leftCrop.c, lb]);
+                                if (useR) eyes.push([rightCrop.c, rb]);
+                                // Keep the eyes' left-to-right order at the mouth
+                                eyes.sort((a, b) => a[1].cx - b[1].cx);
+                                eyes.forEach(([crop, b], k) => {
+                                    const w = b.w * hp.eyeScale, h = b.h * hp.eyeScale;
+                                    const x = mb.cx + (k - (eyes.length - 1) / 2) * w * 0.85;
+                                    pasteFeather(ctx, crop, x, mb.cy, w, h, eFX, eFY, f);
+                                });
+                            }
+
+                            if (hp.black && hp.tears > 0) {
+                                const now = performance.now();
+                                drawTear(lm, L_EYE, 145, 1.3, W, H, hp, now);
+                                drawTear(lm, R_EYE, 374, 4.1, W, H, hp, now);
+                            }
                         }
 
                         frameNo++;
@@ -371,6 +750,8 @@
                     // Face detection can fail when face is partially visible;
                     // ignore and keep showing the plain camera feed.
                 }
+
+                if (hp.on && !spaceHeld) drawAtmosphere(W, H, hp);
             }
             requestAnimationFrame(loop);
         }
@@ -384,11 +765,27 @@
 
     // ---- Slider readouts ----
 
-    for (const id of ['delayL', 'delayR', 'delayM']) {
-        const el = document.getElementById(id);
-        const val = document.getElementById(id + 'Val');
+    for (const el of document.querySelectorAll('label.slider input')) {
+        const val = document.getElementById(el.id + 'Val');
         el.addEventListener('input', () => { val.textContent = el.value; });
     }
+
+    // ---- Horror panel: show the parameters of the active mode ----
+
+    const horrorMode = document.getElementById('horrorMode');
+    function syncHorror() {
+        const m = horrorMode.value;
+        document.getElementById('blackGroup').hidden = !(m === 'black' || m === 'both');
+        document.getElementById('swapGroup').hidden  = !(m === 'swap'  || m === 'both');
+        document.getElementById('atmoGroup').hidden  = m === 'off';
+        tearStart = performance.now();
+    }
+    horrorMode.addEventListener('change', syncHorror);
+    document.getElementById('hTears').addEventListener('input', e => {
+        // Let fresh tears run down again rather than appear at full length
+        if (+e.target.value === 0) tearStart = performance.now();
+    });
+    syncHorror();
 
     // ---- Keyboard ----
 
