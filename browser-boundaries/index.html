@@ -48,6 +48,8 @@
   .svgtile .box { aspect-ratio: 320 / 120; }
   .svgtile .box > * { display: block; width: 100%; height: 100%; border: 0; }
   .svgtile .exp { font-size: 13px; color: var(--soft); margin-top: 6px; }
+  .pdftile .box { aspect-ratio: auto; height: 250px; }
+  .pdftile .box > iframe { border: 1px solid var(--line); border-radius: 6px; background: #fff; }
   .note { border-left: 4px solid var(--warn); background: var(--warn-bg); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; }
   .answer { border-left: 4px solid var(--ok); background: var(--ok-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; }
   .answer p { margin: 6px 0; }
@@ -587,6 +589,24 @@ app.get('/proxy', async (req, res) =&gt; {
 </ul>
 </div>
 <div class="svgtiles" id="svgTiles"></div>
+</div>
+
+<div class="card" id="cl-pdf">
+<h3>PDF: not HTML, but scripts, forms and actions of its own</h3>
+<p class="q"><b>A PDF can't contain a web page that the browser runs.</b> It has its own world instead: JavaScript (Adobe's Acrobat scripting), form fields, links, embedded files, and actions such as "submit this form to a URL" or "open this URL". The PDF below is built by this page. It has one form field and a script that writes into it which viewer ran it and whether it can see <code>window</code> or <code>fetch</code>.</p>
+<div class="closer" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+<ul>
+<li><b>Firefox turns every PDF into HTML.</b> Its viewer, pdf.js, is a PDF reader written in JavaScript: pages are drawn on canvases, the text is a layer of HTML elements, and form fields become real <code>&lt;input&gt;</code>s. It runs at Firefox's internal <code>resource://pdf.js</code> address, not at the address the PDF came from. The PDF's own script runs in a separate sandbox (QuickJS compiled to WebAssembly) with an Acrobat-like API, no page and no network: in a test, <code>submitForm()</code> and <code>app.launchURL()</code> to a local server never arrived.</li>
+<li><b>Chrome's viewer (PDFium) runs in a separate process</b> and supports fewer scripts; in the Chromium build this page was tested in, none ran. A same-origin parent can open the frame's <code>contentDocument</code>, but finds only an empty wrapper page (in Firefox it is <code>null</code>). Chromium does not show a PDF in a sandboxed iframe at all; Firefox does.</li>
+<li><b>So in a browser a PDF's script never gets your page's origin or cookies.</b> Desktop readers such as Acrobat are another matter: a much larger script API, launch actions, embedded files and connections home after a prompt. That is where the history of PDF malware lives.</li>
+</ul>
+<ul>
+<li><b>The real browser risk is a file that is two things.</b> PDF readers skip junk before the <code>%PDF</code> header, so one file can be a valid PDF and a valid HTML page at once (a <em>polyglot</em>). If your site serves an uploaded ".pdf" as <code>text/html</code>, or lets the browser guess the type, the HTML part runs as your site. Defences: the right <code>Content-Type</code>, <code>X-Content-Type-Options: nosniff</code>, <code>Content-Disposition: attachment</code>, a separate domain for uploads. The last two tiles show one file both ways.</li>
+<li><b>pdf.js inside your own page runs as you.</b> Sites that show PDFs with the <code>pdfjs-dist</code> library run it in their own origin, so a pdf.js bug is a hole in your site. In 2024 (CVE-2024-4367) a crafted font made pdf.js run arbitrary JavaScript on every site using a vulnerable version; fixed in pdf.js 4.2.67 and Firefox 126, and <code>isEvalSupported: false</code> closes that path.</li>
+<li><b>Links in PDFs</b> are a favourite phishing route, because people trust a document more than a web page. <b>History:</b> around 2007 Adobe Reader's browser plugin ran JavaScript put after the <code>#</code> of any PDF link, inside the site hosting the PDF. Plugins are gone.</li>
+</ul>
+</div>
+<div class="svgtiles" id="pdfTiles"></div>
 </div>
 
 <div class="card" id="cl-nocors">
@@ -1524,7 +1544,68 @@ function buildSvgTiles() {
 }
 buildSvgTiles();
 
-window.__ifr = { runTarget, TARGETS, runPeek, freezeTest, trkVisit, buildSandbox, runFetch, FETCHES, cdnLoad, errTest, imgTest, sriRun, buildSvgTiles };
+// ------------------------------------------------------------------ 6 pdf
+// a tiny PDF with one text field and a document-level script, built byte by byte
+function makePdf(title, prefix = '', suffix = '') {
+  const js = "var f = this.getField('out'); f.value = 'script ran in ' + app.viewerType + ' ' + app.viewerVersion + '; typeof window: ' + typeof window + ', typeof fetch: ' + typeof fetch;";
+  const esc = (t) => t.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const content = `BT /F1 16 Tf 16 150 Td (${esc(title)}) Tj ET`;
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /NeedAppearances true /DR << /Font << /Helv 7 0 R >> >> /DA (/Helv 10 Tf 0 g) >> /Names << /JavaScript << /Names [(init) 6 0 R] >> >> >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 520 190] /Contents 4 0 R /Resources << /Font << /F1 7 0 R >> >> /Annots [5 0 R] >>',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Annot /Subtype /Widget /FT /Tx /T (out) /Rect [16 50 504 100] /V (script did not run) /DA (/Helv 10 Tf 0 g) /F 4 /P 3 0 R /MK << /BG [0.9 0.89 0.84] >> >>',
+    `<< /S /JavaScript /JS (${esc(js)}) >>`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let pdf = '%PDF-1.7\n%\xe2\xe3\xcf\xd3\n';
+  const offs = [];
+  objs.forEach((o, i) => { offs.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map((o) => String(o).padStart(10, '0') + ' 00000 n \n').join('');
+  pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const all = prefix + pdf + suffix;
+  const bytes = new Uint8Array(all.length);
+  for (let i = 0; i < all.length; i++) bytes[i] = all.charCodeAt(i) & 255;
+  return bytes;
+}
+// the same bytes are an HTML page and a PDF: the HTML hides the PDF inside a comment
+const POLY_HTML = '<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;padding:12px 14px;font:14px/1.5 -apple-system,Helvetica,Arial,sans-serif;background:#fde8e6;color:#3a1c1a}</style></head><body>'
+  + '<b>I am the same file, read as HTML.</b><p id="m">My script did not run.</p>'
+  + '<script>var t; try { t = parent.document.title; } catch (e) { t = "(blocked: " + e.name + ")"; } document.getElementById("m").textContent = "My script ran, as origin " + JSON.stringify(self.origin) + ". I can read the parent page title: " + t;<\/script><!' + '--\n';
+const POLY_END = '\n--' + '></body></html>\n';
+function buildPdfTiles() {
+  const pdfUrl = URL.createObjectURL(new Blob([makePdf('A PDF with a script and a form field')], { type: 'application/pdf' }));
+  const polyBytes = makePdf('The same file, read as a PDF', POLY_HTML, POLY_END);
+  const polyPdf = URL.createObjectURL(new Blob([polyBytes], { type: 'application/pdf' }));
+  const polyHtml = URL.createObjectURL(new Blob([polyBytes], { type: 'text/html' }));
+  const frame = (src, sandbox) => { const f = document.createElement('iframe'); f.title = 'PDF demo'; if (sandbox !== undefined) f.setAttribute('sandbox', sandbox); f.src = src; return f; };
+  const tiles = [
+    { lbl: '&lt;iframe src="file.pdf"&gt;', el: frame(pdfUrl), exp: 'The field shows whether this browser ran the PDF\'s script, and what it could see.', peek: true },
+    { lbl: '&lt;iframe sandbox="allow-scripts" src="file.pdf"&gt;', el: frame(pdfUrl, 'allow-scripts'), exp: 'Chromium shows nothing in a sandboxed frame. Firefox shows the PDF and runs its script, still inside the viewer\'s own sandbox.' },
+    { lbl: `one file (${polyBytes.length} bytes), served as application/pdf`, el: frame(polyPdf), exp: 'The PDF viewer skips the HTML in front of the %PDF header and shows the PDF.' },
+    { lbl: 'the same bytes, served as text/html', el: frame(polyHtml), exp: 'The browser reads the HTML, hides the PDF in a comment, and runs the script as this site.' },
+  ];
+  $('pdfTiles').replaceChildren(...tiles.map((t) => {
+    const el = document.createElement('div'); el.className = 'svgtile pdftile';
+    el.innerHTML = `<div class="lbl">${t.lbl}</div><div class="box"></div><div class="exp">${t.exp}</div>`;
+    el.querySelector('.box').append(t.el);
+    if (t.peek) {
+      const out = document.createElement('div'); out.className = 'exp mono'; el.append(out);
+      t.el.addEventListener('load', () => setTimeout(() => {
+        let txt;
+        try { const d = t.el.contentDocument; txt = d ? `parent reads contentDocument: <${d.body ? d.body.firstElementChild?.tagName.toLowerCase() || 'empty body' : 'no body'}>, text "${(d.body?.innerText || '').trim().slice(0, 40)}"` : 'parent reads contentDocument: null (the viewer is not this page\'s document)'; }
+        catch (e) { txt = 'parent reads contentDocument: ' + e.name; }
+        out.textContent = txt;
+      }, 800));
+    }
+    return el;
+  }));
+}
+buildPdfTiles();
+
+window.__ifr = { runTarget, TARGETS, runPeek, freezeTest, trkVisit, buildSandbox, runFetch, FETCHES, cdnLoad, errTest, imgTest, sriRun, buildSvgTiles, buildPdfTiles, makePdf };
 </script>
 </body>
 </html>
