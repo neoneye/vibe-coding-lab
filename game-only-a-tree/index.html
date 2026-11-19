@@ -74,25 +74,26 @@ const W = 320, H = 180;
 const WIN = { x0: 70, y0: 18, x1: 250, y1: 104 };          // glass, x1/y1 exclusive
 const WW = WIN.x1 - WIN.x0, WH = WIN.y1 - WIN.y0;
 const BED_Y = 136, BLANKET_Y = 153;
+const OPEN = 18;                                             // the lower left sash is pushed up this far
 const TARGET_ANGLE = -1.35;                                  // "toward the bed": left and slightly up
 
 // key, label, min, max, step, start-of-night, at-its-worst
 const PARAMS = [
   ['seed',     'Seed',                   1, 999, 1,     7,    7],
-  ['trunkX',   'Trunk position',         0.3, 1.1, 0.01, 0.86, 0.80],
-  ['lean',     'Trunk lean',            -0.8, 0.8, 0.01, -0.08, -0.30],
+  ['trunkX',   'Trunk position',         0.3, 1.1, 0.01, 0.88, 0.82],
+  ['lean',     'Trunk lean',            -0.8, 0.8, 0.01, -0.16, -0.30],
   ['trunkW',   'Trunk thickness',        3, 24, 0.5,    9,    13],
-  ['trunkLen', 'Trunk height',           10, 80, 1,     34,   34],
-  ['scale',    'Closeness',              0.5, 2.2, 0.01, 1.0,  1.3],
+  ['trunkLen', 'Trunk height',           10, 80, 1,     23,   30],
+  ['scale',    'Closeness',              0.5, 2.2, 0.01, 1.3,  1.6],
   ['levels',   'Branch generations',     2, 8, 1,       5,    7],
   ['forks',    'Forks per joint',        1.5, 3.2, 0.05, 2.0,  2.5],
-  ['spread',   'Fork angle',             0.1, 1.3, 0.01, 0.50, 0.72],
-  ['decay',    'Length falloff',         0.5, 0.9, 0.01, 0.68, 0.78],
+  ['spread',   'Fork angle',             0.1, 1.3, 0.01, 0.62, 0.72],
+  ['decay',    'Length falloff',         0.5, 0.9, 0.01, 0.74, 0.78],
   ['gnarl',    'Crookedness',            0, 1.5, 0.01,  0.20, 1.00],
   ['droop',    'Droop',                  0, 1, 0.01,    0.05, 0.55],
-  ['reach',    'Reach toward the bed',   0, 1, 0.01,    0.00, 0.75],
+  ['reach',    'Reach toward the bed',   0, 1, 0.01,    0.12, 0.75],
   ['fingers',  'Finger twigs',           0, 1, 0.01,    0.00, 1.00],
-  ['foliage',  'Leaves',                 0, 1, 0.01,    0.70, 0.00],
+  ['foliage',  'Leaves',                 0, 1, 0.01,    0.85, 0.00],
   ['hang',     'Hanging things',         0, 1, 0.01,    0.00, 0.50],
   ['knots',    'Hollows in the trunk',   0, 1, 0.01,    0.00, 1.00],
   ['sway',     'Sway',                   0, 2, 0.01,    0.35, 1.10],
@@ -156,6 +157,10 @@ const staticBase = new Float32Array(W * H);
 const bedShade = new Float32Array(W * H);     // 0 = not bed
 const barMask = new Uint8Array(W * H);
 const treeMask = new Uint8Array(W * H);
+const openMask = new Uint8Array(W * H);     // no glass here
+const curtA = new Uint8Array(W * H);        // curtain hanging in front of the glass
+const leafD = new Float32Array(W * H);      // how much leaf the moonlight has to pass through
+const leafT = new Float32Array(W * H);
 const out = new Uint8ClampedArray(W * H);
 
 function buildStatic() {
@@ -168,7 +173,11 @@ function buildStatic() {
       const mid = (a + b) >> 1;
       if (x === mid) bar = true;
       const ry = y - WIN.y0;
-      if (ry === 21 || ry === 22 || ry === 43 || ry === 64) bar = true;
+      if (a === WIN.x0) {                                    // left half: lower sash raised
+        if (ry === 21 || ry === 22 || ry === 43 - OPEN || ry === 64 - OPEN) bar = true;
+        if (ry >= WH - OPEN - 3 && ry < WH - OPEN) bar = true;
+        if (ry >= WH - OPEN) { bar = false; openMask[y * W + x] = 1; }
+      } else if (ry === 21 || ry === 22 || ry === 43 || ry === 64) bar = true;
     }
     if (bar) barMask[y * W + x] = 1;
   }
@@ -181,7 +190,7 @@ function buildStatic() {
     if (y === 139 || y === 140) v = 10;                                            // skirting
     // curtain rod and curtains
     if ((y === 7 || y === 8) && x >= 42 && x < 278) v = 19;
-    const cl = x >= 48 && x < 71, cr = x >= 249 && x < 272;
+    const cl = false, cr = false;                            // curtains are drawn live, see drawCurtains
     if ((cl || cr) && y >= 9 && y < 124 + Math.round(Math.sin(x * 1.3) * 1.5)) {
       const k = cl ? 70 - x : x - 249;
       const fold = Math.sin(k * 0.95 + Math.sin(y * 0.045 + (cl ? 0 : 2)) * 0.9);
@@ -230,6 +239,15 @@ function stamp(x, y, r) {
     if (dx * dx + dy * dy <= r2) treeMask[yy * W + xx] = 1;
   }
 }
+function stampLeaf(x, y, r) {
+  const x0 = Math.max(WIN.x0, Math.floor(x - r)), x1 = Math.min(WIN.x1 - 1, Math.ceil(x + r));
+  const y0 = Math.max(WIN.y0, Math.floor(y - r)), y1 = Math.min(WIN.y1 - 1, Math.ceil(y + r));
+  const r2 = r * r;
+  for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+    const dx = xx - x, dy = yy - y, q = (dx * dx + dy * dy) / r2;
+    if (q < 1) leafD[yy * W + xx] += 0.75 * (1 - q * q);
+  }
+}
 function line(x0, y0, x1, y1, w0, w1) {
   const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 1.5) + 1;
   for (let i = 0; i <= n; i++) {
@@ -238,26 +256,28 @@ function line(x0, y0, x1, y1, w0, w1) {
   }
 }
 function drawTree(p, time, opt) {
-  treeMask.fill(0);
+  treeMask.fill(0); leafD.fill(0);
   opt = opt || {};
+  const wind = opt.wind || 0;
   const sc = p.scale * (opt.zoom || 1);
   const levels = Math.round(p.levels);
   const seed = Math.round(p.seed);
   budget = 7000; trunkPts = [];
   const bx = WIN.x0 + p.trunkX * WW + (opt.dx || 0), by = WIN.y1 + 6 + (opt.dy || 0);
 
-  function leaves(x, y, r) {
-    const n = Math.round(p.foliage * 12);
+  function leaves(x, y, r, a0) {
+    const n = Math.round(p.foliage * 44);
     for (let k = 0; k < n; k++) {
-      const a = r() * 6.283, d = r() * 7 * sc;
-      stamp(x + Math.cos(a) * d, y + Math.sin(a) * d * 0.75, (0.9 + r() * 2.2 * p.foliage) * sc);
+      const a = r() * 6.283, d = Math.sqrt(r()) * 9 * sc, ph = r() * 6.283;
+      const fl = Math.sin(time * 2.6 + ph) * 0.35 * p.sway * (1 + wind);        // each leaf flutters a little
+      stampLeaf(x + Math.cos(a) * d + fl, y + Math.sin(a) * d * 0.7 + fl * 0.5, (0.8 + r() * 1.3) * (0.6 + 0.4 * p.foliage) * sc);
     }
   }
   function grow(x, y, a, len, w, gen, id) {
     if (budget-- <= 0) return;
     const r = mulberry32(Math.imul(seed, 2654435761) ^ Math.imul(id, 40503));
     const ph = r();
-    if (gen > 0) a += Math.sin(time * (0.5 + ph * 0.7) + ph * 6.283) * p.sway * 0.02 * gen;
+    if (gen > 0) a += (Math.sin(time * (0.5 + ph * 0.7) + ph * 6.283) * 0.02 + wind * 0.03) * p.sway * gen;
     const n = gen === 0 ? 6 : 4, sl = len / n, w1 = w * 0.68;
     for (let i = 0; i < n; i++) {
       a += (r() - 0.5) * p.gnarl * 0.8 * (gen === 0 ? 0.45 : 1);
@@ -279,7 +299,7 @@ function drawTree(p, time, opt) {
       for (let yy = -ry; yy <= ry; yy++) for (let xx = -rx; xx <= rx; xx++)
         if ((xx * xx) / (rx * rx) + (yy * yy) / (ry * ry) <= 1) stamp(ex + xx, ey + ry + yy, 0.5);
     }
-    if (gen >= levels - 1) leaves(x, y, r);
+    if (gen >= levels - 2 && gen > 0) leaves(x, y, r);
     if (gen >= levels) {
       if (p.fingers > 0.02) {                                  // twig ends that curl like fingers
         for (let k = 0; k < 4; k++) {
@@ -325,20 +345,58 @@ function drawTree(p, time, opt) {
 }
 
 // ---------------------------------------------------------------------------
-// feet
-const FEET = [{ cx: 100, dir: 1 }, { cx: 162, dir: -1 }];
+// curtains: pinned at the rod, pushed into the room by the wind, most on the open side
+function drawCurtains(time, wind, gust) {
+  curtA.fill(0);
+  for (let side = 0; side < 2; side++) {
+    const amp = side === 0 ? 17 : 6, ph = side * 2.3;
+    for (let y = 9; y < 127; y++) {
+      const t = (y - 9) / 114;
+      const wave = Math.sin(time * 2.1 - t * 4.5 + ph) * 0.5 + Math.sin(time * 1.3 - t * 2.2 + ph) * 0.5;
+      const push = amp * Math.pow(t, 1.5) * (wind * 0.75 + wave * (0.1 + 0.3 * gust));
+      const xa = side === 0 ? 48 + push * 0.25 : 249 - push, xb = side === 0 ? 71 + push : 272 - push * 0.25;
+      const hem = 124 - Math.abs(push) * 0.12;
+      for (let x = Math.ceil(xa); x < xb; x++) {
+        if (x < 0 || x >= W || y >= hem + Math.sin(x * 1.3) * 1.5) continue;
+        const u = (x - xa) / (xb - xa), k = (side === 0 ? 1 - u : u) * 23;
+        const fold = Math.sin(k * 0.95 + Math.sin(y * 0.045 + ph) * 0.9 + push * 0.12);
+        let val = 9 + 6 * fold + 30 * Math.exp(-k / 3.2) * (0.6 + 0.4 * fold);
+        const i = y * W + x;
+        if (x >= WIN.x0 && x < WIN.x1 && y >= WIN.y0 && y < WIN.y1) { val = val * 0.55 + fb[i] * 0.5; curtA[i] = 1; }
+        fb[i] = val;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// feet. Each foot rocks about the ankle, and the toes spread and wiggle.
+const ANKLE_Y = 152;
+const FEET = [{ cx: 100, dir: 1, c: 1, s: 0, spread: 0, ty: [0, 0, 0, 0, 0] }, { cx: 162, dir: -1, c: 1, s: 0, spread: 0, ty: [0, 0, 0, 0, 0] }];
 // toes from the big one outward: x offset, rx, ry, centre y
-const TOES = [[10.6, 3.4, 4.6, 126.5], [4.5, 2.5, 4.1, 127.5], [-1.2, 2.4, 4.0, 128.6], [-6.6, 2.3, 3.6, 130.2], [-11.6, 2.1, 3.2, 132.2]];
-function inFoot(f, x, y, curl, lift) {
-  y -= lift;
-  const dx = x - f.cx, ax = Math.abs(dx);
+const TOES = [[11.4, 3.2, 4.6, 126.5], [4.9, 2.2, 4.1, 127.5], [-1.2, 2.1, 4.0, 128.6], [-7.0, 2.0, 3.6, 130.2], [-12.4, 1.9, 3.2, 132.2]];
+function poseFeet(time, curl, lift) {
+  FEET.forEach((f, n) => {
+    const th = (fbm(time * 0.16 + n * 31, 1.7) - 0.5) * 0.42 + Math.sin(time * 0.9 + n * 2) * 0.02;
+    f.c = Math.cos(th); f.s = Math.sin(th); f.lift = lift;
+    f.spread = smooth(0.35, 0.75, vnoise(time * 0.23 + n * 17, 4.2)) * (1 - curl);
+    const wig = smooth(0.55, 0.8, vnoise(time * 0.31 + n * 9, 8.8));
+    for (let k = 0; k < 5; k++) f.ty[k] = curl * 2 + wig * Math.sin(time * 7.5 + k * 1.25 + n) * 1.1 - f.spread * 0.6;
+  });
+}
+function inFoot(f, x, y) {
+  y -= f.lift;
+  const rx = x - f.cx, ry = y - ANKLE_Y;
+  const dx = rx * f.c + ry * f.s; y = ANKLE_Y - rx * f.s + ry * f.c;
   if (y >= 128 - f.dir * dx * 0.2) {
     const hw = y < 136 ? 14.5 : y < 150 ? 14.5 - (y - 136) * 0.46 : 8 + (y - 150) * 0.2;
-    if (ax <= hw) return true;
+    if (Math.abs(dx) <= hw) return true;
   }
   if (y > 137) return false;
-  for (const t of TOES) {
-    const qx = (x - (f.cx + f.dir * t[0])) / t[1], qy = (y - (t[3] + curl * 2)) / t[2];
+  const sp = 1 + 0.2 * f.spread;
+  for (let k = 0; k < 5; k++) {
+    const t = TOES[k];
+    const qx = (dx - f.dir * t[0] * sp) / t[1], qy = (y - t[3] - f.ty[k]) / t[2];
     if (qx * qx + qy * qy <= 1) return true;
   }
   return false;
@@ -378,7 +436,7 @@ function text(s, x, y, val, scale, center) {
 let frameNo = 0;
 function render(v) {
   const p = v.p, time = v.time, dawn = v.dawn || 0;
-  drawTree(p, time, v.inside ? { zoom: 2.3, dx: 20, dy: 80 } : null);
+  drawTree(p, time, v.inside ? { zoom: 2.3, dx: 20, dy: 80 } : { wind: v.wind || 0 });
   fb.set(staticBase);
 
   // outside
@@ -386,13 +444,24 @@ function render(v) {
   const cloudAt = (x, y) => smooth(0.62 - p.clouds * 0.42, 0.9 - p.clouds * 0.3, fbm((x + time * 1.6) * 0.022, y * 0.05 + 5));
   const moonVis = (1 - 0.65 * cloudAt(mx, my)) * (1 - dawn * 0.8);
   for (let y = WIN.y0; y < WIN.y1; y++) {
-    const ground = WIN.y1 - 6 + Math.sin(0.05 * 1) * 0;
+    const ground = WIN.y1 - 4;
     for (let x = WIN.x0; x < WIN.x1; x++) {
       const i = y * W + x;
-      if (barMask[i]) { fb[i] = 4 + dawn * 10; continue; }
+      if (barMask[i]) { fb[i] = 4 + dawn * 10 + (openMask[i + W] ? 34 * moonVis : 0); continue; }
       if (!v.inside && treeMask[i]) { fb[i] = 2.5 + dawn * 14; continue; }
-      if (y > ground + Math.sin(x * 0.045) * 1.6) { fb[i] = 2 + dawn * 12; continue; }
       const d = Math.hypot(x - mx, y - my);
+      // leaves: light is absorbed on the way through, and what gets scattered inside a thin
+      // leaf comes out the near side, strongest where the moon is close behind it
+      let T = 1, sc8 = 0;
+      const ld = v.inside ? 0 : leafD[i];
+      if (ld > 0.02) {
+        const dn = (ld + 0.2 * (leafD[i - 1] + leafD[i + 1] + leafD[i - W] + leafD[i + W])) / 1.8;
+        T = Math.exp(-1.15 * dn);
+        const fwd = Math.exp(-d / (mr * 4)) + 0.25 * Math.exp(-d / 60);
+        sc8 = moonVis * (14 + 190 * fwd) * (1 - T) * Math.exp(-0.75 * dn) + dawn * 30 * (1 - T);
+      }
+      leafT[i] = T;
+      if (y > ground + Math.sin(x * 0.045) * 1.6) { fb[i] = 2 + dawn * 12 + sc8 * 0.5; continue; }
       let s = 30 + 26 * (y - WIN.y0) / WH + 62 * Math.exp(-d / (mr * 2.4)) + 26 * Math.exp(-d / 70);
       const c = cloudAt(x, y);
       s += c * (10 + 40 * Math.exp(-d / 45));
@@ -401,16 +470,24 @@ function render(v) {
         s += (disc * (1 - 0.6 * c) - s) * clamp(mr + 0.5 - d, 0, 1);
       }
       s = s * (1 - dawn * 0.45) + dawn * (150 + 70 * (y - WIN.y0) / WH);
-      fb[i] = s;
+      fb[i] = s * T + sc8 + (T < 1 ? 2 : 0);
     }
   }
+  // the glass adds a little haze; the open gap is the bare night
+  for (let y = WIN.y0; y < WIN.y1; y++) for (let x = WIN.x0; x < WIN.x1; x++) {
+    const i = y * W + x;
+    if (!openMask[i] && !barMask[i]) fb[i] = fb[i] * 0.93 + 10 + (Math.sin((x + y * 1.4) * 0.11) > 0.93 ? 3 : 0);
+    else if (openMask[i]) fb[i] *= 0.82;
+  }
+  drawCurtains(time, v.wind || 0, v.gust || 0);
 
   // moonlight through the window onto the bed
   const lightAt = (u, vv) => {
     if (u < 0 || u >= 1 || vv < 0 || vv >= 1) return 0;
     const i = ((WIN.y0 + vv * WH) | 0) * W + ((WIN.x0 + u * WW) | 0);
-    return barMask[i] || treeMask[i] ? 0 : 1;
+    return barMask[i] || treeMask[i] ? 0 : leafT[i] * (curtA[i] ? 0.45 : 1) * (openMask[i] ? 1.15 : 1);
   };
+  poseFeet(time, v.curl || 0, v.footLift || 0);
   for (let y = BED_Y; y < H; y++) {
     const t = (y - BED_Y) / (H - BED_Y), z = 1 - Math.pow(1 - t, 1.8);
     const vv = 0.985 - z * 1.07, s = 1 + z * 1.25, pen = (0.6 + 2.2 * z) / WW;
@@ -420,21 +497,30 @@ function render(v) {
       if (!sh) continue;
       const u = 0.5 + ((x - 150 + 34 * z) / s) / WW;
       const L = (lightAt(u - pen, vv) + lightAt(u + pen, vv) + lightAt(u, vv - pen * 1.5) + lightAt(u, vv + pen * 1.5)) * 0.25;
-      const lit = L * moonVis + dawn * 0.5;
+      let lit = L * moonVis + dawn * 0.5;
+      if (y > ANKLE_Y - 4 && lit > 0.01) {                    // the feet throw their shadow toward you, toes last
+        const q = y - (ANKLE_Y - 4);
+        let sh2 = 0;
+        for (const f of FEET) {
+          const fx = f.cx + (x - f.cx + 0.55 * q) / (1 + 0.012 * q), fy = ANKLE_Y - 4 - q / 1.02;
+          if (Math.abs(fx - f.cx) < 24) sh2 += (inFoot(f, fx - 0.5, fy) ? 0.5 : 0) + (inFoot(f, fx + 0.5, fy) ? 0.5 : 0);
+        }
+        lit *= 1 - 0.85 * Math.min(1, sh2);
+      }
       fb[i] = blanket ? (8 + lit * 88) * sh : (12 + lit * 128) * (0.9 + 0.1 * sh);
       if (y === BLANKET_Y) fb[i] += 5 + lit * 30;
     }
   }
 
-  // feet, lit from behind
-  const lift = v.footLift || 0, curl = v.curl || 0;
+  // feet, lit from behind: light catches the top of every toe and both of its sides
   for (const f of FEET) {
-    for (let y = 118; y < BLANKET_Y + 1; y++) for (let x = f.cx - 17; x <= f.cx + 17; x++) {
-      if (!inFoot(f, x, y, curl, lift)) continue;
+    for (let y = 112; y < BLANKET_Y + 1; y++) for (let x = f.cx - 24; x <= f.cx + 24; x++) {
+      if (!inFoot(f, x, y)) continue;
       let val = 19 + dawn * 60;
-      if (!inFoot(f, x, y - 1, curl, lift)) val = 20 + 150 * moonVis + dawn * 60;
-      else if (!inFoot(f, x, y - 2, curl, lift)) val = 20 + 55 * moonVis + dawn * 60;
-      if (!inFoot(f, x + 1, y, curl, lift)) val += 30 * moonVis;
+      if (!inFoot(f, x, y - 1)) val = 20 + 150 * moonVis + dawn * 60;
+      else if (!inFoot(f, x, y - 2)) val = 20 + 55 * moonVis + dawn * 60;
+      if (!inFoot(f, x + 1, y)) val += 34 * moonVis;
+      if (y < 137 && !inFoot(f, x - 1, y)) val += 24 * moonVis;
       fb[y * W + x] = val;
     }
   }
@@ -511,6 +597,12 @@ function sfxTap() {
     burst(w, 0.035, 1500, 9, 0.9); thump(w, 0.25, 260);
   }
 }
+function sfxTwig(g) {          // a twig touching the glass, much lighter than a knock
+  if (!A.ctx) return;
+  const t = A.ctx.currentTime + 0.01, k = (0.5 + 0.5 * Math.random()) * (0.35 + 0.65 * g);
+  const f = burst(t, 0.022, 2400 + Math.random() * 1400, 14, 0.5 * k);
+  thump(t, 0.05 * k, 330);
+}
 function sfxSting(v) { if (!A.ctx) return; const t = A.ctx.currentTime + 0.01; burst(t, 0.5, 700, 0.7, v * 0.5, 'lowpass'); thump(t, v * 0.7); }
 function sfxDeath() {
   if (!A.ctx) return;
@@ -565,6 +657,7 @@ const G = {
   lid: 0, held: false, needRelease: false, wasClosed: false,
   depth: 0,            // how deeply asleep
   surgeT: 8, surge: 0,
+  wind: 0, gust: 0, tapT: 0, jolt: 0,
   curl: 0, t: 0, closes: 0, tune: false, tuneTab: 'calm', tuneBlend: null
 };
 function newNight() {
@@ -580,7 +673,16 @@ function clockString(h) {
 }
 function update(dt) {
   G.time += dt;
+  // wind: a slow breeze with gusts that push the twigs against the glass
+  const wn = fbm(G.time * 0.22, 3.1);
+  G.gust = smooth(0.5, 0.78, wn);
+  G.jolt = Math.max(0, G.jolt - dt * 6);
+  G.wind = ((wn - 0.5) * 0.8 + G.gust) * (1 - 0.3 * G.jolt);
   if (G.tune) return;
+  if (G.gust > 0.25 && (G.state === 'play' || G.state === 'win')) {
+    G.tapT -= dt;
+    if (G.tapT <= 0) { G.tapT = 0.16 + Math.random() * (1.1 - 0.7 * G.gust); G.jolt = 1; sfxTwig(G.gust); }
+  }
   G.t += dt;
   G.curl = Math.max(0, G.curl - dt * 0.8);
   const s = G.state;
@@ -632,7 +734,7 @@ function update(dt) {
 function draw() {
   if (G.tune) {
     const v = G.tuneBlend !== null ? G.tuneBlend : (G.tuneTab === 'calm' ? 0 : 1);
-    render({ p: blendParams(v), time: G.time });
+    render({ p: blendParams(v), time: G.time, wind: G.wind, gust: G.gust });
     return;
   }
   const s = G.state;
@@ -644,7 +746,7 @@ function draw() {
     return;
   }
   const dawn = s === 'win' || s === 'waking' ? 1 : clamp((G.hour - 5) * 0.3, 0, 0.3);
-  const view = { p: blendParams(s === 'title' || s === 'win' || s === 'waking' ? 0 : visualCreep()), time: G.time, dawn, lid: G.lid, curl: G.curl };
+  const view = { p: blendParams(s === 'title' || s === 'win' || s === 'waking' ? 0 : visualCreep()), time: G.time, dawn, lid: G.lid, curl: G.curl, wind: G.wind, gust: G.gust };
   if (s === 'title') view.dark = 0.5;
   if (s === 'reveal') {
     view.p = blendParams(1); view.inside = true; view.curl = 1;
