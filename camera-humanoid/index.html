@@ -89,9 +89,12 @@ body.bare #panel { display: none; }
       <label class="check" style="margin-top:0"><input type="checkbox" id="lv_on" checked> Mount my face on the figure</label>
       <label class="check"><input type="checkbox" id="lv_mirror" checked> Mirror (like a mirror, not a camera)</label>
       <label class="check"><input type="checkbox" id="lv_follow" checked> Head follows mine</label>
+      <label class="check"><input type="checkbox" id="lv_body" checked> Arms and body follow mine (pose tracking)</label>
+      <label class="check"><input type="checkbox" id="lv_legs"> Legs follow too, when the camera sees them</label>
       <label class="check"><input type="checkbox" id="lv_tex"> Show the face texture</label>
       <div class="field"><label for="lv_frame">Framing</label><select id="lv_frame"><option value="head">Head</option><option value="bust" selected>Head and shoulders</option><option value="full">Full body</option></select></div>
       <div class="field"><label for="lv_motion"><span>Head motion</span><output></output></label><input id="lv_motion" type="range" min="0" max="1.5" step="0.01" value="1"></div>
+      <div class="field"><label for="lv_turn"><span>Body turn</span><output></output></label><input id="lv_turn" type="range" min="0" max="1.5" step="0.01" value="1"></div>
       <div class="field"><label for="lv_smooth"><span>Smoothing</span><output></output></label><input id="lv_smooth" type="range" min="0" max="0.95" step="0.01" value="0.5"></div>
       <div class="field"><label for="lv_size"><span>Face size</span><output></output></label><input id="lv_size" type="range" min="0.7" max="1.4" step="0.01" value="1"></div>
       <div class="field"><label for="lv_lift"><span>Face height</span><output></output></label><input id="lv_lift" type="range" min="-0.3" max="0.3" step="0.01" value="0"></div>
@@ -520,7 +523,7 @@ const L_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160
 const R_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
 const LIP_INNER = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191];
 const LIVE_KEY = "camera-humanoid.live.v1";
-const LIVE_IDS = ["on", "mirror", "follow", "tex", "frame", "motion", "smooth", "size", "lift", "stretch", "bright", "relief"];
+const LIVE_IDS = ["on", "mirror", "follow", "body", "legs", "tex", "frame", "motion", "turn", "smooth", "size", "lift", "stretch", "bright", "relief"];
 const LIVE = {};
 let maskInfo = null, faceRT = null, headPivot = null, headBaseQ = null, liveQ = null, rawQ = null, neutralInv = null;
 let landmarker = null, video = null, faceScene, faceCam, faceGeo, insetScene, insetCam, skinColor = null;
@@ -581,6 +584,7 @@ async function startLive() {
     setupFaceRender();
     status.textContent = "Looking for a face…";
     requestAnimationFrame(liveLoop);
+    loadPose(resolver).catch(e => { console.error(e); status.textContent = "Pose tracking failed: " + (e && e.message ? e.message : e); });
   } catch (e) {
     console.error(e);
     status.textContent = "Camera or face tracking failed: " + (e && e.message ? e.message : e);
@@ -678,9 +682,16 @@ function updateFace(lm) {
   const target = new THREE.Quaternion().multiplyQuaternions(rawQ, neutralInv);
   target.slerp(new THREE.Quaternion(), 1 - LIVE.motion);   // motion < 1 damps, > 1 exaggerates
   liveQ.slerp(target, liveFrames ? 1 - LIVE.smooth : 1);
-  if (headPivot && LIVE.follow) headPivot.quaternion.copy(headBaseQ).multiply(liveQ);
+  applyHead();
   if (liveFrames % 15 === 0) sampleSkin(lm);
   liveFrames++;
+}
+
+// The face gives the head's rotation as the camera sees it; the figure's body may already be turned
+function applyHead() {
+  if (!headPivot || !LIVE.follow) return;
+  const unturn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -bodyYaw);
+  headPivot.quaternion.copy(headBaseQ).multiply(unturn).multiply(liveQ);
 }
 
 function liveLoop() {
@@ -693,7 +704,22 @@ function liveLoop() {
   try { res = landmarker.detectForVideo(video, performance.now()); } catch (e) { return; }
   const lm = res && res.faceLandmarks && res.faceLandmarks[0];
   if (lm) updateFace(lm);
-  status.textContent = lm ? "Face tracked" : "No face in view";
+  // Pose: from the tracker, or from a test hook (__hm.poseOverride = { world, vis })
+  let pw = null, pv = null;
+  if ((LIVE.body || LIVE.legs) && (poseLandmarker || window.__hm?.poseOverride)) {
+    const o = window.__hm?.poseOverride;
+    if (o) { pw = o.world; pv = o.vis; }
+    else {
+      try {
+        const r = poseLandmarker.detectForVideo(video, performance.now());
+        if (r.worldLandmarks && r.worldLandmarks[0]) { pw = r.worldLandmarks[0]; pv = r.landmarks[0].map(p => p.visibility); }
+      } catch (e) {}
+    }
+  }
+  driveBody(pw, pv || []);   // also eases untracked or switched-off limbs back to rest
+  if (!lm) applyHead();
+  poseSeen = !!pw;
+  status.textContent = (lm ? "Face tracked" : "No face in view") + ((LIVE.body || LIVE.legs) ? (poseLandmarker ? (pw ? " · pose tracked" : " · no pose") : " · loading pose…") : "");
   renderFaceTexture();
   frame();
 }
@@ -707,6 +733,80 @@ function drawInset() {
   renderer.render(insetScene, insetCam);
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, el.clientWidth, el.clientHeight);
+}
+
+// ───────────────────────── live pose ─────────────────────────
+// MediaPipe's pose landmarker gives 33 body points in metres around the hips (x to the image right, y down,
+// z away from the camera). Mapped into the figure's space (x to its left, y up, z towards the viewer; x negated
+// in mirror view, where the person's left arm drives the figure's right one), each limb's two segment
+// directions become joint rotations: the shoulder (or hip) turns the straight-down upper segment onto the
+// upper arm (thigh), and the elbow (knee) turns the lower segment onto the forearm (shin) in the shoulder's
+// own frame. The right-side limbs are built mirrored (scale.x = −1), so their child directions are reflected.
+// Shoulder line yaw turns the whole figure. Untracked limbs ease back to their rest pose.
+const POSE_SIDES = { L: { sh: 11, el: 13, wr: 15, hip: 23, kn: 25, an: 27 }, R: { sh: 12, el: 14, wr: 16, hip: 24, kn: 26, an: 28 } };
+let poseLandmarker = null, rig = null, bodyDirs = null, bodyYaw = 0, poseSeen = false;
+
+async function loadPose(resolver) {
+  const { PoseLandmarker } = await import(MP + "/vision_bundle.mjs");
+  const opts = delegate => ({
+    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task", delegate },
+    runningMode: "VIDEO", numPoses: 1,
+  });
+  try { poseLandmarker = await PoseLandmarker.createFromOptions(resolver, opts("GPU")); }
+  catch { poseLandmarker = await PoseLandmarker.createFromOptions(resolver, opts("CPU")); }
+}
+
+const DOWN = () => new THREE.Vector3(0, -1, 0);
+// Reflect a rotation through the x = 0 plane (for joints inside a mirrored limb)
+const reflectQ = q => new THREE.Quaternion(q.x, -q.y, -q.z, q.w);
+
+function relax(o, k) { if (o.userData.q0) o.quaternion.slerp(o.userData.q0, k); }
+
+function driveBody(world, vis) {
+  if (!rig) return;
+  const k = 1 - LIVE.smooth * .9;
+  const sx = LIVE.mirror ? -1 : 1;
+  const ok = i => world && (vis[i] ?? 1) > .5;
+  const m = i => new THREE.Vector3(sx * world[i].x, -world[i].y, -world[i].z);
+  const sides = LIVE.mirror ? [POSE_SIDES.R, POSE_SIDES.L] : [POSE_SIDES.L, POSE_SIDES.R];
+  if (!bodyDirs) bodyDirs = { arms: [null, null], legs: [null, null] };
+
+  // Body turn from the shoulder line
+  let yaw = 0;
+  if (LIVE.body && ok(11) && ok(12)) {
+    const s = m(sides[0].sh).sub(m(sides[1].sh));
+    yaw = clamp(Math.atan2(-s.z, s.x), -1.1, 1.1) * LIVE.turn;
+  }
+  bodyYaw += (yaw - bodyYaw) * k;
+  rig.root.rotation.y = bodyYaw;
+  const inv = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -bodyYaw);
+
+  const limb = (g, child, j, a, b, c, use, store) => {
+    if (!use || !ok(a) || !ok(b)) {
+      store[j] = null;
+      relax(g, k); relax(child, k);
+      return null;
+    }
+    const d1 = m(b).sub(m(a)).normalize().applyQuaternion(inv);
+    const d2 = ok(c) ? m(c).sub(m(b)).normalize().applyQuaternion(inv) : d1.clone();
+    const st = store[j] || (store[j] = { d1: d1.clone(), d2: d2.clone() });
+    st.d1.lerp(d1, k).normalize(); st.d2.lerp(d2, k).normalize();
+    const q1 = new THREE.Quaternion().setFromUnitVectors(DOWN(), st.d1);
+    g.quaternion.copy(q1);
+    const l2 = st.d2.clone().applyQuaternion(q1.clone().invert());
+    if (j === 1) l2.x = -l2.x;   // the right limb's children live in a mirrored frame
+    child.quaternion.setFromUnitVectors(DOWN(), l2);
+    return q1;
+  };
+  rig.arms.forEach((g, j) => limb(g, g.userData.elbow, j, sides[j].sh, sides[j].el, sides[j].wr, LIVE.body, bodyDirs.arms));
+  rig.legs.forEach((g, j) => {
+    const q1 = limb(g, g.userData.knee, j, sides[j].hip, sides[j].kn, sides[j].an, LIVE.legs, bodyDirs.legs);
+    const a = g.userData.ankle;
+    if (!q1) { relax(a, k); return; }
+    // Keep the foot level: undo the hip and knee rotations at the ankle
+    const q2inv = g.userData.knee.quaternion.clone().invert(), q1inv = q1.clone().invert();
+    a.quaternion.copy(q2inv.multiply(j === 1 ? reflectQ(q1inv) : q1inv));
+  });
 }
 
 // ───────────────────────── three.js ─────────────────────────
@@ -1242,6 +1342,7 @@ function buildFigure() {
     const a = new THREE.Group(); a.position.y = -shinLen; a.rotation.z = -legA; k.add(a);
     a.add(joint(P.jointStyle === 1 ? 1 : 2, ankleR * 1.25));
     a.add(buildFoot(D, ankleY, mat("foot")));
+    g.userData.knee = k; g.userData.ankle = a;
     return g;
   };
   const legL = leg(), legR = leg(); legR.scale.x = -1; legR.position.x = -hx; legR.rotation.z = -legA; root.add(legL, legR);
@@ -1268,6 +1369,7 @@ function buildFigure() {
     const h = new THREE.Group(); h.position.y = -foLen - (flare > .35 ? -.012 : .004); h.rotation.y = -Math.PI / 2 + .25; e.add(h);
     h.add(at(disc(wrR * .9, .014, MAT.frame, "y", 16), 0, 0, 0));
     h.add(at(buildHand(P.handSize * lerp(1.06, .92, s), mat("hand") === MAT.sec ? MAT.sec : (P.handType === 1 ? MAT.dark : MAT.shell)), 0, -.006, 0));
+    g.userData.elbow = e;
     return g;
   };
   const armL = arm(), armR = arm(); armR.scale.x = -1; armR.position.x = -shoulderHalf; armR.rotation.z = -armL.rotation.z; root.add(armL, armR);
@@ -1298,6 +1400,10 @@ function buildFigure() {
   const pivot = new THREE.Group(); pivot.position.set(0, chestTop + neckLen, nz); pivot.rotation.y = P.headTurn * .7; root.add(pivot);
   headPivot = pivot; headBaseQ = pivot.quaternion.clone();
   if (LIVE.on && LIVE.follow) pivot.quaternion.copy(headBaseQ).multiply(liveQ);
+  // Joints the pose tracker drives, each with its rest rotation to return to
+  rig = { root, arms: [armL, armR], legs: [legL, legR] };
+  for (const o of [armL, armR, armL.userData.elbow, armR.userData.elbow, legL, legR, legL.userData.knee, legR.userData.knee, legL.userData.ankle, legR.userData.ankle]) o.userData.q0 = o.quaternion.clone();
+  bodyDirs = null;
   head.g.position.set(0, head.hh * .86, head.hd * .16); pivot.add(head.g);
 
   const height = chestTop + neckLen + head.hh * 1.86 + (P.headwear === 3 ? .03 : 0);
@@ -1416,6 +1522,7 @@ async function init() {
     if (Q.has("sheet")) sheet();
     else startLive();
     window.__hm = {
+      poseOverride: null,
       get P() { return P; }, set(o) { Object.assign(P, o); presetName = ""; syncUI(); changed(); frame(); }, preset(n) { P = HM.preset(n); presetName = n; refit = true; syncUI(); changed(); frame(); },
       roll, frame, resize, renderer: () => renderer, camera: () => camera, controls: () => controls, scene: () => scene, fit: () => fit(lastH), savePNG,
       stats: () => ({ meshes: geos.length, tris: renderer.info.render.triangles, height: lastH }),
