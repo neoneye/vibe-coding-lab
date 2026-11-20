@@ -109,9 +109,15 @@ body.bare #panel { display: none; }
       <div class="field"><label for="lv_relief"><span>Sculpted relief</span><output></output></label><input id="lv_relief" type="range" min="0" max="1" step="0.01" value="0.35"></div>
       <div class="sub">Face <span id="faceCount" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
       <div class="faces" id="faces"></div>
-      <div class="grid2" style="margin-top:8px"><button class="sm" id="capture" title="Save the face as it looks right now">Capture face</button></div>
+      <div class="grid2" style="margin-top:8px">
+        <button class="sm" id="capture" title="Save the face as it looks right now">Capture face</button>
+        <button class="sm" id="faceSaveOne" title="Download the selected face as a JPEG image">Save this face</button>
+        <button class="sm" id="facesSave" title="Download every saved face as one .json file">Save all faces</button>
+        <button class="sm" id="facesLoad" title="Add faces from a .json file saved here, or from JPEG/PNG face images">Load faces</button>
+      </div>
+      <input type="file" id="facesFile" accept=".json,application/json,image/jpeg,image/png,image/webp" multiple hidden>
       <div class="grid2" style="margin-top:6px"><button class="sm" id="lv_center" title="Treat the way you hold your head right now as looking straight ahead">Set my neutral pose</button></div>
-      <p class="hint">Capture face saves the face as it looks now; pick a saved face to wear it while your head and body still move, or Live for the camera. Saved faces and these settings stay in this browser; the figure link in the address bar holds the body.</p>
+      <p class="hint">Capture face saves the face as it looks now; pick a saved face to wear it while your head and body still move, or Live for the camera. Saved faces and these settings stay in this browser; Save all faces and Load faces move them through files. The figure link in the address bar holds the body.</p>
     </div>
   </div>
 
@@ -647,7 +653,7 @@ function renderFaceTexture() {
 // ── captured faces ──
 // A capture is the current face texture as a 512² JPEG data URL, kept in localStorage (newest first, at most
 // FACE_MAX). Selecting one shows it on the figure instead of the camera; head and body still follow.
-const FACES_KEY = "camera-humanoid.faces.v1", FACE_SEL_KEY = "camera-humanoid.faceSel.v1", FACE_MAX = 16;
+const FACES_KEY = "camera-humanoid.faces.v1", FACE_SEL_KEY = "camera-humanoid.faceSel.v1", FACE_MAX = 40;
 let faces = [], faceSel = "live";
 function loadFaces() {
   try { faces = JSON.parse(localStorage.getItem(FACES_KEY) || "[]").filter(f => f && f.id && /^data:image\//.test(f.url)); } catch { faces = []; }
@@ -701,6 +707,66 @@ function deleteFace(id) {
   faces = faces.filter(f => f.id !== id);
   if (faceSel === id) selectFace("live"); else { saveFaces(); renderFaces(); }
 }
+// ── faces as files ──
+// Save all: one JSON file { app, version, faces: [{ id, url, t }] }. Save this face: the JPEG itself.
+// Load: JSON files from Save all (merged, duplicates skipped) and plain images, centre-cropped to a 512² square.
+const FACE_URL = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+function stamp() { const d = new Date(), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; }
+function download(blob, name) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function saveAllFaces() {
+  if (!faces.length) { flash($("facesSave"), "No faces yet"); return; }
+  const json = JSON.stringify({ app: "camera-humanoid", version: 1, faces }, null, 1);
+  download(new Blob([json], { type: "application/json" }), `camera-humanoid-faces-${stamp()}.json`);
+}
+async function saveOneFace() {
+  const f = faces.find(q => q.id === faceSel);
+  if (!f) { flash($("faceSaveOne"), "Pick a face"); return; }
+  download(await (await fetch(f.url)).blob(), `camera-humanoid-face-${f.id}.jpg`);
+}
+function addFace(url, t = Date.now(), id) {
+  if (!FACE_URL.test(url) || url.length > 3e6 || faces.some(f => f.url === url)) return false;
+  id = id && /^[\w-]{1,40}$/.test(id) && !faces.some(f => f.id === id) ? id : "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  faces.push({ id, url, t: Number.isFinite(t) ? t : Date.now() });
+  return true;
+}
+function imageToFace(file) {
+  return new Promise(resolve => {
+    const im = new Image(), src = URL.createObjectURL(file);
+    im.onload = () => {
+      const S = 512, c = document.createElement("canvas"); c.width = c.height = S;
+      const k = Math.min(im.naturalWidth, im.naturalHeight);
+      c.getContext("2d").drawImage(im, (im.naturalWidth - k) / 2, (im.naturalHeight - k) / 2, k, k, 0, 0, S, S);
+      URL.revokeObjectURL(src); resolve(c.toDataURL("image/jpeg", .86));
+    };
+    im.onerror = () => { URL.revokeObjectURL(src); resolve(null); };
+    im.src = src;
+  });
+}
+async function loadFaceFiles(files) {
+  let added = 0, bad = 0;
+  for (const file of files) {
+    try {
+      if (/json$/i.test(file.type) || /\.json$/i.test(file.name)) {
+        const o = JSON.parse(await file.text());
+        const list = Array.isArray(o) ? o : o && Array.isArray(o.faces) ? o.faces : [];
+        if (!list.length) bad++;
+        for (const f of list) if (f && typeof f.url === "string" && addFace(f.url, +f.t, f.id)) added++;
+      } else if (/^image\//.test(file.type) || /\.(jpe?g|png|webp)$/i.test(file.name)) {
+        const url = await imageToFace(file);
+        if (url && addFace(url)) added++; else if (!url) bad++;
+      } else bad++;
+    } catch (e) { console.warn(e); bad++; }
+  }
+  faces.sort((a, b) => b.t - a.t);
+  while (faces.length > FACE_MAX) faces.pop();
+  saveFaces(); renderFaces();
+  flash($("facesLoad"), added ? `Added ${added}` : bad ? "Not a face file" : "Already there");
+  return { added, bad };
+}
+
 function renderFaces() {
   const box = $("faces"); box.innerHTML = "";
   const tile = (id, inner, title) => {
@@ -711,6 +777,8 @@ function renderFaces() {
   tile("live", '<span class="live">● Live</span>', "Show the camera, live");
   for (const f of faces) tile(f.id, `<img src="${f.url}" alt=""><span class="x" title="Delete">×</span>`, "Captured " + new Date(f.t).toLocaleString());
   $("faceCount").textContent = faces.length ? faces.length + " saved" : "none saved yet";
+  $("faceSaveOne").disabled = !faces.some(f => f.id === faceSel);
+  $("facesSave").disabled = !faces.length;
 }
 
 // Skin tone from small patches on both cheeks and the forehead, read from a tiny copy of the frame.
@@ -1579,6 +1647,10 @@ async function init() {
   if (Q.has("bare")) document.body.classList.add("bare");
   setupLiveUI(); loadFaces(); renderFaces(); buildUI(); syncUI();
   $("capture").onclick = () => { if (captureFace()) flash($("capture"), "Captured"); };
+  $("faceSaveOne").onclick = saveOneFace;
+  $("facesSave").onclick = saveAllFaces;
+  $("facesLoad").onclick = () => $("facesFile").click();
+  $("facesFile").onchange = async e => { const fl = [...e.target.files]; e.target.value = ""; if (fl.length) await loadFaceFiles(fl); };
   try {
     THREE = await import("three");
     const { OrbitControls } = await import("three/addons/controls/OrbitControls.js");
