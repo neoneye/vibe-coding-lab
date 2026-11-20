@@ -36,7 +36,13 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
 #cam video.mirror { transform: scaleX(-1); }
 #cam div { padding: 5px 8px; }
 #cam.off video { display: none; }
-.live-row { display: flex; gap: 6px; align-items: center; }
+.faces { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 6px; }
+.face { position: relative; aspect-ratio: 1; padding: 0; border: 2px solid var(--line); border-radius: 8px; overflow: hidden; background: #171a1f; cursor: pointer; color: var(--soft); }
+.face img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.face.on { border-color: var(--hot); }
+.face .live { font-size: 11px; font-weight: 700; color: var(--hot2); }
+.face .x { position: absolute; top: 1px; right: 3px; font-size: 14px; line-height: 1; color: #fff; text-shadow: 0 0 3px #000; opacity: 0; }
+.face:hover .x, .face:focus-visible .x, .face.on .x { opacity: 1; }
 #err { position: absolute; left: 18px; top: 18px; right: 18px; padding: 12px 14px; border-radius: 10px; background: #5a1e2c; color: #fff; }
 h1 { margin: 2px 0 4px; font-size: 22px; letter-spacing: -.03em; }
 .lead { margin: 0 0 12px; color: var(--soft); line-height: 1.45; font-size: 12px; }
@@ -101,8 +107,11 @@ body.bare #panel { display: none; }
       <div class="field"><label for="lv_stretch"><span>Fit mouth to the mask</span><output></output></label><input id="lv_stretch" type="range" min="0" max="1" step="0.01" value="0.7"></div>
       <div class="field"><label for="lv_bright"><span>Face brightness</span><output></output></label><input id="lv_bright" type="range" min="0.5" max="2" step="0.01" value="1.15"></div>
       <div class="field"><label for="lv_relief"><span>Sculpted relief</span><output></output></label><input id="lv_relief" type="range" min="0" max="1" step="0.01" value="0.35"></div>
-      <div class="grid2" style="margin-top:10px"><button class="sm" id="lv_center" title="Treat the way you hold your head right now as looking straight ahead">Set my neutral pose</button></div>
-      <p class="hint">The figure link in the address bar holds the body; these live-face settings are remembered in this browser.</p>
+      <div class="sub">Face <span id="faceCount" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
+      <div class="faces" id="faces"></div>
+      <div class="grid2" style="margin-top:8px"><button class="sm" id="capture" title="Save the face as it looks right now">Capture face</button></div>
+      <div class="grid2" style="margin-top:6px"><button class="sm" id="lv_center" title="Treat the way you hold your head right now as looking straight ahead">Set my neutral pose</button></div>
+      <p class="hint">Capture face saves the face as it looks now; pick a saved face to wear it while your head and body still move, or Live for the camera. Saved faces and these settings stay in this browser; the figure link in the address bar holds the body.</p>
     </div>
   </div>
 
@@ -591,9 +600,23 @@ async function startLive() {
   }
 }
 
-function setupFaceRender() {
+// The face render target exists from the start, so captured faces can be shown without a camera.
+let frozenScene = null, frozenMat = null, frozenTex = null, captureRT = null;
+function initFaceTarget() {
   faceRT = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType });
   faceRT.texture.anisotropy = 8;
+  faceCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
+  // Inset that shows the texture itself, drawn into a corner of the main canvas (and used for captures)
+  insetScene = new THREE.Scene();
+  insetScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: faceRT.texture, toneMapped: false })));
+  insetCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
+  // A captured face, shown instead of the live one
+  frozenMat = new THREE.MeshBasicMaterial({ toneMapped: false });
+  frozenScene = new THREE.Scene(); frozenScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), frozenMat));
+  renderFaceTexture();
+}
+
+function setupFaceRender() {
   const videoTex = new THREE.VideoTexture(video); videoTex.colorSpace = THREE.SRGBColorSpace;
   const N = 478;
   faceGeo = new THREE.BufferGeometry();
@@ -606,11 +629,6 @@ function setupFaceRender() {
   const mesh = new THREE.Mesh(faceGeo, new THREE.MeshBasicMaterial({ map: videoTex, vertexColors: true, transparent: true, side: THREE.DoubleSide, depthTest: false, depthWrite: false, toneMapped: false }));
   mesh.frustumCulled = false;
   faceScene = new THREE.Scene(); faceScene.add(mesh);
-  faceCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
-  // Inset that shows the texture itself, drawn into a corner of the main canvas
-  insetScene = new THREE.Scene();
-  insetScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: faceRT.texture, toneMapped: false })));
-  insetCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
   renderFaceTexture();
   dirty = true; schedule();
 }
@@ -620,9 +638,79 @@ function renderFaceTexture() {
   renderer.setRenderTarget(faceRT);
   renderer.setClearColor(skinColor, 1);
   renderer.clear();
-  if (liveFrames > 0) renderer.render(faceScene, faceCam);
+  if (frozenTex) renderer.render(frozenScene, faceCam);
+  else if (faceScene && liveFrames > 0) renderer.render(faceScene, faceCam);
   renderer.setRenderTarget(null);
   renderer.setClearColor(keepC, keepA);
+}
+
+// ── captured faces ──
+// A capture is the current face texture as a 512² JPEG data URL, kept in localStorage (newest first, at most
+// FACE_MAX). Selecting one shows it on the figure instead of the camera; head and body still follow.
+const FACES_KEY = "camera-humanoid.faces.v1", FACE_SEL_KEY = "camera-humanoid.faceSel.v1", FACE_MAX = 16;
+let faces = [], faceSel = "live";
+function loadFaces() {
+  try { faces = JSON.parse(localStorage.getItem(FACES_KEY) || "[]").filter(f => f && f.id && /^data:image\//.test(f.url)); } catch { faces = []; }
+  try { faceSel = localStorage.getItem(FACE_SEL_KEY) || "live"; } catch {}
+  if (faceSel !== "live" && !faces.some(f => f.id === faceSel)) faceSel = "live";
+}
+function saveFaces() {
+  // If storage is full, drop the oldest captures until it fits
+  for (;;) {
+    try { localStorage.setItem(FACES_KEY, JSON.stringify(faces)); break; }
+    catch { if (faces.length <= 1) break; faces.pop(); }
+  }
+  try { localStorage.setItem(FACE_SEL_KEY, faceSel); } catch {}
+}
+function captureFace() {
+  if (!faceRT) return null;
+  const S = 512;
+  if (!captureRT) { captureRT = new THREE.WebGLRenderTarget(S, S); captureRT.texture.colorSpace = THREE.SRGBColorSpace; }
+  renderer.setRenderTarget(captureRT);
+  renderer.render(insetScene, insetCam);
+  const px = new Uint8Array(S * S * 4);
+  renderer.readRenderTargetPixels(captureRT, 0, 0, S, S, px);
+  renderer.setRenderTarget(null);
+  const c = document.createElement("canvas"); c.width = c.height = S;
+  const x = c.getContext("2d"), img = x.createImageData(S, S);
+  for (let y = 0; y < S; y++) img.data.set(px.subarray((S - 1 - y) * S * 4, (S - y) * S * 4), y * S * 4);   // GL rows run bottom-up
+  x.putImageData(img, 0, 0);
+  const f = { id: "f" + Date.now().toString(36), url: c.toDataURL("image/jpeg", .86), t: Date.now() };
+  faces.unshift(f);
+  while (faces.length > FACE_MAX) faces.pop();
+  saveFaces(); renderFaces();
+  return f;
+}
+function selectFace(id) {
+  faceSel = id;
+  if (frozenTex) { frozenTex.dispose(); frozenTex = null; }
+  const f = faces.find(q => q.id === id);
+  if (f) {
+    const im = new Image();
+    im.onload = () => {
+      if (faceSel !== id) return;
+      frozenTex = new THREE.Texture(im); frozenTex.colorSpace = THREE.SRGBColorSpace; frozenTex.needsUpdate = true;
+      frozenMat.map = frozenTex; frozenMat.needsUpdate = true;
+      renderFaceTexture(); schedule();
+    };
+    im.src = f.url;
+  } else faceSel = "live";
+  saveFaces(); renderFaces(); renderFaceTexture(); schedule();
+}
+function deleteFace(id) {
+  faces = faces.filter(f => f.id !== id);
+  if (faceSel === id) selectFace("live"); else { saveFaces(); renderFaces(); }
+}
+function renderFaces() {
+  const box = $("faces"); box.innerHTML = "";
+  const tile = (id, inner, title) => {
+    const b = document.createElement("button"); b.className = "face" + (faceSel === id ? " on" : ""); b.title = title; b.innerHTML = inner;
+    b.onclick = e => { if (e.target.classList.contains("x")) { deleteFace(id); return; } selectFace(id); };
+    box.appendChild(b);
+  };
+  tile("live", '<span class="live">● Live</span>', "Show the camera, live");
+  for (const f of faces) tile(f.id, `<img src="${f.url}" alt=""><span class="x" title="Delete">×</span>`, "Captured " + new Date(f.t).toLocaleString());
+  $("faceCount").textContent = faces.length ? faces.length + " saved" : "none saved yet";
 }
 
 // Skin tone from small patches on both cheeks and the forehead, read from a tiny copy of the frame.
@@ -719,7 +807,7 @@ function liveLoop() {
   driveBody(pw, pv || []);   // also eases untracked or switched-off limbs back to rest
   if (!lm) applyHead();
   poseSeen = !!pw;
-  status.textContent = (lm ? "Face tracked" : "No face in view") + ((LIVE.body || LIVE.legs) ? (poseLandmarker ? (pw ? " · pose tracked" : " · no pose") : " · loading pose…") : "");
+  status.textContent = (frozenTex ? "Captured face · " : "") + (lm ? "Face tracked" : "No face in view") + ((LIVE.body || LIVE.legs) ? (poseLandmarker ? (pw ? " · pose tracked" : " · no pose") : " · loading pose…") : "");
   renderFaceTexture();
   frame();
 }
@@ -1489,7 +1577,8 @@ function sheet() {
 }
 async function init() {
   if (Q.has("bare")) document.body.classList.add("bare");
-  setupLiveUI(); buildUI(); syncUI();
+  setupLiveUI(); loadFaces(); renderFaces(); buildUI(); syncUI();
+  $("capture").onclick = () => { if (captureFace()) flash($("capture"), "Captured"); };
   try {
     THREE = await import("three");
     const { OrbitControls } = await import("three/addons/controls/OrbitControls.js");
@@ -1517,6 +1606,7 @@ async function init() {
     makeMaterials();
     liveQ = new THREE.Quaternion(); rawQ = new THREE.Quaternion(); neutralInv = new THREE.Quaternion();
     { const c = skinRGB(P.skin); skinColor = new THREE.Color().setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.SRGBColorSpace); }
+    initFaceTarget(); selectFace(faceSel);
     new ResizeObserver(resize).observe($("stage"));
     resize(); changed(); frame();
     if (Q.has("sheet")) sheet();
