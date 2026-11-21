@@ -113,11 +113,12 @@ body.bare #panel { display: none; }
         <button class="sm" id="capture" title="Save the face as it looks right now">Capture face</button>
         <button class="sm" id="faceSaveOne" title="Download the selected face as a JPEG image">Save this face</button>
         <button class="sm" id="facesSave" title="Download every saved face as one .json file">Save all faces</button>
-        <button class="sm" id="facesLoad" title="Add faces from a .json file saved here, or from JPEG/PNG face images">Load faces</button>
+        <button class="sm" id="facesZip" title="Download every saved face as JPEG images in one .zip file">Download zip</button>
+        <button class="sm" id="facesLoad" title="Add faces from a .json or .zip file saved here, or from JPEG/PNG face images">Load faces</button>
+        <button class="sm" id="lv_center" title="Treat the way you hold your head right now as looking straight ahead">Set my neutral pose</button>
       </div>
-      <input type="file" id="facesFile" accept=".json,application/json,image/jpeg,image/png,image/webp" multiple hidden>
-      <div class="grid2" style="margin-top:6px"><button class="sm" id="lv_center" title="Treat the way you hold your head right now as looking straight ahead">Set my neutral pose</button></div>
-      <p class="hint">Capture face saves the face as it looks now; pick a saved face to wear it while your head and body still move, or Live for the camera. Saved faces and these settings stay in this browser; Save all faces and Load faces move them through files. The figure link in the address bar holds the body.</p>
+      <input type="file" id="facesFile" accept=".json,application/json,.zip,application/zip,image/jpeg,image/png,image/webp" multiple hidden>
+      <p class="hint">Capture face saves the face as it looks now; pick a saved face to wear it while your head and body still move, or Live for the camera. Saved faces and these settings stay in this browser; Save all faces, Download zip (the images themselves) and Load faces move them through files. The figure link in the address bar holds the body.</p>
     </div>
   </div>
 
@@ -366,6 +367,60 @@ const HM = (() => {
   return { GROUPS, ALL_GROUPS, PARAMS, INDEX, PRESETS, LINK_PRESETS, defaults, preset, randomize, encode, decode, mulberry, clampP };
 })();
 
+// A small zip archive writer and reader. make() stores files uncompressed (JPEGs do not shrink);
+// list() reads the central directory of any single-disk, non-zip64 archive and returns the entries with
+// their raw bytes and method (0 stored, 8 deflate), leaving inflation to the caller.
+const ZIP = (() => {
+  const T = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; T[n] = c >>> 0; }
+  const crc32 = u8 => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = T[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  const utf8 = s => { s = unescape(encodeURIComponent(s)); const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; };
+  const text = b => { let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); try { return decodeURIComponent(escape(s)); } catch { return s; } };
+  // files: [{ name, data: Uint8Array, t: ms since epoch }]  →  Uint8Array
+  function make(files) {
+    const recs = files.map(f => {
+      const d = new Date(Number.isFinite(f.t) ? f.t : Date.now()), y = Math.min(2107, Math.max(1980, d.getFullYear()));
+      return { name: utf8(f.name), data: f.data, crc: crc32(f.data),
+        time: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), date: ((y - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate() };
+    });
+    const size = recs.reduce((s, r) => s + 30 + 46 + 2 * r.name.length + r.data.length, 22);
+    const out = new Uint8Array(size), v = new DataView(out.buffer);
+    let o = 0;
+    const u16 = x => { v.setUint16(o, x, true); o += 2; }, u32 = x => { v.setUint32(o, x >>> 0, true); o += 4; }, put = b => { out.set(b, o); o += b.length; };
+    const common = r => { u16(20); u16(0x0800); u16(0); u16(r.time); u16(r.date); u32(r.crc); u32(r.data.length); u32(r.data.length); u16(r.name.length); u16(0); };
+    for (const r of recs) { r.off = o; u32(0x04034b50); common(r); put(r.name); put(r.data); }
+    const cd = o;
+    for (const r of recs) { u32(0x02014b50); u16(20); common(r); u16(0); u16(0); u16(0); u32(0); u32(r.off); put(r.name); }
+    const cdSize = o - cd;
+    u32(0x06054b50); u16(0); u16(0); u16(recs.length); u16(recs.length); u32(cdSize); u32(cd); u16(0);
+    return out;
+  }
+  // Uint8Array  →  [{ name, method, data (raw, as stored in the archive), size, crc, t }], or null if it is not a zip
+  function list(u8) {
+    const v = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    let e = u8.length - 22;
+    while (e >= 0 && v.getUint32(e, true) !== 0x06054b50) e--;
+    if (e < 0) return null;
+    const n = v.getUint16(e + 10, true), out = [];
+    let p = v.getUint32(e + 16, true);
+    for (let i = 0; i < n; i++) {
+      if (p + 46 > u8.length || v.getUint32(p, true) !== 0x02014b50) return null;
+      const method = v.getUint16(p + 10, true), time = v.getUint16(p + 12, true), date = v.getUint16(p + 14, true);
+      const crc = v.getUint32(p + 16, true), csize = v.getUint32(p + 20, true), size = v.getUint32(p + 24, true);
+      const nl = v.getUint16(p + 28, true), xl = v.getUint16(p + 30, true), cl = v.getUint16(p + 32, true), off = v.getUint32(p + 42, true);
+      const name = text(u8.subarray(p + 46, p + 46 + nl));
+      p += 46 + nl + xl + cl;
+      if (off + 30 > u8.length || v.getUint32(off, true) !== 0x04034b50) return null;
+      const start = off + 30 + v.getUint16(off + 26, true) + v.getUint16(off + 28, true);
+      if (start + csize > u8.length) return null;
+      const t = new Date(1980 + (date >> 9), ((date >> 5) & 15) - 1, date & 31, time >> 11, (time >> 5) & 63, (time & 31) * 2).getTime();
+      out.push({ name, method, data: u8.subarray(start, start + csize), size, crc, t });
+    }
+    return out;
+  }
+  return { crc32, make, list };
+})();
+
 const HMTests = {
   run() {
     let ok = true;
@@ -415,6 +470,17 @@ const HMTests = {
     check("garbage links decode to null", decode("nonsense") === null && decode("") === null && decode("h1.5.A") === null);
     const short = "h1.3." + encode(defaults()).split(".")[2];
     check("links from a shorter parameter list keep defaults for the rest", (() => { const P = decode(short); return P && P.legLen === defaults().legLen; })());
+
+    const bytes = s => Uint8Array.from(s, c => c.charCodeAt(0));
+    check("crc32 matches the standard check value", ZIP.crc32(bytes("123456789")) === 0xCBF43926);
+    const t0 = new Date(2026, 10, 21, 13, 45, 30).getTime();
+    const src = [{ name: "face-a.jpg", data: bytes("first image"), t: t0 }, { name: "ansigt-æø.png", data: new Uint8Array(0), t: t0 }, { name: "face-c.jpg", data: Uint8Array.from({ length: 5000 }, (_, i) => i * 7 & 255), t: t0 }];
+    const z = ZIP.make(src), back = ZIP.list(z);
+    check("a zip lists the files that went in", !!back && back.length === 3 && back.every((e, i) => e.name === src[i].name && e.method === 0 && e.size === src[i].data.length && e.t === t0));
+    check("zip entries hold the same bytes and checksum", !!back && back.every((e, i) => e.data.length === src[i].data.length && e.data.every((b, j) => b === src[i].data[j]) && e.crc === ZIP.crc32(src[i].data)));
+    check("an empty zip is still a zip", (() => { const l = ZIP.list(ZIP.make([])); return !!l && l.length === 0; })());
+    check("non-zip bytes list as null", ZIP.list(bytes("this is not an archive, just some text")) === null && ZIP.list(new Uint8Array(0)) === null);
+    check("a truncated zip lists as null", ZIP.list(z.subarray(40)) === null);
     return ok;
   }
 };
@@ -709,9 +775,11 @@ function deleteFace(id) {
 }
 // ── faces as files ──
 // Save all: one JSON file { app, version, faces: [{ id, url, t }] }. Save this face: the JPEG itself.
-// Load: JSON files from Save all (merged, duplicates skipped) and plain images, centre-cropped to a 512² square.
+// Download zip: every face as an image file, face-<date>-<time>-<id>.jpg, in one archive.
+// Load: JSON files from Save all and zips (merged, duplicates skipped) and plain images, centre-cropped to a
+// 512² square; an image that already is 512² is kept byte for byte, so a zip loads back as the same faces.
 const FACE_URL = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
-function stamp() { const d = new Date(), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; }
+function stamp(t, secs) { const d = t == null ? new Date() : new Date(t), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${secs ? p(d.getSeconds()) : ""}`; }
 function download(blob, name) {
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
@@ -720,6 +788,14 @@ function saveAllFaces() {
   if (!faces.length) { flash($("facesSave"), "No faces yet"); return; }
   const json = JSON.stringify({ app: "camera-humanoid", version: 1, faces }, null, 1);
   download(new Blob([json], { type: "application/json" }), `camera-humanoid-faces-${stamp()}.json`);
+}
+function faceBytes(url) { const b = atob(url.slice(url.indexOf(",") + 1)), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+function saveFacesZip() {
+  if (!faces.length) { flash($("facesZip"), "No faces yet"); return null; }
+  const files = faces.map(f => ({ name: `face-${stamp(f.t, true)}-${f.id}.${/^data:image\/(\w+)/.exec(f.url)[1].replace("jpeg", "jpg")}`, data: faceBytes(f.url), t: f.t }));
+  const zip = ZIP.make(files);
+  download(new Blob([zip], { type: "application/zip" }), `camera-humanoid-faces-${stamp()}.zip`);
+  return zip;
 }
 async function saveOneFace() {
   const f = faces.find(q => q.id === faceSel);
@@ -736,7 +812,13 @@ function imageToFace(file) {
   return new Promise(resolve => {
     const im = new Image(), src = URL.createObjectURL(file);
     im.onload = () => {
-      const S = 512, c = document.createElement("canvas"); c.width = c.height = S;
+      const S = 512;
+      if (im.naturalWidth === S && im.naturalHeight === S && /^image\/(jpeg|png|webp)$/.test(file.type) && file.size < 3e5) {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result); r.onerror = () => resolve(null);
+        URL.revokeObjectURL(src); r.readAsDataURL(file); return;
+      }
+      const c = document.createElement("canvas"); c.width = c.height = S;
       const k = Math.min(im.naturalWidth, im.naturalHeight);
       c.getContext("2d").drawImage(im, (im.naturalWidth - k) / 2, (im.naturalHeight - k) / 2, k, k, 0, 0, S, S);
       URL.revokeObjectURL(src); resolve(c.toDataURL("image/jpeg", .86));
@@ -744,6 +826,10 @@ function imageToFace(file) {
     im.onerror = () => { URL.revokeObjectURL(src); resolve(null); };
     im.src = src;
   });
+}
+async function inflateRaw(u8) {
+  try { return new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer()); }
+  catch (e) { console.warn(e); return null; }
 }
 async function loadFaceFiles(files) {
   let added = 0, bad = 0;
@@ -754,6 +840,19 @@ async function loadFaceFiles(files) {
         const list = Array.isArray(o) ? o : o && Array.isArray(o.faces) ? o.faces : [];
         if (!list.length) bad++;
         for (const f of list) if (f && typeof f.url === "string" && addFace(f.url, +f.t, f.id)) added++;
+      } else if (/zip/i.test(file.type) || /\.zip$/i.test(file.name)) {
+        const list = ZIP.list(new Uint8Array(await file.arrayBuffer())), MIME = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
+        let seen = 0;
+        for (const e of list || []) {
+          const ext = /\.(jpe?g|png|webp)$/i.exec(e.name), base = e.name.split("/").pop();
+          if (!ext || base.startsWith(".") || e.name.startsWith("__MACOSX/")) continue;   // skip Finder's resource forks
+          seen++;
+          const data = e.method === 0 ? e.data : e.method === 8 ? await inflateRaw(e.data) : null;
+          const url = data && await imageToFace(new Blob([data], { type: MIME[ext[1].toLowerCase()] }));
+          if (!url) { bad++; continue; }
+          if (addFace(url, e.t, (/^face-\d{8}-\d{6}-(\w+)\.\w+$/.exec(base) || [])[1])) added++;
+        }
+        if (!seen) bad++;
       } else if (/^image\//.test(file.type) || /\.(jpe?g|png|webp)$/i.test(file.name)) {
         const url = await imageToFace(file);
         if (url && addFace(url)) added++; else if (!url) bad++;
@@ -778,7 +877,7 @@ function renderFaces() {
   for (const f of faces) tile(f.id, `<img src="${f.url}" alt=""><span class="x" title="Delete">×</span>`, "Captured " + new Date(f.t).toLocaleString());
   $("faceCount").textContent = faces.length ? faces.length + " saved" : "none saved yet";
   $("faceSaveOne").disabled = !faces.some(f => f.id === faceSel);
-  $("facesSave").disabled = !faces.length;
+  $("facesSave").disabled = $("facesZip").disabled = !faces.length;
 }
 
 // Skin tone from small patches on both cheeks and the forehead, read from a tiny copy of the frame.
@@ -1649,6 +1748,7 @@ async function init() {
   $("capture").onclick = () => { if (captureFace()) flash($("capture"), "Captured"); };
   $("faceSaveOne").onclick = saveOneFace;
   $("facesSave").onclick = saveAllFaces;
+  $("facesZip").onclick = saveFacesZip;
   $("facesLoad").onclick = () => $("facesFile").click();
   $("facesFile").onchange = async e => { const fl = [...e.target.files]; e.target.value = ""; if (fl.length) await loadFaceFiles(fl); };
   try {
@@ -1689,6 +1789,7 @@ async function init() {
       roll, frame, resize, renderer: () => renderer, camera: () => camera, controls: () => controls, scene: () => scene, fit: () => fit(lastH), savePNG,
       stats: () => ({ meshes: geos.length, tris: renderer.info.render.triangles, height: lastH }),
       live: () => ({ LIVE, maskInfo, frames: liveFrames, q: liveQ && liveQ.toArray() }),
+      faces: () => faces, loadFaceFiles, saveFacesZip,
     };
   } catch (e) {
     console.error(e);
