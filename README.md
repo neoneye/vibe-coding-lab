@@ -198,6 +198,7 @@ Dirac's belt trick: a 360 degree turn leaves a twist, 720 degrees undoes it. A s
 - [game-scifi-rpg](game-scifi-rpg/) -- a stick-figure sci-fi RPG with inventory and quests.
 - [game-snake](game-snake/) -- see highlights.
 - [game-straight-up-the-hormuz](game-straight-up-the-hormuz/) -- Minesweeper crossed with Battleship on an oil budget; every shot costs, deduction saves.
+- [game-syntax-temple](game-syntax-temple/) -- Syntax Temple: a top-down puzzle game where each room's rules are word tiles lying in the room, and you solve it by pushing them into new statements. The vocabulary grows from `WALL IS STOP` into `AND`, `NOT`, assignment (`SKULL = GEM`) and `IF ... THEN` with tests on the room's state, and a listing beside the room shows the program as it currently runs. Twelve rooms sit in temples on a fog-covered world map; solving one lifts the fog over the next. Turn-based with unlimited undo, inside a bevelled grey window. The rule-pushing idea is inspired by Baba Is You.
 
 ### Tools, explainers and the rest
 
