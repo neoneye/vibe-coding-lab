@@ -307,7 +307,7 @@ const SyntaxTemple = (() => {
   // conditional sees what this very turn destroyed or transformed (capped for programs that oscillate).
   function settleEnts(state, ents) {
     const sentences = findSentences({ w: state.w, h: state.h, ents });
-    let props;
+    let props, stable = false;
     for (let pass = 0; pass < 8; pass++) {
       let changed = false;
       for (const s of sentences) {
@@ -339,17 +339,25 @@ const SyntaxTemple = (() => {
         }
       }
       if (dead.size) { ents = ents.filter(e => !dead.has(e)); changed = true; }
-      if (!changed) break;
+      if (!changed) { stable = true; break; }
     }
+    if (!stable) props = rulesFor(sentences, ents).props;
     const has = (e, p) => !e.word && props[e.name].has(p);
     const yous = ents.filter(e => has(e, 'YOU'));
     const won = yous.some(y => ents.some(o => has(o, 'WIN') && o.x === y.x && o.y === y.y));
-    return { ents, won, noYou: yous.length === 0 };
+    return { ents, won, noYou: yous.length === 0, props };
+  }
+
+  // Properties of a settled state, remembered so the next move need not parse the room again.
+  const settledProps = new WeakMap();
+  function settled(state, r, moves) {
+    const out = { w: state.w, h: state.h, ents: r.ents, won: r.won, noYou: r.noYou, moves };
+    settledProps.set(out, r.props);
+    return out;
   }
 
   function settle(state) {
-    const r = settleEnts(state, state.ents.map(e => ({ ...e })));
-    return { w: state.w, h: state.h, ents: r.ents, won: r.won, noYou: r.noYou, moves: state.moves };
+    return settled(state, settleEnts(state, state.ents.map(e => ({ ...e }))), state.moves);
   }
 
   // One turn: every YOU object tries to move one tile, pushing chains ahead of it.
@@ -357,7 +365,7 @@ const SyntaxTemple = (() => {
   function step(state, dir) {
     if (state.won || state.noYou) return state;
     const [dx, dy] = DIRS[dir];
-    const props = rules(state).props;
+    const props = settledProps.get(state) || rules(state).props;
     let ents = state.ents.map(e => ({ ...e }));
     const has = (e, p) => !e.word && props[e.name].has(p);
     const gone = new Set();
@@ -392,8 +400,7 @@ const SyntaxTemple = (() => {
     }
     if (!any) return state;
     ents = ents.filter(e => !gone.has(e));
-    const r = settleEnts(state, ents);
-    return { w: state.w, h: state.h, ents: r.ents, won: r.won, noYou: r.noYou, moves: state.moves + 1 };
+    return settled(state, settleEnts(state, ents), state.moves + 1);
   }
 
   // ---- rooms ----
@@ -524,17 +531,17 @@ const SyntaxTemple = (() => {
       '####################',
       '#HIY.WIX.CIP.......#',
       '####################',
-      '#..................#',
-      '#...............g..#',
-      '#..QHLFRGIV........#',
-      '#..................#',
-      '#.......C..........#',
+      '#...#..............#',
+      '#..#.######.....g..#',
+      '#.#QHLFRGIV#.......#',
+      '#..#.######........#',
+      '#..#C#.............#',
       '#..................#',
       '#.@.........c.f....#',
       '#..................#',
       '#..................#',
       '####################',
-    ], solution: 'URRRRRRRULLLLDLUUDDDRRRRRRRRRUUUUURRR' },
+    ], solution: 'URRUUDDDRRRRRRRRRUUUUURRR' },
     { name: "House Cleaning", needs: [6, 7], rows: [
       '####################',
       '#HIY.WIX.SIZ.AIJ...#',
@@ -664,12 +671,30 @@ const SyntaxTemple = (() => {
     return MAP.temples.filter(t => !solved.includes(t.room) && seen.has(t.x + ',' + t.y)).map(t => t.room);
   }
 
+  // Canvas size for a logical playfield of logW x logH art pixels in an available box of CSS pixels.
+  // Art pixels map to a whole number of device pixels whenever that gives at least one CSS pixel
+  // per art pixel; a smaller box is filled exactly instead, so the playfield never collapses.
+  function fitCanvasMetrics(availW, availH, dpr, logW, logH) {
+    const fitCss = Math.min(availW / logW, availH / logH);
+    let scale = Math.floor(fitCss * dpr);
+    if (!(scale >= 1)) scale = 1;
+    let cssW = logW * scale / dpr;
+    if (scale < dpr || cssW > availW) {
+      const fill = fitCss * logW;
+      if (fill >= 120) {
+        cssW = Math.min(fill, logW);
+        scale = Math.max(1, Math.ceil(cssW * dpr / logW));
+      }
+    }
+    return { scale, cssW, cssH: cssW * logH / logW };
+  }
+
   function templeAt(x, y) {
     const t = MAP.temples.find(t => t.x === x && t.y === y);
     return t ? t.room : -1;
   }
 
-  return { NOUNS, PROPS, OPS, CTLS, KIND, OBJ_CH, WORD_CH, load, findSentences, DIRS, rules, settle, step, ROOMS, openRoom, replay, MAP, revealed, walkable, openTemples, templeAt, roomAvailable };
+  return { NOUNS, PROPS, OPS, CTLS, KIND, OBJ_CH, WORD_CH, load, findSentences, DIRS, rules, settle, step, ROOMS, openRoom, replay, MAP, revealed, walkable, openTemples, templeAt, roomAvailable, fitCanvasMetrics };
 })();
 
 const SyntaxTempleTests = (() => {
@@ -817,6 +842,45 @@ const SyntaxTempleTests = (() => {
       };
       visit([]);
     });
+    // ---- review fixes ----
+    t('room 9: only the noun slot of the IF line can be edited', () => {
+      const st = SyntaxTemple.openRoom(8);
+      const line = SyntaxTemple.rules(st).listing.find(l => l.text.startsWith('IF '));
+      const wallAt = (x, y) => st.ents.some(e => !e.word && e.name === 'WALL' && e.x === x && e.y === y);
+      const c = line.cells, y = c[0].y;
+      eq([wallAt(c[0].x - 1, y), wallAt(c[c.length - 1].x + 1, y)], [true, true]);
+      eq(c.filter((cell, i) => i !== 1 && !(wallAt(cell.x, y - 1) && wallAt(cell.x, y + 1))).length, 0);
+    });
+    t('room 9: the test still reads HERO at the start', () => eq(SyntaxTemple.rules(SyntaxTemple.openRoom(8)).listing.at(-1).text, 'IF HERO ON FIRE THEN GEM IS WIN'));
+    const fitM = (w, h, dpr) => { const m = SyntaxTemple.fitCanvasMetrics(w, h, dpr, 480, 312); return [m.scale, Math.round(m.cssW)]; };
+    t('fit: whole device pixels when there is room', () => eq(fitM(2000, 2000, 2), [8, 1920]));
+    t('fit: dpr 1 picks the largest whole scale', () => eq(fitM(1000, 700, 1), [2, 960]));
+    t('fit: retina half-width window fills the space instead of halving', () => eq(fitM(476, 650, 2), [2, 476]));
+    t('fit: retina short window fills the height', () => eq(fitM(1000, 280, 2), [2, Math.round(280 * 480 / 312)]));
+    t('fit: never below one device pixel per art pixel', () => eq(fitM(0, 0, 1)[0], 1));
+    t('fit: tiny dpr 1 window is squeezed to fit', () => eq(fitM(300, 600, 1), [1, 300]));
+    t('room 9: every reachable win runs through the IF line', () => {
+      const start = SyntaxTemple.openRoom(8);
+      const seen = new Set([fullSig(start)]);
+      let frontier = [start], wins = 0;
+      while (frontier.length) {
+        const next = [];
+        for (const st of frontier) for (const d of 'UDLR') {
+          const s2 = SyntaxTemple.step(st, d);
+          if (s2 === st) continue;
+          const k = fullSig(s2);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          if (s2.won) {
+            wins++;
+            if (!SyntaxTemple.rules(s2).listing.some(l => l.active && l.text.startsWith('IF '))) throw new Error('won with the conditional broken');
+          } else next.push(s2);
+        }
+        if (seen.size > 400000) throw new Error('search too large');
+        frontier = next;
+      }
+      eq(wins > 0, true);
+    });
     /*TESTS*/
 
     console.log(`${count - fails}/${count} tests passed`);
@@ -963,18 +1027,14 @@ const SyntaxTempleTests = (() => {
   function fit() {
     const dpr = window.devicePixelRatio || 1;
     const narrow = window.innerWidth <= 640;
-    const availW = window.innerWidth - (narrow ? 34 : 244);
+    const availW = window.innerWidth - (narrow ? 48 : 262);
     const availH = window.innerHeight - (narrow ? 340 : 150);
-    let s = Math.floor(Math.min(availW / LOG_W, availH / LOG_H) * dpr);
-    if (!(s >= 1)) s = 1;
-    scale = s;
-    cv.width = LOG_W * s;
-    cv.height = LOG_H * s;
-    // Whole device pixels per art pixel. Only a window too small for 1:1 is squeezed further.
-    let cssW = LOG_W * s / dpr;
-    if (availW >= 120 && cssW > availW) cssW = availW;
-    cv.style.width = cssW + 'px';
-    cv.style.height = cssW * LOG_H / LOG_W + 'px';
+    const m = E.fitCanvasMetrics(availW, availH, dpr, LOG_W, LOG_H);
+    scale = m.scale;
+    cv.width = LOG_W * scale;
+    cv.height = LOG_H * scale;
+    cv.style.width = m.cssW + 'px';
+    cv.style.height = m.cssH + 'px';
     draw();
   }
   function blit(sprite, px, py) {
@@ -1136,6 +1196,7 @@ const SyntaxTempleTests = (() => {
       undoStack.push(st);
       anim = animate ? { t0, dur: 100, from: new Map(st.ents.map(e => [e.id, { x: e.x, y: e.y }])) } : null;
       st = next;
+      if (st.won) recordSolve();
     } else {
       const [dx, dy] = E.DIRS[dir];
       if (!E.walkable(solved, pos.x + dx, pos.y + dy)) return false;
@@ -1166,21 +1227,23 @@ const SyntaxTempleTests = (() => {
       }, 100);
     }
   }
-  function roomSolved() {
-    const first = !solved.includes(roomIdx);
+  // The solve is recorded at the winning move itself, so leaving during the last slide cannot lose it.
+  let solveNews = '';
+  function recordSolve() {
+    solveNews = '';
+    if (solved.includes(roomIdx)) return;
     const before = E.openTemples(solved).length;
-    if (first) {
-      solved = [...solved, roomIdx].sort((a, b) => a - b);
-      writeSave();
+    solved = [...solved, roomIdx].sort((a, b) => a - b);
+    writeSave();
+    if (solved.length === E.ROOMS.length) {
+      solveNews = '<p>That was the last temple. Every program in the land now runs the way you wrote it.</p><p>All rooms stay open if you want to find other solutions.</p>';
+    } else if (E.openTemples(solved).length > before - 1) {
+      solveNews = '<p>The fog lifts over new ground on the map.</p>';
     }
+  }
+  function roomSolved() {
     const name = E.ROOMS[roomIdx].name;
-    let html = `<p><b>${name}</b> is solved in ${st.moves} moves.</p>`;
-    if (first && solved.length === E.ROOMS.length) {
-      html += '<p>That was the last temple. Every program in the land now runs the way you wrote it.</p><p>All rooms stay open if you want to find other solutions.</p>';
-    } else if (first && E.openTemples(solved).length > before - 1) {
-      html += '<p>The fog lifts over new ground on the map.</p>';
-    }
-    showDialog('Room solved', html, [{ label: 'OK', run: showMap }]);
+    showDialog('Room solved', `<p><b>${name}</b> is solved in ${st.moves} moves.</p>${solveNews}`, [{ label: 'OK', run: showMap }]);
   }
   function enterTemple() {
     if (screen !== 'map' || dialogOpen()) return;
@@ -1207,12 +1270,14 @@ const SyntaxTempleTests = (() => {
       el.addEventListener('click', () => closeDialog(b));
       row.append(el);
     });
+    $('win').inert = true;
     $('modal').hidden = false;
     row.firstChild.focus();
   }
   function closeDialog(button) {
     dialogButtons = null;
     $('modal').hidden = true;
+    $('win').inert = false;
     if (button && button.run) button.run();
   }
 
@@ -1304,7 +1369,7 @@ const SyntaxTempleTests = (() => {
         a.textContent = label;
         b.textContent = key;
         item.append(a, b);
-        item.addEventListener('click', () => { closeMenus(); item.blur(); ACTIONS[id](); });
+        item.addEventListener('click', () => { closeMenus(); item.blur(); if (!dialogOpen()) ACTIONS[id](); });
         drop.append(item);
       }
       menu.append(title, drop);
@@ -1356,7 +1421,7 @@ const SyntaxTempleTests = (() => {
   buildMenus();
   if (params.has('solved')) {
     noSave = true;
-    solved = [...new Set(params.get('solved').split(',').map(Number).filter(n => Number.isInteger(n) && n >= 0 && n < E.ROOMS.length))].sort((a, b) => a - b);
+    solved = [...new Set(params.get('solved').split(',').filter(x => x !== '').map(Number).filter(n => Number.isInteger(n) && n >= 0 && n < E.ROOMS.length))].sort((a, b) => a - b);
   } else {
     readSave();
   }

@@ -32,7 +32,7 @@ Arrows or WASD move, Z undoes, R restarts the room, Esc returns to the map, Ente
 node test.mjs
 ```
 
-The engine lives in the `shared-code` script block of `index.html`. The tests cover the parser, every property, the turn order and the map's unlock graph, and replay a recorded solution for each of the twelve rooms.
+The suite takes about half a minute, because several tests search a room's whole state space. The engine lives in the `shared-code` script block of `index.html`. The tests cover the parser, every property, the turn order and the map's unlock graph, and replay a recorded solution for each of the twelve rooms.
 
 Review hooks: `?room=N` opens room N, `?room=N&moves=RRUL` also plays moves, `?solved=0,1,2` previews a map state without touching saved progress.
 
