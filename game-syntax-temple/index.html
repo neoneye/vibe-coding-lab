@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Syntax Temple</title>
+<style>
+/*STYLE*/
+</style>
+</head>
+<body>
+<!--MARKUP-->
+<script id="shared-code">
+"use strict";
+// Syntax Temple engine: pure functions over plain state objects.
+// state = { w, h, ents: [{ id, word, name, x, y }], won, noYou, moves }
+const SyntaxTemple = (() => {
+  const NOUNS = ['HERO', 'WALL', 'KEY', 'DOOR', 'SKULL', 'FIRE', 'GEM', 'CRATE', 'WATER'];
+  const PROPS = ['YOU', 'WIN', 'STOP', 'PUSH', 'DEATH', 'SINK', 'OPEN', 'SHUT'];
+  const OPS = ['IS', 'AND', 'NOT', '='];
+  const CTLS = ['IF', 'THEN', 'ON', 'NEAR', 'NO'];
+  const KIND = {};
+  NOUNS.forEach(w => KIND[w] = 'noun');
+  PROPS.forEach(w => KIND[w] = 'prop');
+  OPS.forEach(w => KIND[w] = 'op');
+  CTLS.forEach(w => KIND[w] = 'ctl');
+  // One character per tile in room rows.
+  const OBJ_CH = { '@': 'HERO', '#': 'WALL', k: 'KEY', d: 'DOOR', s: 'SKULL', f: 'FIRE', g: 'GEM', c: 'CRATE', '~': 'WATER' };
+  const WORD_CH = {
+    H: 'HERO', W: 'WALL', K: 'KEY', D: 'DOOR', S: 'SKULL', F: 'FIRE', G: 'GEM', C: 'CRATE', A: 'WATER',
+    Y: 'YOU', V: 'WIN', X: 'STOP', P: 'PUSH', Z: 'DEATH', J: 'SINK', O: 'OPEN', U: 'SHUT',
+    I: 'IS', N: 'AND', T: 'NOT', E: '=', Q: 'IF', R: 'THEN', L: 'ON', M: 'NEAR', B: 'NO',
+  };
+
+  function load(rows, extra) {
+    const ents = [];
+    const add = (ch, x, y) => {
+      if (ch === '.') return;
+      if (OBJ_CH[ch]) ents.push({ id: ents.length, word: false, name: OBJ_CH[ch], x, y });
+      else if (WORD_CH[ch]) ents.push({ id: ents.length, word: true, name: WORD_CH[ch], x, y });
+      else throw new Error(`unknown tile character "${ch}"`);
+    };
+    rows.forEach((row, y) => [...row].forEach((ch, x) => add(ch, x, y)));
+    (extra || []).forEach(e => add(e.ch, e.x, e.y));
+    return { w: rows[0].length, h: rows.length, ents, won: false, noYou: false, moves: 0 };
+  }
+
+  // ---- parser ----
+  const isNoun = w => KIND[w] === 'noun';
+  const isProp = w => KIND[w] === 'prop';
+
+  function parseStatement(tok, i) {
+    if (isNoun(tok[i]) && tok[i + 1] === '=' && isNoun(tok[i + 2]) && tok[i] !== tok[i + 2]) {
+      return { stmt: { type: 'assign', from: tok[i], to: tok[i + 2] }, end: i + 3 };
+    }
+    const subjects = [];
+    let p = i;
+    const subjectAt = q => {
+      const not = tok[q] === 'NOT';
+      return isNoun(tok[q + (not ? 1 : 0)]) ? { noun: tok[q + (not ? 1 : 0)], not, end: q + (not ? 2 : 1) } : null;
+    };
+    let s = subjectAt(p);
+    if (!s) return null;
+    for (;;) {
+      subjects.push({ noun: s.noun, not: s.not });
+      p = s.end;
+      if (tok[p] !== 'AND') break;
+      s = subjectAt(p + 1);
+      if (!s) break;
+    }
+    if (tok[p] !== 'IS' || !isProp(tok[p + 1])) return null;
+    const props = [tok[p + 1]];
+    p += 2;
+    while (tok[p] === 'AND' && isProp(tok[p + 1])) { props.push(tok[p + 1]); p += 2; }
+    return { stmt: { type: 'is', subjects, props }, end: p };
+  }
+
+  function parseSentence(tok, i) {
+    if (tok[i] !== 'IF') {
+      const r = parseStatement(tok, i);
+      return r && { cond: null, stmt: r.stmt, end: r.end };
+    }
+    let cond, p;
+    if (tok[i + 1] === 'NO' && isNoun(tok[i + 2])) {
+      cond = { op: 'NO', a: tok[i + 2] }; p = i + 3;
+    } else if (isNoun(tok[i + 1]) && (tok[i + 2] === 'ON' || tok[i + 2] === 'NEAR') && isNoun(tok[i + 3])) {
+      cond = { op: tok[i + 2], a: tok[i + 1], b: tok[i + 3] }; p = i + 4;
+    } else return null;
+    if (tok[p] !== 'THEN') return null;
+    const r = parseStatement(tok, p + 1);
+    return r && { cond, stmt: r.stmt, end: r.end };
+  }
+
+  // Sentences in listing order: horizontal by row then column, then vertical by column then row.
+  function findSentences(state) {
+    const grid = new Map();
+    for (const e of state.ents) if (e.word) grid.set(e.x + ',' + e.y, e.name);
+    const out = [];
+    const scan = (dir, outer, inner) => {
+      for (let a = 0; a < outer; a++) {
+        let b = 0;
+        while (b < inner) {
+          const cells = [], tok = [];
+          for (; b < inner; b++) {
+            const x = dir === 'h' ? b : a, y = dir === 'h' ? a : b;
+            const w = grid.get(x + ',' + y);
+            if (w === undefined) break;
+            cells.push({ x, y }); tok.push(w);
+          }
+          b++;
+          for (let i = 0; i < tok.length;) {
+            const r = parseSentence(tok, i);
+            if (!r) { i++; continue; }
+            out.push({ dir, cells: cells.slice(i, r.end), text: tok.slice(i, r.end).join(' '), cond: r.cond, stmt: r.stmt });
+            i = r.end;
+          }
+        }
+      }
+    };
+    scan('h', state.h, state.w);
+    scan('v', state.w, state.h);
+    return out;
+  }
+
+  /*ENGINE2*/
+
+  return { NOUNS, PROPS, OPS, CTLS, KIND, OBJ_CH, WORD_CH, load, findSentences, /*EXPORTS*/ };
+})();
+
+const SyntaxTempleTests = (() => {
+  function run() {
+    let fails = 0, count = 0;
+    const eq = (a, b) => {
+      const x = JSON.stringify(a), y = JSON.stringify(b);
+      if (x !== y) throw new Error(`expected ${y}, got ${x}`);
+    };
+    const t = (name, fn) => {
+      count++;
+      try { fn(); } catch (e) { fails++; console.log(`FAIL ${name}: ${e.message}`); }
+    };
+
+    // ---- parser ----
+    const S = rows => SyntaxTemple.findSentences(SyntaxTemple.load(rows)).map(s => s.text);
+    t('declaration',        () => eq(S(['HIY']), ['HERO IS YOU']));
+    t('and props',          () => eq(S(['KIPNO']), ['KEY IS PUSH AND OPEN']));
+    t('and subjects + not', () => eq(S(['TKNSIX']), ['NOT KEY AND SKULL IS STOP']));
+    t('assignment',         () => eq(S(['SEK']), ['SKULL = KEY']));
+    t('if on',              () => eq(S(['QHLFRDIO']), ['IF HERO ON FIRE THEN DOOR IS OPEN']));
+    t('if near',            () => eq(S(['QHMDRSEG']), ['IF HERO NEAR DOOR THEN SKULL = GEM']));
+    t('if no',              () => eq(S(['QBSRDIO']), ['IF NO SKULL THEN DOOR IS OPEN']));
+    t('vertical',           () => eq(S(['H', 'I', 'Y']), ['HERO IS YOU']));
+    t('broken',             () => ['HI.Y', 'IYH', 'HIK', 'QHLFR', 'HIYN', 'SES.'].forEach(r => eq(S([r]).filter(x => x !== 'HERO IS YOU').length, 0)));
+    t('trailing AND dropped', () => eq(S(['HIYN']), ['HERO IS YOU']));
+    t('longest match',      () => eq(S(['HIYNV']), ['HERO IS YOU AND WIN']));
+    t('junk before',        () => eq(S(['YHIY']), ['HERO IS YOU']));
+    t('failed IF falls back', () => eq(S(['QHIY']), ['HERO IS YOU']));
+    t('two in one run',     () => eq(S(['HIYWIX']), ['HERO IS YOU', 'WALL IS STOP']));
+    t('listing order',      () => eq(S(['W.HIY', 'I....', 'X....']), ['HERO IS YOU', 'WALL IS STOP']));
+    t('object breaks run',  () => eq(S(['HI@Y']).length, 0));
+    t('parsed shape',       () => {
+      const s = SyntaxTemple.findSentences(SyntaxTemple.load(['QBSRTKIX']))[0];
+      eq([s.dir, s.cells.length, s.cond, s.stmt], ['h', 8, { op: 'NO', a: 'SKULL' }, { type: 'is', subjects: [{ noun: 'KEY', not: true }], props: ['STOP'] }]);
+    });
+    /*TESTS*/
+
+    console.log(`${count - fails}/${count} tests passed`);
+    return fails === 0;
+  }
+  return { run };
+})();
+</script>
+<!--APP-->
+</body>
+</html>
