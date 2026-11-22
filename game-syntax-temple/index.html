@@ -444,9 +444,85 @@ const SyntaxTemple = (() => {
     return [...moves].reduce((st, m) => step(st, m), openRoom(i));
   }
 
-  /*ENGINE4*/
+  // ---- world map ----
+  // , grass  t forest  h hills  ^ mountain  ~ water  1-9 a b c: the temple of room 1-12.
+  const MAP_ROWS = [
+    '^^^^^^^^^,,,tt,,,,,,^^^^',
+    '^^^^^^^,,,,tt,5,,,hh,^^^',
+    '^^^^^,,,,t,,,,,,,h,,,,^^',
+    '^^^,,,,,tt,,,,~~,,9,,,,^',
+    '^^,,,t,,,,3,,,~~,,,,h,,^',
+    '^,,,tt,,,,,,,,6,,,,,,,,^',
+    ',,,,,,,,,hh,,,,,,^^,,,,,',
+    ',,,,,,,,,^^^,,,,^^^,,,,,',
+    ',,1,,,,2,^^^^,,,^^^b,,c,',
+    ',,,,,,,,,^^^,,,,^^^,,,,,',
+    ',,,,t,,,,,h,,,7,,^,,,,,,',
+    '~,,,tt,,,,,,,,,,,,,,,t,,',
+    '~~,,,,,,,,4,,,~,,,a,,tt,',
+    '~~~,,,,,,,,,,~~,,,,,,,,~',
+    '~~~~,,,,h,,,,,8,,,,h,,~~',
+    '~~~~~~,,,hh,,,,,,,,,~~~~',
+  ];
+  const MAP = (() => {
+    const temples = [];
+    MAP_ROWS.forEach((row, y) => [...row].forEach((ch, x) => {
+      const room = '123456789abc'.indexOf(ch);
+      if (room >= 0) temples.push({ room, x, y });
+    }));
+    temples.sort((a, b) => a.room - b.room);
+    return { rows: MAP_ROWS, start: { x: 1, y: 8 }, temples };
+  })();
 
-  return { NOUNS, PROPS, OPS, CTLS, KIND, OBJ_CH, WORD_CH, load, findSentences, DIRS, rules, settle, step, ROOMS, openRoom, replay, /*EXPORTS*/ };
+  // Each tile belongs to its nearest temple. A tile is out of the fog once that
+  // temple's room is available (everything it needs is solved) or solved.
+  const MAP_OWNER = MAP.rows.map((row, y) => [...row].map((_, x) => {
+    let best = 0, bestD = Infinity;
+    for (const t of MAP.temples) {
+      const d = (t.x - x) ** 2 + (t.y - y) ** 2;
+      if (d < bestD) { bestD = d; best = t.room; }
+    }
+    return best;
+  }));
+
+  function roomAvailable(solved, room) {
+    return solved.includes(room) || ROOMS[room].needs.every(n => solved.includes(n));
+  }
+
+  function revealed(solved) {
+    const out = new Set();
+    MAP_OWNER.forEach((row, y) => row.forEach((room, x) => { if (roomAvailable(solved, room)) out.add(x + ',' + y); }));
+    return out;
+  }
+
+  function walkable(solved, x, y) {
+    if (x < 0 || y < 0 || y >= MAP.rows.length || x >= MAP.rows[0].length) return false;
+    const ch = MAP.rows[y][x];
+    return ch !== '^' && ch !== '~' && roomAvailable(solved, MAP_OWNER[y][x]);
+  }
+
+  // Unsolved rooms whose temple can be reached on foot from the start tile.
+  function openTemples(solved) {
+    const seen = new Set([MAP.start.x + ',' + MAP.start.y]);
+    const queue = [MAP.start];
+    while (queue.length) {
+      const { x, y } = queue.pop();
+      for (const [dx, dy] of Object.values(DIRS)) {
+        const nx = x + dx, ny = y + dy, k = nx + ',' + ny;
+        if (seen.has(k) || !walkable(solved, nx, ny)) continue;
+        seen.add(k);
+        queue.push({ x: nx, y: ny });
+      }
+    }
+    return MAP.temples.filter(t => !solved.includes(t.room) && seen.has(t.x + ',' + t.y)).map(t => t.room);
+  }
+
+  function templeAt(x, y) {
+    const t = MAP.temples.find(t => t.x === x && t.y === y);
+    return t ? t.room : -1;
+  }
+
+  return { NOUNS, PROPS, OPS, CTLS, KIND, OBJ_CH, WORD_CH, load, findSentences, DIRS, rules, settle, step, ROOMS, openRoom, replay, MAP, revealed, walkable, openTemples, templeAt, roomAvailable };
 })();
 
 const SyntaxTempleTests = (() => {
@@ -566,6 +642,33 @@ const SyntaxTempleTests = (() => {
         }
         eq(won, false);
       });
+    });
+    // ---- world map ----
+    const MAP = SyntaxTemple.MAP || { rows: [], temples: [] };
+    t('map shape',  () => eq([MAP.rows.length, ...new Set(MAP.rows.map(r => r.length))], [16, 24]));
+    t('12 temples', () => eq(MAP.temples.map(x => x.room).sort((a, b) => a - b), [...Array(12).keys()]));
+    t('start opens room 1 only', () => eq(SyntaxTemple.openTemples([]), [0]));
+    t('start tile is walkable', () => eq(SyntaxTemple.walkable([], MAP.start.x, MAP.start.y), true));
+    t('out of bounds is not walkable', () => eq([SyntaxTemple.walkable([], -1, 0), SyntaxTemple.walkable([], 0, 16)], [false, false]));
+    t('unrevealed is not walkable', () => { const f = MAP.temples.find(x => x.room === 11); eq(SyntaxTemple.walkable([], f.x, f.y), false); });
+    t('solving reveals more', () => eq(SyntaxTemple.revealed([0]).size > SyntaxTemple.revealed([]).size, true));
+    t('everything revealed at the end', () => eq(SyntaxTemple.revealed([...Array(12).keys()]).size, 24 * 16));
+    t('every solve order finishes and keeps a choice', () => {
+      const seen = new Set();
+      const visit = solved => {
+        const k = solved.join(',');
+        if (seen.has(k)) return;
+        seen.add(k);
+        if (solved.length === 12) return;
+        const open = SyntaxTemple.openTemples(solved);
+        if (open.length === 0) throw new Error(`stuck after [${k}]`);
+        const left = branch => branch.some(r => !solved.includes(r));
+        // A choice of rooms as long as neither branch of the temple is finished.
+        if (solved.includes(0) && solved.includes(1) && left([2, 4, 5, 8]) && left([3, 6, 7, 9]) && open.length < 2) throw new Error(`no choice after [${k}]`);
+        if (open.includes(11) && solved.length < 11) throw new Error(`finale open early after [${k}]`);
+        for (const r of open) visit([...solved, r].sort((a, b) => a - b));
+      };
+      visit([]);
     });
     /*TESTS*/
 
