@@ -122,9 +122,136 @@ const SyntaxTemple = (() => {
     return out;
   }
 
-  /*ENGINE2*/
+  // ---- rules ----
+  const DIRS = { U: [0, -1], D: [0, 1], L: [-1, 0], R: [1, 0] };
 
-  return { NOUNS, PROPS, OPS, CTLS, KIND, OBJ_CH, WORD_CH, load, findSentences, /*EXPORTS*/ };
+  function evalCond(c, ents) {
+    if (!c) return true;
+    const A = ents.filter(e => !e.word && e.name === c.a);
+    if (c.op === 'NO') return A.length === 0;
+    const B = ents.filter(e => !e.word && e.name === c.b);
+    return A.some(a => B.some(b => a.id !== b.id &&
+      (c.op === 'ON' ? a.x === b.x && a.y === b.y : Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1)));
+  }
+
+  function rulesFor(sentences, ents) {
+    const props = {};
+    NOUNS.forEach(n => props[n] = new Set());
+    const present = NOUNS.filter(n => ents.some(e => !e.word && e.name === n));
+    const listing = sentences.map(s => {
+      const active = evalCond(s.cond, ents);
+      if (active && s.stmt.type === 'is') {
+        for (const sub of s.stmt.subjects) {
+          const targets = sub.not ? present.filter(n => n !== sub.noun) : [sub.noun];
+          for (const n of targets) for (const p of s.stmt.props) props[n].add(p);
+        }
+      }
+      return { text: s.text, active, cells: s.cells, stmt: s.stmt };
+    });
+    return { props, listing };
+  }
+
+  // The program as it currently runs: properties per noun and the listing in execution order.
+  function rules(state) {
+    return rulesFor(findSentences(state), state.ents);
+  }
+
+  // Everything that happens after movement. Repeats until the room is stable, so a
+  // conditional sees what this very turn destroyed or transformed (capped for programs that oscillate).
+  function settleEnts(state, ents) {
+    const sentences = findSentences({ w: state.w, h: state.h, ents });
+    let props;
+    for (let pass = 0; pass < 8; pass++) {
+      let changed = false;
+      for (const s of sentences) {
+        if (s.stmt.type !== 'assign' || !evalCond(s.cond, ents)) continue;
+        for (const e of ents) if (!e.word && e.name === s.stmt.from) { e.name = s.stmt.to; changed = true; }
+      }
+      props = rulesFor(sentences, ents).props;
+      const has = (e, p) => !e.word && props[e.name].has(p);
+      const tiles = new Map();
+      for (const e of ents) {
+        if (e.word) continue;
+        const k = e.x + ',' + e.y;
+        if (!tiles.has(k)) tiles.set(k, []);
+        tiles.get(k).push(e);
+      }
+      const dead = new Set();
+      for (const list of tiles.values()) {
+        if (list.length < 2) continue;
+        const opens = list.filter(e => has(e, 'OPEN'));
+        for (const o of opens) {
+          const sh = list.find(e => e !== o && !dead.has(e) && has(e, 'SHUT'));
+          if (sh && !dead.has(o)) { dead.add(o); dead.add(sh); }
+        }
+        const live = list.filter(e => !dead.has(e));
+        if (live.length >= 2 && live.some(e => has(e, 'SINK'))) live.forEach(e => dead.add(e));
+        for (const d of list) {
+          if (dead.has(d) || !has(d, 'DEATH')) continue;
+          for (const y of list) if (y !== d && !dead.has(y) && has(y, 'YOU')) dead.add(y);
+        }
+      }
+      if (dead.size) { ents = ents.filter(e => !dead.has(e)); changed = true; }
+      if (!changed) break;
+    }
+    const has = (e, p) => !e.word && props[e.name].has(p);
+    const yous = ents.filter(e => has(e, 'YOU'));
+    const won = yous.some(y => ents.some(o => has(o, 'WIN') && o.x === y.x && o.y === y.y));
+    return { ents, won, noYou: yous.length === 0 };
+  }
+
+  function settle(state) {
+    const r = settleEnts(state, state.ents.map(e => ({ ...e })));
+    return { w: state.w, h: state.h, ents: r.ents, won: r.won, noYou: r.noYou, moves: state.moves };
+  }
+
+  // One turn: every YOU object tries to move one tile, pushing chains ahead of it.
+  // Returns the same state object when nothing could move.
+  function step(state, dir) {
+    if (state.won || state.noYou) return state;
+    const [dx, dy] = DIRS[dir];
+    const props = rules(state).props;
+    let ents = state.ents.map(e => ({ ...e }));
+    const has = (e, p) => !e.word && props[e.name].has(p);
+    const gone = new Set();
+    const shove = e => {
+      const nx = e.x + dx, ny = e.y + dy;
+      if (nx < 0 || ny < 0 || nx >= state.w || ny >= state.h) return false;
+      for (const o of ents) {
+        if (o === e || gone.has(o) || o.x !== nx || o.y !== ny) continue;
+        const pushable = o.word || has(o, 'PUSH');
+        if (!pushable && !has(o, 'STOP')) continue;
+        if (pushable && shove(o)) continue;
+        if ((has(e, 'OPEN') && has(o, 'SHUT')) || (has(e, 'SHUT') && has(o, 'OPEN'))) {
+          gone.add(e); gone.add(o);
+          return true;
+        }
+        return false;
+      }
+      e.x = nx; e.y = ny;
+      return true;
+    };
+    const movers = ents.filter(e => has(e, 'YOU')).sort((a, b) => (b.x * dx + b.y * dy) - (a.x * dx + a.y * dy));
+    let any = false;
+    for (const m of movers) {
+      if (gone.has(m)) continue;
+      const snapshot = ents.map(e => [e.x, e.y]);
+      const goneBefore = new Set(gone);
+      if (shove(m)) any = true;
+      else {
+        ents.forEach((e, i) => { e.x = snapshot[i][0]; e.y = snapshot[i][1]; });
+        gone.clear(); goneBefore.forEach(g => gone.add(g));
+      }
+    }
+    if (!any) return state;
+    ents = ents.filter(e => !gone.has(e));
+    const r = settleEnts(state, ents);
+    return { w: state.w, h: state.h, ents: r.ents, won: r.won, noYou: r.noYou, moves: state.moves + 1 };
+  }
+
+  /*ENGINE3*/
+
+  return { NOUNS, PROPS, OPS, CTLS, KIND, OBJ_CH, WORD_CH, load, findSentences, DIRS, rules, settle, step, /*EXPORTS*/ };
 })();
 
 const SyntaxTempleTests = (() => {
@@ -161,6 +288,44 @@ const SyntaxTempleTests = (() => {
       const s = SyntaxTemple.findSentences(SyntaxTemple.load(['QBSRTKIX']))[0];
       eq([s.dir, s.cells.length, s.cond, s.stmt], ['h', 8, { op: 'NO', a: 'SKULL' }, { type: 'is', subjects: [{ noun: 'KEY', not: true }], props: ['STOP'] }]);
     });
+    // ---- rules and the turn step ----
+    const at = (st, x, y) => st.ents.filter(e => e.x === x && e.y === y).map(e => e.name);
+    const run = (rows, moves) => [...moves].reduce((st, m) => SyntaxTemple.step(st, m), SyntaxTemple.settle(SyntaxTemple.load(rows)));
+    t('move',             () => eq(at(run(['@..', 'HIY'], 'R'), 1, 0), ['HERO']));
+    t('move counts',      () => eq(run(['@..', 'HIY'], 'RR').moves, 2));
+    t('edge blocks',      () => eq(at(run(['@', 'H', 'I', 'Y'], 'L'), 0, 0), ['HERO']));
+    t('blocked move is no turn', () => { const s = run(['@', 'H', 'I', 'Y'], ''); eq(SyntaxTemple.step(s, 'L') === s, true); });
+    t('stop',             () => eq(at(run(['@#.', 'HIY', 'WIX'], 'R'), 0, 0), ['HERO']));
+    t('no stop = walk through', () => eq(at(run(['@#.', 'HIY'], 'R'), 1, 0).sort(), ['HERO', 'WALL']));
+    t('push chain',       () => eq(at(run(['@cc.', 'HIY.', 'CIP.'], 'R'), 3, 0), ['CRATE']));
+    t('push chain blocked at edge', () => eq(at(run(['@cc', 'HIY', 'CIP'], 'R'), 0, 0), ['HERO']));
+    t('words always push',() => eq(at(run(['@X.', 'HIY'], 'R'), 2, 0), ['STOP']));
+    t('words do not stack', () => eq(at(run(['@XV', 'HIY'], 'R'), 0, 0), ['HERO']));
+    t('push beats stop',  () => eq(at(run(['@c...', 'HIY..', 'CIPNX'], 'R'), 2, 0), ['CRATE']));
+    t('breaking a rule',  () => eq(at(run(['@.#', 'WIX', '...', 'HIY'], 'RDUR'), 2, 0).sort(), ['HERO', 'WALL']));
+    t('noYou',            () => eq(run(['..@', 'HIY', '...'], 'D').noYou, true));
+    t('noYou freezes moves', () => { const s = run(['..@', 'HIY', '...'], 'D'); eq(SyntaxTemple.step(s, 'U') === s, true); });
+    t('two yous move together', () => { const s = run(['@@.', 'HIY'], 'R'); eq([at(s, 1, 0), at(s, 2, 0)], [['HERO'], ['HERO']]); });
+    t('win',              () => eq(run(['@g.', 'HIY', 'GIV'], 'R').won, true));
+    t('you and win',      () => eq(run(['@..', 'HIY', 'HIV'], '').won, true));
+    t('death',            () => { const s = run(['@s.', 'HIY', 'SIZ'], 'R'); eq([at(s, 1, 0), s.noYou], [['SKULL'], true]); });
+    t('sink',             () => eq(at(run(['@c~', 'HIY', 'CIP', 'AIJ'], 'R'), 2, 0), []));
+    t('sink spares words',() => eq(at(run(['@X~', 'HIY', 'AIJ'], 'R'), 2, 0).sort(), ['STOP', 'WATER']));
+    t('open shut through stop', () => eq(at(run(['@kd..', 'HIY..', 'KIPNO', 'DIXNU'], 'R'), 2, 0), []));
+    t('shut stop blocks without key', () => eq(at(run(['@d...', 'HIY..', 'DIXNU'], 'R'), 0, 0), ['HERO']));
+    t('not',              () => eq(at(run(['@c..', 'HIY.', 'THIP'], 'R'), 2, 0), ['CRATE']));
+    t('assignment',       () => eq(at(run(['@.s', 'HIY', 'SEK'], ''), 2, 0), ['KEY']));
+    t('assignments run in order', () => eq(at(run(['@.s', 'HIY', 'SEK', 'KEG'], ''), 2, 0), ['GEM']));
+    t('swap needs a temp',() => { const s = run(['@sk', 'HIY', 'SEK', 'KES'], ''); eq([at(s, 1, 0), at(s, 2, 0)], [['SKULL'], ['SKULL']]); });
+    t('assignment ignores words', () => eq(SyntaxTemple.rules(run(['@.s', 'HIY', 'SEK'], '')).listing.length, 2));
+    t('if on false',      () => eq(SyntaxTemple.rules(run(['@f.d....', 'HIY.....', 'QHLFRDIO'], '')).listing.at(-1).active, false));
+    t('if on true',       () => eq(SyntaxTemple.rules(run(['@f.d....', 'HIY.....', 'QHLFRDIO'], 'R')).props.DOOR.has('OPEN'), true));
+    t('if near',          () => eq(at(run(['@.d.s...', 'HIY.....', 'QHMDRSEG'], 'R'), 4, 0), ['GEM']));
+    t('if no',            () => eq(SyntaxTemple.rules(run(['@.d....', 'HIY....', 'QBSRDIV'], '')).props.DOOR.has('WIN'), true));
+    t('conditional sees this turn\'s destruction', () => eq(run(['@s~....', 'HIY....', 'SIPNAIJ', 'QBSRHIV'], 'R').won, true));
+    t('oscillating program terminates', () => eq(run(['@sk.....', 'HIY.....', 'QBKRSEK.', 'QBSRKES.'], '').ents.length > 0, true));
+    t('won state is frozen', () => { const s = run(['@g.', 'HIY', 'GIV'], 'R'); eq(SyntaxTemple.step(s, 'L') === s, true); });
+    t('step does not mutate', () => { const a = run(['@..', 'HIY'], ''); const j = JSON.stringify(a); SyntaxTemple.step(a, 'R'); eq(JSON.stringify(a), j); });
     /*TESTS*/
 
     console.log(`${count - fails}/${count} tests passed`);
