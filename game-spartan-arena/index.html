@@ -24,6 +24,7 @@
 <canvas id="view"></canvas>
 <canvas id="hud"></canvas>
 <div id="error"></div>
+<audio id="music" src="music.mp3" loop preload="none"></audio>
 <script id="shared-code">
 "use strict";
 // ---------------------------------------------------------------------------
@@ -1831,9 +1832,136 @@ function makeBot(seed) {
   };
 }
 
+// ---------------------------------------------------------------- sound: synthesised Web Audio, created on the first key press
+function createAudio() {
+  let ctx = null, master = null, analyser = null, crowd = null, booGain = null, noiseBuf = null;
+  let on = true;
+  try { on = localStorage.getItem("spartan-arena-sound") !== "off"; } catch (e) {}
+  const musicEl = document.getElementById("music");
+  let musicOk = false;
+  fetch("music.mp3", { method: "HEAD" }).then(r => { musicOk = r.ok; if (musicOk && ctx && on) musicEl.play().catch(() => {}); }).catch(() => {});
+  const lastAt = {};
+  function unlock() {
+    if (ctx) { if (ctx.state === "suspended") ctx.resume(); return; }
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain(); master.gain.value = on ? 0.8 : 0;
+    const comp = ctx.createDynamicsCompressor();
+    analyser = ctx.createAnalyser(); analyser.fftSize = 1024;
+    master.connect(comp); comp.connect(analyser); analyser.connect(ctx.destination);
+    // two seconds of pink-ish noise, shared by every noisy sound
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0); let b0 = 0, b1 = 0, b2 = 0;
+    for (let i = 0; i < d.length; i++) { const w = Math.random() * 2 - 1; b0 = 0.997 * b0 + w * 0.029; b1 = 0.985 * b1 + w * 0.032; b2 = 0.95 * b2 + w * 0.048; d[i] = (b0 + b1 + b2 + w * 0.05) * 0.9; }
+    // crowd bed: noise through a voice-band filter, louder when they cheer
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 700; bp.Q.value = 0.6;
+    crowd = ctx.createGain(); crowd.gain.value = 0.05;
+    src.connect(bp); bp.connect(crowd); crowd.connect(master); src.start();
+    // booing: a low formant, wobbling
+    const src2 = ctx.createBufferSource(); src2.buffer = noiseBuf; src2.loop = true; src2.playbackRate.value = 0.7;
+    const lp = ctx.createBiquadFilter(); lp.type = "bandpass"; lp.frequency.value = 260; lp.Q.value = 2.5;
+    booGain = ctx.createGain(); booGain.gain.value = 0;
+    src2.connect(lp); lp.connect(booGain); booGain.connect(master); src2.start();
+    if (musicOk && on) musicEl.play().catch(() => {});
+  }
+  const now = () => ctx.currentTime;
+  function env(g, t, peak, attack, decay) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay); }
+  function noise(t, dur, filterType, freq, q, peak, attack = 0.004, rate = 1) {
+    const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = rate;
+    const f = ctx.createBiquadFilter(); f.type = filterType; f.frequency.value = freq; f.Q.value = q;
+    const g = ctx.createGain(); env(g, t, peak, attack, dur);
+    s.connect(f); f.connect(g); g.connect(master);
+    s.start(t, Math.random() * 1.5); s.stop(t + attack + dur + 0.05);
+    return f;
+  }
+  function tone(t, type, f0, f1, dur, peak, attack = 0.005) {
+    const o = ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    const g = ctx.createGain(); env(g, t, peak, attack, dur);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + attack + dur + 0.05);
+    return o;
+  }
+  const SOUNDS = {
+    thud: (o = {}) => { const t = now(); noise(t, 0.12, "lowpass", 700, 0.7, 0.6 * (o.v || 1)); tone(t, "sine", 140, 50, 0.14, 0.5 * (o.v || 1)); },
+    block: () => { const t = now(); noise(t, 0.08, "bandpass", 1800, 1.5, 0.35); },
+    clang: (o = {}) => { const t = now(); for (const [f, a] of [[523, 0.16], [1311, 0.1], [2093, 0.07]]) tone(t, "square", f * (o.pitch || 1), f * (o.pitch || 1) * 0.98, 0.35, a, 0.002); noise(t, 0.05, "highpass", 3000, 0.7, 0.2); },
+    whoosh: () => { const t = now(); const f = noise(t, 0.2, "bandpass", 400, 1.2, 0.25, 0.03); f.frequency.exponentialRampToValueAtTime(2400, t + 0.2); },
+    chop: () => { const t = now(); SOUNDS.clang({ pitch: 0.8 }); noise(t + 0.03, 0.3, "lowpass", 400, 1, 0.7); tone(t + 0.03, "sine", 90, 35, 0.3, 0.6); },
+    lion: () => {
+      const t = now(), o = ctx.createOscillator(); o.type = "sawtooth"; o.frequency.setValueAtTime(110, t); o.frequency.linearRampToValueAtTime(80, t + 1.1);
+      const lfo = ctx.createOscillator(); lfo.frequency.value = 23; const lg = ctx.createGain(); lg.gain.value = 9; lfo.connect(lg); lg.connect(o.frequency);
+      const f1 = ctx.createBiquadFilter(); f1.type = "bandpass"; f1.frequency.value = 520; f1.Q.value = 3;
+      const g = ctx.createGain(); env(g, t, 0.5, 0.15, 1.0);
+      o.connect(f1); f1.connect(g); g.connect(master); o.start(t); lfo.start(t); o.stop(t + 1.3); lfo.stop(t + 1.3);
+      noise(t, 1.0, "bandpass", 300, 1.5, 0.35, 0.1);
+    },
+    elephant: () => {
+      const t = now(), o = ctx.createOscillator(); o.type = "sawtooth"; o.frequency.setValueAtTime(300, t); o.frequency.exponentialRampToValueAtTime(620, t + 0.35); o.frequency.exponentialRampToValueAtTime(540, t + 1.1);
+      const lfo = ctx.createOscillator(); lfo.frequency.value = 7; const lg = ctx.createGain(); lg.gain.value = 14; lfo.connect(lg); lg.connect(o.frequency);
+      const f = ctx.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = 950; f.Q.value = 2;
+      const g = ctx.createGain(); env(g, t, 0.35, 0.08, 1.05);
+      o.connect(f); f.connect(g); g.connect(master); o.start(t); lfo.start(t); o.stop(t + 1.3); lfo.stop(t + 1.3);
+    },
+    gate: () => { const t = now(); noise(t, 1.1, "lowpass", 140, 1, 0.6, 0.05); for (let k = 0; k < 14; k++) tone(t + k * 0.07, "square", 180, 120, 0.02, 0.12, 0.001); },
+    thunder: () => { const t = now(); noise(t, 0.25, "highpass", 2500, 0.7, 0.6, 0.001); noise(t + 0.02, 1.0, "lowpass", 200, 0.8, 0.8, 0.01); tone(t, "sine", 70, 35, 0.9, 0.6); },
+    blip: (o = {}) => { const t = now(); tone(t, "square", o.f || 660, o.f || 660, 0.06, 0.12, 0.002); },
+    gong: () => { const t = now(); for (const [f, a] of [[98, 0.4], [196, 0.2], [293, 0.12], [415, 0.08]]) tone(t, "sine", f, f * 0.99, 2.2, a, 0.01); },
+    jump: () => { const t = now(); noise(t, 0.08, "lowpass", 900, 0.7, 0.18); },
+  };
+  function play(name, opts) {
+    if (!ctx || !on) return;
+    const t = performance.now();
+    if (lastAt[name] && t - lastAt[name] < 30) return;     // two of the same sound in one frame is one sound
+    lastAt[name] = t;
+    SOUNDS[name](opts);
+  }
+  const MOOD_GAIN = { calm: 0.05, cheer: 0.16, roar: 0.28, boo: 0.08 };
+  let mood = "calm";
+  function setMood(m) {
+    if (!ctx || m === mood) return;
+    mood = m;
+    crowd.gain.setTargetAtTime(MOOD_GAIN[m] || 0.05, now(), m === "calm" ? 0.8 : 0.15);
+    booGain.gain.setTargetAtTime(m === "boo" ? 0.35 : 0, now(), 0.2);
+  }
+  function event(e, m) {
+    switch (e.type) {
+      case "attack":
+        if (SA.MOVES[e.move] && SA.MOVES[e.move].sword || e.move === "throw") play("whoosh");
+        break;
+      case "hit": play("thud", { v: Math.min(1.4, 0.5 + e.dmg / 15) }); if (e.sword) play("clang", { pitch: 1.3 }); break;
+      case "block": if (e.shield) play("clang"); else play("block"); break;
+      case "chop": play("chop"); break;
+      case "ko": play("gong"); break;
+      case "gate": play("gate"); break;
+      case "roar": play(e.kind === "elephant" ? "elephant" : "lion"); break;
+      case "animalAttack": if (e.attack === "pounce" || e.attack === "charge") play(e.kind === "elephant" ? "elephant" : "lion"); break;
+      case "animalHit": play("thud", { v: 0.8 }); break;
+      case "thunder": play("thunder"); break;
+      case "pick": play("blip", { f: 880 }); break;
+      case "cursor": play("blip", { f: 520 }); break;
+      case "jump": play("jump"); break;
+      case "propLand": play("clang", { pitch: 1.6 }); break;
+      case "thumbsDown": case "champion": play("gong"); break;
+    }
+  }
+  function toggle() {
+    on = !on;
+    try { localStorage.setItem("spartan-arena-sound", on ? "on" : "off"); } catch (e) {}
+    if (master) master.gain.setTargetAtTime(on ? 0.8 : 0, now(), 0.02);
+    musicEl.muted = !on;
+    if (on && musicOk && ctx) musicEl.play().catch(() => {});
+  }
+  function rms() {
+    if (!analyser) return 0;
+    const buf = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(buf);
+    let s = 0; for (const v of buf) s += v * v; return Math.sqrt(s / buf.length);
+  }
+  return { unlock, toggle, play, setMood, event, rms, get ctx() { return ctx; }, get on() { return on; }, musicEl };
+}
+
 // ---------------------------------------------------------------- the game
 async function runGame() {
   const arena = createArena();
+  const audio = window.__audio = createAudio();
   const seed = +(params.get("seed") || (Date.now() % 100000));
   const lvl = params.get("level") ? Math.max(1, Math.min(3, +params.get("level"))) : null;
   const phaseParam = params.get("phase") || (lvl ? "fight" : "title");
@@ -2071,6 +2199,7 @@ async function runGame() {
     // crowd and Caesar
     if (moodHold > 0) { moodHold -= dt * 60; if (moodHold <= 0) arena.setMood("calm"); }
     arena.update(dt);
+    audio.setMood(arena.mood);
     if (flashT > 0) {
       const f = m.fighters.find(f => f.move && f.move.name === "thunder") || m.fighters[0];
       flash.position.set(f.x + f.facing * 20, 40, 20); flash.intensity = flashT * 4000; flashT = Math.max(0, flashT - dt * 2.5);
@@ -2221,7 +2350,7 @@ async function runGame() {
   if (m.phase === "salute") handleEvents([{ type: "salute", level: m.level }]);
   if (m.phase === "fight") handleEvents([{ type: "roundStart", round: m.round }]);
   window.__sa = {
-    match: m, rigs, arena, beasts,
+    match: m, rigs, arena, beasts, audio,
     step(n = 1) { simTicks(n); frame(n / 60); return m.phase; },
     render() { frame(1 / 60); },
     chop(who = 1, arm = "sword") { SA.chop(m, m.fighters[who], arm, { mid: true }); handleEvents(m.events.splice(0)); frame(1 / 60); },
