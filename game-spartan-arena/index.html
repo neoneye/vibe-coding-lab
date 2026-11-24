@@ -256,7 +256,7 @@ SA.newFighter = function (id, level) {
     health: 100, state: "idle", st: 0, move: null,
     arms: { sword: { wound: 0, on: true }, shield: { wound: 0, on: true } },
     hasSword: level >= 2, charge: 0, thunder: 0, rewards: [], stamina: 100,
-    hitstun: 0, invuln: 0, blocking: false, lastAttack: 0,
+    hitstun: 0, invuln: 0, blocking: false, lastAttack: 0, staminaDelay: 0,
   };
 };
 SA.createMatch = function ({ seed = 1, level = 1, round = 1, phase = "fight" } = {}) {
@@ -333,14 +333,157 @@ SA.faceEachOther = function (m) {
     if (want !== f.facing) { f.facing = want; SA.emit(m, { type: "turn", who: f.id }); }
   }
 };
+// ---------------------------------------------------------------------------
+// Moves. Hitbox: from the fighter's x forward by reach, heights y0..y1 from the fighter's feet.
+// Hurt zones (from the feet): legs 0-18 low, body 18-40 mid, head 40-54 high.
+// A low attack misses a jumping fighter; a high attack misses a crouching one.
+// ---------------------------------------------------------------------------
+SA.MOVES = {
+  punch:     { startup: 4,  active: 3, recovery: 8,  damage: 5,  reach: 20, y0: 36, y1: 50, height: "high", knock: 1.5 },
+  kick:      { startup: 7,  active: 4, recovery: 12, damage: 7,  reach: 26, y0: 20, y1: 40, height: "mid",  knock: 2.5 },
+  sweep:     { startup: 8,  active: 4, recovery: 16, damage: 6,  reach: 28, y0: 0,  y1: 10, height: "low",  knock: 1, knockdown: true },
+  jumpKick:  { startup: 3,  active: 8, recovery: 0,  damage: 8,  reach: 22, y0: -10, y1: 22, height: "high", knock: 2, air: true },
+  slash:     { startup: 6,  active: 4, recovery: 12, damage: 10, reach: 30, y0: 24, y1: 48, height: "mid",  knock: 2, sword: true },
+  jumpSlash: { startup: 4,  active: 6, recovery: 0,  damage: 11, reach: 30, y0: -4, y1: 30, height: "high", knock: 2, sword: true, air: true },
+  charged:   { startup: 10, active: 5, recovery: 22, damage: 22, reach: 34, y0: 30, y1: 58, height: "high", knock: 6, sword: true, lunge: 2 },
+};
+Object.assign(SA.K, {
+  HITSTUN: 14, DOWN_TICKS: 40, CHARGE_TICKS: 60,
+  BLOCK_PLAIN: 0.5, BLOCK_SHIELD: 0.1, SHIELD_STAMINA: 12, STAMINA_REGEN: 0.25, STAMINA_DELAY: 60,
+  QUIET_BOO: 360,
+});
+SA.canSword = f => f.hasSword && f.arms.sword.on;
+SA.startMove = function (m, f, name) {
+  f.move = { name, t: 0, hits: [] };
+  f.state = "attack"; f.st = 0;
+  const mv = SA.MOVES[name];
+  if (!mv.air) f.vx = mv.lunge ? mv.lunge * f.facing : 0;
+  f.lastAttack = m.tick; m.quietT = 0;
+  SA.emit(m, { type: "attack", who: f.id, move: name });
+};
+SA.isFree = f => f.state === "idle" || f.state === "walk" || f.state === "crouch" || f.state === "charging";
+// Attack and charge input for one fighter.
+SA.controlAttack = function (m, f, inp) {
+  const sword = SA.canSword(f);
+  // charging: punch held since it was pressed; release after a full second fires the charged strike
+  if (sword && inp.held.punch) f.charge++;
+  if (f.state === "charging") {
+    f.vx = 0;
+    if (!inp.held.punch) {
+      const full = f.charge >= SA.K.CHARGE_TICKS;
+      f.charge = 0;
+      if (full) SA.startMove(m, f, "charged"); else SA.setState(f, "idle");
+      return;
+    }
+  }
+  if (!inp.held.punch && f.state !== "attack") f.charge = 0;
+  if (f.state === "attack" || f.state === "charging") return;
+  if (!grounded(f)) {
+    if (f.state === "jump" && !f.move && (inp.pressed.punch || inp.pressed.kick)) {
+      SA.startMove(m, f, inp.pressed.punch && sword ? "jumpSlash" : "jumpKick");
+      f.state = "jump";
+    }
+    return;
+  }
+  if (!SA.isFree(f)) return;
+  if (inp.pressed.punch) { SA.startMove(m, f, sword ? "slash" : "punch"); f.charge = sword ? 1 : 0; }
+  else if (inp.pressed.kick) SA.startMove(m, f, inp.held.down ? "sweep" : "kick");
+};
+// Advance a fighter's current move and timers.
+SA.updateMove = function (m, f, inp) {
+  if (f.invuln > 0) f.invuln--;
+  if (f.staminaDelay > 0) f.staminaDelay--; else f.stamina = Math.min(100, f.stamina + SA.K.STAMINA_REGEN);
+  if (f.state === "hit" && f.st >= f.hitstun) SA.setState(f, "idle");
+  if (f.state === "down" && f.st >= SA.K.DOWN_TICKS) { SA.setState(f, "idle"); f.invuln = 20; }
+  if (!f.move) return;
+  const mv = SA.MOVES[f.move.name];
+  f.move.t++;
+  if (mv.lunge && f.move.t > mv.startup) f.vx *= 0.7;
+  if (!mv.air && f.move.t >= mv.startup + mv.active + mv.recovery) {
+    f.move = null;
+    if (inp && inp.held.punch && SA.canSword(f) && f.charge > 0) SA.setState(f, "charging");
+    else SA.setState(f, "idle");
+  }
+};
+SA.moveActive = function (f) {
+  if (!f.move) return null;
+  const mv = SA.MOVES[f.move.name], t = f.move.t;
+  return t >= mv.startup && t < mv.startup + mv.active ? mv : null;
+};
+// Does an active move's hitbox overlap a body (x centre, half width, feet y, height)?
+SA.hitboxTouches = function (f, mv, bx, bhw, by, bh) {
+  const x0 = f.facing > 0 ? f.x : f.x - mv.reach, x1 = f.facing > 0 ? f.x + mv.reach : f.x;
+  const y0 = f.y + mv.y0, y1 = f.y + mv.y1;
+  return x1 >= bx - bhw && x0 <= bx + bhw && y1 >= by && y0 <= by + bh;
+};
+SA.blockCovers = (mv, d) => (d.state === "crouch" ? mv.height !== "high" : mv.height !== "low");
+SA.zoneOf = function (mv, a, d) {
+  const mid = a.y + (mv.y0 + mv.y1) / 2 - d.y;
+  return mid >= 40 ? "head" : mid >= 18 ? "body" : "legs";
+};
+// One fighter's active move against the other.
+SA.resolveHit = function (m, a, d) {
+  const mv = SA.moveActive(a);
+  if (!mv || a.move.hits.includes(d.id) || d.invuln > 0 || d.state === "ko") return;
+  if (mv.height === "low" && d.y > 6) return;
+  if (mv.height === "high" && d.state === "crouch" && !mv.air) return;
+  if (!SA.hitboxTouches(a, mv, d.x, SA.K.BODY_W / 2, d.y, SA.fighterHeight(d))) return;
+  a.move.hits.push(d.id);
+  const K = SA.K;
+  const blocked = d.blocking && SA.isFree(d) && d.state !== "charging" && SA.blockCovers(mv, d);
+  let dmg = mv.damage;
+  if (blocked) {
+    const shield = m.level >= 2 && d.arms.shield.on && d.stamina > 0;
+    dmg *= shield ? K.BLOCK_SHIELD : K.BLOCK_PLAIN;
+    if (shield) { d.stamina = Math.max(0, d.stamina - K.SHIELD_STAMINA); d.staminaDelay = K.STAMINA_DELAY; }
+    d.vx = a.facing * mv.knock * 0.5;
+    SA.emit(m, { type: "block", who: d.id, by: a.id, shield, move: a.move.name, x: d.x, y: d.y + 36 });
+  } else {
+    d.move = null; d.charge = 0;
+    if (mv.knockdown || mv.knock >= 6) { SA.setState(d, "down"); d.invuln = K.DOWN_TICKS; }
+    else { SA.setState(d, "hit"); d.hitstun = K.HITSTUN; }
+    d.vx = a.facing * mv.knock;
+    SA.emit(m, { type: "hit", who: d.id, by: a.id, dmg, move: a.move.name, zone: SA.zoneOf(mv, a, d), sword: !!mv.sword, x: d.x, y: d.y + a.y + (mv.y0 + mv.y1) / 2 });
+  }
+  d.health = Math.max(0, d.health - dmg);
+  return { blocked, mv };
+};
+SA.resetRound = function (m) {
+  m.fighters = m.fighters.map(f => { const n = SA.newFighter(f.id, m.level); n.rewards = f.rewards; return n; });
+  m.timer = SA.K.ROUND_TICKS; m.winner = null; m.props = []; m.animal = null; m.quietT = 0;
+};
+SA.endRound = function (m, winner, why) {
+  if (winner === null) {
+    SA.emit(m, { type: "draw", why });
+    SA.resetRound(m);
+    m.phase = "fight"; m.phaseT = 0;
+    return;
+  }
+  m.winner = winner;
+  if (why === "ko") SA.emit(m, { type: "ko", who: 1 - winner });
+  else SA.emit(m, { type: "timeout", winner });
+  m.phase = "verdict"; m.phaseT = 0;
+  const l = m.fighters[1 - winner];
+  l.move = null; SA.setState(l, "dazed"); l.vx = 0;
+};
 SA.fightTick = function (m, inputs) {
   const [a, b] = m.fighters;
   for (const f of m.fighters) { f.st++; }
+  for (const [f, i] of [[a, 0], [b, 1]]) { SA.updateMove(m, f, inputs[i]); }
   SA.controlMove(m, a, inputs[0], b);
   SA.controlMove(m, b, inputs[1], a);
+  SA.controlAttack(m, a, inputs[0]);
+  SA.controlAttack(m, b, inputs[1]);
   for (const f of m.fighters) SA.physics(m, f);
   SA.separate(a, b, SA.K.BODY_W);
   SA.faceEachOther(m);
+  SA.resolveHit(m, a, b);
+  SA.resolveHit(m, b, a);
+  // round end: KO, or time-out
+  const ka = a.health <= 0, kb = b.health <= 0;
+  if (ka || kb) { SA.endRound(m, ka && kb ? null : ka ? 1 : 0, "ko"); return; }
+  if (--m.timer <= 0) { SA.endRound(m, a.health === b.health ? null : a.health > b.health ? 0 : 1, "timeout"); return; }
+  if (++m.quietT >= SA.K.QUIET_BOO) { m.quietT = 0; SA.emit(m, { type: "boo" }); }
 };
 SA.step = function (m, inputs) {
   m.events = [];
@@ -430,6 +573,35 @@ var SATests = {
       check("and lands again", m.fighters[0].y === 0 && m.fighters[0].state === "idle");
       m = SA.createMatch({ seed: 1 }); runTicks(m, 5, [I({ down: 1 }), I({})]);
       check("holding down crouches", m.fighters[0].state === "crouch" && m.fighters[0].x === -60);
+    });
+
+    T("combat", () => {
+      let m = SA.createMatch({ seed: 1 }); face(m, 20); runTicks(m, 20, k => [k === 0 ? press("punch") : I({}), I({})]);
+      check("a punch in reach hits for 5", m.fighters[1].health === 95, m.fighters[1].health);
+      m = SA.createMatch({ seed: 1 }); face(m, 20); runTicks(m, 20, k => [k === 0 ? press("punch") : I({}), I({ right: 1 })]);
+      check("blocking halves fist damage", m.fighters[1].health === 97.5, m.fighters[1].health);
+      m = SA.createMatch({ seed: 1, level: 2 }); face(m, 24); runTicks(m, 25, k => [k === 0 ? press("punch") : I({}), I({ right: 1 })]);
+      check("a shield block takes 10% of a slash", m.fighters[1].health === 99 && m.fighters[1].stamina === 88, [m.fighters[1].health, m.fighters[1].stamina]);
+      m = SA.createMatch({ seed: 1 }); face(m, 20); runTicks(m, 30, k => [k === 0 ? press("kick", { down: 1 }) : I({ down: 1 }), I({ up: 1 })]);
+      check("a sweep misses a jumping fighter", m.fighters[1].health === 100, m.fighters[1].health);
+      m = SA.createMatch({ seed: 1 }); face(m, 20); runTicks(m, 30, k => [k === 0 ? press("kick", { down: 1 }) : I({ down: 1 }), I({ right: 1 })]);
+      check("a standing block does not stop a sweep", m.fighters[1].health === 94 && m.fighters[1].state === "down", [m.fighters[1].health, m.fighters[1].state]);
+      m = SA.createMatch({ seed: 1 }); face(m, 20); runTicks(m, 30, k => [k === 0 ? press("punch") : I({}), I({ down: 1 })]);
+      check("a crouching fighter ducks under a punch", m.fighters[1].health === 100, m.fighters[1].health);
+      m = SA.createMatch({ seed: 1 }); m.fighters[1].health = 3; face(m, 20); runTicks(m, 20, k => [k === 0 ? press("punch") : I({}), I({})]);
+      check("KO starts Caesar's verdict", m.phase === "verdict" && m.winner === 0, [m.phase, m.winner]);
+      m = SA.createMatch({ seed: 1 }); m.timer = 1; m.fighters[0].health = 50; runTicks(m, 2, [I({}), I({})]);
+      check("time-out goes to more health", m.phase === "verdict" && m.winner === 1, [m.phase, m.winner]);
+      m = SA.createMatch({ seed: 1 }); m.timer = 1; runTicks(m, 2, [I({}), I({})]);
+      check("equal health at time-out replays the round", m.log.some(e => e.type === "draw") && m.round === 1 && m.phase === "fight" && m.timer > 5000);
+      m = SA.createMatch({ seed: 1 }); runTicks(m, 361, [I({}), I({})]);
+      check("six quiet seconds make the crowd boo", m.log.some(e => e.type === "boo"));
+      m = SA.createMatch({ seed: 1, level: 2 }); face(m, 24);
+      runTicks(m, 120, k => [k < 80 ? press("punch") : I({}), I({})]);
+      check("holding slash after a slash and releasing fires a charged strike", m.log.some(e => e.type === "hit" && e.move === "charged"), m.log.filter(e => e.type === "hit").map(e => e.move).join());
+      m = SA.createMatch({ seed: 1, level: 2 }); face(m, 24);
+      runTicks(m, 60, k => [k < 30 ? press("punch") : I({}), I({})]);
+      check("releasing too early fires no charged strike", !m.log.some(e => e.move === "charged"));
     });
 
     return ok;
