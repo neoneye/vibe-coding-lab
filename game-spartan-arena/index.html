@@ -4,8 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Spartan Arena</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #120c08; overflow: hidden; }
+  #view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #hud { position: fixed; left: 0; top: 0; image-rendering: pixelated; pointer-events: none; }
+  #error { position: fixed; inset: 0; display: none; padding: 32px 16px; box-sizing: border-box; color: #f0ece0;
+    background: #2a1810; font: 16px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow: auto; }
+  #error b { color: #f06a50; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
 </head>
 <body>
+<canvas id="view"></canvas>
+<canvas id="hud"></canvas>
+<div id="error"></div>
 <script id="shared-code">
 "use strict";
 // ---------------------------------------------------------------------------
@@ -216,6 +233,224 @@ var SATests = {
     return ok;
   },
 };
+</script>
+<script type="module">
+import * as THREE from "three";
+
+// ===========================================================================
+// Presentation: three.js voxel rendering of the SA core.
+// ===========================================================================
+const params = new URLSearchParams(location.search);
+const errorBox = document.getElementById("error");
+function showError(title, lines) {
+  errorBox.style.display = "block";
+  errorBox.innerHTML = `<b>${title}</b>\n\n` + lines.map(l => String(l).replace(/&/g, "&amp;").replace(/</g, "&lt;")).join("\n");
+}
+
+// ---------------------------------------------------------------- sheets
+async function loadSheets() {
+  if (location.protocol === "file:") {
+    showError("Spartan Arena needs a web server", [
+      "The browser does not let a page opened from disk read the pixels of its PNG files.",
+      "From the repository root, run:",
+      "",
+      "    python3 -m http.server 8000",
+      "",
+      "and open http://localhost:8000/game-spartan-arena/",
+    ]);
+    throw new Error("file protocol");
+  }
+  const entries = SA.sheetPaths(), out = new Map(), problems = [];
+  await Promise.all(entries.map(async e => {
+    try {
+      const res = await fetch(e.path, { cache: "no-cache" });
+      if (!res.ok) { problems.push(`${e.path}: missing (HTTP ${res.status}); expected a ${e.w * SA.SLICES}x${e.h} PNG`); return; }
+      const bmp = await createImageBitmap(await res.blob());
+      const bad = SA.checkSheet(e, bmp.width, bmp.height);
+      if (bad) { problems.push(bad); return; }
+      const cv = new OffscreenCanvas(bmp.width, bmp.height), cx = cv.getContext("2d", { willReadFrequently: true });
+      cx.drawImage(bmp, 0, 0);
+      out.set(`${e.model}/${e.sheet}`, { w: e.w, h: e.h, rgba: cx.getImageData(0, 0, bmp.width, bmp.height).data });
+    } catch (err) { problems.push(`${e.path}: ${err.message}`); }
+  }));
+  if (problems.length) { showError("Some voxel sheets could not be used", problems.sort()); throw new Error("sheets"); }
+  return out;
+}
+
+// ---------------------------------------------------------------- rigs
+let SHEETS = null;
+const geomCache = new Map();
+const voxelMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+const tmpColor = new THREE.Color();
+function sheetGeometry(model, sheet, team) {
+  const key = `${model}/${sheet}/${team || 0}`;
+  if (geomCache.has(key)) return geomCache.get(key);
+  const s = SHEETS.get(`${model}/${sheet}`);
+  const m = SA.meshSlices(s.rgba, s.w * SA.SLICES, s.h, SA.SLICES, model === "gladiator" ? SA.teamRecolor(team) : null);
+  const lin = new Float32Array(m.colors.length);
+  for (let i = 0; i < lin.length; i += 3) { tmpColor.setRGB(m.colors[i], m.colors[i + 1], m.colors[i + 2], THREE.SRGBColorSpace); lin[i] = tmpColor.r; lin[i + 1] = tmpColor.g; lin[i + 2] = tmpColor.b; }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(m.positions, 3));
+  g.setAttribute("normal", new THREE.BufferAttribute(m.normals, 3));
+  g.setAttribute("color", new THREE.BufferAttribute(lin, 3));
+  g.setIndex(new THREE.BufferAttribute(m.indices, 1));
+  g.computeBoundingSphere();
+  geomCache.set(key, g);
+  return g;
+}
+const DEG = Math.PI / 180;
+// Rig = { root, joints, meshes, model, footOffset, setLevel(level) }
+function buildRig(model, team = 0) {
+  const M = SA.MODELS[model], joints = {}, meshes = {};
+  const root = new THREE.Group();
+  const make = name => {
+    if (joints[name]) return joints[name];
+    const p = M.parts[name], j = new THREE.Group();
+    j.name = name;
+    j.userData.rest = new THREE.Quaternion().setFromEuler(new THREE.Euler(...(p.rest || [0, 0, 0]).map(d => d * DEG), "XYZ"));
+    j.quaternion.copy(j.userData.rest);
+    if (p.parent) {
+      const pp = M.parts[p.parent];
+      j.position.set(p.at[0] - pp.pivot[0], p.at[1] - pp.pivot[1], p.at[2] - pp.pivot[2]);
+      make(p.parent).add(j);
+    } else root.add(j);
+    const mesh = new THREE.Mesh(sheetGeometry(model, p.sheet, team), voxelMat);
+    mesh.position.set(-p.pivot[0], -p.pivot[1], -p.pivot[2]);
+    mesh.castShadow = mesh.receiveShadow = true;
+    j.add(mesh);
+    joints[name] = j; meshes[name] = mesh;
+    return j;
+  };
+  for (const name of Object.keys(M.parts)) make(name);
+  const rig = { root, joints, meshes, model, team, footOffset: 0 };
+  rig.setLevel = level => { for (const [n, p] of Object.entries(M.parts)) meshes[n].visible = !p.level || level >= p.level; };
+  // rest-pose height of the lowest voxel, so the rig can be stood on the ground
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  for (const [n, mesh] of Object.entries(meshes)) if (!M.parts[n].level) box.expandByObject(mesh);
+  rig.footOffset = -box.min.y;
+  rig.height = box.max.y - box.min.y;
+  rig.width = box.max.x - box.min.x;
+  return rig;
+}
+const tmpQ = new THREE.Quaternion(), tmpE = new THREE.Euler();
+// pose = { part: [rx, ry, rz] } in degrees, applied on top of the rest rotation
+function applyPose(rig, pose) {
+  for (const [name, j] of Object.entries(rig.joints)) {
+    const r = pose && pose[name];
+    if (r) { tmpE.set(r[0] * DEG, r[1] * DEG, r[2] * DEG, "XYZ"); j.quaternion.copy(j.userData.rest).multiply(tmpQ.setFromEuler(tmpE)); }
+    else j.quaternion.copy(j.userData.rest);
+  }
+}
+
+// ---------------------------------------------------------------- renderer: low-res target, whole-number upscale
+const canvas = document.getElementById("view");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance", preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.BasicShadowMap;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x6e9dd2);
+const camera = new THREE.PerspectiveCamera(28, 16 / 9, 10, 3000);
+const sun = new THREE.DirectionalLight(0xffe2b0, 2.6);
+sun.position.set(-140, 260, 200);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -300, right: 300, top: 160, bottom: -160, near: 10, far: 900 });
+sun.shadow.bias = -0.0015;
+sun.shadow.normalBias = 1.2;
+scene.add(sun, sun.target);
+scene.add(new THREE.HemisphereLight(0x9fc4ff, 0xc8a060, 1.1));
+
+const low = { w: 384, h: 216, k: 1, devW: 1, devH: 1 };
+let rt = null;
+const blitScene = new THREE.Scene(), blitCam = new THREE.OrthographicCamera(0, 1, 0, -1, -1, 1);
+const blitMat = new THREE.MeshBasicMaterial({ toneMapped: false });
+const blitQuad = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), blitMat);
+blitScene.add(blitQuad);
+const hudCanvas = document.getElementById("hud");
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  low.devW = Math.max(1, Math.round(innerWidth * dpr));
+  low.devH = Math.max(1, Math.round(innerHeight * dpr));
+  low.k = Math.max(1, Math.round(low.devH / 216));
+  low.w = Math.ceil(low.devW / low.k);
+  low.h = Math.ceil(low.devH / low.k);
+  renderer.setSize(low.devW, low.devH, false);
+  if (rt) rt.dispose();
+  rt = new THREE.WebGLRenderTarget(low.w, low.h, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, type: THREE.HalfFloatType, depthBuffer: true });
+  blitMat.map = rt.texture; blitMat.needsUpdate = true;
+  // the quad covers low.w*k x low.h*k device pixels from the top-left; any overflow is clipped
+  Object.assign(blitCam, { left: 0, right: low.devW, top: 0, bottom: -low.devH });
+  blitCam.updateProjectionMatrix();
+  blitQuad.scale.set(low.w * low.k, low.h * low.k, 1);
+  blitQuad.position.set(low.w * low.k / 2, -low.h * low.k / 2, 0);
+  camera.aspect = low.w / low.h;
+  camera.updateProjectionMatrix();
+  hudCanvas.width = low.w; hudCanvas.height = low.h;
+  hudCanvas.style.width = (low.w * low.k / dpr) + "px";
+  hudCanvas.style.height = (low.h * low.k / dpr) + "px";
+}
+addEventListener("resize", resize);
+resize();
+function draw() {
+  renderer.setRenderTarget(rt);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+  renderer.render(blitScene, blitCam);
+}
+
+// ---------------------------------------------------------------- model viewer (?view=<model>)
+const VIEW_POSES = {
+  gladiator: [
+    {},
+    { armNearUpper: [0, 0, 70], armNearLower: [0, 0, 60], armFarUpper: [0, 0, -40], armFarLower: [0, 0, 90] },
+    { legNearUpper: [0, 0, 70], legNearLower: [0, 0, -20], armNearUpper: [0, 0, 30], armFarUpper: [0, 0, -30] },
+    { torso: [0, 0, 10], head: [0, 0, -10], armFarUpper: [0, 0, 160], armFarLower: [0, 0, 20] },
+    { legNearUpper: [0, 0, 40], legNearLower: [0, 0, -80], legFarUpper: [0, 0, -30], legFarLower: [0, 0, -30] },
+  ],
+  caesar: [{}, { armUpper: [0, 0, 80], armLower: [0, 0, 10], thumb: [0, 0, 0] }, { armUpper: [0, 0, 80], armLower: [0, 0, 10], thumb: [0, 0, 180] }],
+  lion: [{}, { head: [0, 0, 15], legNearFront: [0, 0, 40], legFarFront: [0, 0, 40], legNearBack: [0, 0, -40], legFarBack: [0, 0, -40] }],
+  elephant: [{}, { trunk: [0, 0, 60], trunkTip: [0, 0, 50], head: [0, 0, 10], earNear: [-30, 0, 0] }],
+  spectator: [{}, { armL: [0, 0, 170], armR: [0, 0, 170] }],
+};
+async function runViewer(model) {
+  const level = +(params.get("level") || 2), team = +(params.get("team") || 0);
+  const rig = buildRig(model, team);
+  rig.setLevel(level);
+  rig.root.position.y = rig.footOffset;
+  scene.add(rig.root);
+  const sand = new THREE.Mesh(new THREE.BoxGeometry(220, 2, 120), new THREE.MeshLambertMaterial({ color: 0xd8b878 }));
+  sand.position.y = -1; sand.receiveShadow = true;
+  scene.add(sand);
+  const h = Math.max(30, rig.height, rig.width * 0.75);
+  camera.position.set(0, h * 0.75, h * 3.4);
+  camera.lookAt(0, h * 0.45, 0);
+  let poseIx = 0, yaw = -25, spin = params.get("spin") !== "0";
+  addEventListener("keydown", e => {
+    const n = +e.key;
+    if (n >= 1 && n <= 9) poseIx = n - 1;
+    if (e.key === " ") spin = !spin;
+  });
+  const frame = () => {
+    if (spin) yaw += 0.5;
+    rig.root.rotation.y = yaw * DEG;
+    applyPose(rig, (VIEW_POSES[model] || [{}])[poseIx] || {});
+    draw();
+  };
+  window.__sa = { rig, render: frame, setYaw: d => { yaw = d; spin = false; frame(); }, setPose: i => { poseIx = i; frame(); } };
+  const loop = () => { frame(); requestAnimationFrame(loop); };
+  loop();
+}
+
+// ---------------------------------------------------------------- start
+try {
+  SHEETS = await loadSheets();
+  const view = params.get("view");
+  if (view && SA.MODELS[view]) await runViewer(view);
+} catch (e) {
+  if (!["file protocol", "sheets"].includes(e.message)) { showError("Spartan Arena failed to start", [e.stack || e.message]); console.error(e); }
+}
 </script>
 </body>
 </html>
