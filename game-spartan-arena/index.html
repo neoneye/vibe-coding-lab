@@ -346,6 +346,46 @@ SA.MOVES = {
   slash:     { startup: 6,  active: 4, recovery: 12, damage: 10, reach: 30, y0: 24, y1: 48, height: "mid",  knock: 2, sword: true },
   jumpSlash: { startup: 4,  active: 6, recovery: 0,  damage: 11, reach: 30, y0: -4, y1: 30, height: "high", knock: 2, sword: true, air: true },
   charged:   { startup: 10, active: 5, recovery: 22, damage: 22, reach: 34, y0: 30, y1: 58, height: "high", knock: 6, sword: true, lunge: 2 },
+  // reward moves
+  throw:     { startup: 8,  active: 1, recovery: 14, damage: 0,  reach: 0,  y0: 0,  y1: 0,  height: "mid",  knock: 0, noHit: true },
+  stomp:     { startup: 0,  active: 99, recovery: 0, damage: 16, reach: 10, y0: -8, y1: 10, height: "high", knock: 3, air: true, around: true },
+  fury:      { startup: 4,  active: 20, recovery: 10, damage: 4, reach: 22, y0: 26, y1: 46, height: "mid",  knock: 0.3, rehit: 4 },
+  whirl:     { startup: 4,  active: 16, recovery: 4,  damage: 12, reach: 22, y0: 4,  y1: 40, height: "mid",  knock: 6, around: true },
+  thunder:   { startup: 10, active: 4, recovery: 16, damage: 25, reach: 34, y0: 14, y1: 50, height: "mid",  knock: 4, blockMul: 0.5 },
+  bash:      { startup: 2,  active: 15, recovery: 10, damage: 6,  reach: 10, y0: 10, y1: 50, height: "mid",  knock: 1, stun: 30, dash: 3 },
+};
+Object.assign(SA.K, { LEAP_VY: 7.4, STOMP_VY: -10, THROW_VX: 7, THROW_DAMAGE: 14, THUNDER_PER_HIT: 20 });
+// Special = rewards[0], down + Special = rewards[1]. Returns false (a whiff) when the card can't be used.
+SA.useCard = function (m, f, card) {
+  const K = SA.K;
+  const whiff = () => { SA.emit(m, { type: "whiff", who: f.id, card }); return false; };
+  switch (card) {
+    case "swordThrow":
+      if (!SA.canSword(f) || !grounded(f)) return whiff();
+      SA.startMove(m, f, "throw"); return true;
+    case "leap":
+      if (grounded(f)) {
+        const dir = Math.sign(f.vx);
+        f.vy = K.LEAP_VY; f.vx = dir * K.WALK; f.y = 0.001; f.leap = true;
+        SA.setState(f, "jump"); SA.emit(m, { type: "jump", who: f.id, leap: true });
+        return true;
+      }
+      if (f.state === "jump" && !f.move) { SA.startMove(m, f, "stomp"); f.state = "jump"; f.vy = K.STOMP_VY; f.vx = 0; return true; }
+      return whiff();
+    case "furyFists":
+      if (!grounded(f) || (!f.arms.sword.on && !f.arms.shield.on)) return whiff();
+      SA.startMove(m, f, "fury"); return true;
+    case "whirlwind":
+      if (!grounded(f)) return whiff();
+      SA.startMove(m, f, "whirl"); SA.emit(m, { type: "spin", who: f.id }); return true;
+    case "thunder":
+      if (!grounded(f) || !SA.canSword(f) || f.thunder < 100) return whiff();
+      f.thunder = 0; SA.startMove(m, f, "thunder"); SA.emit(m, { type: "thunder", who: f.id }); return true;
+    case "shieldBash":
+      if (!grounded(f) || !f.arms.shield.on || m.level < 2) return whiff();
+      SA.startMove(m, f, "bash"); return true;
+  }
+  return false;
 };
 Object.assign(SA.K, {
   HITSTUN: 14, DOWN_TICKS: 40, CHARGE_TICKS: 60,
@@ -379,6 +419,10 @@ SA.controlAttack = function (m, f, inp) {
   }
   if (!inp.held.punch && f.state !== "attack") f.charge = 0;
   if (f.state === "attack" || f.state === "charging") return;
+  if (inp.pressed.special && (SA.isFree(f) || (f.state === "jump" && !f.move))) {
+    const card = f.rewards[inp.held.down ? 1 : 0];
+    if (card) { SA.useCard(m, f, card); return; }
+  }
   if (!grounded(f)) {
     if (f.state === "jump" && !f.move && (inp.pressed.punch || inp.pressed.kick)) {
       SA.startMove(m, f, inp.pressed.punch && sword ? "jumpSlash" : "jumpKick");
@@ -400,6 +444,13 @@ SA.updateMove = function (m, f, inp) {
   const mv = SA.MOVES[f.move.name];
   f.move.t++;
   if (mv.lunge && f.move.t > mv.startup) f.vx *= 0.7;
+  if (mv.rehit && f.move.t > mv.startup && (f.move.t - mv.startup) % mv.rehit === 0) f.move.hits = [];
+  if (mv.dash) f.vx = f.move.t >= mv.startup && f.move.t < mv.startup + mv.active ? mv.dash * f.facing : 0;
+  if (f.move.name === "throw" && f.move.t === mv.startup) {
+    f.hasSword = false;
+    m.props.push({ kind: "thrownSword", owner: f.id, x: f.x + f.facing * 10, y: 36, vx: SA.K.THROW_VX * f.facing, vy: 0, flying: true, landed: false });
+    SA.emit(m, { type: "throwSword", who: f.id });
+  }
   if (!mv.air && f.move.t >= mv.startup + mv.active + mv.recovery) {
     f.move = null;
     if (inp && inp.held.punch && SA.canSword(f) && f.charge > 0) SA.setState(f, "charging");
@@ -413,7 +464,8 @@ SA.moveActive = function (f) {
 };
 // Does an active move's hitbox overlap a body (x centre, half width, feet y, height)?
 SA.hitboxTouches = function (f, mv, bx, bhw, by, bh) {
-  const x0 = f.facing > 0 ? f.x : f.x - mv.reach, x1 = f.facing > 0 ? f.x + mv.reach : f.x;
+  const x0 = mv.around ? f.x - mv.reach : f.facing > 0 ? f.x : f.x - mv.reach;
+  const x1 = mv.around ? f.x + mv.reach : f.facing > 0 ? f.x + mv.reach : f.x;
   const y0 = f.y + mv.y0, y1 = f.y + mv.y1;
   return x1 >= bx - bhw && x0 <= bx + bhw && y1 >= by && y0 <= by + bh;
 };
@@ -428,26 +480,35 @@ SA.resolveHit = function (m, a, d) {
   if (!mv || a.move.hits.includes(d.id) || d.invuln > 0 || d.state === "ko") return;
   if (mv.height === "low" && d.y > 6) return;
   if (mv.height === "high" && d.state === "crouch" && !mv.air) return;
-  if (!SA.hitboxTouches(a, mv, d.x, SA.K.BODY_W / 2, d.y, SA.fighterHeight(d))) return;
+  if (mv.noHit || !SA.hitboxTouches(a, mv, d.x, SA.K.BODY_W / 2, d.y, SA.fighterHeight(d))) return;
   a.move.hits.push(d.id);
+  const r = SA.applyHit(m, a, d, mv, a.move.name);
+  if (mv.dash) { a.move.t = mv.startup + mv.active; a.vx = 0; }    // a bash stops on contact
+  return r;
+};
+// Damage, block, knockback and wounds of one blow (a move, or a thrown sword with moveName "thrownSword").
+SA.applyHit = function (m, a, d, mv, moveName) {
   const K = SA.K;
   const blocked = d.blocking && SA.isFree(d) && d.state !== "charging" && SA.blockCovers(mv, d);
   let dmg = mv.damage;
   if (blocked) {
     const shield = m.level >= 2 && d.arms.shield.on && d.stamina > 0;
-    dmg *= shield ? K.BLOCK_SHIELD : K.BLOCK_PLAIN;
+    dmg *= mv.blockMul || (shield ? K.BLOCK_SHIELD : K.BLOCK_PLAIN);
     if (shield) { d.stamina = Math.max(0, d.stamina - K.SHIELD_STAMINA); d.staminaDelay = K.STAMINA_DELAY; }
     d.vx = a.facing * mv.knock * 0.5;
-    SA.emit(m, { type: "block", who: d.id, by: a.id, shield, move: a.move.name, x: d.x, y: d.y + 36 });
+    SA.emit(m, { type: "block", who: d.id, by: a.id, shield, move: moveName, x: d.x, y: d.y + 36 });
   } else {
     d.move = null; d.charge = 0;
+    if (d.state === "charging") SA.setState(d, "idle");
+    const push = Math.sign(d.x - a.x) || a.facing;
     if (mv.knockdown || mv.knock >= 6) { SA.setState(d, "down"); d.invuln = K.DOWN_TICKS; }
-    else { SA.setState(d, "hit"); d.hitstun = K.HITSTUN; }
-    d.vx = a.facing * mv.knock;
-    SA.emit(m, { type: "hit", who: d.id, by: a.id, dmg, move: a.move.name, zone: SA.zoneOf(mv, a, d), sword: !!mv.sword, x: d.x, y: d.y + a.y + (mv.y0 + mv.y1) / 2 });
+    else { SA.setState(d, "hit"); d.hitstun = mv.stun || K.HITSTUN; }
+    d.vx = push * mv.knock;
+    SA.emit(m, { type: "hit", who: d.id, by: a.id, dmg, move: moveName, zone: SA.zoneOf(mv, a, d), sword: !!mv.sword, x: d.x, y: Math.min(d.y + 50, Math.max(d.y + 6, a.y + (mv.y0 + mv.y1) / 2)) });
+    if (mv.sword) a.thunder = Math.min(100, a.thunder + K.THUNDER_PER_HIT);
   }
   d.health = Math.max(0, d.health - dmg);
-  if (mv.sword) SA.woundArms(m, a, d, mv, blocked);
+  if (mv.sword && moveName !== "thrownSword") SA.woundArms(m, a, d, mv, blocked);
   return { blocked, mv };
 };
 // Sword blows wound arms: mid hits the shield arm, high hits the sword arm, a shield block nicks the shield arm.
@@ -499,12 +560,36 @@ SA.endRound = function (m, winner, why) {
   }
 };
 // Props: thrown or dropped swords fall and land; the verdict gladius is picked up by walking over it.
+SA.THROWN = { damage: 14, y0: -4, y1: 4, height: "mid", knock: 3, sword: true };
 SA.updateProps = function (m) {
   for (const p of m.props) {
     if (p.landed) continue;
+    if (p.flying) {
+      p.x += p.vx;
+      const lim = SA.K.ARENA_HALF - 4;
+      const target = m.fighters[1 - p.owner];
+      const hitT = target && m.phase === "fight" && target.state !== "ko" && target.invuln <= 0 &&
+        Math.abs(target.x - p.x) < SA.K.BODY_W / 2 + 3 && p.y >= target.y && p.y <= target.y + SA.fighterHeight(target);
+      if (hitT) {
+        const owner = m.fighters[p.owner], mv = Object.assign({}, SA.THROWN, { damage: SA.K.THROW_DAMAGE });
+        SA.applyHit(m, { id: owner.id, x: p.x - Math.sign(p.vx), y: p.y, facing: Math.sign(p.vx), thunder: 0 }, target, mv, "thrownSword");
+      }
+      if (hitT || Math.abs(p.x) > lim || (m.animal && SA.thrownHitsAnimal && SA.thrownHitsAnimal(m, p))) {
+        p.flying = false; p.vx = -Math.sign(p.vx) * 1.2; p.vy = 3; p.x = Math.max(-lim, Math.min(lim, p.x));
+      }
+      continue;
+    }
     p.vy -= SA.K.GRAVITY; p.y += p.vy; p.x += p.vx;
     if (p.y <= 0) { p.y = 0; p.vy = 0; p.vx = 0; p.landed = true; SA.emit(m, { type: "propLand", kind: p.kind, x: p.x }); }
   }
+};
+// Walking over a landed sword picks it up (your own thrown sword, or Caesar's gladius).
+SA.pickupSword = function (m, f, kind) {
+  if (!grounded(f) || !f.arms.sword.on || f.hasSword) return;
+  const i = m.props.findIndex(p => p.kind === kind && p.landed && Math.abs(p.x - f.x) < 10 && (kind !== "thrownSword" || p.owner === f.id));
+  if (i < 0) return;
+  m.props.splice(i, 1); f.hasSword = true;
+  SA.emit(m, { type: "pickup", who: f.id, kind });
 };
 SA.verdictTick = function (m, inputs) {
   const w = m.fighters[m.winner], l = m.fighters[1 - m.winner], inp = inputs[m.winner];
@@ -516,9 +601,8 @@ SA.verdictTick = function (m, inputs) {
   SA.physics(m, w);
   SA.separate(w, l, SA.K.BODY_W);
   if (w.state !== "attack" && grounded(w)) { const want = Math.sign(l.x - w.x); if (want && want !== w.facing) { w.facing = want; SA.emit(m, { type: "turn", who: w.id }); } }
-  // pick up the gladius
-  const gi = m.props.findIndex(p => p.kind === "gladius" && p.landed && Math.abs(p.x - w.x) < 10);
-  if (gi >= 0 && grounded(w)) { m.props.splice(gi, 1); w.hasSword = true; SA.emit(m, { type: "pickup", who: w.id }); }
+  SA.pickupSword(m, w, "gladius");
+  SA.pickupSword(m, w, "thrownSword");
   // the verdict blow: a slash that lands within reach takes the loser's sword arm (or the shield arm)
   if (!m.verdictDone && !w.move && SA.isFree(w) && inp.pressed.punch && SA.canSword(w)) SA.startMove(m, w, "slash");
   if (w.move && w.move.name === "slash" && w.move.t === SA.MOVES.slash.startup && !m.verdictDone) {
@@ -622,6 +706,8 @@ SA.fightTick = function (m, inputs) {
   SA.faceEachOther(m);
   SA.resolveHit(m, a, b);
   SA.resolveHit(m, b, a);
+  SA.updateProps(m);
+  for (const f of m.fighters) SA.pickupSword(m, f, "thrownSword");
   // round end: KO, or time-out
   const ka = a.health <= 0, kb = b.health <= 0;
   if (ka || kb) { SA.endRound(m, ka && kb ? null : ka ? 1 : 0, "ko"); return; }
@@ -828,6 +914,43 @@ var SATests = {
       check("the title waits for a key", m.phase === "title");
       runTicks(m, 1, [I({}), press("kick")]);
       check("any attack key on the title starts the match", m.phase === "salute" && m.log.some(e => e.type === "salute"));
+    });
+
+    T("reward moves", () => {
+      const withCards = (level, cards, d) => { const m = SA.createMatch({ seed: 1, level }); m.fighters[0].rewards = cards.slice(); face(m, d); return m; };
+      const spec = (k, extra) => [k === 0 ? press("special", extra) : I({}), I({})];
+      let m = withCards(2, ["swordThrow"], 80); runTicks(m, 40, k => spec(k));
+      check("sword throw hits at range and leaves the thrower unarmed", m.fighters[1].health === 86 && m.fighters[0].hasSword === false, [m.fighters[1].health, m.fighters[0].hasSword]);
+      runTicks(m, 30, [I({}), I({})]);
+      const sw = m.props.find(p => p.kind === "thrownSword");
+      check("the thrown sword lies in the sand", sw && sw.landed);
+      runTicks(m, 90, [I({ right: 1 }), I({})]);
+      check("walking over the sword picks it up", m.fighters[0].hasSword && !m.props.some(p => p.kind === "thrownSword"));
+      m = withCards(2, ["swordThrow"], 80); runTicks(m, 40, k => (k === 0 ? [press("special"), I({})] : [I({}), I({})])); runTicks(m, 20, k => [k === 0 ? press("punch") : I({}), I({})]);
+      check("an unarmed thrower punches with fists", m.log.some(e => e.type === "attack" && e.who === 0 && e.move === "punch"));
+      let normal = 0; m = SA.createMatch({ seed: 1 }); for (let k = 0; k < 60; k++) { runTicks(m, 1, [I(k === 0 ? { up: 1 } : {}), I({})]); normal = Math.max(normal, m.fighters[0].y); }
+      let peak = 0; m = withCards(1, ["leap"], 120); for (let k = 0; k < 90; k++) { runTicks(m, 1, spec(k)); peak = Math.max(peak, m.fighters[0].y); }
+      check("leap jumps about twice as high", peak > 1.8 * normal, [peak.toFixed(1), normal.toFixed(1)]);
+      m = withCards(1, ["leap"], 30); m.fighters[0].x = -15; m.fighters[1].x = 20; runTicks(m, 20, k => [k === 0 ? press("special", { right: 1 }) : I({ right: 1 }), I({})]); runTicks(m, 40, k => [k === 0 ? press("special") : I({}), I({})]);
+      check("the leap's stomp lands on the opponent for 16", m.log.some(e => e.type === "hit" && e.move === "stomp" && e.dmg === 16));
+      m = withCards(1, ["furyFists"], 20); runTicks(m, 40, k => spec(k));
+      check("fury fists land five hits", m.log.filter(e => e.type === "hit" && e.move === "fury").length === 5 && m.fighters[1].health === 80, m.fighters[1].health);
+      m = withCards(1, ["whirlwind"], 20); m.fighters[1].x = m.fighters[0].x - 16; runTicks(m, 30, k => spec(k));
+      check("whirlwind hits behind too", m.fighters[1].health === 88 && m.log.some(e => e.type === "spin"), m.fighters[1].health);
+      m = withCards(2, ["thunder"], 24); m.fighters[0].thunder = 80; runTicks(m, 30, k => spec(k));
+      check("thunder needs a full charge", m.fighters[1].health === 100 && m.log.some(e => e.type === "whiff"));
+      m = withCards(2, ["thunder"], 24); m.fighters[0].thunder = 100; runTicks(m, 30, k => spec(k));
+      check("a full thunder blade does 25 and empties", m.fighters[1].health === 75 && m.fighters[0].thunder === 0, [m.fighters[1].health, m.fighters[0].thunder]);
+      m = withCards(2, [], 24); runTicks(m, 20, k => [k === 0 ? press("punch") : I({}), I({})]);
+      check("landed sword hits charge the thunder meter", m.fighters[0].thunder === 20);
+      m = withCards(2, ["shieldBash"], 40); m.fighters[0].arms.shield.on = false; runTicks(m, 30, k => spec(k));
+      check("shield bash needs the shield arm", m.fighters[1].health === 100 && m.log.some(e => e.type === "whiff"));
+      m = withCards(2, ["shieldBash"], 40); runTicks(m, 12, k => spec(k));
+      check("shield bash stuns for 6", m.fighters[1].health === 94 && m.fighters[1].state === "hit" && m.fighters[1].hitstun === 30, [m.fighters[1].health, m.fighters[1].state]);
+      m = withCards(1, ["leap", "furyFists"], 20); runTicks(m, 40, k => spec(k, { down: 1 }));
+      check("down + special uses the second card", m.log.some(e => e.type === "hit" && e.move === "fury") && m.fighters[0].y === 0);
+      m = withCards(1, [], 20); runTicks(m, 20, k => spec(k));
+      check("special with no card does nothing", m.fighters[1].health === 100);
     });
 
     return ok;
