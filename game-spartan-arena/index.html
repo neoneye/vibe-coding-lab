@@ -350,7 +350,8 @@ SA.MOVES = {
 Object.assign(SA.K, {
   HITSTUN: 14, DOWN_TICKS: 40, CHARGE_TICKS: 60,
   BLOCK_PLAIN: 0.5, BLOCK_SHIELD: 0.1, SHIELD_STAMINA: 12, STAMINA_REGEN: 0.25, STAMINA_DELAY: 60,
-  QUIET_BOO: 360,
+  QUIET_BOO: 360, CHOP_WOUND: 60, WOUND_HIT: 25, WOUND_BLOCK: 10,
+  VERDICT_TICKS: 360, VERDICT_AFTER_CHOP: 90, ROUND_END_TICKS: 120, VERDICT_REACH: 30,
 });
 SA.canSword = f => f.hasSword && f.arms.sword.on;
 SA.startMove = function (m, f, name) {
@@ -446,7 +447,28 @@ SA.resolveHit = function (m, a, d) {
     SA.emit(m, { type: "hit", who: d.id, by: a.id, dmg, move: a.move.name, zone: SA.zoneOf(mv, a, d), sword: !!mv.sword, x: d.x, y: d.y + a.y + (mv.y0 + mv.y1) / 2 });
   }
   d.health = Math.max(0, d.health - dmg);
+  if (mv.sword) SA.woundArms(m, a, d, mv, blocked);
   return { blocked, mv };
+};
+// Sword blows wound arms: mid hits the shield arm, high hits the sword arm, a shield block nicks the shield arm.
+// A charged strike lands on the shield arm of a blocking fighter, otherwise on the sword arm;
+// if that arm is already badly wounded it comes off.
+SA.woundArms = function (m, a, d, mv, blocked) {
+  const K = SA.K;
+  if (a.move.name === "charged") {
+    const arm = blocked ? "shield" : "sword";
+    if (d.arms[arm].on && d.arms[arm].wound >= K.CHOP_WOUND) { SA.chop(m, d, arm, { mid: true }); return; }
+    d.arms[arm].wound += K.WOUND_HIT;
+    return;
+  }
+  if (blocked) { if (d.arms.shield.on && m.level >= 2) d.arms.shield.wound += K.WOUND_BLOCK; return; }
+  const arm = mv.height === "high" ? "sword" : mv.height === "mid" ? "shield" : null;
+  if (arm && d.arms[arm].on) d.arms[arm].wound += K.WOUND_HIT;
+};
+SA.chop = function (m, d, arm, extra) {
+  d.arms[arm].on = false;
+  if (arm === "sword") d.charge = 0;
+  SA.emit(m, Object.assign({ type: "chop", who: d.id, arm, x: d.x, y: d.y + 40, facing: d.facing }, extra));
 };
 SA.resetRound = function (m) {
   m.fighters = m.fighters.map(f => { const n = SA.newFighter(f.id, m.level); n.rewards = f.rewards; return n; });
@@ -462,9 +484,68 @@ SA.endRound = function (m, winner, why) {
   m.winner = winner;
   if (why === "ko") SA.emit(m, { type: "ko", who: 1 - winner });
   else SA.emit(m, { type: "timeout", winner });
-  m.phase = "verdict"; m.phaseT = 0;
-  const l = m.fighters[1 - winner];
-  l.move = null; SA.setState(l, "dazed"); l.vx = 0;
+  m.phase = "verdict"; m.phaseT = 0; m.verdictDone = 0;
+  const w = m.fighters[winner], l = m.fighters[1 - winner];
+  l.move = null; SA.setState(l, "dazed"); l.vx = 0; l.charge = 0; l.blocking = false;
+  w.charge = 0;
+  if (w.state === "charging") SA.setState(w, "idle");
+  SA.emit(m, { type: "thumbsDown", winner });
+  // Caesar throws a gladius into the sand when the winner has no sword in hand (always in Level 1)
+  if (!SA.canSword(w) && w.arms.sword.on) {
+    const dir = Math.sign(l.x - w.x) || 1, lim = SA.K.ARENA_HALF - 10;
+    const x = Math.max(-lim, Math.min(lim, w.x + dir * 40));
+    m.props.push({ kind: "gladius", x, y: 120, vx: 0, vy: 0, landed: false });
+    SA.emit(m, { type: "gladius", x });
+  }
+};
+// Props: thrown or dropped swords fall and land; the verdict gladius is picked up by walking over it.
+SA.updateProps = function (m) {
+  for (const p of m.props) {
+    if (p.landed) continue;
+    p.vy -= SA.K.GRAVITY; p.y += p.vy; p.x += p.vx;
+    if (p.y <= 0) { p.y = 0; p.vy = 0; p.vx = 0; p.landed = true; SA.emit(m, { type: "propLand", kind: p.kind, x: p.x }); }
+  }
+};
+SA.verdictTick = function (m, inputs) {
+  const w = m.fighters[m.winner], l = m.fighters[1 - m.winner], inp = inputs[m.winner];
+  for (const f of m.fighters) f.st++;
+  SA.updateMove(m, w, null);
+  SA.updateProps(m);
+  if (!w.move) SA.controlMove(m, w, inp, l); else w.vx = 0;
+  l.vx = 0;
+  SA.physics(m, w);
+  SA.separate(w, l, SA.K.BODY_W);
+  if (w.state !== "attack" && grounded(w)) { const want = Math.sign(l.x - w.x); if (want && want !== w.facing) { w.facing = want; SA.emit(m, { type: "turn", who: w.id }); } }
+  // pick up the gladius
+  const gi = m.props.findIndex(p => p.kind === "gladius" && p.landed && Math.abs(p.x - w.x) < 10);
+  if (gi >= 0 && grounded(w)) { m.props.splice(gi, 1); w.hasSword = true; SA.emit(m, { type: "pickup", who: w.id }); }
+  // the verdict blow: a slash that lands within reach takes the loser's sword arm (or the shield arm)
+  if (!m.verdictDone && !w.move && SA.isFree(w) && inp.pressed.punch && SA.canSword(w)) SA.startMove(m, w, "slash");
+  if (w.move && w.move.name === "slash" && w.move.t === SA.MOVES.slash.startup && !m.verdictDone) {
+    if (Math.abs(l.x - w.x) <= SA.K.VERDICT_REACH) {
+      const arm = l.arms.sword.on ? "sword" : l.arms.shield.on ? "shield" : null;
+      if (arm) SA.chop(m, l, arm, { verdict: true });
+      m.verdictDone = m.phaseT;
+    } else SA.emit(m, { type: "whiff", who: w.id });
+  }
+  if (m.phaseT >= SA.K.VERDICT_TICKS || (m.verdictDone && m.phaseT - m.verdictDone >= SA.K.VERDICT_AFTER_CHOP)) {
+    m.phase = "roundEnd"; m.phaseT = 0;
+    if (w.move) { w.move = null; }
+    SA.setState(w, "victory");
+    SA.emit(m, { type: "roundEnd", winner: m.winner });
+  }
+};
+SA.roundEndTick = function (m) {
+  for (const f of m.fighters) f.st++;
+  SA.updateProps(m);
+  if (m.phaseT >= SA.K.ROUND_END_TICKS) SA.afterRound(m);
+};
+// After a round: count the win and start the next round (match flow refines this).
+SA.afterRound = function (m) {
+  m.round++;
+  SA.resetRound(m);
+  m.phase = "fight"; m.phaseT = 0;
+  SA.emit(m, { type: "roundStart", level: m.level, round: m.round });
 };
 SA.fightTick = function (m, inputs) {
   const [a, b] = m.fighters;
@@ -490,6 +571,8 @@ SA.step = function (m, inputs) {
   m.tick++;
   m.phaseT++;
   if (m.phase === "fight") SA.fightTick(m, inputs);
+  else if (m.phase === "verdict") SA.verdictTick(m, inputs);
+  else if (m.phase === "roundEnd") SA.roundEndTick(m);
 };
 
 // ---------------------------------------------------------------------------
@@ -602,6 +685,39 @@ var SATests = {
       m = SA.createMatch({ seed: 1, level: 2 }); face(m, 24);
       runTicks(m, 60, k => [k < 30 ? press("punch") : I({}), I({})]);
       check("releasing too early fires no charged strike", !m.log.some(e => e.move === "charged"));
+    });
+
+    T("arms and Caesar's verdict", () => {
+      const chargeAndRelease = (m, who) => { const hold = [I({}), I({})]; hold[who] = press("punch"); runTicks(m, 70, hold); runTicks(m, 30, [I({}), I({})]); };
+      let m = SA.createMatch({ seed: 1, level: 2 }); m.fighters[1].arms.sword.wound = 60; face(m, 24);
+      chargeAndRelease(m, 0);
+      check("a charged strike on a wounded arm chops it mid-fight", !m.fighters[1].arms.sword.on && m.log.some(e => e.type === "chop" && e.mid && e.arm === "sword"));
+      m = SA.createMatch({ seed: 1, level: 2 }); m.fighters[1].arms.sword.wound = 35; face(m, 24); chargeAndRelease(m, 0);
+      check("a charged strike on a fresh arm only wounds it", m.fighters[1].arms.sword.on && m.fighters[1].arms.sword.wound === 60, m.fighters[1].arms.sword.wound);
+      check("a mid slash wounds the shield arm", m.fighters[1].arms.shield.wound === 25, m.fighters[1].arms.shield.wound);
+      m = SA.createMatch({ seed: 1, level: 2 }); m.fighters[1].arms.shield.wound = 70; face(m, 24); m.fighters[0].x = 160; m.fighters[1].x = 184; // blocker backs into the wall
+      runTicks(m, 70, [press("punch"), I({ right: 1 })]); runTicks(m, 30, [I({}), I({ right: 1 })]);
+      check("a charged strike on a blocking fighter takes the wounded shield arm", !m.fighters[1].arms.shield.on && m.fighters[1].arms.sword.on);
+      m = SA.createMatch({ seed: 1, level: 2 }); m.fighters[0].arms.sword.on = false; face(m, 24); runTicks(m, 20, k => [k === 0 ? press("punch") : I({}), I({})]);
+      check("no sword arm means fist punches", m.fighters[1].health === 95, m.fighters[1].health);
+      m = SA.createMatch({ seed: 1, level: 2 }); m.fighters[1].arms.shield.on = false; face(m, 24); runTicks(m, 25, k => [k === 0 ? press("punch") : I({}), I({ right: 1 })]);
+      check("no shield arm means a plain block", m.fighters[1].health === 95, m.fighters[1].health);
+      m = SA.createMatch({ seed: 1 }); face(m, 20); runTicks(m, 20, k => [k === 0 ? press("punch") : I({}), I({})]);
+      check("fists never wound arms", m.fighters[1].arms.shield.wound === 0 && m.fighters[1].arms.sword.wound === 0);
+      m = SA.createMatch({ seed: 1, level: 2 }); m.fighters[1].health = 0; runTicks(m, 1, [I({}), I({})]);
+      check("the verdict starts with Caesar's thumb down", m.log.some(e => e.type === "thumbsDown") && m.fighters[1].state === "dazed");
+      face(m, 20);
+      runTicks(m, 10, k => [k === 0 ? press("punch") : I({}), I({ left: 1, punch: 1 })]);
+      check("the verdict takes the sword arm", !m.fighters[1].arms.sword.on && m.log.some(e => e.type === "chop" && e.verdict), m.log.filter(e => e.type === "chop").length);
+      check("the dazed loser cannot move", m.fighters[1].x === 10);
+      m = SA.createMatch({ seed: 1, level: 1 }); m.fighters[1].health = 0; runTicks(m, 1, [I({}), I({})]);
+      const g = m.props.find(p => p.kind === "gladius");
+      check("in Level 1 Caesar throws a gladius", !!g && g.x > m.fighters[0].x);
+      runTicks(m, 120, [I({ right: 1 }), I({})]);
+      check("the winner picks the gladius up", m.fighters[0].hasSword && !m.props.some(p => p.kind === "gladius"));
+      m = SA.createMatch({ seed: 1, level: 2 }); m.fighters[1].health = 0; runTicks(m, 1, [I({}), I({})]);
+      runTicks(m, 360 + 121, [I({}), I({})]);
+      check("after the verdict and a pause the next round starts", m.phase === "fight" && m.round === 2 && m.fighters[1].arms.sword.on && m.fighters[1].health === 100, [m.phase, m.round]);
     });
 
     return ok;
