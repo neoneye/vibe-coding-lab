@@ -210,6 +210,146 @@ SA.crowdRecolor = function (i) {
 };
 
 // ---------------------------------------------------------------------------
+// Input: a queue per player. Key presses are queued so a tap shorter than one tick still acts.
+// ---------------------------------------------------------------------------
+SA.ACTIONS = ["left", "right", "up", "down", "punch", "kick", "special"];
+SA.InputQueue = class {
+  constructor() { this.live = {}; this.q = {}; for (const a of SA.ACTIONS) { this.live[a] = false; this.q[a] = []; } }
+  down(a) { if (this.live[a]) return; this.live[a] = true; if (this.q[a].length < 8) this.q[a].push("d"); }
+  up(a) { if (!this.live[a] && !this.q[a].length) return; this.live[a] = false; if (this.q[a].length < 8) this.q[a].push("u"); }
+  releaseAll() { for (const a of SA.ACTIONS) { this.live[a] = false; this.q[a].length = 0; } }
+  // One press (and the release that directly follows it) per action per tick; the rest wait.
+  take() {
+    const t = { held: {}, pressed: {}, released: {} };
+    for (const a of SA.ACTIONS) {
+      const q = this.q[a];
+      t.pressed[a] = t.released[a] = false;
+      if (q[0] === "d") { q.shift(); t.pressed[a] = true; if (q[0] === "u") { q.shift(); t.released[a] = true; } }
+      else if (q[0] === "u") { q.shift(); t.released[a] = true; }
+      t.held[a] = t.pressed[a] || (this.live[a] && !q.length) || (this.live[a] && q[0] === "u");
+    }
+    return t;
+  }
+};
+SA.emptyInput = () => { const t = { held: {}, pressed: {}, released: {} }; for (const a of SA.ACTIONS) t.held[a] = t.pressed[a] = t.released[a] = false; return t; };
+
+// Fixed 60 Hz clock. A long gap (tab in the background) is clamped to 5 ticks so the fight never fast-forwards.
+SA.TICK_MS = 1000 / 60;
+SA.ticksFor = function (elapsedMs, carryMs) {
+  const total = carryMs + elapsedMs;
+  let ticks = Math.floor(total / SA.TICK_MS);
+  if (ticks > 5) return { ticks: 5, carryMs: 0 };
+  return { ticks, carryMs: total - ticks * SA.TICK_MS };
+};
+
+// ---------------------------------------------------------------------------
+// Simulation. Units are voxels and ticks; x runs along the arena, y up from the sand.
+// ---------------------------------------------------------------------------
+SA.K = {
+  WALK: 1.6, WALK_BACK: 1.2, JUMP_VY: 5.2, GRAVITY: 0.3,
+  BODY_W: 14, BODY_H: 54, CROUCH_H: 34, ARENA_HALF: 200,
+  ROUND_TICKS: 99 * 60,
+};
+SA.newFighter = function (id, level) {
+  return {
+    id, team: id, x: id ? 60 : -60, y: 0, vx: 0, vy: 0, facing: id ? -1 : 1,
+    health: 100, state: "idle", st: 0, move: null,
+    arms: { sword: { wound: 0, on: true }, shield: { wound: 0, on: true } },
+    hasSword: level >= 2, charge: 0, thunder: 0, rewards: [], stamina: 100,
+    hitstun: 0, invuln: 0, blocking: false, lastAttack: 0,
+  };
+};
+SA.createMatch = function ({ seed = 1, level = 1, round = 1, phase = "fight" } = {}) {
+  const m = {
+    seed, rng: SA.rng(seed), tick: 0, level, round, phase, phaseT: 0,
+    timer: SA.K.ROUND_TICKS, winner: null, champion: null,
+    fighters: [SA.newFighter(0, level), SA.newFighter(1, level)],
+    animal: null, props: [], events: [], log: [],
+    roundWins: [[0, 0], [0, 0], [0, 0]], levelWins: [0, 0], draft: null, quietT: 0,
+  };
+  return m;
+};
+SA.emit = function (m, e) {
+  m.events.push(e);
+  m.log.push(Object.assign({ tick: m.tick }, e));
+  if (m.log.length > 2000) m.log.splice(0, m.log.length - 2000);
+};
+const grounded = f => f.y <= 0 && f.vy <= 0;
+SA.fighterHeight = f => (f.state === "crouch" ? SA.K.CROUCH_H : SA.K.BODY_H);
+
+// Movement part of a fighter's tick: walking, crouching, jumping, gravity.
+SA.controlMove = function (m, f, inp, opp) {
+  const K = SA.K, free = f.state === "idle" || f.state === "walk" || f.state === "crouch";
+  if (free && grounded(f)) {
+    const dir = (inp.held.right ? 1 : 0) - (inp.held.left ? 1 : 0);
+    if (inp.pressed.up) {
+      f.vy = K.JUMP_VY; f.vx = dir * K.WALK; f.y = 0.001;
+      SA.setState(f, "jump"); SA.emit(m, { type: "jump", who: f.id });
+    } else if (inp.held.down) {
+      f.vx = 0; if (f.state !== "crouch") SA.setState(f, "crouch");
+    } else {
+      f.vx = dir * (dir === f.facing ? K.WALK : K.WALK_BACK);
+      const want = dir ? "walk" : "idle";
+      if (f.state !== want) SA.setState(f, want);
+    }
+    // holding away from the opponent blocks
+    f.blocking = dir === -f.facing;
+  } else f.blocking = false;
+};
+SA.setState = function (f, s) { f.state = s; f.st = 0; };
+SA.physics = function (m, f) {
+  const K = SA.K;
+  if (!grounded(f) || f.vy > 0) {
+    f.vy -= K.GRAVITY;
+    f.y += f.vy;
+    if (f.y <= 0) {
+      f.y = 0; f.vy = 0;
+      if (f.state === "jump" || (f.move && f.move.air)) { f.move = null; SA.setState(f, "idle"); SA.emit(m, { type: "land", who: f.id }); }
+    }
+  } else if (f.state === "hit" || f.state === "down") f.vx *= 0.85;
+  f.x += f.vx;
+  const lim = K.ARENA_HALF - K.BODY_W / 2;
+  f.x = Math.max(-lim, Math.min(lim, f.x));
+};
+// Grounded bodies never overlap; the wall pushes back on whoever is against it.
+SA.separate = function (a, b, minDist) {
+  if (!(grounded(a) && grounded(b))) return;
+  const dx = b.x - a.x;
+  if (Math.abs(dx) >= minDist) return;
+  const lim = SA.K.ARENA_HALF - SA.K.BODY_W / 2;
+  const sgn = dx !== 0 ? Math.sign(dx) : (a.facing || 1);
+  const need = minDist - Math.abs(dx);
+  a.x -= sgn * need / 2; b.x += sgn * need / 2;
+  if (Math.abs(a.x) > lim) { a.x = Math.sign(a.x) * lim; b.x = a.x + sgn * minDist; }
+  if (Math.abs(b.x) > lim) { b.x = Math.sign(b.x) * lim; a.x = b.x - sgn * minDist; }
+};
+SA.faceEachOther = function (m) {
+  const [a, b] = m.fighters;
+  for (const [f, o] of [[a, b], [b, a]]) {
+    if (!grounded(f) || f.move || f.state === "down" || f.state === "ko") continue;
+    const dx = o.x - f.x;
+    if (Math.abs(dx) < 0.5) continue;
+    const want = Math.sign(dx);
+    if (want !== f.facing) { f.facing = want; SA.emit(m, { type: "turn", who: f.id }); }
+  }
+};
+SA.fightTick = function (m, inputs) {
+  const [a, b] = m.fighters;
+  for (const f of m.fighters) { f.st++; }
+  SA.controlMove(m, a, inputs[0], b);
+  SA.controlMove(m, b, inputs[1], a);
+  for (const f of m.fighters) SA.physics(m, f);
+  SA.separate(a, b, SA.K.BODY_W);
+  SA.faceEachOther(m);
+};
+SA.step = function (m, inputs) {
+  m.events = [];
+  m.tick++;
+  m.phaseT++;
+  if (m.phase === "fight") SA.fightTick(m, inputs);
+};
+
+// ---------------------------------------------------------------------------
 var SATests = {
   run() {
     let ok = true;
@@ -246,6 +386,52 @@ var SATests = {
       check("team 2 is the grey guards", SA.teamRecolor(2).get(SA.TEAM_KEYS[1]) === SA.TEAM_GREY[1]);
       check("crowd variants recolor the grey tunic", SA.crowdRecolor(3).get(SA.CROWD_KEYS[1]) !== SA.CROWD_KEYS[1] && SA.crowdRecolor(3).size === 3);
     });
+    // ---- helpers for the simulation tests. Inputs are "held" Acts; runTicks derives press/release edges.
+    const ACTS = ["left", "right", "up", "down", "punch", "kick", "special"];
+    const I = (acts = {}) => acts;
+    const press = (name, extra = {}) => Object.assign({}, extra, { [name]: 1 });
+    const edges = (m) => m.__prev || (m.__prev = [{}, {}]);
+    const tickInput = (m, i, held) => {
+      const prev = edges(m)[i], t = { held: {}, pressed: {}, released: {} };
+      for (const a of ACTS) { t.held[a] = !!held[a]; t.pressed[a] = !!held[a] && !prev[a]; t.released[a] = !held[a] && !!prev[a]; }
+      edges(m)[i] = Object.assign({}, held);
+      return t;
+    };
+    const runTicks = (m, n, inp) => {
+      for (let k = 0; k < n; k++) {
+        const pair = typeof inp === "function" ? inp(k) : inp;
+        SA.step(m, [tickInput(m, 0, pair[0] || {}), tickInput(m, 1, pair[1] || {})]);
+      }
+    };
+    const face = (m, d) => { m.fighters[0].x = -d / 2; m.fighters[1].x = d / 2; m.fighters[0].facing = 1; m.fighters[1].facing = -1; };
+
+    T("input and movement", () => {
+      const q = new SA.InputQueue(); q.down("punch"); q.up("punch");
+      check("taps shorter than a tick still fire", q.take().pressed.punch === true && q.take().pressed.punch === false);
+      q.down("left"); q.down("left");
+      check("repeat keydowns are one press", q.take().pressed.left && !q.take().pressed.left);
+      q.releaseAll(); check("releaseAll clears held keys", !q.take().held.left);
+      const q2 = new SA.InputQueue(); q2.down("kick"); q2.up("kick"); q2.down("kick"); q2.up("kick");
+      check("two quick taps act on two ticks", q2.take().pressed.kick && q2.take().pressed.kick && !q2.take().pressed.kick);
+      check("ticksFor clamps a long gap to 5 ticks", SA.ticksFor(5000, 0).ticks === 5);
+      check("ticksFor keeps the remainder", Math.abs(SA.ticksFor(20, 0).carryMs - (20 - 1000 / 60)) < 1e-9);
+      let m = SA.createMatch({ seed: 1 }); runTicks(m, 30, [I({ right: 1 }), I({})]);
+      check("walking moves right", m.fighters[0].x > -60 + 30, m.fighters[0].x);
+      m = SA.createMatch({ seed: 1 }); runTicks(m, 400, [I({ right: 1 }), I({ right: 1 })]);
+      check("fighters never overlap or leave the arena at the wall", Math.abs(m.fighters[0].x - m.fighters[1].x) >= 14 - 1e-6 && m.fighters.every(f => Math.abs(f.x) <= 193), m.fighters.map(f => f.x.toFixed(1)));
+      m = SA.createMatch({ seed: 1 }); m.fighters[1].x = 190; m.fighters[0].x = 150; runTicks(m, 120, k => [I(k < 60 ? { right: 1 } : { up: 1, right: 1 }), I({})]);
+      check("jumping over the opponent at the wall stays inside", m.fighters.every(f => Math.abs(f.x) <= 193) && Math.abs(m.fighters[0].x - m.fighters[1].x) >= 14 - 1e-6, m.fighters.map(f => f.x.toFixed(1)));
+      m = SA.createMatch({ seed: 1 }); m.fighters[1].x = -45; runTicks(m, 60, [I({ up: 1, right: 1 }), I({})]);
+      check("jumping over the opponent turns both round", m.fighters[0].x > m.fighters[1].x && m.fighters[0].facing === -1 && m.fighters[1].facing === 1, [m.fighters[0].x.toFixed(1), m.fighters[0].facing, m.fighters[1].facing]);
+      m = SA.createMatch({ seed: 1 }); runTicks(m, 1, [I({ up: 1 }), I({ up: 1 })]);
+      check("both players' presses in the same tick both act", m.fighters.every(f => f.vy > 0));
+      m = SA.createMatch({ seed: 1 }); let peak = 0; for (let k = 0; k < 60; k++) { runTicks(m, 1, [I(k === 0 ? { up: 1 } : {}), I({})]); peak = Math.max(peak, m.fighters[0].y); }
+      check("a jump peaks at about 45 voxels", peak > 40 && peak < 50, peak.toFixed(1));
+      check("and lands again", m.fighters[0].y === 0 && m.fighters[0].state === "idle");
+      m = SA.createMatch({ seed: 1 }); runTicks(m, 5, [I({ down: 1 }), I({})]);
+      check("holding down crouches", m.fighters[0].state === "crouch" && m.fighters[0].x === -60);
+    });
+
     return ok;
   },
 };
