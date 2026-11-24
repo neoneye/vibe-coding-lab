@@ -313,8 +313,10 @@ SA.physics = function (m, f) {
   f.x = Math.max(-lim, Math.min(lim, f.x));
 };
 // Grounded bodies never overlap; the wall pushes back on whoever is against it.
+// Only a deliberate jump may pass over someone; tossed or tumbling bodies still collide.
+SA.passingOver = f => !grounded(f) && (f.state === "jump" || (f.move && SA.MOVES[f.move.name].air));
 SA.separate = function (a, b, minDist) {
-  if (!(grounded(a) && grounded(b))) return;
+  if (SA.passingOver(a) || SA.passingOver(b)) return;
   const dx = b.x - a.x;
   if (Math.abs(dx) >= minDist) return;
   const lim = SA.K.ARENA_HALF - SA.K.BODY_W / 2;
@@ -476,15 +478,18 @@ SA.zoneOf = function (mv, a, d) {
   return mid >= 40 ? "head" : mid >= 18 ? "body" : "legs";
 };
 // One fighter's active move against the other.
-SA.resolveHit = function (m, a, d) {
-  const mv = SA.moveActive(a);
-  if (!mv || a.move.hits.includes(d.id) || d.invuln > 0 || d.state === "ko") return;
+// snap = { mv, move } taken before any hit of this tick is applied, so a same-tick trade lands both blows
+SA.activeSnap = f => { const mv = SA.moveActive(f); return mv ? { mv, move: f.move } : null; };
+SA.resolveHit = function (m, a, d, snap = SA.activeSnap(a)) {
+  if (!snap) return;
+  const mv = snap.mv, move = snap.move;
+  if (move.hits.includes(d.id) || d.invuln > 0 || d.state === "ko") return;
   if (mv.height === "low" && d.y > 6) return;
   if (mv.height === "high" && d.state === "crouch" && !mv.air) return;
   if (mv.noHit || !SA.hitboxTouches(a, mv, d.x, SA.K.BODY_W / 2, d.y, SA.fighterHeight(d))) return;
-  a.move.hits.push(d.id);
-  const r = SA.applyHit(m, a, d, mv, a.move.name);
-  if (mv.dash) { a.move.t = mv.startup + mv.active; a.vx = 0; }    // a bash stops on contact
+  move.hits.push(d.id);
+  const r = SA.applyHit(m, a, d, mv, move.name);
+  if (mv.dash && a.move === move) { move.t = mv.startup + mv.active; a.vx = 0; }    // a bash stops on contact
   return r;
 };
 // Damage, block, knockback and wounds of one blow (a move, or a thrown sword with moveName "thrownSword").
@@ -509,15 +514,15 @@ SA.applyHit = function (m, a, d, mv, moveName) {
     if (mv.sword) a.thunder = Math.min(100, a.thunder + K.THUNDER_PER_HIT);
   }
   d.health = Math.max(0, d.health - dmg);
-  if (mv.sword && moveName !== "thrownSword") SA.woundArms(m, a, d, mv, blocked);
+  if (mv.sword && moveName !== "thrownSword") SA.woundArms(m, a, d, mv, blocked, moveName);
   return { blocked, mv };
 };
 // Sword blows wound arms: mid hits the shield arm, high hits the sword arm, a shield block nicks the shield arm.
 // A charged strike lands on the shield arm of a blocking fighter, otherwise on the sword arm;
 // if that arm is already badly wounded it comes off.
-SA.woundArms = function (m, a, d, mv, blocked) {
+SA.woundArms = function (m, a, d, mv, blocked, moveName) {
   const K = SA.K;
-  if (a.move.name === "charged") {
+  if (moveName === "charged") {
     const arm = blocked ? "shield" : "sword";
     if (d.arms[arm].on && d.arms[arm].wound >= K.CHOP_WOUND) { SA.chop(m, d, arm, { mid: true }); return; }
     d.arms[arm].wound += K.WOUND_HIT;
@@ -551,11 +556,14 @@ SA.endRound = function (m, winner, why) {
   l.move = null; SA.setState(l, "dazed"); l.vx = 0; l.charge = 0; l.blocking = false;
   w.charge = 0;
   if (w.state === "charging") SA.setState(w, "idle");
+  // a winner who has lost the sword arm cannot strike: Caesar spares the loser
+  if (!w.arms.sword.on) { SA.emit(m, { type: "spared", winner, who: l.id }); m.verdictDone = 1; return; }
   SA.emit(m, { type: "thumbsDown", winner });
   // Caesar throws a gladius into the sand when the winner has no sword in hand (always in Level 1)
-  if (!SA.canSword(w) && w.arms.sword.on) {
+  if (!SA.canSword(w)) {
     const dir = Math.sign(l.x - w.x) || 1, lim = SA.K.ARENA_HALF - 10;
-    const x = Math.max(-lim, Math.min(lim, w.x + dir * 40));
+    const room = Math.max(0, Math.abs(l.x - w.x) - SA.K.BODY_W);      // the winner can't walk past the loser
+    const x = Math.max(-lim, Math.min(lim, w.x + dir * Math.min(40, room)));
     m.props.push({ kind: "gladius", x, y: 120, vx: 0, vy: 0, landed: false });
     SA.emit(m, { type: "gladius", x });
   }
@@ -632,11 +640,13 @@ SA.thrownHitsAnimal = function (m, p) {
   return true;
 };
 // Gladiators' active moves against the beast.
-SA.hitAnimal = function (m, f) {
-  const a = m.animal, mv = SA.moveActive(f);
-  if (!mv || mv.noHit || !SA.animalAlive(a) || a.state === "enter" || f.move.hits.includes("animal")) return;
+SA.hitAnimal = function (m, f, snap = SA.activeSnap(f)) {
+  const a = m.animal;
+  if (!snap) return;
+  const mv = snap.mv;
+  if (mv.noHit || !SA.animalAlive(a) || a.state === "enter" || snap.move.hits.includes("animal")) return;
   if (!SA.hitboxTouches(f, mv, a.x, a.w / 2, a.y, a.h)) return;
-  f.move.hits.push("animal");
+  snap.move.hits.push("animal");
   SA.hurtAnimal(m, f.id, mv.damage, a.x - Math.sign(a.x - f.x) * a.w / 3, f.y + (mv.y0 + mv.y1) / 2);
   if (mv.sword) f.thunder = Math.min(100, f.thunder + SA.K.THUNDER_PER_HIT);
 };
@@ -705,15 +715,27 @@ SA.animalTick = function (m) {
   if (a.y > 0 || a.vy > 0) { a.vy -= K.GRAVITY; a.y += a.vy; if (a.y <= 0) { a.y = 0; a.vy = 0; a.vx *= 0.3; } }
   a.x = Math.max(-lim, Math.min(lim, a.x + a.vx));
   // bodies: gladiators can't walk or jump through the beast unless they clear its back
+  if (a.state === "dead") return;
+  const minD = (K.BODY_W + a.w) / 2, fl = K.ARENA_HALF - K.BODY_W / 2;
+  const touching = f => Math.abs(f.x - a.x) < minD - 1e-9 && f.y < a.y + a.h && a.y < f.y + SA.fighterHeight(f);
+  const side = f => (f.x !== a.x ? Math.sign(f.x - a.x) : -a.facing);
   for (const f of m.fighters) {
-    const minD = (K.BODY_W + a.w) / 2, dx = f.x - a.x;
-    if (Math.abs(dx) >= minD || f.y >= a.y + a.h || a.y >= f.y + SA.fighterHeight(f) || a.state === "dead") continue;
-    const sgn = dx !== 0 ? Math.sign(dx) : -a.facing, need = minD - Math.abs(dx);
+    if (!touching(f)) continue;
+    const sgn = side(f), need = minD - Math.abs(f.x - a.x);
     if (B.heavy) f.x += sgn * need; else { f.x += sgn * need / 2; a.x -= sgn * need / 2; }
-    const fl = K.ARENA_HALF - K.BODY_W / 2;
-    if (Math.abs(f.x) > fl) { f.x = Math.sign(f.x) * fl; a.x = f.x - sgn * minD; }
-    a.x = Math.max(-lim, Math.min(lim, a.x));
+    if (Math.abs(f.x) > fl) f.x = Math.sign(f.x) * fl;
   }
+  // the two gladiators never end up inside each other; if they're stacked against the wall, the beast gives way
+  SA.separate(m.fighters[0], m.fighters[1], K.BODY_W);
+  for (const f of m.fighters) if (touching(f)) a.x = f.x - side(f) * minD;
+  a.x = Math.max(-lim, Math.min(lim, a.x));
+};
+// Camera fit: frame the subjects (x from lo to hi) in the middle 75% across, and always show
+// feet to crest (about 118 voxels tall) however wide the window is.
+SA.cameraFit = function (lo, hi, aspect, fovDeg, maxW = 480) {
+  const w = Math.min(maxW, Math.max(220, (hi - lo + 50) / 0.75));
+  const tv = Math.tan(fovDeg * Math.PI / 360), th = tv * aspect;
+  return { w, cx: (lo + hi) / 2, dist: Math.max(w / 2 / th, 59 / tv) };
 };
 // Walking over a landed sword picks it up (your own thrown sword, or Caesar's gladius).
 SA.pickupSword = function (m, f, kind) {
@@ -731,6 +753,8 @@ SA.verdictTick = function (m, inputs) {
   if (!w.move) SA.controlMove(m, w, inp, l); else w.vx = 0;
   l.vx = 0;
   SA.physics(m, w);
+  SA.physics(m, l);                  // a loser KO'd in the air falls to the sand
+  SA.animalFall(m);
   SA.separate(w, l, SA.K.BODY_W);
   if (w.state !== "attack" && grounded(w)) { const want = Math.sign(l.x - w.x); if (want && want !== w.facing) { w.facing = want; SA.emit(m, { type: "turn", who: w.id }); } }
   SA.pickupSword(m, w, "gladius");
@@ -751,8 +775,21 @@ SA.verdictTick = function (m, inputs) {
     SA.emit(m, { type: "roundEnd", winner: m.winner });
   }
 };
+// Outside the fight nobody is controlled, but bodies still fall and land.
+SA.settle = function (m) {
+  for (const f of m.fighters) { f.vx *= 0.8; SA.physics(m, f); }
+  SA.separate(m.fighters[0], m.fighters[1], SA.K.BODY_W);
+  SA.animalFall(m);
+};
+SA.animalFall = function (m) {
+  const a = m.animal;
+  if (!a || (a.y <= 0 && a.vy <= 0)) return;
+  a.vy -= SA.K.GRAVITY; a.y += a.vy;
+  if (a.y <= 0) { a.y = 0; a.vy = 0; a.vx = 0; }
+};
 SA.roundEndTick = function (m) {
   for (const f of m.fighters) f.st++;
+  SA.settle(m);
   SA.updateProps(m);
   if (m.phaseT >= SA.K.ROUND_END_TICKS) SA.afterRound(m);
 };
@@ -803,12 +840,12 @@ SA.draftTick = function (m, inputs) {
   if (!free(d.cursor[who])) stepCursor(1);
   if (inp.pressed.left) stepCursor(-1);
   if (inp.pressed.right) stepCursor(1);
-  if (inp.pressed.punch && m.phaseT > SA.K.PICK_GUARD) {
+  if (inp.pressed.punch && m.phaseT - (d.turnStart || 0) > SA.K.PICK_GUARD) {
     const card = d.cards[d.cursor[who]];
     d.taken.push(card);
     m.fighters[who].rewards.push(card);
     SA.emit(m, { type: "pick", who, card });
-    d.turn++;
+    d.turn++; d.turnStart = m.phaseT;
     if (d.turn >= 2) SA.startLevel(m, m.level + 1);
   }
 };
@@ -836,10 +873,11 @@ SA.fightTick = function (m, inputs) {
   for (const f of m.fighters) SA.physics(m, f);
   SA.separate(a, b, SA.K.BODY_W);
   SA.faceEachOther(m);
-  SA.resolveHit(m, a, b);
-  SA.resolveHit(m, b, a);
-  SA.hitAnimal(m, a);
-  SA.hitAnimal(m, b);
+  const sa = SA.activeSnap(a), sb = SA.activeSnap(b);
+  SA.resolveHit(m, a, b, sa);
+  SA.resolveHit(m, b, a, sb);
+  SA.hitAnimal(m, a, sa);
+  SA.hitAnimal(m, b, sb);
   SA.animalTick(m);
   SA.updateProps(m);
   for (const f of m.fighters) SA.pickupSword(m, f, "thrownSword");
@@ -858,7 +896,7 @@ SA.step = function (m, inputs) {
   else if (m.phase === "roundEnd") SA.roundEndTick(m);
   else if (m.phase === "draft") SA.draftTick(m, inputs);
   else if (m.phase === "title") { if (anyAttack(inputs)) SA.newMatch(m); }
-  else if (m.phase === "champion") { for (const f of m.fighters) f.st++; if (m.phaseT > SA.K.CHAMPION_GUARD && anyAttack(inputs)) SA.newMatch(m); }
+  else if (m.phase === "champion") { for (const f of m.fighters) f.st++; SA.settle(m); if (m.phaseT > SA.K.CHAMPION_GUARD && anyAttack(inputs)) SA.newMatch(m); }
   else if (m.phase === "salute") {
     for (const f of m.fighters) f.st++;
     if (m.phaseT >= SA.K.SALUTE_TICKS || anyAttack(inputs)) {
@@ -1022,7 +1060,7 @@ var SATests = {
         runTicks(m, 1, [I({}), I({})]);
         skipTo(m, m => m.phase !== "verdict" && m.phase !== "roundEnd");
       };
-      const pick = (m) => { skipTo(m, m => m.phaseT > SA.K.PICK_GUARD); const who = m.draft.order[m.draft.turn], pair = [I({}), I({})]; pair[who] = press("punch"); runTicks(m, 2, k => (k === 0 ? pair : [I({}), I({})])); };
+      const pick = (m) => { skipTo(m, m => m.phaseT - (m.draft.turnStart || 0) > SA.K.PICK_GUARD); const who = m.draft.order[m.draft.turn], pair = [I({}), I({})]; pair[who] = press("punch"); runTicks(m, 2, k => (k === 0 ? pair : [I({}), I({})])); };
       const availableFor = m => m.draft.cards.filter(c => !m.draft.taken.includes(c));
       let m = SA.createMatch({ seed: 3 }); winRound(m, 0); winRound(m, 0);
       check("two round wins take the level", m.levelWins[0] === 1 && m.phase === "draft", [m.levelWins, m.phase]);
@@ -1141,6 +1179,54 @@ var SATests = {
       check("and reaches the champion screen through every phase", m.phase === "champion" && ["salute", "fight", "verdict", "roundEnd", "draft"].every(p => phases.has(p)), [m.phase, m.level, [...phases].join()]);
     });
 
+    T("review fixes", () => {
+      const idle = [I({}), I({})];
+      // 1. a same-tick trade lands both blows
+      let m = SA.createMatch({ seed: 1 }); face(m, 20); runTicks(m, 20, k => (k === 0 ? [press("punch"), press("punch")] : idle));
+      check("a same-tick punch trade lands both blows", m.fighters[0].health === 95 && m.fighters[1].health === 95, m.fighters.map(f => f.health));
+      m = SA.createMatch({ seed: 1, level: 2 }); face(m, 24); runTicks(m, 25, k => (k === 0 ? [press("punch"), press("punch")] : idle));
+      check("a same-tick slash trade lands both blows", m.fighters[0].health === 90 && m.fighters[1].health === 90, m.fighters.map(f => f.health));
+      // 2. a cornered loser in Level 1: the gladius must be reachable
+      for (const [wx, lx] of [[150, 193], [170, 193], [-150, -193]]) {
+        m = SA.createMatch({ seed: 1, level: 1 }); m.fighters[0].x = wx; m.fighters[1].x = lx; m.fighters[1].health = 0; runTicks(m, 1, idle);
+        const dir = lx > wx ? { right: 1 } : { left: 1 };
+        runTicks(m, 120, [I(dir), I({})]); runTicks(m, 12, k => [k === 0 ? press("punch") : I({}), I({})]);
+        check("Caesar's gladius is reachable when the loser is cornered at " + lx, m.fighters[0].hasSword && m.log.some(e => e.type === "chop" && e.verdict), [m.fighters[0].x.toFixed(1), (m.props[0] || {}).x]);
+      }
+      // 3. nobody hangs in the air after a KO
+      m = SA.createMatch({ seed: 1 }); m.fighters[1].y = 40; m.fighters[1].vy = 0; m.fighters[1].state = "jump"; m.fighters[1].health = 0; runTicks(m, 60, idle);
+      check("a fighter KO'd in the air falls to the sand during the verdict", m.phase === "verdict" && m.fighters[1].y === 0, m.fighters[1].y);
+      m = SA.createMatch({ seed: 1, level: 3 }); SA.spawnAnimal(m, "lion", 0); m.animal.y = 25; m.animal.vy = 0; m.fighters[1].health = 0; runTicks(m, 60, idle);
+      check("a beast in mid-air lands during the verdict", m.animal.y === 0, m.animal.y);
+      m = SA.createMatch({ seed: 1 }); m.phase = "roundEnd"; m.phaseT = 0; m.winner = 0; m.fighters[1].y = 30; runTicks(m, 40, idle);
+      check("fighters land during the round end too", m.fighters[1].y === 0);
+      // 4. the elephant never wedges the gladiators into each other at the wall
+      for (const side of [1, -1]) {
+        m = SA.createMatch({ seed: 1, level: 3 }); SA.spawnAnimal(m, "elephant", 60 * side); m.fighters[0].x = 170 * side; m.fighters[1].x = 190 * side;
+        let worst = 99; for (let k = 0; k < 400; k++) { runTicks(m, 1, idle); if (m.phase !== "fight") break; worst = Math.min(worst, Math.abs(m.fighters[0].x - m.fighters[1].x)); }
+        check("the elephant never pushes the gladiators into each other at the " + (side > 0 ? "right" : "left") + " wall", worst >= 14 - 1e-6, worst.toFixed(2));
+      }
+      // 5. the camera fits the fighters' full height in wide windows
+      for (const aspect of [16 / 9, 2.4, 3.2]) {
+        const c = SA.cameraFit(-60, 60, aspect, 28);
+        const visH = 2 * c.dist * Math.tan(14 * Math.PI / 180);
+        check("the camera shows feet to crest at aspect " + aspect.toFixed(2), visH >= 118, visH.toFixed(1));
+      }
+      // 6. a winner without a sword arm spares the loser instead of waiting for a gladius that never comes
+      m = SA.createMatch({ seed: 1, level: 2 }); m.fighters[0].arms.sword.on = false; m.fighters[1].health = 0; runTicks(m, 1, idle);
+      check("a one-armed winner: Caesar spares the loser", m.log.some(e => e.type === "spared") && !m.props.length);
+      runTicks(m, 120, idle);
+      check("and the verdict ends early", m.phase !== "verdict");
+      // 7. each drafter gets the pick guard
+      const skip = (m, n) => runTicks(m, n, idle);
+      m = SA.createMatch({ seed: 3 }); SA.startDraft(m, 0); skip(m, SA.K.PICK_GUARD + 1); runTicks(m, 2, k => [k === 0 ? press("punch") : I({}), I({})]);
+      check("the winner picks", m.draft.turn === 1);
+      runTicks(m, 2, k => [I({}), k === 0 ? press("punch") : I({})]);
+      check("a mashed punch right after does not pick for the loser", m.draft && m.draft.turn === 1);
+      skip(m, SA.K.PICK_GUARD + 1); runTicks(m, 2, k => [I({}), k === 0 ? press("punch") : I({})]);
+      check("but a deliberate one does", m.phase === "salute");
+    });
+
     return ok;
   },
 };
@@ -1176,7 +1262,8 @@ async function loadSheets() {
     try {
       const res = await fetch(e.path, { cache: "no-cache" });
       if (!res.ok) { problems.push(`${e.path}: missing (HTTP ${res.status}); expected a ${e.w * SA.SLICES}x${e.h} PNG`); return; }
-      const bmp = await createImageBitmap(await res.blob());
+      // exact pixel values: a PNG saved with a colour profile (Display P3 on Macs) must not be converted, or the team key colours drift
+      const bmp = await createImageBitmap(await res.blob(), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
       const bad = SA.checkSheet(e, bmp.width, bmp.height);
       if (bad) { problems.push(bad); return; }
       const cv = new OffscreenCanvas(bmp.width, bmp.height), cx = cv.getContext("2d", { willReadFrequently: true });
@@ -1506,16 +1593,15 @@ function createArena() {
   const camState = { x: 0, w: 260 };
   function cameraFor(xs, dt = 1, snap = false) {
     const lo = Math.min(...xs), hi = Math.max(...xs);
-    const w = Math.max(220, (hi - lo + 50) / 0.75);
-    const hfov = 2 * Math.atan(Math.tan(camera.fov * DEG / 2) * camera.aspect);
-    let cx = (lo + hi) / 2;
+    const fit = SA.cameraFit(lo, hi, camera.aspect, camera.fov, 2 * ARENA.sandHalf - 40);
     const k = snap ? 1 : 1 - Math.pow(0.04, dt);
-    camState.w += (Math.min(w, 2 * ARENA.sandHalf - 40) - camState.w) * k;
-    const halfW = camState.w / 2;
+    camState.w += (fit.w - camState.w) * k;
+    const th = Math.tan(camera.fov * DEG / 2) * camera.aspect;
+    const dist = Math.max(camState.w / 2 / th, 59 / Math.tan(camera.fov * DEG / 2));
+    const halfW = dist * th;
     const edge = Math.max(0, ARENA.sandHalf - halfW * 1.18);       // the wall is further away, so it shows wider
-    cx = Math.max(-edge, Math.min(edge, cx));
+    const cx = Math.max(-edge, Math.min(edge, fit.cx));
     camState.x += (cx - camState.x) * k;
-    const dist = halfW / Math.tan(hfov / 2);
     camera.position.set(camState.x, 40 + dist * 0.07, dist + 20);
     camera.lookAt(camState.x, 52, -10);
   }
@@ -1811,7 +1897,7 @@ function makeBot(seed) {
     let hold = {}, dur = 6 + Math.floor(r() * 10), tap = null;
     const d = Math.abs(o.x - f.x);
     if (m.phase === "title" || m.phase === "champion" || m.phase === "salute") { if (r() < 0.05) { hold = { punch: 1 }; tap = "punch"; } }
-    else if (m.phase === "draft") { if (m.draft && m.draft.order[m.draft.turn] === i && m.phaseT > 45) { hold = r() < 0.4 ? { right: 1 } : { punch: 1 }; tap = Object.keys(hold)[0]; dur = 10; } }
+    else if (m.phase === "draft") { if (m.draft && m.draft.order[m.draft.turn] === i && m.phaseT - (m.draft.turnStart || 0) > 45) { hold = r() < 0.4 ? { right: 1 } : { punch: 1 }; tap = Object.keys(hold)[0]; dur = 10; } }
     else if (m.phase === "verdict") {
       if (m.winner === i) { const g = m.props.find(p => p.kind === "gladius" && p.landed && !f.hasSword); const tx = g ? g.x : o.x; hold = Math.abs(tx - f.x) > 18 ? { [tx > f.x ? "right" : "left"]: 1 } : { punch: 1 }; dur = 4; }
     } else if (m.phase === "fight") {
@@ -2127,6 +2213,7 @@ async function runGame() {
         case "ko": mood("roar", 120); banner("K.O.!", null, 60); break;
         case "timeout": banner("TIME!", null, 60); break;
         case "draw": banner("DRAW!", "FIGHT AGAIN", 100); clearRoundVisuals(); break;
+        case "spared": arena.setThumb("up"); banner("CAESAR SPARES " + TEAM_NAME[e.who], null, 120); break;
         case "thumbsDown": arena.setThumb("down"); banner("CAESAR'S VERDICT", m.level === 1 || !SA.canSword(m.fighters[e.winner]) ? "TAKE THE GLADIUS AND STRIKE!" : TEAM_NAME[e.winner] + ", STRIKE!", 150); break;
         case "roundEnd": arena.setThumb("none"); break;
         case "roundStart": clearRoundVisuals(); arena.setThumb("none"); banner("ROUND " + e.round, "FIGHT!", 80); break;
