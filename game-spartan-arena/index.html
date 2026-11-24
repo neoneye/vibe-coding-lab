@@ -540,13 +540,75 @@ SA.roundEndTick = function (m) {
   SA.updateProps(m);
   if (m.phaseT >= SA.K.ROUND_END_TICKS) SA.afterRound(m);
 };
-// After a round: count the win and start the next round (match flow refines this).
+// ---------------------------------------------------------------------------
+// Match flow: title -> salute -> fight -> verdict -> roundEnd -> (fight | draft | champion).
+// Each level is best of 3 rounds; all three levels are always played; two level wins make the champion.
+// ---------------------------------------------------------------------------
+SA.CARDS = ["swordThrow", "leap", "furyFists", "whirlwind", "thunder", "shieldBash"];
+Object.assign(SA.K, { SALUTE_TICKS: 150, PICK_GUARD: 30, CHAMPION_GUARD: 60 });   // guards: a mashed punch never confirms by accident
+SA.LEVEL_NAMES = ["THE BEGINNERS", "SWORD AND SHIELD", "THE BEASTS"];
 SA.afterRound = function (m) {
+  const w = m.winner, rw = m.roundWins[m.level - 1];
+  rw[w]++;
+  if (rw[w] >= 2) {
+    m.levelWins[w]++;
+    SA.emit(m, { type: "levelWon", who: w, level: m.level });
+    if (m.level >= 3) {
+      m.champion = m.levelWins[0] > m.levelWins[1] ? 0 : 1;
+      m.phase = "champion"; m.phaseT = 0;
+      for (const f of m.fighters) SA.setState(f, f.id === m.champion ? "victory" : "dazed");
+      SA.emit(m, { type: "champion", who: m.champion });
+    } else SA.startDraft(m, w);
+    return;
+  }
   m.round++;
   SA.resetRound(m);
   m.phase = "fight"; m.phaseT = 0;
   SA.emit(m, { type: "roundStart", level: m.level, round: m.round });
 };
+SA.startDraft = function (m, winner) {
+  const owned = new Set([...m.fighters[0].rewards, ...m.fighters[1].rewards]);
+  const pool = SA.CARDS.filter(c => !owned.has(c));
+  const cards = [];
+  while (cards.length < 3 && pool.length) cards.push(pool.splice(Math.floor(m.rng() * pool.length), 1)[0]);
+  m.draft = { cards, order: [winner, 1 - winner], turn: 0, cursor: [1, 1], taken: [] };
+  m.phase = "draft"; m.phaseT = 0;
+  SA.emit(m, { type: "draft", cards: cards.slice(), first: winner });
+};
+SA.draftTick = function (m, inputs) {
+  const d = m.draft, who = d.order[d.turn], inp = inputs[who];
+  const free = i => !d.taken.includes(d.cards[i]);
+  const stepCursor = dir => {
+    let c = d.cursor[who];
+    for (let k = 0; k < d.cards.length; k++) { c = (c + dir + d.cards.length) % d.cards.length; if (free(c)) break; }
+    d.cursor[who] = c;
+    SA.emit(m, { type: "cursor", who });
+  };
+  if (!free(d.cursor[who])) stepCursor(1);
+  if (inp.pressed.left) stepCursor(-1);
+  if (inp.pressed.right) stepCursor(1);
+  if (inp.pressed.punch && m.phaseT > SA.K.PICK_GUARD) {
+    const card = d.cards[d.cursor[who]];
+    d.taken.push(card);
+    m.fighters[who].rewards.push(card);
+    SA.emit(m, { type: "pick", who, card });
+    d.turn++;
+    if (d.turn >= 2) SA.startLevel(m, m.level + 1);
+  }
+};
+SA.startLevel = function (m, level) {
+  m.level = level; m.round = 1; m.draft = null;
+  SA.resetRound(m);
+  m.phase = "salute"; m.phaseT = 0;
+  for (const f of m.fighters) SA.setState(f, "salute");
+  SA.emit(m, { type: "salute", level });
+};
+SA.newMatch = function (m) {
+  m.roundWins = [[0, 0], [0, 0], [0, 0]]; m.levelWins = [0, 0]; m.champion = null;
+  for (const f of m.fighters) f.rewards = [];
+  SA.startLevel(m, 1);
+};
+const anyAttack = inputs => inputs.some(i => i.pressed.punch || i.pressed.kick);
 SA.fightTick = function (m, inputs) {
   const [a, b] = m.fighters;
   for (const f of m.fighters) { f.st++; }
@@ -573,6 +635,17 @@ SA.step = function (m, inputs) {
   if (m.phase === "fight") SA.fightTick(m, inputs);
   else if (m.phase === "verdict") SA.verdictTick(m, inputs);
   else if (m.phase === "roundEnd") SA.roundEndTick(m);
+  else if (m.phase === "draft") SA.draftTick(m, inputs);
+  else if (m.phase === "title") { if (anyAttack(inputs)) SA.newMatch(m); }
+  else if (m.phase === "champion") { for (const f of m.fighters) f.st++; if (m.phaseT > SA.K.CHAMPION_GUARD && anyAttack(inputs)) SA.newMatch(m); }
+  else if (m.phase === "salute") {
+    for (const f of m.fighters) f.st++;
+    if (m.phaseT >= SA.K.SALUTE_TICKS || anyAttack(inputs)) {
+      m.phase = "fight"; m.phaseT = 0;
+      for (const f of m.fighters) SA.setState(f, "idle");
+      SA.emit(m, { type: "roundStart", level: m.level, round: m.round });
+    }
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -718,6 +791,43 @@ var SATests = {
       m = SA.createMatch({ seed: 1, level: 2 }); m.fighters[1].health = 0; runTicks(m, 1, [I({}), I({})]);
       runTicks(m, 360 + 121, [I({}), I({})]);
       check("after the verdict and a pause the next round starts", m.phase === "fight" && m.round === 2 && m.fighters[1].arms.sword.on && m.fighters[1].health === 100, [m.phase, m.round]);
+    });
+
+    T("match flow and reward draft", () => {
+      const skipTo = (m, pred, max = 2000) => { for (let k = 0; k < max && !pred(m); k++) runTicks(m, 1, [I({}), I({})]); };
+      const winRound = (m, who) => {
+        skipTo(m, m => m.phase === "fight");
+        m.fighters[1 - who].health = 0;
+        runTicks(m, 1, [I({}), I({})]);
+        skipTo(m, m => m.phase !== "verdict" && m.phase !== "roundEnd");
+      };
+      const pick = (m) => { skipTo(m, m => m.phaseT > SA.K.PICK_GUARD); const who = m.draft.order[m.draft.turn], pair = [I({}), I({})]; pair[who] = press("punch"); runTicks(m, 2, k => (k === 0 ? pair : [I({}), I({})])); };
+      const availableFor = m => m.draft.cards.filter(c => !m.draft.taken.includes(c));
+      let m = SA.createMatch({ seed: 3 }); winRound(m, 0); winRound(m, 0);
+      check("two round wins take the level", m.levelWins[0] === 1 && m.phase === "draft", [m.levelWins, m.phase]);
+      check("the level winner picks first", m.draft.order[0] === 0 && m.draft.cards.length === 3 && new Set(m.draft.cards).size === 3);
+      const first = m.draft.cards[m.draft.cursor[0]]; pick(m);
+      check("the loser picks from the two left", m.draft.turn === 1 && !availableFor(m).includes(first) && availableFor(m).length === 2 && m.fighters[0].rewards[0] === first);
+      const pair = [I({}), I({})]; pair[1] = press("left"); const before = m.draft.cursor[1]; runTicks(m, 2, k => (k === 0 ? pair : [I({}), I({})]));
+      check("the picker's cursor skips the taken card", m.draft.cursor[1] !== before && !m.draft.taken.includes(m.draft.cards[m.draft.cursor[1]]));
+      pick(m);
+      check("after both picks the next level salutes", m.level === 2 && m.phase === "salute" && m.fighters.every(f => f.rewards.length === 1) && m.fighters[0].hasSword);
+      runTicks(m, 1, [press("kick"), I({})]);
+      check("an attack key skips the salute", m.phase === "fight");
+      winRound(m, 1); winRound(m, 0); winRound(m, 1);
+      check("a level can go to three rounds", m.levelWins[1] === 1 && m.phase === "draft", [m.levelWins, m.phase]);
+      check("owned cards are not offered again", m.draft.cards.every(c => !m.fighters[0].rewards.includes(c) && !m.fighters[1].rewards.includes(c)));
+      check("the second level's winner picks first", m.draft.order[0] === 1);
+      pick(m); pick(m); winRound(m, 0); winRound(m, 0);
+      check("Level 3 is always played and decides the champion", m.phase === "champion" && m.champion === 0, [m.phase, m.champion]);
+      runTicks(m, 1, [press("punch"), I({})]);
+      check("a mashed punch does not skip the champion screen", m.phase === "champion");
+      skipTo(m, m => m.phaseT > SA.K.CHAMPION_GUARD); runTicks(m, 2, k => [k ? press("punch") : I({}), I({})]);
+      check("punch on the champion screen starts a rematch", m.phase === "salute" && m.level === 1 && m.levelWins.join() === "0,0" && m.fighters.every(f => f.rewards.length === 0));
+      m = SA.createMatch({ seed: 3, phase: "title" }); runTicks(m, 5, [I({}), I({})]);
+      check("the title waits for a key", m.phase === "title");
+      runTicks(m, 1, [I({}), press("kick")]);
+      check("any attack key on the title starts the match", m.phase === "salute" && m.log.some(e => e.type === "salute"));
     });
 
     return ok;
