@@ -79,7 +79,7 @@ Every model is built from body parts, and each part is one PNG in `voxels/<model
 
 ## Music
 
-Drop a song named `music.mp3` next to `index.html` and it loops behind the fight. M mutes it along with the sound effects. Until the file exists, the browser console shows one harmless 404 for it. The sound effects (hits, clangs, crowd, lion roar, elephant trumpet, the gate) are synthesised with Web Audio.
+The soundtrack, `music.mp3`, is the owner's own song. It starts with the first key press (browsers don't allow sound before then), loops behind the fight at half volume, and M mutes it along with the sound effects. To change it, replace the file. If the file is missing, the game runs without music and the browser console shows one harmless 404. The sound effects (hits, clangs, crowd, lion roar, elephant trumpet, the gate) are synthesised with Web Audio.
 
 ## Tuning numbers
 
