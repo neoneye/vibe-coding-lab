@@ -448,7 +448,7 @@ SA.updateMove = function (m, f, inp) {
   if (mv.dash) f.vx = f.move.t >= mv.startup && f.move.t < mv.startup + mv.active ? mv.dash * f.facing : 0;
   if (f.move.name === "throw" && f.move.t === mv.startup) {
     f.hasSword = false;
-    m.props.push({ kind: "thrownSword", owner: f.id, x: f.x + f.facing * 10, y: 36, vx: SA.K.THROW_VX * f.facing, vy: 0, flying: true, landed: false });
+    m.props.push({ kind: "thrownSword", owner: f.id, x: f.x + f.facing * 10, y: 28, vx: SA.K.THROW_VX * f.facing, vy: 0, flying: true, landed: false });
     SA.emit(m, { type: "throwSword", who: f.id });
   }
   if (!mv.air && f.move.t >= mv.startup + mv.active + mv.recovery) {
@@ -583,6 +583,137 @@ SA.updateProps = function (m) {
     if (p.y <= 0) { p.y = 0; p.vy = 0; p.vx = 0; p.landed = true; SA.emit(m, { type: "propLand", kind: p.kind, x: p.x }); }
   }
 };
+// ---------------------------------------------------------------------------
+// Level 3: the beasts. Caesar's gate opens 3 s into each round; the beast attacks the nearest
+// gladiator, and both gladiators can hit it. Lion in rounds 1 and 3, elephant in round 2.
+// ---------------------------------------------------------------------------
+SA.BEASTS = {
+  lion: {
+    health: 60, w: 34, h: 26, speed: 2.2, heavy: false, recover: 40,
+    attacks: {
+      claw:   { range: 22, startup: 8, active: 4, damage: 8,  reach: 24, y0: 0, y1: 30, height: "mid", knock: 2 },
+      pounce: { range: 70, startup: 6, damage: 12, reach: 12, y0: 0, y1: 30, height: "high", knock: 4, vx: 5, vy: 5, cooldown: 90 },
+    },
+  },
+  elephant: {
+    health: 140, w: 50, h: 56, speed: 1.0, heavy: true, recover: 70,
+    attacks: {
+      trunk:  { range: 30, startup: 12, active: 5, damage: 10, reach: 36, y0: 0, y1: 50, height: "mid", knock: 5, toss: 6 },
+      charge: { range: 120, startup: 20, damage: 18, reach: 8, y0: 0, y1: 56, height: "mid", knock: 5, knockdown: true, vx: 4.5, maxTicks: 70, cooldown: 120 },
+    },
+  },
+};
+Object.assign(SA.K, { GATE_TICK: 180, ENTER_TICKS: 60, BEAST_HYSTERESIS: 30, KILL_REFILL: 20, BEAST_HURT: 12 });
+SA.spawnAnimal = function (m, kind, x, state = "stalk") {
+  const B = SA.BEASTS[kind];
+  m.animal = { kind, x, y: 0, vx: 0, vy: 0, facing: 1, health: B.health, maxHealth: B.health, w: B.w, h: B.h,
+    state, st: 0, target: null, attack: null, hits: [], recover: 0, cool: 0 };
+  return m.animal;
+};
+SA.forceAnimalAttack = function (m, who) { const a = m.animal; a.target = who; a.state = "stalk"; a.st = 0; a.recover = 0; a.cool = 0; };
+SA.animalAlive = a => a && a.state !== "dead";
+SA.hurtAnimal = function (m, by, dmg, x, y) {
+  const a = m.animal;
+  if (!SA.animalAlive(a) || a.state === "enter") return;
+  a.health = Math.max(0, a.health - dmg);
+  SA.emit(m, { type: "animalHit", by, dmg, x: x !== undefined ? x : a.x, y: y !== undefined ? y : a.h * 0.6 });
+  if (a.health <= 0) {
+    a.state = "dead"; a.st = 0; a.vx = 0; a.attack = null;
+    const f = m.fighters[by];
+    if (f) f.health = Math.min(100, f.health + SA.K.KILL_REFILL);
+    SA.emit(m, { type: "animalKill", by, kind: a.kind, x: a.x });
+  } else if (!SA.BEASTS[a.kind].heavy && a.state !== "pounce") { a.state = "hurt"; a.st = 0; a.attack = null; a.vx = 0; }
+};
+SA.thrownHitsAnimal = function (m, p) {
+  const a = m.animal;
+  if (!SA.animalAlive(a) || a.state === "enter" || Math.abs(p.x - a.x) > a.w / 2 + 3 || p.y - 3 > a.y + a.h) return false;
+  SA.hurtAnimal(m, p.owner, SA.K.THROW_DAMAGE, p.x, p.y);
+  return true;
+};
+// Gladiators' active moves against the beast.
+SA.hitAnimal = function (m, f) {
+  const a = m.animal, mv = SA.moveActive(f);
+  if (!mv || mv.noHit || !SA.animalAlive(a) || a.state === "enter" || f.move.hits.includes("animal")) return;
+  if (!SA.hitboxTouches(f, mv, a.x, a.w / 2, a.y, a.h)) return;
+  f.move.hits.push("animal");
+  SA.hurtAnimal(m, f.id, mv.damage, a.x - Math.sign(a.x - f.x) * a.w / 3, f.y + (mv.y0 + mv.y1) / 2);
+  if (mv.sword) f.thunder = Math.min(100, f.thunder + SA.K.THUNDER_PER_HIT);
+};
+SA.animalTick = function (m) {
+  const K = SA.K;
+  if (m.level < 3) return;
+  if (!m.animal) {
+    if (m.phaseT === K.GATE_TICK) {
+      SA.emit(m, { type: "gate" });
+      SA.spawnAnimal(m, m.round === 2 ? "elephant" : "lion", 0, "enter");
+    }
+    return;
+  }
+  const a = m.animal, B = SA.BEASTS[a.kind];
+  a.st++;
+  if (a.cool > 0) a.cool--;
+  if (a.state === "dead") return;
+  if (a.state === "enter") { if (a.st >= K.ENTER_TICKS) { a.state = "stalk"; a.st = 0; SA.emit(m, { type: "roar", kind: a.kind }); } return; }
+  // choose a target: the nearest gladiator still standing, switching only when the other is much nearer
+  const alive = m.fighters.filter(f => f.health > 0);
+  if (!alive.length) return;
+  const dist = f => Math.abs(f.x - a.x);
+  if (a.target === null || m.fighters[a.target].health <= 0) a.target = alive.reduce((b, f) => (dist(f) < dist(b) ? f : b)).id;
+  else { const o = m.fighters[1 - a.target]; if (o.health > 0 && dist(o) + K.BEAST_HYSTERESIS < dist(m.fighters[a.target])) a.target = o.id; }
+  const t = m.fighters[a.target], d = dist(t), dir = Math.sign(t.x - a.x) || a.facing;
+  const lim = K.ARENA_HALF - a.w / 2;
+  switch (a.state) {
+    case "hurt": if (a.st >= K.BEAST_HURT) { a.state = "stalk"; a.st = 0; } break;
+    case "recover": a.vx = 0; if (a.st >= (a.recover || B.recover)) { a.state = "stalk"; a.st = 0; a.recover = 0; } break;
+    case "stalk": {
+      a.facing = dir;
+      const near = Object.entries(B.attacks).find(([, at]) => d <= at.range + a.w / 2 && (!at.cooldown || a.cool <= 0) && (at.range > 40 ? d > 40 : true));
+      if (near) {
+        a.state = "attack"; a.st = 0; a.attack = near[0]; a.hits = []; a.vx = 0;
+        SA.emit(m, { type: "animalAttack", kind: a.kind, attack: near[0] });
+      } else a.vx = dir * B.speed;
+      break;
+    }
+    case "attack": {
+      const at = B.attacks[a.attack];
+      if (a.attack === "pounce" && a.st === at.startup) { a.vx = at.vx * a.facing; a.vy = at.vy; a.cool = at.cooldown; }
+      if (a.attack === "charge" && a.st === at.startup) { a.vx = at.vx * a.facing; a.cool = at.cooldown; }
+      const airborne = a.y > 0 || a.vy > 0;
+      const activeNow = a.attack === "pounce" ? a.st > at.startup && airborne
+        : a.attack === "charge" ? a.st >= at.startup
+        : a.st >= at.startup && a.st < at.startup + at.active;
+      if (activeNow) {
+        for (const f of m.fighters) {
+          if (a.hits.includes(f.id) || f.health <= 0 || f.invuln > 0) continue;
+          const x0 = a.facing > 0 ? a.x : a.x - a.w / 2 - at.reach, x1 = a.facing > 0 ? a.x + a.w / 2 + at.reach : a.x;
+          if (x1 < f.x - K.BODY_W / 2 || x0 > f.x + K.BODY_W / 2 || a.y + at.y1 < f.y || a.y + at.y0 > f.y + SA.fighterHeight(f)) continue;
+          a.hits.push(f.id);
+          const mv = Object.assign({}, at, { sword: false });
+          SA.applyHit(m, { id: -1, x: a.x, y: a.y, facing: a.facing, thunder: 0 }, f, mv, a.attack === "charge" ? "trample" : a.attack);
+          if (at.toss && f.state === "hit") { f.vy = at.toss; f.y = 0.001; f.vx = Math.sign(f.x - a.x) * 5; }
+        }
+      }
+      const done = a.attack === "pounce" ? a.st > at.startup + 2 && !airborne
+        : a.attack === "charge" ? a.st >= at.startup + at.maxTicks || Math.abs(a.x) >= lim - 1 || (a.st > at.startup + 10 && (t.x - a.x) * a.facing < -40)
+        : a.st >= at.startup + at.active + 6;
+      if (done) { a.state = "recover"; a.st = 0; a.vx = 0; a.attack = null; }
+      break;
+    }
+  }
+  // physics
+  if (a.y > 0 || a.vy > 0) { a.vy -= K.GRAVITY; a.y += a.vy; if (a.y <= 0) { a.y = 0; a.vy = 0; a.vx *= 0.3; } }
+  a.x = Math.max(-lim, Math.min(lim, a.x + a.vx));
+  // bodies: gladiators can't walk or jump through the beast unless they clear its back
+  for (const f of m.fighters) {
+    const minD = (K.BODY_W + a.w) / 2, dx = f.x - a.x;
+    if (Math.abs(dx) >= minD || f.y >= a.y + a.h || a.y >= f.y + SA.fighterHeight(f) || a.state === "dead") continue;
+    const sgn = dx !== 0 ? Math.sign(dx) : -a.facing, need = minD - Math.abs(dx);
+    if (B.heavy) f.x += sgn * need; else { f.x += sgn * need / 2; a.x -= sgn * need / 2; }
+    const fl = K.ARENA_HALF - K.BODY_W / 2;
+    if (Math.abs(f.x) > fl) { f.x = Math.sign(f.x) * fl; a.x = f.x - sgn * minD; }
+    a.x = Math.max(-lim, Math.min(lim, a.x));
+  }
+};
 // Walking over a landed sword picks it up (your own thrown sword, or Caesar's gladius).
 SA.pickupSword = function (m, f, kind) {
   if (!grounded(f) || !f.arms.sword.on || f.hasSword) return;
@@ -706,6 +837,9 @@ SA.fightTick = function (m, inputs) {
   SA.faceEachOther(m);
   SA.resolveHit(m, a, b);
   SA.resolveHit(m, b, a);
+  SA.hitAnimal(m, a);
+  SA.hitAnimal(m, b);
+  SA.animalTick(m);
   SA.updateProps(m);
   for (const f of m.fighters) SA.pickupSword(m, f, "thrownSword");
   // round end: KO, or time-out
@@ -951,6 +1085,59 @@ var SATests = {
       check("down + special uses the second card", m.log.some(e => e.type === "hit" && e.move === "fury") && m.fighters[0].y === 0);
       m = withCards(1, [], 20); runTicks(m, 20, k => spec(k));
       check("special with no card does nothing", m.fighters[1].health === 100);
+    });
+
+    T("the beasts", () => {
+      const idle = [I({}), I({})];
+      let m = SA.createMatch({ seed: 1, level: 3, round: 1 }); runTicks(m, 181, idle);
+      check("the lion comes out in round 1", m.animal && m.animal.kind === "lion" && m.log.some(e => e.type === "gate"));
+      m = SA.createMatch({ seed: 1, level: 3, round: 2 }); runTicks(m, 181, idle);
+      check("the elephant comes out in round 2", m.animal && m.animal.kind === "elephant");
+      m = SA.createMatch({ seed: 1, level: 2 }); runTicks(m, 300, idle);
+      check("no beasts before Level 3", !m.animal);
+      m = SA.createMatch({ seed: 1, level: 3 }); runTicks(m, 200, idle);
+      check("the beast cannot be hurt while it walks out", m.animal.state === "enter" || m.animal.health === m.animal.maxHealth);
+      m = SA.createMatch({ seed: 1, level: 3 }); SA.spawnAnimal(m, "lion", 0); m.fighters[0].x = -20; m.fighters[1].x = 50; runTicks(m, 1, idle);
+      check("the beast goes for the nearest", m.animal.target === 0);
+      m.fighters[0].x = -40; m.fighters[1].x = 30; m.animal.x = 0; runTicks(m, 1, idle);
+      check("targeting has hysteresis", m.animal.target === 0);
+      m.fighters[0].x = -100; m.fighters[1].x = 20; m.animal.x = 0; runTicks(m, 1, idle);
+      check("a much nearer gladiator becomes the target", m.animal.target === 1);
+      m = SA.createMatch({ seed: 1, level: 3 }); SA.spawnAnimal(m, "lion", 18); m.animal.health = 4; m.animal.state = "recover"; m.animal.recover = 99;
+      m.fighters[0].health = 50; m.fighters[0].x = 0; m.fighters[0].facing = 1; m.fighters[1].x = 150;
+      runTicks(m, 20, k => [k === 0 ? press("kick") : I({}), I({})]);
+      check("killing the beast refills 20 health", m.animal.state === "dead" && m.fighters[0].health === 70 && m.log.some(e => e.type === "animalKill" && e.by === 0), [m.animal.state, m.fighters[0].health]);
+      m = SA.createMatch({ seed: 1, level: 3 }); SA.spawnAnimal(m, "lion", 18); m.animal.state = "recover"; m.animal.recover = 99; m.fighters[0].x = 0; m.fighters[1].x = 150; m.fighters[0].hasSword = false;
+      runTicks(m, 20, k => [k === 0 ? press("punch") : I({}), I({})]);
+      check("a standing punch passes over a lion", m.animal.health === m.animal.maxHealth);
+      m = SA.createMatch({ seed: 1, level: 3 }); SA.spawnAnimal(m, "elephant", 40); m.animal.state = "recover"; m.animal.recover = 999; m.fighters[0].x = 0; m.fighters[1].x = -150;
+      runTicks(m, 40, [I({ up: 1, right: 1 }), I({})]);
+      check("a normal jump can't clear the elephant", m.fighters[0].x < 40, m.fighters[0].x.toFixed(1));
+      m = SA.createMatch({ seed: 1, level: 3 }); m.fighters[1].health = 1; SA.spawnAnimal(m, "lion", m.fighters[1].x + 12); SA.forceAnimalAttack(m, 1); runTicks(m, 60, idle);
+      check("a gladiator killed by the beast loses the round", m.winner === 0 && m.phase === "verdict", [m.winner, m.phase]);
+      m = SA.createMatch({ seed: 1, level: 3 }); SA.spawnAnimal(m, "lion", m.fighters[1].x + 12); SA.forceAnimalAttack(m, 1); runTicks(m, 60, idle);
+      check("beasts never wound arms", m.fighters[1].health < 100 && m.fighters[1].arms.sword.wound === 0 && m.fighters[1].arms.shield.wound === 0);
+      m = SA.createMatch({ seed: 1, level: 3 }); SA.spawnAnimal(m, "elephant", -150); m.fighters[0].x = -40; m.fighters[1].x = 150; SA.forceAnimalAttack(m, 0); runTicks(m, 80, idle);
+      check("the elephant charges and tramples", m.log.some(e => e.type === "hit" && e.move === "trample" && e.who === 0) && m.log.some(e => e.type === "animalAttack" && e.attack === "charge"));
+      m = SA.createMatch({ seed: 1, level: 3 }); SA.spawnAnimal(m, "lion", 0); m.animal.state = "recover"; m.animal.recover = 999; m.fighters[0].rewards = ["swordThrow"]; face(m, 160);
+      m.fighters[0].x = -100; m.animal.x = -20; runTicks(m, 40, k => [k === 0 ? press("special") : I({}), I({})]);
+      check("a thrown sword can hit the beast", m.animal.health === m.animal.maxHealth - SA.K.THROW_DAMAGE, m.animal.health);
+    });
+
+    T("random brawl", () => {
+      const r = SA.rng(42), m = SA.createMatch({ seed: 9, phase: "title" });
+      let bad = null, phases = new Set();
+      const rand = () => { const h = {}; for (const a of ACTS) h[a] = r() < (a === "punch" || a === "kick" ? 0.25 : a === "special" ? 0.08 : 0.3); return h; };
+      let hold = [{}, {}];
+      for (let k = 0; k < 120000 && m.phase !== "champion"; k++) {
+        if (k % 6 === 0) hold = [rand(), rand()];
+        runTicks(m, 1, hold);
+        phases.add(m.phase);
+        for (const f of m.fighters) if (!(Math.abs(f.x) <= 193.0001) || !(f.health >= 0 && f.health <= 100) || Number.isNaN(f.y)) bad = bad || [k, m.phase, f.id, f.x, f.health];
+        if (m.animal && (Number.isNaN(m.animal.x) || Math.abs(m.animal.x) > 200)) bad = bad || [k, "animal", m.animal.x];
+      }
+      check("a random brawl keeps everyone in bounds and sane", !bad, bad);
+      check("and reaches the champion screen through every phase", m.phase === "champion" && ["salute", "fight", "verdict", "roundEnd", "draft"].every(p => phases.has(p)), [m.phase, m.level, [...phases].join()]);
     });
 
     return ok;
