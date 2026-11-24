@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>Spartan Arena</title>
 <style>
   html, body { margin: 0; height: 100%; background: #120c08; overflow: hidden; }
@@ -190,9 +191,22 @@ SA.checkSheet = function (entry, pngW, pngH) {
 // Team colours: the PNGs are drawn in the red team's shades; the blue team swaps these keys.
 SA.TEAM_KEYS = [0xa02424, 0xd03a30, 0xf06a50];
 SA.TEAM_BLUE = [0x24409a, 0x3060d0, 0x5a8af0];
+SA.TEAM_GREY = [0x55524c, 0x7a766e, 0xa09a90];   // team 2: Caesar's guards
 SA.teamRecolor = function (team) {
   if (!team) return null;
-  return new Map(SA.TEAM_KEYS.map((k, i) => [k, SA.TEAM_BLUE[i]]));
+  const to = team === 2 ? SA.TEAM_GREY : SA.TEAM_BLUE;
+  return new Map(SA.TEAM_KEYS.map((k, i) => [k, to[i]]));
+};
+// Spectators are drawn with grey tunics; each crowd variant swaps the greys for a colour.
+SA.CROWD_KEYS = [0x8c8c8c, 0xbcbcbc, 0xe4e4e4];
+SA.CROWD_TUNICS = [
+  [0x8c8c8c, 0xbcbcbc, 0xe4e4e4], [0x8a2a20, 0xb84030, 0xd86050], [0x284a86, 0x3a68b0, 0x5a88d0],
+  [0x6a5a2a, 0x9a8440, 0xc8b060], [0x4a2a60, 0x6a3c88, 0x8c5aaa], [0x3a6a30, 0x528c42, 0x74ae5a],
+  [0xa87a40, 0xd0a060, 0xecc888], [0x6a3a2a, 0x8c5038, 0xb07050],
+];
+SA.crowdRecolor = function (i) {
+  const to = SA.CROWD_TUNICS[i % SA.CROWD_TUNICS.length];
+  return new Map(SA.CROWD_KEYS.map((k, j) => [k, to[j]]));
 };
 
 // ---------------------------------------------------------------------------
@@ -229,6 +243,8 @@ var SATests = {
       check("every model has its root part", Object.values(SA.MODELS).every(M => M.parts[M.root] && M.parts[M.root].parent === null));
       check("parts sharing a sheet agree on its size", SA.sheetPaths().length === new Set(SA.sheetPaths().map(p => p.path)).size);
       check("blue team recolors all three keys", SA.teamRecolor(1).size === 3 && SA.teamRecolor(0) === null);
+      check("team 2 is the grey guards", SA.teamRecolor(2).get(SA.TEAM_KEYS[1]) === SA.TEAM_GREY[1]);
+      check("crowd variants recolor the grey tunic", SA.crowdRecolor(3).get(SA.CROWD_KEYS[1]) !== SA.CROWD_KEYS[1] && SA.crowdRecolor(3).size === 3);
     });
     return ok;
   },
@@ -286,7 +302,7 @@ function sheetGeometry(model, sheet, team) {
   const key = `${model}/${sheet}/${team || 0}`;
   if (geomCache.has(key)) return geomCache.get(key);
   const s = SHEETS.get(`${model}/${sheet}`);
-  const m = SA.meshSlices(s.rgba, s.w * SA.SLICES, s.h, SA.SLICES, model === "gladiator" ? SA.teamRecolor(team) : null);
+  const m = SA.meshSlices(s.rgba, s.w * SA.SLICES, s.h, SA.SLICES, model === "gladiator" ? SA.teamRecolor(team) : model === "spectator" ? SA.crowdRecolor(team) : null);
   const lin = new Float32Array(m.colors.length);
   for (let i = 0; i < lin.length; i += 3) { tmpColor.setRGB(m.colors[i], m.colors[i + 1], m.colors[i + 2], THREE.SRGBColorSpace); lin[i] = tmpColor.r; lin[i + 1] = tmpColor.g; lin[i + 2] = tmpColor.b; }
   const g = new THREE.BufferGeometry();
@@ -350,7 +366,7 @@ renderer.setPixelRatio(1);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.BasicShadowMap;
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x6e9dd2);
+scene.background = new THREE.Color(0xc8a468);
 const camera = new THREE.PerspectiveCamera(28, 16 / 9, 10, 3000);
 const sun = new THREE.DirectionalLight(0xffe2b0, 2.6);
 sun.position.set(-140, 260, 200);
@@ -400,6 +416,249 @@ function draw() {
   renderer.render(blitScene, blitCam);
 }
 
+// ---------------------------------------------------------------- arena
+// Sim x runs -200..200 voxels; fighters walk at z = 0. The back wall stands at z = -40.
+const ARENA = { half: 200, sandHalf: 260, wallZ: -40, wallH: 34, gateHalf: 16, gateH: 26 };
+const hash3 = (x, y, z) => { let h = (x * 374761393 + y * 668265263 + z * 1274126177) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+function pixelTexture(w, h, fn) {
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const c = fn(x, y), i = (y * w + x) * 4; data[i] = c >> 16; data[i + 1] = (c >> 8) & 255; data[i + 2] = c & 255; data[i + 3] = 255; }
+  const t = new THREE.DataTexture(data, w, h);
+  t.magFilter = t.minFilter = THREE.NearestFilter;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.needsUpdate = true;
+  return t;
+}
+const stone = (x, y, seed) => {
+  const row = Math.floor(y / 4), bx = Math.floor((x + (row % 2) * 4) / 8);
+  if (y % 4 === 0 || (x + (row % 2) * 4) % 8 === 0) return 0x8a7a60;              // mortar
+  const v = hash3(bx, row, seed);
+  return v < 0.3 ? 0xc8b48e : v < 0.7 ? 0xd6c29c : 0xe2d0aa;
+};
+function box(w, h, d, mat, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z); m.castShadow = m.receiveShadow = true;
+  return m;
+}
+function createArena() {
+  const group = new THREE.Group();
+  scene.add(group);
+  // sand: one texel per voxel, so footprints and stains stay pixel art
+  const SW = ARENA.sandHalf * 2, SD = 600;
+  const sandBase = new Uint8Array(SW * SD * 4);
+  const SAND = [0xc8a468, 0xd4b274, 0xdcbc80, 0xe4c88c];
+  for (let z = 0; z < SD; z++) for (let x = 0; x < SW; x++) {
+    const v = hash3(x, z, 3), c = SAND[v < 0.15 ? 0 : v < 0.55 ? 1 : v < 0.92 ? 2 : 3], i = (z * SW + x) * 4;
+    sandBase[i] = c >> 16; sandBase[i + 1] = (c >> 8) & 255; sandBase[i + 2] = c & 255; sandBase[i + 3] = 255;
+  }
+  const sandTex = new THREE.DataTexture(sandBase.slice(), SW, SD);
+  sandTex.magFilter = sandTex.minFilter = THREE.NearestFilter; sandTex.colorSpace = THREE.SRGBColorSpace; sandTex.flipY = false; sandTex.needsUpdate = true;
+  const sand = new THREE.Mesh(new THREE.PlaneGeometry(SW, SD), new THREE.MeshLambertMaterial({ map: sandTex }));
+  sand.rotation.x = -Math.PI / 2;
+  sand.position.set(0, 0, ARENA.wallZ + SD / 2);
+  sand.receiveShadow = true;
+  group.add(sand);
+  // sand texel (x, z) for a world point; texture row 0 is the far edge (flipY off, plane rotated)
+  const stains = [];
+  function stain(wx, wz, size) {
+    const cx = Math.round(wx + ARENA.sandHalf), cz = Math.round(wz - ARENA.wallZ);
+    const d = sandTex.image.data;
+    for (let k = 0; k < size * size; k++) {
+      const x = cx + Math.round((hash3(k, cx, cz) - 0.5) * size * 1.6), z = cz + Math.round((hash3(cz, k, cx) - 0.5) * size * 0.9);
+      if (x < 0 || z < 0 || x >= SW || z >= SD) continue;
+      const i = (z * SW + x) * 4, dark = hash3(x, z, k) < 0.4;
+      d[i] = dark ? 0x6a : 0x8e; d[i + 1] = dark ? 0x10 : 0x1c; d[i + 2] = dark ? 0x10 : 0x18;
+    }
+    sandTex.needsUpdate = true;
+    stains.push(1);
+  }
+  function clearStains() { if (!stains.length) return; sandTex.image.data.set(sandBase); sandTex.needsUpdate = true; stains.length = 0; }
+
+  // back wall with the beast gate in the middle
+  const wallMat = side => new THREE.MeshLambertMaterial({ map: pixelTexture(ARENA.sandHalf - ARENA.gateHalf, ARENA.wallH, (x, y) => stone(x + side * 999, y, 5)) });
+  const segW = ARENA.sandHalf - ARENA.gateHalf;
+  group.add(box(segW, ARENA.wallH, 6, wallMat(0), -(ARENA.gateHalf + segW / 2), ARENA.wallH / 2, ARENA.wallZ - 3));
+  group.add(box(segW, ARENA.wallH, 6, wallMat(1), ARENA.gateHalf + segW / 2, ARENA.wallH / 2, ARENA.wallZ - 3));
+  const lintelMat = new THREE.MeshLambertMaterial({ map: pixelTexture(ARENA.gateHalf * 2, ARENA.wallH - ARENA.gateH, (x, y) => stone(x, y, 9)) });
+  group.add(box(ARENA.gateHalf * 2, ARENA.wallH - ARENA.gateH, 6, lintelMat, 0, ARENA.gateH + (ARENA.wallH - ARENA.gateH) / 2, ARENA.wallZ - 3));
+  const tunnel = box(ARENA.gateHalf * 2, ARENA.gateH, 0.6, new THREE.MeshBasicMaterial({ color: 0x140e0a }), 0, ARENA.gateH / 2, ARENA.wallZ - 3.4);
+  tunnel.castShadow = false;
+  group.add(tunnel);
+  const gate = new THREE.Group(), ironMat = new THREE.MeshLambertMaterial({ color: 0x3a3a40 });
+  for (let x = -ARENA.gateHalf + 2; x <= ARENA.gateHalf - 2; x += 4) gate.add(box(1.4, ARENA.gateH, 1.4, ironMat, x, ARENA.gateH / 2, 0));
+  for (let y = 4; y < ARENA.gateH; y += 6) gate.add(box(ARENA.gateHalf * 2, 1.4, 1.4, ironMat, 0, y, 0));
+  gate.position.z = ARENA.wallZ - 1;
+  group.add(gate);
+  const gateOpen = t => { gate.position.y = Math.max(0, Math.min(1, t)) * (ARENA.gateH - 2); };
+
+  // stands: three stepped tiers of stone behind the wall, full of spectators
+  const TIERS = [{ z: -50, y: 34 }, { z: -62, y: 43 }, { z: -74, y: 52 }];
+  TIERS.forEach((t, i) => {
+    const mat = new THREE.MeshLambertMaterial({ map: pixelTexture(64, 16, (x, y) => stone(x, y, 20 + i)) });
+    mat.map.wrapS = mat.map.wrapT = THREE.RepeatWrapping; mat.map.repeat.set(SW * 1.6 / 64, 1);
+    group.add(box(SW * 1.6, t.y, 12, mat, 0, t.y / 2, t.z));
+  });
+
+  // Caesar's box: a marble platform with an awning, Caesar on a throne and two guards
+  const marble = new THREE.MeshLambertMaterial({ map: pixelTexture(16, 16, (x, y) => (hash3(x, y, 77) < 0.12 ? 0xc8c0b0 : hash3(x, y, 78) < 0.5 ? 0xf0ece4 : 0xe4ded2)) });
+  const purple = new THREE.MeshLambertMaterial({ map: pixelTexture(8, 8, (x, y) => (x % 4 === 0 ? 0x5a1e70 : 0x7a2c96)) });
+  const boxZ = -50;
+  group.add(box(84, 6, 28, marble, 0, ARENA.wallH + 3, boxZ));
+  group.add(box(84, 7, 3, marble, 0, ARENA.wallH + 9.5, boxZ + 13));
+  group.add(box(90, 3, 34, purple, 0, ARENA.wallH + 64, boxZ - 1));
+  for (const x of [-41, 41]) group.add(box(4, 58, 4, marble, x, ARENA.wallH + 35, boxZ + 12));
+  const throne = box(22, 34, 10, purple, 0, ARENA.wallH + 6 + 17, boxZ - 12);
+  group.add(throne);
+  const caesar = buildRig("caesar");
+  caesar.root.rotation.y = -Math.PI / 2;                       // faces the arena (+z)
+  caesar.root.scale.setScalar(1.35);                           // the emperor is drawn larger than life
+  caesar.root.position.set(0, ARENA.wallH + 6 + caesar.footOffset * 1.35, boxZ - 2);
+  group.add(caesar.root);
+  const guards = [-36, 36].map(x => {
+    const g = buildRig("gladiator", 2); g.setLevel(2);
+    g.root.rotation.y = -Math.PI / 2 + (x < 0 ? 0.3 : -0.3);
+    g.root.position.set(x, ARENA.wallH + 6 + g.footOffset, boxZ - 8);
+    group.add(g.root);
+    return g;
+  });
+  for (const g of guards) applyPose(g, { armFarUpper: [0, 0, 20], armFarLower: [0, 0, 70] });
+
+  // crowd: instanced spectators, one InstancedMesh per (colour variant, part)
+  const people = [];
+  TIERS.forEach((t, row) => {
+    for (let x = -ARENA.sandHalf * 1.15; x <= ARENA.sandHalf * 1.15; x += 10.5) {
+      const jx = x + (hash3(row, Math.round(x), 1) - 0.5) * 4;
+      if (Math.abs(jx) < 48 && row < 2) continue;              // Caesar's box
+      people.push({ x: jx, y: t.y, z: t.z + 1 + (hash3(row, Math.round(x), 2) - 0.5) * 3, variant: Math.floor(hash3(row, Math.round(x), 3) * SA.CROWD_TUNICS.length), phase: hash3(row, Math.round(x), 4) * 6.28, eager: hash3(row, Math.round(x), 5) });
+    }
+  });
+  const SPEC = SA.MODELS.spectator;
+  const crowdMeshes = [];
+  for (let v = 0; v < SA.CROWD_TUNICS.length; v++) {
+    const mine = people.filter(p => p.variant === v);
+    if (!mine.length) continue;
+    for (const [name, part] of Object.entries(SPEC.parts)) {
+      const im = new THREE.InstancedMesh(sheetGeometry("spectator", part.sheet, v), voxelMat, mine.length);
+      im.castShadow = true; im.receiveShadow = true;
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      group.add(im);
+      crowdMeshes.push({ im, name, part, people: mine });
+    }
+  }
+  const specRig = buildRig("spectator", 0);                      // used only to compute part matrices
+  const specFoot = specRig.footOffset;
+  const mtx = new THREE.Matrix4(), pm = new THREE.Matrix4(), personM = new THREE.Matrix4();
+  const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2), pos = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+  let mood = "calm", moodT = 0, time = 0, thumb = "none";
+
+  function crowdPose(p) {
+    const t = time + p.phase;
+    if (mood === "roar" || (mood === "cheer" && p.eager > 0.35)) {
+      const up = 150 + Math.sin(t * 9) * 25;
+      return { bob: Math.abs(Math.sin(t * 7)) * 3, pose: { armL: [0, 0, up], armR: [0, 0, up - 10], head: [0, 0, 10] } };
+    }
+    if (mood === "boo" && p.eager > 0.3) {
+      const shake = 95 + Math.sin(t * 14) * 25;
+      return { bob: 0, pose: { armL: [0, 0, shake], armR: [0, 0, 20], head: [0, 0, -10] } };
+    }
+    return { bob: 0, pose: { body: [Math.sin(t * 1.3) * 4, 0, 0], armL: [0, 0, 8 + Math.sin(t) * 6], armR: [0, 0, 8 - Math.sin(t) * 6] } };
+  }
+  function updateCrowd() {
+    const cache = new Map();
+    for (const c of crowdMeshes) {
+      c.people.forEach((p, i) => {
+        let pr = cache.get(p);
+        if (!pr) {
+          const cp = crowdPose(p);
+          applyPose(specRig, cp.pose);
+          specRig.root.updateMatrixWorld(true);
+          pr = { bob: cp.bob, parts: {} };
+          for (const n of Object.keys(SPEC.parts)) pr.parts[n] = specRig.meshes[n].matrixWorld.clone();
+          cache.set(p, pr);
+        }
+        personM.compose(pos.set(p.x, p.y + specFoot + pr.bob, p.z), yawQ, one);
+        mtx.multiplyMatrices(personM, pr.parts[c.name]);
+        c.im.setMatrixAt(i, mtx);
+      });
+      c.im.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  // Caesar's thumb: pose the arm forward, then point the thumb straight up or down in world space
+  const thumbUp = new THREE.Quaternion(), thumbDown = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+  const parentQ = new THREE.Quaternion();
+  function poseCaesar() {
+    const lean = mood === "roar" ? 12 : 0;
+    if (thumb === "none") applyPose(caesar, { body: [0, 0, -lean], armUpper: [0, 0, 10], armLower: [0, 0, 60], head: [0, 0, 0] });
+    else applyPose(caesar, { body: [0, 0, -6 - lean], armUpper: [0, 0, 95], armLower: [0, 0, 25], head: [0, 0, -8] });
+    caesar.root.updateMatrixWorld(true);
+    const th = caesar.joints.thumb;
+    if (thumb !== "none") {
+      th.parent.getWorldQuaternion(parentQ);
+      const want = (thumb === "up" ? thumbUp : thumbDown).clone().premultiply(caesar.root.getWorldQuaternion(new THREE.Quaternion()));
+      th.quaternion.copy(parentQ.invert().multiply(want));
+    }
+  }
+
+  // backdrop: far crowd, arches, temple and sky
+  const bdTex = new THREE.TextureLoader().load("backdrop.png");
+  bdTex.magFilter = bdTex.minFilter = THREE.NearestFilter; bdTex.colorSpace = THREE.SRGBColorSpace;
+  const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(1280, 400), new THREE.MeshBasicMaterial({ map: bdTex, fog: false }));
+  backdrop.position.set(0, 150, -520);
+  group.add(backdrop);
+
+  // camera: keep every subject in the middle 70% of the frame, ease towards the target
+  const camState = { x: 0, w: 260 };
+  function cameraFor(xs, dt = 1, snap = false) {
+    const lo = Math.min(...xs), hi = Math.max(...xs);
+    const w = Math.max(220, (hi - lo + 50) / 0.75);
+    const hfov = 2 * Math.atan(Math.tan(camera.fov * DEG / 2) * camera.aspect);
+    let cx = (lo + hi) / 2;
+    const k = snap ? 1 : 1 - Math.pow(0.04, dt);
+    camState.w += (Math.min(w, 2 * ARENA.sandHalf - 40) - camState.w) * k;
+    const halfW = camState.w / 2;
+    const edge = Math.max(0, ARENA.sandHalf - halfW * 1.18);       // the wall is further away, so it shows wider
+    cx = Math.max(-edge, Math.min(edge, cx));
+    camState.x += (cx - camState.x) * k;
+    const dist = halfW / Math.tan(hfov / 2);
+    camera.position.set(camState.x, 40 + dist * 0.07, dist + 20);
+    camera.lookAt(camState.x, 52, -10);
+  }
+
+  return {
+    group, caesar, guards, stain, clearStains, gateOpen, cameraFor,
+    setMood(m) { if (m !== mood) { mood = m; moodT = 0; } },
+    get mood() { return mood; },
+    setThumb(t) { thumb = t; },
+    update(dt) { time += dt; moodT += dt; updateCrowd(); poseCaesar(); },
+  };
+}
+
+// ---------------------------------------------------------------- arena viewer (?view=arena)
+async function runArenaViewer() {
+  const arena = createArena();
+  const moods = ["calm", "cheer", "roar", "boo"], thumbs = ["none", "up", "down"];
+  let mi = 0, ti = 0, gate = 0, gateDir = 0, last = performance.now();
+  const fighters = [-60, 60].map((x, i) => { const r = buildRig("gladiator", i); r.setLevel(2); r.root.position.set(x, r.footOffset, 0); r.root.rotation.y = (i ? 205 : -25) * DEG; scene.add(r.root); return r; });
+  addEventListener("keydown", e => {
+    if (e.code === "KeyC") arena.setMood(moods[mi = (mi + 1) % 4]);
+    if (e.code === "KeyT") arena.setThumb(thumbs[ti = (ti + 1) % 3]);
+    if (e.code === "KeyG") gateDir = gateDir > 0 ? -1 : 1;
+    if (e.code === "KeyS") arena.stain(fighters[0].root.position.x + 10, 4, 6);
+  });
+  const frame = (dt = 1 / 60) => {
+    gate = Math.max(0, Math.min(1, gate + gateDir * dt));
+    arena.gateOpen(gate);
+    arena.update(dt);
+    arena.cameraFor(fighters.map(f => f.root.position.x), dt);
+    draw();
+  };
+  window.__sa = { arena, fighters, render: frame, setMood: m => { arena.setMood(m); frame(); }, setThumb: t => { arena.setThumb(t); frame(); }, gate: v => { gate = v; frame(); }, spread: (a, b) => { fighters[0].root.position.x = a; fighters[1].root.position.x = b; arena.cameraFor([a, b], 1, true); frame(); } };
+  arena.cameraFor([-60, 60], 1, true);
+  const loop = now => { const dt = Math.min(0.05, (now - last) / 1000); last = now; frame(dt); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+}
+
 // ---------------------------------------------------------------- model viewer (?view=<model>)
 const VIEW_POSES = {
   gladiator: [
@@ -447,7 +706,8 @@ async function runViewer(model) {
 try {
   SHEETS = await loadSheets();
   const view = params.get("view");
-  if (view && SA.MODELS[view]) await runViewer(view);
+  if (view === "arena") await runArenaViewer();
+  else if (view && SA.MODELS[view]) await runViewer(view);
 } catch (e) {
   if (!["file protocol", "sheets"].includes(e.message)) { showError("Spartan Arena failed to start", [e.stack || e.message]); console.error(e); }
 }
