@@ -1283,7 +1283,7 @@ function resize() {
   const dpr = window.devicePixelRatio || 1;
   low.devW = Math.max(1, Math.round(innerWidth * dpr));
   low.devH = Math.max(1, Math.round(innerHeight * dpr));
-  low.k = Math.max(1, Math.round(low.devH / 216));
+  low.k = Math.max(1, Math.min(Math.round(low.devH / 216), Math.floor(low.devW / 256)));   // keep at least 256 px across for the HUD
   low.w = Math.ceil(low.devW / low.k);
   low.h = Math.ceil(low.devH / low.k);
   renderer.setSize(low.devW, low.devH, false);
@@ -1596,12 +1596,648 @@ async function runViewer(model) {
   loop();
 }
 
+// ---------------------------------------------------------------- pixel font (5x7) and HUD drawing
+const FONT = {
+  "A": ".###.|#...#|#...#|#####|#...#|#...#|#...#", "B": "####.|#...#|#...#|####.|#...#|#...#|####.",
+  "C": ".###.|#...#|#....|#....|#....|#...#|.###.", "D": "####.|#...#|#...#|#...#|#...#|#...#|####.",
+  "E": "#####|#....|#....|####.|#....|#....|#####", "F": "#####|#....|#....|####.|#....|#....|#....",
+  "G": ".###.|#...#|#....|#.###|#...#|#...#|.####", "H": "#...#|#...#|#...#|#####|#...#|#...#|#...#",
+  "I": ".###.|..#..|..#..|..#..|..#..|..#..|.###.", "J": "..###|...#.|...#.|...#.|...#.|#..#.|.##..",
+  "K": "#...#|#..#.|#.#..|##...|#.#..|#..#.|#...#", "L": "#....|#....|#....|#....|#....|#....|#####",
+  "M": "#...#|##.##|#.#.#|#.#.#|#...#|#...#|#...#", "N": "#...#|#...#|##..#|#.#.#|#..##|#...#|#...#",
+  "O": ".###.|#...#|#...#|#...#|#...#|#...#|.###.", "P": "####.|#...#|#...#|####.|#....|#....|#....",
+  "Q": ".###.|#...#|#...#|#...#|#.#.#|#..#.|.##.#", "R": "####.|#...#|#...#|####.|#.#..|#..#.|#...#",
+  "S": ".####|#....|#....|.###.|....#|....#|####.", "T": "#####|..#..|..#..|..#..|..#..|..#..|..#..",
+  "U": "#...#|#...#|#...#|#...#|#...#|#...#|.###.", "V": "#...#|#...#|#...#|#...#|#...#|.#.#.|..#..",
+  "W": "#...#|#...#|#...#|#.#.#|#.#.#|#.#.#|.#.#.", "X": "#...#|#...#|.#.#.|..#..|.#.#.|#...#|#...#",
+  "Y": "#...#|#...#|.#.#.|..#..|..#..|..#..|..#..", "Z": "#####|....#|...#.|..#..|.#...|#....|#####",
+  "0": ".###.|#...#|#..##|#.#.#|##..#|#...#|.###.", "1": "..#..|.##..|..#..|..#..|..#..|..#..|.###.",
+  "2": ".###.|#...#|....#|...#.|..#..|.#...|#####", "3": "####.|....#|....#|.###.|....#|....#|####.",
+  "4": "...#.|..##.|.#.#.|#..#.|#####|...#.|...#.", "5": "#####|#....|####.|....#|....#|#...#|.###.",
+  "6": ".###.|#....|#....|####.|#...#|#...#|.###.", "7": "#####|....#|...#.|..#..|.#...|.#...|.#...",
+  "8": ".###.|#...#|#...#|.###.|#...#|#...#|.###.", "9": ".###.|#...#|#...#|.####|....#|....#|.###.",
+  " ": ".....|.....|.....|.....|.....|.....|.....", ".": ".....|.....|.....|.....|.....|.##..|.##..",
+  ",": ".....|.....|.....|.....|.##..|..#..|.#...", "!": "..#..|..#..|..#..|..#..|..#..|.....|..#..",
+  "?": ".###.|#...#|....#|...#.|..#..|.....|..#..", ":": ".....|.##..|.##..|.....|.##..|.##..|.....",
+  "-": ".....|.....|.....|.###.|.....|.....|.....", "+": ".....|..#..|..#..|#####|..#..|..#..|.....",
+  "/": "....#|....#|...#.|..#..|.#...|#....|#....", "'": "..#..|..#..|.#...|.....|.....|.....|.....",
+  "(": "...#.|..#..|.#...|.#...|.#...|..#..|...#.", ")": ".#...|..#..|...#.|...#.|...#.|..#..|.#...",
+  "&": ".##..|#..#.|#.#..|.#...|#.#.#|#..#.|.##.#", "<": "...#.|..#..|.#...|#....|.#...|..#..|...#.",
+  ">": ".#...|..#..|...#.|....#|...#.|..#..|.#...", "^": "..#..|.#.#.|#...#|.....|.....|.....|.....",
+  "*": ".....|#.#.#|.###.|#####|.###.|#.#.#|.....", "=": ".....|.....|#####|.....|#####|.....|.....",
+};
+const GLYPH = {};
+for (const [ch, rows] of Object.entries(FONT)) GLYPH[ch] = rows.split("|").map(r => [...r].map(c => c === "#"));
+const textWidth = (str, scale = 1) => str.length * 6 * scale - scale;
+function drawText(ctx, str, x, y, color, { scale = 1, align = "left", shadow = "#1a0e08" } = {}) {
+  str = String(str).toUpperCase();
+  const w = textWidth(str, scale);
+  let x0 = Math.round(align === "center" ? x - w / 2 : align === "right" ? x - w : x);
+  y = Math.round(y);
+  for (const pass of shadow ? [0, 1] : [1]) {
+    ctx.fillStyle = pass ? color : shadow;
+    let cx = x0 + (pass ? 0 : scale);
+    const cy = y + (pass ? 0 : scale);
+    for (const ch of str) {
+      const g = GLYPH[ch] || GLYPH["?"];
+      for (let r = 0; r < 7; r++) for (let c = 0; c < 5; c++) if (g[r][c]) ctx.fillRect(cx + c * scale, cy + r * scale, scale, scale);
+      cx += 6 * scale;
+    }
+  }
+  return w;
+}
+function wrapText(str, maxChars) {
+  const out = []; let line = "";
+  for (const word of str.split(" ")) { if ((line + " " + word).trim().length > maxChars) { out.push(line); line = word; } else line = (line + " " + word).trim(); }
+  if (line) out.push(line);
+  return out;
+}
+const TEAM_CSS = ["#e04838", "#4a7ae0"], TEAM_NAME = ["RED", "BLUE"];
+const CARD_INFO = {
+  swordThrow: { name: "SWORD THROW", text: "HURL YOUR SWORD. WALK OVER IT TO TAKE IT BACK", icon: "sword" },
+  leap: { name: "LEAP OF SPARTA", text: "JUMP TWICE AS HIGH. SPECIAL IN THE AIR TO STOMP", icon: "leap" },
+  furyFists: { name: "FURY FISTS", text: "A FIVE-HIT FLURRY OF BLOWS", icon: "fist" },
+  whirlwind: { name: "WHIRLWIND KICK", text: "SPIN ROUND AND HIT ON BOTH SIDES", icon: "spin" },
+  thunder: { name: "THUNDER BLADE", text: "SWORD HITS CHARGE IT. THEN BLAST YOUR FOE WITH LIGHT", icon: "bolt" },
+  shieldBash: { name: "SHIELD BASH", text: "CHARGE SHIELD FIRST AND STUN", icon: "shield" },
+};
+const CARD_SHORT = { swordThrow: "THROW", leap: "LEAP", furyFists: "FURY", whirlwind: "WHIRL", thunder: "THUNDER", shieldBash: "BASH" };
+const SPECIAL_KEYS = [["H", "S+H"], ["RSHIFT", "DN+RSHIFT"]];
+// tiny pixel icons for the reward cards (9x9)
+const ICONS = {
+  sword: "....#....|....#....|....#....|....#....|....#....|..#####..|....#....|....#....|...###...",
+  leap: "....#....|...###...|..#.#.#..|....#....|....#....|...#.#...|..#...#..|.........|#########",
+  fist: ".........|.####....|#....#...|#.##.##..|#.....#..|#.....#..|.#....#..|..####...|.........",
+  spin: "..#####..|.#.....#.|#.......#|#...#...#|#..#.#..#|#.......#|.#.....##|..#####.#|.......##",
+  bolt: ".....##..|....##...|...##....|..#####..|....##...|...##....|..##.....|.##......|.#.......",
+  shield: "..#####..|.#.....#.|#...#...#|#..#.#..#|#.#...#.#|#.......#|.#.....#.|..#####..|.........",
+};
+function drawIcon(ctx, name, x, y, color, scale = 1) {
+  const rows = ICONS[name].split("|");
+  ctx.fillStyle = color;
+  rows.forEach((r, j) => [...r].forEach((c, i) => { if (c === "#") ctx.fillRect(x + i * scale, y + j * scale, scale, scale); }));
+}
+function panel(ctx, x, y, w, h, fill = "rgba(26,14,8,0.82)", edge = "#c8a050") {
+  x = Math.round(x); y = Math.round(y);
+  ctx.fillStyle = fill; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = edge; ctx.fillRect(x, y, w, 1); ctx.fillRect(x, y + h - 1, w, 1); ctx.fillRect(x, y, 1, h); ctx.fillRect(x + w - 1, y, 1, h);
+}
+
+// ---------------------------------------------------------------- fighter animation
+// Poses are rotations in degrees per part on top of the rest pose. +z swings a hanging limb forward,
+// bends an elbow, and tilts the torso back; knees bend with -z. _y lowers the hips, _roll tips the whole body.
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = t => t * t * (3 - 2 * t);
+function mixPose(a, b, t) {
+  const out = {}, keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) {
+    const va = a[k] ?? (k[0] === "_" ? 0 : [0, 0, 0]), vb = b[k] ?? (k[0] === "_" ? 0 : [0, 0, 0]);
+    out[k] = typeof va === "number" ? lerp(va, vb, t) : [lerp(va[0], vb[0], t), lerp(va[1], vb[1], t), lerp(va[2], vb[2], t)];
+  }
+  return out;
+}
+// keyframes: [[tick, pose], ...]
+function keyed(t, frames) {
+  if (t <= frames[0][0]) return frames[0][1];
+  for (let i = 1; i < frames.length; i++) if (t <= frames[i][0]) {
+    const [t0, p0] = frames[i - 1], [t1, p1] = frames[i];
+    return mixPose(p0, p1, smooth((t - t0) / Math.max(1e-6, t1 - t0)));
+  }
+  return frames[frames.length - 1][1];
+}
+const with_ = (base, extra) => Object.assign({}, base, extra);
+const P = {};
+P.stand = { armNearUpper: [0, 0, 8], armNearLower: [0, 0, 15], armFarUpper: [0, 0, -6], armFarLower: [0, 0, 20] };
+P.guardFist = { torso: [0, 0, -4], armNearUpper: [0, 0, 55], armNearLower: [0, 0, 105], armFarUpper: [0, 0, 25], armFarLower: [0, 0, 115],
+  legNearUpper: [0, 0, 20], legNearLower: [0, 0, -14], legFarUpper: [0, 0, -16], legFarLower: [0, 0, -8], _y: -1 };
+P.guardSword = with_(P.guardFist, { armNearUpper: [0, 0, 50], armNearLower: [0, 0, 55], armFarUpper: [0, 0, -15], armFarLower: [0, 0, 95] });
+P.crouch = { torso: [0, 0, -18], head: [0, 0, 12], legNearUpper: [0, 0, 85], legNearLower: [0, 0, -105], legFarUpper: [0, 0, 60], legFarLower: [0, 0, -115], _y: -13 };
+P.jump = { legNearUpper: [0, 0, 70], legNearLower: [0, 0, -95], legFarUpper: [0, 0, 30], legFarLower: [0, 0, -80], armNearUpper: [0, 0, 60], armFarUpper: [0, 0, 40] };
+P.block = { torso: [0, 0, 6], armNearUpper: [0, 0, 85], armNearLower: [0, 0, 40], armFarUpper: [0, 0, -10], armFarLower: [0, 0, 80], legNearUpper: [0, 0, 22], legNearLower: [0, 0, -18], legFarUpper: [0, 0, -18], _y: -1 };
+P.hit = { torso: [0, 0, 18], head: [0, 0, 18], armNearUpper: [0, 0, -20], armFarUpper: [0, 0, -40], armNearLower: [0, 0, 20], legNearUpper: [0, 0, 10], legFarUpper: [0, 0, -10] };
+P.down = { _roll: 86, _y: -18, torso: [0, 0, 4], head: [0, 0, 10], armNearUpper: [0, 0, 120], armFarUpper: [0, 0, 150], legNearUpper: [0, 0, 20], legNearLower: [0, 0, -30] };
+P.dazed = { torso: [0, 0, -22], head: [0, 0, -25], legNearUpper: [0, 0, 92], legNearLower: [0, 0, -92], legFarUpper: [0, 0, -5], legFarLower: [0, 0, -95], armNearUpper: [0, 0, 5], armFarUpper: [0, 0, 5], _y: -11 };
+P.victory = { torso: [0, 0, 6], head: [0, 0, 12], armFarUpper: [0, 0, 175], armFarLower: [0, 0, 10], armNearUpper: [0, 0, 30], armNearLower: [0, 0, 60] };
+P.salute = { torso: [0, 0, 4], head: [0, 0, 8], armFarUpper: [0, 0, 165], armFarLower: [0, 0, 5], armNearUpper: [0, 0, 15], armNearLower: [0, 0, 30] };
+P.charge = with_(P.guardSword, { torso: [0, 0, 8], armFarUpper: [0, 0, 172], armFarLower: [0, 0, 55] });
+
+function guardFor(f) { return SA.canSword(f) ? P.guardSword : P.guardFist; }
+const ATTACKS = {
+  punch: f => [[0, guardFor(f)], [3, with_(guardFor(f), { armNearUpper: [0, 0, 40], armNearLower: [0, 0, 120], torso: [0, 0, 4] })],
+    [5, with_(guardFor(f), { armNearUpper: [0, 0, 92], armNearLower: [0, 0, 5], torso: [0, 0, -10] })], [10, with_(guardFor(f), { armNearUpper: [0, 0, 88], armNearLower: [0, 0, 8], torso: [0, 0, -8] })], [15, guardFor(f)]],
+  kick: f => [[0, guardFor(f)], [6, with_(guardFor(f), { legNearUpper: [0, 0, 60], legNearLower: [0, 0, -90], torso: [0, 0, 8] })],
+    [8, with_(guardFor(f), { legNearUpper: [0, 0, 95], legNearLower: [0, 0, -5], legFarUpper: [0, 0, -10], torso: [0, 0, 18], _y: -1 })], [14, with_(guardFor(f), { legNearUpper: [0, 0, 90], legNearLower: [0, 0, -8], torso: [0, 0, 16] })], [23, guardFor(f)]],
+  sweep: f => [[0, P.crouch], [7, with_(P.crouch, { legNearUpper: [0, 0, 40], legNearLower: [0, 0, -60] })], [9, with_(P.crouch, { legNearUpper: [0, 0, 88], legNearLower: [0, 0, -2], _y: -16 })], [16, with_(P.crouch, { legNearUpper: [0, 0, 85], legNearLower: [0, 0, -4], _y: -16 })], [28, P.crouch]],
+  jumpKick: f => [[0, P.jump], [3, with_(P.jump, { legNearUpper: [0, 0, 75], legNearLower: [0, 0, -10], torso: [0, 0, 14] })], [40, with_(P.jump, { legNearUpper: [0, 0, 70], legNearLower: [0, 0, -12], torso: [0, 0, 12] })]],
+  slash: f => [[0, P.guardSword], [5, with_(P.guardSword, { armFarUpper: [0, 0, 165], armFarLower: [0, 0, 40], torso: [0, 0, 8] })],
+    [8, with_(P.guardSword, { armFarUpper: [0, 0, 55], armFarLower: [0, 0, 5], torso: [0, 0, -12] })], [12, with_(P.guardSword, { armFarUpper: [0, 0, 25], armFarLower: [0, 0, 10], torso: [0, 0, -14] })], [22, P.guardSword]],
+  jumpSlash: f => [[0, P.jump], [3, with_(P.jump, { armFarUpper: [0, 0, 170], armFarLower: [0, 0, 30] })], [8, with_(P.jump, { armFarUpper: [0, 0, 40], armFarLower: [0, 0, 0], torso: [0, 0, -12] })], [40, with_(P.jump, { armFarUpper: [0, 0, 30], torso: [0, 0, -10] })]],
+  charged: f => [[0, P.charge], [9, with_(P.charge, { armFarUpper: [0, 0, 185], torso: [0, 0, 12] })], [12, with_(P.guardSword, { armFarUpper: [0, 0, 35], armFarLower: [0, 0, 0], torso: [0, 0, -24], legNearUpper: [0, 0, 45], legNearLower: [0, 0, -40], _y: -5 })], [22, with_(P.guardSword, { armFarUpper: [0, 0, 15], armFarLower: [0, 0, 5], torso: [0, 0, -26], legNearUpper: [0, 0, 45], legNearLower: [0, 0, -40], _y: -5 })], [37, P.guardSword]],
+  throw: f => [[0, P.guardSword], [7, with_(P.guardSword, { armFarUpper: [0, 0, 175], armFarLower: [0, 0, 60], torso: [0, 0, 10] })], [10, with_(P.guardSword, { armFarUpper: [0, 0, 95], armFarLower: [0, 0, 0], torso: [0, 0, -14] })], [23, P.guardFist]],
+  stomp: f => [[0, with_(P.jump, { legNearUpper: [0, 0, 5], legNearLower: [0, 0, 0], legFarUpper: [0, 0, -5], legFarLower: [0, 0, 0], armNearUpper: [0, 0, 150], armFarUpper: [0, 0, 160] })], [99, with_(P.jump, { legNearUpper: [0, 0, 5], legNearLower: [0, 0, 0], legFarUpper: [0, 0, -5], legFarLower: [0, 0, 0], armNearUpper: [0, 0, 150], armFarUpper: [0, 0, 160] })]],
+  fury: f => {
+    const g = guardFor(f), frames = [[0, g]];
+    for (let i = 0; i < 5; i++) {
+      const t0 = 4 + i * 4, near = i % 2 === 0;
+      frames.push([t0 + 1, with_(g, near ? { armNearUpper: [0, 0, 92], armNearLower: [0, 0, 5], torso: [0, 0, -10] } : { armFarUpper: [0, 0, 90], armFarLower: [0, 0, 5], torso: [0, 0, -12] })]);
+      frames.push([t0 + 3, g]);
+    }
+    frames.push([34, g]);
+    return frames;
+  },
+  whirl: f => [[0, guardFor(f)], [4, with_(guardFor(f), { legNearUpper: [0, 0, 90], legNearLower: [0, 0, -4], torso: [0, 0, 18], armNearUpper: [0, 0, 90], armFarUpper: [0, 0, 80], _y: 3 })], [20, with_(guardFor(f), { legNearUpper: [0, 0, 90], legNearLower: [0, 0, -4], torso: [0, 0, 18], armNearUpper: [0, 0, 90], armFarUpper: [0, 0, 80], _y: 3 })], [24, guardFor(f)]],
+  thunder: f => [[0, P.guardSword], [9, with_(P.guardSword, { armFarUpper: [0, 0, 180], armFarLower: [0, 0, 0], head: [0, 0, 15], torso: [0, 0, 8] })], [12, with_(P.guardSword, { armFarUpper: [0, 0, 90], armFarLower: [0, 0, 0], torso: [0, 0, -10] })], [30, P.guardSword]],
+  bash: f => [[0, P.guardSword], [2, with_(P.guardSword, { armNearUpper: [0, 0, 82], armNearLower: [0, 0, 15], torso: [0, 0, -18], legNearUpper: [0, 0, 40], legNearLower: [0, 0, -30] })], [17, with_(P.guardSword, { armNearUpper: [0, 0, 82], armNearLower: [0, 0, 15], torso: [0, 0, -18], legFarUpper: [0, 0, 40], legFarLower: [0, 0, -40] })], [27, P.guardSword]],
+};
+function walkPose(f, base, phase, back) {
+  const s = Math.sin(phase) * (back ? 22 : 28), c = Math.max(0, Math.cos(phase));
+  return with_(base, { legNearUpper: [0, 0, s + 8], legNearLower: [0, 0, -12 - c * 30], legFarUpper: [0, 0, -s - 6], legFarLower: [0, 0, -12 - Math.max(0, -Math.cos(phase)) * 30], torso: [0, 0, (base.torso ? base.torso[2] : 0) - 3], _y: -Math.abs(Math.sin(phase)) * 1.2 });
+}
+// Returns { pose, yaw (deg, extra), roll, y } for a fighter in the current match state.
+function fighterPose(m, f, vis) {
+  const t = f.st;
+  if (m.phase === "title") return { pose: with_(guardFor(f), { torso: [0, 0, -4 + Math.sin(vis.time * 2) * 1.5] }) };
+  if (f.state === "salute") return { pose: f.st < 12 ? mixPose(guardFor(f), P.salute, f.st / 12) : P.salute, face: "caesar" };
+  if (f.state === "victory") return { pose: with_(P.victory, { armFarUpper: [0, 0, 165 + Math.sin(vis.time * 6) * 10] }), face: m.phase === "champion" ? "caesar" : null };
+  if (f.state === "dazed") return { pose: f.st < 14 ? mixPose(P.hit, P.dazed, f.st / 14) : with_(P.dazed, { head: [0, 0, -25 + Math.sin(vis.time * 2) * 4] }) };
+  if (f.state === "down" || f.state === "ko") { const k = Math.min(1, f.st / 8); return { pose: mixPose(P.hit, P.down, k) }; }
+  if (f.state === "hit") return { pose: mixPose(P.hit, guardFor(f), Math.min(1, f.st / Math.max(1, f.hitstun))) };
+  if (f.state === "charging") return { pose: with_(P.charge, { torso: [0, 0, 8 + Math.sin(vis.time * 40) * 1.2] }) };
+  if (f.move && ATTACKS[f.move.name]) {
+    const pose = keyed(f.move.t, ATTACKS[f.move.name](f));
+    const spin = f.move.name === "whirl" ? -360 * smooth(Math.min(1, Math.max(0, (f.move.t - 2) / 22))) * f.facing : 0;
+    return { pose, spin };
+  }
+  if (f.state === "jump") return { pose: f.vy > 1 ? mixPose(guardFor(f), P.jump, Math.min(1, f.st / 6)) : P.jump };
+  if (f.state === "crouch") return { pose: f.blocking ? with_(P.crouch, { armNearUpper: [0, 0, 70], armNearLower: [0, 0, 50] }) : mixPose(guardFor(f), P.crouch, Math.min(1, f.st / 5)) };
+  const opp = m.fighters[1 - f.id];
+  const threatened = opp && opp.move && Math.abs(opp.x - f.x) < 60;
+  if (f.blocking && (threatened || f.state === "idle")) return { pose: P.block };
+  if (f.state === "walk") { vis.walk += Math.abs(f.vx) * 0.12; return { pose: walkPose(f, f.blocking ? P.block : guardFor(f), vis.walk, f.blocking) }; }
+  return { pose: with_(guardFor(f), { torso: [0, 0, -4 + Math.sin(vis.time * 2.2 + f.id) * 1.5], _y: -1 + Math.sin(vis.time * 2.2 + f.id) * 0.4 }) };
+}
+// beasts
+function lionPose(a, time) {
+  const s = a.state, t = a.st, walk = Math.sin(time * 9) * 24;
+  const tail = { tail: [0, 0, Math.sin(time * 3) * 15] };
+  if (s === "dead") return { pose: { head: [0, 0, -10], legNearFront: [0, 0, 50], legFarFront: [0, 0, 40], tail: [0, 0, -10] }, roll: -82, y: -9 };
+  if (s === "attack" && a.attack === "pounce") return { pose: with_(tail, { head: [0, 0, 18], legNearFront: [0, 0, 70], legFarFront: [0, 0, 60], legNearBack: [0, 0, -60], legFarBack: [0, 0, -50] }), tilt: a.vy > 0 ? 15 : -10 };
+  if (s === "attack" && a.attack === "claw") { const k = t < 8 ? t / 8 : Math.max(0, 1 - (t - 12) / 6); return { pose: with_(tail, { head: [0, 0, 10 + k * 15], legNearFront: [0, 0, 20 + k * 95], body: [0, 0, k * 10] }) }; }
+  if (s === "hurt") return { pose: with_(tail, { head: [0, 0, 25] }) };
+  if (s === "stalk" || s === "enter") return { pose: with_(tail, { legNearFront: [0, 0, walk], legFarFront: [0, 0, -walk], legNearBack: [0, 0, -walk], legFarBack: [0, 0, walk], head: [0, 0, -6] }), bob: Math.abs(Math.sin(time * 9)) * 0.8 };
+  return { pose: with_(tail, { head: [0, 0, Math.sin(time * 1.5) * 6] }) };
+}
+function elephantPose(a, time) {
+  const s = a.state, t = a.st, fast = s === "attack" && a.attack === "charge" && t >= 20, walk = Math.sin(time * (fast ? 10 : 5)) * (fast ? 22 : 14);
+  const ears = Math.sin(time * (fast ? 12 : 3)) * (fast ? 35 : 10);
+  const base = { earNear: [ears, 0, 0], earFar: [-ears, 0, 0], tail: [0, 0, Math.sin(time * 2) * 12], trunk: [0, 0, 10 + Math.sin(time * 2) * 8], trunkTip: [0, 0, 15] };
+  if (s === "dead") return { pose: with_(base, { trunk: [0, 0, 30], legNearFront: [0, 0, 30], legNearBack: [0, 0, -20] }), roll: -80, y: -18 };
+  if (s === "attack" && a.attack === "trunk") { const k = t < 12 ? t / 12 : Math.max(0, 1 - (t - 17) / 6); return { pose: with_(base, { trunk: [0, 0, 20 + k * 110], trunkTip: [0, 0, 20 + k * 50], head: [0, 0, k * 15] }) }; }
+  if (s === "attack" && a.attack === "charge" && t < 20) return { pose: with_(base, { head: [0, 0, 20], trunk: [0, 0, 120], trunkTip: [0, 0, 60], legNearFront: [0, 0, 30], legFarFront: [0, 0, 25] }), tilt: 8 };
+  if (s === "stalk" || s === "enter" || fast) return { pose: with_(base, { legNearFront: [0, 0, walk], legFarFront: [0, 0, -walk], legNearBack: [0, 0, -walk], legFarBack: [0, 0, walk], head: [0, 0, fast ? -12 : 0] }) };
+  return { pose: base };
+}
+function caesarMood() {}
+
+// ---------------------------------------------------------------- demo bot (?demo=1): seeded, plays both sides
+function makeBot(seed) {
+  const r = SA.rng(seed);
+  const st = [{ hold: {}, until: 0 }, { hold: {}, until: 0 }];
+  return function (m, i) {
+    const s = st[i], f = m.fighters[i], o = m.fighters[1 - i];
+    if (m.tick < s.until) { const h = Object.assign({}, s.hold); if (s.tap) { delete s.hold[s.tap]; s.tap = null; } return h; }
+    const toward = Math.sign(o.x - f.x) > 0 ? "right" : "left", away = toward === "right" ? "left" : "right";
+    let hold = {}, dur = 6 + Math.floor(r() * 10), tap = null;
+    const d = Math.abs(o.x - f.x);
+    if (m.phase === "title" || m.phase === "champion" || m.phase === "salute") { if (r() < 0.05) { hold = { punch: 1 }; tap = "punch"; } }
+    else if (m.phase === "draft") { if (m.draft && m.draft.order[m.draft.turn] === i && m.phaseT > 45) { hold = r() < 0.4 ? { right: 1 } : { punch: 1 }; tap = Object.keys(hold)[0]; dur = 10; } }
+    else if (m.phase === "verdict") {
+      if (m.winner === i) { const g = m.props.find(p => p.kind === "gladius" && p.landed && !f.hasSword); const tx = g ? g.x : o.x; hold = Math.abs(tx - f.x) > 18 ? { [tx > f.x ? "right" : "left"]: 1 } : { punch: 1 }; dur = 4; }
+    } else if (m.phase === "fight") {
+      const x = r();
+      if (d > 45) hold = x < 0.75 ? { [toward]: 1 } : x < 0.85 ? { up: 1, [toward]: 1 } : x < 0.92 && f.rewards.length ? { special: 1 } : {};
+      else if (x < 0.35) { hold = { punch: 1 }; if (r() < 0.25 && SA.canSword(f)) dur = 75; }
+      else if (x < 0.55) hold = { kick: 1, down: r() < 0.3 ? 1 : 0 };
+      else if (x < 0.72) hold = { [away]: 1 };
+      else if (x < 0.8 && f.rewards.length) hold = { special: 1, down: f.rewards.length > 1 && r() < 0.5 ? 1 : 0 };
+      else if (x < 0.88) hold = { up: 1, [toward]: 1 };
+      else hold = {};
+      if (hold.punch && dur < 20) tap = "punch";
+      if (hold.kick) tap = "kick";
+      if (hold.special) tap = "special";
+    }
+    s.hold = hold; s.until = m.tick + dur; s.tap = tap;
+    return Object.assign({}, hold);
+  };
+}
+
+// ---------------------------------------------------------------- the game
+async function runGame() {
+  const arena = createArena();
+  const seed = +(params.get("seed") || (Date.now() % 100000));
+  const lvl = params.get("level") ? Math.max(1, Math.min(3, +params.get("level"))) : null;
+  const phaseParam = params.get("phase") || (lvl ? "fight" : "title");
+  const m = SA.createMatch({ seed, level: lvl || 1, round: +(params.get("round") || 1), phase: phaseParam === "draft" ? "fight" : phaseParam });
+  if (phaseParam === "draft") SA.startDraft(m, 0);
+  if (phaseParam === "champion") { m.champion = 0; m.levelWins = [2, 1]; for (const f of m.fighters) SA.setState(f, f.id ? "dazed" : "victory"); }
+  if (phaseParam === "salute") SA.startLevel(m, m.level);
+
+  // rigs
+  const rigs = [0, 1].map(i => { const r = buildRig("gladiator", i); scene.add(r.root); return r; });
+  const vis = [0, 1].map(() => ({ yaw: 0, walk: 0, time: 0, init: false }));
+  const beasts = { lion: buildRig("lion"), elephant: buildRig("elephant") };
+  for (const b of Object.values(beasts)) { b.root.visible = false; scene.add(b.root); }
+  const beastVis = { yaw: -25, init: false };
+
+  // props: swords lying in the sand or flying
+  const swordGeo = sheetGeometry("gladiator", "sword", 0), swordPivot = SA.MODELS.gladiator.parts.sword.pivot;
+  const propMeshes = [];
+  function propMesh(i) {
+    while (propMeshes.length <= i) {
+      const g = new THREE.Group(), mesh = new THREE.Mesh(swordGeo, voxelMat);
+      mesh.position.set(-swordPivot[0], -swordPivot[1], -swordPivot[2]); mesh.castShadow = true;
+      g.add(mesh); scene.add(g); propMeshes.push(g);
+    }
+    return propMeshes[i];
+  }
+
+  // severed limbs and voxel particles
+  const pieces = [];
+  const PART_CAP = 700;
+  const cubeGeo = new THREE.BoxGeometry(1.15, 1.15, 1.15);
+  const cubeMat = new THREE.MeshLambertMaterial();
+  const cubes = new THREE.InstancedMesh(cubeGeo, cubeMat, PART_CAP);
+  cubes.castShadow = true; cubes.count = 0;
+  cubes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  cubes.setColorAt(0, new THREE.Color());
+  scene.add(cubes);
+  const parts = [];
+  const tmpM = new THREE.Matrix4(), tmpV = new THREE.Vector3(), tmpQ2 = new THREE.Quaternion(), unit = new THREE.Vector3(1, 1, 1), tmpC = new THREE.Color();
+  function spray(x, y, z, n, { color = 0xa01818, colors = null, speed = 2.2, up = 1.6, dir = 0, life = 600, stick = true, size = 1 } = {}) {
+    for (let k = 0; k < n; k++) {
+      if (parts.length >= PART_CAP) parts.shift();
+      const c = colors ? colors[k % colors.length] : color;
+      parts.push({ x, y, z: z + (Math.random() - 0.5) * 6, vx: dir * speed * (0.3 + Math.random()) + (Math.random() - 0.5) * speed, vy: up * (0.4 + Math.random() * 1.2), vz: (Math.random() - 0.5) * speed * 0.8, life, color: c, landed: false, stick, size: size * (0.7 + Math.random() * 0.6), stainDone: false });
+    }
+  }
+  function updateParts(dt) {
+    const g = 0.3 * 60 * 60 * dt * 0.016;   // voxels per tick^2, scaled to frame time
+    let n = 0;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      p.life -= dt * 60;
+      if (p.life <= 0) { parts.splice(i, 1); continue; }
+      if (!p.landed) {
+        const k = dt * 60;
+        p.vy -= 0.3 * k; p.x += p.vx * k; p.y += p.vy * k; p.z += p.vz * k;
+        if (p.y <= 0.5) {
+          p.y = 0.5; p.landed = true;
+          if (!p.stick) p.life = Math.min(p.life, 20);
+          else if (!p.stainDone && Math.random() < 0.15) { arena.stain(p.x, p.z, 2); p.stainDone = true; }
+        }
+      }
+    }
+    for (const p of parts) {
+      if (n >= PART_CAP) break;
+      tmpM.compose(tmpV.set(p.x, p.y, p.z), tmpQ2.identity(), unit.set(p.size, p.size, p.size));
+      cubes.setMatrixAt(n, tmpM);
+      cubes.setColorAt(n, tmpC.setHex(p.color, THREE.SRGBColorSpace));
+      n++;
+    }
+    cubes.count = n;
+    cubes.instanceMatrix.needsUpdate = true;
+    if (cubes.instanceColor) cubes.instanceColor.needsUpdate = true;
+  }
+  const BLOOD = [0x8a1010, 0xb01818, 0xd02a20, 0x6a0c0c];
+  function severArm(who, arm, verdict) {
+    const rig = rigs[who], jointName = arm === "sword" ? "armFarUpper" : "armNearUpper";
+    const j = rig.joints[jointName];
+    rig.root.updateMatrixWorld(true);
+    const piece = j.clone(true);
+    j.matrixWorld.decompose(piece.position, piece.quaternion, piece.scale);
+    piece.traverse(o => { if (o.isMesh) { o.castShadow = true; } });
+    piece.visible = true;
+    scene.add(piece);
+    const f = m.fighters[who], away = -f.facing;
+    pieces.push({ obj: piece, vx: away * (0.5 + Math.random() * 0.6), vy: verdict ? 4.2 : 3.4, vz: 0.4 + Math.random() * 0.6, spin: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize(), w: 0.25, landed: false });
+    const wp = new THREE.Vector3(); j.getWorldPosition(wp);
+    spray(wp.x, wp.y, wp.z, 70, { colors: BLOOD, speed: 2.6, up: 2.4, dir: away });
+    arena.stain(f.x + away * 6, 6, 7);
+  }
+  function updatePieces(dt) {
+    const k = dt * 60;
+    for (const p of pieces) {
+      if (p.landed) continue;
+      p.vy -= 0.3 * k;
+      p.obj.position.x += p.vx * k; p.obj.position.y += p.vy * k; p.obj.position.z += p.vz * k;
+      p.obj.quaternion.multiply(tmpQ2.setFromAxisAngle(p.spin, p.w * k));
+      p.obj.position.z = Math.min(p.obj.position.z, 28);
+      if (p.obj.position.y < 3) {
+        p.obj.position.y = 3;
+        if (Math.abs(p.vy) > 1.2) { p.vy = -p.vy * 0.3; p.vx *= 0.5; p.vz *= 0.5; p.w *= 0.5; spray(p.obj.position.x, 1, p.obj.position.z, 6, { colors: BLOOD, speed: 1, up: 0.8 }); }
+        else { p.landed = true; }
+      }
+    }
+  }
+  function clearRoundVisuals() {
+    for (const p of pieces) scene.remove(p.obj);
+    pieces.length = 0; parts.length = 0;
+    arena.clearStains();
+  }
+
+  // thunder flash
+  const flash = new THREE.PointLight(0xbfe0ff, 0, 160, 1.2);
+  scene.add(flash);
+  let flashT = 0;
+
+  // ---- input
+  const queues = [new SA.InputQueue(), new SA.InputQueue()];
+  const KEYS = {
+    KeyA: [0, "left"], KeyD: [0, "right"], KeyW: [0, "up"], KeyS: [0, "down"], KeyF: [0, "punch"], KeyG: [0, "kick"], KeyH: [0, "special"],
+    ArrowLeft: [1, "left"], ArrowRight: [1, "right"], ArrowUp: [1, "up"], ArrowDown: [1, "down"], Period: [1, "punch"], Slash: [1, "kick"], ShiftRight: [1, "special"],
+  };
+  const KEYS_BY_CHAR = { ".": [1, "punch"], "/": [1, "kick"], ">": [1, "punch"], "?": [1, "kick"] };   // fallback when a browser reports no physical code
+  const keyOf = e => KEYS[e.code] || (!e.code || e.code === "Unidentified" ? KEYS_BY_CHAR[e.key] : null);
+  const demo = params.get("demo") === "1";
+  addEventListener("keydown", e => {
+    const k = keyOf(e);
+    if (k) { e.preventDefault(); if (!demo) queues[k[0]].down(k[1]); }
+    if (e.code === "KeyM" && window.__audio) window.__audio.toggle();
+    if (window.__audio) window.__audio.unlock();
+  });
+  addEventListener("keyup", e => { const k = keyOf(e); if (k) { e.preventDefault(); if (!demo) queues[k[0]].up(k[1]); } });
+  addEventListener("blur", () => { queues[0].releaseAll(); queues[1].releaseAll(); });
+  const bot = demo ? makeBot(seed) : null;
+  const botHeld = [{}, {}];
+  function botInputs() {
+    return [0, 1].map(i => {
+      const want = bot(m, i), q = queues[i];
+      for (const a of SA.ACTIONS) { if (want[a] && !botHeld[i][a]) q.down(a); if (!want[a] && botHeld[i][a]) q.up(a); }
+      botHeld[i] = want;
+      return q.take();
+    });
+  }
+
+  // ---- banners and screen state driven by events
+  const ui = { banner: null, bannerT: 0, bannerSub: null, lagHealth: [100, 100], shake: 0 };
+  function banner(text, sub = null, ticks = 90) { ui.banner = text; ui.bannerSub = sub; ui.bannerT = ticks; }
+  let moodHold = 0;
+  function mood(mo, ticks) { arena.setMood(mo); moodHold = Math.max(moodHold, ticks); }
+  function handleEvents(events) {
+    for (const e of events) {
+      if (window.__audio) window.__audio.event(e, m);
+      switch (e.type) {
+        case "hit": {
+          const d = m.fighters[e.who];
+          if (e.sword || e.move === "trample" || e.move === "claw" || e.move === "pounce" || e.move === "thrownSword") spray(d.x, e.y, 2, e.dmg >= 10 ? 18 : 8, { colors: BLOOD, speed: 1.6, up: 1.4, dir: Math.sign(d.x - (e.by >= 0 ? m.fighters[e.by].x : d.x - 1)) });
+          else spray(d.x, e.y, 2, 6, { colors: [0xf0e0c0, 0xd8c8a0], speed: 1.2, up: 1, life: 25, stick: false });
+          if (e.dmg >= 10) { mood("cheer", 80); ui.shake = Math.max(ui.shake, 4); }
+          break;
+        }
+        case "block": spray(e.x + (e.shield ? 0 : 0), e.y, 4, 7, { colors: e.shield ? [0xfff0a0, 0xffc040] : [0xf0e0c0], speed: 1.6, up: 1.2, life: 18, stick: false }); break;
+        case "chop": severArm(e.who, e.arm, e.verdict); mood("roar", 160); ui.shake = 8; if (e.mid) banner("ARM OFF!", null, 70); break;
+        case "ko": mood("roar", 120); banner("K.O.!", null, 60); break;
+        case "timeout": banner("TIME!", null, 60); break;
+        case "draw": banner("DRAW!", "FIGHT AGAIN", 100); clearRoundVisuals(); break;
+        case "thumbsDown": arena.setThumb("down"); banner("CAESAR'S VERDICT", m.level === 1 || !SA.canSword(m.fighters[e.winner]) ? "TAKE THE GLADIUS AND STRIKE!" : TEAM_NAME[e.winner] + ", STRIKE!", 150); break;
+        case "roundEnd": arena.setThumb("none"); break;
+        case "roundStart": clearRoundVisuals(); arena.setThumb("none"); banner("ROUND " + e.round, "FIGHT!", 80); break;
+        case "salute": clearRoundVisuals(); arena.setThumb("up"); banner("AVE CAESAR!", "LEVEL " + e.level + ": " + SA.LEVEL_NAMES[e.level - 1], 150); mood("cheer", 120); break;
+        case "boo": mood("boo", 120); break;
+        case "animalKill": mood("roar", 150); banner(TEAM_NAME[e.by] + " SLAYS THE " + e.kind.toUpperCase() + "!", "+20 HEALTH", 90); break;
+        case "gate": banner("CAESAR RELEASES THE BEAST!", null, 80); break;
+        case "thunder": flashT = 1; break;
+        case "levelWon": mood("roar", 120); break;
+        case "champion": arena.setThumb("up"); mood("roar", 600); break;
+      }
+    }
+  }
+
+  // ---- posing the scene from the match state
+  const swordTip = new THREE.Vector3();
+  function poseScene(dt) {
+    // fighters
+    m.fighters.forEach((f, i) => {
+      const rig = rigs[i], v = vis[i];
+      v.time += dt;
+      rig.setLevel(m.level);
+      rig.meshes.sword.visible = f.hasSword && f.arms.sword.on;
+      rig.meshes.shield.visible = m.level >= 2 && f.arms.shield.on;
+      rig.joints.armFarUpper.visible = f.arms.sword.on;
+      rig.joints.armNearUpper.visible = f.arms.shield.on;
+      const pp = fighterPose(m, f, v);
+      applyPose(rig, pp.pose);
+      // yaw: 25 degrees towards the camera from profile; turning passes through the camera-facing side
+      const target = pp.face === "caesar" ? 62 : f.facing > 0 ? -25 : -155;
+      if (!v.init) { v.yaw = target; v.init = true; }
+      v.yaw += (target - v.yaw) * Math.min(1, dt * 60 / 6);
+      rig.root.rotation.set(0, (v.yaw + (pp.spin || 0)) * DEG, 0);
+      const roll = (pp.pose._roll || 0) * (f.facing > 0 ? 1 : 1);
+      rig.joints.hips.rotation.z = roll * DEG;
+      rig.root.position.set(f.x, f.y + rig.footOffset + (pp.pose._y || 0), 0);
+      // charging sparkle
+      if (f.state === "charging" && rig.meshes.sword.visible && Math.random() < 0.5) {
+        rig.meshes.sword.getWorldPosition(swordTip);
+        spray(swordTip.x, swordTip.y + 10, swordTip.z, 1, { colors: [0xfff4c0, 0xffffff], speed: 0.4, up: 0.6, life: 14, stick: false, size: 0.6 });
+      }
+    });
+    // beast
+    const a = m.animal;
+    for (const [k, b] of Object.entries(beasts)) b.root.visible = !!a && a.kind === k && m.level === 3;
+    if (a && m.level === 3) {
+      const b = beasts[a.kind];
+      const pp = a.kind === "lion" ? lionPose(a, vis[0].time) : elephantPose(a, vis[0].time);
+      applyPose(b, pp.pose);
+      let z = 0, yaw = a.facing > 0 ? -25 : -155;
+      if (a.state === "enter") { const k = Math.min(1, a.st / SA.K.ENTER_TICKS); z = lerp(ARENA.wallZ - 20, 0, k); yaw = lerp(-90, yaw, smooth(Math.max(0, k * 1.6 - 0.6))); }
+      if (!beastVis.init) { beastVis.yaw = yaw; beastVis.init = true; }
+      beastVis.yaw += (yaw - beastVis.yaw) * (a.state === "enter" ? 1 : Math.min(1, dt * 60 / 8));
+      b.root.rotation.set(0, beastVis.yaw * DEG, 0);
+      b.joints[SA.MODELS[a.kind].root].rotation.z = ((pp.tilt || 0) * DEG);
+      if (pp.roll) b.joints[SA.MODELS[a.kind].root].rotation.x = pp.roll * DEG; else b.joints[SA.MODELS[a.kind].root].rotation.x = 0;
+      b.root.position.set(a.x, a.y + b.footOffset + (pp.y || 0) + (pp.bob || 0), z);
+    } else beastVis.init = false;
+    // props
+    m.props.forEach((p, i) => {
+      const g = propMesh(i);
+      g.visible = true;
+      if (p.flying) { g.position.set(p.x, p.y, 2); g.rotation.set(0, 0, -Math.PI / 2 * Math.sign(p.vx)); }
+      else if (!p.landed) { g.position.set(p.x, p.y + 14, 2); g.rotation.set(0, 0, Math.PI); }
+      else { g.position.set(p.x, 16, 2); g.rotation.set(0, 0.4, Math.PI + 0.12); }
+    });
+    for (let i = m.props.length; i < propMeshes.length; i++) propMeshes[i].visible = false;
+    updatePieces(dt);
+    updateParts(dt);
+    // crowd and Caesar
+    if (moodHold > 0) { moodHold -= dt * 60; if (moodHold <= 0) arena.setMood("calm"); }
+    arena.update(dt);
+    if (flashT > 0) {
+      const f = m.fighters.find(f => f.move && f.move.name === "thunder") || m.fighters[0];
+      flash.position.set(f.x + f.facing * 20, 40, 20); flash.intensity = flashT * 4000; flashT = Math.max(0, flashT - dt * 2.5);
+      if (f.move && f.move.name === "thunder" && f.move.t >= 10 && f.move.t <= 14) for (let k = 0; k < 4; k++) spray(f.x + f.facing * (10 + Math.random() * 30), 30 + Math.random() * 16, 2, 1, { colors: [0xffffff, 0xbfe0ff, 0x80c0ff], speed: 0.3, up: 0.2, life: 10, stick: false, size: 1.3 });
+    }
+    const xs = m.fighters.map(f => f.x);
+    if (m.animal && m.animal.state !== "dead" && m.animal.state !== "enter") xs.push(m.animal.x);
+    arena.cameraFor(xs, dt);
+    if (ui.shake > 0) { camera.position.x += (Math.random() - 0.5) * ui.shake * 0.4; camera.position.y += (Math.random() - 0.5) * ui.shake * 0.4; ui.shake = Math.max(0, ui.shake - dt * 30); }
+  }
+
+  // ---- HUD
+  const hud = hudCanvas.getContext("2d");
+  function drawHud(dt) {
+    const W = hudCanvas.width, H = hudCanvas.height;
+    hud.clearRect(0, 0, W, H);
+    const blink = Math.floor(performance.now() / 400) % 2 === 0;
+    if (m.phase === "title") return drawTitle(W, H, blink);
+    const mid = W / 2, barW = Math.floor(Math.min(120, (W - 44) / 2)), top = 6;
+    // health bars
+    m.fighters.forEach((f, i) => {
+      ui.lagHealth[i] = Math.max(f.health, ui.lagHealth[i] - dt * 25);
+      const x = i === 0 ? mid - 16 - barW : mid + 16;
+      hud.fillStyle = "#1a0e08"; hud.fillRect(x - 1, top + 8, barW + 2, 8);
+      hud.fillStyle = "#f4e8c8"; const lag = Math.round(barW * ui.lagHealth[i] / 100);
+      hud.fillRect(i === 0 ? x + barW - lag : x, top + 9, lag, 6);
+      hud.fillStyle = TEAM_CSS[i]; const w = Math.round(barW * f.health / 100);
+      hud.fillRect(i === 0 ? x + barW - w : x, top + 9, w, 6);
+      hud.fillStyle = "rgba(255,255,255,0.35)"; hud.fillRect(i === 0 ? x + barW - w : x, top + 9, w, 1);
+      drawText(hud, TEAM_NAME[i], i === 0 ? x : x + barW, top, TEAM_CSS[i], { align: i === 0 ? "left" : "right" });
+      // round pips
+      const wins = m.roundWins[m.level - 1][i];
+      for (let k = 0; k < 2; k++) { const px = i === 0 ? x + barW - 6 - k * 8 : x + 1 + k * 8; hud.fillStyle = "#1a0e08"; hud.fillRect(px, top + 18, 5, 5); hud.fillStyle = k < wins ? "#f0c040" : "#5a4430"; hud.fillRect(px + 1, top + 19, 3, 3); }
+      // reward slots
+      f.rewards.forEach((c, k) => {
+        const label = SPECIAL_KEYS[i][k] + " " + CARD_SHORT[c];
+        drawText(hud, label, i === 0 ? x : x + barW, top + 26 + k * 9, "#f4e8c8", { align: i === 0 ? "left" : "right" });
+      });
+      if (f.rewards.includes("thunder")) {
+        const ty = top + 26 + f.rewards.length * 9, tw = Math.round(40 * f.thunder / 100);
+        hud.fillStyle = "#1a0e08"; hud.fillRect(i === 0 ? x : x + barW - 42, ty, 42, 4);
+        hud.fillStyle = f.thunder >= 100 && blink ? "#ffffff" : "#80c0ff"; hud.fillRect(i === 0 ? x + 1 : x + barW - 41, ty + 1, tw, 2);
+      }
+    });
+    // timer and level
+    const secs = Math.ceil(m.timer / 60);
+    drawText(hud, String(Math.min(99, secs)).padStart(2, "0"), mid, top + 6, m.timer < 600 && blink ? "#f06a50" : "#f4e8c8", { scale: 2, align: "center" });
+    drawText(hud, "LEVEL " + m.level, mid, top + 23, "#c8a050", { align: "center" });
+    // beast health
+    if (m.animal && m.animal.state !== "enter" && m.animal.state !== "dead") {
+      const bw = 50, bx = Math.round(mid - bw / 2), by = top + 33;
+      drawText(hud, m.animal.kind, mid, by, "#e8b860", { align: "center" });
+      hud.fillStyle = "#1a0e08"; hud.fillRect(bx - 1, by + 9, bw + 2, 4);
+      hud.fillStyle = "#c8923c"; hud.fillRect(bx, by + 10, Math.round(bw * m.animal.health / m.animal.maxHealth), 2);
+    }
+    // banners
+    if (ui.bannerT > 0) {
+      ui.bannerT -= dt * 60;
+      const sc = textWidth(ui.banner, 2) < W - 16 ? 2 : 1;
+      const by = Math.round(H * 0.78);
+      drawText(hud, ui.banner, mid, by, "#ffe8a0", { scale: sc, align: "center" });
+      if (ui.bannerSub) drawText(hud, ui.bannerSub, mid, by + 9 * sc + 4, "#f4e8c8", { align: "center" });
+    }
+    if (m.phase === "draft") drawDraft(W, H, blink);
+    if (m.phase === "champion") drawChampion(W, H, blink);
+    if (demo) drawText(hud, "DEMO", W - 4, H - 10, "#c8a050", { align: "right" });
+  }
+  function drawTitle(W, H, blink) {
+    const mid = W / 2;
+    const lines = [
+      ["RED", "A D MOVE  W JUMP  S CROUCH"], ["", "F PUNCH  G KICK  H SPECIAL"],
+      ["BLUE", "ARROWS MOVE, JUMP, CROUCH"], ["", ". PUNCH  / KICK  RSHIFT SPECIAL"],
+    ];
+    const pw = Math.min(W - 12, 232), ph = 118, px = Math.round(mid - pw / 2), py = Math.round(H * 0.18);
+    panel(hud, px, py, pw, ph);
+    drawText(hud, "SPARTAN", mid, py + 8, "#e8b850", { scale: 2, align: "center" });
+    drawText(hud, "ARENA", mid, py + 26, "#e8b850", { scale: 2, align: "center" });
+    drawText(hud, "IN FRONT OF CAESAR", mid, py + 45, "#c8a050", { align: "center" });
+    lines.forEach(([who, text], k) => {
+      const y = py + 58 + k * 9;
+      if (who) drawText(hud, who, px + 6, y, TEAM_CSS[who === "RED" ? 0 : 1]);
+      drawText(hud, text, px + 36, y, "#f4e8c8");
+    });
+    drawText(hud, "HOLD AWAY TO BLOCK   M SOUND", mid, py + 96, "#c8a050", { align: "center" });
+    if (blink) drawText(hud, "PRESS PUNCH OR KICK TO FIGHT", mid, py + ph + 6, "#ffe8a0", { align: "center" });
+  }
+  function drawDraft(W, H, blink) {
+    const d = m.draft, mid = W / 2, picker = d.order[d.turn];
+    const cw = Math.min(78, Math.floor((W - 16) / 3) - 4), ch = 92, gap = 4, total = cw * 3 + gap * 2, x0 = Math.round(mid - total / 2), y0 = Math.round(H * 0.32);
+    panel(hud, x0 - 6, y0 - 26, total + 12, ch + 46);
+    drawText(hud, TEAM_NAME[picker] + (d.turn === 0 ? " WON THE LEVEL" : " PICKS NEXT"), mid, y0 - 20, TEAM_CSS[picker], { align: "center" });
+    drawText(hud, "CHOOSE A REWARD", mid, y0 - 10, "#f4e8c8", { align: "center" });
+    d.cards.forEach((c, i) => {
+      const x = x0 + i * (cw + gap), taken = d.taken.includes(c), sel = d.cursor[picker] === i && !taken;
+      const info = CARD_INFO[c];
+      panel(hud, x, y0, cw, ch, taken ? "rgba(40,30,24,0.9)" : "#3a2414", sel ? (blink ? TEAM_CSS[picker] : "#ffe8a0") : "#8a6a40");
+      if (sel) { hud.fillStyle = TEAM_CSS[picker]; hud.fillRect(x + 1, y0 + 1, cw - 2, 1); hud.fillRect(x + 1, y0 + ch - 2, cw - 2, 1); }
+      drawIcon(hud, info.icon, Math.round(x + cw / 2 - 9), y0 + 6, taken ? "#6a5a48" : "#e8b850", 2);
+      const nameLines = wrapText(info.name, Math.floor((cw - 4) / 6));
+      nameLines.forEach((l, k) => drawText(hud, l, x + cw / 2, y0 + 28 + k * 9, taken ? "#6a5a48" : "#ffe8a0", { align: "center" }));
+      wrapText(info.text, Math.floor((cw - 4) / 6)).slice(0, 5).forEach((l, k) => drawText(hud, l, x + cw / 2, y0 + 30 + nameLines.length * 9 + k * 8, taken ? "#5a4a38" : "#d8c8a8", { align: "center", shadow: null }));
+      if (taken) { const who = d.order[d.taken.indexOf(c)]; drawText(hud, TEAM_NAME[who], x + cw / 2, y0 + ch / 2 - 4, TEAM_CSS[who], { scale: 2, align: "center" }); }
+    });
+    const keys = picker === 0 ? "A D CHOOSE   F TAKE" : "< > CHOOSE   . TAKE";
+    drawText(hud, keys, mid, y0 + ch + 6, "#c8a050", { align: "center" });
+  }
+  function drawChampion(W, H, blink) {
+    const mid = W / 2, c = m.champion;
+    const pw = Math.min(W - 12, 200), px = Math.round(mid - pw / 2), py = Math.round(H * 0.3);
+    panel(hud, px, py, pw, 52);
+    drawText(hud, TEAM_NAME[c] + " IS CHAMPION", mid, py + 8, TEAM_CSS[c], { scale: textWidth(TEAM_NAME[c] + " IS CHAMPION", 2) < pw - 8 ? 2 : 1, align: "center" });
+    drawText(hud, "OF THE ARENA", mid, py + 28, "#ffe8a0", { align: "center" });
+    drawText(hud, "LEVELS " + m.levelWins[0] + " - " + m.levelWins[1], mid, py + 39, "#c8a050", { align: "center" });
+    if (blink && m.phaseT > SA.K.CHAMPION_GUARD) drawText(hud, "PUNCH FOR A REMATCH", mid, py + 60, "#ffe8a0", { align: "center" });
+  }
+
+  // ---- frozen pose for review (?pose=<anim>&t=<tick>)
+  const freezePose = params.get("pose");
+  if (freezePose) {
+    const f = m.fighters[0], t = +(params.get("t") || 6);
+    m.phase = "fight";
+    if (SA.MOVES[freezePose]) { f.move = { name: freezePose, t, hits: [] }; f.state = "attack"; }
+    else { f.state = freezePose; f.st = t; }
+  }
+
+  // ---- loop
+  let carry = 0, last = performance.now();
+  function simTicks(n) {
+    for (let k = 0; k < n; k++) {
+      const inputs = demo ? botInputs() : [queues[0].take(), queues[1].take()];
+      if (!freezePose) SA.step(m, inputs);
+      handleEvents(m.events);
+    }
+  }
+  function frame(dt) {
+    poseScene(dt);
+    draw();
+    drawHud(dt);
+  }
+  function loop(now) {
+    const el = Math.min(250, now - last); last = now;
+    const r = SA.ticksFor(el, carry); carry = r.carryMs;
+    simTicks(r.ticks);
+    frame(Math.max(r.ticks, 1) / 60);
+    requestAnimationFrame(loop);
+  }
+  // first frame: start any opening banners
+  if (m.phase === "salute") handleEvents([{ type: "salute", level: m.level }]);
+  if (m.phase === "fight") handleEvents([{ type: "roundStart", round: m.round }]);
+  window.__sa = {
+    match: m, rigs, arena, beasts,
+    step(n = 1) { simTicks(n); frame(n / 60); return m.phase; },
+    render() { frame(1 / 60); },
+    chop(who = 1, arm = "sword") { SA.chop(m, m.fighters[who], arm, { mid: true }); handleEvents(m.events.splice(0)); frame(1 / 60); },
+    spawn(kind = "lion", x = 0) { SA.spawnAnimal(m, kind, x); frame(1 / 60); },
+  };
+  frame(1 / 60);
+  requestAnimationFrame(loop);
+}
+
 // ---------------------------------------------------------------- start
 try {
   SHEETS = await loadSheets();
   const view = params.get("view");
   if (view === "arena") await runArenaViewer();
   else if (view && SA.MODELS[view]) await runViewer(view);
+  else await runGame();
 } catch (e) {
   if (!["file protocol", "sheets"].includes(e.message)) { showError("Spartan Arena failed to start", [e.stack || e.message]); console.error(e); }
 }
