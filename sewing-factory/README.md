@@ -72,7 +72,10 @@ Legs swing out from the hip as rigid limbs for the stance; the swing fades out
 over a few centimetres round the crotch, and the lift of the outer thigh is
 spread down the leg so the hip does not fold into a ledge. Trousers and shorts
 are drafted on the same construction with ease, and swimwear carries on under
-the body: 7 cm of cloth from the front and from the back meet in the crotch seam.
+the body: 10 cm of cloth from the front and from the back, down to where the
+thighs part and then under, meet in the crotch seam. Above the crotch line the
+strip where the two sides lie together starts from the front and back ends of
+the crotch, so the lower belly and the cleft stay smooth, as on a shop mannequin.
 
 ## How the pieces are made
 
@@ -105,8 +108,9 @@ Machine timing is schematic and slowed; thread is drawn thick. There is no cloth
 physics, no darts, facings or linings, and the sleeve head has more ease than a
 real pattern. On very short, close-cut legs the back inside-leg edge is up to
 2 cm longer than the front one and is eased on to it. The turn-up cuff of the
-jean shorts is a separate band (on real cut-offs it is the leg rolled up). A
-faint crease remains on the figure where the thighs meet. Fabric changes the look, not the construction: an unsuitable cloth
+jean shorts is a separate band (on real cut-offs it is the leg rolled up). Near
+the crotch the worn cloth lies closer to the body than the drafted pattern
+allows for. Fabric changes the look, not the construction: an unsuitable cloth
 gets a note. The page lists the rest under "What is simplified".
 
 ## Tests and review hooks

@@ -414,8 +414,7 @@ const SF = {};
     // once, so the cloth's valley along the centre seam is always narrower than the body's and never lets it through.
     const hipBack = (x, z, sn, yy, e = 0, sharp = 1.5) => {
       if (sn >= 0) {   // the front, the same way: the thigh fills out to the belly's outline, so there is no ledge above the legs
-        // on the body the filling-out fades towards the centre line, where the belly turns under to the crotch; cloth spans straight across
-        const w = smooth(y.crotch - 9, y.crotch + 1, yy) * Math.min(1, sn * sharp) * (sharp < 2 ? smooth(-1, 8, Math.abs(x)) : 1);
+        const w = smooth(y.crotch - 9, y.crotch + 1, yy) * Math.min(1, sn * sharp);
         return w <= 0 ? z : lerp(z, Math.max(z, frontOutline(x, yy) + e), w);
       }
       const w = smooth(y.crotch - 9, y.crotch + 1, yy) * Math.min(1, -sn * sharp); if (w <= 0) return z;
@@ -443,9 +442,14 @@ const SF = {};
     // it turns the corner at once (the underside of the crotch is level); round the front, outside and back it
     // leaves the thigh smoothly, or the crotch line shows as a crease right round the leg.
     const blendB = (p, s) => lerp(s * s * (3 - 2 * s), 1 - Math.pow(1 - s, 2.4), smooth(-0.3, 0.7, Math.cos(TAU * p)));
+    // Above the crotch line the part of the ring that lay on the centre plane has no depth of its own any more: it
+    // starts from the front (or back) end of the crotch. Left where it was, it pulled a hollow into the lower belly
+    // and into the cleft as the ring spread out again.
+    const pEff = (p, q) => q <= y.crotch ? p : lerp(p, clamp(p, pStar, 1 - pStar), smooth(0, 0.6, q - y.crotch));
     const lower = (sgn, p, q) => {
-      const qc = Math.min(q, y.crotch), S = legSect(qc), cs = Math.cos(TAU * p), sn = Math.sin(TAU * p);
-      const lx = ringX(S, cs, qc);
+      const qc = Math.min(q, y.crotch), S = legSect(qc), pe = pEff(p, q), cs = Math.cos(TAU * pe), sn = Math.sin(TAU * pe);
+      let lx = ringX(S, cs, qc);
+      if (q > y.crotch) lx *= lerp(1, smooth(pStar, pStar + 0.07, Math.min(pe, 1 - pe)), smooth(0, 0.6, q - y.crotch));   // the two sides close on the centre plane, with no slit between them
       const L = [sgn * lx, q, hipBack(lx, S.cz + S.rz * sn - legBack(p, q), sn, q)];
       if (q <= y.crotch) return L;
       const T = torso(sgn * thOf(p, q), q, true), s = (q - y.crotch) / CAPH;
@@ -492,7 +496,7 @@ const SF = {};
     const posed = makeArms({ ...P0, ...Object.fromEntries(SF.POSE.map(d => [d.key, M[d.key] ?? d.def])) });
     const arms = posed.arms, armPoint = posed.point, armFrame = posed.frame;
     const rest = makeArms(P0);   // patterns are drafted from the resting pose, so a pose never changes a cut piece
-    return { M, y, neckR, bustTh, CAP, CAPH, gapH, pivX, shiftIn, ringX, thOf, blendB, lower, sect, torso, girth, bump, legSect, leg, legSurf, hipBack, backOutline, frontOutline, legGirth, seat, legBack, seatY, yPiv, yMidThigh: ymid, poseLeg, hipDrop, arms, armR, armPoint, armFrame, rest };
+    return { M, y, neckR, bustTh, CAP, CAPH, gapH, pivX, shiftIn, ringX, thOf, blendB, pEff, lower, sect, torso, girth, bump, legSect, leg, legSurf, hipBack, backOutline, frontOutline, legGirth, seat, legBack, seatY, yPiv, yMidThigh: ymid, poseLeg, hipDrop, arms, armR, armPoint, armFrame, rest };
   };
 })();
 // ============================================================ part 2: garment surfaces, pattern pieces, operations
@@ -548,11 +552,12 @@ const SF = {};
   // One side of the lower body. p: 0 = centre front / inside leg, 0.5 = side seam, 1 = centre back / inside leg.
   function lowerChart(body, shell, legG, sgn) {
     const yc = body.y.crotch, BZ = body.CAPH;   // the crotch curve rounds in over the same height as the pelvis under it, so it always clears it
-    const ch = {
-      orient: sgn, yq: true, f(p, q) {
+    // worn = true: the cloth as it lies on the body. false: the same cloth as drafted, where the strip under the
+    // crotch keeps its length up the rise, so the flat pattern gets the usual smooth crotch curve and fork.
+    const surf = worn => (p, q) => {
         const S = legG(Math.min(q, yc));
         // the cloth follows the thigh in to the centre line under the crotch, as the body does
-        const cs = Math.cos(TAU * p), lx = body.ringX(S, cs, Math.min(q, yc), -0.5), sn = Math.sin(TAU * p);
+        const pe = worn ? body.pEff(p, q) : p, cs = Math.cos(TAU * pe), lx = body.ringX(S, cs, Math.min(q, yc), -0.5), sn = Math.sin(TAU * pe);
         const L = [sgn * lx, q, body.hipBack(lx, S.cz + S.rz * sn - body.legBack(p, q), sn, q, S.ease + 0.3, S.sharp || 9)];   // the cheek runs down on to the back of the thigh, and the cloth with it
         if (q <= yc) return L;
         const T = shell(sgn * body.thOf(p, q), q), s = (q - yc) / BZ;
@@ -561,11 +566,10 @@ const SF = {};
         if (sn < 0) B[2] = lerp(B[2], Math.min(B[2], body.backOutline(B[0], q) - S.ease - 0.3), Math.min(1, -sn * 9));   // still outside the cheek at the place the blend has moved it to
         else B[2] = lerp(B[2], Math.max(B[2], body.frontOutline(B[0], q) + S.ease + 0.3), Math.min(1, sn * 9));
         return B;
-      },
     };
-    // f0 is the surface at rest, which the flat pattern is unrolled from; f is the same surface in the figure's pose
-    const f0 = ch.f; ch.f0 = f0; ch.f = (p, q) => body.poseLeg(sgn, f0(p, q));
-    return ch;
+    // f0 is the drafted surface at rest, which the flat pattern is unrolled from; f is the worn surface in the figure's pose
+    const wornF = surf(true);
+    return { orient: sgn, yq: true, f0: surf(false), f: (p, q) => body.poseLeg(sgn, wornF(p, q)) };
   }
   const armChart = (body, rg, sgn) => ({ orient: sgn, flipY: true, yq: true, f: (p, q) => body.armPoint(sgn, p, q, rg(q)) });
 
@@ -971,7 +975,7 @@ const SF = {};
   // front to back, so the cloth cannot stop at the crotch line: below it the chart carries on *under* the body,
   // SWIM_U centimetres of cloth from the front (and from the back) to the middle of the crotch, where the two
   // meet in the crotch seam. Most of that strip lies between the thighs.
-  const SWIM_U = 7;
+  const SWIM_U = 10;
   const swimChart = body => {
     const base = SF.makeShell(body, { ease: 0.45, loose: 0 }), yc = body.y.crotch, zmid = body.legSect(yc).cz;
     const hugAt = (th, yy) => {
@@ -979,10 +983,17 @@ const SF = {};
       const back = Math.cos(th) < 0, zs = body.legSurf(P[0], yy, back); if (zs === null) return P;
       P[2] = lerp(P[2], back ? Math.min(P[2], zs - 0.6) : Math.max(P[2], zs + 0.6), 1 - smooth(yc + 8, yc + 11, yy)); return P;
     };
+    // Below the crotch line the cloth first follows the body down to where the thighs part (D cm), then turns
+    // under and runs level to the middle.
+    const D = 3.6, tD = D / SWIM_U;
+    const bodyZ = (x, yy, back) => body.legSurf(x, yy, back) ?? body.legSurf(body.lower(1, 0, yy)[0] + 0.45, yy, back) ?? zmid;
     const shell = (th, yy) => {
       if (yy >= yc) return hugAt(th, yy);
-      const E = hugAt(th, yc), t = clamp((yc - yy) / SWIM_U, 0, 1);
-      return [E[0], yc - 2 * Math.sqrt(t * (2 - t)), lerp(E[2], zmid, t)];
+      const E = hugAt(th, yc), back = Math.cos(th) < 0, t = clamp((yc - yy) / SWIM_U, 0, 1);
+      const sg = (back ? -1 : 1) * (0.6 + 0.5 * Math.min(1, t / (0.4 * tD))), x = E[0] * (1 - 0.3 * smooth(0, tD, t));   // the strip narrows a little as it goes between the thighs
+      if (t <= tD) return [x, yy, bodyZ(x, yy, back) + sg];
+      const u = (t - tD) / (1 - tD);
+      return [x, yc - D - 0.4 * Math.sin(PI * u / 2), lerp(bodyZ(x, yc - D, back) + sg, zmid, u)];
     };
     // worn, it follows the legs' stance as the body under it does; the pattern is unrolled from the resting shape
     return { shell, chart: { f: (th, q) => { const P = shell(th, q); return body.poseLeg(P[0] >= 0 ? 1 : -1, P); }, f0: shell, orient: 1, yq: true } };
