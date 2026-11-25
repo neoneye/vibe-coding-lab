@@ -2246,7 +2246,7 @@ const STAGES = { 1: ['The mannequin', 'A measured form. The tapes show chest, wa
 
 // -------- state
 const S = {
-  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
+  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
   sel: null, op: +(Q.get('op') || 0), opT: +(Q.get('t') || 0), playing: false, lineSpeed: 1, turn: false, showStitch: true, wait: 0,
 };
 S.M = { ...SF.FORMS[S.form] };
@@ -2293,6 +2293,46 @@ const dark = new THREE.MeshStandardMaterial({ color: '#2b2d33', roughness: 0.6, 
 const SPHERE = new THREE.SphereGeometry(1, 28, 18);
 function ball(mat, sx, sy, sz, x, y, z) { const m = new THREE.Mesh(SPHERE, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.userData.keepGeo = true; return m; }
 
+// A mannequin foot: heel, arch, instep and five toes, swept from sections along its length.
+// Local axes: X towards the toes, Y up, Z to the outside of the foot. `heel` lifts the heel (cm) by bending
+// at the ball, as on mannequins made to wear heeled shoes; the toes stay flat on the floor.
+function footParts(b, sgn, heel) {
+  const L = 0.152 * b.M.height, k = L / 25.5, hA = b.y.ankle, S = b.legSect(hA), xa = 0.25 * L, xb = 0.72 * L;
+  const al = Math.asin(clamp(heel / (0.67 * L), 0, 0.85));
+  const bend = p => {
+    const a = al * (1 - smooth(xb - 0.07 * L, xb + 0.03 * L, p[0])), dx = p[0] - xb, c = Math.cos(a), sn = Math.sin(a);
+    return [xb + dx * c + p[1] * sn, p[1] * c - dx * sn, p[2]];
+  };
+  const A = bend([xa, hA, 0]), lift = A[1] - hA, ang = 0.13;
+  const f = [sgn * Math.sin(ang), 0, Math.cos(ang)], l = [sgn * Math.cos(ang), 0, -Math.sin(ang)];
+  const place = p => { const q = bend(p), dx = q[0] - A[0]; return [sgn * S.cx + f[0] * dx + l[0] * q[2], q[1] - lift, S.cz + f[2] * dx + l[2] * q[2]]; };
+  const half = SF.pchip([0, 0.04, 0.12, 0.4, 0.7, 0.8, 0.84], [0.02, 2.3, 3.2, 3.5, 4.75, 4.6, 3.2].map(v => v * k));
+  const ankleW = S.rx + 0.25;
+  const top = SF.pchip([0, 0.03, 0.1, 0.2, 0.33, 0.46, 0.6, 0.72, 0.8, 0.84], [2 * k, 4.2 * k, 6.4 * k, hA + 0.6, hA + 0.6, 6.4 * k, 4.4 * k, 3.1 * k, 2.4 * k, 2.0 * k]);
+  const zBig = -3.25 * k, rootX = z => 0.8 * L - 0.33 * (z - zBig);   // the toe roots slant back towards the little toe
+  const mid = SF.pchip([0, 0.4, 0.84], [0, 0.25 * k, 0.5 * k]);                 // the foot's centre line drifts outwards towards the toes
+  const body = (u, v) => {
+    const s = v * 0.84, ph = (sgn > 0 ? u : 1 - u) * TAU, c = Math.cos(ph), sn = Math.sin(ph), a = half(s), t = top(s), g = s < 0.05 ? Math.sqrt(s / 0.05) : 1;
+    // narrower above than at the sole, and flat underneath
+    const up = (1 + sn) / 2, z = a * Math.sign(c) * Math.pow(Math.abs(c), 0.8) * lerp(1, lerp(Math.min(1.05, ankleW / a) * smooth(0.02, 0.14, s) + 0.7 * (1 - smooth(0.02, 0.14, s)), 0.9, smooth(0.3, 0.6, s)), up) + mid(s);
+    let y = t * (sn > 0 ? 0.5 + 0.5 * sn : 0.5 - 0.5 * Math.pow(-sn, 0.35));
+    const arch = 1.5 * k * Math.pow(Math.max(0, Math.sin(PI * (s - 0.2) / 0.5)), 1.2) * clamp(0.35 - z / a * 0.9, 0, 1);   // the instep side lifts off the floor
+    if (sn < 0.3) y += arch * (1 - Math.max(0, sn) / 0.3);
+    if (s < 0.1 && sn < 0) y += 1.6 * k * Math.pow(1 - s / 0.1, 2) * -sn;      // rounded underside of the heel
+    y = 2.2 * k + (y - 2.2 * k) * g;                                             // the back of the heel closes to a rounded end
+    return place([s * L - 0.33 * (z - zBig) * smooth(0.45, 0.84, s), y, z]);
+  };
+  const parts = [gridGeo(28, 44, body, true)];
+  const toes = [[-3.25, 4.9, 1.5], [-1.2, 4.6, 1.12], [0.55, 4.1, 1.05], [2.15, 3.5, 0.98], [3.6, 2.8, 0.92]];   // z, length, radius: big toe on the inside
+  for (const [tz, tl, tr] of toes) {
+    const x0 = rootX(tz * k + mid(0.84)) - 0.9 * k;
+    parts.push(gridGeo(12, 12, (u, v) => {
+      const ph = (sgn > 0 ? u : 1 - u) * TAU, x = v * tl * k, e = Math.max(0, (v - 0.5) / 0.5), r = tr * k * Math.sqrt(Math.max(0, 1 - e * e)) * (v < 0.08 ? Math.sqrt(v / 0.08) : 1);
+      return place([x0 + x, tr * k * 0.92 + r * Math.sin(ph) * 0.92 + 0.25 * k * Math.sin(PI * v), tz * k + mid(0.84) + r * Math.cos(ph)]);
+    }, true));
+  }
+  return { parts, lift, balls: [] };
+}
 const linen = new THREE.MeshStandardMaterial({ color: '#d6c4a2', roughness: 0.95 }); linen.userData.shared = true;
 const seamMat = new THREE.MeshStandardMaterial({ color: '#a8946f', roughness: 1 }); seamMat.userData.shared = true;
 const brass = new THREE.MeshStandardMaterial({ color: '#b8923f', roughness: 0.32, metalness: 0.9 }); brass.userData.shared = true;
@@ -2304,7 +2344,7 @@ const lathe = (pts, mat, y) => { const m = new THREE.Mesh(new THREE.LatheGeometr
 function buildStand(b, y0) {
   const y = b.y, R = b.neckR;
   figure.add(new THREE.Mesh(gridGeo(96, 110, (u, v) => b.torso(-PI + TAU * u, lerp(y0, y.neck, v)), true), linen));
-  figure.add(lathe([[R * 1.0, -1.2], [R * 0.96, 2.6], [R * 1.12, 2.6], [R * 1.12, 3.5], [0.9, 3.7], [0.7, 4.6], [1.5, 5.4], [1.9, 7.2], [1.2, 9.2], [0.01, 10]], brass, y.neck));
+  figure.add(lathe([[0.01, 2.45], [R * 1.12, 2.45], [R * 1.12, 3.5], [0.9, 3.7], [0.7, 4.6], [1.5, 5.4], [1.9, 7.2], [1.2, 9.2], [0.01, 10]], brass, y.neck));
   const neckStub = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.96, R * 1.0, 3.8, 32), linen); neckStub.position.y = y.neck + 0.7; figure.add(neckStub);
   for (const sgn of [1, -1]) {   // arm plates
     const A = b.arms[sgn], r = b.armR(0) * 0.86, P = b.torso(sgn * PI / 2, A.S[1] + 0.6);
@@ -2330,12 +2370,13 @@ function buildStand(b, y0) {
 function buildFigure() {
   figure.traverse(o => { if (o.geometry && !o.userData.keepGeo) pendingDispose.push(o.geometry); }); figure.clear();
   const b = body, y = b.y, H = b.M.height, y0 = y.crotch - b.CAP;
+  let lift = 0;
   if (S.mode !== 'stand') {
     // the angle runs so that the triangles face outwards (the reverse shows the far inside wall through the front)
     figure.add(new THREE.Mesh(gridGeo(96, 110, (u, v) => b.torso(-PI + TAU * u, lerp(y0, y.neck, v)), true), skin));
     for (const sgn of [1, -1]) {
-      figure.add(new THREE.Mesh(gridGeo(28, 44, (u, v) => b.leg(sgn, sgn > 0 ? u : 1 - u, lerp(4, y.crotch + b.CAPH, v)), true), skin));
-      const fs = b.legSect(4); figure.add(ball(skin, fs.rx * 1.05, 4.2, fs.rx * 2.3, sgn * fs.cx, 4, fs.cz + fs.rx * 1.1));
+      figure.add(new THREE.Mesh(gridGeo(28, 44, (u, v) => b.leg(sgn, sgn > 0 ? u : 1 - u, lerp(y.ankle - 2.5, y.crotch + b.CAPH, v)), true), skin));
+      const ft = footParts(b, sgn, S.heel); lift = ft.lift; for (const g of ft.parts) figure.add(new THREE.Mesh(g, skin)); for (const m of ft.balls) figure.add(m);
       figure.add(new THREE.Mesh(gridGeo(18, 24, (u, v) => b.armPoint(sgn, sgn > 0 ? TAU * u : -TAU * u, lerp(-1, b.M.arm, v)), true), skin));
       const A = b.arms[sgn], r0 = b.armR(0) * 0.93; figure.add(ball(skin, r0, r0, r0, A.S[0], A.S[1], A.S[2]));
       const hp = b.armPoint(sgn, 0, b.M.arm + 0.045 * H, 0), hand = ball(skin, 2.2, 0.052 * H, 3.6, hp[0], hp[1], hp[2]); hand.rotation.z = sgn * 17 * PI / 180; figure.add(hand);
@@ -2345,7 +2386,8 @@ function buildFigure() {
       // a hint of a face, as on shop mannequins: brow ridge and nose
     const hy = y.chin + hr * 0.98; figure.add(ball(skin, hr * 0.085, hr * 0.24, hr * 0.16, 0, hy - hr * 0.1, 0.8 + hr * 0.8)); figure.add(ball(skin, hr * 0.44, hr * 0.1, hr * 0.2, 0, hy + hr * 0.15, 0.8 + hr * 0.66));
   } else buildStand(b, y0);
-  if (S.mode !== 'stand') { const plate = new THREE.Mesh(new THREE.CylinderGeometry(30, 31, 1.2, 48), dark); plate.position.y = 0.6; figure.add(plate); }
+  if (S.mode !== 'stand') { const plate = new THREE.Mesh(new THREE.CylinderGeometry(30, 31, 1.2, 48), dark); plate.position.y = 0.6 - lift; figure.add(plate); }
+  turnG.position.y = lift;   // heels raise the whole figure
   blob.scale.setScalar(S.mode === 'stand' ? 0.55 : 1);
   // tapes
   retire(tapes);
@@ -2648,6 +2690,7 @@ function uiMeasures() {
   for (const [k, name] of [['figure', 'Full figure'], ['stand', 'Dress form on a stand']]) { const b = document.createElement('button'); b.textContent = name; b.className = S.mode === k ? 'on' : ''; b.onclick = () => { S.mode = k; needBody = true; uiMeasures(); }; md.appendChild(b); }
   $('modeNote').textContent = S.mode === 'stand' ? 'A tailor\u2019s dress form: torso only. Trousers and swimwear need the crotch free, so for those the form hangs from a rail instead of standing on its pole. Sleeves and trouser legs hang empty.' : '';
   const m = $('measures'); m.innerHTML = '';
+  if (S.mode !== 'stand') slider(m, { label: 'Heel lift (foot posed for heeled shoes)', min: 0, max: 11, step: 0.5 }, () => S.heel, v => { S.heel = v; needBody = true; });
   for (const d of SF.MEASURES) slider(m, d, () => S.M[d.key], v => { S.M[d.key] = v; needBody = true; });
 }
 function setGarment(id) {
