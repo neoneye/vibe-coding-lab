@@ -8,8 +8,9 @@ browser (three.js is loaded from a CDN).
 
 1. **Measure.** A mannequin with sliders for height, chest, waist, hip,
    shoulder width, inside leg and arm length. The torso sections are solved so
-   the tape girths equal the slider values. A Hips and legs card sets the buttocks
-   and the thigh, knee, calf and ankle girths. Seven more sliders shape the bust
+   the tape girths equal the slider values. A Hips and legs card sets the buttocks,
+   the gap between the thighs (as a share of the hip width) and the thigh, knee,
+   calf and ankle girths. Seven more sliders shape the bust
    (projection, spacing, height, width, fullness above and below, and the rib cage
    under the bust as a share of the bust girth), a heel-lift slider poses the feet for heeled shoes, and a Pose card moves
    the arms, elbows, feet and head (the cut pieces never change with the pose). Two modes: a full figure with head,
@@ -28,10 +29,26 @@ An **X-ray** switch makes the body see-through and shows a skeleton inside it
 (spine, rib cage, pelvis, limbs, hands, feet, skull), built from the same
 measurements and pose, with the clothing still on.
 
-Garments: jeans, shorts, shirt, dress, swimsuit, bikini. Cloths: denim, stretch
-denim, chino twill, poplin, oxford, linen, flannel, satin, viscose crepe, cotton
-jersey, swim tricot. Prints: solid, zebra, leopard, polka dots, stripes, gingham,
-floral, camouflage.
+Garments: jeans, shorts, jean shorts, hot shorts, metallic shorts, bike shorts,
+shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
+poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
+stretch, swim tricot. Prints: solid, zebra, leopard, pink leopard, polka dots,
+stripes, gingham, floral, camouflage.
+
+### Four women's shorts
+
+All four sit on the natural waist, are cut close to the body, and share the
+trouser block (two fronts, two backs, a waistband).
+
+| Shorts | Cloth | What makes it different on the line |
+|---|---|---|
+| Jean shorts | pale stretch denim | yokes, patch pockets, belt loops, fly zip, tack button, lap-felled seams, a turn-up cuff |
+| Hot shorts | cotton jersey | no fly: four-thread overlock seams, an elastic waistband, coverstitched hems (5 operations) |
+| Metallic shorts | foil-coated stretch | fly zip and a large sewn button, plain waistband, no pockets |
+| Bike shorts | swim tricot, pink leopard | as the hot shorts, with a leg to mid-thigh |
+
+The hem of the short ones can be cut higher at the side of the thigh than at
+the inside leg.
 
 ## Figure presets
 
@@ -44,6 +61,18 @@ men's table has no hip column, so the men's hips, like every shoulder width,
 inside leg and shape slider, are this page's own proportions. The ASTM tables
 (D5585, D6240, D6960) are paywalled and were not used. The anime figures are
 stylised (long legs, narrow waist, larger head) and follow no standard.
+
+## The lower body
+
+Each side of the lower body is one surface: the thigh, whose ring opens out
+into half of the hip section over the 6 cm above the crotch line. The inside of
+each thigh swells in to the centre line just below the crotch, so the gap
+between the legs ends in an arch and the crotch has length from front to back.
+Legs swing out from the hip as rigid limbs for the stance; the swing fades out
+over a few centimetres round the crotch, and the lift of the outer thigh is
+spread down the leg so the hip does not fold into a ledge. Trousers and shorts
+are drafted on the same construction with ease, and swimwear carries on under
+the body: 7 cm of cloth from the front and from the back meet in the crotch seam.
 
 ## How the pieces are made
 
@@ -74,7 +103,10 @@ narrower than the body (negative ease).
 
 Machine timing is schematic and slowed; thread is drawn thick. There is no cloth
 physics, no darts, facings or linings, and the sleeve head has more ease than a
-real pattern. Fabric changes the look, not the construction: an unsuitable cloth
+real pattern. On very short, close-cut legs the back inside-leg edge is up to
+2 cm longer than the front one and is eased on to it. The turn-up cuff of the
+jean shorts is a separate band (on real cut-offs it is the leg rolled up). A
+faint crease remains on the figure where the thighs meet. Fabric changes the look, not the construction: an unsuitable cloth
 gets a note. The page lists the rest under "What is simplified".
 
 ## Tests and review hooks
@@ -84,7 +116,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|bikeshorts|shirt|dress|swimsuit|bikini`,
 `&form=w|m|w3|m3|ag|ab`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.

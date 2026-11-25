@@ -247,6 +247,7 @@ const SF = {};
   SF.LEGS = [
     { key: 'seat', label: 'Buttocks: projection', min: 0, max: 7, step: 0.1, def: 2.6 },
     { key: 'seatLow', label: 'Buttocks: fullness below', min: 3, max: 10, step: 0.5, def: 6 },
+    { key: 'gap', label: 'Gap between the thighs, as a share of the hip width', min: 0, max: 24, step: 1, def: 8, unit: '%' },
     { key: 'thigh', label: 'Thigh', min: 70, max: 150, step: 1, def: 100, unit: '%' },
     { key: 'knee', label: 'Knee', min: 70, max: 150, step: 1, def: 100, unit: '%' },
     { key: 'calf', label: 'Calf', min: 70, max: 150, step: 1, def: 100, unit: '%' },
@@ -265,7 +266,7 @@ const SF = {};
   // body-dimension tables (women: drop −16 cm; men: drop −12 cm, which has no hip column, so the men's hip is ours),
   // heights are EN 13402 design heights, and the men's arm length is its height association. Shoulder width, inside
   // leg and the shape sliders are this page's own proportions. The anime figures are stylised, not a standard.
-  const shape = (o = {}) => ({ bust: 0, bustDist: 18, bustHeight: 0, bustSpread: 100, bustLow: 5, bustHigh: 6.5, underRatio: 92, seat: 2, seatLow: 6, thigh: 100, knee: 100, calf: 100, ankle: 100, head: 100, ...o });
+  const shape = (o = {}) => ({ bust: 0, bustDist: 18, bustHeight: 0, bustSpread: 100, bustLow: 5, bustHigh: 6.5, underRatio: 92, seat: 2, seatLow: 6, gap: 8, thigh: 100, knee: 100, calf: 100, ankle: 100, head: 100, ...o });
   SF.FORMS = {
     w: { name: 'Women M', std: 'EN 13402: bust 92', height: 168, chest: 92, waist: 76, hip: 100, shoulder: 38.5, inseam: 78, arm: 58, ...shape({ bust: 3.6, bustDist: 17.5, underRatio: 85, seat: 2.6 }) },
     m: { name: 'Men M', std: 'EN 13402: chest 100', height: 176, chest: 100, waist: 88, hip: 102, shoulder: 45, inseam: 81, arm: 65, ...shape({ bustDist: 20, underRatio: 95, seat: 1.8 }) },
@@ -362,16 +363,22 @@ const SF = {};
     const girth = yy => { const S = sect(yy); return perimeter(contour(S.a, S.df, S.db, yy, S.k ?? 1)); };
 
     // -------- legs: centre cx, radii rx (across) and rz (front-back), centre cz
-    const c0 = keys[0], legTop = { rx: c0[1] / 2, rz: (c0[2] + c0[3]) / 2 * 0.86, cz: (c0[2] - c0[3]) / 2 };
+    // The two thighs do not fill the hips from side to side: between them is the crotch, a bridge `2 gapH` wide,
+    // and below it the inner thighs stay apart (or just touch, at gap 0). The inner edge of each leg is drawn
+    // directly, so a thicker leg grows outwards and the two can never run into each other.
+    const c0 = keys[0], gapH = clamp(M.gap ?? 8, 0, 24) / 100 * c0[1], pivX = c0[1] / 2;
+    const legTop = { rx: (c0[1] - gapH) / 2, rz: (c0[2] + c0[3]) / 2 * 0.86, cz: (c0[2] - c0[3]) / 2 };
     const circ = (f, pct) => f * M.hip / TAU * (pct ?? 100) / 100;
     const ymid = lerp(y.knee, y.crotch, 0.55);
     const lys = [0, y.ankle, y.calf, y.knee, ymid, y.crotch];
-    const frx = SF.pchip(lys, [circ(0.23, M.ankle), circ(0.225, M.ankle), circ(0.37, M.calf), circ(0.385, M.knee), circ(0.53, M.thigh), legTop.rx]);
-    const frz = SF.pchip(lys, [circ(0.23, M.ankle), circ(0.225, M.ankle), circ(0.37, M.calf), circ(0.385, M.knee), circ(0.55, M.thigh), legTop.rz]);
+    const frx = SF.pchip(lys, [circ(0.23, M.ankle), circ(0.225, M.ankle), circ(0.37, M.calf), circ(0.385, M.knee), circ(0.48, M.thigh), legTop.rx]);
+    const frz = SF.pchip(lys, [circ(0.23, M.ankle), circ(0.225, M.ankle), circ(0.37, M.calf), circ(0.385, M.knee), circ(0.6, M.thigh), legTop.rz]);
+    const fxi = SF.pchip(lys, [0.19 * c0[1], 0.19 * c0[1], 0.08 * c0[1], 0.085 * c0[1], Math.max(0.3, 0.8 * gapH), gapH]);
     const legGirth = yy => PI * (frx(yy) + frz(yy));
     const legSect = yy => {
       const yc = Math.min(yy, y.crotch), t = clamp(yc / y.crotch, 0, 1);
-      return { cx: lerp(legTop.rx * 0.62 + 1.5, legTop.rx, t * t), rx: frx(yc), rz: frz(yc), cz: lerp(-1, legTop.cz, t) };
+      const rx = frx(yc);
+      return { cx: fxi(yc) + rx, rx, rz: frz(yc), cz: lerp(-1, legTop.cz, t) };
     };
     // Stance: each leg swings out from the hip as a rigid limb, so it keeps its length and the hips come down.
     // `stance` is the extra distance between the feet as a share of the inside-leg length.
@@ -381,9 +388,13 @@ const SF = {};
       if (!stA) return P;
       // Near the crotch point the swing fades out, so the two legs stay joined there and the inner thigh (and the
       // cloth over it) spans from the crotch out to the leg, instead of the legs tearing apart at the top.
-      const near = smooth(0, 22, Math.hypot(P[0], Math.min(0, P[1] - y.crotch)));   // distance from the centre line above the crotch, and from the crotch point below it
-      const a = stA * (1 - smooth(y.crotch, yPiv, P[1])) * near, c = Math.cos(a), sn = sgn * Math.sin(a), dx = P[0] - sgn * legTop.rx, dy = P[1] - yPiv;
-      return [sgn * legTop.rx + dx * c - dy * sn, yPiv + dy * c + dx * sn, P[2]];
+      // The fade is short and starts steeply: a long, gentle one left the inner thighs hanging as a pouch between the legs.
+      const nd = clamp((Math.hypot(P[0], Math.min(0, P[1] - y.crotch)) - gapH * 0.6) / 9, 0, 1), near = 1 - (1 - nd) * (1 - nd);   // distance from the centre line above the crotch, and from the crotch bridge below it
+      const a = stA * (1 - smooth(y.crotch, y.crotch + CAPH, P[1])) * near, c = Math.cos(a), sn = sgn * Math.sin(a), dx = P[0] - sgn * pivX, dy = P[1] - yPiv;
+      // Outside the hip joint a rigid turn would lift the top of the thigh into the hip and pile it up there as a
+      // ledge. The lift fades in down the thigh instead, so the fold is spread over the upper thigh.
+      const lift = sgn * dx > 0 ? smooth(y.crotch - 14, y.crotch + 2, P[1]) : 0;
+      return [sgn * pivX + dx * c - dy * sn, yPiv + dy * c + dx * sn * (1 - lift), P[2]];
     };
     const hipDrop = legLen * (1 - Math.cos(stA));   // how far the whole figure comes down
     // psi: 0 = inside of the leg, 0.25 = front, 0.5 = outside, 0.75 = back
@@ -403,7 +414,8 @@ const SF = {};
     // once, so the cloth's valley along the centre seam is always narrower than the body's and never lets it through.
     const hipBack = (x, z, sn, yy, e = 0, sharp = 1.5) => {
       if (sn >= 0) {   // the front, the same way: the thigh fills out to the belly's outline, so there is no ledge above the legs
-        const w = smooth(y.crotch - 9, y.crotch + 1, yy) * Math.min(1, sn * sharp);
+        // on the body the filling-out fades towards the centre line, where the belly turns under to the crotch; cloth spans straight across
+        const w = smooth(y.crotch - 9, y.crotch + 1, yy) * Math.min(1, sn * sharp) * (sharp < 2 ? smooth(-1, 8, Math.abs(x)) : 1);
         return w <= 0 ? z : lerp(z, Math.max(z, frontOutline(x, yy) + e), w);
       }
       const w = smooth(y.crotch - 9, y.crotch + 1, yy) * Math.min(1, -sn * sharp); if (w <= 0) return z;
@@ -412,18 +424,44 @@ const SF = {};
       // the hip's, and where the leg ended under the torso that difference showed as a flat top on the buttock.
       return lerp(z, -(F.db * kx + seat(PI - Math.asin(Math.pow(ax, 1 / E)), yy)) - e, w);
     };
-    // Depth of the leg's surface (front or back) at sideways position x, at rest: what swimwear has to lie on
-    // where the thigh has taken over from the torso. null outside the leg.
+    // The lower body is one surface on each side, not a leg pushed into a torso. Up to the crotch line it is the
+    // thigh (p: 0 = inside, 0.25 = front, 0.5 = outside, 0.75 = back); over the next CAPH centimetres the same ring
+    // opens out into half of the hip section (p: 0 = centre front, 0.5 = side, 1 = centre back). Trousers are
+    // drafted on the same construction, with ease.
+    // Towards the crotch the inside of each thigh swells in to the centre line and flattens against it. So the gap
+    // between the legs ends in an arch, and above it the two sides share a strip along the centre plane: the
+    // crotch, which has length from front to back. Without that strip the legs met in a single point, with a pit
+    // in front of it and behind it.
+    const archH = 5, inF = 0.35, pStar = Math.acos(1 - inF) / TAU;
+    const shiftIn = q => { const t = clamp((q - (y.crotch - archH)) / archH, 0, 1); return (gapH + inF * legTop.rx) * t * t * (3 - 2 * t); };
+    // the ring meets the centre plane tangentially (a rounded lip), not at an angle, which showed as a pinched crease
+    const ringX = (S, cs, q, lo = 0) => { const d = S.cx - S.rx * cs - shiftIn(q) * smooth(0, 0.45, cs) + 0.5 - lo; return lo + (d <= 0 ? 0 : d * d / (d + 0.5)); };
+    // angle round the hip section for ring position p: at the crotch line the part of the ring lying on the centre
+    // plane belongs to centre front and centre back; by the top of the transition the ring is spread evenly again
+    const thOf = (p, q) => { const even = p * PI; return q >= y.crotch + CAPH ? even : lerp(PI * clamp((p - pStar) / (1 - 2 * pStar), 0, 1), even, smooth(y.crotch, y.crotch + CAPH, q)); };
+    // How far the ring has opened into the hip section at fraction s of the transition. On the inside of the thigh
+    // it turns the corner at once (the underside of the crotch is level); round the front, outside and back it
+    // leaves the thigh smoothly, or the crotch line shows as a crease right round the leg.
+    const blendB = (p, s) => lerp(s * s * (3 - 2 * s), 1 - Math.pow(1 - s, 2.4), smooth(-0.3, 0.7, Math.cos(TAU * p)));
+    const lower = (sgn, p, q) => {
+      const qc = Math.min(q, y.crotch), S = legSect(qc), cs = Math.cos(TAU * p), sn = Math.sin(TAU * p);
+      const lx = ringX(S, cs, qc);
+      const L = [sgn * lx, q, hipBack(lx, S.cz + S.rz * sn - legBack(p, q), sn, q)];
+      if (q <= y.crotch) return L;
+      const T = torso(sgn * thOf(p, q), q, true), s = (q - y.crotch) / CAPH;
+      if (s >= 1) return T;
+      const b = blendB(p, s);
+      return [lerp(L[0], T[0], b), q, lerp(L[2], T[2], b)];
+    };
+    // Depth of that surface (front or back) at sideways position x, at rest: what swimwear has to lie on.
+    // null where there is no body at that x (between the thighs, or beyond the hip).
     const legSurf = (x, yy, back) => {
-      const S = legSect(yy), c = (S.cx - Math.abs(x)) / S.rx; if (Math.abs(c) >= 1) return null;
-      const sq = Math.sqrt(1 - c * c), sn = back ? -sq : sq;
-      return hipBack(Math.abs(x), S.cz + S.rz * sn - (back && seatP > 0 ? seatP * 0.95 * Math.pow(sq, 1.3) * seatV(yy) : 0), sn, yy, 0.3);
+      const ax = Math.max(0.35, Math.abs(x)); let lo = back ? 1 : 0, hi = 0.5;   // on the centre line itself: just outside the strip where the two sides lie together, so the front (or back) end of the crotch
+      if (ax >= lower(1, 0.5, yy)[0] || ax < lower(1, lo, yy)[0]) return null;
+      for (let i = 0; i < 14; i++) { const m = (lo + hi) / 2; if (lower(1, m, yy)[0] < ax) lo = m; else hi = m; }
+      return lower(1, (lo + hi) / 2, yy)[2];
     };
-    const leg = (sgn, psi, yy) => {
-      const S = legSect(yy), sn = Math.sin(TAU * psi); let x = S.cx - S.rx * Math.cos(TAU * psi), z = S.cz + S.rz * sn - legBack(psi, yy);
-      z = hipBack(x, z, Math.sin(TAU * psi), yy, lerp(0.3, -0.3, smooth(y.crotch + CAPH + 1, y.crotch + CAPH + 3, yy)));   // just outside the pelvis under it, then tucked in where the torso takes over
-      return poseLeg(sgn, [sgn * x, yy, z]);
-    };
+    const leg = (sgn, psi, yy) => poseLeg(sgn, lower(sgn, psi, yy));
 
     // -------- arms: th = 0 is the outside of the arm, ±π the underarm, positive th is the front.
     // Pose: armOut swings the arm away from the body, armFwd swings it forwards, elbow bends the forearm forwards.
@@ -454,7 +492,7 @@ const SF = {};
     const posed = makeArms({ ...P0, ...Object.fromEntries(SF.POSE.map(d => [d.key, M[d.key] ?? d.def])) });
     const arms = posed.arms, armPoint = posed.point, armFrame = posed.frame;
     const rest = makeArms(P0);   // patterns are drafted from the resting pose, so a pose never changes a cut piece
-    return { M, y, neckR, bustTh, CAP, CAPH, sect, torso, girth, bump, legSect, leg, legSurf, hipBack, backOutline, frontOutline, legGirth, seat, legBack, seatY, yPiv, yMidThigh: ymid, poseLeg, hipDrop, arms, armR, armPoint, armFrame, rest };
+    return { M, y, neckR, bustTh, CAP, CAPH, gapH, pivX, shiftIn, ringX, thOf, blendB, lower, sect, torso, girth, bump, legSect, leg, legSurf, hipBack, backOutline, frontOutline, legGirth, seat, legBack, seatY, yPiv, yMidThigh: ymid, poseLeg, hipDrop, arms, armR, armPoint, armFrame, rest };
   };
 })();
 // ============================================================ part 2: garment surfaces, pattern pieces, operations
@@ -513,12 +551,13 @@ const SF = {};
     const ch = {
       orient: sgn, yq: true, f(p, q) {
         const S = legG(Math.min(q, yc));
-        const lx = S.cx - S.rx * Math.cos(TAU * p), sn = Math.sin(TAU * p);
-        const L = [sgn * lx, q, body.hipBack(lx, S.cz + S.rz * sn - body.legBack(p, q), sn, q, S.ease + 0.3, 9)];   // the cheek runs down on to the back of the thigh, and the cloth with it
+        // the cloth follows the thigh in to the centre line under the crotch, as the body does
+        const cs = Math.cos(TAU * p), lx = body.ringX(S, cs, Math.min(q, yc), -0.5), sn = Math.sin(TAU * p);
+        const L = [sgn * lx, q, body.hipBack(lx, S.cz + S.rz * sn - body.legBack(p, q), sn, q, S.ease + 0.3, S.sharp || 9)];   // the cheek runs down on to the back of the thigh, and the cloth with it
         if (q <= yc) return L;
-        const T = shell(sgn * p * PI, q), s = (q - yc) / BZ;
+        const T = shell(sgn * body.thOf(p, q), q), s = (q - yc) / BZ;
         if (s >= 1) return T;
-        const B = lerp3(L, T, Math.sqrt(1 - (1 - s) * (1 - s)));
+        const B = lerp3(L, T, body.blendB(p, s));
         if (sn < 0) B[2] = lerp(B[2], Math.min(B[2], body.backOutline(B[0], q) - S.ease - 0.3), Math.min(1, -sn * 9));   // still outside the cheek at the place the blend has moved it to
         else B[2] = lerp(B[2], Math.max(B[2], body.frontOutline(B[0], q) + S.ease + 0.3), Math.min(1, sn * 9));
         return B;
@@ -694,19 +733,27 @@ const SF = {};
   const J = (a, b, tol) => ({ a: a.split('+').map(s => s.split('.')), b: b.split('+').map(s => s.split('.')), tol });
 
   // -------- trousers (jeans and shorts share the block)
-  function trousers(body, fit, jeans) {
+  // o.denim: yokes, patch pockets, belt loops, felled seams, tack button. o.long: full-length, tapered leg.
+  // o.knit: stretch cloth, no fly, elastic waistband, overlock and coverstitch. o.high: waistband on the natural waist.
+  // o.close: no flare or extra room in the leg. o.cuff: a turn-up at the hem.
+  function trousers(body, fit, o = {}) {
+    const jeans = !!o.denim, long = !!o.long, knit = !!o.knit;
     const y = body.y, e = fit.ease, yc = y.crotch;
     const shell = SF.makeShell(body, { ease: e, loose: 0, full: true });
-    const yTop = y.waist - (jeans ? 5 : 2.5), band = jeans ? 4 : 3.5;
-    const yH = jeans ? clamp(y.ankle + 2 + (100 - fit.length) * 0.01 * (yc - y.ankle), y.ankle, yc - 6) : yc - fit.length;
+    const band = knit ? 5 : jeans ? 4 : 3.5, yTop = o.high ? y.waist + 2.5 - band + (fit.rise || 0) : y.waist - (jeans ? 5 : 2.5);
+    const yH = long ? clamp(y.ankle + 2 + (100 - fit.length) * 0.01 * (yc - y.ankle), y.ankle, yc - 6) : yc - fit.length;
+    // the hem of short shorts is cut higher at the side of the thigh than at the inside leg
+    const cut = fit.cut || 0, hemQ = p => yH + cut * (1 - Math.cos(TAU * p)) / 2;
     const kneeR = body.legSect(y.knee).rx + e + 1.2, hemR = (fit.hem || 40) / TAU;
     const legG = q => {
       const S = body.legSect(q); let rx = S.rx + e, rz = S.rz + e;
-      if (jeans) { const c = q < y.knee ? lerp(hemR, kneeR, clamp((q - yH) / (y.knee - yH), 0, 1)) : kneeR - 0.4; rx = Math.max(rx, c); rz = Math.max(rz, c); }
-      else { const w = (yc - q) * fit.flare * 0.0004 * S.rx; rx += 0.4 + w; rz += 0.4 + w; }
+      if (long) { const c = q < y.knee ? lerp(hemR, kneeR, clamp((q - yH) / (y.knee - yH), 0, 1)) : kneeR - 0.4; rx = Math.max(rx, c); rz = Math.max(rz, c); }
+      else if (!o.close) { const w = (yc - q) * (fit.flare || 0) * 0.0004 * S.rx; rx += 0.4 + w; rz += 0.4 + w; }
       // The cloth needs room on the inside of the leg too. With none, it lay exactly on the skin along the inseam
       // and the skin showed through in a strip. The two legs' cloth may overlap a little at the very top.
-      return { cx: S.cx + (rx - S.rx) - Math.max(0.6, 0.6 * e), rx, rz, cz: S.cz, ease: e };
+      // Close-cut shorts follow the thigh nearly as the body's own surface does (sharp 3); looser cloth spans
+      // straight across from the hip instead, like a skirt (sharp 9), and stands away from the thigh at the hem.
+      return { cx: S.cx + (rx - S.rx) - Math.max(0.6, 0.6 * e), rx, rz, cz: S.cz, ease: e, sharp: o.close ? 3 : 9 };
     };
     const pieces = [], trims = [], sC = frac(yc, yH, yTop);
     const yk = [yTop - 3, yTop - 7.5];
@@ -714,13 +761,13 @@ const SF = {};
       const s = sgn > 0 ? 'L' : 'R', side = sgn > 0 ? 'left' : 'right', ch = lowerChart(body, shell, legG, sgn);
       pieces.push({
         id: 'front' + s, name: `Front leg, ${side}`, chart: ch, grain: 0.25, nu: 22, nv: 34,
-        B: lin([0, yH], [0.5, yH]), T: lin([0, yTop], [0.5, yTop]), L: lin([0, yH], [0, yTop]), R: lin([0.5, yH], [0.5, yTop]),
+        B: u => [0.5 * u, hemQ(0.5 * u)], T: lin([0, yTop], [0.5, yTop]), L: lin([0, yH], [0, yTop]), R: lin([0.5, yH + cut], [0.5, yTop]),
         segs: { inseam: ['L', 0, sC], rise: ['L', sC, 1], side: ['R', 0, 1], hem: ['B', 0, 1], waist: ['T', 0, 1] },
       });
       const yT = jeans ? yk : [yTop, yTop], sB = frac(yc, yH, yT[1]);
       pieces.push({
         id: 'back' + s, name: `Back leg, ${side}`, chart: ch, grain: 0.75, nu: 22, nv: 34,
-        B: lin([0.5, yH], [1, yH]), T: lin([0.5, yT[0]], [1, yT[1]]), L: lin([0.5, yH], [0.5, yT[0]]), R: lin([1, yH], [1, yT[1]]),
+        B: u => [0.5 + 0.5 * u, hemQ(0.5 + 0.5 * u)], T: lin([0.5, yT[0]], [1, yT[1]]), L: lin([0.5, yH + cut], [0.5, yT[0]]), R: lin([1, yH], [1, yT[1]]),
         segs: { side: ['L', 0, 1], inseam: ['R', 0, sB], seat: ['R', sB, 1], hem: ['B', 0, 1], top: ['T', 0, 1] },
       });
       if (jeans) {
@@ -729,19 +776,25 @@ const SF = {};
           B: lin([0.5, yk[0]], [1, yk[1]]), T: lin([0.5, yTop], [1, yTop]), L: lin([0.5, yk[0]], [0.5, yTop]), R: lin([1, yk[1]], [1, yTop]),
           segs: { side: ['L', 0, 1], seat: ['R', 0, 1], bottom: ['B', 0, 1], waist: ['T', 0, 1] },
         });
-        const pt = yTop - 9.5, pb = yTop - 23;
+        const pt = yTop - 9.5, pb = Math.max(yTop - 23, yH + cut + 3.5, pt - 13.5) ;
         pieces.push({
           id: 'pocket' + s, name: `Back pocket, ${side}`, chart: ch, grain: 0.78, nu: 8, nv: 8, layer: 1,
           B: u => [lerp(0.69, 0.9, u), pb - 2.2 * (1 - Math.abs(2 * u - 1)) + 2.2], T: lin([0.67, pt], [0.92, pt]),
           L: lin([0.69, pb + 2.2], [0.67, pt]), R: lin([0.9, pb + 2.2], [0.92, pt]),
         });
       }
+      if (o.cuff) pieces.push({
+        id: 'cuff' + s, name: `Turn-up cuff, ${side}`, chart: ch, grain: 0.5, nu: 36, nv: 2, layer: 1.1,
+        B: u => [u, hemQ(u) - 0.35], T: u => [u, hemQ(u) + 2.3], L: lin([0, yH - 0.35], [0, yH + 2.3]), R: lin([1, yH - 0.35], [1, yH + 2.3]),
+      });
     }
     const bandShell = SF.makeShell(body, { ease: e + 0.1, loose: 0 });
+    // a waistband with a button laps over itself at the centre front; an elastic one is a closed ring joined at the centre back
+    const b0 = knit ? -PI : -0.06, b1 = knit ? PI : TAU + 0.16;
     pieces.push({
-      id: 'band', name: 'Waistband', chart: torsoChart(bandShell), grain: PI, nu: 40, nv: 3, layer: 1, rot: true,
-      B: lin([-0.06, yTop - 0.4], [TAU + 0.16, yTop - 0.4]), T: lin([-0.06, yTop + band], [TAU + 0.16, yTop + band]),
-      L: lin([-0.06, yTop - 0.4], [-0.06, yTop + band]), R: lin([TAU + 0.16, yTop - 0.4], [TAU + 0.16, yTop + band]),
+      id: 'band', name: knit ? 'Elastic waistband' : 'Waistband', chart: torsoChart(bandShell), grain: knit ? 0 : PI, nu: 40, nv: 3, layer: 1, rot: true,
+      B: lin([b0, yTop - 0.4], [b1, yTop - 0.4]), T: lin([b0, yTop + band], [b1, yTop + band]),
+      L: lin([b0, yTop - 0.4], [b0, yTop + band]), R: lin([b1, yTop - 0.4], [b1, yTop + band]),
     });
     const loops = [];
     if (jeans) [0.55, -0.55, 2.0, -2.0, PI].forEach((th, i) => {
@@ -749,14 +802,24 @@ const SF = {};
       const pt = q => { const P = bandShell(th, q), o = outOf(P); return [P[0] + o[0] * 0.75, P[1], P[2] + o[2] * 0.75]; };
       pieces.push({ id, name: 'Belt loop', ribbon: true, width: 1.3, nv: 4, path: [pt(yTop - 1), pt(yTop + band / 2), pt(yTop + band + 0.5)], small: true });
     });
+    const ops = [];
+    const both = f => ['L', 'R'].map(f);
+    const hems = both(s => [`front${s}.hem`, `back${s}.hem`]).flat();
+    if (knit) {
+      // stretch cloth: every seam is a four-thread overlock, every hem a coverstitch, and there is no fly
+      ops.push({ name: 'Front and back rise seams', machine: 'overlock4', seam: 'superimposed', joins: [J('frontL.rise', 'frontR.rise'), J('backL.seat', 'backR.seat')], bring: ['frontL', 'frontR', 'backL', 'backR'], note: 'The two fronts are joined down the centre, then the two backs. A four-thread overlock seams and neatens at once, and its looped threads stretch with the cloth.' });
+      ops.push({ name: 'Inside leg seam', machine: 'overlock4', seam: 'superimposed', joins: both(s => J(`front${s}.inseam`, `back${s}.inseam`, o.close ? 0.25 : 0.16)), note: 'One run from hem to hem through the crotch, where four layers meet.' });
+      ops.push({ name: 'Side seams', machine: 'overlock4', seam: 'superimposed', joins: both(s => J(`front${s}.side`, `back${s}.side`)), note: 'Closing the side seams turns the panels into two tubes.' });
+      ops.push({ name: 'Attach the elastic waistband', machine: 'overlock4', seam: 'elastic', bring: ['band'], stitch: [{ e: 'band.b', in: 0.35 }], note: 'The band is a folded strip with wide elastic inside, cut shorter than the waist of the shorts and stretched to fit as it is sewn on. That is what holds the shorts up.' });
+      ops.push({ name: 'Coverstitch the leg hems', machine: 'cover', seam: 'hem', stitch: hems.map(e => ({ e, in: 1.1, rows: 2 })), note: 'The hem is turned up once and held by a coverstitch: two needle rows outside, a looper thread covering the raw edge inside. A lockstitch hem would snap the first time the leg stretched.' });
+      return { pieces, trims, ops };
+    }
     // zip fly: the tape sits behind the centre-front edge; the J-stitch is the visible sign of it
     const zl = Math.min(13, yTop - yc - 7), zp = q => { const P = shell(0, q); return [0, P[1], P[2] - 0.25]; };
     pieces.push({ id: 'zip', name: 'Fly zip', kind: 'zip', ribbon: true, width: 2.6, nv: 10, path: [zp(yTop - zl), zp(yTop - zl / 2), zp(yTop - 0.3)], out: () => [0, 0, 1] });
     const bp = bandShell(0.04, yTop + band / 2);
-    trims.push(button('btn', 'band', [bp[0], bp[1], bp[2] + 0.4], [0, 0, 1], jeans ? 0.85 : 0.75, jeans ? 'tack' : 'sewn'));
+    trims.push(button('btn', 'band', [bp[0], bp[1], bp[2] + 0.4], [0, 0, 1], o.bigButton ? 1.1 : jeans ? 0.85 : 0.75, jeans ? 'tack' : 'sewn'));
     const fly = [[0.16, 1], [0.16, 0.86], [0.155, 0.78], [0.12, 0.72], [0.04, 0.685], [0, 0.68]].map(c => [c[0], lerp(sC, 1, (c[1] - 0.68) / 0.32 * (zl + 2.5) / (yTop - yc) + (1 - (zl + 2.5) / (yTop - yc)))]);
-    const ops = [];
-    const both = f => ['L', 'R'].map(f);
     if (jeans) {
       ops.push({ name: 'Sew on the back pockets', machine: 'lock', seam: 'topstitch', stitch: both(s => [`pocket${s}.l`, `pocket${s}.b`, `pocket${s}.r`]).flat().map(e => ({ e, in: 0.35, rows: 2 })), bring: ['backL', 'backR'], note: 'Patch pockets go on while the back legs are still flat. Two rows of topstitching in thick thread.' });
       ops.push({ name: 'Bartack the pocket corners', machine: 'bartack', seam: 'bartack', tacks: both(s => [[`pocket${s}`, 0.04, 0.97], [`pocket${s}`, 0.96, 0.97]]).flat(), note: 'A pocket tears at its top corners first, so each gets a dense bar of about 28 stitches.' });
@@ -768,10 +831,14 @@ const SF = {};
     }
     ops.push({ name: 'Set the zip into the fly', machine: 'lock', seam: 'zip', bring: ['frontL', 'frontR', 'zip'], stitch: [{ p: 'frontL', uv: fly, rows: jeans ? 2 : 1 }], note: 'A narrow zipper foot lets the needle run right beside the teeth. The J-shaped topstitch you see on every fly holds the zip facing in place.' });
     ops.push({ name: 'Front rise below the fly', machine: jeans ? 'felled' : 'safety5', seam: jeans ? 'felled' : 'superimposed', joins: [J('frontL.rise', 'frontR.rise')], stitch: [{ e: 'frontL.rise', s: [0, 0.42], in: 0.2, rows: jeans ? 2 : 1 }], note: 'Closes the short curve between the bottom of the zip and the crotch point.' });
-    ops.push({ name: 'Inside leg seam', machine: jeans ? 'felled' : 'safety5', seam: jeans ? 'felled' : 'superimposed', joins: both(s => J(`front${s}.inseam`, `back${s}.inseam`, 0.16)), note: jeans ? 'Sewn as one run from hem to hem through the crotch on a feed-off-the-arm machine: the finished tube slides off the end of the arm.' : 'One run from hem to hem through the crotch.' });
+    ops.push({ name: 'Inside leg seam', machine: jeans ? 'felled' : 'safety5', seam: jeans ? 'felled' : 'superimposed', joins: both(s => J(`front${s}.inseam`, `back${s}.inseam`, o.close ? 0.25 : 0.16)), note: jeans ? 'Sewn as one run from hem to hem through the crotch on a feed-off-the-arm machine: the finished tube slides off the end of the arm.' : 'One run from hem to hem through the crotch.' });
     ops.push({ name: 'Side seams', machine: 'safety5', seam: 'superimposed', joins: both(s => J(`front${s}.side`, jeans ? `back${s}.side+yoke${s}.side` : `back${s}.side`)), note: 'Closing the side seams turns the flat panels into two tubes. Safety stitch: strong chainstitch plus overlocked edges.' });
     ops.push({ name: 'Attach the waistband', machine: 'lock', seam: 'topstitch', stitch: [{ e: 'band.b', in: 0.3 }, { e: 'band.t', in: 0.3 }], note: 'Large factories use a dedicated two-needle chainstitch waistband machine with a folder; a lockstitch does the same job more slowly.' });
-    ops.push({ name: 'Hem the legs', machine: 'lock', seam: 'hem', stitch: both(s => [`front${s}.hem`, `back${s}.hem`]).flat().map(e => ({ e, in: 1.2 })), note: 'The raw edge is rolled twice by a hemming folder and stitched down.' });
+    if (o.cuff) {
+      ops.push({ name: 'Sew on the turn-up cuffs', machine: 'lock', seam: 'topstitch', bring: ['cuffL', 'cuffR'], stitch: both(s => ({ e: `cuff${s}.t`, in: 0.3 })), note: 'On real cut-offs the cuff is the leg itself, cut longer and rolled up twice. Here it is a separate band, so the turn-up can be seen as its own piece on the cutting table.' });
+      ops.push({ name: 'Bartack the cuffs at the seams', machine: 'bartack', seam: 'bartack', tacks: both(s => [[`cuff${s}`, 0.5, 0.5], [`cuff${s}`, 0.02, 0.5]]).flat(), note: 'A short bartack at the side seam and the inside leg seam stops the turn-up from rolling down.' });
+      ops.push({ name: 'Hem the legs under the cuffs', machine: 'lock', seam: 'hem', stitch: hems.map(e => ({ e, in: 0.6 })), note: 'The raw edge is turned in and stitched, hidden behind the cuff.' });
+    } else ops.push({ name: 'Hem the legs', machine: 'lock', seam: 'hem', stitch: hems.map(e => ({ e, in: 1.2 })), note: 'The raw edge is rolled twice by a hemming folder and stitched down.' });
     if (jeans) ops.push({ name: 'Bartack the belt loops', machine: 'bartack', seam: 'bartack', bring: loops, tacks: loops.map(l => [[l, 0.5, 0.12], [l, 0.5, 0.88]]).flat(), note: 'Each loop is held by a bartack at the top and bottom.' });
     ops.push({ name: 'Buttonhole in the waistband', machine: 'buttonhole', seam: 'buttonhole', holes: [['band', 0.985, 0.5, 0]], note: jeans ? 'Jeans use a keyhole-shaped eyelet buttonhole; the principle is the one shown: a zigzag bead round a slot, cut by a knife.' : 'A zigzag bead is sewn round the slot, then a knife cuts it open.' });
     ops.push(jeans
@@ -900,14 +967,25 @@ const SF = {};
     return { pieces, trims: [], ops };
   }
 
-  // Swimwear lies on the torso shell, but below the hips the visible body is the thigh filled out into the hip.
-  // Hug that instead, so the seat and the front are not buried in it; right at the crotch line let go again, so
-  // front and back still meet underneath.
-  const hug = (body, shell) => (th, yy) => {
-    const P = shell(th, yy), yc = body.y.crotch; if (yy > yc + 11) return P;
-    const back = Math.cos(th) < 0, zs = body.legSurf(P[0], yy, back); if (zs === null) return P;
-    const w = smooth(yc, yc + 3.5, yy) * (1 - smooth(yc + 8, yc + 11, yy));
-    P[2] = lerp(P[2], back ? Math.min(P[2], zs - 0.5) : Math.max(P[2], zs + 0.5), w); return P;
+  // Swimwear lies on the torso shell, and round the hips on the body itself. The body's crotch has length from
+  // front to back, so the cloth cannot stop at the crotch line: below it the chart carries on *under* the body,
+  // SWIM_U centimetres of cloth from the front (and from the back) to the middle of the crotch, where the two
+  // meet in the crotch seam. Most of that strip lies between the thighs.
+  const SWIM_U = 7;
+  const swimChart = body => {
+    const base = SF.makeShell(body, { ease: 0.45, loose: 0 }), yc = body.y.crotch, zmid = body.legSect(yc).cz;
+    const hugAt = (th, yy) => {
+      const P = base(th, yy); if (yy > yc + 11) return P;
+      const back = Math.cos(th) < 0, zs = body.legSurf(P[0], yy, back); if (zs === null) return P;
+      P[2] = lerp(P[2], back ? Math.min(P[2], zs - 0.6) : Math.max(P[2], zs + 0.6), 1 - smooth(yc + 8, yc + 11, yy)); return P;
+    };
+    const shell = (th, yy) => {
+      if (yy >= yc) return hugAt(th, yy);
+      const E = hugAt(th, yc), t = clamp((yc - yy) / SWIM_U, 0, 1);
+      return [E[0], yc - 2 * Math.sqrt(t * (2 - t)), lerp(E[2], zmid, t)];
+    };
+    // worn, it follows the legs' stance as the body under it does; the pattern is unrolled from the resting shape
+    return { shell, chart: { f: (th, q) => { const P = shell(th, q); return body.poseLeg(P[0] >= 0 ? 1 : -1, P); }, f0: shell, orient: 1, yq: true } };
   };
   // Lower edge of a swimsuit or bikini bottom: the leg opening from the crotch strip out to the side seam.
   function legCurve(body, shell, yK, yLeg, expo) {
@@ -920,9 +998,9 @@ const SF = {};
   }
 
   function swimsuit(body, fit) {
-    const y = body.y, H = PI / 2, shell = hug(body, SF.makeShell(body, { ease: 0.45, loose: 0 })), tc = torsoChart(shell);
-    const yK = y.crotch, yLeg = y.hip + fit.leg, yU = y.armpit - 3, yS = lerp(y.shoulder, y.neck, 0.35), yT = lerp(y.shoulder, y.neck, 0.68), W = 0.6;
-    const sc = scoop(W, yU, yS), lcF = legCurve(body, shell, yK, yLeg, 2.3), lcB = legCurve(body, shell, yK, yLeg, 0.85);
+    const y = body.y, H = PI / 2, { shell, chart: tc } = swimChart(body);
+    const yK = y.crotch - SWIM_U, yLeg = y.hip + fit.leg, yU = y.armpit - 3, yS = lerp(y.shoulder, y.neck, 0.35), yT = lerp(y.shoulder, y.neck, 0.68), W = 0.6;
+    const sc = scoop(W, yU, yS), lcF = legCurve(body, shell, y.crotch, yLeg, 2.3), lcB = legCurve(body, shell, y.crotch, yLeg, 0.85);
     const ynF = neckFn(yT, fit.neck, 1.2), ynB = neckFn(yT, fit.back, 0.9);
     const fr = (a, b) => [frac(a, yK, yT), frac(b, yK, yT)];
     const segs = { legR: ['L', ...fr(yK, yLeg)], sideR: ['L', ...fr(yLeg, yU)], armR: ['L', ...fr(yU, yS)], shR: ['L', ...fr(yS, yT)], legL: ['R', ...fr(yK, yLeg)], sideL: ['R', ...fr(yLeg, yU)], armL: ['R', ...fr(yU, yS)], shL: ['R', ...fr(yS, yT)], crotch: ['B', 0, 1], neck: ['T', 0, 1] };
@@ -947,7 +1025,7 @@ const SF = {};
   }
 
   function bikini(body, fit) {
-    const y = body.y, H = PI / 2, shell = hug(body, SF.makeShell(body, { ease: 0.45, loose: 0 })), tc = torsoChart(shell);
+    const y = body.y, H = PI / 2, { shell, chart: tc } = swimChart(body);
     const yUb = y.bust - 7.2, k = fit.cup / 100, pieces = [], ops = [];
     const bt = body.bustTh, apex = [bt, y.bust + 9.5 * k], wI = Math.max(0.03, bt - 0.42 * k), wO = bt + 0.55 * k;
     for (const sgn of [1, -1]) {
@@ -961,8 +1039,8 @@ const SF = {};
         path: [P(bt, apex[1] - 0.6), P(lerp(bt, 0.7, 0.4), lerp(apex[1], y.shoulder, 0.5)), P(0.7, lerp(y.shoulder, y.neck, 0.35)), P(1.15, lerp(y.shoulder, y.neck, 0.82), 0.7), P(2.2, y.neck - 0.4, 0.8), P(3.0, y.neck - 1.3, 0.8)] });
     }
     pieces.push({ id: 'band', name: 'Under-bust band', chart: torsoChart(SF.makeShell(body, { ease: 0.3 })), grain: PI, nu: 40, nv: 2, layer: 1.2, rot: true, B: lin([0, yUb - 1.5], [TAU, yUb - 1.5]), T: lin([0, yUb + 0.3], [TAU, yUb + 0.3]), L: lin([0, yUb - 1.5], [0, yUb + 0.3]), R: lin([TAU, yUb - 1.5], [TAU, yUb + 0.3]) });
-    const yK = y.crotch, yTop = y.hip + fit.rise, yLeg = yTop - fit.side;
-    const lcF = legCurve(body, shell, yK, yLeg, 2.2), lcB = legCurve(body, shell, yK, yLeg, 0.9), t0 = lcF(yK), fr = (a, b) => [frac(a, yK, yTop), frac(b, yK, yTop)];
+    const yK = y.crotch - SWIM_U, yTop = y.hip + fit.rise, yLeg = yTop - fit.side;
+    const lcF = legCurve(body, shell, y.crotch, yLeg, 2.2), lcB = legCurve(body, shell, y.crotch, yLeg, 0.9), t0 = lcF(yK), fr = (a, b) => [frac(a, yK, yTop), frac(b, yK, yTop)];
     const sideF = fnq(lcF, yK, yTop), sideB = fnq(q => PI - lcB(q), yK, yTop), dip = c => p => yTop - 1.6 * Math.pow(Math.cos(p - c), 2);
     pieces.push({ id: 'botF', name: 'Bottom front', chart: tc, grain: 0, nu: 18, nv: 18, B: lin([-t0, yK], [t0, yK]), T: fnp(-H, H, dip(0)), L: mir(sideF), R: sideF, segs: { legR: ['L', ...fr(yK, yLeg)], sideR: ['L', ...fr(yLeg, yTop)], legL: ['R', ...fr(yK, yLeg)], sideL: ['R', ...fr(yLeg, yTop)], crotch: ['B', 0, 1], waist: ['T', 0, 1] } });
     pieces.push({ id: 'botB', name: 'Bottom back', chart: tc, grain: PI, nu: 18, nv: 18, B: lin([PI - t0, yK], [PI + t0, yK]), T: lin([H, yTop], [3 * H, yTop]), L: sideB, R: mir(sideB, PI), segs: { legL: ['L', ...fr(yK, yLeg)], sideL: ['L', ...fr(yLeg, yTop)], legR: ['R', ...fr(yK, yLeg)], sideR: ['R', ...fr(yLeg, yTop)], crotch: ['B', 0, 1], waist: ['T', 0, 1] } });
@@ -983,10 +1061,23 @@ const SF = {};
   SF.GARMENTS = {
     jeans: { name: 'Jeans', cloth: 'denim', print: 'solid', colour: '#3a5378', thread: '#c98a2b', stretch: [1, 1], usual: ['denim', 'stretchdenim', 'chino'],
       fit: [{ key: 'length', label: 'Leg length', min: 60, max: 100, def: 100, step: 1, unit: '%' }, { key: 'hem', label: 'Leg opening', min: 26, max: 62, def: 40, step: 1, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.6, max: 4, def: 1.4, step: 0.1, unit: 'cm' }],
-      build: (b, f) => trousers(b, f, true) },
+      build: (b, f) => trousers(b, f, { denim: true, long: true }) },
     shorts: { name: 'Shorts', cloth: 'chino', print: 'solid', colour: '#b9a276', thread: '#a08c60', stretch: [1, 1], usual: ['chino', 'denim', 'linen', 'poplin'],
       fit: [{ key: 'length', label: 'Inside leg of the shorts', min: 5, max: 32, def: 16, step: 1, unit: 'cm' }, { key: 'flare', label: 'Leg flare', min: 0, max: 100, def: 30, step: 1, unit: '%' }, { key: 'ease', label: 'Ease', min: 1, max: 5, def: 1.8, step: 0.1, unit: 'cm' }],
-      build: (b, f) => trousers(b, f, false) },
+      build: (b, f) => trousers(b, f) },
+    // Four women's shorts, after the owner's reference photos. All sit on the natural waist and are cut close.
+    jeanshorts: { name: 'Jean shorts', cloth: 'stretchdenim', print: 'solid', colour: '#a9c3de', thread: '#e8eef5', stretch: [1, 1], usual: ['stretchdenim', 'denim', 'chino'],
+      fit: [{ key: 'length', label: 'Inside leg of the shorts', min: 2, max: 14, def: 4, step: 0.5, unit: 'cm' }, { key: 'cut', label: 'Hem rise at the side', min: 0, max: 6, def: 2.5, step: 0.5, unit: 'cm' }, { key: 'rise', label: 'Waistband, from the natural waist', min: -8, max: 4, def: 0, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.5, max: 3, def: 0.8, step: 0.1, unit: 'cm' }],
+      build: (b, f) => trousers(b, f, { denim: true, high: true, close: true, cuff: true }) },
+    hotshorts: { name: 'Hot shorts', cloth: 'jersey', print: 'solid', colour: '#b9cde8', thread: '#b9cde8', stretch: [0.9, 0.95], usual: ['jersey', 'tricot'],
+      fit: [{ key: 'length', label: 'Inside leg of the shorts', min: 2, max: 14, def: 4, step: 0.5, unit: 'cm' }, { key: 'cut', label: 'Hem rise at the side', min: 0, max: 6, def: 1.5, step: 0.5, unit: 'cm' }, { key: 'rise', label: 'Waistband, from the natural waist', min: -8, max: 4, def: 0, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.3, max: 2, def: 0.45, step: 0.05, unit: 'cm' }],
+      build: (b, f) => trousers(b, f, { knit: true, high: true, close: true }) },
+    metalshorts: { name: 'Metallic shorts', cloth: 'foil', print: 'solid', colour: '#c9cdd3', thread: '#b4b8bf', stretch: [0.94, 0.97], usual: ['foil', 'satin', 'tricot'],
+      fit: [{ key: 'length', label: 'Inside leg of the shorts', min: 2, max: 14, def: 3.5, step: 0.5, unit: 'cm' }, { key: 'cut', label: 'Hem rise at the side', min: 0, max: 6, def: 1, step: 0.5, unit: 'cm' }, { key: 'rise', label: 'Waistband, from the natural waist', min: -8, max: 4, def: 0, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.4, max: 3, def: 0.6, step: 0.1, unit: 'cm' }],
+      build: (b, f) => trousers(b, f, { high: true, close: true, bigButton: true }) },
+    bikeshorts: { name: 'Bike shorts', cloth: 'tricot', print: 'pinkleopard', colour: '#ff86b4', thread: '#f0528a', stretch: [0.88, 0.94], usual: ['tricot', 'jersey'],
+      fit: [{ key: 'length', label: 'Inside leg of the shorts', min: 8, max: 36, def: 17, step: 1, unit: 'cm' }, { key: 'rise', label: 'Waistband, from the natural waist', min: -8, max: 4, def: 0, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.3, max: 2, def: 0.45, step: 0.05, unit: 'cm' }],
+      build: (b, f) => trousers(b, f, { knit: true, high: true, close: true }) },
     shirt: { name: 'Shirt', cloth: 'poplin', print: 'stripes', colour: '#e9eef5', thread: '#f2f2f2', stretch: [1, 1], usual: ['poplin', 'oxford', 'linen', 'flannel'],
       fit: [{ key: 'length', label: 'Length below the crotch line', min: -14, max: 12, def: 2, step: 1, unit: 'cm' }, { key: 'sleeve', label: 'Sleeve length', min: 16, max: 70, def: 70, step: 1, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 1.2, max: 6, def: 2.6, step: 0.1, unit: 'cm' }],
       build: shirt },
@@ -1084,12 +1175,14 @@ const SF = {};
     satin: { name: 'Satin', kind: 'woven', weave: 'satin', weight: 110, stretch: 0, rough: 0.32, thread: '#888888', note: 'Long floating warp threads make the smooth, shiny face.' },
     crepe: { name: 'Viscose crepe', kind: 'woven', weave: 'crepe', weight: 130, stretch: 0, rough: 0.8, thread: '#555555', note: 'High-twist yarns give a matt, pebbly, drapey cloth.' },
     jersey: { name: 'Cotton jersey', kind: 'knit', weave: 'jersey', weight: 160, stretch: 35, rough: 0.9, thread: '#777777', note: 'Single knit, the T-shirt fabric: columns of little V-shaped loops.' },
+    foil: { name: 'Foil-coated stretch', kind: 'knit', weave: 'foil', weight: 210, stretch: 45, rough: 0.3, metal: 0.72, thread: '#b4b8bf', note: 'A stretch knit with a thin metallic film bonded to its face (the "wet look"). Needle holes do not close again, so it cannot be unpicked or pinned.' },
     tricot: { name: 'Swim tricot', kind: 'knit', weave: 'tricot', weight: 190, stretch: 80, rough: 0.45, thread: '#888888', note: 'Warp-knitted nylon with about 20 % elastane (spandex, Lycra): stretches both ways and snaps back.' },
   };
   SF.PRINTS = {
     solid: { name: 'Solid colour' },
     zebra: { name: 'Zebra', ground: '#f3efe6' },
     leopard: { name: 'Leopard', ground: '#c9974f' },
+    pinkleopard: { name: 'Leopard, pink', ground: '#ff86b4' },
     dots: { name: 'Polka dots' },
     stripes: { name: 'Stripes' },
     gingham: { name: 'Gingham' },
@@ -1184,6 +1277,7 @@ const SF = {};
     switch (print) {
       case 'zebra': return mix(g, [22, 20, 20], zebraAt(x, y));
       case 'leopard': { const [p, inn] = leopardAt(x, y); return mix(mix(g, [150, 92, 40], inn * 0.85), [34, 22, 16], p); }
+      case 'pinkleopard': { const [p, inn] = leopardAt(x, y); return mix(mix(g, [240, 84, 104], inn * 0.9), [26, 16, 20], p); }
       case 'dots': return mix(g, lum(g) > 0.6 ? [30, 34, 60] : [248, 246, 240], dotsAt(x, y));
       case 'stripes': { const k = smooth(0.04, 0.07, Math.abs(wrapD(x * 16)) ); return mix(lum(g) > 0.6 ? [70, 100, 160] : [240, 238, 230], g, k); }
       case 'gingham': { const a = (x * 12 + 0.25) % 1 < 0.5 ? 1 : 0, b = (y * 12 + 0.25) % 1 < 0.5 ? 1 : 0; return mix([250, 250, 246], g, (a + b) / 2 * 0.92 + 0.04); }
@@ -1205,6 +1299,7 @@ const SF = {};
       case 'satin': return 0.97 + 0.06 * h(i >> 4, j, 1) + (((i * 3 + j) % 8) === 0 ? -0.04 : 0);
       case 'crepe': return 0.93 + 0.14 * h(i, j) * h(i >> 1, j >> 1, 2);
       case 'jersey': { const u = i & 7, v = j & 7, a = Math.abs(u - 3.5) / 3.5; return 0.9 + 0.2 * Math.abs(((v / 8 + a * 0.5) % 1) - 0.5); }
+      case 'foil': return 0.985 + 0.03 * h(i >> 3, j >> 1, 5);
       case 'tricot': return 0.97 + 0.05 * ((i & 3) === 0 ? -1 : 0.3) + 0.02 * ((j & 1) ? 1 : -1);
     }
     return 1;
@@ -1621,7 +1716,7 @@ const SF = {};
       for (const p of ga.pieces) { const q = gb.byId[p.id]; assertNear(q.w, p.w, 0.05, `${id} ${p.id} width`); assertNear(q.h, p.h, 0.05, `${id} ${p.id} height`); assertNear(q.area, p.area, 0.5 + p.area * 0.002, `${id} ${p.id} area`); }
     }
     const h0 = a.armPoint(1, 0, F.arm), h1 = b.armPoint(1, 0, F.arm);
-    assert(h1[1] > h0[1] + 20 && h1[2] > h0[2] + 10, 'the hand goes up and forwards'); const S0 = a.legSect(a.y.ankle), k0 = [S0.cx, a.y.ankle, S0.cz], k1 = b.poseLeg(1, k0), piv = [S0.cx * 0 + a.legSect(a.y.crotch).rx, a.y.crotch + 8];
+    assert(h1[1] > h0[1] + 20 && h1[2] > h0[2] + 10, 'the hand goes up and forwards'); const S0 = a.legSect(a.y.ankle), k0 = [S0.cx, a.y.ankle, S0.cz], k1 = b.poseLeg(1, k0), piv = [a.pivX, a.y.crotch + 8];
     assertNear(2 * (k1[0] - k0[0]), F.inseam, 0.5, 'feet one inside-leg length further apart at 100 %');
     assertNear(Math.hypot(k1[0] - piv[0], k1[1] - piv[1]), Math.hypot(k0[0] - piv[0], k0[1] - piv[1]), 1e-6, 'the leg keeps its length');
     assert(b.hipDrop > 5 && a.hipDrop === 0, 'the hips come down');
@@ -1641,9 +1736,13 @@ const SF = {};
       for (const u of [0, 0.25, 0.5, 0.75, 1]) { const p = a.at(u, 0), q = b.at(1 - u, 0); assert(Math.abs(p[2] - q[2]) < 0.15 && Math.abs(p[0] - q[0]) < 0.15 && Math.abs(p[1] - q[1]) < 0.15, `${id} on ${f}: crotch edges ${(p[2] - q[2]).toFixed(1)} cm apart at u=${u}`); }
     }
   });
-  SewTests.add('body: legs meet at the crotch, shoulders are as wide as asked', () => {
+  SewTests.add('body: the thighs leave the asked gap and never run into each other; shoulders are as wide as asked', () => {
     const b = SF.makeBody(SF.FORMS.w), S = b.legSect(b.y.crotch);
-    assertNear(S.cx - S.rx, 0, 1e-6, 'inner thigh');
+    assertNear(2 * (S.cx - S.rx), 0.08 * 2 * b.sect(b.y.crotch, true).a, 1e-6, 'gap at the top of the thighs');
+    for (const M of [{ ...SF.FORMS.w, gap: 0, thigh: 150, knee: 150, calf: 150 }, { ...SF.FORMS.w3, gap: 0 }, SF.FORMS.ag, SF.FORMS.m3]) {
+      const c = SF.makeBody(M);
+      for (let yy = 0; yy <= c.y.crotch; yy += 1) { const T = c.legSect(yy); assert(T.cx - T.rx >= -1e-9, `legs overlap at ${yy}`); }
+    }
     assertNear(b.torso(Math.PI / 2, b.y.shoulder)[0], SF.FORMS.w.shoulder / 2 - 1, 1e-6, 'shoulder point');
   });
   SewTests.add('pchip: passes through keys without overshoot', () => {
@@ -2514,6 +2613,21 @@ function footParts(b, sgn, heel) {
   }
   return { parts, lift: lift - up, footX: Math.abs(K[0]), balls: [] };
 }
+// A metallic cloth has nothing to reflect in an empty scene and renders black, so foil gets a plain studio
+// surround of its own: a bright ceiling, a dark floor and a few soft light panels.
+let _metalEnv = null;
+function metalEnv() {
+  if (_metalEnv) return _metalEnv;
+  const W = 128, H = 64, d = new Uint8Array(W * H * 4);
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    const v = j / (H - 1), u = i / W, panel = Math.pow(Math.max(0, Math.cos(TAU * u * 3)), 6) * Math.exp(-Math.pow((v - 0.62) / 0.16, 2));
+    const L = Math.min(255, 26 + 150 * Math.pow(v, 1.6) + 235 * panel), k = 4 * (j * W + i);
+    d[k] = L; d[k + 1] = L; d[k + 2] = Math.min(255, L * 1.04); d[k + 3] = 255;
+  }
+  const t = new THREE.DataTexture(d, W, H); t.mapping = THREE.EquirectangularReflectionMapping; t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true;
+  const pm = new THREE.PMREMGenerator(renderer); _metalEnv = pm.fromEquirectangular(t).texture; pm.dispose(); t.dispose();
+  return _metalEnv;
+}
 const linen = new THREE.MeshStandardMaterial({ color: '#d6c4a2', roughness: 0.95 }); linen.userData.shared = true;
 const seamMat = new THREE.MeshStandardMaterial({ color: '#a8946f', roughness: 1 }); seamMat.userData.shared = true;
 const brass = new THREE.MeshStandardMaterial({ color: '#b8923f', roughness: 0.32, metalness: 0.9 }); brass.userData.shared = true;
@@ -2540,7 +2654,7 @@ function buildStand(b, y0) {
   const out = (th, yy, d = 0.06) => { const p = b.torso(th, yy), l = Math.hypot(p[0], p[2]) || 1; return [p[0] * (1 + d / l), yy, p[2] * (1 + d / l)]; };
   const ring = []; for (let i = 0; i < 72; i++) ring.push(out(TAU * i / 72, y.waist)); tube(ring, true);
   for (const th of [0, PI / 2, PI, -PI / 2]) { const l = []; for (let i = 0; i <= 40; i++) l.push(out(th, lerp(y.crotch + 0.5, th === PI / 2 || th === -PI / 2 ? y.armpit - 3 : y.neck - 0.5, i / 40))); tube(l, false); }
-  const hang = ['jeans', 'shorts', 'swimsuit', 'bikini'].includes(S.garment);
+  const hang = ['jeans', 'shorts', 'jeanshorts', 'hotshorts', 'metalshorts', 'bikeshorts', 'swimsuit', 'bikini'].includes(S.garment);
   if (hang) {
     const top = b.M.height + 70, rod = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, top - (y.neck + 9), 12), steel); rod.position.y = (top + y.neck + 9) / 2; figure.add(rod);
     const rail = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 150, 16), steel); rail.rotation.z = PI / 2; rail.position.y = top; figure.add(rail);
@@ -2640,9 +2754,20 @@ function buildFigure() {
       const k = 0.4, ye = y.neck - k * Math.log(1 + Math.exp((y.neck - yy) / k)), p = b.torso(th, ye, false, true), f = lerp(1, 0.84, smooth(y.neck - 1, y.neck + 5, yy));
       return [p[0] * f, yy, p[2] * f];
     };
-    figure.add(new THREE.Mesh(gridGeo(96, 140, (u, v) => vt(-PI + TAU * u, lerp(y0, yTopN, v)), true), skin));
+    // The torso starts where the two lower halves have opened out into the full hip section; they share that ring
+    // of vertices and its normals, so there is no seam between them.
+    const yJ = y.crotch + b.CAPH, NTH = 96, NLV = 84;
+    const jn = th => { const h = 0.02, a = b.torso(th - h, yJ, true), c = b.torso(th + h, yJ, true), d = b.torso(th, yJ - 0.2, true), e = b.torso(th, yJ + 0.2, true), n = new THREE.Vector3(c[0] - a[0], 0, c[2] - a[2]).cross(new THREE.Vector3(e[0] - d[0], 0.4, e[2] - d[2])); if (n.x * d[0] + n.z * d[2] < 0) n.negate(); return n.normalize(); };
+    const tg = gridGeo(NTH, 140, (u, v) => vt(-PI + TAU * u, lerp(yJ, yTopN, v)), true);
+    for (let i = 0; i <= NTH; i++) { const n = jn(-PI + TAU * i / NTH); tg.attributes.normal.setXYZ(i, n.x, n.y, n.z); }
+    figure.add(new THREE.Mesh(tg, skin));
     for (const sgn of [1, -1]) {
-      figure.add(new THREE.Mesh(gridGeo(32, 52, (u, v) => b.leg(sgn, sgn > 0 ? u : 1 - u, lerp(y.ankle - 2.5, y.crotch + b.CAPH + 4, v)), true), skin));   // the top is tucked inside the torso
+      const yv = v => v < 0.42 ? lerp(y.ankle - 2.5, y.crotch - 9, v / 0.42) : lerp(y.crotch - 9, yJ, (v - 0.42) / 0.58);   // most of the rows go where the shape turns quickly, round the crotch
+      const lg = gridGeo(NTH / 2, NLV, (u, v) => b.leg(sgn, sgn > 0 ? u : 1 - u, yv(v)), true), ln = lg.attributes.normal, W = NTH / 2 + 1;
+      for (let i = 0; i < W; i++) { const n = jn(sgn * (sgn > 0 ? i : NTH / 2 - i) / (NTH / 2) * PI); ln.setXYZ(NLV * W + i, n.x, n.y, n.z); }
+      // above the crotch line the ring is open along the centre line, where it meets the other side: the normals there lie in the centre plane
+      for (let j = 0; j < NLV; j++) if (yv(j / NLV) > y.crotch) for (const i of [0, W - 1]) { const k = j * W + i, a = j * W + (i ? W - 2 : 1), ny = ln.getY(a), nz = ln.getZ(a), l = Math.hypot(ny, nz) || 1; ln.setXYZ(k, 0, ny / l, nz / l); }
+      figure.add(new THREE.Mesh(lg, skin));
       const ft = footParts(b, sgn, S.heel); lift = ft.lift; footX = ft.footX; for (const g of ft.parts) figure.add(new THREE.Mesh(g, skin)); for (const m of ft.balls) figure.add(m);
       // Shoulder: the arm grows out of the torso like modelled clay. The first rows of this surface lie on the
       // torso itself (a loop round the shoulder that shrinks), so it starts flush and with the torso's own shading;
@@ -2732,7 +2857,7 @@ function buildPieces() {
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3)); g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setIndex(idx);
     const f = fabOf(p.id), cl = SF.CLOTHS[f.cloth];
     const mat = zip ? new THREE.MeshStandardMaterial({ map: zipTexture(), roughness: 0.6, metalness: 0.2, side: THREE.DoubleSide })
-      : new THREE.MeshStandardMaterial({ map: fabTex(f), roughness: cl.rough, side: THREE.DoubleSide });
+      : new THREE.MeshStandardMaterial({ map: fabTex(f), roughness: cl.rough, metalness: cl.metal || 0, envMap: cl.metal ? metalEnv() : null, envMapIntensity: 1.15, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(g, mat); mesh.userData.piece = p.id; cloth.add(mesh);
     const o = { p, mesh, T, F, W: p.pos, f: 0, w: 0, tf: 0, tw: 0, first: firstOp(p.id), dirty: true, decor: null };
     if (!zip) o.decor = buildDecor(p, tx, tz, n);
@@ -2952,7 +3077,7 @@ function rebuild() {
   }
 }
 function retexture() {
-  for (const o of objs) if (o.p.spec.kind !== 'zip') { const f = fabOf(o.p.id); o.mesh.material.map = fabTex(f); o.mesh.material.roughness = SF.CLOTHS[f.cloth].rough; o.mesh.material.needsUpdate = true; }
+  for (const o of objs) if (o.p.spec.kind !== 'zip') { const f = fabOf(o.p.id); o.mesh.material.map = fabTex(f); o.mesh.material.roughness = SF.CLOTHS[f.cloth].rough; o.mesh.material.metalness = SF.CLOTHS[f.cloth].metal || 0; o.mesh.material.envMap = SF.CLOTHS[f.cloth].metal ? metalEnv() : null; o.mesh.material.needsUpdate = true; }
   for (const m of lineMats) m.color.set(S.thread);
   syncMachine(); uiFabric();
 }
