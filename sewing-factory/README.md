@@ -8,7 +8,9 @@ browser (three.js is loaded from a CDN).
 
 1. **Measure.** A mannequin with sliders for height, chest, waist, hip,
    shoulder width, inside leg and arm length. The torso sections are solved so
-   the tape girths equal the slider values.
+   the tape girths equal the slider values. Two modes: a full figure with head,
+   arms and legs, or a tailor's dress form on a stand (it hangs from a rail for
+   trousers and swimwear, which need the crotch free).
 2. **Cut.** The pattern pieces of the chosen garment lie on a cutting table as a
    marker: grain arrows, cutting line, stitch line. Click a piece to give it its
    own cloth, print or colour.
@@ -63,6 +65,6 @@ must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
 hides the panel, `&stage=1..4`, `&g=jeans|shorts|shirt|dress|swimsuit|bikini`,
-`&form=w|m`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
+`&form=w|m`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.

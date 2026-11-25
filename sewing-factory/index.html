@@ -103,7 +103,9 @@
     <div class="stage s1">
       <div class="card"><h2>The mannequin</h2>
         <p>Every pattern piece is drafted from these measurements. Change one and the cut pieces change with it.</p>
-        <div class="seg" id="forms"></div>
+        <div class="seg" id="modes"></div>
+        <p id="modeNote" style="margin:6px 0 0"></p>
+        <div class="seg" id="forms" style="margin-top:6px"></div>
         <div id="measures"></div>
       </div>
       <div class="card"><h2>Next</h2><p>Pick a garment above, then go to <b>2 Cut</b> to see its pieces laid out on the cloth.</p></div>
@@ -230,7 +232,8 @@ const SF = {};
     m: { name: "Men's form", height: 180, chest: 100, waist: 86, hip: 100, shoulder: 45, inseam: 82, arm: 63, bust: 0 },
   };
   const E = 0.9;            // superellipse exponent of the torso sections (1 = ellipse, lower = boxier)
-  const CAP = 5;            // depth of the rounded pelvis underside below the crotch line
+  const CAP = 0;            // the torso ends at the crotch line
+  const CAPH = 6;           // height over which the underside of the pelvis rounds in to the crotch point
 
   // Perimeter of a closed contour fn(θ) → [x, z].
   function perimeter(fn, n = 96) {
@@ -282,14 +285,17 @@ const SF = {};
     ];
     const ys = keys.map(k => k[0]);
     const fa = SF.pchip(ys, keys.map(k => k[1])), fdf = SF.pchip(ys, keys.map(k => k[2])), fdb = SF.pchip(ys, keys.map(k => k[3]));
-    // Section at height yy. Below the crotch line the depth closes to a keel (the underside the gusset passes over).
-    const sect = yy => {
-      if (yy >= y.crotch) return { a: fa(yy), df: fdf(yy), db: fdb(yy) };
-      const s = clamp((y.crotch - yy) / CAP, 0, 1), k = Math.sqrt(Math.max(0, 1 - s * s));
-      return { a: keys[0][1] * (1 - 0.12 * s), df: keys[0][2] * k, db: keys[0][3] * k };
+    // Section at height yy. Over the last few centimetres the depth closes to a keel at the crotch line:
+    // the underside of the pelvis, which the crotch seam and the swimsuit gusset pass over.
+    const sect = (yy, full) => {
+      const yc = Math.max(yy, y.crotch), S = { a: fa(yc), df: fdf(yc), db: fdb(yc) };
+      if (full || yy >= y.crotch + CAPH) return S;
+      const s = clamp((y.crotch + CAPH - yy) / CAPH, 0, 1), k = Math.sqrt(Math.max(0, 1 - s * s));
+      return { a: S.a * (1 - 0.12 * s), df: S.df * k, db: S.db * k };
     };
-    const torso = (th, yy) => {
-      const S = sect(yy), p = contour(S.a, S.df, S.db, yy)(th);
+    // full = without the rounded underside (the envelope that trousers hang from)
+    const torso = (th, yy, full) => {
+      const S = sect(yy, full), p = contour(S.a, S.df, S.db, yy)(th);
       return [p[0], yy, p[1]];
     };
     const girth = yy => { const S = sect(yy); return perimeter(contour(S.a, S.df, S.db, yy)); };
@@ -325,7 +331,7 @@ const SF = {};
       const A = arms[sgn], rr = r === undefined ? armR(clamp(t, 0, M.arm)) : r, c = Math.cos(th) * rr, s = Math.sin(th) * rr;
       return [A.S[0] + A.d[0] * t + A.u[0] * c + A.w[0] * s, A.S[1] + A.d[1] * t + A.u[1] * c + A.w[1] * s, A.S[2] + A.d[2] * t + A.u[2] * c + A.w[2] * s];
     };
-    return { M, y, neckR, CAP, sect, torso, girth, bump, legSect, leg, arms, armR, armPoint };
+    return { M, y, neckR, CAP, CAPH, sect, torso, girth, bump, legSect, leg, arms, armR, armPoint };
   };
 })();
 // ============================================================ part 2: garment surfaces, pattern pieces, operations
@@ -343,7 +349,7 @@ const SF = {};
   // -------- shell: the body's torso pushed out by ease, optionally hanging from the widest point above and flared.
   // Returns fn(θ, y) → [x, y, z], valid from the floor to just above the neck base.
   SF.makeShell = function (body, o = {}) {
-    const ease = o.ease ?? 1, loose = o.loose ?? 0, hangTop = o.hangTop ?? body.y.armpit, flare = o.flare ?? 0, flareTop = o.flareTop ?? body.y.waist;
+    const ease = o.ease ?? 1, loose = o.loose ?? 0, hangTop = o.hangTop ?? body.y.armpit, flare = o.flare ?? 0, flareTop = o.flareTop ?? body.y.waist, full = !!o.full;
     const NT = 96, DY = 0.5, y1 = body.y.neck + 3, NY = Math.ceil(y1 / DY) + 1, yLow = body.y.crotch - body.CAP;
     const px = new Float32Array(NT * NY), pz = new Float32Array(NT * NY);
     for (let i = 0; i < NT; i++) {
@@ -353,7 +359,7 @@ const SF = {};
         const yy = j * DY;
         let base = 0;
         if (yy >= yLow) {
-          const p = body.torso(th, Math.min(yy, body.y.neck)), e = Math.hypot(p[0], p[2]);
+          const p = body.torso(th, Math.min(yy, body.y.neck), full), e = Math.hypot(p[0], p[2]);
           // a hanging shell keeps the direction of the widest section above it
           if (e > 0.4 && !(loose > 0 && yy <= hangTop && e + ease < run)) { dx = p[0] / e; dz = p[2] / e; }
           base = e + ease;
@@ -559,7 +565,7 @@ const SF = {};
   // -------- trousers (jeans and shorts share the block)
   function trousers(body, fit, jeans) {
     const y = body.y, e = fit.ease, yc = y.crotch;
-    const shell = SF.makeShell(body, { ease: e, loose: 0 });
+    const shell = SF.makeShell(body, { ease: e, loose: 0, full: true });
     const yTop = y.waist - (jeans ? 5 : 2.5), band = jeans ? 4 : 3.5;
     const yH = jeans ? clamp(y.ankle + 2 + (100 - fit.length) * 0.01 * (yc - y.ankle), y.ankle, yc - 6) : yc - fit.length;
     const kneeR = body.legSect(y.knee).rx + e + 1.2, hemR = (fit.hem || 40) / TAU;
@@ -2240,7 +2246,7 @@ const STAGES = { 1: ['The mannequin', 'A measured form. The tapes show chest, wa
 
 // -------- state
 const S = {
-  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
+  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
   sel: null, op: +(Q.get('op') || 0), opT: +(Q.get('t') || 0), playing: false, lineSpeed: 1, turn: false, showStitch: true, wait: 0,
 };
 S.M = { ...SF.FORMS[S.form] };
@@ -2287,21 +2293,60 @@ const dark = new THREE.MeshStandardMaterial({ color: '#2b2d33', roughness: 0.6, 
 const SPHERE = new THREE.SphereGeometry(1, 28, 18);
 function ball(mat, sx, sy, sz, x, y, z) { const m = new THREE.Mesh(SPHERE, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.userData.keepGeo = true; return m; }
 
+const linen = new THREE.MeshStandardMaterial({ color: '#d6c4a2', roughness: 0.95 }); linen.userData.shared = true;
+const seamMat = new THREE.MeshStandardMaterial({ color: '#a8946f', roughness: 1 }); seamMat.userData.shared = true;
+const brass = new THREE.MeshStandardMaterial({ color: '#b8923f', roughness: 0.32, metalness: 0.9 }); brass.userData.shared = true;
+const wood = new THREE.MeshStandardMaterial({ color: '#5a3a26', roughness: 0.55 }); wood.userData.shared = true;
+const steel = new THREE.MeshStandardMaterial({ color: '#a9adb3', roughness: 0.3, metalness: 0.9 }); steel.userData.shared = true;
+const lathe = (pts, mat, y) => { const m = new THREE.Mesh(new THREE.LatheGeometry(pts.map(p => new THREE.Vector2(p[0], p[1])), 32), mat); m.position.y = y; return m; };
+// A tailor's dress form: linen-covered torso with a neck cap and finial, arm plates, and a stand.
+// Garments with a crotch need it free, so for those the form hangs from an overhead rail instead.
+function buildStand(b, y0) {
+  const y = b.y, R = b.neckR;
+  figure.add(new THREE.Mesh(gridGeo(96, 110, (u, v) => b.torso(-PI + TAU * u, lerp(y0, y.neck, v)), true), linen));
+  figure.add(lathe([[R * 1.0, -1.2], [R * 0.96, 2.6], [R * 1.12, 2.6], [R * 1.12, 3.5], [0.9, 3.7], [0.7, 4.6], [1.5, 5.4], [1.9, 7.2], [1.2, 9.2], [0.01, 10]], brass, y.neck));
+  const neckStub = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.96, R * 1.0, 3.8, 32), linen); neckStub.position.y = y.neck + 0.7; figure.add(neckStub);
+  for (const sgn of [1, -1]) {   // arm plates
+    const A = b.arms[sgn], r = b.armR(0) * 0.86, P = b.torso(sgn * PI / 2, A.S[1] + 0.6);
+    const d = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.7, 32), brass); d.position.set(P[0] + sgn * 0.15, A.S[1] + 0.6, A.S[2]); d.rotation.z = PI / 2 + sgn * 0.22; figure.add(d);
+    const k = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.3, r * 0.3, 1.1, 20), dark); k.position.copy(d.position); k.rotation.copy(d.rotation); figure.add(k);
+  }
+  // seams of the linen cover: waist tape, centre front and back, side seams
+  const tube = (pts, closed) => figure.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(...p)), closed), pts.length * 2, 0.16, 5, closed), seamMat));
+  const out = (th, yy, d = 0.06) => { const p = b.torso(th, yy), l = Math.hypot(p[0], p[2]) || 1; return [p[0] * (1 + d / l), yy, p[2] * (1 + d / l)]; };
+  const ring = []; for (let i = 0; i < 72; i++) ring.push(out(TAU * i / 72, y.waist)); tube(ring, true);
+  for (const th of [0, PI / 2, PI, -PI / 2]) { const l = []; for (let i = 0; i <= 40; i++) l.push(out(th, lerp(y.crotch + 0.5, th === PI / 2 || th === -PI / 2 ? y.armpit - 3 : y.neck - 0.5, i / 40))); tube(l, false); }
+  const hang = ['jeans', 'shorts', 'swimsuit', 'bikini'].includes(S.garment);
+  if (hang) {
+    const top = b.M.height + 70, rod = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, top - (y.neck + 9), 12), steel); rod.position.y = (top + y.neck + 9) / 2; figure.add(rod);
+    const rail = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 150, 16), steel); rail.rotation.z = PI / 2; rail.position.y = top; figure.add(rail);
+  } else {
+    const yb = y0 + 0.4, ym = yb * 0.6;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, yb - ym + 4, 16), steel); pole.position.y = (yb + ym) / 2 + 2; figure.add(pole);
+    figure.add(lathe([[0.01, 0], [15, 0], [15.5, 1.2], [13, 2.4], [6, 3.4], [3.2, 5], [2.6, 7], [4.4, 10], [4.8, 13], [3, 18], [2.2, 24], [2.6, 25], [2.6, 26], [2.1, 27], [2.3, ym * 0.7], [2.9, ym * 0.72], [2.2, ym * 0.75], [2.4, ym - 2], [3, ym - 1], [1.8, ym], [0.01, ym]], wood, 0));
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 2.2, 16), steel); collar.position.y = ym + 1; figure.add(collar);
+  }
+}
 function buildFigure() {
   figure.traverse(o => { if (o.geometry && !o.userData.keepGeo) pendingDispose.push(o.geometry); }); figure.clear();
   const b = body, y = b.y, H = b.M.height, y0 = y.crotch - b.CAP;
-  // the angle runs so that the triangles face outwards (the reverse shows the far inside wall through the front)
-  figure.add(new THREE.Mesh(gridGeo(96, 110, (u, v) => b.torso(-PI + TAU * u, lerp(y0, y.neck, v)), true), skin));
-  for (const sgn of [1, -1]) {
-    figure.add(new THREE.Mesh(gridGeo(28, 44, (u, v) => b.leg(sgn, sgn > 0 ? u : 1 - u, lerp(4, y.crotch + 1, v)), true), skin));
-    const fs = b.legSect(4); figure.add(ball(skin, fs.rx * 1.05, 4.2, fs.rx * 2.3, sgn * fs.cx, 4, fs.cz + fs.rx * 1.1));
-    figure.add(new THREE.Mesh(gridGeo(18, 24, (u, v) => b.armPoint(sgn, sgn > 0 ? TAU * u : -TAU * u, lerp(-1, b.M.arm, v)), true), skin));
-    const A = b.arms[sgn], r0 = b.armR(0) * 0.93; figure.add(ball(skin, r0, r0, r0, A.S[0], A.S[1], A.S[2]));
-    const hp = b.armPoint(sgn, 0, b.M.arm + 0.045 * H, 0), hand = ball(skin, 2.2, 0.052 * H, 3.6, hp[0], hp[1], hp[2]); hand.rotation.z = sgn * 17 * PI / 180; figure.add(hand);
-  }
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(b.neckR * 0.84, b.neckR * 1.04, y.chin + 2 - y.neck + 2.4, 28), skin); neck.position.set(0, (y.chin + 2 + y.neck - 2.4) / 2, 0); figure.add(neck);
-  const hr = (H - y.chin) / 2; figure.add(ball(skin, hr * 0.76, hr * 1.04, hr * 0.9, 0, y.chin + hr * 0.98, 0.8));
-  const plate = new THREE.Mesh(new THREE.CylinderGeometry(30, 31, 1.2, 48), dark); plate.position.y = 0.6; figure.add(plate);
+  if (S.mode !== 'stand') {
+    // the angle runs so that the triangles face outwards (the reverse shows the far inside wall through the front)
+    figure.add(new THREE.Mesh(gridGeo(96, 110, (u, v) => b.torso(-PI + TAU * u, lerp(y0, y.neck, v)), true), skin));
+    for (const sgn of [1, -1]) {
+      figure.add(new THREE.Mesh(gridGeo(28, 44, (u, v) => b.leg(sgn, sgn > 0 ? u : 1 - u, lerp(4, y.crotch + b.CAPH, v)), true), skin));
+      const fs = b.legSect(4); figure.add(ball(skin, fs.rx * 1.05, 4.2, fs.rx * 2.3, sgn * fs.cx, 4, fs.cz + fs.rx * 1.1));
+      figure.add(new THREE.Mesh(gridGeo(18, 24, (u, v) => b.armPoint(sgn, sgn > 0 ? TAU * u : -TAU * u, lerp(-1, b.M.arm, v)), true), skin));
+      const A = b.arms[sgn], r0 = b.armR(0) * 0.93; figure.add(ball(skin, r0, r0, r0, A.S[0], A.S[1], A.S[2]));
+      const hp = b.armPoint(sgn, 0, b.M.arm + 0.045 * H, 0), hand = ball(skin, 2.2, 0.052 * H, 3.6, hp[0], hp[1], hp[2]); hand.rotation.z = sgn * 17 * PI / 180; figure.add(hand);
+    }
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(b.neckR * 0.84, b.neckR * 1.04, y.chin + 2 - y.neck + 2.4, 28), skin); neck.position.set(0, (y.chin + 2 + y.neck - 2.4) / 2, 0); figure.add(neck);
+    const hr = (H - y.chin) / 2; figure.add(ball(skin, hr * 0.76, hr * 1.04, hr * 0.9, 0, y.chin + hr * 0.98, 0.8));
+      // a hint of a face, as on shop mannequins: brow ridge and nose
+    const hy = y.chin + hr * 0.98; figure.add(ball(skin, hr * 0.085, hr * 0.24, hr * 0.16, 0, hy - hr * 0.1, 0.8 + hr * 0.8)); figure.add(ball(skin, hr * 0.44, hr * 0.1, hr * 0.2, 0, hy + hr * 0.15, 0.8 + hr * 0.66));
+  } else buildStand(b, y0);
+  if (S.mode !== 'stand') { const plate = new THREE.Mesh(new THREE.CylinderGeometry(30, 31, 1.2, 48), dark); plate.position.y = 0.6; figure.add(plate); }
+  blob.scale.setScalar(S.mode === 'stand' ? 0.55 : 1);
   // tapes
   retire(tapes);
   for (const yy of [y.bust, y.waist, y.hip]) {
@@ -2532,9 +2577,11 @@ function drawLabels() {
   if (S.stage === 1) {
     const b = body, M = b.M, side = (yy, t) => { const p = b.torso(-PI / 2, yy); w.set(p[0] - 9, yy, p[2]).applyMatrix4(turnG.matrixWorld); putLabel(n++, t, w, 'tape'); };
     side(b.y.bust, `${M.bust ? 'Bust' : 'Chest'} ${M.chest} cm`); side(b.y.waist, `Waist ${M.waist} cm`); side(b.y.hip, `Hip ${M.hip} cm`);
+    if (S.mode !== 'stand') {
     w.set(0, M.height + 6, 0); putLabel(n++, `Height ${M.height} cm`, w);
     w.set(0, b.y.crotch / 2, 0).applyMatrix4(turnG.matrixWorld); putLabel(n++, `Inside leg ${Math.round(b.y.crotch)} cm`, w);
     const hp = b.armPoint(1, 0, M.arm / 2, b.armR(M.arm / 2) + 7); w.set(...hp).applyMatrix4(turnG.matrixWorld); putLabel(n++, `Arm ${M.arm} cm`, w);
+    }
     w.set(-M.shoulder / 2 - 16, b.y.shoulder + 5, 0).applyMatrix4(turnG.matrixWorld); putLabel(n++, `Shoulders ${M.shoulder} cm`, w);
   } else if (S.stage === 2) {
     for (const o of objs) if (o.decor && !o.p.spec.small && o.p.w * o.p.h > 60) putLabel(n++, o.p.name, o.decor.userData.label);
@@ -2564,9 +2611,10 @@ function machineOpts() { if (mv) mv.setOptions({ speed: +$('mspeed').value, cuta
 // -------- rebuilds
 let needBody = true, needGarment = true;
 function rebuild() {
+  const fresh = needBody;
   if (needBody) { body = SF.makeBody(S.M); buildFigure(); needBody = false; needGarment = true; }
   if (needGarment) {
-    needGarment = false;
+    needGarment = false; if (!fresh && S.mode === 'stand') buildFigure();   // stand or hanging rail depends on the garment
     garment = SF.buildGarment(S.garment, body, S.fit); marker = SF.makeMarker(garment.pieces);
     const keep = objs.map(o => [o.p.id, o.f, o.w]), keepT = trimObjs.map(o => [o.t.id, o.f, o.w]);
     buildTable(); buildPieces();
@@ -2596,6 +2644,9 @@ function slider(parent, d, get, set) {
 function uiMeasures() {
   const f = $('forms'); f.innerHTML = '';
   for (const [k, F] of Object.entries(SF.FORMS)) { const b = document.createElement('button'); b.textContent = F.name; b.className = S.form === k ? 'on' : ''; b.onclick = () => { S.form = k; S.M = { ...F }; needBody = true; uiMeasures(); }; f.appendChild(b); }
+  const md = $('modes'); md.innerHTML = '';
+  for (const [k, name] of [['figure', 'Full figure'], ['stand', 'Dress form on a stand']]) { const b = document.createElement('button'); b.textContent = name; b.className = S.mode === k ? 'on' : ''; b.onclick = () => { S.mode = k; needBody = true; uiMeasures(); }; md.appendChild(b); }
+  $('modeNote').textContent = S.mode === 'stand' ? 'A tailor\u2019s dress form: torso only. Trousers and swimwear need the crotch free, so for those the form hangs from a rail instead of standing on its pole. Sleeves and trouser legs hang empty.' : '';
   const m = $('measures'); m.innerHTML = '';
   for (const d of SF.MEASURES) slider(m, d, () => S.M[d.key], v => { S.M[d.key] = v; needBody = true; });
 }
