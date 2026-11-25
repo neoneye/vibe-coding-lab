@@ -98,7 +98,9 @@
       <button id="instant" title="Finish the whole run at once">Skip to result</button>
       <button id="pause">Pause</button>
       <label>Time <select id="tscale"><option value="0.25">¼×</option><option value="1" selected>1×</option><option value="3">3×</option><option value="8">8×</option></select></label>
-      <button id="back" title="Fly every piece back to where it came from. This uses the known answer; it is not a solver.">Put it back together</button>
+      <button id="unshred" title="Reassemble the last sheet from the shreds alone: piece outlines and the colours along their cut edges. It is not told where any piece came from.">Unshred</button>
+      <button id="marks" title="Tint the pieces the unshredder put in the wrong place">Mark mistakes</button>
+      <button id="back" title="Fly every piece back to where it came from. This uses the known answer; it is not a solver.">Show the answer</button>
       <button id="empty">Empty tray</button>
       <button id="save">Save image</button>
     </div>
@@ -149,7 +151,23 @@
   <p>Strips keep whole lines of writing and can be matched edge to edge by hand. Particles must be matched in two directions, and blank particles
     carry nothing to match. The readouts count how many pieces show any content and give a rule-of-thumb rating. For scale: the 2011 DARPA Shredder
     Challenge had about 10,000 pieces across five documents, and the winning team needed software, human checking and about a month.
-    "Put it back together" on this page cheats: it uses the position every piece is known to have come from.</p>
+    "Show the answer" on this page cheats: it uses the position every piece is known to have come from.</p>
+  <h2>The unshredder</h2>
+  <p><b>Unshred</b> does not cheat. Every piece is handed to it turned at random, with only what could be read off the shred itself: its outline, and
+    the colours just inside its two long cut edges (it reads a little further in when the cut is fuzzier). It is also told the paper size and the
+    cutter grid, as if the machine were on the bench. It then works in three steps:</p>
+  <ul>
+    <li><b>Compare edges.</b> Every inked edge is laid against every other, in both orientations, at the few offsets the tooth spacing allows, and
+      scored by how well the colours carry across the cut. Blank edges are skipped: they fit everything.</li>
+    <li><b>Join the sure ones.</b> Matches are accepted starting with those where nothing else fits the same stretch of edge nearly as well, and
+      joined pieces grow into clusters. A join is refused if two pieces would overlap or the cluster would outgrow the page.</li>
+    <li><b>Fit the page.</b> A piece with a straight sheet edge can only come from the border, and its length says which column. Clusters holding
+      such a piece are pinned first; the rest go where their edges agree with what is already down; blank pieces fill the gaps.</li>
+  </ul>
+  <p>It is scored against the truth afterwards, and wrong pieces are tinted red. Strips come back almost perfectly, because each edge is as long as the
+    page. Cross-cut particles have short edges and many are blank, so the result gets worse quickly as the particles shrink, which is the whole
+    point of the higher security levels. Blank pieces are interchangeable, so a page can look right with pieces in the "wrong" place. It handles a
+    single straight-fed sheet in one pass, up to 3,500 pieces.</p>
   <h2>What is simplified</h2>
   <ul>
     <li>Motor load and sheet capacity come from a formula fitted to typical rated capacities of office shredders, not from fracture mechanics.</li>
@@ -366,6 +384,396 @@ const ShredCore = (() => {
   return { E_SHEET, E_SLIT, E_CROSS, E_TEAR, E_INTERNAL, rng, hash3, frac, clamp, clip, area, centroid, rect, shred, dinLevel, DIN, model, recover };
 })();
 
+// ShredSolve: the unshredder. It is given, for every piece, only what could be read off the shred itself:
+// its outline in its own frame (turned upside down at random) and the colours just inside its two long cut edges.
+// It is also told the paper size and the cutter grid (disc pitch, tooth spacing and offset), as if the machine
+// were on the bench. It is not told where any piece came from or which way up it is.
+const ShredSolve = (() => {
+  "use strict";
+  const C = ShredCore;
+
+  // pieces: [{poly}] in sheet mm. geo: {w, L (0 = strips), stagger, slantOn, bx, py, W, H, inset, h, paper:[r,g,b]}
+  //   band k covers sheet x in [bx + k*w, bx + (k+1)*w]; cross cuts in band k are at y = py + frac(k*stagger)*L + j*L.
+  // sample(x, y, out) writes the page colour at a sheet position.
+  // Returns {descs, truth}. The solver reads descs only; truth is for scoring and for drawing.
+  function describe(pieces, geo, sample, rnd) {
+    const h = geo.h, descs = [], truth = [], out = [0, 0, 0], pp = geo.paper;
+    for (const pc of pieces) {
+      const poly = pc.poly, c = C.centroid(poly), r = rnd() < 0.5 ? 1 : 0, sg = r ? -1 : 1;
+      const loc = poly.map(p => ({ x: (p.x - c.x) * sg, y: (p.y - c.y) * sg, e: p.e })), m = loc.length;
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+      for (const p of loc) { if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x; if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y; }
+      const xm = (x0 + x1) / 2, ym0 = (y0 + y1) / 2;
+      let bl = false, br = false;
+      const mkSide = (xe, isL) => {
+        let a = 1e9, b = -1e9, border = false;
+        for (let i = 0; i < m; i++) {
+          const A = loc[i], B = loc[(i + 1) % m];
+          if (Math.abs(A.x - xe) < 1e-6 && Math.abs(B.x - xe) < 1e-6) { a = Math.min(a, A.y, B.y); b = Math.max(b, A.y, B.y); if (A.e === C.E_SHEET) border = true; }
+        }
+        if (border) { if (isL) bl = true; else br = true; }
+        if (b - a < 0.8) return null;
+        const n = Math.floor((b - a) / h), data = new Uint8Array(n * 3), dev = new Uint8Array(n); let ink = 0;
+        const xx = isL ? Math.min(xe + geo.inset, xm) : Math.max(xe - geo.inset, xm);
+        for (let i = 0; i < n; i++) {
+          sample(c.x + sg * xx, c.y + sg * (a + (i + 0.5) * h), out);
+          data[i * 3] = out[0]; data[i * 3 + 1] = out[1]; data[i * 3 + 2] = out[2];
+          const dv = Math.max(Math.abs(out[0] - pp[0]), Math.abs(out[1] - pp[1]), Math.abs(out[2] - pp[2])); dev[i] = dv; ink += dv;
+        }
+        return { y0: a, y1: a + n * h, n, data, dev, ink: n ? ink / n : 0, border };
+      };
+      const SL = mkSide(x0, true), SR = mkSide(x1, false);
+      let cutTop = null, cutBot = null, flatTop = false, flatBot = false, slant = 0;
+      // a cross cut is measured where it crosses the middle of its disc; a border piece is narrower than its disc
+      const xc = bl && !br ? x1 - geo.w / 2 : br && !bl ? x0 + geo.w / 2 : xm;
+      for (let i = 0; i < m; i++) {
+        const A = loc[i], B = loc[(i + 1) % m];
+        if (Math.abs(B.x - A.x) < 1e-6) continue;
+        const sl = (B.y - A.y) / (B.x - A.x), ym = A.y + (xc - A.x) * sl, isTop = A.y + (xm - A.x) * sl < ym0;
+        if (A.e === C.E_SHEET) { if (isTop) flatTop = true; else flatBot = true; }
+        else { if (isTop) cutTop = ym; else cutBot = ym; if (Math.abs(sl) > 0.01) slant = sl > 0 ? 1 : -1; }
+      }
+      const rev = s => {
+        if (!s) return null;
+        const n = s.n, data = new Uint8Array(n * 3), dev = new Uint8Array(n);
+        for (let i = 0; i < n; i++) { const j = n - 1 - i; data[i * 3] = s.data[j * 3]; data[i * 3 + 1] = s.data[j * 3 + 1]; data[i * 3 + 2] = s.data[j * 3 + 2]; dev[i] = s.dev[j]; }
+        return { y0: -s.y1, y1: -s.y0, n, data, dev, ink: s.ink, border: s.border };
+      };
+      const v0 = { L: SL, R: SR, top: y0, bot: y1, xl: x0, xr: x1, cutTop, cutBot, flatTop, flatBot, bl, br };
+      const v1 = { L: rev(SR), R: rev(SL), top: -y1, bot: -y0, xl: -x1, xr: -x0, cutTop: cutBot === null ? null : -cutBot, cutBot: cutTop === null ? null : -cutTop,
+        flatTop: flatBot, flatBot: flatTop, bl: br, br: bl };
+      descs.push({ v: [v0, v1], slant, area: C.area(poly), ink: Math.max(SL ? SL.ink : 0, SR ? SR.ink : 0) });
+      truth.push({ c, r, k: Math.floor((c.x - geo.bx) / geo.w), y: c.y });
+    }
+    return { descs, truth };
+  }
+
+  // How badly the right edge of one piece continues into the left edge of another, when the second piece's origin
+  // sits dlt below the first one's. Mean colour difference per inked sample; -1 if they barely overlap or are blank.
+  function pairCost(ar, bl, dlt, h) {
+    const lo = Math.max(ar.y0, bl.y0 + dlt), hi = Math.min(ar.y1, bl.y1 + dlt); let n = Math.floor((hi - lo) / h + 1e-6);
+    if (n < 8) return -1;
+    let ia = Math.round((lo - ar.y0) / h), ib = Math.round((lo - bl.y0 - dlt) / h);
+    if (ia < 0) ia = 0; if (ib < 0) ib = 0;
+    n = Math.min(n, ar.n - ia, bl.n - ib);
+    if (n < 8) return -1;
+    const A = ar.data, B = bl.data, DA = ar.dev, DB = bl.dev; let sum = 0, ink = 0;
+    const bMax = (bl.n - 1) * 3;
+    for (let i = 0; i < n; i++) {
+      const pa = (ia + i) * 3, pb = (ib + i) * 3, r = A[pa], g = A[pa + 1], b = A[pa + 2];
+      // a slanted stroke crosses the gap one sample higher or lower, so allow that much slip
+      let d = Math.abs(r - B[pb]) + Math.abs(g - B[pb + 1]) + Math.abs(b - B[pb + 2]);
+      if (d > 30) {
+        if (pb >= 3) { const e = Math.abs(r - B[pb - 3]) + Math.abs(g - B[pb - 2]) + Math.abs(b - B[pb - 1]); if (e < d) d = e; }
+        if (pb < bMax) { const e = Math.abs(r - B[pb + 3]) + Math.abs(g - B[pb + 4]) + Math.abs(b - B[pb + 5]); if (e < d) d = e; }
+      }
+      sum += d;
+      if (DA[ia + i] > 24 || DB[ib + i] > 24) ink++;
+    }
+    if (ink < 5) return -1;
+    lastLo = lo; lastHi = lo + n * h;
+    return sum / (3 * (ink + 4));
+  }
+  let lastLo = 0, lastHi = 0;
+
+  const placeX = (d, p, geo) => Math.max(0, geo.bx + p.k * geo.w) - d.v[p.o].xl;
+
+  function* solveGen(descs, geo, opt) {
+    opt = opt || {};
+    const N = descs.length, h = geo.h, L = geo.L, W = geo.W, H = geo.H, w = geo.w, sL = geo.stagger * L, tol = 0.45, tolCut = 0.1;   // lengths are trusted to a tenth of a millimetre
+    const kMin = Math.floor(-geo.bx / w + 1e-9), kMax = Math.ceil((W - geo.bx) / w - 1e-9) - 1, K = kMax - kMin + 1;
+    const phase = k => geo.py + C.frac(k * geo.stagger) * L;
+    const inkMin = 1.5, confMax = opt.confMax || 0.8, costMax = opt.costMax || 70;
+    const cutOf = v => v.cutTop !== null ? v.cutTop : v.cutBot;
+
+    // ---- 1. compare every inked edge with every other
+    const KEEP = 12, top = []; for (let i = 0; i < 2 * N; i++) top.push([]);
+    const keep = (id, cand) => {
+      const t = top[id]; let j = t.length; t.push(cand);
+      while (j > 0 && t[j - 1].s > cand.s) { t[j] = t[j - 1]; j--; }
+      t[j] = cand; if (t.length > KEEP) t.pop();
+    };
+    const offs = [];
+    const offsets = (va, vb) => {
+      offs.length = 0;
+      if (!L) { offs.push(va.top - vb.top); return; }
+      const ca = cutOf(va), cb = cutOf(vb); if (ca === null || cb === null) return;
+      const base = ca - cb + sL, nLo = Math.ceil((va.top - vb.bot + 2 - base) / L), nHi = Math.floor((va.bot - vb.top - 2 - base) / L);
+      for (let n = nLo; n <= nHi; n++) offs.push(base + n * L);
+    };
+    const info = []; for (let i = 0; i < N; i++) if (descs[i].ink >= inkMin) info.push(i);
+    let compared = 0;
+    for (let ai = 0; ai < info.length; ai++) {
+      const A = info[ai], dA = descs[A];
+      for (let bi = ai + 1; bi < info.length; bi++) {
+        const B = info[bi], dB = descs[B];
+        if (geo.slantOn && dA.slant * dB.slant > 0) continue;       // neighbours slant opposite ways
+        for (let oA = 0; oA < 2; oA++) {
+          const ar = dA.v[oA].R; if (!ar || ar.border || ar.ink < inkMin) continue;
+          for (let oB = 0; oB < 2; oB++) {
+            const bl = dB.v[oB].L; if (!bl || bl.border || bl.ink < inkMin) continue;
+            offsets(dA.v[oA], dB.v[oB]);
+            for (let q = 0; q < offs.length; q++) {
+              const s = pairCost(ar, bl, offs[q], h); compared++;
+              if (s < 0) continue;
+              const pa = 2 * A + (oA ? 0 : 1), pb = 2 * B + (oB ? 1 : 0), ta = top[pa], tb = top[pb];
+              if (ta.length < KEEP || s < ta[KEEP - 1].s || tb.length < KEEP || s < tb[KEEP - 1].s) {
+                // where along each piece's edge the two touch, in that piece's own (unturned) frame
+                const a0 = oA ? -lastHi : lastLo, a1 = oA ? -lastLo : lastHi, bl0 = lastLo - offs[q], bl1 = lastHi - offs[q];
+                const cand = { A, oA, B, oB, dlt: offs[q], s, pa, pb, a0, a1, b0: oB ? -bl1 : bl0, b1: oB ? -bl0 : bl1 };
+                keep(pa, cand); keep(pb, cand);
+              }
+            }
+          }
+        }
+      }
+      if ((ai & 7) === 7) yield { step: "Comparing cut edges", f: ai / info.length };
+    }
+    const seen = new Set(), cands = [];
+    for (const t of top) for (const c of t) if (!seen.has(c)) { seen.add(c); cands.push(c); }
+    // A match is trusted when nothing else fits the same stretch of either edge nearly as well.
+    const alt = (id, c) => {
+      const c0 = id === c.pa ? c.a0 : c.b0, c1 = id === c.pa ? c.a1 : c.b1;
+      for (const t of top[id]) {
+        if (t === c) continue;
+        const t0 = id === t.pa ? t.a0 : t.b0, t1 = id === t.pa ? t.a1 : t.b1;
+        if (Math.min(c1, t1) - Math.max(c0, t0) > 0.5 * Math.min(c1 - c0, t1 - t0)) return t.s;
+      }
+      return 60;
+    };
+    for (const c of cands) c.conf = c.s / (Math.min(alt(c.pa, c), alt(c.pb, c)) + 0.5);
+    cands.sort((a, b) => a.conf - b.conf);
+
+    // ---- page rules: what a piece's outline allows, used both while joining and while fitting
+    const occ = new Map(), PK = new Int32Array(N), PY = new Float64Array(N), PO = new Uint8Array(N), placed = new Uint8Array(N);
+    const valid = (i, o, k, y) => {
+      const d = descs[i], v = d.v[o];
+      if (k < kMin || k > kMax) return false;
+      if (y + v.top < -tol || y + v.bot > H + tol) return false;
+      if (v.bl !== (k === kMin) || v.br !== (k === kMax)) return false;
+      if (v.flatTop !== (Math.abs(y + v.top) < tol) || v.flatBot !== (Math.abs(y + v.bot - H) < tol)) return false;
+      if (L) {
+        const cut = cutOf(v);
+        if (cut !== null) { const r = C.frac((y + cut - phase(k)) / L + 0.5) * L - L / 2; if (Math.abs(r) > tolCut) return false; }
+        if (geo.slantOn && d.slant && d.slant !== ((k & 1) ? -1 : 1)) return false;
+      }
+      const list = occ.get(k);
+      if (list) for (const e of list) if (Math.min(e.y1, y + v.bot) - Math.max(e.y0, y + v.top) > 0.6) return false;
+      return true;
+    };
+    const tryPlace = (M, ref, k, y, o) => {
+      const rot = oo[ref] !== o, res = [];
+      for (const m of M) {
+        const mk = k + (rot ? -(col[m] - col[ref]) : col[m] - col[ref]), my = y + (rot ? -(yy[m] - yy[ref]) : yy[m] - yy[ref]), mo = rot ? 1 - oo[m] : oo[m];
+        if (!valid(m, mo, mk, my)) return null;
+        res.push(m, mk, my, mo);
+      }
+      return res;
+    };
+    const commit = res => {
+      for (let i = 0; i < res.length; i += 4) {
+        const m = res[i], k = res[i + 1], y = res[i + 2], o = res[i + 3], v = descs[m].v[o];
+        PK[m] = k; PY[m] = y; PO[m] = o; placed[m] = 1;
+        if (!occ.has(k)) occ.set(k, []); occ.get(k).push({ y0: y + v.top, y1: y + v.bot, i: m });
+      }
+    };
+    const FREE = 1e6;
+    const contact = res => {
+      let sum = 0, cnt = 0;
+      for (let i = 0; i < res.length; i += 4) {
+        const k = res[i + 1], y = res[i + 2], v = descs[res[i]].v[res[i + 3]];
+        const R = occ.get(k + 1), Lf = occ.get(k - 1);
+        if (R && v.R && !v.R.border) for (const e of R) { const vj = descs[e.i].v[PO[e.i]]; if (!vj.L) continue; const s = pairCost(v.R, vj.L, PY[e.i] - y, h); if (s >= 0) { sum += s; cnt++; } }
+        if (Lf && v.L && !v.L.border) for (const e of Lf) { const vj = descs[e.i].v[PO[e.i]]; if (!vj.R) continue; const s = pairCost(vj.R, v.L, y - PY[e.i], h); if (s >= 0) { sum += s; cnt++; } }
+      }
+      if (cnt) return sum / cnt;
+      // touching nothing: prefer the spot that centres the inked pieces on the page (equal margins)
+      let cx = 0, cy = 0, n = 0;
+      for (let i = 0; i < res.length; i += 4) if (descs[res[i]].ink >= inkMin) { cx += geo.bx + (res[i + 1] + 0.5) * w; cy += res[i + 2]; n++; }
+      return FREE + (n ? (Math.abs(cx / n - W / 2) + Math.abs(cy / n - H / 2)) / (W + H) : 0);
+    };
+    // a piece with a straight sheet end can only sit in the top or bottom row, and its length says which column
+    const anchorOf = i => {
+      let found = null, n = 0;
+      for (let o = 0; o < 2; o++) {
+        const v = descs[i].v[o]; let y;
+        if (v.flatTop) y = -v.top; else if (v.flatBot) y = H - v.bot; else continue;
+        for (let k = kMin; k <= kMax; k++) if (valid(i, o, k, y)) { n++; found = { k, y, o }; }
+      }
+      return n === 1 ? found : null;
+    };
+
+    // ---- 2. grow clusters from the most confident matches
+    const cl = new Int32Array(N), col = new Int32Array(N), yy = new Float64Array(N), oo = new Uint8Array(N), mem = [];
+    for (let i = 0; i < N; i++) { cl[i] = i; mem.push([i]); }
+    // A cluster that holds a pinned piece knows where it sits on the page: page column = dk +/- col, and so on.
+    const pin = []; let pinned = 0;
+    for (let i = 0; i < N; i++) { const a = descs[i].ink >= inkMin ? anchorOf(i) : null; pin.push(a ? { rot: a.o === 1, dk: a.k, dy: a.y } : null); if (a) pinned++; }
+    const onPage = (pn, k, y, o) => pn.rot ? [pn.dk - k, pn.dy - y, 1 - o] : [pn.dk + k, pn.dy + y, o];
+    let merges = 0, refused = 0;
+    const tryJoin = c => {
+      const A = c.A, B = c.B, ca = cl[A], cb = cl[B]; if (ca === cb) return;
+      let tcol, ty, to;
+      if (oo[A] === c.oA) { tcol = col[A] + 1; ty = yy[A] + c.dlt; to = c.oB; } else { tcol = col[A] - 1; ty = yy[A] - c.dlt; to = 1 - c.oB; }
+      const MB = mem[cb], MA = mem[ca], rot = oo[B] !== to;
+      const bc = col[B], by = yy[B];
+      const nc = m => tcol + (rot ? -(col[m] - bc) : col[m] - bc), ny = m => ty + (rot ? -(yy[m] - by) : yy[m] - by), no = m => rot ? 1 - oo[m] : oo[m];
+      let ok = true, cLo = 1e9, cHi = -1e9, yLo = 1e9, yHi = -1e9;
+      for (const a of MA) { const v = descs[a].v[oo[a]]; cLo = Math.min(cLo, col[a]); cHi = Math.max(cHi, col[a]); yLo = Math.min(yLo, yy[a] + v.top); yHi = Math.max(yHi, yy[a] + v.bot); }
+      for (const b of MB) {
+        const v = descs[b].v[no(b)], k = nc(b), y = ny(b), b0 = y + v.top, b1 = y + v.bot;
+        cLo = Math.min(cLo, k); cHi = Math.max(cHi, k); yLo = Math.min(yLo, b0); yHi = Math.max(yHi, b1);
+        for (const a of MA) if (col[a] === k) { const va = descs[a].v[oo[a]]; if (Math.min(b1, yy[a] + va.bot) - Math.max(b0, yy[a] + va.top) > 0.6) { ok = false; break; } }
+        if (!ok) break;
+      }
+      if (!ok || cHi - cLo + 1 > K || yHi - yLo > H + 1) return;
+      const moved = MB.map(b => [nc(b), ny(b), no(b)]);
+      // does the join agree with what is known about the page?
+      let pn = pin[ca];
+      if (pin[cb]) {
+        const was = onPage(pin[cb], col[B], yy[B], oo[B]), rotN = to !== was[2];
+        const fromB = { rot: rotN, dk: rotN ? was[0] + tcol : was[0] - tcol, dy: rotN ? was[1] + ty : was[1] - ty };
+        if (pn) { if (pn.rot !== fromB.rot || pn.dk !== fromB.dk || Math.abs(pn.dy - fromB.dy) > 0.2) { refused++; return; } }
+        else { pn = fromB; for (const a of MA) { const q = onPage(pn, col[a], yy[a], oo[a]); if (!valid(a, q[2], q[0], q[1])) { refused++; return; } } }
+      } else if (pn) {
+        for (let i = 0; i < MB.length; i++) { const q = onPage(pn, moved[i][0], moved[i][1], moved[i][2]); if (!valid(MB[i], q[2], q[0], q[1])) { refused++; return; } }
+      }
+      pin[ca] = pn;
+      MB.forEach((b, i) => { col[b] = moved[i][0]; yy[b] = moved[i][1]; oo[b] = moved[i][2]; cl[b] = ca; MA.push(b); });
+      mem[cb] = null; merges++;
+    };
+    // first the matches nothing else rivals, then whatever still fits, best first; a join that would put two
+    // pieces in the same place is refused, which is what stops an edge being used twice
+    for (let ci = 0; ci < cands.length; ci++) { const c = cands[ci]; if (c.conf <= confMax && c.s <= costMax) tryJoin(c); if ((ci & 255) === 0) yield { step: "Joining matched pieces", f: 0.5 * ci / cands.length }; }
+    // Then repeat with what is left: an edge whose rivals have all been used elsewhere can now be trusted too.
+    // A stretch of edge is "taken" once a piece of the same cluster already lies against it.
+    const taken = (X, phys, d0, d1) => {
+      const o = oo[X], right = (phys === 1) === (o === 0), k = col[X] + (right ? 1 : -1);
+      const y0 = yy[X] + (o ? -d1 : d0), y1 = yy[X] + (o ? -d0 : d1);
+      for (const m of mem[cl[X]]) if (col[m] === k) { const v = descs[m].v[oo[m]]; if (Math.min(y1, yy[m] + v.bot) - Math.max(y0, yy[m] + v.top) > 0.6) return true; }
+      return false;
+    };
+    const open = c => cl[c.A] !== cl[c.B] && !taken(c.A, c.pa & 1, c.a0, c.a1) && !taken(c.B, c.pb & 1, c.b0, c.b1);
+    const rival = (id, c) => {
+      const c0 = id === c.pa ? c.a0 : c.b0, c1 = id === c.pa ? c.a1 : c.b1;
+      for (const t of top[id]) {
+        if (t === c) continue;
+        const t0 = id === t.pa ? t.a0 : t.b0, t1 = id === t.pa ? t.a1 : t.b1;
+        if (Math.min(c1, t1) - Math.max(c0, t0) > 0.5 * Math.min(c1 - c0, t1 - t0) && open(t)) return t.s;
+      }
+      return 1e9;
+    };
+    const byCost = cands.slice().sort((a, b) => a.s - b.s);
+    for (let sweep = 0; sweep < 6; sweep++) {
+      const before = merges;
+      for (let ci = 0; ci < byCost.length; ci++) {
+        const c = byCost[ci]; if (c.s > costMax) break;
+        if (open(c) && c.s / (Math.min(rival(c.pa, c), rival(c.pb, c)) + 0.5) <= confMax) tryJoin(c);
+        if ((ci & 255) === 0) yield { step: "Joining matched pieces", f: 0.5 + (sweep + ci / byCost.length) / 12 };
+      }
+      if (merges === before) break;
+    }
+
+    // ---- 3. fit clusters into the page
+    const queue = []; for (let i = 0; i < N; i++) if (mem[i]) queue.push(mem[i]);
+    const inkOf = M => { let s = 0; for (const m of M) s += descs[m].ink; return s / M.length; };
+    queue.sort((a, b) => b.length - a.length || inkOf(b) - inkOf(a));
+    const later = []; let anchored = 0;
+    for (const M of queue) {
+      const pn = pin[cl[M[0]]]; let res = null;
+      if (pn) { const q = onPage(pn, col[M[0]], yy[M[0]], oo[M[0]]); res = tryPlace(M, M[0], q[0], q[1], q[2]); }
+      if (res) { commit(res); anchored += M.length; } else later.push(M);
+    }
+    yield { step: "Fitting clusters into the page", f: 0 };
+    // Clusters with no sheet end: put each where its edges agree best with what is already on the page. One that
+    // touches nothing yet waits for a later round; if a whole round places nothing, the biggest goes in anyway.
+    const leftover = [];
+    const bestSpot = (M, blank) => {
+      const ref = M.find(m => !L || cutOf(descs[m].v[0]) !== null) ?? M[0];
+      let best = null, bestS = 1e9;
+      for (let o = 0; o < 2; o++) {
+        const v = descs[ref].v[o], cut = cutOf(v);
+        for (let k = kMin; k <= kMax; k++) {
+          let y0, step, n;
+          if (!L || cut === null) { y0 = v.flatBot && !v.flatTop ? H - v.bot : -v.top; step = 1; n = 1; }
+          else { y0 = phase(k) - cut; y0 -= Math.ceil((y0 + v.top) / L + 1) * L; step = L; n = Math.ceil(H / L) + 3; }
+          for (let j = 0; j < n; j++) {
+            const res = tryPlace(M, ref, k, y0 + j * step, o); if (!res) continue;
+            if (blank) return { res, s: FREE };
+            const s = contact(res); if (s < bestS) { bestS = s; best = res; }
+          }
+        }
+      }
+      return best ? { res: best, s: bestS } : null;
+    };
+    // spots suggested by this cluster's own edge matches with pieces already on the page
+    const linkedSpot = M => {
+      let best = null, bestS = 1e9;
+      const tryAt = (m, k, y, o) => { const res = tryPlace(M, m, k, y, o); if (!res) return; const s2 = contact(res); if (s2 < bestS) { bestS = s2; best = res; } };
+      for (const m of M) for (let sd = 0; sd < 2; sd++) for (const c of top[2 * m + sd]) {
+        if (c.B === m && placed[c.A]) { if (PO[c.A] === c.oA) tryAt(m, PK[c.A] + 1, PY[c.A] + c.dlt, c.oB); else tryAt(m, PK[c.A] - 1, PY[c.A] - c.dlt, 1 - c.oB); }
+        else if (c.A === m && placed[c.B]) { if (PO[c.B] === c.oB) tryAt(m, PK[c.B] - 1, PY[c.B] - c.dlt, c.oA); else tryAt(m, PK[c.B] + 1, PY[c.B] + c.dlt, 1 - c.oA); }
+      }
+      return best ? { res: best, s: bestS } : null;
+    };
+    let pending = later.filter(M => M.length > 1 || descs[M[0]].ink >= inkMin);
+    const blanks = later.filter(M => M.length === 1 && descs[M[0]].ink < inkMin);
+    let round = 0; const total = pending.length + 1;
+    while (pending.length) {
+      const next = []; let did = 0;
+      // every waiting cluster proposes its best spot; only the best-fitting few go in, then everyone looks again
+      const props = []; let lo = FREE;
+      for (const M of pending) { const b = linkedSpot(M); props.push(b); if (b && b.s < lo) lo = b.s; }
+      for (let i = 0; i < pending.length; i++) {
+        const b = props[i];
+        if (b && b.s <= lo * 1.15 + 1 && b.s < costMax && tryPlace(pending[i], b.res[0], b.res[1], b.res[2], b.res[3])) { commit(b.res); did++; } else next.push(pending[i]);
+      }
+      if (!did) {
+        // nothing touches the page yet: the biggest cluster goes in on its own, as near the middle as it fits
+        const M = next.shift(), b = bestSpot(M, false);
+        if (b) commit(b.res); else if (M.length > 1) for (const m of M) next.push([m]); else leftover.push(M[0]);
+      }
+      pending = next; if (++round > 20000) break;
+      yield { step: "Fitting clusters into the page", f: 1 - pending.length / total };
+    }
+    for (const M of pending) blanks.push(M);
+    for (let qi = 0; qi < blanks.length; qi++) {
+      const M = blanks[qi], b = bestSpot(M, true);
+      if (b) commit(b.res); else leftover.push(M[0]);
+      if ((qi & 63) === 0) yield { step: "Filling in the blank pieces", f: qi / blanks.length };
+    }
+    const place = []; for (let i = 0; i < N; i++) place.push({ k: PK[i], y: PY[i], o: PO[i], ok: !!placed[i] });
+    return { place, inked: info.length, compared, merges, refused, pinned, clusters: queue.filter(M => M.length > 1).length, biggest: queue.length ? queue[0].length : 0, anchored, leftover: leftover.length, kMin, kMax };
+  }
+  function solve(descs, geo, opt) { const g = solveGen(descs, geo, opt); for (;;) { const r = g.next(); if (r.done) return r.value; } }
+
+  // Compare with the truth. A strip-cut page can come out upside down, which nothing in the shreds can rule out;
+  // that counts as solved and is reported as `flipped`.
+  function score(descs, truth, res, geo, sample) {
+    const N = descs.length, a = [0, 0, 0], b = [0, 0, 0];
+    const run = flip => {
+      let exact = 0, good = 0, areaGood = 0, areaAll = 0; const wrong = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        const d = descs[i], t = truth[i], p0 = res.place[i]; areaAll += d.area;
+        if (!p0.ok) { wrong[i] = 1; continue; }
+        const p = flip ? { k: res.kMin + res.kMax - p0.k, y: geo.H - p0.y, o: 1 - p0.o } : p0;
+        if (p.k === t.k && Math.abs(p.y - t.y) < 0.6 && p.o === t.r) exact++;
+        const v = d.v[p.o], X = placeX(d, p, geo), so = p.o ? -1 : 1, st = t.r ? -1 : 1; let diff = 0, n = 0;
+        for (const fy of [0.1, 0.3, 0.5, 0.7, 0.9]) for (const fx of [0.25, 0.75]) {
+          const qx = v.xl + (v.xr - v.xl) * fx, qy = v.top + (v.bot - v.top) * fy;      // a point in the placed (oriented) frame
+          sample(X + qx, p.y + qy, a); sample(t.c.x + st * so * qx, t.c.y + st * so * qy, b);
+          diff += Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]); n += 3;
+        }
+        if (diff / n < 10) { good++; areaGood += d.area; } else wrong[i] = 1;
+      }
+      return { exact: exact / N, looks: areaGood / areaAll, good, wrong, flipped: flip };
+    };
+    const s0 = run(false), s1 = run(true);
+    return s1.looks > s0.looks + 1e-9 ? s1 : s0;
+  }
+  return { describe, pairCost, placeX, solveGen, solve, score };
+})();
+
 const ShredTests = {
   run() {
     const C = ShredCore; let ok = true;
@@ -418,6 +826,32 @@ const ShredTests = {
     check("wet paper fails more cross cuts", C.model({ ...base, moist: 45 }).pTag > 0.3 && C.model(base).pTag < 0.02);
     check("wear widens the fringe", C.model({ ...base, wear: 80 }).roughSlit > 2 * C.model(base).roughSlit);
     check("recover rating orders", C.recover(30, 0, 1700).level < C.recover(400, 1, 160).level && C.recover(12000, 1, 5).level === 4);
+
+    // ---- the unshredder, on a synthetic page: coloured wavy ink in the middle, blank margins
+    const S = ShredSolve;
+    const page = (x, y, o) => {
+      const inside = x > 22 && x < 188 && y > 25 && y < 270;
+      const f = Math.sin(x * 0.9 + Math.sin(y * 0.31) * 3) + Math.sin(y * 1.3 + Math.sin(x * 0.23) * 4) + Math.sin((x + y) * 0.47 + 1);
+      const g = Math.sin(x * 0.21 + 2) * Math.sin(y * 0.17);
+      if (!inside || f < 0.4) { o[0] = o[1] = o[2] = 255; return; }
+      o[0] = 40 + 60 * (g + 1); o[1] = 30 + 50 * (1 - g); o[2] = 90 + 40 * Math.sin(x * 0.05 + y * 0.04);
+    };
+    const tryCut = (cut, name, minLooks) => {
+      const place = { a: 1, b: 0, c: 0, d: 1, tx: -105, ty: -330 };
+      const sh = C.shred([{ poly: C.rect(210, 297), place, sheet: 0 }], cut, 5);
+      const geo = { w: cut.w, L: cut.L, stagger: cut.stagger, slantOn: cut.L > 0 && cut.slant > 0.01, bx: 105, py: 330, W: 210, H: 297, inset: 0.25, h: 0.25, paper: [255, 255, 255] };
+      const { descs, truth } = S.describe(sh.pieces, geo, page, C.rng(3));
+      const res = S.solve(descs, geo), sc = S.score(descs, truth, res, geo, page);
+      console.log(`     ${name}: ${sh.pieces.length} pieces, exact ${(sc.exact * 100).toFixed(1)} %, looks right ${(sc.looks * 100).toFixed(1)} %, clusters ${res.clusters}, biggest ${res.biggest}, leftover ${res.leftover}`);
+      check(`unshredder: ${name}`, sc.looks >= minLooks && (minLooks === 0 || res.leftover === 0), sc.looks);
+      return { sc, res, truth };
+    };
+    const us = tryCut({ w: 6, L: 0, stagger: 0, slant: 0, x0: 0, y0: 0, pTag: 0, tearRate: 0 }, "6 mm strips", 0.999);
+    check("unshredder: strips are not handed the answer", us.truth.some(t => t.r === 1) && us.truth.some(t => t.r === 0));
+    tryCut({ w: 4, L: 40, stagger: 0.37, slant: 0.14, x0: 0, y0: 0, pTag: 0.01, tearRate: 0 }, "4 x 40 mm cross-cut", 0.85);
+    // 2 x 15 mm on this self-similar test page is beyond it; it must still finish and place nearly everything
+    const hard = tryCut({ w: 2, L: 15, stagger: 0.37, slant: 0.14, x0: 0, y0: 0, pTag: 0, tearRate: 0 }, "2 x 15 mm cross-cut (finishes)", 0);
+    check("unshredder: hard case places over 98 % of the pieces", hard.res.place.filter(q => q.ok).length > 0.98 * hard.res.place.length);
     console.log(ok ? "all tests passed" : "TESTS FAILED");
     return ok;
   },
@@ -594,6 +1028,12 @@ function rebuildDoc() {
   // the paper background is the commonest tone only if it is light and covers much of the page; a photo has none
   lumMap = { w: lw, h: lh, data, bg: bi >= 24 && hist[bi] > 0.35 * lw * lh ? bi * 8 + 4 : 255 };
   docVersion++;
+}
+let docPix = null, docPixVersion = -1;
+function getDocPixels() {
+  if (docPix && docPixVersion === docVersion) return docPix;
+  const d = docCanvas.getContext("2d").getImageData(0, 0, docCanvas.width, docCanvas.height);
+  docPix = { data: d.data, w: d.width, h: d.height }; docPixVersion = docVersion; return docPix;
 }
 function loadFile(file) {
   if (!file || !file.type.startsWith("image/")) return;
@@ -932,6 +1372,7 @@ let preview = null;       // the waiting sheet(s)
 let run = null;
 let assembled = false, sheetCounter = 0, binVolume = 0, hudNote = "", hudNoteT = 0;
 let lastStats = null, specPieces = null, specInfo = null;
+let solving = null, solved = null, showMarks = true;
 const seedRng = () => C.rng(P.seed * 1013 + sheetCounter * 31 + 5);
 
 function lookNow(mdl) {
@@ -975,7 +1416,7 @@ function setHudNote(t) { hudNote = t; hudNoteT = performance.now() + 6000; }
 
 // ---------------------------------------------------------------- a run: one or more passes through the cutter
 function startFeed() {
-  if (run) return;
+  if (run || solving) return;
   if (assembled) setAssembled(false, true);
   const mp = modelParams(), mdl = C.model(mp), cross = mp.cross;
   const places = sheetPlaces(1);
@@ -986,7 +1427,7 @@ function startFeed() {
   const parents = makeSheetBatch(nVis, mdl);
   run = { P: { ...P }, mp, mdl, cross, nVis, sheets: P.sheets, stage: 0, passes: P.passes, phase: "feed", s: 0, tries: 0, wait: 0,
     parents, kids: null, W: sheetW, H: sheetH, grain: P.grain === "long" ? (sheetH >= sheetW ? Math.PI / 2 : 0) : (sheetH >= sheetW ? 0 : Math.PI / 2),
-    look: parents.look, tex: parents.tex, rnd: seedRng(), jam: mdl.load > 1, v: P.speed * mdl.vFactor, note: "", area: sheetW * sheetH * P.sheets };
+    look: parents.look, tex: parents.tex, pix: getDocPixels(), place0: parents.places[0], rnd: seedRng(), jam: mdl.load > 1, v: P.speed * mdl.vFactor, note: "", area: sheetW * sheetH * P.sheets };
   sheetCounter += nVis;
   cutStage(run, parents.places);
   if (P.autoview) viewTo = fitView(boundsAll());
@@ -1109,6 +1550,10 @@ function finishRun(r) {
     const kb = r.kids; kb.afterFly = REST;
     for (let i = 0; i < kb.n; i++) if (kb.mode[i] < FLY) { kb.mode[i] = GONE; zeroPiece(kb, i); }
     tray.push(kb);
+    // what the unshredder needs to know about this sheet: paper size and the cutter grid
+    kb.si = { passes: r.stage + 1, sheets: r.sheets, skew: r.P.skew, tear: r.mdl.tearRate, jammed: r.phase === "jammed", pix: r.pix,
+      geo: { w: r.P.w, L: r.cross ? r.P.L : 0, stagger: r.P.stagger, slantOn: r.cross && r.P.slant > 0.5, bx: -r.place0.tx, py: -r.place0.ty,
+        W: r.W, H: r.H, inset: 0.4 * r.mdl.roughSlit, h: 0.17, paper: [255, 255, 255] } };
     binVolume += r.area * r.mdl.thick * r.mdl.bulk * (r.phase === "jammed" ? Math.min(1, r.s / r.sEnd) : 1);
     pickSpecimens(kb, r);
   }
@@ -1119,13 +1564,14 @@ function finishRun(r) {
 }
 function clearJam() { if (run && run.phase === "jammed") { run.note = "Stack pulled out. Feed fewer sheets, or use a stronger motor or a coarser cut."; finishRun(run); } }
 function emptyTray() {
-  if (run) return;
+  if (run || solving) return;
+  solved = null;
   for (const b of tray) freeBatch(b); tray = []; binVolume = 0; assembled = false; lastStats = null; specPieces = null;
   drawSpecimens(); updateReadouts(); syncButtons();
 }
 function setAssembled(on, quick) {
-  if (run) return;
-  assembled = on;
+  if (run || solving) return;
+  assembled = on; solved = null;
   const nSheets = new Set(); for (const b of tray) for (let i = 0; i < b.n; i++) nSheets.add(b.sheet[i]);
   const ids = [...nSheets].sort((a, b) => a - b), cols = Math.min(3, ids.length) || 1;
   for (const b of tray) {
@@ -1140,6 +1586,70 @@ function setAssembled(on, quick) {
   if (!quick && P.autoview) viewTo = fitView(boundsTray());
   syncButtons();
 }
+
+// ---------------------------------------------------------------- the unshredder (solver core is ShredSolve)
+function unshredCheck() {
+  const kb = tray[tray.length - 1];
+  if (!kb || !kb.si) return { why: "Feed a sheet first." };
+  const si = kb.si;
+  if (si.jammed) return { why: "The last sheet jammed part-way, so there is no whole page to rebuild." };
+  if (si.passes > 1) return { why: "The unshredder only handles a single pass. After a second pass the pieces no longer sit on one cutter grid." };
+  if (si.sheets > 1) return { why: "The unshredder handles one sheet at a time. Feed a single sheet." };
+  if (Math.abs(si.skew) > 0.01) return { why: "The unshredder needs a straight feed. Set \"Fed crooked by\" to 0." };
+  if (si.tear > 0) return { why: "Wet strips tore at random places; the unshredder cannot use the cutter grid on them." };
+  if (kb.n > 3500) return { why: `${kb.n.toLocaleString("en")} pieces: too many to compare pair by pair here, and each holds less than a letter.` };
+  return { kb, si };
+}
+function makeSampler(pix, W, H) {
+  const kx = pix.w / W, ky = pix.h / H, D = pix.data, w = pix.w, h = pix.h;
+  return (x, y, o) => {
+    let fx = x * kx - 0.5, fy = y * ky - 0.5; fx = fx < 0 ? 0 : fx > w - 1.001 ? w - 1.001 : fx; fy = fy < 0 ? 0 : fy > h - 1.001 ? h - 1.001 : fy;
+    const ix = fx | 0, iy = fy | 0, tx = fx - ix, ty = fy - iy, p = (iy * w + ix) * 4, q = p + w * 4;
+    for (let c = 0; c < 3; c++) o[c] = (D[p + c] * (1 - tx) + D[p + 4 + c] * tx) * (1 - ty) + (D[q + c] * (1 - tx) + D[q + 4 + c] * tx) * ty;
+  };
+}
+function startSolve() {
+  if (run || solving) return false;
+  const chk = unshredCheck();
+  if (chk.why) { setHudNote(chk.why); return false; }
+  if (assembled) setAssembled(false, true);
+  const kb = chk.kb, geo = chk.si.geo, sample = makeSampler(chk.si.pix, geo.W, geo.H);
+  const { descs, truth } = ShredSolve.describe(kb.items, geo, sample, C.rng(P.seed * 53 + kb.n));
+  solving = { kb, geo, sample, descs, truth, gen: ShredSolve.solveGen(descs, geo), t0: performance.now(), step: "Reading the cut edges", f: 0 };
+  syncButtons(); setTimeout(solveTick, 0); return true;
+}
+// runs on its own timer, in slices, so the page stays responsive and a throttled tab still finishes
+function solveTick() { if (!solving) return; pumpSolve(30); if (solving) setTimeout(solveTick, 0); }
+function pumpSolve(ms) {
+  const sv = solving, t = performance.now();
+  for (;;) {
+    let r;
+    try { r = sv.gen.next(); } catch (e) { solving = null; setHudNote("The unshredder stopped with an error: " + e.message); syncButtons(); return; }
+    if (r.done) { finishSolve(r.value); return; }
+    sv.step = r.value.step; sv.f = r.value.f;
+    if (performance.now() - t > ms) return;
+  }
+}
+function finishSolve(res) {
+  const sv = solving, kb = sv.kb, geo = sv.geo; solving = null;
+  const sc = ShredSolve.score(sv.descs, sv.truth, res, geo, sv.sample);
+  // a strip-cut page can come out upside down; nothing in the shreds says which way is up, so turn it for display
+  if (sc.flipped) for (const p of res.place) if (p.ok) { p.k = res.kMin + res.kMax - p.k; p.y = geo.H - p.y; p.o = 1 - p.o; }
+  const ox = -geo.W / 2, oy = TRAY.y0 + Math.max(4, (TRAY.h - geo.H) / 2), path = new Path2D(); let spare = 0;
+  for (let i = 0; i < kb.n; i++) {
+    if (kb.mode[i] === GONE) continue;
+    const p = res.place[i], dur = 1.0 + (i % 97) / 97 * 1.2;
+    if (!p.ok) { flyTo(kb, i, geo.W / 2 + 26 + (spare % 6) * 9, oy + 16 + Math.floor(spare / 6) * 8, kb.ax[i], 1, 0, dur, 0); spare++; continue; }
+    const X = ShredSolve.placeX(sv.descs[i], p, geo), turned = p.o !== sv.truth[i].r, sg = turned ? -1 : 1;
+    flyTo(kb, i, ox + X, oy + p.y, kb.ax[i] + (turned ? Math.PI : 0), 1, 0, dur, 0);
+    if (sc.wrong[i]) { const c = sv.truth[i].c; kb.items[i].poly.forEach((q, j) => { const x = ox + X + sg * (q.x - c.x), y = oy + p.y + sg * (q.y - c.y); if (j) path.lineTo(x, y); else path.moveTo(x, y); }); path.closePath(); }
+  }
+  assembled = true;
+  solved = { kb, res, sc, path, descs: sv.descs, truth: sv.truth, geo, ms: performance.now() - sv.t0, n: kb.n, showAt: simTime + 2.3 };
+  if (P.autoview) viewTo = fitView(boundsTray());
+  updateReadouts(); syncButtons();
+}
+function solveNow() { if (!startSolve()) return null; while (solving) pumpSolve(1e9); return solved; }
 
 // ---------------------------------------------------------------- statistics
 function hasContent(poly) {
@@ -1182,6 +1692,14 @@ function updateReadouts() {
     add("Pieces showing content", `${Math.round(s.contentFrac * 100)} %`);
     const rc = C.recover(s.content, s.cross, s.median);
     add("Reassembly", rc.text, rc.level <= 1 ? "warn" : rc.level >= 3 ? "ok" : "");
+  }
+  if (solved) {
+    const u = solved, r = u.res;
+    add("Unshredder", `${(u.sc.looks * 100).toFixed(u.sc.looks > 0.995 ? 0 : 1)} % of the page looks right`, u.sc.looks > 0.8 ? "warn" : "");
+    add("Pieces in their exact place", `${(u.sc.exact * 100).toFixed(0)} % of ${u.n.toLocaleString("en")}`);
+    add("Edge matching", `${r.inked.toLocaleString("en")} inked pieces, ${r.compared.toLocaleString("en")} edge comparisons`);
+    add("Clusters before fitting", `${r.clusters.toLocaleString("en")}, largest ${r.biggest} pieces`);
+    add("Solve time", (u.ms / 1000).toFixed(1) + " s" + (u.sc.flipped ? ", page came out upside down" : "") + (r.leftover ? `, ${r.leftover} pieces left over` : ""));
   }
   $("read").innerHTML = rows.join("");
   $("machnote").textContent = "Changes apply to the next sheet you feed.";
@@ -1265,6 +1783,7 @@ function drawTop(forExport) {
   const g = topc.getContext("2d"); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, R.w, R.h);
   setMM(g);
   const k = k2(), th = P.throat / 2, hw = th + 26, w = P.w, cross = P.type === "cross";
+  if (solved && showMarks && simTime > solved.showAt) { g.fillStyle = "rgba(240,70,50,0.5)"; g.fill(solved.path); }
   const body = g.createLinearGradient(0, -HOUSE, 0, HOUSE); body.addColorStop(0, "#4a525d"); body.addColorStop(0.5, "#2c323a"); body.addColorStop(1, "#1d2127");
   rr(g, -hw, -HOUSE, 2 * hw, 2 * HOUSE, 6); g.fillStyle = body; g.fill(); g.lineWidth = 0.6; g.strokeStyle = "#0c0e11"; g.stroke();
   g.fillStyle = "#07080a"; g.fillRect(-th, -HOUSE, 2 * th, 2.6);
@@ -1408,17 +1927,21 @@ function updateHud() {
     else if (r.phase === "gather") t = `<b>${pass}</b>gathering the shreds to feed them again`;
     else t = `<b>${pass}</b>settling`;
     if (r.sheets > r.nVis) t += ` · drawing ${r.nVis} of ${r.sheets} sheets`;
-  } else if (hudNote && performance.now() < hudNoteT) t = hudNote;
+  } else if (solving) t = `<b>Unshredding:</b> ${solving.step} ${Math.round(solving.f * 100)} %`;
+  else if (hudNote && performance.now() < hudNoteT) t = hudNote;
+  else if (solved) t = `<b>Unshredded</b> from the pieces alone: ${(solved.sc.looks * 100).toFixed(0)} % of the page looks right` + (showMarks ? ", mistakes tinted red." : ".") + (solved.sc.flipped ? " It came out upside down and was turned for you." : "");
   else if (assembled) t = "Every piece is back where it came from. This uses the known answer.";
   else if (!tray.length) t = "Drop an image here or use the panel, then press <b>Feed sheet</b>. Scroll to zoom, drag to pan.";
   if (t !== hudText) { hudText = t; $("hud").innerHTML = t; }
 }
 function syncButtons() {
-  const f = $("feed"), jam = run && run.phase === "jammed";
-  f.textContent = jam ? "Pull the stack out" : P.sheets > 1 ? `Feed ${P.sheets} sheets` : "Feed sheet"; f.disabled = !!run && !jam;
-  $("instant").disabled = !!run && jam; $("empty").disabled = !!run || !tray.length;
-  $("back").disabled = !!run || !tray.length; $("back").classList.toggle("on", assembled);
-  $("back").textContent = assembled ? "Scatter again" : "Put it back together";
+  const f = $("feed"), jam = run && run.phase === "jammed", busy = !!run || !!solving;
+  f.textContent = jam ? "Pull the stack out" : P.sheets > 1 ? `Feed ${P.sheets} sheets` : "Feed sheet"; f.disabled = busy && !jam;
+  $("instant").disabled = (!!run && jam) || !!solving; $("empty").disabled = busy || !tray.length;
+  const answer = assembled && !solved;
+  $("back").disabled = busy || !tray.length; $("back").classList.toggle("on", answer); $("back").textContent = answer ? "Scatter again" : "Show the answer";
+  $("unshred").disabled = busy || !tray.length; $("unshred").classList.toggle("on", !!solved); $("unshred").textContent = solved ? "Scatter again" : solving ? "Unshredding…" : "Unshred";
+  $("marks").disabled = !solved; $("marks").classList.toggle("on", !!solved && showMarks);
   $("pause").textContent = paused ? "Resume" : "Pause"; $("pause").classList.toggle("on", paused);
 }
 
@@ -1431,6 +1954,7 @@ function step(dt) {
   for (const b of tray) if (b.flying.length) updateFly(b);
 }
 function runInstant() {
+  if (solving) return;
   if (!run) startFeed(); if (!run) return;
   instant = true;
   for (let i = 0; i < 400 && run && run.phase !== "jammed"; i++) step(0.05);
@@ -1477,7 +2001,9 @@ function initInput() {
   $("instant").onclick = runInstant;
   $("pause").onclick = () => { paused = !paused; syncButtons(); };
   $("empty").onclick = emptyTray;
-  $("back").onclick = () => setAssembled(!assembled);
+  $("back").onclick = () => setAssembled(!(assembled && !solved));
+  $("unshred").onclick = () => { if (solved) setAssembled(false); else startSolve(); };
+  $("marks").onclick = () => { showMarks = !showMarks; syncButtons(); };
   $("save").onclick = saveImage;
   $("vAll").onclick = () => { viewTo = fitView(boundsAll()); };
   $("vTray").onclick = () => { viewTo = fitView(boundsTray()); };
@@ -1516,6 +2042,7 @@ function init() {
   syncDin(); paramsChanged(); syncButtons(); drawSpecimens();
   if (q.get("instant")) { rebuildPreview(); runInstant(); Object.assign(view, fitView(q.get("view") === "all" ? boundsAll() : boundsTray())); viewTo = null; }
   if (q.get("back")) { setAssembled(true, true); step(0.01); }
+  if (q.get("unshred")) { solveNow(); instant = true; step(0.01); instant = false; for (const b of tray) for (const i of b.flying) b.dur[i] = 0.0001; step(0.01); if (solved) solved.showAt = 0; }
   if (q.get("at")) {   // freeze part-way through a feed, for screenshots
     rebuildPreview(); startFeed();
     for (let i = 0; i < 4000 && run && run.phase === "feed" && run.s < +q.get("at") * run.sEnd; i++) step(0.03);
@@ -1526,7 +2053,7 @@ function init() {
   requestAnimationFrame(frame);
 }
 window.__shred = {
-  step, runInstant, startFeed, composeImage, setParam: (k, v) => { setParam(k, v); onControl(k); }, setAssembled,
+  step, runInstant, startFeed, composeImage, solveNow, get _solved() { return solved; }, get solved() { return solved && { looks: solved.sc.looks, exact: solved.sc.exact, flipped: solved.sc.flipped, ms: solved.ms, res: { ...solved.res, place: undefined } }; }, setParam: (k, v) => { setParam(k, v); onControl(k); }, setAssembled,
   render: () => { resize(); renderAll(false); updateHud(); drawCutaway(); },
   fit: which => { Object.assign(view, fitView(which === "tray" ? boundsTray() : boundsAll())); viewTo = null; needBg = true; },
   get state() { return { run: run && { phase: run.phase, s: run.s, sEnd: run.sEnd, stage: run.stage, kids: run.kids && run.kids.n }, tray: tray.map(b => b.n), stats: lastStats, view: { ...view }, R: { ...R } }; },
