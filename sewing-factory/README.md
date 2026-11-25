@@ -9,8 +9,8 @@ browser (three.js is loaded from a CDN).
 1. **Measure.** A mannequin with sliders for height, chest, waist, hip,
    shoulder width, inside leg and arm length. The torso sections are solved so
    the tape girths equal the slider values. Seven more sliders shape the bust
-   (projection, spacing, height, width, fullness above and below, under-bust
-   girth), and a heel-lift slider poses the feet for heeled shoes. Two modes: a full figure with head,
+   (projection, spacing, height, width, fullness above and below, and the rib cage
+   under the bust as a share of the bust girth), and a heel-lift slider poses the feet for heeled shoes. Two modes: a full figure with head,
    arms and legs, or a tailor's dress form on a stand (it hangs from a rail for
    trousers and swimwear, which need the crotch free).
 2. **Cut.** The pattern pieces of the chosen garment lie on a cutting table as a
