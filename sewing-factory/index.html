@@ -108,6 +108,7 @@
         <div class="seg" id="forms" style="margin-top:6px"></div>
         <div id="measures"></div>
       </div>
+      <div class="card"><h2>Bust</h2><p>The shape of the bust. The girth round it stays the Chest / bust measurement above; cups, bodices and shirt fronts are redrafted to fit.</p><div id="bustP"></div></div>
       <div class="card"><h2>Next</h2><p>Pick a garment above, then go to <b>2 Cut</b> to see its pieces laid out on the cloth.</p></div>
     </div>
     <div class="stage s2">
@@ -227,9 +228,19 @@ const SF = {};
     { key: 'inseam', label: 'Inside leg', min: 64, max: 96, step: 1 },
     { key: 'arm', label: 'Arm length', min: 50, max: 70, step: 0.5 },
   ];
+  // Shape of the bust; the bust girth itself is the "Chest / bust" measurement above.
+  SF.BUST = [
+    { key: 'bust', label: 'Projection', min: 0, max: 9, step: 0.1, def: 3.6 },
+    { key: 'bustDist', label: 'Bust point to bust point', min: 13, max: 26, step: 0.5, def: 17 },
+    { key: 'bustHeight', label: 'Bust height (raise or lower)', min: -4, max: 4, step: 0.5, def: 0 },
+    { key: 'bustSpread', label: 'Width of each breast', min: 60, max: 150, step: 1, def: 100, unit: '%' },
+    { key: 'bustLow', label: 'Fullness below the bust point', min: 3, max: 10, step: 0.5, def: 5 },
+    { key: 'bustHigh', label: 'Fullness above the bust point', min: 3, max: 11, step: 0.5, def: 6.5 },
+    { key: 'underbust', label: 'Under-bust girth', min: 60, max: 125, step: 1, def: 77 },
+  ];
   SF.FORMS = {
-    w: { name: "Women's form", height: 168, chest: 90, waist: 70, hip: 97, shoulder: 38, inseam: 78, arm: 58, bust: 3.6 },
-    m: { name: "Men's form", height: 180, chest: 100, waist: 86, hip: 100, shoulder: 45, inseam: 82, arm: 63, bust: 0 },
+    w: { name: "Women's form", height: 168, chest: 90, waist: 70, hip: 97, shoulder: 38, inseam: 78, arm: 58, bust: 3.6, bustDist: 17, bustHeight: 0, bustSpread: 100, bustLow: 5, bustHigh: 6.5, underbust: 77 },
+    m: { name: "Men's form", height: 180, chest: 100, waist: 86, hip: 100, shoulder: 45, inseam: 82, arm: 63, bust: 0, bustDist: 20, bustHeight: 0, bustSpread: 100, bustLow: 5, bustHigh: 6.5, underbust: 95 },
   };
   const E = 0.9;            // superellipse exponent of the torso sections (1 = ellipse, lower = boxier)
   const CAP = 0;            // the torso ends at the crotch line
@@ -250,14 +261,17 @@ const SF = {};
     const y = {};
     y.crotch = M.inseam; y.neck = 0.86 * H;
     const span = y.neck - y.crotch;
-    y.hip = y.crotch + 0.11 * span; y.waist = y.crotch + 0.39 * span; y.bust = y.crotch + 0.6 * span;
-    y.under = y.bust - 0.105 * span; y.armpit = y.crotch + 0.7 * span;
+    y.hip = y.crotch + 0.11 * span; y.waist = y.crotch + 0.39 * span; y.bust = y.crotch + 0.6 * span + clamp(M.bustHeight || 0, -4, 4);
+    y.under = y.crotch + 0.6 * span - 0.105 * span + Math.min(0, M.bustHeight || 0); y.armpit = y.crotch + 0.7 * span;
     y.shoulder = y.neck - 4.6 * (M.shoulder / 40);
     y.knee = 0.285 * H; y.calf = 0.2 * H; y.ankle = 0.05 * H;
     y.chin = 0.875 * H; y.top = H;
     const neckR = (34 + 0.22 * (M.chest - 88)) / TAU * 1.08;
     const bust = M.bust || 0;
-    const bump = (th, yy) => bust <= 0 ? 0 : bust * Math.exp(-Math.pow((Math.abs(th) - 0.5) / 0.36, 2)) * Math.exp(-Math.pow((yy - y.bust) / (yy > y.bust ? 6.5 : 5), 2));
+    // angle of the bust point round the torso, from the distance between the two points
+    const bustTh = Math.asin(clamp((M.bustDist ?? 17) / 2 / (M.chest * 0.159), 0.2, 0.95));
+    const bw = 0.36 * (M.bustSpread ?? 100) / 100, bHi = M.bustHigh ?? 6.5, bLo = M.bustLow ?? 5;
+    const bump = (th, yy) => bust <= 0 ? 0 : bust * Math.exp(-Math.pow((Math.abs(th) - bustTh) / bw, 2)) * Math.exp(-Math.pow((yy - y.bust) / (yy > y.bust ? bHi : bLo), 2));
     const contour = (a, df, db, yy) => th => {
       const s = Math.sin(th), c = Math.cos(th);
       return [a * spow(s, E), (c >= 0 ? df + bump(th, yy) : db) * spow(c, E)];
@@ -277,7 +291,7 @@ const SF = {};
       [y.crotch, ...solve(M.hip * 0.955, 0.66, 0.46, y.crotch)],
       [y.hip, ...solve(M.hip, 0.67, 0.45, y.hip)],
       [y.waist, ...solve(M.waist, 0.76, 0.53, y.waist)],
-      [y.under, ...solve(lerp(M.waist, M.chest, 0.62) * (bust > 0 ? 0.93 : 1), 0.74, 0.52, y.under)],
+      [y.under, ...solve(M.underbust ?? lerp(M.waist, M.chest, 0.62) * (bust > 0 ? 0.93 : 1), 0.74, 0.52, y.under)],
       [y.bust, ...solve(M.chest, 0.72, 0.52, y.bust)],
       [y.armpit, ...solve(M.chest * (bust > 0 ? 0.93 : 0.97), 0.68, 0.5, y.armpit)],
       [y.shoulder, M.shoulder / 2 - 1, 5.4 * kc, 6.6 * kc],
@@ -321,7 +335,7 @@ const SF = {};
     const ang = 17 * PI / 180;
     const armR = SF.pchip([0, 0.5 * M.arm, M.arm], [M.chest * 0.052, M.chest * 0.043, M.chest * 0.031]);
     const arm = sgn => {
-      const S = [sgn * (M.shoulder / 2 - 4.5), y.shoulder - 5.0, -0.2];
+      const r0 = M.chest * 0.052, S = [sgn * (M.shoulder / 2 - r0 - 0.1), y.shoulder - r0 - 0.5, -0.2];   // the joint stays inside the shoulder whatever the arm's girth
       const d = [sgn * Math.sin(ang), -Math.cos(ang), 0.05], dl = Math.hypot(...d); d.forEach((v, i) => (d[i] = v / dl));
       const u = [sgn * Math.cos(ang), Math.sin(ang), 0], w = [0, 0, 1];
       return { S, d, u, w };
@@ -331,7 +345,7 @@ const SF = {};
       const A = arms[sgn], rr = r === undefined ? armR(clamp(t, 0, M.arm)) : r, c = Math.cos(th) * rr, s = Math.sin(th) * rr;
       return [A.S[0] + A.d[0] * t + A.u[0] * c + A.w[0] * s, A.S[1] + A.d[1] * t + A.u[1] * c + A.w[1] * s, A.S[2] + A.d[2] * t + A.u[2] * c + A.w[2] * s];
     };
-    return { M, y, neckR, CAP, CAPH, sect, torso, girth, bump, legSect, leg, arms, armR, armPoint };
+    return { M, y, neckR, bustTh, CAP, CAPH, sect, torso, girth, bump, legSect, leg, arms, armR, armPoint };
   };
 })();
 // ============================================================ part 2: garment surfaces, pattern pieces, operations
@@ -807,16 +821,16 @@ const SF = {};
   function bikini(body, fit) {
     const y = body.y, H = PI / 2, shell = SF.makeShell(body, { ease: 0.45, loose: 0 }), tc = torsoChart(shell);
     const yUb = y.bust - 7.2, k = fit.cup / 100, pieces = [], ops = [];
-    const apex = [0.5, y.bust + 9.5 * k], wI = 0.5 - 0.42 * k, wO = 0.5 + 0.55 * k;
+    const bt = body.bustTh, apex = [bt, y.bust + 9.5 * k], wI = Math.max(0.03, bt - 0.42 * k), wO = bt + 0.55 * k;
     for (const sgn of [1, -1]) {
       const s = sgn > 0 ? 'L' : 'R', side = sgn > 0 ? 'left' : 'right', m = f => sgn > 0 ? f : mir(f);
       const bow = (a, b, d) => u => { const c = lin(a, b)(u); return [c[0] + d * Math.sin(PI * u), c[1]]; };
-      const sp = { id: 'cup' + s, name: `Cup, ${side}`, chart: tc, grain: sgn * 0.5, nu: 10, nv: 12, layer: 0.6, B: m(lin([wI, yUb], [wO, yUb])), T: m(() => apex), L: m(bow([wI, yUb], apex, -0.05 * k)), R: m(bow([wO, yUb], apex, 0.1 * k)) };
+      const sp = { id: 'cup' + s, name: `Cup, ${side}`, chart: tc, grain: sgn * bt, nu: 10, nv: 12, layer: 0.6, B: m(lin([wI, yUb], [wO, yUb])), T: m(() => apex), L: m(bow([wI, yUb], apex, -0.05 * k)), R: m(bow([wO, yUb], apex, 0.1 * k)) };
       if (sgn < 0) { [sp.L, sp.R] = [sp.R, sp.L]; const B = sp.B; sp.B = u => B(1 - u); }
       pieces.push(sp);
       const P = (th, q, lift = 0.5) => { const p = shell(sgn * th, q), o = outOf(p); return [p[0] + o[0] * lift, p[1], p[2] + o[2] * lift]; };
       pieces.push({ id: 'tie' + s, name: `Neck tie, ${side}`, ribbon: true, width: 1.1, nv: 20, small: true,
-        path: [P(0.5, apex[1] - 0.6), P(0.56, lerp(apex[1], y.shoulder, 0.5)), P(0.7, lerp(y.shoulder, y.neck, 0.35)), P(1.15, lerp(y.shoulder, y.neck, 0.82), 0.7), P(2.2, y.neck - 0.4, 0.8), P(3.0, y.neck - 1.3, 0.8)] });
+        path: [P(bt, apex[1] - 0.6), P(lerp(bt, 0.7, 0.4), lerp(apex[1], y.shoulder, 0.5)), P(0.7, lerp(y.shoulder, y.neck, 0.35)), P(1.15, lerp(y.shoulder, y.neck, 0.82), 0.7), P(2.2, y.neck - 0.4, 0.8), P(3.0, y.neck - 1.3, 0.8)] });
     }
     pieces.push({ id: 'band', name: 'Under-bust band', chart: torsoChart(SF.makeShell(body, { ease: 0.3 })), grain: PI, nu: 40, nv: 2, layer: 1.2, rot: true, B: lin([0, yUb - 1.5], [TAU, yUb - 1.5]), T: lin([0, yUb + 0.3], [TAU, yUb + 0.3]), L: lin([0, yUb - 1.5], [0, yUb + 0.3]), R: lin([TAU, yUb - 1.5], [TAU, yUb + 0.3]) });
     const yK = y.crotch - body.CAP + 0.35, yTop = y.hip + fit.rise, yLeg = yTop - fit.side;
@@ -1448,7 +1462,7 @@ const SF = {};
     for (const [k, f] of forms()) {
       out.push([k + ' default', f]);
       const lo = { ...f }, hi = { ...f };
-      for (const m of SF.MEASURES) { lo[m.key] = m.min; hi[m.key] = m.max; }
+      for (const m of [...SF.MEASURES, ...SF.BUST]) { lo[m.key] = m.min; hi[m.key] = m.max; }
       out.push([k + ' smallest', lo], [k + ' largest', hi]);
     }
     return out;
@@ -1461,6 +1475,12 @@ const SF = {};
       assertNear(b.girth(b.y.hip), M.hip, 0.5, label + ' hip');
       assert(b.y.crotch < b.y.hip && b.y.hip < b.y.waist && b.y.waist < b.y.bust && b.y.bust < b.y.armpit && b.y.armpit < b.y.shoulder && b.y.shoulder < b.y.neck, label + ' level order');
     }
+  });
+  SewTests.add('body: bust parameters move the bust without changing the bust girth', () => {
+    const F = SF.FORMS.w, a = SF.makeBody(F), b = SF.makeBody({ ...F, bust: 7, bustDist: 22, bustHeight: 3, bustSpread: 130, bustLow: 8 });
+    assertNear(b.girth(b.y.bust), F.chest, 0.5, 'girth kept'); assertNear(b.y.bust - a.y.bust, 3, 1e-9, 'height');
+    assert(b.bustTh > a.bustTh, 'wider apart'); assertNear(b.bump(b.bustTh, b.y.bust), 7, 1e-9, 'projection at the bust point'); assert(b.bump(b.bustTh, b.y.bust - 6) > a.bump(a.bustTh, a.y.bust - 6) * 2, 'fuller below');
+    assertNear(a.girth(a.y.under), F.underbust, 0.5, 'under-bust girth');
   });
   SewTests.add('body: legs meet at the crotch, shoulders are as wide as asked', () => {
     const b = SF.makeBody(SF.FORMS.w), S = b.legSect(b.y.crotch);
@@ -2690,6 +2710,8 @@ function uiMeasures() {
   for (const [k, name] of [['figure', 'Full figure'], ['stand', 'Dress form on a stand']]) { const b = document.createElement('button'); b.textContent = name; b.className = S.mode === k ? 'on' : ''; b.onclick = () => { S.mode = k; needBody = true; uiMeasures(); }; md.appendChild(b); }
   $('modeNote').textContent = S.mode === 'stand' ? 'A tailor\u2019s dress form: torso only. Trousers and swimwear need the crotch free, so for those the form hangs from a rail instead of standing on its pole. Sleeves and trouser legs hang empty.' : '';
   const m = $('measures'); m.innerHTML = '';
+  const bp = $('bustP'); bp.innerHTML = '';
+  for (const d of SF.BUST) slider(bp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
   if (S.mode !== 'stand') slider(m, { label: 'Heel lift (foot posed for heeled shoes)', min: 0, max: 11, step: 0.5 }, () => S.heel, v => { S.heel = v; needBody = true; });
   for (const d of SF.MEASURES) slider(m, d, () => S.M[d.key], v => { S.M[d.key] = v; needBody = true; });
 }
@@ -2843,6 +2865,8 @@ try {
   setGarment(S.garment); S.op = +(Q.get('op') || 0); S.opT = +(Q.get('t') || 0);
   if (Q.get('cloth') || Q.get('print') || Q.get('colour')) S.fabric = { cloth: Q.get('cloth') || S.fabric.cloth, print: Q.get('print') || S.fabric.print, colour: Q.get('colour') ? '#' + Q.get('colour') : S.fabric.colour };
   for (const d of SF.GARMENTS[S.garment].fit) if (Q.has(d.key)) S.fit[d.key] = +Q.get(d.key);
+  for (const d of [...SF.MEASURES, ...SF.BUST]) if (Q.has(d.key)) { S.M[d.key] = +Q.get(d.key); needBody = true; }
+  if (needBody) uiMeasures();
   if (STILL) $('mview').dataset.preserve = '1';
   try { mv = createMachineView($('mview')); } catch (e) { showErr(e); }
   resize(); rebuild(); setStage(S.stage, true); machineOpts();
