@@ -29,26 +29,29 @@ An **X-ray** switch makes the body see-through and shows a skeleton inside it
 (spine, rib cage, pelvis, limbs, hands, feet, skull), built from the same
 measurements and pose, with the clothing still on.
 
-Garments: jeans, shorts, jean shorts, hot shorts, metallic shorts, bike shorts,
+Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
+rainbow shorts, bike shorts,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
-stretch, swim tricot. Prints: solid, zebra, leopard, pink leopard, polka dots,
+stretch, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye,
+polka dots,
 stripes, gingham, floral, camouflage.
 
-### Four women's shorts
+### Six women's shorts
 
-All four sit on the natural waist, are cut close to the body, and share the
+All six sit on the natural waist, are cut close to the body, and share the
 trouser block (two fronts, two backs, a waistband).
 
 | Shorts | Cloth | What makes it different on the line |
 |---|---|---|
 | Jean shorts | pale stretch denim | yokes, patch pockets, belt loops, fly zip, tack button, lap-felled seams, a turn-up cuff |
 | Hot shorts | cotton jersey | no fly: four-thread overlock seams, an elastic waistband, coverstitched hems (5 operations) |
-| Metallic shorts | foil-coated stretch | fly zip and a large sewn button, plain waistband, no pockets |
+| Silver shorts, gold shorts | foil-coated stretch | fly zip and a large sewn button, plain waistband, no pockets |
+| Rainbow shorts | swim tricot, rainbow tie-dye | as the hot shorts |
 | Bike shorts | swim tricot, pink leopard | as the hot shorts, with a leg to mid-thigh |
 
 The hem of the short ones can be cut higher at the side of the thigh than at
-the inside leg. Worn, these four lie skin-tight: the body's own surface pushed
+the inside leg. Worn, these six lie skin-tight: the body's own surface pushed
 out by the ease, so the cloth goes into the cleft and tucks under each buttock.
 The looser jeans and chino shorts span across instead.
 
@@ -134,7 +137,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|bikeshorts|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|shirt|dress|swimsuit|bikini`,
 `&form=w|m|w3|m3|ag|ab`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
