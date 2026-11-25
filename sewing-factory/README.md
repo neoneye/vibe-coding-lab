@@ -71,7 +71,9 @@ which rises steeply out of it, and the section there is an ellipse instead of
 the torso's boxy one, so the top of the torso is a dome: round from the side
 as well as from the front. The corner
 at the shoulder point is rounded with a soft minimum. Sleeveless garments
-(dress, swimsuit, bikini) are fitted to that shape so their straps lie on it;
+(dress, swimsuit, bikini) are fitted to that shape. The dress and the swimsuit
+end in a corner on the upper chest and on the shoulder blade, and a separate
+strap, bartacked at each end, runs flat over the shoulder between them;
 the shirt keeps a fuller envelope so its sleeve head clears the top of the arm.
 
 ## The lower body

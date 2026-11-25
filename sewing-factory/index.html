@@ -749,9 +749,33 @@ const SF = {};
   // Bodice side boundary for the +x side: side seam, armhole scoop, shoulder. dir = +1 front (scoop towards θ = 0), −1 back.
   const scoop = (W, yU, yS) => q => q <= yU || q >= yS ? 0 : W * Math.pow(Math.sin(PI * (q - yU) / (yS - yU)), 0.75);
   const neckFn = (yT, drop, k = 1.6) => th => yT - drop * Math.pow(Math.abs(Math.cos(th)), k);
-  // Neckline exponent that leaves a strap `sw` radians wide where the armhole ends (height yS), however deep the
-  // neckline is cut. With a fixed exponent a deep neckline crossed the armhole edge and the strap shrank to a point.
-  const strapK = (k, drop, rise, sw = 0.42) => drop > rise ? Math.max(k, Math.log(rise / drop) / Math.log(Math.sin(sw))) : k;
+
+  // Sleeveless tops, as they are really made: front and back each end in a corner on the upper chest and on the
+  // shoulder blade, and a separate strap runs flat over the shoulder from one corner to the other, part-way
+  // between neck and shoulder tip. (Carrying the body panels themselves over the shoulder pinched them to a point.)
+  function strapTop(body, shell, yU, o = {}) {
+    const y = body.y, H = PI / 2, yA = lerp(y.armpit, y.shoulder, o.at ?? 0.5), xs = body.sect(y.shoulder).a * (o.x ?? 0.6);
+    // angle from the centre line (front or back) at which the surface is xs out from the middle, at height q; null above the shoulder there
+    const ang = (q, back, x = xs) => {
+      if (shell(H, q)[0] < x) return null;
+      let lo = 0, hi = H; for (let i = 0; i < 22; i++) { const m = (lo + hi) / 2; if (shell(back ? PI - m : m, q)[0] < x) lo = m; else hi = m; }
+      return (lo + hi) / 2;
+    };
+    // The panel's top corner is at the strap's *outer* edge and its top runs level for the strap's width (the
+    // neckline's high exponent), so the whole end of the strap sits on cloth, not on a point.
+    const hw = (o.w ?? 2.2) / 2, tF = ang(yA, false, xs + hw) ?? H, tB = ang(yA, true, xs + hw) ?? H;
+    const ease = q => q <= yU ? 0 : Math.pow(Math.sin(PI / 2 * clamp((q - yU) / (yA - yU), 0, 1)), 0.8);
+    const neck = (tC, drop, k) => d => yA - drop * Math.pow(Math.max(0, Math.cos(PI / 2 * clamp(d / tC, -1, 1))), k);
+    const strap = (sgn, id, name, width) => {
+      const pts = [], P = (q, back) => { const m = ang(q, back); return m === null ? null : shell(sgn * (back ? PI - m : m), q); };
+      let q = yA - 1.6; for (; ; q += 0.4) { const c = P(q, false); if (!c) break; pts.push(c); }
+      const qTop = q - 0.4, n0 = pts.length;
+      for (q = qTop; q >= yA - 1.6 - 1e-6; q -= 0.4) { const c = P(q, true); if (c) pts.push(c); }
+      const zr = (pts[n0 - 1][2] + pts[n0][2]) / 2, out = c => norm([0, 2.5 * smooth(qTop - 3.5, qTop + 0.5, c[1]), c[2] - zr]);
+      return { id, name, ribbon: true, width, nv: 26, small: true, out, path: pts.map(c => { const n = out(c); return [c[0] + n[0] * 0.45, c[1] + n[1] * 0.45, c[2] + n[2] * 0.45]; }) };
+    };
+    return { yA, tF, tB, armF: q => (H - tF) * ease(q), armB: q => (H - tB) * ease(q), neckF: (drop, k = 3) => neck(tF, drop, k), neckB: (drop, k = 3) => neck(tB, drop, k), strap };
+  }
 
   function button(id, host, P, n, r, style) { return { id, type: 'button', host, pos: [P[0] + n[0] * 0.35, P[1] + n[1] * 0.35, P[2] + n[2] * 0.35], n, r, style: style || 'sewn' }; }
   const outOf = P => norm([P[0], 0, P[2]]);
@@ -960,17 +984,18 @@ const SF = {};
     const flare = Math.min(fit.flare * 0.0042, Math.max(0, (43 - body.M.hip / TAU - 2 - fit.ease) / (yW - yHem)));
     const shell = SF.makeShell(body, { ease: fit.ease, loose: 1, hangTop: y.waist, flare, flareTop: y.waist - 1, soft: true });
     const tc = torsoChart(shell);
-    const yU = y.armpit - 1.5, yS = lerp(y.shoulder, y.neck, 0.3), yT = lerp(y.shoulder, y.neck, 0.72), W = 0.5;
-    const sc = scoop(W, yU, yS), ynF = neckFn(yT, fit.neck, strapK(1.3, fit.neck, yT - yS)), ynB = neckFn(yT, 5, strapK(1.6, 5, yT - yS));
+    const yU = y.armpit - 1.5, ST = strapTop(body, shell, yU, { at: 0.55, w: 3.4 }), yT = ST.yA, rise = lerp(y.shoulder, y.neck, 0.72) - yT;
+    const nF = ST.neckF(Math.max(1.5, fit.neck - rise)), nB = ST.neckB(1.8), ynF = th => nF(th), ynB = th => nB(th - PI);
     const pieces = [], fr = (a, b) => [frac(a, yW, yT), frac(b, yW, yT)];
-    const sideF = fnq(q => H - sc(q), yW, yT);
-    pieces.push({ id: 'bodF', name: 'Bodice front', chart: tc, grain: 0, nu: 22, nv: 18, B: lin([-H, yW], [H, yW]), T: fnp(-H, H, ynF), L: mir(sideF), R: sideF,
-      segs: { sideR: ['L', ...fr(yW, yU)], armR: ['L', ...fr(yU, yS)], shR: ['L', ...fr(yS, yT)], sideL: ['R', ...fr(yW, yU)], armL: ['R', ...fr(yU, yS)], shL: ['R', ...fr(yS, yT)], waist: ['B', 0, 1], neck: ['T', 0, 1] } });
-    const sideB = fnq(q => H + sc(q), yW, yT);
-    pieces.push({ id: 'bodBL', name: 'Bodice back, left', chart: tc, grain: PI, nu: 12, nv: 18, B: lin([H, yW], [PI, yW]), T: fnp(H, PI, ynB), L: sideB, R: lin([PI, yW], [PI, ynB(PI)]),
-      segs: { side: ['L', ...fr(yW, yU)], arm: ['L', ...fr(yU, yS)], sh: ['L', ...fr(yS, yT)], cb: ['R', 0, 1], waist: ['B', 0, 1], neck: ['T', 0, 1] } });
-    pieces.push({ id: 'bodBR', name: 'Bodice back, right', chart: tc, grain: PI, nu: 12, nv: 18, B: lin([PI, yW], [3 * H, yW]), T: fnp(PI, 3 * H, ynB), L: lin([PI, yW], [PI, ynB(PI)]), R: mir(sideB, PI),
-      segs: { side: ['R', ...fr(yW, yU)], arm: ['R', ...fr(yU, yS)], sh: ['R', ...fr(yS, yT)], cb: ['L', 0, 1], waist: ['B', 0, 1], neck: ['T', 0, 1] } });
+    const sideF = fnq(q => H - ST.armF(q), yW, yT);
+    pieces.push({ id: 'bodF', name: 'Bodice front', chart: tc, grain: 0, nu: 22, nv: 18, B: lin([-H, yW], [H, yW]), T: fnp(-ST.tF, ST.tF, ynF), L: mir(sideF), R: sideF,
+      segs: { sideR: ['L', ...fr(yW, yU)], armR: ['L', ...fr(yU, yT)], sideL: ['R', ...fr(yW, yU)], armL: ['R', ...fr(yU, yT)], waist: ['B', 0, 1], neck: ['T', 0, 1] } });
+    const sideB = fnq(q => H + ST.armB(q), yW, yT);
+    pieces.push({ id: 'bodBL', name: 'Bodice back, left', chart: tc, grain: PI, nu: 12, nv: 18, B: lin([H, yW], [PI, yW]), T: fnp(PI - ST.tB, PI, ynB), L: sideB, R: lin([PI, yW], [PI, ynB(PI)]),
+      segs: { side: ['L', ...fr(yW, yU)], arm: ['L', ...fr(yU, yT)], cb: ['R', 0, 1], waist: ['B', 0, 1], neck: ['T', 0, 1] } });
+    pieces.push({ id: 'bodBR', name: 'Bodice back, right', chart: tc, grain: PI, nu: 12, nv: 18, B: lin([PI, yW], [3 * H, yW]), T: fnp(PI, PI + ST.tB, ynB), L: lin([PI, yW], [PI, ynB(PI)]), R: mir(sideB, PI),
+      segs: { side: ['R', ...fr(yW, yU)], arm: ['R', ...fr(yU, yT)], cb: ['L', 0, 1], waist: ['B', 0, 1], neck: ['T', 0, 1] } });
+    pieces.push(ST.strap(1, 'strapL', 'Shoulder strap, left', 3.4), ST.strap(-1, 'strapR', 'Shoulder strap, right', 3.4));
     const sk = (id, name, p0, p1, g, segs) => pieces.push({ id, name, chart: tc, grain: g, nu: p1 - p0 > 2 ? 22 : 12, nv: 22, B: lin([p0, yHem], [p1, yHem]), T: lin([p0, yW], [p1, yW]), L: lin([p0, yHem], [p0, yW]), R: lin([p1, yHem], [p1, yW]), segs: { hem: ['B', 0, 1], waist: ['T', 0, 1], ...segs } });
     sk('skF', 'Skirt front', -H, H, 0, { sideR: ['L', 0, 1], sideL: ['R', 0, 1] });
     sk('skBL', 'Skirt back, left', H, PI, PI, { side: ['L', 0, 1], cb: ['R', 0, 1] });
@@ -981,12 +1006,12 @@ const SF = {};
     const zf = frac(zBot, yHem, yW);
     const ops = [
       { name: 'Overlock the raw edges', machine: 'overlock3', seam: 'edge', stitch: ['skF.sideL', 'skF.sideR', 'skBL.side', 'skBR.side', 'skBL.cb', 'skBR.cb', 'bodF.sideL', 'bodF.sideR', 'bodBL.side', 'bodBR.side'].map(e => ({ e, in: 0.2 })), note: 'Dress cloths fray easily. Every seam edge is trimmed and wrapped by a three-thread overlock first, so the seams can later be pressed open.' },
-      { name: 'Shoulder seams', machine: 'lock', seam: 'superimposed', joins: [J('bodF.shL', 'bodBL.sh'), J('bodF.shR', 'bodBR.sh')], note: 'A plain lockstitch seam, the workhorse of woven garments.' },
       { name: 'Finish neckline and armholes', machine: 'lock', seam: 'topstitch', stitch: ['bodF.neck', 'bodBL.neck', 'bodBR.neck', 'bodF.armL', 'bodF.armR', 'bodBL.arm', 'bodBR.arm'].map(e => ({ e, in: 0.5 })), note: 'A facing or bias binding encloses the curved edges; shown here as the row of stitching that holds it.' },
       { name: 'Waist seams', machine: 'lock', seam: 'superimposed', joins: [J('bodF.waist', 'skF.waist'), J('bodBL.waist', 'skBL.waist'), J('bodBR.waist', 'skBR.waist')], note: 'Bodice and skirt panels are joined in pairs while they are still flat.' },
       { name: 'Centre back seam below the zip', machine: 'lock', seam: 'superimposed', joins: [J('skBL.cb', 'skBR.cb')], stitch: [{ e: 'skBL.cb', s: [0, zf], in: 0.2 }], note: 'Sewn from the hem up to where the zip will end.' },
       { name: 'Set in the back zip', machine: 'lock', seam: 'zip', bring: ['zip'], joins: [J('bodBL.cb', 'bodBR.cb')], stitch: [{ e: 'bodBL.cb', in: 0.7 }, { e: 'bodBR.cb', in: 0.7 }, { e: 'skBL.cb', s: [zf, 1], in: 0.7 }, { e: 'skBR.cb', s: [zf, 1], in: 0.7 }], note: 'With a zipper foot the needle runs close beside the teeth, down one tape and up the other.' },
       { name: 'Side seams', machine: 'lock', seam: 'superimposed', joins: [J('bodF.sideL+skF.sideL', 'bodBL.side+skBL.side'), J('bodF.sideR+skF.sideR', 'bodBR.side+skBR.side')], note: 'One run from underarm to hem on each side closes the dress.' },
+      { name: 'Attach the shoulder straps', machine: 'bartack', seam: 'bartack', bring: ['strapL', 'strapR'], tacks: [['strapL', 0.5, 0.03], ['strapL', 0.5, 0.97], ['strapR', 0.5, 0.03], ['strapR', 0.5, 0.97]], note: 'Each strap is a folded band of the dress cloth. Its ends are caught under the facing at the top corners of the bodice front and back and held by a bartack.' },
       { name: 'Hem', machine: 'lock', seam: 'hem', stitch: ['skF.hem', 'skBL.hem', 'skBR.hem'].map(e => ({ e, in: 2 })), note: 'A turned hem. Finer dresses use a blindstitch machine, whose curved needle catches only a thread of the outer cloth.' },
     ];
     return { pieces, trims: [], ops };
@@ -1031,25 +1056,26 @@ const SF = {};
 
   function swimsuit(body, fit) {
     const y = body.y, H = PI / 2, { shell, chart: tc } = swimChart(body);
-    const yK = y.crotch - SWIM_U, yLeg = y.hip + fit.leg, yU = y.armpit - 3, yS = lerp(y.shoulder, y.neck, 0.35), yT = lerp(y.shoulder, y.neck, 0.68), W = 0.6;
-    const sc = scoop(W, yU, yS), lcF = legCurve(body, shell, y.crotch, yLeg, 2.3), lcB = legCurve(body, shell, y.crotch, yLeg, 0.85);
-    const ynF = neckFn(yT, fit.neck, strapK(1.2, fit.neck, yT - yS)), ynB = neckFn(yT, fit.back, strapK(0.9, fit.back, yT - yS));
+    const yK = y.crotch - SWIM_U, yLeg = y.hip + fit.leg, yU = y.armpit - 3, ST = strapTop(body, shell, yU), yT = ST.yA, yS = yT, rise = lerp(y.shoulder, y.neck, 0.68) - yT;
+    const lcF = legCurve(body, shell, y.crotch, yLeg, 2.3), lcB = legCurve(body, shell, y.crotch, yLeg, 0.85);
+    const nF = ST.neckF(Math.max(1.5, fit.neck - rise)), nB = ST.neckB(Math.max(1.5, fit.back - rise)), ynF = th => nF(th), ynB = th => nB(th - PI);
     const fr = (a, b) => [frac(a, yK, yT), frac(b, yK, yT)];
-    const segs = { legR: ['L', ...fr(yK, yLeg)], sideR: ['L', ...fr(yLeg, yU)], armR: ['L', ...fr(yU, yS)], shR: ['L', ...fr(yS, yT)], legL: ['R', ...fr(yK, yLeg)], sideL: ['R', ...fr(yLeg, yU)], armL: ['R', ...fr(yU, yS)], shL: ['R', ...fr(yS, yT)], crotch: ['B', 0, 1], neck: ['T', 0, 1] };
-    const sideF = fnq(q => lcF(q) - sc(q), yK, yT), sideB = fnq(q => PI - (lcB(q) - sc(q)), yK, yT);
+    const segs = { legR: ['L', ...fr(yK, yLeg)], sideR: ['L', ...fr(yLeg, yU)], armR: ['L', ...fr(yU, yS)], legL: ['R', ...fr(yK, yLeg)], sideL: ['R', ...fr(yLeg, yU)], armL: ['R', ...fr(yU, yS)], crotch: ['B', 0, 1], neck: ['T', 0, 1] };
+    const sideF = fnq(q => lcF(q) - ST.armF(q), yK, yT), sideB = fnq(q => PI - (lcB(q) - ST.armB(q)), yK, yT);
     const t0 = lcF(yK);
     const pieces = [
-      { id: 'front', name: 'Front', chart: tc, grain: 0, nu: 20, nv: 34, B: lin([-t0, yK], [t0, yK]), T: fnp(-H, H, ynF), L: mir(sideF), R: sideF, segs },
-      { id: 'back', name: 'Back', chart: tc, grain: PI, nu: 20, nv: 34, B: lin([PI - t0, yK], [PI + t0, yK]), T: fnp(H, 3 * H, ynB), L: sideB, R: mir(sideB, PI),
-        segs: { legL: ['L', ...fr(yK, yLeg)], sideL: ['L', ...fr(yLeg, yU)], armL: ['L', ...fr(yU, yS)], shL: ['L', ...fr(yS, yT)], legR: ['R', ...fr(yK, yLeg)], sideR: ['R', ...fr(yLeg, yU)], armR: ['R', ...fr(yU, yS)], shR: ['R', ...fr(yS, yT)], crotch: ['B', 0, 1], neck: ['T', 0, 1] } },
+      { id: 'front', name: 'Front', chart: tc, grain: 0, nu: 20, nv: 34, B: lin([-t0, yK], [t0, yK]), T: fnp(-ST.tF, ST.tF, ynF), L: mir(sideF), R: sideF, segs },
+      { id: 'back', name: 'Back', chart: tc, grain: PI, nu: 20, nv: 34, B: lin([PI - t0, yK], [PI + t0, yK]), T: fnp(PI - ST.tB, PI + ST.tB, ynB), L: sideB, R: mir(sideB, PI),
+        segs: { legL: ['L', ...fr(yK, yLeg)], sideL: ['L', ...fr(yLeg, yU)], armL: ['L', ...fr(yU, yS)], legR: ['R', ...fr(yK, yLeg)], sideR: ['R', ...fr(yLeg, yU)], armR: ['R', ...fr(yU, yS)], crotch: ['B', 0, 1], neck: ['T', 0, 1] } },
     ];
     const yG = y.crotch + 7, gs = fnq(q => lcF(q) * 0.96, yK, yG);
     pieces.push({ id: 'gusset', name: 'Gusset lining', chart: tc, grain: 0, nu: 6, nv: 8, layer: -0.4, B: lin([-t0 * 0.96, yK], [t0 * 0.96, yK]), T: lin([-lcF(yG) * 0.96, yG], [lcF(yG) * 0.96, yG]), L: mir(gs), R: gs });
+    pieces.push(ST.strap(1, 'strapL', 'Shoulder strap, left', 2.2), ST.strap(-1, 'strapR', 'Shoulder strap, right', 2.2));
     const ops = [
       { name: 'Baste the gusset lining to the front', machine: 'zigzag', seam: 'superimposed', stitch: [{ e: 'gusset.t', in: 0.4 }], bring: ['front'], note: 'A small lining panel inside the crotch. Zigzag, because any straight lockstitch would snap when the cloth stretches.' },
       { name: 'Crotch seam', machine: 'overlock4', seam: 'superimposed', joins: [J('front.crotch', 'back.crotch')], note: 'The four-thread overlock is the standard seam for stretch cloth: its looped threads stretch with the fabric.' },
       { name: 'Side seams', machine: 'overlock4', seam: 'superimposed', joins: [J('front.sideL', 'back.sideL', 0.1), J('front.sideR', 'back.sideR', 0.1)], note: 'The knife trims both edges level a hair in front of the needles.' },
-      { name: 'Shoulder seams', machine: 'overlock4', seam: 'superimposed', joins: [J('front.shL', 'back.shL', 0.3), J('front.shR', 'back.shR', 0.3)], note: 'Short seams joining the straps.' },
+      { name: 'Bartack the shoulder straps', machine: 'bartack', seam: 'bartack', bring: ['strapL', 'strapR'], tacks: [['strapL', 0.5, 0.03], ['strapL', 0.5, 0.97], ['strapR', 0.5, 0.03], ['strapR', 0.5, 0.97]], note: 'Each strap is a narrow tube of the same cloth with elastic inside. It runs over the shoulder from the top corner of the front to the top corner of the back, and a bartack holds each end.' },
       { name: 'Apply elastic to legs, neck and armholes', machine: 'zigzag', seam: 'elastic', stitch: ['front.legL', 'front.legR', 'back.legL', 'back.legR', 'front.neck', 'back.neck', 'front.armL', 'front.armR', 'back.armL', 'back.armR'].map(e => ({ e, in: 0.25, zig: true })), note: 'Narrow rubber or elastane tape is stretched slightly and zigzagged to the inside of every opening, so the edges grip the body.' },
       { name: 'Turn the edges and coverstitch', machine: 'cover', seam: 'hem', stitch: ['front.legL', 'front.legR', 'back.legL', 'back.legR', 'front.neck', 'back.neck', 'front.armL', 'front.armR', 'back.armL', 'back.armR'].map(e => ({ e, in: 0.7, rows: 2 })), note: 'The elasticated edge is folded under and held by a coverstitch: two needle rows on the outside, a looper thread zigzagging between them inside.' },
     ];
