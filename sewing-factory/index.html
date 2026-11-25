@@ -346,7 +346,10 @@ const SF = {};
     const stA = Math.asin(clamp((M.stance ?? 0) / 100 * M.inseam / 2 / legLen, 0, 0.8));
     const poseLeg = (sgn, P) => {
       if (!stA) return P;
-      const a = stA * (1 - smooth(y.crotch, yPiv, P[1])), c = Math.cos(a), sn = sgn * Math.sin(a), dx = P[0] - sgn * legTop.rx, dy = P[1] - yPiv;
+      // Near the crotch point the swing fades out, so the two legs stay joined there and the inner thigh (and the
+      // cloth over it) spans from the crotch out to the leg, instead of the legs tearing apart at the top.
+      const near = smooth(0, 22, Math.hypot(P[0], P[1] - y.crotch, P[2] - legTop.cz));
+      const a = stA * (1 - smooth(y.crotch, yPiv, P[1])) * near, c = Math.cos(a), sn = sgn * Math.sin(a), dx = P[0] - sgn * legTop.rx, dy = P[1] - yPiv;
       return [sgn * legTop.rx + dx * c - dy * sn, yPiv + dy * c + dx * sn, P[2]];
     };
     const hipDrop = legLen * (1 - Math.cos(stA));   // how far the whole figure comes down
@@ -440,16 +443,19 @@ const SF = {};
   // One side of the lower body. p: 0 = centre front / inside leg, 0.5 = side seam, 1 = centre back / inside leg.
   function lowerChart(body, shell, legG, sgn) {
     const yc = body.y.crotch, BZ = body.CAPH;   // the crotch curve rounds in over the same height as the pelvis under it, so it always clears it
-    return {
+    const ch = {
       orient: sgn, yq: true, f(p, q) {
         const S = legG(Math.min(q, yc));
         const L = [sgn * (S.cx - S.rx * Math.cos(TAU * p)), q, S.cz + S.rz * Math.sin(TAU * p)];
-        if (q <= yc) return body.poseLeg(sgn, L);
+        if (q <= yc) return L;
         const T = shell(sgn * p * PI, q), s = (q - yc) / BZ;
-        if (s >= 1) return body.poseLeg(sgn, T);
-        return body.poseLeg(sgn, lerp3(L, T, Math.sqrt(1 - (1 - s) * (1 - s))));
+        if (s >= 1) return T;
+        return lerp3(L, T, Math.sqrt(1 - (1 - s) * (1 - s)));
       },
     };
+    // f0 is the surface at rest, which the flat pattern is unrolled from; f is the same surface in the figure's pose
+    const f0 = ch.f; ch.f0 = f0; ch.f = (p, q) => body.poseLeg(sgn, f0(p, q));
+    return ch;
   }
   const armChart = (body, rg, sgn) => ({ orient: sgn, flipY: true, yq: true, f: (p, q) => body.armPoint(sgn, p, q, rg(q)) });
 
@@ -478,15 +484,15 @@ const SF = {};
       const c = pq(i / nu, j / nv), k = j * W + i; par[2 * k] = c[0]; par[2 * k + 1] = c[1];
       qa = Math.min(qa, c[1]); qb = Math.max(qb, c[1]);
     }
-    const pc = spec.grain, NQ = 64, ytab = [0];
-    for (let k = 1; k <= NQ; k++) ytab.push(ytab[k - 1] + dist(ch.f(pc, lerp(qa, qb, (k - 1) / NQ)), ch.f(pc, lerp(qa, qb, k / NQ))));
+    const pc = spec.grain, NQ = 64, ytab = [0], fF = ch.f0 || ch.f;   // unroll the surface at rest
+    for (let k = 1; k <= NQ; k++) ytab.push(ytab[k - 1] + dist(fF(pc, lerp(qa, qb, (k - 1) / NQ)), fF(pc, lerp(qa, qb, k / NQ))));
     const Yof = q => { if (ch.yq) return q; const f = frac(q, qa, qb) * NQ, k = Math.min(NQ - 1, Math.floor(f)); return lerp(ytab[k], ytab[k + 1], f - k); };
     const hand = ch.orient * (ch.flipY ? -1 : 1);
     for (let k = 0; k < N; k++) {
       const p = par[2 * k], q = par[2 * k + 1], P = ch.f(p, q);
       pos[3 * k] = P[0]; pos[3 * k + 1] = P[1]; pos[3 * k + 2] = P[2];
-      let X = 0, prev = ch.f(pc, q); const NS = 10;
-      for (let s = 1; s <= NS; s++) { const c = ch.f(lerp(pc, p, s / NS), q); X += dist(prev, c); prev = c; }
+      let X = 0, prev = fF(pc, q); const NS = 10;
+      for (let s = 1; s <= NS; s++) { const c = fF(lerp(pc, p, s / NS), q); X += dist(prev, c); prev = c; }
       X *= Math.sign(p - pc) * hand * stretch[0];
       let Y = Yof(q) * (ch.flipY ? -1 : 1) * stretch[1];
       if (spec.rot) { const t = X; X = Y; Y = -t; }
@@ -2543,7 +2549,7 @@ function buildPieces() {
     const c = [fr.c[0] + nh[0] * D, Math.max(fr.c[1], half + 4), fr.c[2] + nh[2] * D];
     for (let k = 0; k < N; k++) {
       const X = p.flat[2 * k], Y = p.flat[2 * k + 1];
-      T[3 * k] = tx + Y; T[3 * k + 1] = TY + 0.5 + 0.01 * n; T[3 * k + 2] = tz + X;
+      T[3 * k] = tx + Y; T[3 * k + 1] = TY + 0.5 + 0.01 * n - turnG.position.y; T[3 * k + 2] = tz + X;   // the figure's group moves up and down with heels and stance; the table does not
       for (let a = 0; a < 3; a++) F[3 * k + a] = c[a] + ax[a] * X + ay[a] * Y;
       uv[2 * k] = zip ? (X / p.w + 0.5) : X / SF.TILE_CM; uv[2 * k + 1] = zip ? Y / 1.6 : Y / SF.TILE_CM;
     }
@@ -2565,7 +2571,7 @@ function buildPieces() {
     cloth.add(m);
     const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...t.n).normalize());
     const [tx, tz] = [TX0 + 12 + marker.length + 20, -marker.width / 2 + 30 + i * 5];
-    trimObjs.push({ t, mesh: m, q, T: [tx, TY + 0.6, tz], W: t.pos, F: [t.pos[0] + t.n[0] * 34, t.pos[1] + t.n[1] * 34, t.pos[2] + t.n[2] * 34], f: 0, w: 0, tf: 0, tw: 0, first: firstOp(t.id), dirty: true });
+    trimObjs.push({ t, mesh: m, q, T: [tx, TY + 0.6 - turnG.position.y, tz], W: t.pos, F: [t.pos[0] + t.n[0] * 34, t.pos[1] + t.n[1] * 34, t.pos[2] + t.n[2] * 34], f: 0, w: 0, tf: 0, tw: 0, first: firstOp(t.id), dirty: true });
   });
   buildStitches();
 }
