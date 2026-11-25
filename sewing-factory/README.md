@@ -64,6 +64,16 @@ inside leg and shape slider, are this page's own proportions. The ASTM tables
 (D5585, D6240, D6960) are paywalled and were not used. The anime figures are
 stylised (long legs, narrow waist, larger head) and follow no standard.
 
+## The shoulders
+
+From the shoulder tip the body's width runs in a straight slope up to the neck,
+which rises steeply out of it, and the section there is an ellipse instead of
+the torso's boxy one, so the top of the torso is a dome: round from the side
+as well as from the front. The corner
+at the shoulder point is rounded with a soft minimum. Sleeveless garments
+(dress, swimsuit, bikini) are fitted to that shape so their straps lie on it;
+the shirt keeps a fuller envelope so its sleeve head clears the top of the arm.
+
 ## The lower body
 
 Each side of the lower body is one surface: the thigh, whose ring opens out

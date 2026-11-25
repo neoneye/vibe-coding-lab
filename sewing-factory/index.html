@@ -315,9 +315,12 @@ const SF = {};
     const seatV = yy => Math.exp(-Math.pow((yy - seatY) / (yy > seatY ? 9 : seatLow), 2));
     const seat = (th, yy) => seatP <= 0 ? 0 : seatP * Math.exp(-Math.pow((PI - Math.abs(wrapTh(th)) - 0.46) / 0.36, 2)) * seatV(yy);
     const legBack = (psi, yy) => { const sn = -Math.sin(TAU * psi); return seatP <= 0 || sn <= 0 ? 0 : seatP * 0.95 * Math.pow(sn, 1.3) * seatV(yy); };
-    const contour = (a, df, db, yy, capK = 1) => th => {
+    // Round the shoulders the section is an ellipse, not the torso's boxy one, so the top of the torso is a dome:
+    // round from the side as well as from the front.
+    const lensE = yy => E + 0.2 * smooth(y.shoulder - 11, y.shoulder + 1.5, yy);   // a plain ellipse: more than this thins the shoulder to a blade   // back to a round section at the neck, gradually
+    const contour = (a, df, db, yy, capK = 1, lens = false) => th => {
       const s = Math.sin(th), c = Math.cos(th);
-      return [a * spow(s, E), (c >= 0 ? df + bump(th, yy) : db + seat(th, yy) * capK) * spow(c, E)];
+      return [a * spow(s, E), (c >= 0 ? df + bump(th, yy) : db + seat(th, yy) * capK) * spow(c, lens && yy > y.shoulder - 11 ? lensE(yy) : E)];   // the figure only: garments keep the fuller envelope, so they clear the top of the arm
     };
     // Solve the half-width a so that the tape girth equals G for depth ratio k and front share f.
     const solve = (G, k, f, yy) => {
@@ -337,7 +340,7 @@ const SF = {};
       [y.under, ...solve(M.chest * clamp(M.underRatio ?? 85, 60, 100) / 100, 0.74, 0.52, y.under)],   // a share of the bust girth, so it can never bulge out past the bust
       [y.bust, ...solve(M.chest, 0.72, 0.52, y.bust)],
       [y.armpit, ...solve(M.chest * (bust > 0 ? 0.93 : 0.97), 0.68, 0.5, y.armpit)],
-      [y.shoulder, M.shoulder / 2 - 1, 5.4 * kc, 6.6 * kc],
+      [y.shoulder, M.shoulder / 2 - 1, 6.1 * kc, 7.3 * kc],   // enough depth at the collarbones and shoulder blades for the top to be round, not a ridge
       [y.neck, neckR, neckR * 0.95, neckR * 1.05],
     ];
     const ys = keys.map(k => k[0]);
@@ -347,17 +350,21 @@ const SF = {};
     const sect = (yy, full, soft) => {
       const yc = Math.max(yy, y.crotch), S = { a: fa(yc), df: fdf(yc), db: fdb(yc) };
       // the shoulder tip is rounded over, not a corner: the width leaves the shoulder point gently before sloping to the neck
-      if (yc > y.shoulder) { const u = clamp((yc - y.shoulder) / (y.neck - y.shoulder), 0, 1), sh = keys[6][1]; S.a = neckR + (sh - neckR) * (1 - Math.pow(u, 1.45)); }
+      if (yc > y.shoulder) { const u = clamp((yc - y.shoulder) / (y.neck - y.shoulder), 0, 1), sh = keys[6][1]; S.a = neckR + (sh - neckR) * Math.pow(1 - u, 0.8); }   // a straight slope from the shoulder tip up to the neck, which rises steeply out of it (a slow start here made a flat table round the neck)
       // soft = the figure as modelled: the corner at the shoulder point is taken off, because the top of the arm fills it.
       // Garments keep the unsoftened envelope, so they still clear the shoulder.
-      if (soft) S.a -= 2.6 * Math.exp(-Math.pow((yc - y.shoulder) / (yc > y.shoulder ? 1.1 : 3.4), 2));   // little above the point, where straps lie
+      if (soft && yy > y.shoulder - 9) {   // a soft minimum of the body's width below the shoulder and the slope above it: the corner between them is rounded over, with no ledge at the shoulder line
+        const sh = keys[6][1], line = neckR + (sh - neckR) * Math.pow(Math.max(0, 1 - (yc - y.shoulder) / (y.neck - y.shoulder)), 0.8), below = yc > y.shoulder ? sh : S.a, k = 1.3;
+        S.a = Math.min(S.a, -k * Math.log(Math.exp(-below / k) + Math.exp(-line / k)));
+        S.a -= 1.7 * Math.exp(-Math.pow((yc - y.shoulder) / 3.2, 2));   // and the shoulder point itself is taken in a little, evenly above and below, because the top of the arm fills it
+      }
       if (full || yy >= y.crotch + CAPH) return S;
       const s = clamp((y.crotch + CAPH - yy) / CAPH, 0, 1), k = Math.sqrt(Math.max(0, 1 - s * s));
       return { a: S.a * (1 - 0.12 * s), df: S.df * k, db: S.db * k, k };   // k also closes the cheeks in to the keel
     };
     // full = without the rounded underside (the envelope that trousers hang from)
     const torso = (th, yy, full, soft) => {
-      const S = sect(yy, full, soft), p = contour(S.a, S.df, S.db, yy, S.k ?? 1)(th);
+      const S = sect(yy, full, soft), p = contour(S.a, S.df, S.db, yy, S.k ?? 1, soft)(th);
       return [p[0], yy, p[1]];
     };
     const girth = yy => { const S = sect(yy); return perimeter(contour(S.a, S.df, S.db, yy, S.k ?? 1)); };
@@ -514,7 +521,7 @@ const SF = {};
   // -------- shell: the body's torso pushed out by ease, optionally hanging from the widest point above and flared.
   // Returns fn(θ, y) → [x, y, z], valid from the floor to just above the neck base.
   SF.makeShell = function (body, o = {}) {
-    const ease = o.ease ?? 1, loose = o.loose ?? 0, hangTop = o.hangTop ?? body.y.armpit, flare = o.flare ?? 0, flareTop = o.flareTop ?? body.y.waist, full = !!o.full;
+    const ease = o.ease ?? 1, loose = o.loose ?? 0, hangTop = o.hangTop ?? body.y.armpit, flare = o.flare ?? 0, flareTop = o.flareTop ?? body.y.waist, full = !!o.full, soft = !!o.soft;   // soft: on the figure's own rounded shoulders (sleeveless garments, whose straps must lie on them)
     const NT = 96, DY = 0.5, y1 = body.y.neck + 3, NY = Math.ceil(y1 / DY) + 2, yLow = body.y.crotch - body.CAP;
     const off = yLow - Math.floor(yLow / DY) * DY;   // the rows are aligned to the crotch line, so the keel is a row of its own whatever the inside leg
     const px = new Float32Array(NT * NY), pz = new Float32Array(NT * NY);
@@ -525,7 +532,7 @@ const SF = {};
         const yy = off + j * DY;
         let base = 0;
         if (yy >= yLow - 1e-9) {
-          const p = body.torso(th, Math.min(yy, body.y.neck), full), e = Math.hypot(p[0], p[2]);
+          const p = body.torso(th, Math.min(yy, body.y.neck), full, soft), e = Math.hypot(p[0], p[2]);
           // a hanging shell keeps the direction of the widest section above it
           if (e > 0.4 && !(loose > 0 && yy <= hangTop && e + ease < run)) { dx = p[0] / e; dz = p[2] / e; }
           base = e + ease * Math.min(1, e / 1.5);   // where the body closes to nothing (the keel under the crotch) the ease does too, or it would hold front and back apart
@@ -948,7 +955,7 @@ const SF = {};
     const y = body.y, H = PI / 2;
     const yW = y.waist, yHem = Math.max(6, yW - fit.length);
     const flare = Math.min(fit.flare * 0.0042, Math.max(0, (43 - body.M.hip / TAU - 2 - fit.ease) / (yW - yHem)));
-    const shell = SF.makeShell(body, { ease: fit.ease, loose: 1, hangTop: y.waist, flare, flareTop: y.waist - 1 });
+    const shell = SF.makeShell(body, { ease: fit.ease, loose: 1, hangTop: y.waist, flare, flareTop: y.waist - 1, soft: true });
     const tc = torsoChart(shell);
     const yU = y.armpit - 1.5, yS = lerp(y.shoulder, y.neck, 0.3), yT = lerp(y.shoulder, y.neck, 0.72), W = 0.5;
     const sc = scoop(W, yU, yS), ynF = neckFn(yT, fit.neck, 1.3), ynB = neckFn(yT, 5, 1.6);
@@ -988,7 +995,7 @@ const SF = {};
   // meet in the crotch seam. Most of that strip lies between the thighs.
   const SWIM_U = 10;
   const swimChart = body => {
-    const base = SF.makeShell(body, { ease: 0.45, loose: 0 }), yc = body.y.crotch, zmid = body.legSect(yc).cz;
+    const base = SF.makeShell(body, { ease: 0.45, loose: 0, soft: true }), yc = body.y.crotch, zmid = body.legSect(yc).cz;
     const hugAt = (th, yy) => {
       const P = base(th, yy); if (yy > yc + 11) return P;
       const back = Math.cos(th) < 0, zs = body.legSurf(P[0], yy, back); if (zs === null) return P;
