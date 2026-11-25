@@ -244,9 +244,9 @@ const SF = {};
     { key: 'armOut', label: 'Arms out from the body', min: 3, max: 88, step: 1, def: 17, unit: '°' },
     { key: 'armFwd', label: 'Arms forwards', min: -25, max: 70, step: 1, def: 3, unit: '°' },
     { key: 'elbow', label: 'Elbow bend', min: 0, max: 110, step: 1, def: 0, unit: '°' },
-    { key: 'stance', label: 'Feet apart', min: 0, max: 80, step: 1, def: 0, unit: 'cm' },
+    { key: 'stance', label: 'Feet apart, as a share of the inside leg', min: 0, max: 120, step: 1, def: 0, unit: '%' },
   ];
-  SF.POSES = { Relaxed: { armOut: 17, armFwd: 3, elbow: 0, stance: 0 }, 'Arms down': { armOut: 5, armFwd: 3, elbow: 0, stance: 0 }, 'T-pose': { armOut: 86, armFwd: 0, elbow: 0, stance: 18 }, 'Arms forward': { armOut: 12, armFwd: 55, elbow: 25, stance: 10 }, 'Elbows bent': { armOut: 22, armFwd: 0, elbow: 85, stance: 14 } };
+  SF.POSES = { Relaxed: { armOut: 17, armFwd: 3, elbow: 0, stance: 0 }, 'Arms down': { armOut: 5, armFwd: 3, elbow: 0, stance: 0 }, 'T-pose': { armOut: 86, armFwd: 0, elbow: 0, stance: 25 }, 'Arms forward': { armOut: 12, armFwd: 55, elbow: 25, stance: 12 }, 'Elbows bent': { armOut: 22, armFwd: 0, elbow: 85, stance: 20 } };
   SF.FORMS = {
     w: { name: "Women's form", height: 168, chest: 90, waist: 70, hip: 97, shoulder: 38, inseam: 78, arm: 58, bust: 3.6, bustDist: 17, bustHeight: 0, bustSpread: 100, bustLow: 5, bustHigh: 6.5, underRatio: 85 },
     m: { name: "Men's form", height: 180, chest: 100, waist: 86, hip: 100, shoulder: 45, inseam: 82, arm: 63, bust: 0, bustDist: 20, bustHeight: 0, bustSpread: 100, bustLow: 5, bustHigh: 6.5, underRatio: 95 },
@@ -338,12 +338,22 @@ const SF = {};
     const frz = SF.pchip(lys, [circ(0.23), circ(0.225), circ(0.37), circ(0.385), circ(0.55), legTop.rz]);
     const legSect = yy => {
       const yc = Math.min(yy, y.crotch), t = clamp(yc / y.crotch, 0, 1);
-      return { cx: lerp(legTop.rx * 0.62 + 1.5, legTop.rx, t * t) + (M.stance ?? 0) / 2 * (1 - t), rx: frx(yc), rz: frz(yc), cz: lerp(-1, legTop.cz, t) };   // stance spreads the feet
+      return { cx: lerp(legTop.rx * 0.62 + 1.5, legTop.rx, t * t), rx: frx(yc), rz: frz(yc), cz: lerp(-1, legTop.cz, t) };
     };
+    // Stance: each leg swings out from the hip as a rigid limb, so it keeps its length and the hips come down.
+    // `stance` is the extra distance between the feet as a share of the inside-leg length.
+    const yPiv = y.crotch + 8, legLen = yPiv - y.ankle;
+    const stA = Math.asin(clamp((M.stance ?? 0) / 100 * M.inseam / 2 / legLen, 0, 0.8));
+    const poseLeg = (sgn, P) => {
+      if (!stA) return P;
+      const a = stA * (1 - smooth(y.crotch, yPiv, P[1])), c = Math.cos(a), sn = sgn * Math.sin(a), dx = P[0] - sgn * legTop.rx, dy = P[1] - yPiv;
+      return [sgn * legTop.rx + dx * c - dy * sn, yPiv + dy * c + dx * sn, P[2]];
+    };
+    const hipDrop = legLen * (1 - Math.cos(stA));   // how far the whole figure comes down
     // psi: 0 = inside of the leg, 0.25 = front, 0.5 = outside, 0.75 = back
     const leg = (sgn, psi, yy) => {
       const S = legSect(yy); let x = S.cx - S.rx * Math.cos(TAU * psi), z = S.cz + S.rz * Math.sin(TAU * psi);
-      return [sgn * x, yy, z];
+      return poseLeg(sgn, [sgn * x, yy, z]);
     };
 
     // -------- arms: th = 0 is the outside of the arm, ±π the underarm, positive th is the front.
@@ -375,7 +385,7 @@ const SF = {};
     const posed = makeArms({ ...P0, ...Object.fromEntries(SF.POSE.map(d => [d.key, M[d.key] ?? d.def])) });
     const arms = posed.arms, armPoint = posed.point, armFrame = posed.frame;
     const rest = makeArms(P0);   // patterns are drafted from the resting pose, so a pose never changes a cut piece
-    return { M, y, neckR, bustTh, CAP, CAPH, sect, torso, girth, bump, legSect, leg, arms, armR, armPoint, armFrame, rest };
+    return { M, y, neckR, bustTh, CAP, CAPH, sect, torso, girth, bump, legSect, leg, poseLeg, hipDrop, arms, armR, armPoint, armFrame, rest };
   };
 })();
 // ============================================================ part 2: garment surfaces, pattern pieces, operations
@@ -434,10 +444,10 @@ const SF = {};
       orient: sgn, yq: true, f(p, q) {
         const S = legG(Math.min(q, yc));
         const L = [sgn * (S.cx - S.rx * Math.cos(TAU * p)), q, S.cz + S.rz * Math.sin(TAU * p)];
-        if (q <= yc) return L;
+        if (q <= yc) return body.poseLeg(sgn, L);
         const T = shell(sgn * p * PI, q), s = (q - yc) / BZ;
-        if (s >= 1) return T;
-        return lerp3(L, T, Math.sqrt(1 - (1 - s) * (1 - s)));
+        if (s >= 1) return body.poseLeg(sgn, T);
+        return body.poseLeg(sgn, lerp3(L, T, Math.sqrt(1 - (1 - s) * (1 - s))));
       },
     };
   }
@@ -1517,13 +1527,16 @@ const SF = {};
     assertNear(p[0], q[0], 1e-9); assertNear(p[2], q[2], 1e-9); assert(b.bump(2 * Math.PI - b.bustTh, b.y.bust) > 3, 'right breast at 2π − θ');
   });
   SewTests.add('pose: moving the arms and feet never changes a cut piece', () => {
-    const F = SF.FORMS.w, a = SF.makeBody(F), b = SF.makeBody({ ...F, armOut: 86, armFwd: 40, elbow: 90, stance: 30 });
+    const F = SF.FORMS.w, a = SF.makeBody(F), b = SF.makeBody({ ...F, armOut: 86, armFwd: 40, elbow: 90, stance: 100 });
     for (const id of Object.keys(SF.GARMENTS)) {
       const ga = SF.buildGarment(id, a, {}), gb = SF.buildGarment(id, b, {});
       for (const p of ga.pieces) { const q = gb.byId[p.id]; assertNear(q.w, p.w, 0.05, `${id} ${p.id} width`); assertNear(q.h, p.h, 0.05, `${id} ${p.id} height`); assertNear(q.area, p.area, 0.5 + p.area * 0.002, `${id} ${p.id} area`); }
     }
     const h0 = a.armPoint(1, 0, F.arm), h1 = b.armPoint(1, 0, F.arm);
-    assert(h1[1] > h0[1] + 20 && h1[2] > h0[2] + 10, 'the hand goes up and forwards'); assertNear(b.legSect(0).cx - a.legSect(0).cx, 15, 1e-9, 'feet apart');
+    assert(h1[1] > h0[1] + 20 && h1[2] > h0[2] + 10, 'the hand goes up and forwards'); const S0 = a.legSect(a.y.ankle), k0 = [S0.cx, a.y.ankle, S0.cz], k1 = b.poseLeg(1, k0), piv = [S0.cx * 0 + a.legSect(a.y.crotch).rx, a.y.crotch + 8];
+    assertNear(2 * (k1[0] - k0[0]), F.inseam, 0.5, 'feet one inside-leg length further apart at 100 %');
+    assertNear(Math.hypot(k1[0] - piv[0], k1[1] - piv[1]), Math.hypot(k0[0] - piv[0], k0[1] - piv[1]), 1e-6, 'the leg keeps its length');
+    assert(b.hipDrop > 5 && a.hipDrop === 0, 'the hips come down');
   });
   SewTests.add('body: legs meet at the crotch, shoulders are as wide as asked', () => {
     const b = SF.makeBody(SF.FORMS.w), S = b.legSect(b.y.crotch);
@@ -2368,7 +2381,8 @@ function footParts(b, sgn, heel) {
   };
   const A = bend([xa, hA, 0]), lift = A[1] - hA, ang = 0.13;
   const f = [sgn * Math.sin(ang), 0, Math.cos(ang)], l = [sgn * Math.cos(ang), 0, -Math.sin(ang)];
-  const place = p => { const q = bend(p), dx = q[0] - A[0]; return [sgn * S.cx + f[0] * dx + l[0] * q[2], q[1] - lift, S.cz + f[2] * dx + l[2] * q[2]]; };
+  const K = b.poseLeg(sgn, [sgn * S.cx, hA, S.cz]), up = K[1] - hA;   // the ankle after the stance; the foot stays flat under it
+  const place = p => { const q = bend(p), dx = q[0] - A[0]; return [K[0] + f[0] * dx + l[0] * q[2], q[1] - lift + up, S.cz + f[2] * dx + l[2] * q[2]]; };
   const half = SF.pchip([0, 0.04, 0.12, 0.4, 0.7, 0.8, 0.84], [0.02, 2.3, 3.2, 3.5, 4.75, 4.6, 3.2].map(v => v * k));
   const ankleW = S.rx + 0.25;
   const top = SF.pchip([0, 0.03, 0.1, 0.2, 0.33, 0.46, 0.6, 0.72, 0.8, 0.84], [2 * k, 4.2 * k, 6.4 * k, hA + 0.6, hA + 0.6, 6.4 * k, 4.4 * k, 3.1 * k, 2.4 * k, 2.0 * k]);
@@ -2395,7 +2409,7 @@ function footParts(b, sgn, heel) {
       return place([x0 + x, tr * k * 0.8 + r * Math.sin(ph) * 0.8 + 0.2 * k * Math.sin(PI * v), tz * k + mid(0.84) + r * Math.cos(ph)]);
     }, true));
   }
-  return { parts, lift, balls: [] };
+  return { parts, lift: lift - up, footX: Math.abs(K[0]), balls: [] };
 }
 const linen = new THREE.MeshStandardMaterial({ color: '#d6c4a2', roughness: 0.95 }); linen.userData.shared = true;
 const seamMat = new THREE.MeshStandardMaterial({ color: '#a8946f', roughness: 1 }); seamMat.userData.shared = true;
@@ -2437,7 +2451,7 @@ function buildStand(b, y0) {
 function buildFigure() {
   figure.traverse(o => { if (o.geometry && !o.userData.keepGeo) pendingDispose.push(o.geometry); }); figure.clear();
   const b = body, y = b.y, H = b.M.height, y0 = y.crotch - b.CAP;
-  let lift = 0;
+  let lift = 0, footX = 0;
   if (S.mode !== 'stand') {
     // the angle runs so that the triangles face outwards (the reverse shows the far inside wall through the front)
     // Torso and neck are one surface. Near the neck the section is read slightly lower than its own height
@@ -2449,7 +2463,7 @@ function buildFigure() {
     figure.add(new THREE.Mesh(gridGeo(96, 140, (u, v) => vt(-PI + TAU * u, lerp(y0, yTopN, v)), true), skin));
     for (const sgn of [1, -1]) {
       figure.add(new THREE.Mesh(gridGeo(28, 44, (u, v) => b.leg(sgn, sgn > 0 ? u : 1 - u, lerp(y.ankle - 2.5, y.crotch + b.CAPH, v)), true), skin));
-      const ft = footParts(b, sgn, S.heel); lift = ft.lift; for (const g of ft.parts) figure.add(new THREE.Mesh(g, skin)); for (const m of ft.balls) figure.add(m);
+      const ft = footParts(b, sgn, S.heel); lift = ft.lift; footX = ft.footX; for (const g of ft.parts) figure.add(new THREE.Mesh(g, skin)); for (const m of ft.balls) figure.add(m);
       // Shoulder: the arm grows out of the torso like modelled clay. The first rows of this surface lie on the
       // torso itself (a loop round the shoulder that shrinks), so it starts flush and with the torso's own shading;
       // then it eases over to the arm's rings. No joint ball and no cut end of a tube.
@@ -2472,7 +2486,7 @@ function buildFigure() {
     head.add(ball(skin, hr * 0.085, hr * 0.24, hr * 0.16, 0, hy - hr * 0.1, 0.5 + hr * 0.8)); head.add(ball(skin, hr * 0.44, hr * 0.1, hr * 0.2, 0, hy + hr * 0.15, 0.5 + hr * 0.66));
     head.rotation.set(-S.headNod * PI / 180, S.headTurn * PI / 180, 0, 'YXZ'); figure.add(head);
   } else buildStand(b, y0);
-  if (S.mode !== 'stand') { const pr = Math.max(30, (S.M.stance || 0) / 2 + 20), plate = new THREE.Mesh(new THREE.CylinderGeometry(pr, pr + 1, 1.2, 64), dark); plate.position.y = 0.6 - lift; figure.add(plate); }
+  if (S.mode !== 'stand') { const pr = Math.max(30, footX + 20), plate = new THREE.Mesh(new THREE.CylinderGeometry(pr, pr + 1, 1.2, 64), dark); plate.position.y = 0.6 - lift; figure.add(plate); }
   turnG.position.y = lift;   // heels raise the whole figure
   blob.scale.setScalar(S.mode === 'stand' ? 0.55 : 1);
   // tapes
@@ -2740,7 +2754,8 @@ function machineOpts() { if (mv) mv.setOptions({ speed: +$('mspeed').value, cuta
 let needBody = true, needGarment = true;
 function rebuild() {
   const fresh = needBody;
-  if (needBody) { body = SF.makeBody(S.M); buildFigure(); needBody = false; needGarment = true; }
+  if (needBody) { body = SF.makeBody(S.mode === 'stand' ? { ...S.M, ...Object.fromEntries(SF.POSE.map(d => [d.key, d.def])) } : S.M);   // a dress form has no limbs to pose
+    buildFigure(); needBody = false; needGarment = true; }
   if (needGarment) {
     needGarment = false; if (!fresh && S.mode === 'stand') buildFigure();   // stand or hanging rail depends on the garment
     garment = SF.buildGarment(S.garment, body, S.fit); marker = SF.makeMarker(garment.pieces);
