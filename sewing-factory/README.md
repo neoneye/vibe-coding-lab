@@ -8,7 +8,8 @@ browser (three.js is loaded from a CDN).
 
 1. **Measure.** A mannequin with sliders for height, chest, waist, hip,
    shoulder width, inside leg and arm length. The torso sections are solved so
-   the tape girths equal the slider values. Seven more sliders shape the bust
+   the tape girths equal the slider values. A Hips and legs card sets the buttocks
+   and the thigh, knee, calf and ankle girths. Seven more sliders shape the bust
    (projection, spacing, height, width, fullness above and below, and the rib cage
    under the bust as a share of the bust girth), a heel-lift slider poses the feet for heeled shoes, and a Pose card moves
    the arms, elbows, feet and head (the cut pieces never change with the pose). Two modes: a full figure with head,
