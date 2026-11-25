@@ -104,6 +104,7 @@
       <div class="card"><h2>The mannequin</h2>
         <p>Every pattern piece is drafted from these measurements. Change one and the cut pieces change with it.</p>
         <div class="seg" id="modes"></div>
+        <label class="ck" id="xrayRow"><input type="checkbox" id="xray">X-ray: show the skeleton, body see-through</label>
         <p id="modeNote" style="margin:6px 0 0"></p>
         <div class="seg" id="forms" style="margin-top:6px"></div>
         <p id="formNote" style="margin:6px 0 0"></p>
@@ -150,6 +151,7 @@
       <div class="card"><h2>Finished garment</h2>
         <p id="summary"></p>
         <label class="ck"><input type="checkbox" id="turn">Turntable</label>
+        <label class="ck"><input type="checkbox" id="xray2">X-ray: show the skeleton, body see-through</label>
         <label class="ck"><input type="checkbox" id="showStitch" checked>Show stitching</label>
         <div class="row"><span>Thread</span><input type="color" id="thread2"><button id="save">Save image</button></div>
       </div>
@@ -2399,7 +2401,7 @@ const STAGES = { 1: ['The mannequin', 'A measured form. The tapes show chest, wa
 
 // -------- state
 const S = {
-  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), headTurn: +(Q.get('headTurn') || 0), headNod: +(Q.get('headNod') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
+  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), xray: Q.has('xray'), headTurn: +(Q.get('headTurn') || 0), headNod: +(Q.get('headNod') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
   sel: null, op: +(Q.get('op') || 0), opT: +(Q.get('t') || 0), playing: false, lineSpeed: 1, turn: false, showStitch: true, wait: 0,
 };
 S.M = { ...SF.FORMS[S.form] };
@@ -2525,6 +2527,83 @@ function buildStand(b, y0) {
     const collar = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 2.2, 16), steel); collar.position.y = ym + 1; figure.add(collar);
   }
 }
+// -------- skeleton for the x-ray view. Stylised but in the right places: it is built from the same measurements
+// and pose as the figure, so it stays inside the body whatever the sliders say.
+const lerp3 = SF.vec.lerp3;
+const boneMat = new THREE.MeshStandardMaterial({ color: '#ece4cf', roughness: 0.55, side: THREE.DoubleSide }); boneMat.userData.shared = true;
+const holeMat = new THREE.MeshBasicMaterial({ color: '#17181c' }); holeMat.userData.shared = true;
+function buildSkeleton(b, head, hr, hy) {
+  const G = new THREE.Group(), y = b.y, H = b.M.height, yc = y.crotch, V = p => new THREE.Vector3(p[0], p[1], p[2]);
+  const tube = (pts, r, n) => G.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(V)), n || Math.max(8, pts.length * 6), r, 8, false), boneMat));
+  const knob = (p, rx, ry, rz) => G.add(ball(boneMat, rx, ry ?? rx, rz ?? rx, p[0], p[1], p[2]));
+  const F = yy => b.sect(Math.max(yy, yc), true);
+  const onSect = (th, yy, k, yAt) => { const S = F(yy), sn = Math.sin(th), c = Math.cos(th); return [S.a * k * Math.sign(sn) * Math.pow(Math.abs(sn), 0.9), yAt ?? yy, (c >= 0 ? S.df : S.db) * k * Math.sign(c) * Math.pow(Math.abs(c), 0.9)]; };
+  // spine: 24 vertebrae on an S-curve, lumbar forwards, thoracic back, cervical forwards
+  const ySac = yc + 10, yAtlas = y.chin + 0.5, spineAt = t => {
+    const yy = lerp(ySac + 1.5, yAtlas, t), base = -F(Math.min(yy, y.neck)).db * 0.5 * (1 - smooth(0.8, 1, t) * 0.75);
+    const bend = t < 0.25 ? 1.7 * Math.sin(PI * t / 0.25) : t < 0.78 ? -1.5 * Math.sin(PI * (t - 0.25) / 0.53) : 1.1 * Math.sin(PI * (t - 0.78) / 0.22);
+    return [0, yy, base + bend];
+  };
+  for (let i = 0; i < 24; i++) {
+    const t = i / 23, p = spineAt(t), r = lerp(2.2, 1.05, t), h = (yAtlas - ySac) / 24 * 0.72;
+    const v = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 14), boneMat); v.position.set(p[0], p[1], p[2]); G.add(v);
+    knob([0, p[1] - h * 0.2, p[2] - r - 0.7], 0.35, 0.5, 0.9);
+  }
+  // rib cage: twelve pairs, sloping down towards the front; the last two float
+  const wid = [0.5, 0.66, 0.79, 0.88, 0.94, 0.98, 1, 1, 0.98, 0.95, 0.9, 0.84], yR0 = y.shoulder - 2.5, yR1 = y.under - 2, front = [];
+  for (let i = 0; i < 12; i++) for (const sgn of [1, -1]) {
+    const yb = lerp(yR0, yR1, i / 11), end = i < 7 ? 0.2 : i < 10 ? 0.38 + (i - 7) * 0.14 : i === 10 ? 1.15 : 1.6, drop = lerp(3.5, 7.5, i / 11), pts = [];
+    for (let k = 0; k <= 14; k++) { const a = k / 14, th = sgn * lerp(PI - 0.16, end, a), p = onSect(th, yb - 1, 0.8 * wid[i], yb - drop * Math.pow(a, 1.25)); if (k === 0) { p[0] = sgn * 1.4; p[2] = spineAt((yb - ySac - 1.5) / (yAtlas - ySac - 1.5))[2] - 0.6; } pts.push(p); }
+    tube(pts, 0.42, 40); if (i < 7 && sgn > 0) front.push(pts[14]);
+    if (i >= 7 && i < 10) tube([pts[14], onSect(sgn * 0.24, yb - 3, 0.8, yb - drop - 3.5 + (i - 7) * 1.2)], 0.36, 6);   // costal arch
+  }
+  const st0 = front[0], st1 = front[6], sternum = new THREE.Mesh(new THREE.BoxGeometry(3.4, st0[1] - st1[1] + 3.5, 0.9), boneMat);
+  sternum.position.set(0, (st0[1] + st1[1]) / 2 + 0.6, (st0[2] + st1[2]) / 2); sternum.rotation.x = -Math.atan2(st1[2] - st0[2], st0[1] - st1[1]);   // lower end further forward G.add(sternum);
+  // pelvis: iliac crests and wings, sacrum, pubic and sitting bones
+  const hipJ = sgn => { const S = b.legSect(yc); return [sgn * S.cx * 0.98, b.yPiv - 1, S.cz - 0.8]; };
+  const sac = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 1, 10, 12), boneMat); sac.position.set(0, ySac - 3.5, -F(ySac).db * 0.5); sac.scale.z = 0.5; sac.rotation.x = -0.35; G.add(sac);
+  for (const sgn of [1, -1]) {
+    const J = hipJ(sgn), yCr = Math.min(y.waist - 3, yc + 19), crest = u => onSect(sgn * lerp(0.45, PI - 0.3, u), y.hip + 1, 0.8, yCr - 3.2 * Math.pow(Math.abs(2 * u - 0.9), 1.6));
+    const cp = []; for (let k = 0; k <= 12; k++) cp.push(crest(k / 12)); tube(cp, 0.7, 36);
+    G.add(new THREE.Mesh(gridGeo(12, 5, (u, v) => { const c = crest(u), k = v * 0.86; return [lerp(c[0], J[0], k), lerp(c[1], J[1], k * (1 - 0.2 * Math.sin(PI * u))), lerp(c[2], J[2], k)]; }), boneMat));
+    const sym = [sgn * 0.9, yc + 3.6, F(yc + 3).df * 0.55], isch = [sgn * b.legSect(yc).cx * 0.72, yc + 0.6, -F(yc).db * 0.32];
+    tube([J, [lerp(J[0], sym[0], 0.5), lerp(J[1], sym[1], 0.4), lerp(J[2], sym[2], 0.6)], sym], 0.75);      // upper pubic ramus
+    tube([J, [J[0] * 0.95, lerp(J[1], isch[1], 0.6), J[2] - 2], isch, [lerp(isch[0], sym[0], 0.6), yc + 1.4, lerp(isch[2], sym[2], 0.6)], sym], 0.7);   // sitting bone and lower ramus
+    knob(isch, 1.3, 1.1, 1.3);
+    // leg: thigh bone with head, neck and trochanter; kneecap; shin and calf bones — all in the leg's pose
+    const P = p => b.poseLeg(sgn, p), Sk = b.legSect(y.knee), Sa = b.legSect(y.ankle), K = [sgn * Sk.cx, y.knee + 0.5, Sk.cz], A = [sgn * Sa.cx, y.ankle + 0.8, Sa.cz];
+    const GT = [J[0] + sgn * 4.4, J[1] - 2.2, J[2] - 0.4];
+    knob(P(J), 2.25); tube([J, [lerp(J[0], GT[0], 0.6), J[1] - 0.6, J[2]], GT].map(P), 1.25, 8); knob(P(GT), 1.7, 2.1, 1.7);
+    tube([GT, lerp3(GT, K, 0.35), [lerp(GT[0], K[0], 0.7), lerp(GT[1], K[1], 0.7), K[2] + 1.2], [K[0], K[1] + 2.5, K[2]]].map(P), 1.35, 30);
+    knob(P([K[0] + sgn * 1.7, K[1] + 0.8, K[2] - 0.3]), 1.9, 1.7, 2.3); knob(P([K[0] - sgn * 1.7, K[1] + 0.8, K[2] - 0.3]), 1.9, 1.7, 2.3);
+    knob(P([K[0], K[1] + 0.6, K[2] + 3.1]), 1.6, 1.8, 0.8);
+    knob(P([K[0], K[1] - 2.2, K[2]]), 3.1, 1.3, 2.3);
+    tube([[K[0] - sgn * 0.3, K[1] - 2.6, K[2] + 0.3], [lerp(K[0], A[0], 0.5) - sgn * 0.2, lerp(K[1], A[1], 0.5), lerp(K[2], A[2], 0.5) + 0.7], A].map(P), 1.15, 24);
+    tube([[K[0] + sgn * 2.6, K[1] - 3.6, K[2] - 1.1], [lerp(K[0], A[0], 0.5) + sgn * 2.2, lerp(K[1], A[1], 0.5), lerp(K[2], A[2], 0.5) - 1], [A[0] + sgn * 1.9, A[1] - 1.2, A[2] - 0.6]].map(P), 0.5, 24);
+    knob(P([A[0] + sgn * 1.9, A[1] - 1.3, A[2] - 0.5]), 0.9, 1.2, 0.9); knob(P([A[0] - sgn * 1.6, A[1] - 0.6, A[2]]), 1, 1.1, 1);
+    // foot: heel bone, five metatarsals and toes, on the floor under the posed ankle
+    const Ap = P(A), fl = Ap[1] - A[1], L = 0.152 * H, fx = sgn * Math.sin(0.13), fz = Math.cos(0.13), ft = (d, w, h) => [Ap[0] + fx * d + sgn * fz * w, fl + h, Ap[2] + fz * d - sgn * fx * w];
+    knob(ft(-0.13 * L, 0, 2.6), 2, 2.2, 3.4); knob(ft(0.02 * L, 0, 4.6), 2.2, 1.8, 2.6);
+    for (let i = 0; i < 5; i++) { const w = lerp(-2.9, 3.3, i / 4) * (L / 25.5), len = [0.5, 0.49, 0.46, 0.42, 0.38][i] * L; tube([ft(0.12 * L, w * 0.6, 3.6), ft(len, w, 1.3)], i ? 0.42 : 0.6, 6); tube([ft(len + 0.6, w, 1.1), ft(len + [0.19, 0.2, 0.18, 0.16, 0.13][i] * L, w * 1.04, 0.8)], i ? 0.34 : 0.5, 6); }
+    // shoulder girdle and arm
+    const AS = b.arms[sgn].S, st = [sgn * 1.6, st0[1] + 1.6, st0[2] * 0.9];
+    tube([st, [sgn * AS[0] * sgn * 0.5, st[1] + 1.4, st[2] + 0.8], [AS[0] * 0.9, AS[1] + 3.6, AS[2] - 0.4]], 0.6);          // collarbone
+    const sc = [[AS[0] * 0.96, AS[1] + 3.4, AS[2] - 1.6], [sgn * F(y.shoulder).a * 0.3, y.shoulder - 1, -F(y.shoulder).db * 0.82], [sgn * F(y.armpit).a * 0.5, y.armpit - 7, -F(y.armpit - 7).db * 0.86]];
+    const sg = new THREE.BufferGeometry().setFromPoints(sc.map(V)); sg.setIndex([0, 1, 2]); sg.computeVertexNormals(); G.add(new THREE.Mesh(sg, boneMat)); tube([sc[0], sc[1]], 0.5, 6);   // shoulder blade and its spine
+    const ac = t => b.armFrame(sgn, t).c, off = (t, du, dw) => { const f = b.armFrame(sgn, t); return [0, 1, 2].map(i => f.c[i] + f.A.u[i] * du + f.w[i] * dw); }, la = b.M.arm, tE = la * 0.5;
+    knob(ac(0), 2.1); tube([0.5, 0.25 * la, tE - 1.5].map(ac), 1, 20); knob(ac(tE), 1.7, 1.5, 1.5);
+    tube([off(tE + 1, 0.9, 0), off(lerp(tE, la, 0.5), 0.9, 0.2), off(la - 0.5, 1.1, 0)], 0.55, 20); tube([off(tE - 1, -0.8, -0.3), off(lerp(tE, la, 0.5), -0.8, 0), off(la - 0.5, -0.8, 0)], 0.5, 20);   // radius and ulna
+    knob(ac(la + 0.9), 1.9, 1.1, 1.3);
+    for (let i = 0; i < 5; i++) { const w = lerp(1.7, -1.7, i / 4), n = i === 0 ? 0.062 : [0, 0.098, 0.105, 0.098, 0.082][i]; tube([off(la + 1.8, 0, w * 0.7), off(la + 1.8 + n * H * 0.55, 0, w + (i === 0 ? 1.2 : 0)), off(la + 1.8 + n * H, 0, w * 1.1 + (i === 0 ? 2 : 0))], 0.3, 8); }
+  }
+  knob([0, yc + 3.6, F(yc + 3).df * 0.55], 1, 1.3, 0.9);
+  // skull, in the head's own group so it turns and nods with it
+  const sk = (m, sx, sy, sz, x, yy, z) => { const o = ball(m, sx, sy, sz, x, yy, z); o.userData.bone = true; head.add(o); };
+  sk(boneMat, hr * 0.68, hr * 0.78, hr * 0.82, 0, hy + hr * 0.2, 0.2); sk(boneMat, hr * 0.44, hr * 0.5, hr * 0.42, 0, hy - hr * 0.28, 0.5 + hr * 0.36); sk(boneMat, hr * 0.36, hr * 0.2, hr * 0.4, 0, hy - hr * 0.74, 0.5 + hr * 0.3);   // cranium, face, jaw
+  for (const sx of [1, -1]) sk(holeMat, hr * 0.17, hr * 0.15, hr * 0.1, sx * hr * 0.24, hy + hr * 0.02, 0.3 + hr * 0.72);
+  sk(holeMat, hr * 0.07, hr * 0.11, hr * 0.07, 0, hy - hr * 0.26, 0.5 + hr * 0.75); sk(holeMat, hr * 0.26, hr * 0.02, hr * 0.06, 0, hy - hr * 0.6, 0.5 + hr * 0.7);
+  return G;
+}
 function buildFigure() {
   figure.traverse(o => { if (o.geometry && !o.userData.keepGeo) pendingDispose.push(o.geometry); }); figure.clear();
   const b = body, y = b.y, H = b.M.height, y0 = y.crotch - b.CAP;
@@ -2561,6 +2640,7 @@ function buildFigure() {
     head.add(ball(skin, hr * 0.76, hr * 1.04, hr * 0.9, 0, hy, 0.5));
     // a hint of a face, as on shop mannequins: brow ridge and nose
     head.add(ball(skin, hr * 0.085, hr * 0.24, hr * 0.16, 0, hy - hr * 0.1, 0.5 + hr * 0.8)); head.add(ball(skin, hr * 0.44, hr * 0.1, hr * 0.2, 0, hy + hr * 0.15, 0.5 + hr * 0.66));
+    const skel = buildSkeleton(b, head, hr, hy); skel.userData.bone = true; figure.add(skel);
     head.rotation.set(-S.headNod * PI / 180, S.headTurn * PI / 180, 0, 'YXZ'); head.scale.setScalar((b.M.head ?? 100) / 100); figure.add(head);
   } else buildStand(b, y0);
   if (S.mode !== 'stand') { const pr = Math.max(30, footX + 20), plate = new THREE.Mesh(new THREE.CylinderGeometry(pr, pr + 1, 1.2, 64), dark); plate.position.y = 0.6 - lift; plate.userData.floor = true; figure.add(plate); }
@@ -2970,6 +3050,7 @@ function initUI() {
   for (const id of ['mspeed', 'cutaway', 'see', 'below']) $(id).oninput = machineOpts;
   $('teach').oninput = () => { machineOpts(); syncMachine(); };
   $('phPrev').onclick = () => mv && mv.stepPhase(-1); $('phNext').onclick = () => mv && mv.stepPhase(1); $('phRun').onclick = () => mv && mv.setOptions({ paused: false });
+  for (const id of ['xray', 'xray2']) { $(id).checked = S.xray; $(id).oninput = e => { S.xray = e.target.checked; $('xray').checked = $('xray2').checked = S.xray; }; }
   $('turn').oninput = e => (S.turn = e.target.checked); $('showStitch').oninput = e => (S.showStitch = e.target.checked);
   $('save').onclick = saveImage;
   // click a piece on the table
@@ -3005,7 +3086,14 @@ function tick(dt) {
   controls.update();
   if (mv && S.stage === 3) { mv.tick(dt); const ph = mv.phase(); if ($('phText').textContent !== ph.text) $('phText').textContent = ph.text; }
 }
+function applyXray() {
+  const on = S.xray && S.mode !== 'stand';
+  if (skin.transparent !== on) { skin.transparent = on; skin.depthWrite = !on; skin.needsUpdate = true; }
+  skin.opacity = on ? 0.16 : 1;
+  figure.traverse(o => { if (o.userData.bone) o.visible = on; });
+}
 function render() {
+  applyXray();
   // seen from below, the floor and everything standing in for it get out of the way
   const under = camera.position.y < 1; floor.visible = !under; blob.visible = !under && S.stage !== 2;
   for (const o of figure.children) if (o.userData.floor) o.visible = !under;

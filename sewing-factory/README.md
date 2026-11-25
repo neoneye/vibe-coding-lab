@@ -24,6 +24,10 @@ browser (three.js is loaded from a CDN).
    each seam ends up.
 4. **Finished.** The garment on the mannequin, with a clean PNG export.
 
+An **X-ray** switch makes the body see-through and shows a skeleton inside it
+(spine, rib cage, pelvis, limbs, hands, feet, skull), built from the same
+measurements and pose, with the clothing still on.
+
 Garments: jeans, shorts, shirt, dress, swimsuit, bikini. Cloths: denim, stretch
 denim, chino twill, poplin, oxford, linen, flannel, satin, viscose crepe, cotton
 jersey, swim tricot. Prints: solid, zebra, leopard, polka dots, stripes, gingham,
@@ -81,6 +85,6 @@ must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
 hides the panel, `&stage=1..4`, `&g=jeans|shorts|shirt|dress|swimsuit|bikini`,
-`&form=w|m`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
+`&form=w|m|w3|m3|ag|ab`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
