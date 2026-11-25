@@ -108,6 +108,7 @@
         <div class="seg" id="forms" style="margin-top:6px"></div>
         <div id="measures"></div>
       </div>
+      <div class="card" id="poseCard"><h2>Pose</h2><p>Moves the figure and the garment on it. The cut pieces stay exactly the same: a pattern does not depend on how you stand.</p><div class="seg" id="poses"></div><div id="poseP"></div></div>
       <div class="card"><h2>Bust</h2><p>The shape of the bust. The girth round it stays the Chest / bust measurement above; cups, bodices and shirt fronts are redrafted to fit.</p><div id="bustP"></div></div>
       <div class="card"><h2>Next</h2><p>Pick a garment above, then go to <b>2 Cut</b> to see its pieces laid out on the cloth.</p></div>
     </div>
@@ -238,6 +239,14 @@ const SF = {};
     { key: 'bustHigh', label: 'Fullness above the bust point', min: 3, max: 11, step: 0.5, def: 6.5 },
     { key: 'underRatio', label: 'Rib cage just under the bust, as a share of the bust girth', min: 72, max: 95, step: 1, def: 85, unit: '%' },
   ];
+  // Pose of the full figure. It moves the worn garment but never the cut pieces.
+  SF.POSE = [
+    { key: 'armOut', label: 'Arms out from the body', min: 3, max: 88, step: 1, def: 17, unit: '°' },
+    { key: 'armFwd', label: 'Arms forwards', min: -25, max: 70, step: 1, def: 3, unit: '°' },
+    { key: 'elbow', label: 'Elbow bend', min: 0, max: 110, step: 1, def: 0, unit: '°' },
+    { key: 'stance', label: 'Feet apart', min: 0, max: 34, step: 1, def: 0, unit: 'cm' },
+  ];
+  SF.POSES = { Relaxed: { armOut: 17, armFwd: 3, elbow: 0, stance: 0 }, 'Arms down': { armOut: 5, armFwd: 3, elbow: 0, stance: 0 }, 'T-pose': { armOut: 86, armFwd: 0, elbow: 0, stance: 18 }, 'Arms forward': { armOut: 12, armFwd: 55, elbow: 25, stance: 10 }, 'Elbows bent': { armOut: 22, armFwd: 0, elbow: 85, stance: 14 } };
   SF.FORMS = {
     w: { name: "Women's form", height: 168, chest: 90, waist: 70, hip: 97, shoulder: 38, inseam: 78, arm: 58, bust: 3.6, bustDist: 17, bustHeight: 0, bustSpread: 100, bustLow: 5, bustHigh: 6.5, underRatio: 85 },
     m: { name: "Men's form", height: 180, chest: 100, waist: 86, hip: 100, shoulder: 45, inseam: 82, arm: 63, bust: 0, bustDist: 20, bustHeight: 0, bustSpread: 100, bustLow: 5, bustHigh: 6.5, underRatio: 95 },
@@ -329,7 +338,7 @@ const SF = {};
     const frz = SF.pchip(lys, [circ(0.23), circ(0.225), circ(0.37), circ(0.385), circ(0.55), legTop.rz]);
     const legSect = yy => {
       const yc = Math.min(yy, y.crotch), t = clamp(yc / y.crotch, 0, 1);
-      return { cx: lerp(legTop.rx * 0.62 + 1.5, legTop.rx, t * t), rx: frx(yc), rz: frz(yc), cz: lerp(-1, legTop.cz, t) };
+      return { cx: lerp(legTop.rx * 0.62 + 1.5, legTop.rx, t * t) + (M.stance ?? 0) / 2 * (1 - t), rx: frx(yc), rz: frz(yc), cz: lerp(-1, legTop.cz, t) };   // stance spreads the feet
     };
     // psi: 0 = inside of the leg, 0.25 = front, 0.5 = outside, 0.75 = back
     const leg = (sgn, psi, yy) => {
@@ -337,21 +346,36 @@ const SF = {};
       return [sgn * x, yy, z];
     };
 
-    // -------- arms (A-pose): th = 0 is the outside of the arm, ±π the underarm, positive th is the front
-    const ang = 17 * PI / 180;
+    // -------- arms: th = 0 is the outside of the arm, ±π the underarm, positive th is the front.
+    // Pose: armOut swings the arm away from the body, armFwd swings it forwards, elbow bends the forearm forwards.
     const armR = SF.pchip([0, 0.5 * M.arm, M.arm], [M.chest * 0.052, M.chest * 0.043, M.chest * 0.031]);
-    const arm = sgn => {
-      const r0 = M.chest * 0.052, S = [sgn * (M.shoulder / 2 - r0 - 0.1), y.shoulder - r0 - 0.5, -0.2];   // the joint stays inside the shoulder whatever the arm's girth
-      const d = [sgn * Math.sin(ang), -Math.cos(ang), 0.05], dl = Math.hypot(...d); d.forEach((v, i) => (d[i] = v / dl));
-      const u = [sgn * Math.cos(ang), Math.sin(ang), 0], w = [0, 0, 1];
-      return { S, d, u, w };
+    const P0 = Object.fromEntries(SF.POSE.map(d => [d.key, d.def]));
+    const makeArms = pose => {
+      const a = pose.armOut * PI / 180, f = pose.armFwd * PI / 180, be = pose.elbow * PI / 180, tE = 0.5 * M.arm;
+      const arm = sgn => {
+        const r0 = M.chest * 0.052, S = [sgn * (M.shoulder / 2 - r0 - 0.1), y.shoulder - r0 - 0.5, -0.2];   // the joint stays inside the shoulder whatever the arm's girth
+        const d = [sgn * Math.sin(a), -Math.cos(a) * Math.cos(f), Math.cos(a) * Math.sin(f)];
+        const u = [sgn * Math.cos(a), Math.sin(a) * Math.cos(f), -Math.sin(a) * Math.sin(f)];
+        const w = [-sgn * (u[1] * d[2] - u[2] * d[1]), -sgn * (u[2] * d[0] - u[0] * d[2]), -sgn * (u[0] * d[1] - u[1] * d[0])];
+        const d2 = d.map((v, i) => v * Math.cos(be) + w[i] * Math.sin(be));
+        return { S, d, u, w, d2, tE };
+      };
+      const arms = { 1: arm(1), '-1': arm(-1) };
+      // frame of the arm at distance t from the shoulder: centre, direction, and the forward axis
+      const frame = (sgn, t) => {
+        const A = arms[sgn], b = be * smooth(tE - 4, tE + 4, t), cb = Math.cos(b), sb = Math.sin(b), t1 = Math.min(t, tE), t2 = Math.max(0, t - tE);
+        return { A, c: [0, 1, 2].map(i => A.S[i] + A.d[i] * t1 + A.d2[i] * t2), d: A.d.map((v, i) => v * cb + A.w[i] * sb), w: A.w.map((v, i) => v * cb - A.d[i] * sb) };
+      };
+      const point = (sgn, th, t, r) => {
+        const F = frame(sgn, t), rr = r === undefined ? armR(clamp(t, 0, M.arm)) : r, c = Math.cos(th) * rr, s = Math.sin(th) * rr;
+        return [F.c[0] + F.A.u[0] * c + F.w[0] * s, F.c[1] + F.A.u[1] * c + F.w[1] * s, F.c[2] + F.A.u[2] * c + F.w[2] * s];
+      };
+      return { arms, frame, point };
     };
-    const arms = { 1: arm(1), '-1': arm(-1) };
-    const armPoint = (sgn, th, t, r) => {
-      const A = arms[sgn], rr = r === undefined ? armR(clamp(t, 0, M.arm)) : r, c = Math.cos(th) * rr, s = Math.sin(th) * rr;
-      return [A.S[0] + A.d[0] * t + A.u[0] * c + A.w[0] * s, A.S[1] + A.d[1] * t + A.u[1] * c + A.w[1] * s, A.S[2] + A.d[2] * t + A.u[2] * c + A.w[2] * s];
-    };
-    return { M, y, neckR, bustTh, CAP, CAPH, sect, torso, girth, bump, legSect, leg, arms, armR, armPoint };
+    const posed = makeArms({ ...P0, ...Object.fromEntries(SF.POSE.map(d => [d.key, M[d.key] ?? d.def])) });
+    const arms = posed.arms, armPoint = posed.point, armFrame = posed.frame;
+    const rest = makeArms(P0);   // patterns are drafted from the resting pose, so a pose never changes a cut piece
+    return { M, y, neckR, bustTh, CAP, CAPH, sect, torso, girth, bump, legSect, leg, arms, armR, armPoint, armFrame, rest };
   };
 })();
 // ============================================================ part 2: garment surfaces, pattern pieces, operations
@@ -692,7 +716,7 @@ const SF = {};
     const long = fit.sleeve >= body.M.arm - 9, cuffH = 6;
     for (const sgn of [1, -1]) {
       const s = sgn > 0 ? 'L' : 'R', side = sgn > 0 ? 'left' : 'right', A = body.arms[sgn];
-      const tOf = P => SF.vec.dot(SF.vec.sub(P, A.S), A.d);
+      const A0 = body.rest.arms[sgn], tOf = P => SF.vec.dot(SF.vec.sub(P, A0.S), A0.d);
       const tU = tOf(shell(sgn * H, yU)) + 1.5, tTop = Math.min(-0.5, tOf(shell(sgn * H, yS)));
       const tEnd = long ? body.M.arm - cuffH + 1 : Math.max(tU + 4, fit.sleeve);
       const rg = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(1.7, long ? 1.5 : 1.9, clamp(t / tEnd, 0, 1));
@@ -1492,6 +1516,15 @@ const SF = {};
     const b = SF.makeBody(SF.FORMS.w), p = b.torso(-b.bustTh, b.y.bust), q = b.torso(2 * Math.PI - b.bustTh, b.y.bust);
     assertNear(p[0], q[0], 1e-9); assertNear(p[2], q[2], 1e-9); assert(b.bump(2 * Math.PI - b.bustTh, b.y.bust) > 3, 'right breast at 2π − θ');
   });
+  SewTests.add('pose: moving the arms and feet never changes a cut piece', () => {
+    const F = SF.FORMS.w, a = SF.makeBody(F), b = SF.makeBody({ ...F, armOut: 86, armFwd: 40, elbow: 90, stance: 30 });
+    for (const id of Object.keys(SF.GARMENTS)) {
+      const ga = SF.buildGarment(id, a, {}), gb = SF.buildGarment(id, b, {});
+      for (const p of ga.pieces) { const q = gb.byId[p.id]; assertNear(q.w, p.w, 0.05, `${id} ${p.id} width`); assertNear(q.h, p.h, 0.05, `${id} ${p.id} height`); assertNear(q.area, p.area, 0.5 + p.area * 0.002, `${id} ${p.id} area`); }
+    }
+    const h0 = a.armPoint(1, 0, F.arm), h1 = b.armPoint(1, 0, F.arm);
+    assert(h1[1] > h0[1] + 20 && h1[2] > h0[2] + 10, 'the hand goes up and forwards'); assertNear(b.legSect(0).cx - a.legSect(0).cx, 15, 1e-9, 'feet apart');
+  });
   SewTests.add('body: legs meet at the crotch, shoulders are as wide as asked', () => {
     const b = SF.makeBody(SF.FORMS.w), S = b.legSect(b.y.crotch);
     assertNear(S.cx - S.rx, 0, 1e-6, 'inner thigh');
@@ -2276,7 +2309,7 @@ const STAGES = { 1: ['The mannequin', 'A measured form. The tapes show chest, wa
 
 // -------- state
 const S = {
-  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
+  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), headTurn: +(Q.get('headTurn') || 0), headNod: +(Q.get('headNod') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
   sel: null, op: +(Q.get('op') || 0), opT: +(Q.get('t') || 0), playing: false, lineSpeed: 1, turn: false, showStitch: true, wait: 0,
 };
 S.M = { ...SF.FORMS[S.form] };
@@ -2430,11 +2463,14 @@ function buildFigure() {
         return [lerp(T[0], A[0], w), lerp(T[1], A[1], w), lerp(T[2], A[2], w)];
       }, true), skin));
       figure.add(new THREE.Mesh(gridGeo(18, 24, (u, v) => b.armPoint(sgn, sgn > 0 ? TAU * u : -TAU * u, lerp(tJ, b.M.arm, v)), true), skin));
-      const hp = b.armPoint(sgn, 0, b.M.arm + 0.045 * H, 0), hand = ball(skin, 2.2, 0.052 * H, 3.6, hp[0], hp[1], hp[2]); hand.rotation.z = sgn * 17 * PI / 180; figure.add(hand);
+      const hp = b.armPoint(sgn, 0, b.M.arm + 0.045 * H, 0), hand = ball(skin, 2.2, 0.052 * H, 3.6, hp[0], hp[1], hp[2]), hf = b.armFrame(sgn, b.M.arm);
+      const hx = new THREE.Vector3(...hf.A.u), hy2 = new THREE.Vector3(...hf.d).negate(); hand.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(hx, hy2, new THREE.Vector3().crossVectors(hx, hy2))); figure.add(hand);
     }
-    const hr = (H - y.chin) / 2; figure.add(ball(skin, hr * 0.76, hr * 1.04, hr * 0.9, 0, y.chin + hr * 0.98, 0.8));
-      // a hint of a face, as on shop mannequins: brow ridge and nose
-    const hy = y.chin + hr * 0.98; figure.add(ball(skin, hr * 0.085, hr * 0.24, hr * 0.16, 0, hy - hr * 0.1, 0.8 + hr * 0.8)); figure.add(ball(skin, hr * 0.44, hr * 0.1, hr * 0.2, 0, hy + hr * 0.15, 0.8 + hr * 0.66));
+    const hr = (H - y.chin) / 2, hy = hr * 0.98 + 1.5, head = new THREE.Group(); head.position.set(0, y.chin - 1.5, 0.3);   // pivots at the top of the neck
+    head.add(ball(skin, hr * 0.76, hr * 1.04, hr * 0.9, 0, hy, 0.5));
+    // a hint of a face, as on shop mannequins: brow ridge and nose
+    head.add(ball(skin, hr * 0.085, hr * 0.24, hr * 0.16, 0, hy - hr * 0.1, 0.5 + hr * 0.8)); head.add(ball(skin, hr * 0.44, hr * 0.1, hr * 0.2, 0, hy + hr * 0.15, 0.5 + hr * 0.66));
+    head.rotation.set(-S.headNod * PI / 180, S.headTurn * PI / 180, 0, 'YXZ'); figure.add(head);
   } else buildStand(b, y0);
   if (S.mode !== 'stand') { const plate = new THREE.Mesh(new THREE.CylinderGeometry(30, 31, 1.2, 48), dark); plate.position.y = 0.6 - lift; figure.add(plate); }
   turnG.position.y = lift;   // heels raise the whole figure
@@ -2735,11 +2771,17 @@ function slider(parent, d, get, set) {
 }
 function uiMeasures() {
   const f = $('forms'); f.innerHTML = '';
-  for (const [k, F] of Object.entries(SF.FORMS)) { const b = document.createElement('button'); b.textContent = F.name; b.className = S.form === k ? 'on' : ''; b.onclick = () => { S.form = k; S.M = { ...F }; needBody = true; uiMeasures(); }; f.appendChild(b); }
+  for (const [k, F] of Object.entries(SF.FORMS)) { const b = document.createElement('button'); b.textContent = F.name; b.className = S.form === k ? 'on' : ''; b.onclick = () => { const pose = Object.fromEntries(SF.POSE.filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])); S.form = k; S.M = { ...F, ...pose }; needBody = true; uiMeasures(); }; f.appendChild(b); }
   const md = $('modes'); md.innerHTML = '';
   for (const [k, name] of [['figure', 'Full figure'], ['stand', 'Dress form on a stand']]) { const b = document.createElement('button'); b.textContent = name; b.className = S.mode === k ? 'on' : ''; b.onclick = () => { S.mode = k; needBody = true; uiMeasures(); }; md.appendChild(b); }
   $('modeNote').textContent = S.mode === 'stand' ? 'A tailor\u2019s dress form: torso only. Trousers and swimwear need the crotch free, so for those the form hangs from a rail instead of standing on its pole. Sleeves and trouser legs hang empty.' : '';
   const m = $('measures'); m.innerHTML = '';
+  $('poseCard').style.display = S.mode === 'stand' ? 'none' : '';
+  const pp = $('poseP'), pz = $('poses'); pp.innerHTML = ''; pz.innerHTML = '';
+  for (const [name, P] of Object.entries(SF.POSES)) { const b = document.createElement('button'); b.textContent = name; b.onclick = () => { Object.assign(S.M, P); needBody = true; uiMeasures(); }; pz.appendChild(b); }
+  for (const d of SF.POSE) slider(pp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
+  slider(pp, { label: 'Head turn', min: -70, max: 70, step: 1, unit: '°' }, () => S.headTurn, v => { S.headTurn = v; needBody = true; });
+  slider(pp, { label: 'Head nod', min: -25, max: 25, step: 1, unit: '°' }, () => S.headNod, v => { S.headNod = v; needBody = true; });
   const bp = $('bustP'); bp.innerHTML = '';
   for (const d of SF.BUST) slider(bp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
   if (S.mode !== 'stand') slider(m, { label: 'Heel lift (foot posed for heeled shoes)', min: 0, max: 11, step: 0.5 }, () => S.heel, v => { S.heel = v; needBody = true; });
@@ -2895,7 +2937,7 @@ try {
   setGarment(S.garment); S.op = +(Q.get('op') || 0); S.opT = +(Q.get('t') || 0);
   if (Q.get('cloth') || Q.get('print') || Q.get('colour')) S.fabric = { cloth: Q.get('cloth') || S.fabric.cloth, print: Q.get('print') || S.fabric.print, colour: Q.get('colour') ? '#' + Q.get('colour') : S.fabric.colour };
   for (const d of SF.GARMENTS[S.garment].fit) if (Q.has(d.key)) S.fit[d.key] = +Q.get(d.key);
-  for (const d of [...SF.MEASURES, ...SF.BUST]) if (Q.has(d.key)) { S.M[d.key] = +Q.get(d.key); needBody = true; }
+  for (const d of [...SF.MEASURES, ...SF.BUST, ...SF.POSE]) if (Q.has(d.key)) { S.M[d.key] = +Q.get(d.key); needBody = true; }
   if (needBody) uiMeasures();
   if (STILL) $('mview').dataset.preserve = '1';
   try { mv = createMachineView($('mview')); } catch (e) { showErr(e); }
