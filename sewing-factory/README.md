@@ -29,6 +29,18 @@ denim, chino twill, poplin, oxford, linen, flannel, satin, viscose crepe, cotton
 jersey, swim tricot. Prints: solid, zebra, leopard, polka dots, stripes, gingham,
 floral, camouflage.
 
+## Figure presets
+
+Six starting figures: Women M, Men M, Women 3XL, Men 3XL, Anime girl, Anime boy.
+The bust/chest, waist and hip girths of the first four are rows of the EN 13402-3
+body-dimension tables as printed on Wikipedia (women: bust 92 / waist 76 / hip 100
+and 140 / 124 / 142; men: chest 100 / waist 88 and 138 / 126), the heights are
+EN 13402 design heights, and the men's arm length is its height association. The
+men's table has no hip column, so the men's hips, like every shoulder width,
+inside leg and shape slider, are this page's own proportions. The ASTM tables
+(D5585, D6240, D6960) are paywalled and were not used. The anime figures are
+stylised (long legs, narrow waist, larger head) and follow no standard.
+
 ## How the pieces are made
 
 Nothing is drawn by hand. Each garment is a set of surfaces round the body (the
