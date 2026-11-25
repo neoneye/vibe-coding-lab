@@ -48,7 +48,9 @@ trouser block (two fronts, two backs, a waistband).
 | Bike shorts | swim tricot, pink leopard | as the hot shorts, with a leg to mid-thigh |
 
 The hem of the short ones can be cut higher at the side of the thigh than at
-the inside leg.
+the inside leg. Worn, these four lie skin-tight: the body's own surface pushed
+out by the ease, so the cloth goes into the cleft and tucks under each buttock.
+The looser jeans and chino shorts span across instead.
 
 ## Figure presets
 
