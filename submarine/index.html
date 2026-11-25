@@ -44,6 +44,11 @@
   .check input { accent-color: #6fd0d8; margin: 0; }
   canvas.chart { width: 100%; display: block; border-radius: 6px; background: #071118; margin-top: 4px; }
   .cap { font-size: 11px; color: #8a9a9e; margin-top: 8px; }
+  ol.dmg { margin: 6px 0 0; padding: 0; list-style: none; font-size: 11.5px; }
+  ol.dmg li { padding: 5px 6px 5px 8px; border-left: 3px solid #4a6570; margin-top: 4px; background: rgba(255,255,255,0.03); border-radius: 0 6px 6px 0; line-height: 1.35; }
+  ol.dmg li b { color: #fff; font-variant-numeric: tabular-nums; }
+  ol.dmg li .d { color: #94a5a9; font-size: 11px; }
+  ol.dmg li.bump { border-left-color: #e0c458; } ol.dmg li.hard { border-left-color: #ff9a4a; } ol.dmg li.severe { border-left-color: #ff5b4b; } ol.dmg li.live { outline: 1px dashed #6fd0d8; }
   ol.tasks { margin: 2px 0 0; padding: 0; list-style: none; font-size: 12px; }
   ol.tasks li { padding: 5px 6px; border-radius: 6px; margin-top: 3px; display: grid; grid-template-columns: 18px 1fr; gap: 2px 6px; cursor: pointer; }
   ol.tasks li:hover { background: rgba(255,255,255,0.04); }
@@ -166,6 +171,16 @@
   <div class="card">
     <h2>Now <span class="chev">▾</span></h2>
     <div class="body"><div class="readout" id="readout"></div></div>
+  </div>
+  <div class="card">
+    <h2>Damage <span class="chev">▾</span></h2>
+    <div class="body">
+      <canvas class="chart" id="cDmg" style="height:64px"></canvas>
+      <div class="note" id="dmgSum" style="margin-top:4px"></div>
+      <div class="grid2"><button id="bDmgSort">Biggest first</button><button id="bDmgClear">Clear log</button></div>
+      <ol class="dmg" id="dmgList"></ol>
+      <div class="note">Damage is the energy a collision put into the hull: crushing beyond what a 0.3 m/s touch absorbs, plus scraping while sliding. It is logged only; the hull never fails from it.</div>
+    </div>
   </div>
   <div class="card">
     <h2>Charts <span class="chev">▾</span></h2>
@@ -331,6 +346,7 @@ function derive(S) {
   G.kContact = mTot * Math.pow(2 * Math.PI * 1.2, 2) / 10; G.cContact = 2 * 0.8 * Math.sqrt(G.kContact * mTot / 10);
   G.bankMax = P.bankP * 1e5 * P.bankV / (RAIR * TAIR);
   G.gasMax = gas0;
+  G.cpts = contactPoints(G, P);
 }
 
 // ---------- state ----------
@@ -339,7 +355,7 @@ function createSim(P, world) {
     p: [0, 0, 0], psi: 0, theta: 0, phi: 0, u: 0, v: 0, w: 0, pr: 0, q: 0, r: 0,
     mA: [0, 0], neg: 0, comp: 0, trim: [0, 0], drops: P.dropCount, shot: 0, gas: 0, bank: 0,
     surf: { bow: 0, stern: 0, rudder: 0 }, // actual plane angles [rad], driven toward commands at planeRate
-    ctl: blankCtl(), failed: null, events: [], contact: 0, lastImpact: 0, onBottom: false, f: null };
+    ctl: blankCtl(), failed: null, events: [], contact: 0, lastImpact: 0, onBottom: false, f: null, dmg: newDamage(), _hits: [] };
   derive(S);
   S.comp = P.compFill * S.G.comp.cap; S.trim = [P.trimFill * S.G.trimCap, P.trimFill * S.G.trimCap];
   S.shot = S.G.shot.cap; S.gas = S.G.gasMax; S.bank = S.G.bankMax;
@@ -562,37 +578,84 @@ function forces(S) {
 }
 
 const CANG = [0, 0.8, -0.8, 1.6, -1.6, Math.PI, 2.4, -2.4];
+const PARTS = ["bow", "forward hull", "midships", "aft hull", "stern", "sail"];
+function partOf(L, x) { const f = x / L; return f > 0.36 ? 0 : f > 0.12 ? 1 : f > -0.12 ? 2 : f > -0.36 ? 3 : 4; }
+function sideOf(a) { const c = Math.cos(a), sn = Math.sin(a); if (c > 0.85) return "keel"; if (c < -0.85) return "top"; return (sn > 0 ? "starboard " : "port ") + (c > 0.2 ? "bilge" : c < -0.2 ? "shoulder" : "side"); }
+// contact points on the hull circles at each station, plus the top corners of the sail
+function contactPoints(G, P) {
+  const pts = [];
+  G.st.forEach((s, i) => { for (const a of CANG) pts.push({ b: [s.x, s.r * Math.sin(a), s.r * Math.cos(a)], part: partOf(G.L, s.x), side: sideOf(a), st: i }); });
+  if (P.sailH > 0.2) for (const f of [-0.45, 0.45]) pts.push({ b: [G.sailXm + f * P.sailL, 0, -(G.R + P.sailH)], part: 5, side: "top", st: G.st.length });
+  return pts;
+}
 function contacts(S, Rm, add) {
-  const G = S.G, P = S.P, wd = S.world; let any = false;
-  S.contact = 0;
-  for (let i = 0; i < G.st.length; i += 1) {
-    const s = G.st[i];
-    for (const a of CANG) {
-      const b = [s.x, s.r * Math.sin(a), s.r * Math.cos(a)], w = toWorld(S, Rm, b);
-      const zb = wd.seabed(w[0], w[1]);
-      let n = null, pen = 0;
-      if (w[2] > zb) {
-        const h = 0.5, gx = (wd.seabed(w[0] + h, w[1]) - wd.seabed(w[0] - h, w[1])) / (2 * h), gy = wd.planar ? 0 : (wd.seabed(w[0], w[1] + h) - wd.seabed(w[0], w[1] - h)) / (2 * h);
-        const ln = Math.hypot(gx, gy, 1); n = [gx / ln, gy / ln, -1 / ln]; pen = (w[2] - zb) / ln;
-      } else {
-        const cl = wd.ceiling(w[0], w[1]);
-        if (cl && w[2] < cl[1] && w[2] > cl[0]) { n = [0, 0, 1]; pen = cl[1] - w[2]; }
-      }
-      if (!n) continue;
-      any = true;
-      // point velocity in world
-      const om = [S.pr, S.q, S.r], vb = [S.u + om[1] * b[2] - om[2] * b[1], S.v + om[2] * b[0] - om[0] * b[2], S.w + om[0] * b[1] - om[1] * b[0]];
-      const vw = mul(Rm, vb), vn = vw[0] * n[0] + vw[1] * n[1] + vw[2] * n[2];
-      S.contact = Math.max(S.contact, -vn);
-      const fn = Math.max(0, G.kContact * Math.min(pen, 3) - G.cContact * vn);
-      const vt = [vw[0] - vn * n[0], vw[1] - vn * n[1], vw[2] - vn * n[2]], vts = Math.hypot(vt[0], vt[1], vt[2]);
-      const mu = 0.45 * fn / Math.max(vts, 0.08);
-      const fw = [n[0] * fn - mu * vt[0], n[1] * fn - mu * vt[1], n[2] * fn - mu * vt[2]];
-      add(mulT(Rm, fw), b);
+  const G = S.G, wd = S.world; let any = false;
+  S.contact = 0; const hits = S._hits = [];
+  for (const cp of G.cpts) {
+    const b = cp.b, w = toWorld(S, Rm, b);
+    const zb = wd.seabed(w[0], w[1]);
+    let n = null, pen = 0, what = "seabed";
+    if (w[2] > zb) {
+      const h = 0.5, gx = (wd.seabed(w[0] + h, w[1]) - wd.seabed(w[0] - h, w[1])) / (2 * h), gy = wd.planar ? 0 : (wd.seabed(w[0], w[1] + h) - wd.seabed(w[0], w[1] - h)) / (2 * h);
+      const ln = Math.hypot(gx, gy, 1); n = [gx / ln, gy / ln, -1 / ln]; pen = (w[2] - zb) / ln;
+      if (1 / ln < 0.75) what = "rock wall or steep slope";
+    } else {
+      const cl = wd.ceiling(w[0], w[1]);
+      if (cl && w[2] < cl[1] && w[2] > cl[0]) { n = [0, 0, 1]; pen = cl[1] - w[2]; what = "rock overhead (arch)"; }
+    }
+    if (!n) continue;
+    any = true;
+    // point velocity in world
+    const om = [S.pr, S.q, S.r], vb = [S.u + om[1] * b[2] - om[2] * b[1], S.v + om[2] * b[0] - om[0] * b[2], S.w + om[0] * b[1] - om[1] * b[0]];
+    const vw = mul(Rm, vb), vn = vw[0] * n[0] + vw[1] * n[1] + vw[2] * n[2];
+    S.contact = Math.max(S.contact, -vn);
+    const fn = Math.max(0, G.kContact * Math.min(pen, 3) - G.cContact * vn);
+    const vt = [vw[0] - vn * n[0], vw[1] - vn * n[1], vw[2] - vn * n[2]], vts = Math.hypot(vt[0], vt[1], vt[2]);
+    const mu = 0.45 * fn / Math.max(vts, 0.08);
+    const fw = [n[0] * fn - mu * vt[0], n[1] * fn - mu * vt[1], n[2] * fn - mu * vt[2]];
+    add(mulT(Rm, fw), b);
+    // power dissipated at this point: crushing (damper) and scraping (friction while sliding)
+    hits.push({ cp, what, vn, vts, crush: fn > 0 && vn < 0 ? G.cContact * vn * vn : 0, scrape: vts > 0.1 ? mu * vts * vts : 0 });
+  }
+  if (any && !S.onBottom && S.contact > 0.05) S.lastImpact = S.contact;
+  S.onBottom = any;
+}
+
+// ---------- damage log ----------
+// The hull never fails from damage. Each contact episode (contacts less than 1 s apart) becomes one event.
+// Damage energy = crushing energy beyond what a 0.3 m/s touch absorbs, plus all scraping energy while sliding.
+function newDamage() { return { clock: 0, total: 0, byPart: PARTS.map(() => 0), byStation: new Array(NST + 1).fill(0), events: [], light: 0, cur: null, context: "", boat: "" }; }
+const SEVERITY = [[0.3, "touch"], [0.8, "bump"], [1.5, "hard hit"], [Infinity, "severe hit"]];
+function damageStep(S, h) {
+  const D = S.dmg, hits = S._hits, G = S.G;
+  D.clock += h;
+  if (hits && hits.length) {
+    if (!D.cur || D.clock - D.cur.last > 1) D.cur = { t: D.clock, context: D.context, boat: D.boat, depth: S.p[2] + G.R, crush: 0, scrape: 0, peak: 0, slide: 0, where: {}, what: {}, st: new Array(NST + 1).fill(0) };
+    const c = D.cur; c.last = D.clock;
+    for (const hit of hits) {
+      const e = (hit.crush + hit.scrape) * h; c.crush += hit.crush * h; c.scrape += hit.scrape * h; c.peak = Math.max(c.peak, -hit.vn); if (hit.scrape > 0) c.slide = Math.max(c.slide, hit.vts);
+      const key = PARTS[hit.cp.part] + (hit.cp.part === 5 ? "" : ", " + hit.cp.side);
+      c.where[key] = (c.where[key] || 0) + e; c.what[hit.what] = (c.what[hit.what] || 0) + e; c.st[hit.cp.st] += e;
     }
   }
-  if (any && !S.onBottom && S.contact > 0.05) { S.lastImpact = S.contact; S.events.push({ t: S.t, msg: `Touched bottom or rock at ${S.contact.toFixed(2)} m/s` }); }
-  S.onBottom = any;
+  if (D.cur && D.clock - D.cur.last > 1) closeEpisode(S);
+}
+function episodeDamage(S, c) { const G = S.G, mEff = G.mNominal + S.P.addedCross * 1025 * G.V, safe = 0.5 * mEff * 0.09; return Math.max(0, c.crush - safe) + c.scrape; }
+function summarise(S, c) {
+  const dmg = episodeDamage(S, c), all = c.crush + c.scrape || 1, top = o => Object.entries(o).sort((a, b) => b[1] - a[1]);
+  const scraping = c.scrape > dmg - c.scrape; // more damage from sliding than from crushing
+  const sev = scraping ? 'scrape' : SEVERITY.find(([v]) => c.peak < v)[1];
+  return { t: c.t, context: c.context, boat: c.boat, depth: c.depth, peak: c.peak, slide: c.slide, damage: dmg, severity: sev, crush: c.crush, scrape: c.scrape,
+    where: top(c.where).map(([k, e]) => [k, e / all * dmg]), what: top(c.what).map(([k, e]) => [k, e / all * dmg]), st: c.st.map(e => e / all * dmg) };
+}
+function closeEpisode(S) {
+  const D = S.dmg, c = D.cur; D.cur = null;
+  const ev = summarise(S, c);
+  if (ev.damage <= 0) { D.light++; return; }
+  D.events.push(ev); D.total += ev.damage;
+  ev.st.forEach((e, i) => { D.byStation[i] += e; });
+  for (const [k, e] of ev.where) { const pi = PARTS.findIndex(p => k.startsWith(p)); if (pi >= 0) D.byPart[pi] += e; }
+  if (S.onDamage) S.onDamage(ev);
 }
 
 // ---------- integrate ----------
@@ -624,6 +687,7 @@ function step(S, dt) {
     S.p[0] += vel[0] * h; S.p[1] += vel[1] * h; S.p[2] += vel[2] * h;
     if (S.world.planar) { S.p[1] = 0; S.phi = 0; S.psi = 0; }
     S.vel = vel; S.f = f; S.t += h;
+    damageStep(S, h);
     const keel = S.p[2] + G.R;
     if (keel > P.collapseDepth) { S.failed = "collapse"; S.events.push({ t: S.t, msg: "The pressure hull collapsed" }); break; }
     if (!isFinite(S.p[2]) || !isFinite(S.theta)) { S.failed = "numeric"; break; }
@@ -656,7 +720,7 @@ function netAt(S, keelDepth) { // net buoyancy [kg] if the boat (as loaded) were
 }
 
 return { DEG, PATM, RAIR, TAIR, DT, NST, DEFAULTS, PRESETS, BOAT_KEYS, clamp, density, waterTemp, waterSal, gaugeP, swellAt, immersed, tankAir,
-  createSim, reconf, derive, surface, place, flatWorld, step, run, forces, loads, readout, netAt, rot, mul, mulT, toWorld, surfaceForce };
+  createSim, reconf, derive, surface, place, flatWorld, newDamage, summarise, episodeDamage, closeEpisode, PARTS, step, run, forces, loads, readout, netAt, rot, mul, mulT, toWorld, surfaceForce };
 })();
 
 const SubTests = (() => {
@@ -733,6 +797,27 @@ const SubTests = (() => {
   t("emergencyBlowSurfaces", () => {
     const S = SUB.createSim(P0()); SUB.place(S, 0, 0, 150, 0); S.ctl.emergency = true; SUB.run(S, 25); S.ctl.emergency = false; SUB.run(S, 120);
     return S.p[2] - S.G.R < 0 || `axis ${S.p[2].toFixed(1)}`;
+  });
+  const wallWorld = (nWall, deep) => ({ seabed: (n) => n > nWall ? 5 : deep, ceiling: () => null, current: () => [0, 0], planar: false });
+  const settle = (S) => { for (let i = 0; i < 40; i++) SUB.step(S, 0.1); };
+  t("rammingLogsBowDamage", () => {
+    const S = SUB.createSim(P0()); S.world = wallWorld(40, 300); SUB.place(S, -60, 0, 60, 0); S.u = 3; SUB.run(S, 25); settle(S);
+    const ev = S.dmg.events[0];
+    return (ev && ev.where[0][0].startsWith("bow") && ev.what[0][0].startsWith("rock wall") && ev.damage > 0 && !S.failed && ev.peak > 2) ||
+      `events ${S.dmg.events.length} ${ev ? JSON.stringify([ev.where[0], ev.what[0], ev.peak, ev.damage]) : ""}`;
+  });
+  t("hardLandingDamagesKeel", () => {
+    const S = SUB.createSim(P0()); S.world = SUB.flatWorld(80); SUB.place(S, 0, 0, 78, 0); S.w = 1.2; SUB.run(S, 10); settle(S);
+    const ev = S.dmg.events[0];
+    return (ev && /keel|bilge/.test(ev.where[0][0]) && ev.severity === "hard hit" && ev.damage > 0) || `events ${S.dmg.events.length} ${ev ? JSON.stringify([ev.where[0], ev.severity, ev.peak]) : ""}`;
+  });
+  t("gentleLandingNoDamage", () => {
+    const S = SUB.createSim(P0()); S.world = SUB.flatWorld(80); SUB.place(S, 0, 0, 79, 0); S.w = 0.2; SUB.run(S, 20); settle(S);
+    return (S.dmg.events.length === 0 && S.dmg.total === 0 && S.dmg.light >= 1) || `events ${S.dmg.events.length} total ${S.dmg.total} light ${S.dmg.light}`;
+  });
+  t("hardHitsOutrankBumps", () => {
+    const hit = v => { const S = SUB.createSim(P0()); S.world = SUB.flatWorld(80); SUB.place(S, 0, 0, 78, 0); S.w = v; SUB.run(S, 10); settle(S); return S.dmg.total; };
+    const a = hit(0.6), b = hit(1.6); return (b > 3 * a && a > 0) || `0.6 m/s ${a.toFixed(0)} J, 1.6 m/s ${b.toFixed(0)} J`;
   });
   t("everyPresetFloats", () => {
     for (const k of Object.keys(SUB.PRESETS)) { const S = SUB.createSim(preset(k)); SUB.run(S, 30); const top = S.p[2] - S.G.R; if (!(top < 0) || S.subFrac > 0.99 || Math.abs(S.theta) > 0.1) return `${k}: top ${top.toFixed(2)} sub ${S.subFrac.toFixed(3)} pitch ${(S.theta / SUB.DEG).toFixed(1)}`; }
@@ -990,6 +1075,8 @@ function startTask(i) {
   if (i < 0) { if (map === '2d') { SUB.surface(S, 0, 0, 0); resetTanks(S); } else { const W = world; SUB.surface(S, W.start.n, W.start.e, Math.atan2(W.start.te, W.start.tn)); resetTanks(S); } }
   else TASKS[map][i].start();
   S.t = 0; hist.length = 0; trail.length = 0; bubbles.length = 0; lookYaw = 0; lookPitch = 0;
+  S.dmg.context = i < 0 ? 'Free dive' : `task ${i + 1}: ${TASKS[map][i].title}`; S.dmg.boat = SUB.PRESETS[presetKey].label; S.dmg.cur = null;
+  S.onDamage = ev => { if (ev.severity === 'hard hit' || ev.severity === 'severe hit') toast(`${ev.severity[0].toUpperCase() + ev.severity.slice(1)}: ${ev.where[0][0]} on ${ev.what[0][0]} at ${ev.peak.toFixed(1)} m/s, ${fmtE(ev.damage)}`); dmgDirty = true; };
   if (map === '3d' && camMode === 'periscope') camMode = 'captain';
   showTasks(); refreshLevers();
 }
@@ -1357,6 +1444,8 @@ function drawBoat2D(ctx, x, y, sc, clean) {
   if (G.gas.V > 0) { const gs = S.gasState || { vGas: G.gas.V }; const f = gs.vGas / G.gas.V; ctx.fillStyle = 'rgba(240, 200, 90, 0.55)'; ctx.fillRect(-L * 0.4 * sc, -R * 0.95 * sc, L * 0.8 * sc, R * 1.3 * sc * f); }
   if (P.dropCount > 0) for (let i = 0; i < S.drops; i++) { ctx.fillStyle = '#9aa0a4'; ctx.fillRect((-0.12 + i * 0.07) * L * sc, (R * 0.72) * sc, L * 0.05 * sc, R * 0.22 * sc); }
   if (G.shot.cap > 0) { const f = S.shot / G.shot.cap; ctx.fillStyle = '#5a5f64'; ctx.fillRect(-L * 0.06 * sc, R * (0.95 - 0.5 * f) * sc, L * 0.12 * sc, R * 0.5 * f * sc); }
+  // collision damage: hull stations tinted red by their share of the damage so far
+  { const D = S.dmg, mx = Math.max(...D.byStation, 1); if (D.total > 0) G.st.forEach((s, i) => { const f = D.byStation[i] / mx; if (f > 0.01) { ctx.fillStyle = `rgba(255, 70, 50, ${0.12 + 0.35 * f})`; ctx.fillRect((s.x - s.ds / 2) * sc, -R * sc, s.ds * sc, 2 * R * sc); } }); }
   ctx.restore();
   hullPath(ctx, G, sc); ctx.strokeStyle = '#c9d6dc'; ctx.lineWidth = 1.2; ctx.stroke();
   // planes and rudder (side view: planes as short bars at their angle)
@@ -1709,6 +1798,47 @@ function targetInfo() {
   const dn = n - S.p[0], de = e - S.p[1]; return { name, dist: Math.hypot(dn, de), bearing: ((Math.atan2(de, dn) / DEG) + 360) % 360, depth };
 }
 
+// ---------- damage card ----------
+let dmgSort = 'big', dmgDirty = true, dmgShown = '';
+function fmtE(j) { return j >= 1e6 ? `${(j / 1e6).toFixed(j >= 1e7 ? 0 : 1)} MJ` : `${(j / 1e3).toFixed(j >= 1e4 ? 0 : 1)} kJ`; }
+const clock = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+function showDamage() {
+  const D = S.dmg, live = D.cur ? SUB.summarise(S, D.cur) : null;
+  const key = `${D.events.length}|${D.light}|${dmgSort}|${live ? Math.round(live.damage / 1000) : '-'}|${map}`;
+  if (key === dmgShown && !dmgDirty) return; dmgShown = key; dmgDirty = false;
+  const share = D.byPart.map((e, i) => [SUB.PARTS[i], e]).filter(([, e]) => e > 0).sort((a, b) => b[1] - a[1]);
+  $('dmgSum').innerHTML = D.events.length
+    ? `<b style="color:#fff">${fmtE(D.total)}</b> in ${D.events.length} collision${D.events.length > 1 ? 's' : ''}` + (D.light ? `, ${D.light} gentle touch${D.light > 1 ? 'es' : ''} without damage` : '') +
+      `<br>${share.map(([p, e]) => `${p} ${Math.round(e / D.total * 100)}%`).join(' · ')}`
+    : D.light ? `No damage. ${D.light} gentle touch${D.light > 1 ? 'es' : ''} (under 0.3 m/s).` : 'No collisions yet.';
+  const list = D.events.map((e, i) => Object.assign({ n: i + 1 }, e));
+  if (dmgSort === 'big') list.sort((a, b) => b.damage - a.damage); else list.reverse();
+  if (live && live.damage > 0) list.unshift(Object.assign({ n: D.events.length + 1, live: true }, live));
+  const cls = { touch: '', scrape: 'bump', bump: 'bump', 'hard hit': 'hard', 'severe hit': 'severe' };
+  $('dmgList').innerHTML = list.slice(0, 12).map(e => `<li class="${cls[e.severity]}${e.live ? ' live' : ''}"><b>${fmtE(e.damage)}</b> · ${e.severity === 'scrape' ? `scrape, sliding at ${e.slide.toFixed(1)} m/s (hit at ${e.peak.toFixed(2)})` : `${e.severity} at ${e.peak.toFixed(2)} m/s`}${e.live ? ' (still in contact)' : ''}<br>` +
+    `<span class="d">${e.where.slice(0, 2).map(([k, v]) => `${k}${e.where.length > 1 ? ` ${Math.round(v / e.damage * 100)}%` : ''}`).join(', ')}<br>` +
+    `${e.what[0][0]} at ${e.depth.toFixed(0)} m${e.scrape > 0.2 * (e.crush + e.scrape) ? `, ${Math.round(e.scrape / (e.crush + e.scrape) * 100)}% scraping` : ''}<br>#${e.n} · ${clock(e.t)} · ${e.boat}, ${e.context}</span></li>`).join('') +
+    (list.length > 12 ? `<li class="d">… ${list.length - 12} more</li>` : '');
+  drawDamageHull();
+}
+function heatColour(f) { f = clamp(f, 0, 1); const r = 60 + 195 * Math.min(1, f * 1.6), g = 80 + 120 * (1 - f) - 40 * f, b = 90 * (1 - f); return `rgb(${r | 0},${Math.max(30, g) | 0},${b | 0})`; }
+function drawDamageHull() {
+  const c = $('cDmg'), d = fitCanvas(c), g = c.getContext('2d'), w = c.clientWidth, h = c.clientHeight; g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, w, h);
+  const G = S.G, D = S.dmg, live = D.cur ? SUB.summarise(S, D.cur) : null, st = D.byStation.map((e, i) => e + (live ? live.st[i] : 0)), mx = Math.max(...st, 1);
+  const L = w - 40, sc = Math.min(L / G.L, (h - 22) / (2 * G.R + P.sailH)), x0 = w / 2, y0 = 10 + (P.sailH + G.R) * sc;
+  const X = x => x0 + x * sc;
+  // sail
+  g.fillStyle = st[SUB.NST] > 0 ? heatColour(st[SUB.NST] / mx) : '#33434a'; g.fillRect(X(G.sailXm - P.sailL / 2), y0 - (G.R + P.sailH) * sc, P.sailL * sc, P.sailH * sc + 1);
+  // stations
+  G.st.forEach((s, i) => { const xa = X(s.x - s.ds / 2), xb = X(s.x + s.ds / 2), N = 8; g.beginPath();
+    for (let k = 0; k <= N; k++) { const x = s.x - s.ds / 2 + s.ds * k / N; g.lineTo(X(x), y0 - G.R * profileF(x / G.L, G.taper) * sc); }
+    for (let k = N; k >= 0; k--) { const x = s.x - s.ds / 2 + s.ds * k / N; g.lineTo(X(x), y0 + G.R * profileF(x / G.L, G.taper) * sc); }
+    g.closePath(); g.fillStyle = st[i] > 0 ? heatColour(st[i] / mx) : '#33434a'; g.fill(); g.strokeStyle = 'rgba(0,0,0,0.35)'; g.stroke(); });
+  g.fillStyle = '#8a9a9e'; g.font = '10px -apple-system, sans-serif'; g.textAlign = 'left'; g.fillText('stern', 4, h - 4); g.textAlign = 'right'; g.fillText('bow', w - 4, h - 4); g.textAlign = 'left';
+}
+$('bDmgSort').addEventListener('click', () => { dmgSort = dmgSort === 'big' ? 'latest' : 'big'; $('bDmgSort').textContent = dmgSort === 'big' ? 'Biggest first' : 'Latest first'; dmgDirty = true; showDamage(); });
+$('bDmgClear').addEventListener('click', () => { const ctx = S.dmg.context, boat = S.dmg.boat; S.dmg = SUB.newDamage(); S.dmg.context = ctx; S.dmg.boat = boat; dmgDirty = true; showDamage(); });
+
 // ---------- readout and charts ----------
 function showReadout() {
   const r = SUB.readout(S), G = S.G;
@@ -1732,6 +1862,7 @@ function showReadout() {
   if (P.dropCount) rows.push(['Drop weights', `${S.drops} × ${P.dropMass} kg`]);
   if (G.shot.cap) rows.push(['Iron shot', `${(S.shot / 1000).toFixed(2)} t`]);
   if (G.gasMax) rows.push(['Gasoline', `${(S.gas / 1000).toFixed(1)} t`]);
+  rows.push(['Collision damage', S.dmg.events.length ? `${fmtE(S.dmg.total)} (${S.dmg.events.length})` : 'none', S.dmg.events.length ? 'warn' : '']);
   rows.push(['Hull', r.hull === 'failed' ? 'collapsed' : r.hull === 'test' ? 'beyond test depth' : `test ${P.testDepth} / collapse ${P.collapseDepth} m`, r.hull === 'failed' ? 'bad' : r.hull === 'test' ? 'warn' : '']);
   $('readout').innerHTML = rows.map(([k, v, c]) => `<span class="k">${k}</span><span class="v ${c || ''}">${v}</span>`).join('');
 }
@@ -1793,7 +1924,7 @@ function frame(now) {
   if (!paused && !S.failed) physics(dtReal * P.timeScale);
   if (map === '2d') updateBubbles(paused ? 0 : dtReal * P.timeScale);
   draw(false); updateBoard();
-  if (frameNo % 6 === 0) { showReadout(); drawCharts(); }
+  if (frameNo % 6 === 0) { showReadout(); drawCharts(); showDamage(); }
   if (toastT && now > toastT) { $('toast').style.display = 'none'; toastT = 0; }
   requestAnimationFrame(frame);
 }
@@ -1819,7 +1950,7 @@ if (url.get('t')) { const t = parseFloat(url.get('t')), tail = map === '2d' ? Ma
 if (url.get('pause')) togglePause();
 if (url.get('bare')) document.body.classList.add('nopanels');
 refreshLevers(); showReadout(); draw(false); drawCharts();
-window.__sub = { get S() { return S; }, P, SUB, step(sec) { physics(sec); if (map === '2d') updateBubbles(Math.min(sec, 2)); draw(false); showReadout(); drawCharts(); updateBoard(); }, setMap, startTask, applyPreset, draw, get world() { return world; }, taskState, press, refreshLevers };
+window.__sub = { get S() { return S; }, P, SUB, step(sec) { physics(sec); if (map === '2d') updateBubbles(Math.min(sec, 2)); draw(false); showReadout(); drawCharts(); showDamage(); updateBoard(); }, setMap, startTask, applyPreset, draw, get world() { return world; }, taskState, press, refreshLevers };
 requestAnimationFrame(frame);
 </script>
 </body>
