@@ -271,7 +271,8 @@ const SF = {};
     // angle of the bust point round the torso, from the distance between the two points
     const bustTh = Math.asin(clamp((M.bustDist ?? 17) / 2 / (M.chest * 0.159), 0.2, 0.95));
     const bw = 0.36 * (M.bustSpread ?? 100) / 100, bHi = M.bustHigh ?? 6.5, bLo = M.bustLow ?? 5;
-    const bump = (th, yy) => bust <= 0 ? 0 : bust * Math.exp(-Math.pow((Math.abs(th) - bustTh) / bw, 2)) * Math.exp(-Math.pow((yy - y.bust) / (yy > y.bust ? bHi : bLo), 2));
+    const wrapTh = th => th - TAU * Math.round(th / TAU);   // any angle to (−π, π], so both breasts exist whichever way round the angle is counted
+    const bump = (th, yy) => bust <= 0 ? 0 : bust * Math.exp(-Math.pow((Math.abs(wrapTh(th)) - bustTh) / bw, 2)) * Math.exp(-Math.pow((yy - y.bust) / (yy > y.bust ? bHi : bLo), 2));
     const contour = (a, df, db, yy) => th => {
       const s = Math.sin(th), c = Math.cos(th);
       return [a * spow(s, E), (c >= 0 ? df + bump(th, yy) : db) * spow(c, E)];
@@ -301,15 +302,20 @@ const SF = {};
     const fa = SF.pchip(ys, keys.map(k => k[1])), fdf = SF.pchip(ys, keys.map(k => k[2])), fdb = SF.pchip(ys, keys.map(k => k[3]));
     // Section at height yy. Over the last few centimetres the depth closes to a keel at the crotch line:
     // the underside of the pelvis, which the crotch seam and the swimsuit gusset pass over.
-    const sect = (yy, full) => {
+    const sect = (yy, full, soft) => {
       const yc = Math.max(yy, y.crotch), S = { a: fa(yc), df: fdf(yc), db: fdb(yc) };
+      // the shoulder tip is rounded over, not a corner: the width leaves the shoulder point gently before sloping to the neck
+      if (yc > y.shoulder) { const u = clamp((yc - y.shoulder) / (y.neck - y.shoulder), 0, 1), sh = keys[6][1]; S.a = neckR + (sh - neckR) * (1 - Math.pow(u, 1.45)); }
+      // soft = the figure as modelled: the corner at the shoulder point is taken off, because the top of the arm fills it.
+      // Garments keep the unsoftened envelope, so they still clear the shoulder.
+      if (soft) S.a -= 2.6 * Math.exp(-Math.pow((yc - y.shoulder) / (yc > y.shoulder ? 1.1 : 3.4), 2));   // little above the point, where straps lie
       if (full || yy >= y.crotch + CAPH) return S;
       const s = clamp((y.crotch + CAPH - yy) / CAPH, 0, 1), k = Math.sqrt(Math.max(0, 1 - s * s));
       return { a: S.a * (1 - 0.12 * s), df: S.df * k, db: S.db * k };
     };
     // full = without the rounded underside (the envelope that trousers hang from)
-    const torso = (th, yy, full) => {
-      const S = sect(yy, full), p = contour(S.a, S.df, S.db, yy)(th);
+    const torso = (th, yy, full, soft) => {
+      const S = sect(yy, full, soft), p = contour(S.a, S.df, S.db, yy)(th);
       return [p[0], yy, p[1]];
     };
     const girth = yy => { const S = sect(yy); return perimeter(contour(S.a, S.df, S.db, yy)); };
@@ -1482,6 +1488,10 @@ const SF = {};
     assert(b.bustTh > a.bustTh, 'wider apart'); assertNear(b.bump(b.bustTh, b.y.bust), 7, 1e-9, 'projection at the bust point'); assert(b.bump(b.bustTh, b.y.bust - 6) > a.bump(a.bustTh, a.y.bust - 6) * 2, 'fuller below');
     assertNear(a.girth(a.y.under), F.chest * F.underRatio / 100, 0.5, 'under-bust girth');
   });
+  SewTests.add('body: the bust is the same whichever way the angle is counted', () => {
+    const b = SF.makeBody(SF.FORMS.w), p = b.torso(-b.bustTh, b.y.bust), q = b.torso(2 * Math.PI - b.bustTh, b.y.bust);
+    assertNear(p[0], q[0], 1e-9); assertNear(p[2], q[2], 1e-9); assert(b.bump(2 * Math.PI - b.bustTh, b.y.bust) > 3, 'right breast at 2π − θ');
+  });
   SewTests.add('body: legs meet at the crotch, shoulders are as wide as asked', () => {
     const b = SF.makeBody(SF.FORMS.w), S = b.legSect(b.y.crotch);
     assertNear(S.cx - S.rx, 0, 1e-6, 'inner thigh');
@@ -2397,12 +2407,23 @@ function buildFigure() {
   let lift = 0;
   if (S.mode !== 'stand') {
     // the angle runs so that the triangles face outwards (the reverse shows the far inside wall through the front)
-    figure.add(new THREE.Mesh(gridGeo(96, 110, (u, v) => b.torso(-PI + TAU * u, lerp(y0, y.neck, v)), true), skin));
+    figure.add(new THREE.Mesh(gridGeo(96, 110, (u, v) => b.torso(-PI + TAU * u, lerp(y0, y.neck, v), false, true), true), skin));
     for (const sgn of [1, -1]) {
       figure.add(new THREE.Mesh(gridGeo(28, 44, (u, v) => b.leg(sgn, sgn > 0 ? u : 1 - u, lerp(y.ankle - 2.5, y.crotch + b.CAPH, v)), true), skin));
       const ft = footParts(b, sgn, S.heel); lift = ft.lift; for (const g of ft.parts) figure.add(new THREE.Mesh(g, skin)); for (const m of ft.balls) figure.add(m);
-      figure.add(new THREE.Mesh(gridGeo(18, 24, (u, v) => b.armPoint(sgn, sgn > 0 ? TAU * u : -TAU * u, lerp(-1, b.M.arm, v)), true), skin));
-      const A = b.arms[sgn], r0 = b.armR(0) * 0.93; figure.add(ball(skin, r0, r0, r0, A.S[0], A.S[1], A.S[2]));
+      // Shoulder: the arm grows out of the torso like modelled clay. The first rows of this surface lie on the
+      // torso itself (a loop round the shoulder that shrinks), so it starts flush and with the torso's own shading;
+      // then it eases over to the arm's rings. No joint ball and no cut end of a tube.
+      const tJ = 13, yU = y.armpit - 2.5, yT = y.shoulder + 2.6, yc = (yU + yT) / 2, ry = (yT - yU) / 2, Wt = 0.62;
+      const loop = (al, sc) => b.torso(sgn * (PI / 2 - Wt * sc * Math.sin(al)), yc + ry * sc * Math.cos(al), false, true);
+      figure.add(new THREE.Mesh(gridGeo(28, 30, (u, v) => {
+        const al = sgn > 0 ? TAU * u : -TAU * u, v1 = 0.22;
+        if (v <= v1) return loop(al, lerp(1, 0.84, v / v1));
+        const q = (v - v1) / (1 - v1), w = q * q * (3 - 2 * q), t = lerp(-3.5, tJ, q);
+        const T = loop(al, lerp(0.84, 0.3, q)), A = b.armPoint(sgn, al, t, b.armR(Math.max(0, t)) * (1 + 0.24 * Math.exp(-Math.pow((t - 2) / 6, 2))));
+        return [lerp(T[0], A[0], w), lerp(T[1], A[1], w), lerp(T[2], A[2], w)];
+      }, true), skin));
+      figure.add(new THREE.Mesh(gridGeo(18, 24, (u, v) => b.armPoint(sgn, sgn > 0 ? TAU * u : -TAU * u, lerp(tJ, b.M.arm, v)), true), skin));
       const hp = b.armPoint(sgn, 0, b.M.arm + 0.045 * H, 0), hand = ball(skin, 2.2, 0.052 * H, 3.6, hp[0], hp[1], hp[2]); hand.rotation.z = sgn * 17 * PI / 180; figure.add(hand);
     }
     const neck = new THREE.Mesh(new THREE.CylinderGeometry(b.neckR * 0.84, b.neckR * 1.04, y.chin + 2 - y.neck + 2.4, 28), skin); neck.position.set(0, (y.chin + 2 + y.neck - 2.4) / 2, 0); figure.add(neck);
