@@ -39,7 +39,7 @@ still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
 rainbow shorts, faux-leather shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
-flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, holographic leggings, zip bodysuit, side-strap dress, glossy midi dress, gold slip dress, iridescent pink dress, harlequin mesh dress, six skirts (gold mesh, pleated leather, iridescent flared, tiered polka-dot, silver flared, tennis), four tops (zip tube top, leather zip vest, red snap shirt, glossy crop top), striped bikini, glossy blue shorts, white halter dress, pearl racer swimsuit, ruched blue bikini, white bikini bottom, iridescent high-neck swimsuit, white chain monokini, red keyhole monokini, pink vinyl dress, long-sleeve swimsuit,
+flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, holographic leggings, zip bodysuit, side-strap dress, glossy midi dress, gold slip dress, iridescent pink dress, harlequin mesh dress, six skirts (gold mesh, pleated leather, iridescent flared, tiered polka-dot, silver flared, tennis), four tops (zip tube top, leather zip vest, red snap shirt, glossy crop top), striped bikini, glossy blue shorts, white halter dress, pearl racer swimsuit, ruched blue bikini, white bikini bottom, iridescent high-neck swimsuit, white chain monokini, red keyhole monokini, pink vinyl dress, The Dress, long-sleeve swimsuit,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
 stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, wet-look vinyl, coated barrier cloth, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, red dragon brocade, mélange, open mesh,
@@ -370,6 +370,19 @@ cups over the shoulders and straight down to the top of the back.
 The **pink vinyl dress** is the tight mini dress in pink wet-look vinyl with
 wide straps and a scoop neck.
 
+**The Dress** is the dress from the 2015 photo that people saw either as blue
+and black or as white and gold. As made it is royal blue with black lace: a
+tight sheath with lace bands stitched round it (at the top edge, under the
+bust, a wide one at the waist, then evenly down to the hem) and lace straps.
+Its default cloth, *jersey, as the 2015 photo showed it*, is a demonstration
+and not a real fibre: the side the lamp falls on takes the colours the
+overexposed photo gave (blue-white and golden brown), the shaded side keeps
+the true ones, so turning the figure shows both readings at once. Pick cotton
+jersey on Customize to see the dress as it was made. The real colour shift
+came from the camera and from how the eye discounts the light, not from the
+cloth. Simplified: the narrow overlapping tiers between the bands are a print
+on plain panels, and the sheer yoke over the shoulders is left out.
+
 ### Hazmat suit
 
 A loose one-piece coverall in yellow coated cloth: bodice and legs joined at an
@@ -487,7 +500,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..5` (1 Model, 2 Pose, 3 Shoes, 4 Cloth, 5 Finished; `&tab=customize` opens Cloth's Customize subtab and `&tab=sew` Finished's Sew subtab), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..5` (1 Model, 2 Pose, 3 Shoes, 4 Cloth, 5 Finished; `&tab=customize` opens Cloth's Customize subtab and `&tab=sew` Finished's Sew subtab), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|thedress|shirt|dress|swimsuit|bikini`,
 `&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
