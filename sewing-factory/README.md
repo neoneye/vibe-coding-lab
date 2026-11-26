@@ -90,6 +90,10 @@ shoulder seams and set-in sleeves cut from a second colour. Its sleeve stays a
 tube round the arm until just before the armhole seam, because a skin-tight
 sleeve pulled in earlier sinks into the shoulder.
 
+Both swimsuits have a **Zip** option: none, centre front or centre back. The
+panel is slashed from the neckline and the zip set into the slash on the
+lockstitch machine, as its own operation (`&zip=0|1|2`).
+
 ### Two jackets
 
 A short zip-front jacket on the shirt's block (two fronts, back, yoke, set-in
