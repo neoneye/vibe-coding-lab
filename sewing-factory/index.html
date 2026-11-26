@@ -1119,9 +1119,9 @@ const SF = {};
 
   // Optional zip down the centre front or the centre back of a swimsuit (fit.zip: 0 none, 1 front, 2 back).
   // The panel is slashed from the neckline and the zip set into the slash. Returns the zip piece and its operation.
-  function swimZip(which, body, shell, ynF, ynB, yK) {
+  function swimZip(which, body, shell, ynF, ynB, yK, yMin = -1e9) {
     if (!which) return null;
-    const y = body.y, back = which === 2, th = back ? PI : 0, yTop = (back ? ynB(PI) : ynF(0)) - 0.3, yBot = Math.min(yTop - 8, back ? y.hip + 5 : y.waist + 2), sg = back ? -1 : 1;
+    const y = body.y, back = which === 2, th = back ? PI : 0, yTop = (back ? ynB(PI) : ynF(0)) - 0.3, yBot = Math.max(yMin, Math.min(yTop - 8, back ? y.hip + 5 : y.waist + 2)), sg = back ? -1 : 1;
     const path = []; for (let i = 0; i <= 12; i++) { const P = shell(th, lerp(yBot, yTop, i / 12)); path.push([0, P[1], P[2] + sg * 0.5]); }
     const id = back ? 'back' : 'front', v0 = frac(yBot, yK, yTop + 0.3), row = du => ({ p: id, uv: [[0.5 + du, v0], [0.5 + du, 0.985]] });
     return {
@@ -1228,6 +1228,60 @@ const SF = {};
       { name: 'Bartack the rings between the cut-outs', machine: 'bartack', seam: 'bartack', bring: trims.map(t => t.id), note: 'Where two openings meet, each front half ends in a small loop of cloth folded through a metal ring and bartacked. The rings are all that joins the halves above the waist.' },
     ];
     return { pieces, trims, ops };
+  }
+
+  // Catsuit (jumpsuit): the leggings and a long-sleeved, high-necked bodice joined by a waist seam, with a stand
+  // collar and a zip down the front or the back. Skin-tight from neck to ankle.
+  function catsuit(body, fit) {
+    const y = body.y, H = PI / 2, yW = y.waist, { shell, chart: tc } = swimChart(body, false);
+    const low = trousers(body, { length: fit.length, rise: 2.5, ease: 0.4 }, { knit: true, high: true, close: true, long: true });   // rise 2.5 puts the top edge exactly on the waist
+    const pieces = low.pieces.filter(p => p.id !== 'band'), lowOps = low.ops.filter(q => !/waistband/.test(q.name));
+    const yU = y.armpit - 3.5, yS = y.shoulder + 0.6, yT = y.neck + 0.2, sc = scoop(0.4, yU, yS), ynF = neckFn(yT, 1.4, 1.5), ynB = neckFn(yT, 1.0, 2);
+    const fr = (a, b) => [frac(a, yW, yT), frac(b, yW, yT)], sg = (a, b) => ({ ['side' + a]: ['L', ...fr(yW, yU)], ['arm' + a]: ['L', ...fr(yU, yS)], ['sh' + a]: ['L', ...fr(yS, yT)], ['side' + b]: ['R', ...fr(yW, yU)], ['arm' + b]: ['R', ...fr(yU, yS)], ['sh' + b]: ['R', ...fr(yS, yT)], waist: ['B', 0, 1], neck: ['T', 0, 1] });
+    const sideF = fnq(q => H - sc(q), yW, yT), sideB = fnq(q => H + sc(q), yW, yT);
+    pieces.push({ id: 'front', name: 'Bodice front', chart: tc, grain: 0, nu: 22, nv: 26, B: lin([-H, yW], [H, yW]), T: fnp(-H, H, ynF), L: mir(sideF), R: sideF, segs: sg('R', 'L') });
+    pieces.push({ id: 'back', name: 'Bodice back', chart: tc, grain: PI, nu: 22, nv: 26, B: lin([H, yW], [3 * H, yW]), T: fnp(H, 3 * H, ynB), L: sideB, R: mir(sideB, PI), segs: sg('L', 'R') });
+    for (const sgn of [1, -1]) {
+      const s = sgn > 0 ? 'L' : 'R', A0 = body.rest.arms[sgn], tOf = P => SF.vec.dot(SF.vec.sub(P, A0.S), A0.d);
+      const tU = tOf(shell(sgn * H, yU)) + 1.5, tTop = Math.min(-0.5, tOf(shell(sgn * H, yS))), tEnd = clamp(fit.sleeve, tU + 4, body.M.arm - 1);
+      const rg = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(2.7, 0.45, smooth(1, 17, t)), ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
+      const hole = u => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); const P = shell(sgn * (H - 1.22 * sc(q) * Math.sign(Math.sin(a))), q), o = outOf(P); return [P[0] + o[0] * 0.9, P[1], P[2] + o[2] * 0.9]; };
+      pieces.push({ id: 'sleeve' + s, name: `Sleeve, ${sgn > 0 ? 'left' : 'right'}`, chart: ac, grain: 0, nu: 22, nv: 26, B: lin([-PI, tEnd], [PI, tEnd]), T: fnp(-PI, PI, cap), L: lin([-PI, tEnd], [-PI, tU]), R: lin([PI, tEnd], [PI, tU]),
+        segs: { cap: ['T', 0, 1], underA: ['L', 0, 1], underB: ['R', 0, 1], wrist: ['B', 0, 1] }, weld: { fn: hole, depth: 0.16 } });
+    }
+    // stand collar: a straight band round the neck; it opens where the zip is
+    const zf = (fit.zip | 0) === 1, c0 = zf ? 0.05 : -PI + 0.05, c1 = zf ? TAU - 0.05 : PI - 0.05, yc0 = y.neck - 0.6, yc1 = y.neck + 3;
+    pieces.push({ id: 'collar', name: 'Stand collar', chart: torsoChart(SF.makeShell(body, { ease: 0.7, loose: 0 })), grain: zf ? PI : 0, nu: 36, nv: 3, layer: 1, rot: true, B: lin([c0, yc0], [c1, yc0]), T: lin([c0, yc1], [c1, yc1]), L: lin([c0, yc0], [c0, yc1]), R: lin([c1, yc0], [c1, yc1]) });
+    // The zip goes all the way down and round: from the collar down the centre, through the crotch and up the other
+    // side to the waist, so the suit opens completely. It lies along the centre seams of bodice and legs.
+    let Z = null;
+    if (fit.zip | 0) {
+      const back = (fit.zip | 0) === 2, sg = back ? -1 : 1, yc = y.crotch, path = [], add = (P, n, d = 0.55) => path.push([P[0] + n[0] * d, P[1] + n[1] * d, P[2] + n[2] * d]);
+      const yTop = (back ? ynB(PI) : ynF(0)) - 0.3, mid = (bk, q) => { const P = body.lower(1, bk ? 1 : 0, q); return [0, q, P[2]]; };   // the body's own centre line below the waist
+      for (let i = 0; i <= 12; i++) { const P = shell(back ? PI : 0, lerp(yTop, yW, i / 12)); add([0, P[1], P[2]], [0, 0, sg]); }
+      for (let i = 1; i <= 14; i++) add(mid(back, lerp(yW, yc + 0.5, i / 14)), [0, 0, sg], lerp(0.55, 1.5, i / 14));   // further off the body lower down: the tight cloth sits proud of it there, deepest in the cleft
+      const a = mid(back, yc + 0.5), c = mid(!back, yc + 0.5), yUnder = yc - 4.2;
+      for (let i = 1; i < 8; i++) { const t = i / 8; add([0, lerp(yc + 0.5, yUnder, Math.sin(PI * t)), lerp(a[2], c[2], t)], [0, -Math.sin(PI * t), sg * Math.cos(PI * t)]); }
+      for (let i = 0; i <= 14; i++) add(mid(!back, lerp(yc + 0.5, yW - 1, i / 14)), [0, 0, -sg], lerp(1.5, 0.9, i / 14));
+      const out = P => P[1] < yc + 0.2 ? [0, -1, 0] : [0, 0, (P[2] >= (a[2] + c[2]) / 2) === !back ? sg : -sg], id = back ? 'back' : 'front', row = du => ({ p: id, uv: [[0.5 + du, 0.01], [0.5 + du, 0.985]] });
+      Z = {
+        piece: { id: 'zip', name: 'Through zip', kind: 'zip', ribbon: true, width: 2.4, nv: 90, path, out: P => { const front = P[2] > (a[2] + c[2]) / 2; return P[1] < yc - 1.5 ? [0, -1, 0] : [0, 0, front ? 1 : -1]; } },
+        op: { name: 'Set in the through zip', machine: 'lock', seam: 'zip', bring: ['zip'], stitch: [row(-0.035), row(0.035)],
+          note: `One long two-way zip runs from the collar down the centre ${back ? 'back' : 'front'}, through the crotch and up the centre ${back ? 'front' : 'back'} to the waist, so the whole suit opens. It is set into the centre seams with a zipper foot and a plain lockstitch, because zip tape does not stretch. The legs are sewn first and the centre seams left open for it.` },
+      };
+      pieces.push(Z.piece);
+    }
+    const ops = [
+      { name: 'Shoulder seams', machine: 'overlock4', seam: 'superimposed', joins: [J('front.shL', 'back.shL', 0.3), J('front.shR', 'back.shR', 0.3)], bring: ['front', 'back'], note: 'Coated stretch cloth is sewn like swimwear, with one difference: the surface drags under the foot, so it is fed with a roller foot or a strip of tissue, and nothing is pinned because every hole stays.' },
+      { name: 'Set in the sleeves', machine: 'overlock4', seam: 'superimposed', joins: [J('sleeveL.cap', 'front.armL+back.armL', 0.3), J('sleeveR.cap', 'front.armR+back.armR', 0.3)], note: 'The sleeves go in flat while the sides are still open.' },
+      { name: 'Close side and underarm seams of the bodice', machine: 'overlock4', seam: 'superimposed', joins: [J('front.sideL', 'back.sideL', 0.1), J('front.sideR', 'back.sideR', 0.1), J('sleeveL.underA', 'sleeveL.underB'), J('sleeveR.underA', 'sleeveR.underB')], note: 'One run from the waist, through the armpit and down to the wrist.' },
+      ...lowOps,
+      { name: 'Waist seam', machine: 'overlock4', seam: 'superimposed', joins: [J('front.waist', 'frontR.waist+frontL.waist', 0.2), J('back.waist', 'backL.top+backR.top', 0.2)], note: 'The finished bodice and the finished legs are two tubes; they are joined in one seam round the waist, with clear elastic caught in so it cannot stretch out.' },
+      { name: 'Attach the stand collar', machine: 'cover', seam: 'hem', stitch: [{ e: 'collar.b', in: 0.4, rows: 2 }, { e: 'collar.t', in: 0.4 }], note: 'A folded band sewn round the neckline and coverstitched down.' },
+      ...(Z ? [Z.op] : []),
+      { name: 'Coverstitch the wrists', machine: 'cover', seam: 'hem', stitch: ['sleeveL.wrist', 'sleeveR.wrist'].map(e => ({ e, in: 0.7, rows: 2 })), note: 'The sleeve ends are turned once and coverstitched, like the leg hems.' },
+    ];
+    return { pieces, trims: [], ops };
   }
 
   function bikini(body, fit) {
@@ -1345,6 +1399,13 @@ const SF = {};
     cutoutsuit: { name: 'Cut-out swimsuit', cloth: 'gloss', print: 'solid', colour: '#f1f2f4', thread: '#e2e4e8', stretch: [0.86, 0.94], usual: ['gloss', 'tricot', 'foil'],
       fit: [{ key: 'leg', label: 'Leg cut height', min: -2, max: 16, def: 12, step: 0.5, unit: 'cm' }, { key: 'open', label: 'Size of the cut-outs', min: 40, max: 130, def: 100, step: 1, unit: '%' }, { key: 'back', label: 'Back depth', min: 2, max: 30, def: 16, step: 0.5, unit: 'cm' }],
       build: cutoutsuit },
+    // Two catsuits after the owner's reference photos.
+    catsuitred: { name: 'Red catsuit', cloth: 'vinyl', print: 'solid', colour: '#b5121f', thread: '#8f0e18', stretch: [0.9, 0.95], usual: ['vinyl', 'gloss', 'pu'],
+      fit: [{ key: 'length', label: 'Leg length', min: 55, max: 100, def: 97, step: 1, unit: '%' }, { key: 'sleeve', label: 'Sleeve length', min: 16, max: 70, def: 70, step: 1, unit: 'cm' }, { key: 'zip', label: 'Zip', choices: ['None', 'Front', 'Back'], min: 0, max: 2, def: 2, step: 1 }],
+      build: catsuit },
+    catsuitbeige: { name: 'Beige catsuit', cloth: 'vinyl', print: 'solid', colour: '#c9a57e', thread: '#a88560', stretch: [0.9, 0.95], usual: ['vinyl', 'gloss', 'pu'],
+      fit: [{ key: 'length', label: 'Leg length', min: 55, max: 100, def: 97, step: 1, unit: '%' }, { key: 'sleeve', label: 'Sleeve length', min: 16, max: 70, def: 70, step: 1, unit: 'cm' }, { key: 'zip', label: 'Zip', choices: ['None', 'Front', 'Back'], min: 0, max: 2, def: 1, step: 1 }],
+      build: catsuit },
     bikini: { name: 'Bikini', cloth: 'tricot', print: 'dots', colour: '#f2c230', thread: '#f2c230', stretch: [0.86, 0.94], usual: ['tricot'],
       fit: [{ key: 'cup', label: 'Cup size', min: 70, max: 135, def: 100, step: 1, unit: '%' }, { key: 'rise', label: 'Bottom rise', min: -3, max: 10, def: 2, step: 0.5, unit: 'cm' }, { key: 'side', label: 'Side seam height', min: 2, max: 10, def: 4, step: 0.5, unit: 'cm' }],
       build: bikini },
@@ -1439,6 +1500,7 @@ const SF = {};
     snakeskin: { name: 'Scale-embossed leather', kind: 'leather', weave: 'scales', weight: 700, stretch: 0, rough: 0.2, gloss: 1, relief: 'scales', thread: '#26262a', note: 'Real snake and crocodile skins are small and costly, so most "exotic" jackets are cowhide pressed between heated plates that emboss the scales, then glazed.' },
     pu: { name: 'Faux leather', kind: 'knit', weave: 'leather', weight: 320, stretch: 25, rough: 0.3, gloss: 1, thread: '#6d3a21', note: 'A stretch knit coated with polyurethane and embossed with a leather grain. Like the foil cloth, every needle hole stays, so it is clipped, not pinned, and sewn with a longer stitch.' },
     chainmail: { name: 'Metal mesh', kind: 'woven', weave: 'chain', weight: 900, stretch: 0, rough: 0.28, metal: 0.9, relief: 'chain', thread: '#aeb2b9', note: 'Thousands of small metal plates, each held to its neighbours by four rings. It drapes like heavy cloth but is not sewn through: panels are joined by opening rings with pliers, and cut with snips. The machine steps shown here are where a cloth lining and the straps are sewn.' },
+    vinyl: { name: 'Wet-look vinyl', kind: 'knit', weave: 'foil', weight: 260, stretch: 40, rough: 0.09, gloss: 1, thread: '#888888', note: 'A stretch knit with a thick, mirror-smooth polyurethane or PVC coating, made to look like latex. Real latex garments are not sewn at all: the sheet is cut and the seams are glued.' },
     gloss: { name: 'Glossy tricot', kind: 'knit', weave: 'tricot', weight: 200, stretch: 75, rough: 0.2, gloss: 1, thread: '#f7f1e8', note: 'Warp-knitted nylon and elastane with a calendered (hot-rolled) face that gives it a wet shine. Sewn exactly like swim tricot.' },
     tricot: { name: 'Swim tricot', kind: 'knit', weave: 'tricot', weight: 190, stretch: 80, rough: 0.45, thread: '#888888', note: 'Warp-knitted nylon with about 20 % elastane (spandex, Lycra): stretches both ways and snaps back.' },
   };
@@ -3086,7 +3148,7 @@ function buildStand(b, y0) {
   const out = (th, yy, d = 0.06) => { const p = b.torso(th, yy), l = Math.hypot(p[0], p[2]) || 1; return [p[0] * (1 + d / l), yy, p[2] * (1 + d / l)]; };
   const ring = []; for (let i = 0; i < 72; i++) ring.push(out(TAU * i / 72, y.waist)); tube(ring, true);
   for (const th of [0, PI / 2, PI, -PI / 2]) { const l = []; for (let i = 0; i <= 40; i++) l.push(out(th, lerp(y.crotch + 0.5, th === PI / 2 || th === -PI / 2 ? y.armpit - 3 : y.neck - 0.5, i / 40))); tube(l, false); }
-  const hang = ['jeans', 'shorts', 'jeanshorts', 'hotshorts', 'metalshorts', 'goldshorts', 'rainbowshorts', 'bikeshorts', 'leggings', 'scrunchleggings', 'meshleggings', 'shinyleggings', 'zebraleggings', 'flarepants', 'rashsuit', 'leathershorts', 'cutoutsuit', 'swimsuit', 'bikini'].includes(S.garment);
+  const hang = ['jeans', 'shorts', 'jeanshorts', 'hotshorts', 'metalshorts', 'goldshorts', 'rainbowshorts', 'bikeshorts', 'leggings', 'scrunchleggings', 'meshleggings', 'shinyleggings', 'zebraleggings', 'flarepants', 'rashsuit', 'leathershorts', 'cutoutsuit', 'catsuitred', 'catsuitbeige', 'swimsuit', 'bikini'].includes(S.garment);
   if (hang) {
     const top = b.M.height + 70, rod = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, top - (y.neck + 9), 12), steel); rod.position.y = (top + y.neck + 9) / 2; figure.add(rod);
     const rail = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 150, 16), steel); rail.rotation.z = PI / 2; rail.position.y = top; figure.add(rail);
