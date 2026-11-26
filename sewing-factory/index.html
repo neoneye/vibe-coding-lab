@@ -1601,12 +1601,13 @@ const SF = {};
     return { shell, chart: { f: (th, q) => { const P = shell(th, q); return body.poseLeg(P[0] >= 0 ? 1 : -1, P); }, f0: shell, orient: 1, yq: true } };
   };
   // Lower edge of a swimsuit or bikini bottom: the leg opening from the crotch strip out to the side seam.
-  function legCurve(body, shell, yK, yLeg, expo) {
+  function legCurve(body, shell, yK, yLeg, expo, round = false) {   // round: the opening passes level over the hip, so front and back meet there in one curve and not in a peak
     const half = 3.3;
     return q => {
       if (q >= yLeg) return PI / 2;
       const a = Math.max(half + 0.5, body.sect(Math.min(q, body.y.hip)).a), th0 = Math.asin(clamp(half / a, 0, 1));
-      return th0 + (PI / 2 - th0) * Math.pow(clamp((q - yK) / (yLeg - yK), 0, 1), expo);
+      const t = clamp((q - yK) / (yLeg - yK), 0, 1), f = Math.pow(t, expo);
+      return th0 + (PI / 2 - th0) * (round ? 1 - Math.pow(1 - f, 0.6) : f);
     };
   }
 
@@ -1824,17 +1825,26 @@ const SF = {};
   // centre. Below the lowest opening the halves are seamed together. High neck, no sleeves.
   function cutoutsuit(body, fit, o = {}) {   // o.oval: one oval opening over the belly, and a zip from the neck down to it
     const y = body.y, H = PI / 2, { shell, chart: tc } = swimChart(body);
-    const yK = y.crotch - SWIM_U, yLeg = y.hip + fit.leg, yU = y.armpit - 3, yS = y.shoulder + 0.4, yT = y.neck - 0.4, sc = scoop(0.5, yU, yS);
-    const lcF = legCurve(body, shell, y.crotch, yLeg, 2.3), lcB = legCurve(body, shell, y.crotch, yLeg, 0.85), ynF = neckFn(yT, 3.6, 1.6), ynB = neckFn(yT, fit.back, 2.2);
+    const yK = y.crotch - SWIM_U, yLeg = y.hip + fit.leg, yU = y.armpit - (o.oval ? 3.5 : 3), yS = y.shoulder + (o.oval ? 0.1 : 0.4), yT = o.oval ? lerp(y.shoulder, y.neck, 0.76) : y.neck - 0.4 /* o.oval: the neck hole is wider, its side a little way out along the shoulder, which leaves room for a round hole */, sc = o.oval ? (q => q <= yU || q >= yS ? 0 : 0.44 * Math.pow(1 - Math.pow(Math.abs(2 * (q - yU) / (yS - yU) - 1), 2.3), 1 / 2.3)) : scoop(0.5, yU, yS);   /* o.oval: round armholes that end at the shoulder tip; carried higher, the body narrows and pinches the opening to a point */
+    const lcF = legCurve(body, shell, y.crotch, yLeg, 2.3, !!o.oval), lcB = legCurve(body, shell, y.crotch, yLeg, 0.85, !!o.oval), nF0 = neckFn(yT, o.oval ? 3.3 : 3.6, 1.6), nB0 = neckFn(yT, fit.back, 2.2); let ynF = nF0, ynB = nB0;
+    // o.oval: a round neck hole. A neckline drawn by height alone stays near the top of the shoulder for a long way
+    // round and runs out along it to a point. A round neckline lies nearly in one plane: here the front edge is the
+    // body cut by a plane through the two shoulder points that tilts down to the front depth, and the back edge the
+    // same with its own tilt. Leaving the shoulder, each edge then heads straight forwards (or back) across it.
+    const planeNeck = (th0, d) => {
+      const zS = shell(H, yT)[2], z0 = shell(th0, yT - d)[2], k = d / Math.max(0.5, Math.abs(z0 - zS));
+      return th => { let lo = yT - d - 2.5, hi = yT; for (let i = 0; i < 26; i++) { const m = (lo + hi) / 2; if (m - yT + k * Math.abs(shell(th, m)[2] - zS) > 0) hi = m; else lo = m; } return (lo + hi) / 2; };
+    };
+    if (o.oval) { ynF = planeNeck(0, 3.6); ynB = planeNeck(PI, Math.min(2.2, fit.back)); }
     const fr = (a, b) => [frac(a, yK, yT), frac(b, yK, yT)], t0 = lcF(yK), yC = ynF(0), yB = o.oval ? y.waist - 7.5 : y.waist - 7, yN = o.oval ? y.under - 0.5 : yC - 2.6, big = fit.open / 100;
     // inner edge of a front half: three lobes, widest over the bust, closing to the centre line at each ring
-    const lobes = o.oval ? [0.3] : [0.2, 0.3, 0.42], inner = q => { if (q <= yB || q >= yN) return 0; const t = (q - yB) / (yN - yB) * lobes.length, i = Math.min(lobes.length - 1, Math.floor(t)); return big * lobes[i] * Math.pow(Math.sin(PI * (t - i)), 0.75); };
+    const lobes = o.oval ? [0.3] : [0.2, 0.3, 0.42], inner = q => { if (q <= yB || q >= yN) return 0; const t = (q - yB) / (yN - yB) * lobes.length, i = Math.min(lobes.length - 1, Math.floor(t)); return big * lobes[i] * (o.oval ? Math.pow(Math.max(0, 1 - Math.pow(Math.abs(2 * (t - i) - 1), 2.6)), 1 / 2.6) /* a true oval, rounded at both ends */ : Math.pow(Math.sin(PI * (t - i)), 0.75)); };
     const fc = (a, b) => [frac(a, yK, yC), frac(b, yK, yC)], sideF = fnq(q => lcF(q) - sc(q), yK, yT), sideB = fnq(q => PI - (lcB(q) - sc(q)), yK, yT), inF = fnq(inner, yK, yC);
     const edge = (sd, s) => ({ ['leg' + s]: [sd, ...fr(yK, yLeg)], ['side' + s]: [sd, ...fr(yLeg, yU)], ['arm' + s]: [sd, ...fr(yU, yS)], ['sh' + s]: [sd, ...fr(yS, yT)] });
     const pieces = [
-      { id: 'frontL', name: 'Front, left', chart: tc, grain: 0, nu: 12, nv: 44, B: lin([0, yK], [t0, yK]), T: fnp(0, H, ynF), L: inF, R: sideF, segs: { ...edge('R', 'L'), cf: ['L', ...fc(yK, yB)], open: ['L', ...fc(yB, yC)], crotch: ['B', 0, 1], neck: ['T', 0, 1] } },
-      { id: 'frontR', name: 'Front, right', chart: tc, grain: 0, nu: 12, nv: 44, B: lin([-t0, yK], [0, yK]), T: fnp(-H, 0, ynF), L: mir(sideF), R: mir(inF), segs: { ...edge('L', 'R'), cf: ['R', ...fc(yK, yB)], open: ['R', ...fc(yB, yC)], crotch: ['B', 0, 1], neck: ['T', 0, 1] } },
-      { id: 'back', name: 'Back', chart: tc, grain: PI, nu: 20, nv: 40, B: lin([PI - t0, yK], [PI + t0, yK]), T: fnp(H, 3 * H, ynB), L: sideB, R: mir(sideB, PI), segs: { ...edge('L', 'L'), ...edge('R', 'R'), crotch: ['B', 0, 1], neck: ['T', 0, 1] } },
+      { id: 'frontL', name: 'Front, left', chart: tc, grain: 0, nu: 12, nv: o.oval ? 132 : 44, B: lin([0, yK], [t0, yK]), T: fnp(0, H, ynF), L: inF, R: sideF, segs: { ...edge('R', 'L'), cf: ['L', ...fc(yK, yB)], open: ['L', ...fc(yB, yC)], crotch: ['B', 0, 1], neck: ['T', 0, 1] } },
+      { id: 'frontR', name: 'Front, right', chart: tc, grain: 0, nu: 12, nv: o.oval ? 132 : 44, B: lin([-t0, yK], [0, yK]), T: fnp(-H, 0, ynF), L: mir(sideF), R: mir(inF), segs: { ...edge('L', 'R'), cf: ['R', ...fc(yK, yB)], open: ['R', ...fc(yB, yC)], crotch: ['B', 0, 1], neck: ['T', 0, 1] } },
+      { id: 'back', name: 'Back', chart: tc, grain: PI, nu: 20, nv: o.oval ? 120 : 40, B: lin([PI - t0, yK], [PI + t0, yK]), T: fnp(H, 3 * H, ynB), L: sideB, R: mir(sideB, PI), segs: { ...edge('L', 'L'), ...edge('R', 'R'), crotch: ['B', 0, 1], neck: ['T', 0, 1] } },
     ];
     const yG = y.crotch + 7, gs = fnq(q => lcF(q) * 0.96, yK, yG);
     pieces.push({ id: 'gusset', name: 'Gusset lining', chart: tc, grain: 0, nu: 6, nv: 8, layer: -0.4, B: lin([-t0 * 0.96, yK], [t0 * 0.96, yK]), T: lin([-lcF(yG) * 0.96, yG], [lcF(yG) * 0.96, yG]), L: mir(gs), R: gs });
@@ -1845,13 +1855,17 @@ const SF = {};
       { name: 'Baste the gusset lining to the front', machine: 'zigzag', seam: 'superimposed', stitch: [{ e: 'gusset.t', in: 0.4 }], note: 'A small lining panel inside the crotch. Zigzag, because any straight lockstitch would snap when the cloth stretches.' },
       { name: 'Crotch seam', machine: 'overlock4', seam: 'superimposed', joins: [J('frontL.crotch+frontR.crotch', 'back.crotch')], note: 'The four-thread overlock is the standard seam for stretch cloth: its looped threads stretch with the fabric.' },
       { name: 'Shoulder seams', machine: 'overlock4', seam: 'superimposed', joins: [J('frontL.shL', 'back.shL', 0.3), J('frontR.shR', 'back.shR', 0.3)], note: 'Short seams at the top of the high neck, with clear elastic caught in so they cannot stretch.' },
-      { name: 'Side seams', machine: 'overlock4', seam: 'superimposed', joins: [J('frontL.sideL', 'back.sideL', 0.1), J('frontR.sideR', 'back.sideR', 0.1)], note: 'The knife trims both edges level a hair in front of the needles.' },
+      { name: 'Side seams', machine: 'overlock4', seam: 'superimposed', joins: [J('frontL.sideL', 'back.sideL', o.oval ? 0.2 : 0.1), J('frontR.sideR', 'back.sideR', o.oval ? 0.2 : 0.1)] /* o.oval: the leg opening turns level into the side seam, and where the curve ends and the seam begins is only known to one mesh step */, note: 'The knife trims both edges level a hair in front of the needles.' },
       { name: 'Apply elastic to every edge', machine: 'zigzag', seam: 'elastic', stitch: hemE.map(e => ({ e, in: 0.25, zig: true })), note: 'Cut-outs only keep their shape if their edges are elasticated like the leg openings: narrow elastic is stretched slightly and zigzagged round each one.' },
       { name: 'Turn the edges and coverstitch', machine: 'cover', seam: 'hem', stitch: hemE.map(e => ({ e, in: 0.7, rows: 2 })), note: 'The elasticated edge is folded under and held by a coverstitch.' },
       { name: 'Bartack the rings between the cut-outs', machine: 'bartack', seam: 'bartack', bring: trims.map(t => t.id), note: 'Where two openings meet, each front half ends in a small loop of cloth folded through a metal ring and bartacked. The rings are all that joins the halves above the waist.' },
     ];
     if (o.oval) {
       const Z = swimZip(1, body, shell, ynF, ynB, yK, yN + 0.6), sN = frac(yN, yB, yC); pieces.push(Z.piece); ops.pop();
+      // Vinyl is not elasticated with a zigzag: every edge is bound, which leaves a smooth line. (The zigzag, drawn in
+      // black thread across a black edge, also made the edge itself look saw-toothed.)
+      const el = ops.findIndex(q => /Apply elastic/.test(q.name)); ops.splice(el, 1);
+      const hem = ops.find(q => /Turn the edges/.test(q.name)); hem.name = 'Bind every edge'; hem.stitch = hem.stitch.map(t => ({ e: t.e, in: 0.6 })); hem.note = 'Coated cloth does not fray and cannot be eased with a zigzag, which would perforate it. A narrow strip of the same cloth is folded over each edge by a folder on the machine and stitched down in one pass, which leaves a smooth, rounded edge round the neck, armholes, legs and the opening.';
       ops[0].name = 'Centre front seam below the opening'; ops[0].note = 'The two front halves are joined from the crotch up to the bottom of the oval opening. The opening is the gap left between them; above it they are closed by the zip.';
       ops.splice(5, 0, { name: 'Set in the front zip', machine: 'lock', seam: 'zip', bring: ['zip'], stitch: [{ e: 'frontL.open', s: [sN, 1], in: 0.5 }, { e: 'frontR.open', s: [sN, 1], in: 0.5 }], note: 'The zip closes the two front halves from the top of the opening up to the neck. With a zipper foot the needle runs close beside the teeth, down one tape and up the other. A zip tape does not stretch, so this is sewn with a plain lockstitch.' });
     }
