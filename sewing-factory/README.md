@@ -294,7 +294,7 @@ is than the yoke, but not the true depth of a pressed pleat (a real knife-pleate
 strip is about three times the finished width).
 
 The **harlequin mesh dress** is the slip dress in gold metal mesh with a new
-black-diamond print, crossed chain straps, a ring at the neckline and a hem cut
+black-diamond print, crossed chain straps and a hem cut
 in points. The fringe that hangs below the points on the real dress is not
 modelled.
 
