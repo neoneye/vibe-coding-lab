@@ -2820,7 +2820,8 @@ function gridGeo(nu, nv, fn, closeU) {
   const W = nu + 1, pos = new Float32Array(W * (nv + 1) * 3), idx = [];
   for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) { const p = fn(i / nu, j / nv), k = 3 * (j * W + i); pos[k] = p[0]; pos[k + 1] = p[1]; pos[k + 2] = p[2]; }
   for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const a = j * W + i, b = a + 1, c = a + W, d = c + 1; idx.push(a, b, d, a, d, c); }
-  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+  const uv = new Float32Array(W * (nv + 1) * 2); for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) { uv[2 * (j * W + i)] = i / nu; uv[2 * (j * W + i) + 1] = j / nv; }   // for the few surfaces that carry a print (shoes)
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
   if (closeU) { const n = g.attributes.normal; for (let j = 0; j <= nv; j++) { const a = j * W, b = a + nu, x = n.getX(a) + n.getX(b), y = n.getY(a) + n.getY(b), z = n.getZ(a) + n.getZ(b), l = Math.hypot(x, y, z) || 1; n.setXYZ(a, x / l, y / l, z / l); n.setXYZ(b, x / l, y / l, z / l); } }
   return g;
 }
@@ -2839,13 +2840,17 @@ const SHOES = {
   flipflops: { name: 'Flip-flops', kind: 'flip', heel: 0, platform: 0, sole: 1.5, toe: 1.04, welt: 0.4, soleMat: 'pink', upMat: 'pinkClear' },
   heels: { name: 'Platform heels', kind: 'sandal', heel: 11, platform: 4, sole: 0.9, toe: 1.0, welt: 0.15, heelTop: 1.5, heelTip: 0.42, heelSq: 1, soleMat: 'cream', upMat: 'clear' },
   boots: { name: 'Knee boots', kind: 'boot', heel: 5.5, platform: 0.3, sole: 0.7, toe: 1.1, welt: 0.25, heelTop: 2.5, heelTip: 2.1, heelSq: 0.35, shaft: 7, soleMat: 'rubber', upMat: 'leather' },
+  otk: { name: 'Over-the-knee boots', kind: 'boot', heel: 9, platform: 3.4, sole: 0.8, toe: 1.05, welt: 0.3, heelTop: 2.0, heelTip: 2.7, heelSq: 0.45, shaft: -17, soleMat: 'leopard', upMat: 'leopard' },
   chunky: { name: 'Chunky boots', kind: 'boot', heel: 3.5, platform: 3.2, sole: 1.3, toe: 1.05, welt: 0.6, heelTop: 3.3, heelTip: 3.2, heelSq: 0.25, shaft: 5, soleMat: 'rubber', upMat: 'leather' },
 };
 let _shoeMats = null;
 function shoeMats() {
   if (_shoeMats) return _shoeMats;
   const M = (o) => { const m = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, ...o }); m.userData.shared = true; return m; };
+  // printed stretch suede, from the page's own leopard print
+  const lt = new THREE.DataTexture(SF.fabricTile('crepe', 'leopard', '#dcc097', 256), 256, 256); lt.colorSpace = THREE.SRGBColorSpace; lt.wrapS = lt.wrapT = THREE.RepeatWrapping; lt.repeat.set(3, 4); lt.magFilter = THREE.LinearFilter; lt.minFilter = THREE.LinearMipmapLinearFilter; lt.generateMipmaps = true; lt.needsUpdate = true;
   return (_shoeMats = {
+    leopard: M({ map: lt, roughness: 0.9 }),
     pink: M({ color: '#e7a6dc', roughness: 0.75 }), pinkClear: M({ color: '#f6d3f1', roughness: 0.3 }),
     cream: M({ color: '#e9e2d6', roughness: 0.35, envMap: metalEnv(), envMapIntensity: 0.5 }), clear: M({ color: '#f4f6f8', roughness: 0.08, transparent: true, opacity: 0.32, envMap: metalEnv(), envMapIntensity: 1.2, depthWrite: false }),
     rubber: M({ color: '#16171a', roughness: 0.85 }), leather: M({ color: '#17171a', roughness: 0.33, envMap: metalEnv(), envMapIntensity: 0.9 }),
@@ -2926,7 +2931,7 @@ function footParts(b, sgn, heel, shoe) {
       tube(bez([xa - ra, ya, 0], [0.015 * L, hA * 0.6, 0], [0.03 * L, 0.3 * k, 0]), 0.3 * k, shoe.upMat);
     }
     if (shoe.kind === 'boot') {
-      const e = 0.5, yS = b.y.knee - shoe.shaft;
+      const e = 0.5, yS = Math.min(b.y.knee - shoe.shaft, b.y.crotch - 9);   // a negative shaft value reaches above the knee
       // the foot of the boot: the foot's own shape with room round it, carried on over the toes to a closed toe box
       add(gridGeo(28, 48, (u, v) => {
         const s = v * sT, ph = (sgn > 0 ? u : 1 - u) * TAU, c = Math.cos(ph), sn = Math.sin(ph), a = Wd(s) + e * (s < 0.8 ? 1 : Math.sqrt(Math.max(0, 1 - Math.pow((s - 0.8) / (sT - 0.8), 2)))), sm = Math.min(s, 0.84), g = s < 0.05 ? Math.sqrt(s / 0.05) : 1;
@@ -2936,7 +2941,7 @@ function footParts(b, sgn, heel, shoe) {
         return place([sl(s, z), yy - 0.05, z]);
       }, true), shoe.upMat);
       // the shaft: the leg's own surface with room round it, from the ankle to below the knee
-      add(gridGeo(28, 30, (u, v) => {
+      add(gridGeo(28, 44, (u, v) => {
         const yy = lerp(hA - 2.2, yS, v), Pp = b.leg(sgn, sgn > 0 ? u : 1 - u, yy), S2 = b.legSect(yy), C = b.poseLeg(sgn, [sgn * S2.cx, yy, S2.cz]), dx = Pp[0] - C[0], dz = Pp[2] - C[2], dl = Math.hypot(dx, dz) || 1, off = e + 0.25 + 0.5 * smooth(0.75, 1, v);
         return [Pp[0] + dx / dl * off, Pp[1], Pp[2] + dz / dl * off];
       }, true), shoe.upMat);
