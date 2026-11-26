@@ -88,7 +88,12 @@ back to where it was left, unless the garment changed. The sewing line (Sew)
 turns to face each seam as before.
 
 Pose has the pose buttons, the arm, elbow, stance and head sliders and their
-Randomize and Reset. Shoes has the shoe picker. On Pose, Shoes and Type the
+Randomize and Reset. An **Animated** toggle beside them makes Randomize, Reset
+and the pose presets move the figure to the new pose over about 1.3 seconds
+instead of jumping to it. The figure and the garment are rebuilt for every
+in-between pose (about 30 to 40 ms a step for most garments, about 130 ms for
+the swimwear), so the transition is timed by the clock and shows fewer steps on
+a slow machine. Touching a pose slider stops it. Shoes has the shoe picker. On Pose, Shoes and Type the
 chosen garment is shown on the figure.
 
 ## The garment on the Model page

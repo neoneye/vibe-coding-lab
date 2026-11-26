@@ -3717,7 +3717,7 @@ const STAGES = { 1: ['The mannequin', 'The measured form in the chosen garment. 
 // -------- state
 const S = {
   stage: +Q.get('stage') === 5 ? (Q.get('tab') === 'sew' ? 6 : 7) : +Q.get('stage') === 4 ? (Q.get('tab') === 'customize' ? 5 : 4) : [1, 2, 3].includes(+Q.get('stage')) ? +Q.get('stage') : 1, /* pages 1 to 5. Inside: 4 Cloth has Type (4) and Customize (5); 5 Finished has the finished view (7) and Sew (6) */ form: ({ w3: 'wl', m3: 'ml', ag: 'w', ab: 'm' })[Q.get('form')] || (SF.FORMS[Q.get('form')] ? Q.get('form') : 'w'), mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), xray: Q.has('xray'), xrayKind: Q.get('xray') === 'robot' ? 'robot' : 'bones', shoe: Q.get('shoe') || 'none', headTurn: +(Q.get('headTurn') || 0), headNod: +(Q.get('headNod') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
-  dress: Q.get('dress') !== '0', sel: null, op: +(Q.get('op') || 0), opT: +(Q.get('t') || 0), playing: false, lineSpeed: 1, turn: false, showStitch: true, wait: 0,
+  dress: Q.get('dress') !== '0', animPose: false, sel: null, op: +(Q.get('op') || 0), opT: +(Q.get('t') || 0), playing: false, lineSpeed: 1, turn: false, showStitch: true, wait: 0,
 };
 S.M = { ...SF.FORMS[S.form] };
 const STILL = Q.has('still');
@@ -3728,12 +3728,13 @@ const STILL = Q.has('still');
 const LS_KEY = 'sewing-factory:measure:v1', M_DEFS = () => [...SF.MEASURES, ...SF.BUST, ...SF.LEGS, ...SF.HEAD, ...SF.POSE];
 function saveSettings() {
   if (STILL) return;
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ form: S.form, shoe: S.shoe, garment: S.garment, heel: S.heel, headTurn: S.headTurn, headNod: S.headNod, M: Object.fromEntries(M_DEFS().filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])) })); } catch (e) { /* no storage */ }
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ form: S.form, shoe: S.shoe, garment: S.garment, animPose: S.animPose, heel: S.heel, headTurn: S.headTurn, headNod: S.headNod, M: Object.fromEntries(M_DEFS().filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])) })); } catch (e) { /* no storage */ }
 }
 if (!STILL) try {
   const o = JSON.parse(localStorage.getItem(LS_KEY) || 'null'), ok = (v, lo, hi) => typeof v === 'number' && isFinite(v) && v >= lo && v <= hi;
   // the shoe and the garment: each unless the link names its own (the shoe is checked against the shoe table further down)
   if (o && !Q.has('shoe') && typeof o.shoe === 'string') S.shoe = o.shoe;
+  if (o && o.animPose === true) S.animPose = true;
   if (o && !Q.has('g') && SF.GARMENTS[o.garment]) S.garment = o.garment;
   if (o && !Q.has('form') && SF.FORMS[o.form]) {
     S.form = o.form; S.M = { ...SF.FORMS[o.form] };
@@ -4505,11 +4506,18 @@ function uiMeasures() {
   $('formNote').textContent = SF.FORMS[S.form] ? `${SF.FORMS[S.form].name}: ${SF.FORMS[S.form].std} cm, from the European size standard. Every slider below starts from it.` : '';
   $('poseCard').style.display = S.mode === 'stand' ? 'none' : ''; $('poseNone').style.display = S.mode === 'stand' ? '' : 'none';
   const pp = $('poseP'), pz = $('poses'); pp.innerHTML = ''; pz.innerHTML = '';
-  rr(pp, () => { for (const d of SF.POSE) S.M[d.key] = rnd(d); S.headTurn = rnd({ min: -70, max: 70, step: 1 }); S.headNod = rnd({ min: -25, max: 25, step: 1 }); }, () => { for (const d of SF.POSE) S.M[d.key] = d.def; S.headTurn = 0; S.headNod = 0; });
-  for (const [name, P] of Object.entries(SF.POSES)) { const b = document.createElement('button'); b.textContent = name; b.onclick = () => { Object.assign(S.M, P); needBody = true; uiMeasures(); }; pz.appendChild(b); }
-  for (const d of SF.POSE) slider(pp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
-  slider(pp, { label: 'Head turn', min: -70, max: 70, step: 1, unit: '°' }, () => S.headTurn, v => { S.headTurn = v; needBody = true; });
-  slider(pp, { label: 'Head nod', min: -25, max: 25, step: 1, unit: '°' }, () => S.headNod, v => { S.headNod = v; needBody = true; });
+  // Pose buttons: Randomize, Reset and the presets all go through poseTo, which either jumps to the new pose or, with
+  // Animated on, moves to it over a second or so.
+  { const r = document.createElement('div'); r.className = 'row'; r.style.marginTop = '4px';
+    const btn = (name, tip, fn) => { const b = document.createElement('button'); b.textContent = name; b.title = tip; b.onclick = fn; r.appendChild(b); return b; };
+    btn('Randomize', 'A random pose', () => poseTo({ ...Object.fromEntries(SF.POSE.map(d => [d.key, rnd(d)])), headTurn: rnd({ min: -70, max: 70, step: 1 }), headNod: rnd({ min: -25, max: 25, step: 1 }) }));
+    btn('Reset', 'Back to the relaxed pose', () => poseTo({ ...Object.fromEntries(SF.POSE.map(d => [d.key, d.def])), headTurn: 0, headNod: 0 }));
+    const an = btn('Animated', 'Move to a new pose gradually instead of jumping to it', () => { S.animPose = !S.animPose; an.className = S.animPose ? 'on' : ''; saveSettings(); }); an.className = S.animPose ? 'on' : '';
+    pp.appendChild(r); }
+  for (const [name, P] of Object.entries(SF.POSES)) { const b = document.createElement('button'); b.textContent = name; b.onclick = () => poseTo({ ...P, headTurn: S.headTurn, headNod: S.headNod }); pz.appendChild(b); }
+  for (const d of SF.POSE) slider(pp, d, () => S.M[d.key] ?? d.def, v => { poseAnim = null; S.M[d.key] = v; needBody = true; });   // touching a slider stops a transition in progress
+  slider(pp, { label: 'Head turn', min: -70, max: 70, step: 1, unit: '°' }, () => S.headTurn, v => { poseAnim = null; S.headTurn = v; needBody = true; });
+  slider(pp, { label: 'Head nod', min: -25, max: 25, step: 1, unit: '°' }, () => S.headNod, v => { poseAnim = null; S.headNod = v; needBody = true; });
   const lp = $('legsP'); lp.innerHTML = '';
   rr(lp, () => { for (const d of [...SF.LEGS, ...SF.HEAD]) S.M[d.key] = rnd(d); }, () => { for (const d of [...SF.LEGS, ...SF.HEAD]) S.M[d.key] = F0[d.key] ?? d.def; });
   for (const d of [...SF.LEGS, ...SF.HEAD]) slider(lp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
@@ -4666,7 +4674,23 @@ function resize() {
   if (canvas.width !== Math.round(w * pr) || canvas.height !== Math.round(h * pr)) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
   if (mv && S.stage === 6) mv.resize();
 }
+// Moving to a pose. The whole figure and the garment on it are rebuilt for every in-between pose, which is slow, so
+// the transition is timed by the clock: it always takes the same time and simply shows fewer steps on a slow machine.
+let poseAnim = null;
+const poseNow = () => ({ ...Object.fromEntries(SF.POSE.map(d => [d.key, S.M[d.key] ?? d.def])), headTurn: S.headTurn, headNod: S.headNod });
+function setPose(P) { for (const d of SF.POSE) if (d.key in P) S.M[d.key] = P[d.key]; if ('headTurn' in P) S.headTurn = P.headTurn; if ('headNod' in P) S.headNod = P.headNod; needBody = true; }
+function poseTo(P) {
+  if (!S.animPose || STILL) { poseAnim = null; setPose(P); saveSettings(); uiMeasures(); return; }
+  poseAnim = { from: poseNow(), to: { ...poseNow(), ...P }, t0: performance.now(), dur: 1300 };
+}
+function stepPose() {
+  const k = Math.min(1, (performance.now() - poseAnim.t0) / poseAnim.dur), e = k * k * (3 - 2 * k), P = {};
+  for (const key of Object.keys(poseAnim.to)) P[key] = k >= 1 ? poseAnim.to[key] : poseAnim.from[key] + (poseAnim.to[key] - poseAnim.from[key]) * e;
+  setPose(P);
+  if (k >= 1) { poseAnim = null; uiMeasures(); }   // the sliders catch up once the figure has arrived
+}
 function tick(dt) {
+  if (poseAnim) stepPose();
   rebuild();
   if (S.stage === 6 && S.playing) {
     const op = garment.ops[S.op], dur = (2.2 + Math.min(7, opLines[S.op].n * 0.012)) / S.lineSpeed;
