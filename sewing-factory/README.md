@@ -62,15 +62,15 @@ The looser jeans and chino shorts span across instead.
 
 ## Figure presets
 
-Six starting figures: Women M, Men M, Women 3XL, Men 3XL, Anime girl, Anime boy.
-The bust/chest, waist and hip girths of the first four are rows of the EN 13402-3
-body-dimension tables as printed on Wikipedia (women: bust 92 / waist 76 / hip 100
-and 140 / 124 / 142; men: chest 100 / waist 88 and 138 / 126), the heights are
+Two choices pick the starting figure: Woman or Man, and Medium or Large
+(Large is the 3XL row of the size table).
+The bust/chest, waist and hip girths are rows of the EN 13402-3 body-dimension
+tables as printed on Wikipedia (women: bust 92 / waist 76 / hip 100 and
+140 / 124 / 142; men: chest 100 / waist 88 and 138 / 126), the heights are
 EN 13402 design heights, and the men's arm length is its height association. The
 men's table has no hip column, so the men's hips, like every shoulder width,
 inside leg and shape slider, are this page's own proportions. The ASTM tables
-(D5585, D6240, D6960) are paywalled and were not used. The anime figures are
-stylised (long legs, narrow waist, larger head) and follow no standard.
+(D5585, D6240, D6960) are paywalled and were not used. Other figures are reached with the sliders.
 
 ### Leggings and flared pants
 
@@ -245,6 +245,6 @@ must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
 hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|shirt|dress|swimsuit|bikini`,
-`&form=w|m|w3|m3|ag|ab`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
+`&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
