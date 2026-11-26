@@ -98,6 +98,7 @@
       <button data-s="1"><b>1</b>Measure</button><button data-s="2"><b>2</b>Cut</button><button data-s="3"><b>3</b>Sew</button><button data-s="4"><b>4</b>Finished</button>
     </div>
     <div class="seg" id="garments"><span class="lbl" style="align-self:center">Garment</span></div>
+    <div class="seg" id="shoes"><span class="lbl" style="align-self:center">Shoes</span></div>
   </header>
   <div id="panel">
     <div class="stage s1">
@@ -2781,7 +2782,7 @@ const STAGES = { 1: ['The mannequin', 'A measured form. The tapes show chest, wa
 
 // -------- state
 const S = {
-  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), xray: Q.has('xray'), headTurn: +(Q.get('headTurn') || 0), headNod: +(Q.get('headNod') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
+  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), xray: Q.has('xray'), shoe: Q.get('shoe') || 'none', headTurn: +(Q.get('headTurn') || 0), headNod: +(Q.get('headNod') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
   sel: null, op: +(Q.get('op') || 0), opT: +(Q.get('t') || 0), playing: false, lineSpeed: 1, turn: false, showStitch: true, wait: 0,
 };
 S.M = { ...SF.FORMS[S.form] };
@@ -2831,7 +2832,26 @@ function ball(mat, sx, sy, sz, x, y, z) { const m = new THREE.Mesh(SPHERE, mat);
 // A mannequin foot: heel, arch, instep and five toes, swept from sections along its length.
 // Local axes: X towards the toes, Y up, Z to the outside of the foot. `heel` lifts the heel (cm) by bending
 // at the ball, as on mannequins made to wear heeled shoes; the toes stay flat on the floor.
-function footParts(b, sgn, heel) {
+// Shoes are worn, not made here: they are ready-made and there is nothing to assemble. Each has the heel height it
+// poses the foot at, a platform under the forefoot, and a sole thickness; the figure stands that much taller.
+const SHOES = {
+  none: { name: 'Barefoot' },
+  flipflops: { name: 'Flip-flops', kind: 'flip', heel: 0, platform: 0, sole: 1.5, toe: 1.04, welt: 0.4, soleMat: 'pink', upMat: 'pinkClear' },
+  heels: { name: 'Platform heels', kind: 'sandal', heel: 11, platform: 4, sole: 0.9, toe: 1.0, welt: 0.15, heelTop: 1.5, heelTip: 0.42, heelSq: 1, soleMat: 'cream', upMat: 'clear' },
+  boots: { name: 'Knee boots', kind: 'boot', heel: 5.5, platform: 0.3, sole: 0.7, toe: 1.1, welt: 0.25, heelTop: 2.5, heelTip: 2.1, heelSq: 0.35, shaft: 7, soleMat: 'rubber', upMat: 'leather' },
+  chunky: { name: 'Chunky boots', kind: 'boot', heel: 3.5, platform: 3.2, sole: 1.3, toe: 1.05, welt: 0.6, heelTop: 3.3, heelTip: 3.2, heelSq: 0.25, shaft: 5, soleMat: 'rubber', upMat: 'leather' },
+};
+let _shoeMats = null;
+function shoeMats() {
+  if (_shoeMats) return _shoeMats;
+  const M = (o) => { const m = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, ...o }); m.userData.shared = true; return m; };
+  return (_shoeMats = {
+    pink: M({ color: '#e7a6dc', roughness: 0.75 }), pinkClear: M({ color: '#f6d3f1', roughness: 0.3 }),
+    cream: M({ color: '#e9e2d6', roughness: 0.35, envMap: metalEnv(), envMapIntensity: 0.5 }), clear: M({ color: '#f4f6f8', roughness: 0.08, transparent: true, opacity: 0.32, envMap: metalEnv(), envMapIntensity: 1.2, depthWrite: false }),
+    rubber: M({ color: '#16171a', roughness: 0.85 }), leather: M({ color: '#17171a', roughness: 0.33, envMap: metalEnv(), envMapIntensity: 0.9 }),
+  });
+}
+function footParts(b, sgn, heel, shoe) {
   const L = 0.152 * b.M.height, k = L / 25.5, hA = b.y.ankle, S = b.legSect(hA), xa = 0.25 * L, xb = 0.72 * L;
   const al = Math.asin(clamp(heel / (0.67 * L), 0, 0.85));
   const bend = p => {
@@ -2868,7 +2888,62 @@ function footParts(b, sgn, heel) {
       return place([x0 + x, tr * k * 0.8 + r * Math.sin(ph) * 0.8 + 0.2 * k * Math.sin(PI * v), tz * k + mid(0.84) + r * Math.cos(ph)]);
     }, true));
   }
-  return { parts, lift: lift - up, footX: Math.abs(K[0]), balls: [] };
+  const worn = [];
+  if (shoe && shoe.kind) {
+    const MT = shoeMats(), P = shoe.platform, th = shoe.sole, sT = shoe.toe, add = (g, m) => worn.push({ geo: g, mat: MT[m] });
+    const sl = (s, z) => s * L - 0.33 * (z - zBig) * smooth(0.45, 0.84, s);                                  // the same slant of the toe line as the foot
+    const Wd = s => s < 0.8 ? half(s) : half(0.8) * Math.pow(Math.max(0, 1 - Math.pow((s - 0.8) / (sT - 0.8), 2)), 0.5);   // the foot's outline, closed round the toes
+    const sq = (v, e) => Math.sign(v) * Math.pow(Math.abs(v), e);
+    // sole: a slab under the whole foot, thicker under the forefoot by the platform
+    add(gridGeo(24, 44, (u, v) => {
+      const s = v * sT, ph = (sgn > 0 ? u : 1 - u) * TAU, w = (Wd(s) + shoe.welt * (s < 0.8 ? 1 : Math.sqrt(Math.max(0, 1 - Math.pow((s - 0.8) / (sT - 0.8), 2))))) * (s < 0.05 ? Math.sqrt(s / 0.05) : 1), z = mid(Math.min(s, 0.84)) + w * sq(Math.cos(ph), 0.4);   // closed to a point at both ends
+      const x = sl(s, z), bot = -(th + P * smooth(xb - 0.3 * L, xb - 0.08 * L, x));
+      return place([x, lerp(bot, -0.04, (1 + sq(Math.sin(ph), 0.4)) / 2), z]);
+    }, true), shoe.soleMat);
+    // heel: a post from under the heel bone straight down to the floor
+    const G = place([xb + 0.05 * L, -(th + P), 0])[1], Ht = place([0.09 * L, -th * 0.6, mid(0.09)]);
+    if (shoe.heelTop && Ht[1] - G > 0.6) add(gridGeo(20, 10, (u, v) => {
+      const ph = (sgn > 0 ? u : 1 - u) * TAU, r = lerp(shoe.heelTop, shoe.heelTip, Math.pow(v, 0.55)) * k, a = r * sq(Math.cos(ph), shoe.heelSq), c = r * sq(Math.sin(ph), shoe.heelSq), fw = 0.6 * k * v;
+      return [Ht[0] + f[0] * (a + fw) + l[0] * c, lerp(Ht[1] + 0.3, G, v), Ht[2] + f[2] * (a + fw) + l[2] * c];
+    }, true), shoe.soleMat);
+    // a tube along a path given in the foot's own frame
+    const tube = (pt, r, m, n = 18) => add(gridGeo(8, n, (u, v) => {
+      const C = place(pt(v)), D = place(pt(Math.min(1, v + 0.02))), E = place(pt(Math.max(0, v - 0.02))), T = new THREE.Vector3(D[0] - E[0], D[1] - E[1], D[2] - E[2]).normalize();
+      const n1 = new THREE.Vector3(0, 1, 0).cross(T); if (n1.lengthSq() < 1e-6) n1.set(1, 0, 0); n1.normalize(); const n2 = T.clone().cross(n1), a = u * TAU;
+      return [C[0] + r * (Math.cos(a) * n1.x + Math.sin(a) * n2.x), C[1] + r * (Math.cos(a) * n1.y + Math.sin(a) * n2.y), C[2] + r * (Math.cos(a) * n1.z + Math.sin(a) * n2.z)];
+    }, true), m);
+    const bez = (p0, p1, p2) => t => [0, 1, 2].map(i => (1 - t) * (1 - t) * p0[i] + 2 * t * (1 - t) * p1[i] + t * t * p2[i]);
+    const footTop = (s, zz) => top(s) * (0.5 + 0.5 * Math.sqrt(Math.max(0, 1 - zz * zz)));   // height of the foot's upper surface, zz from −1 (inside) to 1 (outside)
+    if (shoe.kind === 'flip') {
+      const post = [0.8 * L, 0.6 * k, -2.05 * k + mid(0.84)];   // the toe post, between the big toe and the next
+      for (const sd of [-1, 1]) tube(bez(post, [0.62 * L, footTop(0.62, 0.55) + 2.4 * k, mid(0.6) + sd * 0.72 * half(0.6)], [0.4 * L, 0.2 * k, mid(0.4) + sd * (half(0.4) + 0.25)]), 0.62 * k, shoe.upMat);
+    }
+    if (shoe.kind === 'sandal') {
+      // a clear band over the toes, and a clear strap round the ankle with a tab down to the back of the heel
+      add(gridGeo(16, 4, (u, v) => { const s = lerp(0.64, 0.8, v), a = lerp(-0.45, PI + 0.45, u), zz = Math.cos(a) * 1.06, z = mid(s) + zz * half(s); return place([sl(s, z), Math.max(0, top(s) * (0.5 + 0.5 * Math.sin(a))) + 0.3, z]); }), shoe.upMat);
+      const ra = ankleW + 0.5, ya = hA + 2.6;
+      tube(t => [xa + ra * Math.cos(TAU * t), ya, ra * Math.sin(TAU * t)], 0.34 * k, shoe.upMat, 28);
+      tube(bez([xa - ra, ya, 0], [0.015 * L, hA * 0.6, 0], [0.03 * L, 0.3 * k, 0]), 0.3 * k, shoe.upMat);
+    }
+    if (shoe.kind === 'boot') {
+      const e = 0.5, yS = b.y.knee - shoe.shaft;
+      // the foot of the boot: the foot's own shape with room round it, carried on over the toes to a closed toe box
+      add(gridGeo(28, 48, (u, v) => {
+        const s = v * sT, ph = (sgn > 0 ? u : 1 - u) * TAU, c = Math.cos(ph), sn = Math.sin(ph), a = Wd(s) + e * (s < 0.8 ? 1 : Math.sqrt(Math.max(0, 1 - Math.pow((s - 0.8) / (sT - 0.8), 2)))), sm = Math.min(s, 0.84), g = s < 0.05 ? Math.sqrt(s / 0.05) : 1;
+        const t = (s < 0.84 ? top(s) : lerp(top(0.84) + 0.5 * k, 2.4 * k, (s - 0.84) / (sT - 0.84)) * Math.pow(Math.max(0.02, 1 - Math.pow((s - 0.84) / (sT - 0.84 + 0.01), 2)), 0.45)) + e;
+        const upw = (1 + sn) / 2, z = a * sq(c, 0.8) * lerp(1, lerp(Math.min(1.05, (ankleW + e) / a) * smooth(0.02, 0.14, s) + 0.7 * (1 - smooth(0.02, 0.14, s)), 0.92, smooth(0.3, 0.6, s)), upw) + mid(sm);
+        let yy = t * (sn > 0 ? 0.5 + 0.5 * sn : 0.5 - 0.5 * Math.pow(-sn, 0.35)); yy = 2.2 * k + (yy - 2.2 * k) * g;
+        return place([sl(s, z), yy - 0.05, z]);
+      }, true), shoe.upMat);
+      // the shaft: the leg's own surface with room round it, from the ankle to below the knee
+      add(gridGeo(28, 30, (u, v) => {
+        const yy = lerp(hA - 2.2, yS, v), Pp = b.leg(sgn, sgn > 0 ? u : 1 - u, yy), S2 = b.legSect(yy), C = b.poseLeg(sgn, [sgn * S2.cx, yy, S2.cz]), dx = Pp[0] - C[0], dz = Pp[2] - C[2], dl = Math.hypot(dx, dz) || 1, off = e + 0.25 + 0.5 * smooth(0.75, 1, v);
+        return [Pp[0] + dx / dl * off, Pp[1], Pp[2] + dz / dl * off];
+      }, true), shoe.upMat);
+    }
+  }
+  const extra = shoe && shoe.kind ? shoe.sole + shoe.platform : 0;
+  return { parts, worn, lift: lift - up + extra, footX: Math.abs(K[0]), balls: [] };
 }
 // A metallic cloth has nothing to reflect in an empty scene and renders black, so foil gets a plain studio
 // surround of its own: a bright ceiling, a dark floor and a few soft light panels.
@@ -3072,7 +3147,9 @@ function buildFigure() {
       // above the crotch line the ring is open along the centre line, where it meets the other side: the normals there lie in the centre plane
       for (let j = 0; j < NLV; j++) if (yv(j / NLV) > y.crotch) for (const i of [0, W - 1]) { const k = j * W + i, a = j * W + (i ? W - 2 : 1), ny = ln.getY(a), nz = ln.getZ(a), l = Math.hypot(ny, nz) || 1; ln.setXYZ(k, 0, ny / l, nz / l); }
       figure.add(new THREE.Mesh(lg, skin));
-      const ft = footParts(b, sgn, S.heel); lift = ft.lift; footX = ft.footX; for (const g of ft.parts) figure.add(new THREE.Mesh(g, skin)); for (const m of ft.balls) figure.add(m);
+      const shoe = SHOES[S.shoe] && SHOES[S.shoe].kind ? SHOES[S.shoe] : null;
+      const ft = footParts(b, sgn, shoe ? shoe.heel : S.heel, shoe); lift = ft.lift; footX = ft.footX; for (const g of ft.parts) figure.add(new THREE.Mesh(g, skin)); for (const m of ft.balls) figure.add(m);
+      for (const w of ft.worn) figure.add(new THREE.Mesh(w.geo, w.mat));
       // Shoulder: the arm grows out of the torso like modelled clay. The first rows of this surface lie on the
       // torso itself (a loop round the shoulder that shrinks), so it starts flush and with the torso's own shading;
       // then it eases over to the arm's rings. No joint ball and no cut end of a tube.
@@ -3413,7 +3490,7 @@ function uiMeasures() {
   for (const d of [...SF.LEGS, ...SF.HEAD]) slider(lp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
   const bp = $('bustP'); bp.innerHTML = '';
   for (const d of SF.BUST) slider(bp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
-  if (S.mode !== 'stand') slider(m, { label: 'Heel lift (foot posed for heeled shoes)', min: 0, max: 11, step: 0.5 }, () => S.heel, v => { S.heel = v; needBody = true; });
+  if (S.mode !== 'stand' && !(SHOES[S.shoe] && SHOES[S.shoe].kind)) slider(m, { label: 'Heel lift (foot posed for heeled shoes)', min: 0, max: 11, step: 0.5 }, () => S.heel, v => { S.heel = v; needBody = true; });
   for (const d of SF.MEASURES) slider(m, d, () => S.M[d.key], v => { S.M[d.key] = v; needBody = true; });
 }
 function setGarment(id) {
@@ -3495,6 +3572,10 @@ function setStage(s, now) {
 function setOp(i, t) { S.op = clamp(i, 0, garment.ops.length - 1); S.opT = t; S.wait = 0; targets(); syncMachine(); uiOps(); if (S.stage === 3) flyTo(camForOp(S.op)); }
 
 function initUI() {
+  // shoes: worn on the full figure at every stage; there is nothing to cut or sew
+  const paintShoes = () => { for (const c of $('shoes').querySelectorAll('button')) c.className = c.dataset.shoe === S.shoe ? 'on' : ''; };
+  for (const [id, sh] of Object.entries(SHOES)) { const b = document.createElement('button'); b.textContent = sh.name; b.dataset.shoe = id; b.onclick = () => { S.shoe = id; needBody = true; paintShoes(); uiMeasures(); }; $('shoes').appendChild(b); }
+  if (!SHOES[S.shoe]) S.shoe = 'none'; paintShoes();
   for (const [id, G] of Object.entries(SF.GARMENTS)) { const b = document.createElement('button'); b.textContent = G.name; b.dataset.g = id; b.onclick = () => { setGarment(id); }; $('garments').appendChild(b); }
   for (const b of $('steps').children) b.onclick = () => setStage(+b.dataset.s);
   $('cloth').onchange = e => setFab({ cloth: e.target.value });

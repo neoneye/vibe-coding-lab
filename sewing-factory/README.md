@@ -115,6 +115,15 @@ collar; it is shown worn down, hanging behind the shoulders. The line starts
 with a quilting operation, and the notes describe sewing through wadding
 (walking foot, wadding trimmed out of the seam allowances, bound edges).
 
+## Shoes
+
+A Shoes row in the header puts ready-made shoes on the full figure: flip-flops,
+platform heels, knee boots or chunky platform boots (or barefoot). They are not
+part of the factory line: nothing is cut or sewn, and they stay on at every
+stage, so garments can be tried with them. Each shoe sets the heel height the
+foot is posed at and the thickness under it, and the figure stands that much
+taller. The dress form has no feet and wears none. `&shoe=flipflops|heels|boots|chunky`.
+
 ## The shoulders
 
 From the shoulder tip the body's width runs in a straight slope up to the neck,
