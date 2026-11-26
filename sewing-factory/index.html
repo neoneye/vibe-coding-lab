@@ -796,7 +796,7 @@ const SF = {};
     const kneeR = body.legSect(y.knee).rx + e + 1.2, hemR = (fit.hem || 40) / TAU;
     const legG = q => {
       const S = body.legSect(q); let rx = S.rx + e, rz = S.rz + e;
-      if (long) { const c = q < y.knee ? lerp(hemR, kneeR, clamp((q - yH) / (y.knee - yH), 0, 1)) : kneeR - 0.4; rx = Math.max(rx, c); rz = Math.max(rz, c); }
+      if (long && !o.close) { const c = q < y.knee ? lerp(hemR, kneeR, clamp((q - yH) / (y.knee - yH), 0, 1)) : kneeR - 0.4; rx = Math.max(rx, c); rz = Math.max(rz, c); }
       else if (!o.close) { const w = (yc - q) * (fit.flare || 0) * 0.0004 * S.rx; rx += 0.4 + w; rz += 0.4 + w; }
       // The cloth needs room on the inside of the leg too. With none, it lay exactly on the skin along the inseam
       // and the skin showed through in a strip. The two legs' cloth may overlap a little at the very top.
@@ -804,13 +804,15 @@ const SF = {};
       // straight across from the hip instead, like a skirt (sharp 9), and stands away from the thigh at the hem.
       return { cx: S.cx + (rx - S.rx) - Math.max(0.6, 0.6 * e), rx, rz, cz: S.cz, ease: e, sharp: o.close ? 3 : 9, close: !!o.close };
     };
-    const pieces = [], trims = [], sC = frac(yc, yH, yTop);
+    // o.vband: the waistband dips to a V at the centre front, and the front legs are cut down to meet it
+    const dip = o.vband ? 3.2 : 0, vF = th => dip * Math.exp(-Math.pow(th / 0.85, 2)), topF = p => yTop - vF(p * PI);
+    const pieces = [], trims = [], sC = frac(yc, yH, topF(0));
     const yk = [yTop - 3, yTop - 7.5];
     for (const sgn of [1, -1]) {
       const s = sgn > 0 ? 'L' : 'R', side = sgn > 0 ? 'left' : 'right', ch = lowerChart(body, shell, legG, sgn);
       pieces.push({
         id: 'front' + s, name: `Front leg, ${side}`, chart: ch, grain: 0.25, nu: 22, nv: 34,
-        B: u => [0.5 * u, hemQ(0.5 * u)], T: lin([0, yTop], [0.5, yTop]), L: lin([0, yH], [0, yTop]), R: lin([0.5, yH + cut], [0.5, yTop]),
+        B: u => [0.5 * u, hemQ(0.5 * u)], T: u => [0.5 * u, topF(0.5 * u)], L: lin([0, yH], [0, topF(0)]), R: lin([0.5, yH + cut], [0.5, topF(0.5)]),
         segs: { inseam: ['L', 0, sC], rise: ['L', sC, 1], side: ['R', 0, 1], hem: ['B', 0, 1], waist: ['T', 0, 1] },
       });
       const yT = jeans ? yk : [yTop, yTop], sB = frac(yc, yH, yT[1]);
@@ -832,6 +834,11 @@ const SF = {};
           L: lin([0.69, pb + 2.2], [0.67, pt]), R: lin([0.9, pb + 2.2], [0.92, pt]),
         });
       }
+      // mesh side panel: an open-knit strip down the outside of the thigh, laid on the leg
+      if (o.mesh) { const m0 = Math.max(yH + 3, y.knee - 8), m1 = yc + 5; pieces.push({
+        id: 'mesh' + s, name: `Mesh side panel, ${side}`, chart: ch, grain: 0.5, nu: 6, nv: 30, layer: 0.5, fab: { print: 'mesh' },
+        B: lin([0.415, m0], [0.585, m0]), T: lin([0.435, m1], [0.565, m1]), L: lin([0.415, m0], [0.435, m1]), R: lin([0.585, m0], [0.565, m1]),
+      }); }
       if (o.cuff) pieces.push({
         id: 'cuff' + s, name: `Turn-up cuff, ${side}`, chart: ch, grain: 0.5, nu: 36, nv: 2, layer: 1.1,
         B: u => [u, hemQ(u) - 0.35], T: u => [u, hemQ(u) + 2.3], L: lin([0, yH - 0.35], [0, yH + 2.3]), R: lin([1, yH - 0.35], [1, yH + 2.3]),
@@ -842,7 +849,7 @@ const SF = {};
     const b0 = knit ? -PI : -0.06, b1 = knit ? PI : TAU + 0.16;
     pieces.push({
       id: 'band', name: knit ? 'Elastic waistband' : 'Waistband', chart: torsoChart(bandShell), grain: knit ? 0 : PI, nu: 40, nv: 3, layer: 1, rot: true,
-      B: lin([b0, yTop - 0.4], [b1, yTop - 0.4]), T: lin([b0, yTop + band], [b1, yTop + band]),
+      B: u => { const th = lerp(b0, b1, u); return [th, yTop - 0.4 - (knit ? vF(th) : 0)]; }, T: lin([b0, yTop + band], [b1, yTop + band]),
       L: lin([b0, yTop - 0.4], [b0, yTop + band]), R: lin([b1, yTop - 0.4], [b1, yTop + band]),
     });
     const loops = [];
@@ -859,6 +866,8 @@ const SF = {};
       ops.push({ name: 'Front and back rise seams', machine: 'overlock4', seam: 'superimposed', joins: [J('frontL.rise', 'frontR.rise'), J('backL.seat', 'backR.seat')], bring: ['frontL', 'frontR', 'backL', 'backR'], note: 'The two fronts are joined down the centre, then the two backs. A four-thread overlock seams and neatens at once, and its looped threads stretch with the cloth.' });
       ops.push({ name: 'Inside leg seam', machine: 'overlock4', seam: 'superimposed', joins: both(s => J(`front${s}.inseam`, `back${s}.inseam`, o.close ? 0.25 : 0.16)), note: 'One run from hem to hem through the crotch, where four layers meet.' });
       ops.push({ name: 'Side seams', machine: 'overlock4', seam: 'superimposed', joins: both(s => J(`front${s}.side`, `back${s}.side`)), note: 'Closing the side seams turns the panels into two tubes.' });
+      if (o.scrunch) ops.push({ name: 'Gather the back seam with elastic', machine: 'zigzag', seam: 'elastic', stitch: [{ e: 'backL.seat', s: [0.25, 0.9], in: 0.3, zig: true }], note: 'A short length of narrow elastic is stretched and zigzagged along the inside of the back seam. When it relaxes it gathers the seam into the "scrunch" that draws the cloth in between the buttocks.' });
+      if (o.mesh) ops.push({ name: 'Coverstitch the mesh side panels', machine: 'cover', seam: 'hem', bring: ['meshL', 'meshR'], stitch: both(s => [{ e: `mesh${s}.l`, in: 0.3, rows: 2 }, { e: `mesh${s}.r`, in: 0.3, rows: 2 }]).flat(), note: 'On seamless sportswear the open mesh is knitted into the tube on a circular machine. Cut-and-sew leggings get the same look from a strip of mesh set down the outside of the leg and coverstitched flat.' });
       ops.push({ name: 'Attach the elastic waistband', machine: 'overlock4', seam: 'elastic', bring: ['band'], stitch: [{ e: 'band.b', in: 0.35 }], note: 'The band is a folded strip with wide elastic inside, cut shorter than the waist of the shorts and stretched to fit as it is sewn on. That is what holds the shorts up.' });
       ops.push({ name: 'Coverstitch the leg hems', machine: 'cover', seam: 'hem', stitch: hems.map(e => ({ e, in: 1.1, rows: 2 })), note: 'The hem is turned up once and held by a coverstitch: two needle rows outside, a looper thread covering the raw edge inside. A lockstitch hem would snap the first time the leg stretched.' });
       return { pieces, trims, ops };
@@ -897,17 +906,19 @@ const SF = {};
   }
 
   // -------- upper body block shared by shirt, dress, swimsuit
-  function shirt(body, fit) {
+  // o.jacket: a short zip-front jacket on the same block (fronts, back, yoke, set-in sleeves, cuffs, collar).
+  function shirt(body, fit, o = {}) {
+    const jk = !!o.jacket;
     const y = body.y, shell = SF.makeShell(body, { ease: fit.ease, loose: 0.9, hangTop: y.armpit });
     const tc = torsoChart(shell), H = PI / 2;
     const yHem = y.crotch + 2 - fit.length, big = Math.max(0, body.M.chest * 0.052 - 4.8), yU = y.armpit - 4 - 1.6 * big, yS = y.shoulder + 0.6, yT = y.neck + 0.2, W = 0.4 + 0.04 * big;   // a fuller arm needs a deeper, wider armhole
-    const sc = scoop(W, yU, yS), ynF = neckFn(yT, 5.5, 1.5), ynB = neckFn(yT, 1.6, 2), yY = yU + 0.62 * (yS - yU), ov = 0.085;
+    const sc = scoop(W, yU, yS), ynF = neckFn(yT, 5.5, 1.5), ynB = neckFn(yT, 1.6, 2), yY = yU + 0.62 * (yS - yU), ov = jk ? 0.012 : 0.085;   // a zip front meets edge to edge; a buttoned one laps over
     const pieces = [], trims = [];
     const sideF = fnq(q => H - sc(q), yHem, yT), fr = (a, b) => [frac(a, yHem, yT), frac(b, yHem, yT)];
     const segsR = { side: ['R', ...fr(yHem, yU)], armhole: ['R', ...fr(yU, yS)], shoulder: ['R', ...fr(yS, yT)], placket: ['L', 0, 1], hem: ['B', 0, 1], neck: ['T', 0, 1] };
     const segsL = { side: ['L', ...fr(yHem, yU)], armhole: ['L', ...fr(yU, yS)], shoulder: ['L', ...fr(yS, yT)], placket: ['R', 0, 1], hem: ['B', 0, 1], neck: ['T', 0, 1] };
-    pieces.push({ id: 'frontL', name: 'Front, left (buttonholes)', chart: tc, grain: 0, nu: 12, nv: 46, layer: 1, B: lin([-ov, yHem], [H, yHem]), T: fnp(-ov, H, ynF), L: lin([-ov, yHem], [-ov, ynF(ov)]), R: sideF, segs: segsR });
-    pieces.push({ id: 'frontR', name: 'Front, right (buttons)', chart: tc, grain: 0, nu: 12, nv: 46, B: lin([-H, yHem], [ov, yHem]), T: fnp(-H, ov, ynF), L: mir(sideF), R: lin([ov, yHem], [ov, ynF(ov)]), segs: segsL });
+    pieces.push({ id: 'frontL', name: jk ? 'Front, left' : 'Front, left (buttonholes)', chart: tc, grain: 0, nu: 12, nv: 46, layer: 1, B: lin([-ov, yHem], [H, yHem]), T: fnp(-ov, H, ynF), L: lin([-ov, yHem], [-ov, ynF(ov)]), R: sideF, segs: segsR });
+    pieces.push({ id: 'frontR', name: jk ? 'Front, right' : 'Front, right (buttons)', chart: tc, grain: 0, nu: 12, nv: 46, B: lin([-H, yHem], [ov, yHem]), T: fnp(-H, ov, ynF), L: mir(sideF), R: lin([ov, yHem], [ov, ynF(ov)]), segs: segsL });
     const sideB = fnq(q => H + sc(q), yHem, yY), fb = (a, b) => [frac(a, yHem, yY), frac(b, yHem, yY)];
     pieces.push({
       id: 'back', name: 'Back', chart: tc, grain: PI, nu: 20, nv: 40, B: lin([H, yHem], [3 * H, yHem]), T: lin([H + sc(yY), yY], [3 * H - sc(yY), yY]), L: sideB, R: mir(sideB, PI),
@@ -935,7 +946,7 @@ const SF = {};
         const rc = t => body.armR(body.M.arm - 2) + 1.5, cc = armChart(body, rc, sgn), t0 = tEnd - 0.4, t1 = tEnd + cuffH - 0.4, a0 = -PI * 0.5, a1 = a0 + TAU + 0.5;
         pieces.push({ id: 'cuff' + s, name: `Cuff, ${side}`, chart: cc, grain: a0 + PI, nu: 22, nv: 3, layer: 1, rot: true, B: lin([a0, t1], [a1, t1]), T: lin([a0, t0], [a1, t0]), L: lin([a0, t1], [a0, t0]), R: lin([a1, t1], [a1, t0]) });
         const P = cc.f(a1 - 0.25, (t0 + t1) / 2), n = norm(SF.vec.sub(P, body.armPoint(sgn, 0, (t0 + t1) / 2, 0)));
-        trims.push(button('cbtn' + s, 'cuff' + s, [P[0] + n[0] * 0.5, P[1] + n[1] * 0.5, P[2] + n[2] * 0.5], n, 0.55));
+        trims.push(button('cbtn' + s, 'cuff' + s, [P[0] + n[0] * 0.5, P[1] + n[1] * 0.5, P[2] + n[2] * 0.5], n, 0.55, jk ? 'tack' : 'sewn'));
       }
     }
     // collar: a band standing up from the neckline that folds over and falls outside
@@ -953,14 +964,37 @@ const SF = {};
     };
     const c0 = 0.07, c1 = TAU - 0.07;
     pieces.push({ id: 'collar', name: 'Collar', chart: collar, grain: PI, nu: 36, nv: 8, layer: 1.5, rot: true, B: lin([c0, 0], [c1, 0]), T: lin([c0, 1], [c1, 1]), L: lin([c0, 0], [c0, 1]), R: lin([c1, 0], [c1, 1]) });
-    pieces.push({ id: 'pocket', name: 'Chest pocket', chart: tc, grain: 0.62, nu: 6, nv: 6, layer: 2.2, B: u => [lerp(0.3, 0.95, u), y.bust - 9.5 + 1.4 * Math.abs(2 * u - 1)], T: lin([0.3, y.bust + 3], [0.95, y.bust + 3]), L: lin([0.3, y.bust - 8.1], [0.3, y.bust + 3]), R: lin([0.95, y.bust - 8.1], [0.95, y.bust + 3]) });
+    if (!jk) pieces.push({ id: 'pocket', name: 'Chest pocket', chart: tc, grain: 0.62, nu: 6, nv: 6, layer: 2.2, B: u => [lerp(0.3, 0.95, u), y.bust - 9.5 + 1.4 * Math.abs(2 * u - 1)], T: lin([0.3, y.bust + 3], [0.95, y.bust + 3]), L: lin([0.3, y.bust - 8.1], [0.3, y.bust + 3]), R: lin([0.95, y.bust - 8.1], [0.95, y.bust + 3]) });
     const holes = [], nb = 7, yb0 = ynF(0) - 2, yb1 = yHem + 13;
-    for (let i = 0; i < nb; i++) {
+    for (let i = 0; i < (jk ? 0 : nb); i++) {
       const q = lerp(yb0, yb1, i / (nb - 1)), P = shell(0, q);
       trims.push(button('btn' + (i + 1), 'frontL', [P[0], P[1], P[2] + 0.45], [0, 0, 1], 0.55));
       holes.push(['frontL', ov / (H + ov), frac(q, yHem, lerp(ynF(ov), yT, ov / (H + ov))), 1]);
     }
     const btns = trims.map(t => t.id);
+    if (jk) {
+      // open-ended front zip from hem to neck, and a slanted zip pocket on each front
+      const zpath = []; for (let i = 0; i <= 10; i++) { const P = shell(0, lerp(yHem + 0.6, ynF(0) - 0.4, i / 10)); zpath.push([0, P[1], P[2] + 0.5]); }
+      pieces.push({ id: 'zip', name: 'Front zip', kind: 'zip', ribbon: true, width: 2.6, nv: 30, path: zpath, out: () => [0, 0, 1] });
+      for (const sgn of [1, -1]) {
+        const pt = (th, q) => { const P = shell(sgn * th, q), n = outOf(P); return [P[0] + n[0] * 0.5, P[1], P[2] + n[2] * 0.5]; }, yp = lerp(yHem, yU, 0.42);
+        pieces.push({ id: 'pzip' + (sgn > 0 ? 'L' : 'R'), name: 'Pocket zip', kind: 'zip', ribbon: true, width: 1.6, nv: 8, path: [pt(0.5, yp + 5.5), pt(0.62, yp), pt(0.74, yp - 5.5)] });
+      }
+      const sides = ['L', 'R'];
+      const ops = [
+        { name: 'Set the pocket zips', machine: 'lock', seam: 'zip', bring: ['frontL', 'frontR', 'pzipL', 'pzipR'], note: 'A slot is cut in each front, the zip is laid behind it and stitched round with a zipper foot. Leather cannot be pinned (every hole is permanent), so the zip is held with double-sided tape while it is sewn.' },
+        { name: 'Join the yoke to the back', machine: 'lock', seam: 'superimposed', joins: [J('yoke.bottom', 'back.top')], note: 'Leather is sewn on a lockstitch machine with a wedge-point needle, which cuts a slit instead of pushing fibres aside, and a roller or walking foot, because an ordinary presser foot sticks to the grain side. Stitches are long: short ones would perforate the skin like a stamp.' },
+        { name: 'Shoulder seams', machine: 'lock', seam: 'superimposed', joins: [J('frontL.shoulder', 'yoke.shoulderL'), J('frontR.shoulder', 'yoke.shoulderR')], note: 'The seam allowances are not pressed with an iron: they are glued open and hammered flat.' },
+        { name: 'Attach the collar', machine: 'lock', seam: 'superimposed', stitch: [{ e: 'collar.b', in: 0.3 }, { e: 'collar.t', in: 0.5 }, { e: 'collar.l', in: 0.5 }, { e: 'collar.r', in: 0.5 }], note: 'The collar is made up first, turned and topstitched, then sewn round the neckline.' },
+        { name: 'Set in the sleeves', machine: 'lock', seam: 'superimposed', joins: [J('sleeveL.cap', 'frontL.armhole+yoke.armholeL+back.armholeL', 0.25), J('sleeveR.cap', 'frontR.armhole+yoke.armholeR+back.armholeR', 0.25)], note: 'Leather has almost no ease to work in, so the sleeve head is cut very close to the armhole length.' },
+        { name: 'Close side and underarm seams', machine: 'lock', seam: 'superimposed', joins: [J('frontL.side', 'back.sideL'), J('frontR.side', 'back.sideR'), J('sleeveL.underA', 'sleeveL.underB'), J('sleeveR.underA', 'sleeveR.underB')], note: 'One run from the hem, up the side, through the armpit and down to the wrist. No overlock: leather does not fray.' },
+        { name: 'Attach the cuffs', machine: 'lock', seam: 'topstitch', stitch: sides.map(s => [{ e: `cuff${s}.t`, in: 0.3 }, { e: `cuff${s}.b`, in: 0.5 }]).flat(), note: 'The sleeve end is enclosed in the cuff and topstitched.' },
+        { name: 'Set in the front zip', machine: 'lock', seam: 'zip', bring: ['zip'], stitch: [{ e: 'frontL.placket', in: 0.6 }, { e: 'frontR.placket', in: 0.6 }], note: 'An open-ended zip: one tape on each front edge, sewn from hem to collar with a zipper foot, then topstitched.' },
+        { name: 'Turn up and stitch the hem', machine: 'lock', seam: 'hem', stitch: ['frontL.hem', 'frontR.hem', 'back.hem'].map(e => ({ e, in: 2 })), note: 'The hem is turned up once (leather is too thick to roll twice), glued and topstitched.' },
+        { name: 'Press on the cuff snaps', machine: null, seam: 'button', bring: btns, note: 'Snap fasteners are not sewn. A press sets the two halves through a punched hole.' },
+      ];
+      return { pieces, trims, ops };
+    }
     const ops = [
       { name: 'Stitch the front plackets', machine: 'lock', seam: 'topstitch', stitch: [{ e: 'frontL.placket', in: 0.4 }, { e: 'frontL.placket', in: 3 }, { e: 'frontR.placket', in: 0.4 }, { e: 'frontR.placket', in: 3 }], note: 'The front edges are folded into a strip a few centimetres wide that will carry the buttons and buttonholes.' },
       { name: 'Sew on the chest pocket', machine: 'lock', seam: 'topstitch', stitch: ['pocket.l', 'pocket.b', 'pocket.r'].map(e => ({ e, in: 0.25 })), note: 'Done while the front is flat, edge-stitched a couple of millimetres from the fold.' },
@@ -1140,12 +1174,29 @@ const SF = {};
     rainbowshorts: { name: 'Rainbow shorts', cloth: 'tricot', print: 'rainbow', colour: '#ff7fb6', thread: '#ff7fb6', stretch: [0.88, 0.94], usual: ['tricot', 'jersey'],
       fit: [{ key: 'length', label: 'Inside leg of the shorts', min: 2, max: 14, def: 4.5, step: 0.5, unit: 'cm' }, { key: 'cut', label: 'Hem rise at the side', min: 0, max: 6, def: 1, step: 0.5, unit: 'cm' }, { key: 'rise', label: 'Waistband, from the natural waist', min: -8, max: 4, def: 1, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.3, max: 2, def: 0.45, step: 0.05, unit: 'cm' }],
       build: (b, f) => trousers(b, f, { knit: true, high: true, close: true }) },
+    // Three leggings, after the owner's reference photos: full-length, skin-tight knits with a wide waistband.
+    leggings: { name: 'Leggings', cloth: 'jersey', print: 'melange', colour: '#5d6a8c', thread: '#5d6a8c', stretch: [0.86, 0.93], usual: ['jersey', 'tricot'],
+      fit: [{ key: 'length', label: 'Leg length', min: 55, max: 100, def: 96, step: 1, unit: '%' }, { key: 'rise', label: 'Waistband, from the natural waist', min: -8, max: 4, def: 1, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.3, max: 2, def: 0.4, step: 0.05, unit: 'cm' }],
+      build: (b, f) => trousers(b, f, { knit: true, high: true, close: true, long: true, vband: true }) },
+    scrunchleggings: { name: 'Scrunch leggings', cloth: 'jersey', print: 'solid', colour: '#8a9460', thread: '#8a9460', stretch: [0.86, 0.93], usual: ['jersey', 'tricot'],
+      fit: [{ key: 'length', label: 'Leg length', min: 55, max: 100, def: 96, step: 1, unit: '%' }, { key: 'rise', label: 'Waistband, from the natural waist', min: -8, max: 4, def: 1, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.3, max: 2, def: 0.4, step: 0.05, unit: 'cm' }],
+      build: (b, f) => trousers(b, f, { knit: true, high: true, close: true, long: true, vband: true, scrunch: true }) },
+    meshleggings: { name: 'Mesh leggings', cloth: 'tricot', print: 'solid', colour: '#8d90a6', thread: '#8d90a6', stretch: [0.86, 0.93], usual: ['tricot', 'jersey'],
+      fit: [{ key: 'length', label: 'Leg length', min: 55, max: 100, def: 96, step: 1, unit: '%' }, { key: 'rise', label: 'Waistband, from the natural waist', min: -8, max: 4, def: 1, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.3, max: 2, def: 0.4, step: 0.05, unit: 'cm' }],
+      build: (b, f) => trousers(b, f, { knit: true, high: true, close: true, long: true, mesh: true }) },
     bikeshorts: { name: 'Bike shorts', cloth: 'tricot', print: 'pinkleopard', colour: '#ff86b4', thread: '#f0528a', stretch: [0.88, 0.94], usual: ['tricot', 'jersey'],
       fit: [{ key: 'length', label: 'Inside leg of the shorts', min: 8, max: 36, def: 17, step: 1, unit: 'cm' }, { key: 'rise', label: 'Waistband, from the natural waist', min: -8, max: 4, def: 0, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.3, max: 2, def: 0.45, step: 0.05, unit: 'cm' }],
       build: (b, f) => trousers(b, f, { knit: true, high: true, close: true }) },
     shirt: { name: 'Shirt', cloth: 'poplin', print: 'stripes', colour: '#e9eef5', thread: '#f2f2f2', stretch: [1, 1], usual: ['poplin', 'oxford', 'linen', 'flannel'],
       fit: [{ key: 'length', label: 'Length below the crotch line', min: -14, max: 12, def: 2, step: 1, unit: 'cm' }, { key: 'sleeve', label: 'Sleeve length', min: 16, max: 70, def: 70, step: 1, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 1.2, max: 6, def: 2.6, step: 0.1, unit: 'cm' }],
       build: shirt },
+    // Two jackets after the owner's reference photos: a plain black leather jacket and a glossy scale-embossed one.
+    leatherjacket: { name: 'Leather jacket', cloth: 'leather', print: 'solid', colour: '#1c1c1f', thread: '#2a2a2e', stretch: [1, 1], usual: ['leather', 'snakeskin'],
+      fit: [{ key: 'length', label: 'Length below the crotch line', min: -22, max: 0, def: -12, step: 1, unit: 'cm' }, { key: 'sleeve', label: 'Sleeve length', min: 16, max: 70, def: 70, step: 1, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 2, max: 7, def: 3.4, step: 0.1, unit: 'cm' }],
+      build: (b, f) => shirt(b, f, { jacket: true }) },
+    snakejacket: { name: 'Snake-skin jacket', cloth: 'snakeskin', print: 'solid', colour: '#141416', thread: '#26262a', stretch: [1, 1], usual: ['snakeskin', 'leather'],
+      fit: [{ key: 'length', label: 'Length below the crotch line', min: -22, max: 0, def: -12, step: 1, unit: 'cm' }, { key: 'sleeve', label: 'Sleeve length', min: 16, max: 70, def: 70, step: 1, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 2, max: 7, def: 3.4, step: 0.1, unit: 'cm' }],
+      build: (b, f) => shirt(b, f, { jacket: true }) },
     dress: { name: 'Dress', cloth: 'crepe', print: 'floral', colour: '#27324f', thread: '#27324f', stretch: [1, 1], usual: ['crepe', 'satin', 'linen', 'poplin', 'jersey'],
       fit: [{ key: 'length', label: 'Skirt length', min: 30, max: 100, def: 62, step: 1, unit: 'cm' }, { key: 'flare', label: 'Skirt flare', min: 0, max: 100, def: 45, step: 1, unit: '%' }, { key: 'neck', label: 'Neckline depth', min: 5, max: 20, def: 11, step: 0.5, unit: 'cm' }, { key: 'ease', label: 'Ease', min: 0.8, max: 4, def: 1.5, step: 0.1, unit: 'cm' }],
       build: dress },
@@ -1241,6 +1292,8 @@ const SF = {};
     crepe: { name: 'Viscose crepe', kind: 'woven', weave: 'crepe', weight: 130, stretch: 0, rough: 0.8, thread: '#555555', note: 'High-twist yarns give a matt, pebbly, drapey cloth.' },
     jersey: { name: 'Cotton jersey', kind: 'knit', weave: 'jersey', weight: 160, stretch: 35, rough: 0.9, thread: '#777777', note: 'Single knit, the T-shirt fabric: columns of little V-shaped loops.' },
     foil: { name: 'Foil-coated stretch', kind: 'knit', weave: 'foil', weight: 210, stretch: 45, rough: 0.2, metal: 0.9, thread: '#b4b8bf', note: 'A stretch knit with a thin metallic film bonded to its face (the "wet look"). Needle holes do not close again, so it cannot be unpicked or pinned.' },
+    leather: { name: 'Leather', kind: 'leather', weave: 'leather', weight: 650, stretch: 0, rough: 0.42, gloss: 1, relief: 'grain', thread: '#2a2a2e', note: 'Tanned hide, about 1 mm thick, cut one layer at a time round the flaws in each skin. It does not fray, cannot be pinned, and every needle hole is permanent.' },
+    snakeskin: { name: 'Scale-embossed leather', kind: 'leather', weave: 'scales', weight: 700, stretch: 0, rough: 0.2, gloss: 1, relief: 'scales', thread: '#26262a', note: 'Real snake and crocodile skins are small and costly, so most "exotic" jackets are cowhide pressed between heated plates that emboss the scales, then glazed.' },
     tricot: { name: 'Swim tricot', kind: 'knit', weave: 'tricot', weight: 190, stretch: 80, rough: 0.45, thread: '#888888', note: 'Warp-knitted nylon with about 20 % elastane (spandex, Lycra): stretches both ways and snaps back.' },
   };
   SF.PRINTS = {
@@ -1249,6 +1302,8 @@ const SF = {};
     leopard: { name: 'Leopard', ground: '#c9974f' },
     pinkleopard: { name: 'Leopard, pink', ground: '#ff86b4' },
     rainbow: { name: 'Rainbow tie-dye', ground: '#ff7fb6' },
+    melange: { name: 'Mélange (heather)' },
+    mesh: { name: 'Open mesh' },
     dots: { name: 'Polka dots' },
     stripes: { name: 'Stripes' },
     gingham: { name: 'Gingham' },
@@ -1351,6 +1406,10 @@ const SF = {};
   function printAt(print, x, y, g) {
     switch (print) {
       case 'rainbow': return rainbowAt(x, y, g);
+      // heather yarn: fibres of two shades spun together, which shows as short flecks along the courses
+      case 'melange': { const i = Math.floor(x * 512), j = Math.floor(y * 512), a = hash2(i >> 2, j, 5), b = hash2(i >> 3, j >> 1, 6); return mix(mix(g, [235, 238, 245], 0.34 * a * a), [20, 22, 30], 0.22 * b * b); }
+      // open mesh: a lattice of diamond holes; what shows through them is the skin
+      case 'mesh': { const N = 20, u = x * N, v = y * 16, r = Math.floor(v), fx = Math.abs((((u + (r & 1) * 0.5) % 1) + 1) % 1 - 0.5), fy = Math.abs(v - r - 0.5); return mix(g, [205, 186, 168], smooth(0.5, 0.36, fx * 1.25 + fy)); }
       case 'zebra': return mix(g, [22, 20, 20], zebraAt(x, y));
       case 'leopard': { const [p, inn] = leopardAt(x, y); return mix(mix(g, [150, 92, 40], inn * 0.85), [34, 22, 16], p); }
       case 'pinkleopard': { const [p, inn] = leopardAt(x, y); return mix(mix(g, [240, 84, 104], inn * 0.9), [26, 16, 20], p); }
@@ -1362,6 +1421,9 @@ const SF = {};
     }
     return g;
   }
+  // Embossed scales: an offset lattice of rounded tiles. Returns 0 at a scale's centre rising to 1 in the grooves
+  // between scales. The 3D view builds its relief from the same function, so shading and colour line up.
+  SF.scaleAt = (x, y) => { const v = y * 16, r = Math.floor(v), u = x * 12 + (r & 1) * 0.5, fx = Math.abs(u - Math.floor(u) - 0.5) * 2, fy = Math.abs(v - r - 0.5) * 2; return Math.pow(Math.pow(fx, 3) + Math.pow(fy, 3), 1 / 3); };
   // Weave or knit structure as a brightness factor at pixel (i, j) of an S × S tile; all periods divide S.
   function weaveAt(weave, i, j, S) {
     const h = (a, b, k = 0) => hash2(a, b, 3, k);
@@ -1375,6 +1437,8 @@ const SF = {};
       case 'satin': return 0.97 + 0.06 * h(i >> 4, j, 1) + (((i * 3 + j) % 8) === 0 ? -0.04 : 0);
       case 'crepe': return 0.93 + 0.14 * h(i, j) * h(i >> 1, j >> 1, 2);
       case 'jersey': { const u = i & 7, v = j & 7, a = Math.abs(u - 3.5) / 3.5; return 0.9 + 0.2 * Math.abs(((v / 8 + a * 0.5) % 1) - 0.5); }
+      case 'leather': return 0.93 + 0.14 * h(i >> 1, j >> 1, 7) * h(i >> 3, j >> 2, 8);
+      case 'scales': { const d = SF.scaleAt(i / S, j / S); return 1.25 - 0.75 * smooth(0.72, 1, d) + 0.1 * (1 - d); }
       case 'foil': return 0.985 + 0.03 * h(i >> 3, j >> 1, 5);
       case 'tricot': return 0.97 + 0.05 * ((i & 3) === 0 ? -1 : 0.3) + 0.02 * ((j & 1) ? 1 : -1);
     }
@@ -2731,6 +2795,25 @@ function foilNormal() {
   return (_foilN = t);
 }
 const FOIL_N = new THREE.Vector2(1, 1);
+// Relief of the two leathers, as normal maps from a height field: domed scales with grooves between them, or a fine pebbled grain.
+const _relief = {};
+function reliefMap(kind) {
+  if (kind === 'foil') return foilNormal();
+  if (_relief[kind]) return _relief[kind];
+  const S = 512, h = new Float32Array(S * S), hs = (a, b, k) => { let x = Math.imul(a, 374761393) ^ Math.imul(b, 668265263) ^ Math.imul(k, 2246822519); x = Math.imul(x ^ (x >>> 13), 1274126177); return ((x ^ (x >>> 16)) >>> 0) / 4294967296; };
+  for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
+    if (kind === 'scales') { const d = SF.scaleAt(i / S, j / S); h[j * S + i] = 1.6 * (1 - smooth(0.55, 1, d)) + 0.5 * (1 - d * d); }
+    else h[j * S + i] = 0.16 * hs(i >> 1, j >> 1, 3) + 0.2 * hs(i >> 3, j >> 3, 4) + 0.12 * Math.sin(TAU * (9 * i + 4 * j) / S + 5 * hs(i >> 5, j >> 5, 5));
+  }
+  const d = new Uint8Array(S * S * 4), K = kind === 'scales' ? 2.4 : 1.4;
+  for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
+    const dx = (h[j * S + (i + 1) % S] - h[j * S + (i + S - 1) % S]) * K, dy = (h[((j + 1) % S) * S + i] - h[((j + S - 1) % S) * S + i]) * K, l = Math.hypot(dx, dy, 1), k = 4 * (j * S + i);
+    d[k] = 127.5 - 127.5 * dx / l; d[k + 1] = 127.5 - 127.5 * dy / l; d[k + 2] = 127.5 + 127.5 / l; d[k + 3] = 255;
+  }
+  const t = new THREE.DataTexture(d, S, S); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter; t.anisotropy = 8; t.needsUpdate = true;
+  return (_relief[kind] = t);
+}
+const clothEnv = cl => cl.metal || cl.gloss ? metalEnv() : null, clothRelief = cl => cl.metal ? foilNormal() : cl.relief ? reliefMap(cl.relief) : null;
 const linen = new THREE.MeshStandardMaterial({ color: '#d6c4a2', roughness: 0.95 }); linen.userData.shared = true;
 const seamMat = new THREE.MeshStandardMaterial({ color: '#a8946f', roughness: 1 }); seamMat.userData.shared = true;
 const brass = new THREE.MeshStandardMaterial({ color: '#b8923f', roughness: 0.32, metalness: 0.9 }); brass.userData.shared = true;
@@ -2757,7 +2840,7 @@ function buildStand(b, y0) {
   const out = (th, yy, d = 0.06) => { const p = b.torso(th, yy), l = Math.hypot(p[0], p[2]) || 1; return [p[0] * (1 + d / l), yy, p[2] * (1 + d / l)]; };
   const ring = []; for (let i = 0; i < 72; i++) ring.push(out(TAU * i / 72, y.waist)); tube(ring, true);
   for (const th of [0, PI / 2, PI, -PI / 2]) { const l = []; for (let i = 0; i <= 40; i++) l.push(out(th, lerp(y.crotch + 0.5, th === PI / 2 || th === -PI / 2 ? y.armpit - 3 : y.neck - 0.5, i / 40))); tube(l, false); }
-  const hang = ['jeans', 'shorts', 'jeanshorts', 'hotshorts', 'metalshorts', 'goldshorts', 'rainbowshorts', 'bikeshorts', 'swimsuit', 'bikini'].includes(S.garment);
+  const hang = ['jeans', 'shorts', 'jeanshorts', 'hotshorts', 'metalshorts', 'goldshorts', 'rainbowshorts', 'bikeshorts', 'leggings', 'scrunchleggings', 'meshleggings', 'swimsuit', 'bikini'].includes(S.garment);
   if (hang) {
     const top = b.M.height + 70, rod = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, top - (y.neck + 9), 12), steel); rod.position.y = (top + y.neck + 9) / 2; figure.add(rod);
     const rail = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 150, 16), steel); rail.rotation.z = PI / 2; rail.position.y = top; figure.add(rail);
@@ -2925,7 +3008,7 @@ function zipTexture() {
   for (let i = 0; i < 4; i++) { g.fillRect(24, i * 8 + 1, 10, 3); g.fillRect(30, i * 8 + 5, 10, 3); }
   zipTex = new THREE.CanvasTexture(c); zipTex.wrapS = zipTex.wrapT = THREE.RepeatWrapping; zipTex.colorSpace = THREE.SRGBColorSpace; zipTex.anisotropy = MAX_ANISO; return zipTex;
 }
-const fabOf = id => S.over[id] || S.fabric;
+const fabOf = id => S.over[id] || (garment && garment.byId[id] && garment.byId[id].spec.fab ? { ...S.fabric, ...garment.byId[id].spec.fab } : S.fabric);   // a piece may come with its own print (the mesh panels)
 
 // -------- pieces as meshes with three placements: table, floating, worn
 function tableXZ(p, i) {
@@ -2960,7 +3043,7 @@ function buildPieces() {
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3)); g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setIndex(idx);
     const f = fabOf(p.id), cl = SF.CLOTHS[f.cloth];
     const mat = zip ? new THREE.MeshStandardMaterial({ map: zipTexture(), roughness: 0.6, metalness: 0.2, side: THREE.DoubleSide })
-      : new THREE.MeshStandardMaterial({ map: fabTex(f), roughness: cl.rough, metalness: cl.metal || 0, envMap: cl.metal ? metalEnv() : null, envMapIntensity: 1.3, normalMap: cl.metal ? foilNormal() : null, normalScale: FOIL_N, side: THREE.DoubleSide });
+      : new THREE.MeshStandardMaterial({ map: fabTex(f), roughness: cl.rough, metalness: cl.metal || 0, envMap: clothEnv(cl), envMapIntensity: 1.3, normalMap: clothRelief(cl), normalScale: FOIL_N, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(g, mat); mesh.userData.piece = p.id; cloth.add(mesh);
     const o = { p, mesh, T, F, W: p.pos, f: 0, w: 0, tf: 0, tw: 0, first: firstOp(p.id), dirty: true, decor: null };
     if (!zip) o.decor = buildDecor(p, tx, tz, n);
@@ -3180,7 +3263,7 @@ function rebuild() {
   }
 }
 function retexture() {
-  for (const o of objs) if (o.p.spec.kind !== 'zip') { const f = fabOf(o.p.id); o.mesh.material.map = fabTex(f); o.mesh.material.roughness = SF.CLOTHS[f.cloth].rough; o.mesh.material.metalness = SF.CLOTHS[f.cloth].metal || 0; o.mesh.material.envMap = SF.CLOTHS[f.cloth].metal ? metalEnv() : null; o.mesh.material.normalMap = SF.CLOTHS[f.cloth].metal ? foilNormal() : null; o.mesh.material.needsUpdate = true; }
+  for (const o of objs) if (o.p.spec.kind !== 'zip') { const f = fabOf(o.p.id); o.mesh.material.map = fabTex(f); o.mesh.material.roughness = SF.CLOTHS[f.cloth].rough; o.mesh.material.metalness = SF.CLOTHS[f.cloth].metal || 0; o.mesh.material.envMap = clothEnv(SF.CLOTHS[f.cloth]); o.mesh.material.normalMap = clothRelief(SF.CLOTHS[f.cloth]); o.mesh.material.needsUpdate = true; }
   for (const m of lineMats) m.color.set(S.thread);
   syncMachine(); uiFabric();
 }

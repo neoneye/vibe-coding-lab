@@ -30,10 +30,10 @@ An **X-ray** switch makes the body see-through and shows a skeleton inside it
 measurements and pose, with the clothing still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
-rainbow shorts, bike shorts,
+rainbow shorts, bike shorts, leggings, scrunch leggings, mesh leggings, leather jacket, snake-skin jacket,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
-stretch, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye,
+stretch, leather, scale-embossed leather, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, mélange, open mesh,
 polka dots,
 stripes, gingham, floral, camouflage.
 
@@ -66,6 +66,29 @@ men's table has no hip column, so the men's hips, like every shoulder width,
 inside leg and shape slider, are this page's own proportions. The ASTM tables
 (D5585, D6240, D6960) are paywalled and were not used. The anime figures are
 stylised (long legs, narrow waist, larger head) and follow no standard.
+
+### Three leggings
+
+Full-length, skin-tight knits on the same block as the hot shorts (overlock
+seams, elastic waistband, coverstitched hems).
+
+| Leggings | Cloth | What makes it different |
+|---|---|---|
+| Leggings | cotton jersey, blue mélange | waistband dipping to a V at the centre front |
+| Scrunch leggings | cotton jersey, olive | the V waistband, and elastic zigzagged along the back seam to gather it |
+| Mesh leggings | swim tricot, grey | an open-mesh strip coverstitched down the outside of each thigh |
+
+### Two jackets
+
+A short zip-front jacket on the shirt's block (two fronts, back, yoke, set-in
+sleeves, cuffs, collar), with an open-ended front zip, a slanted zip pocket on
+each front and cuff snaps in place of buttons. The leather jacket is plain
+black leather with a pebbled grain; the snake-skin jacket is glossy leather
+embossed with scales (how most "exotic" jackets are made). Both are sewn on
+the lockstitch machine only, and the operation notes say what leather changes:
+wedge-point needle, roller foot, long stitches, tape instead of pins, seams
+glued and hammered open, no overlock. Grain and scales are relief on the
+surface, built from the same pattern as the colour.
 
 ## The shoulders
 
@@ -137,7 +160,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|leatherjacket|snakejacket|shirt|dress|swimsuit|bikini`,
 `&form=w|m|w3|m3|ag|ab`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
