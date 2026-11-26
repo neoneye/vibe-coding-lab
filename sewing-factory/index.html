@@ -1148,7 +1148,7 @@ const SF = {};
   function skirt(body, fit, o = {}) {
     const y = body.y, H = PI / 2, e = fit.ease ?? 0.5, band = o.chain ? 0 : (o.band ?? 8), yTop = y.waist + (fit.rise ?? 0), yY = yTop - band, L = fit.length, yHem = Math.max(y.knee + 2, yY - L);
     const shell = SF.makeShell(body, { ease: e, loose: 1, hangTop: yY, full: true }), tc = torsoChart(shell), k = (fit.flare ?? 0) / 100;
-    const vF = th => o.vband ? o.vband * Math.exp(-Math.pow(th / 0.55, 2)) : 0, topF = th => yTop - vF(th), botF = th => yY - 0.8 * vF(th), dipB = th => o.chain ? 7 * Math.pow(Math.cos(th - PI), 2) : 0;
+    const vF = th => o.vband ? o.vband * Math.exp(-Math.pow(th / 0.55, 2)) : 0, topF = th => yTop - vF(th), botF = th => yY - 0.8 * vF(th), CA = 0.95, dipB = th => { if (!o.chain) return 0; let t = ((th + PI) % TAU + TAU) % TAU - PI; t = Math.abs(t); return t <= CA ? 1.6 * (1 - Math.pow(t / CA, 2)) : 7 * Math.sin(PI * (t - CA) / (PI - CA)); };   /* o.chain: the top edge is highest where the chains hold it (the two front corners and the centre back) and sags between */
     const tri = t => 2 * Math.abs(t - Math.floor(t + 0.5));   // 0..1 triangle wave of period 1
     // the flared surface: out from the hanging shell by the flare, plus the folds the extra cloth falls into
     const flared = (kk, base, fold) => ({ orient: 1, yq: true, f: (th, q) => {
@@ -1185,11 +1185,16 @@ const SF = {};
       if (band) ops.push({ name: nP ? 'Sew the pleated skirt to the yoke' : 'Sew the skirt to the yoke', machine: 'overlock4', seam: 'superimposed', joins: [J('yokeF.bot', 'skF.top', nP ? 0.5 : 0.12), J('yokeB.bot', 'skB.top', nP ? 0.5 : 0.12)], note: nP ? 'The pleats are stitched down flat along the top edge and that edge is sewn to the yoke. Below the seam they are free to open as the wearer moves.' : 'One seam round the high hip joins the flared skirt to the fitted yoke.' });
       ops.push({ name: 'Hem', machine: o.chain ? 'bartack' : 'cover', seam: o.chain ? 'bartack' : 'hem', stitch: o.chain ? undefined : ['skF.hem', 'skB.hem'].map(s => ({ e: s, in: nP ? 1.5 : 0.8, rows: 2 })), tacks: o.chain ? [['skF', 0.5, 0.02], ['skB', 0.5, 0.02]] : undefined, note: o.chain ? 'The mesh needs no hem: its edge is simply the last row of plates. The corners are checked and any open rings closed.' : 'A narrow hem. On a flared skirt the hem is a long curve, so it is kept narrow or it would pucker.' });
     }
-    if (o.chain) {   // a chain round the hips; the skirt hangs from it at the two side points
-      const cs = SF.makeShell(body, { ease: 0.3, loose: 0, full: true }), yC = Math.min(y.waist - 2, yTop + 9), ring = [];
-      for (let i = 0; i <= 48; i++) { const th = -PI + TAU * i / 48, q = lerp(yTop + 2.5, yC, Math.pow(Math.abs(Math.cos(th)), 0.8)) , P = cs(th, q), n = outOf(P); ring.push([P[0] + n[0] * 0.3, q, P[2] + n[2] * 0.3]); }
-      pieces.push({ id: 'chain', name: 'Hip chain', ribbon: true, width: 0.6, nv: 96, small: true, path: ring });
-      ops.push({ name: 'Hook the panels on to the hip chain', machine: 'bartack', seam: 'bartack', bring: ['chain'], tacks: [['chain', 0.5, 0.25], ['chain', 0.5, 0.75]], note: 'A fine chain goes round the hips and fastens with a clasp. The top corners of the mesh are linked to it at the two sides; front and back hang from those points, which is why the back falls in a deep curve.' });
+    if (o.chain) {
+      // One chain: from the front panel's top corner on one side it rises over the hip, runs round the back resting on
+      // the hips, and comes down to the other front corner. A short chain drops from its middle to the centre of the
+      // back panel's top edge. So the skirt hangs from two points in front and one behind.
+      const cs = SF.makeShell(body, { ease: 0.3, loose: 0, full: true }), a0 = CA, yC = Math.min(y.waist - 2, yTop + 8.5), ring = [], pt = (th, q, d = 0.35) => { const P = (q <= yTop + 0.5 ? shell : cs)(th, q), n = outOf(P); return [P[0] + n[0] * d, q, P[2] + n[2] * d]; };
+      for (let i = 0; i <= 60; i++) { const th = lerp(a0, TAU - a0, i / 60), m = Math.min(th - a0, TAU - a0 - th), up = smooth(0, 0.8, m); ring.push(pt(th, lerp(yTop - 0.2, yC - 1.2 * Math.pow(Math.max(0, -Math.cos(th)), 2), up))); }   // sags a little at the centre back
+      pieces.push({ id: 'chain', name: 'Hip chain', ribbon: true, width: 0.6, nv: 110, small: true, path: ring });
+      const yB0 = yC - 1.2, yB1 = yTop - dipB(PI) - 0.3, drop = []; for (let i = 0; i <= 8; i++) drop.push(pt(PI, lerp(yB0, yB1, i / 8), 0.5));
+      pieces.push({ id: 'drop', name: 'Back drop chain', ribbon: true, width: 0.6, nv: 16, small: true, path: drop, out: () => [0, 0, -1] });
+      ops.push({ name: 'Link the panels to the hip chain', machine: 'bartack', seam: 'bartack', bring: ['chain', 'drop'], tacks: [['chain', 0.5, 0.01], ['chain', 0.5, 0.99], ['drop', 0.5, 0.95]], note: 'A fine chain rests on the hips. Its two ends are linked to the top corners of the front panel, and a short chain drops from its middle to the centre of the back panel. The skirt hangs from those three points: two in front, one behind. Between them the mesh sags under its own weight, which is why the back falls in a deep curve.' });
     } else if (!o.shirred) ops.push({ name: 'Elastic into the top edge', machine: 'cover', seam: 'hem', stitch: ['yokeF.top', 'yokeB.top'].map(s => ({ e: s, in: 1, rows: 2 })), note: 'The top of the yoke is folded over a band of elastic and coverstitched, so the skirt pulls on without a zip.' });
     return { pieces, trims, ops };
   }

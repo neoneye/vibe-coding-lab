@@ -209,8 +209,11 @@ hang flat, so each skirt deals with it differently:
   ones in white tricot).
 - **Tiered polka-dot skirt**: two gathered ruffles, the upper overlapping the
   lower, under a shirred waistband.
-- **Gold mesh skirt**: no yoke. A straight panel of metal mesh hangs low on the
-  hips from a chain, and the back top edge falls in a deep curve.
+- **Gold mesh skirt**: no yoke. A straight panel of metal mesh hangs low from a
+  chain that rests on the hips. The chain's ends link to the two top corners of
+  the front, and a short chain drops from its middle to the centre of the back.
+  The top edge is highest at those three points and sags between them, deepest
+  over each hip.
 
 The pleats and gathers are drawn as folds in the surface. The flat pattern is
 unrolled from that surface, so it shows roughly how much wider the skirt piece
