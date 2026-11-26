@@ -285,8 +285,12 @@ bottom back. Front and back are sewn to each other at the crotch and nowhere
 else; a short chain over each hip joins them, and thin straps run from the
 cups over the shoulders and straight down to the top of the back.
 
-- **White chain monokini**: white tricot, gold hip chains, a ring where the
-  cups meet. A slider sets how wide the strip at the waist is.
+- **White chain monokini**: white tricot. Its front is a V: a narrow strip
+  rises from the crotch to a point, splits into two bands that run up and out
+  to the sides of the bust with the belly bare between, and each band becomes
+  a cup whose lower edge climbs back to a ring in the middle. Strings from the
+  cups tie in a bow behind the neck. One gold chain, fixed only to the two top
+  corners of the back, passes round the front over the point of the V.
 - **Red keyhole monokini**: red foil, an oval opening below the bust, a small
   bow over the join, and chain for the shoulder straps as well.
 
