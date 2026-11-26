@@ -396,8 +396,10 @@ on plain panels, and the sheer yoke over the shoulders is left out.
   regular lattice rather than the original's vines, and the notch at the centre
   of the neckline is left out.
 - **Two-cats swimsuit**: a sleeveless scoop-neck swimsuit whose front carries a
-  *placement print*: one picture across the whole piece, a dark cat and a white
-  cat, each the other turned half round. The back is plain. A placement print is
+  *placement print*: one picture across the whole piece, built like a yin-yang.
+  The left half is dark and the right half white, and each swells into a round
+  cat's head on the other's side. Turn the picture half round and it is the
+  same picture with the two colours exchanged. The back is plain. A placement print is
   the only print here that is not designed to repeat; chosen for any other piece
   on Customize it is tiled like the rest, and the picture is cut at the tile edges.
 
