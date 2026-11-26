@@ -34,11 +34,11 @@ skull). Both are built from the same measurements and pose, with the clothing
 still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
-rainbow shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
-flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, long-sleeve swimsuit,
+rainbow shorts, faux-leather shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
+flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, long-sleeve swimsuit,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
-stretch, leather, scale-embossed leather, quilted nylon, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, mélange, open mesh,
+stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, mélange, open mesh,
 polka dots,
 stripes, gingham, floral, camouflage.
 
@@ -118,6 +118,17 @@ nylon cloth whose channels are relief on the surface. A hood replaces the
 collar; it is shown worn down, hanging behind the shoulders. The line starts
 with a quilting operation, and the notes describe sewing through wadding
 (walking foot, wadding trimmed out of the seam allowances, bound edges).
+
+### Chainmail dress, faux-leather shorts, cut-out swimsuit
+
+The **chainmail dress** is the dress block cut short and straight with thin
+straps, in a metal mesh of small plates that glint separately. Real metal mesh
+is joined by opening rings with pliers, not sewn; the cloth's note says so.
+The **faux-leather shorts** are the knit shorts in a polyurethane-coated
+stretch cloth. The **cut-out swimsuit** has a high neck and a front made of two
+halves that meet only at two rings, leaving three teardrop openings down the
+centre (a slider sets their size); below the lowest opening the halves are
+seamed together.
 
 ## Shoes
 
@@ -199,7 +210,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|rashsuit|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|shirt|dress|swimsuit|bikini`,
 `&form=w|m|w3|m3|ag|ab`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
