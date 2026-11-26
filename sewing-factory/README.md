@@ -4,7 +4,7 @@ How flat pieces of cloth become a garment, and what each industrial sewing
 machine on the line actually does with its threads. Open `index.html` in a
 browser (three.js is loaded from a CDN).
 
-## Six stages
+## Seven stages
 
 1. **Model.** A mannequin with sliders for height, chest, waist, hip,
    shoulder width, inside leg and arm length. The torso sections are solved so
@@ -19,14 +19,16 @@ browser (three.js is loaded from a CDN).
    change with the pose.
 3. **Shoes.** Pick what the figure wears on its feet. Shoes are only worn,
    not cut or sewn, and stay on while the clothes are tried.
-4. **Cut.** The pattern pieces of the chosen garment lie on a cutting table as a
+4. **Cloth.** Pick the garment to make. It is drafted for the figure and
+   shown on it.
+5. **Cut.** The pattern pieces of the chosen garment lie on a cutting table as a
    marker: grain arrows, cutting line, stitch line. Click a piece to give it its
    own cloth, print or colour.
-5. **Sew.** The operation list in factory order. Each operation goes to the
+6. **Sew.** The operation list in factory order. Each operation goes to the
    machine a factory would use, and a close-up shows that machine forming its
    stitch, thread by thread. The pieces join on the form so you can see where
    each seam ends up.
-6. **Finished.** The garment on the mannequin, with a clean PNG export.
+7. **Finished.** The garment on the mannequin, with a clean PNG export.
 
 An **X-ray** switch makes the body see-through and shows either a skeleton or
 a robot mannequin inside it. The robot is an articulated shop mannequin: matt
@@ -63,14 +65,14 @@ the inside leg. Worn, these six lie skin-tight: the body's own surface pushed
 out by the ease, so the cloth goes into the cleft and tucks under each buttock.
 The looser jeans and chino shorts span across instead.
 
-## Six pages
+## Seven pages
 
-The page has six steps: **1 Model**, **2 Pose**, **3 Shoes**, **4 Cut**,
-**5 Sew** and **6 Finished**. Pose has its own page: the pose buttons, the arm,
-elbow, stance and head sliders, and their Randomize and Reset. Shoes has its own
-page too, with the shoe picker that used to sit in the header. On both, the
-garment is always shown on the figure. Neither posing nor shoes changes a cut
-piece, which is why they sit apart from the measurements.
+The page has seven steps: **1 Model**, **2 Pose**, **3 Shoes**, **4 Cloth**,
+**5 Cut**, **6 Sew** and **7 Finished**. The header holds only the step
+buttons. Pose has the pose buttons, the arm, elbow, stance and head sliders and
+their Randomize and Reset. Shoes has the shoe picker. Cloth has the garment
+picker (all the garments, as one list of buttons). On all three the chosen
+garment is shown on the figure.
 
 ## The garment on the Model page
 
@@ -92,10 +94,11 @@ chosen figure, so the result is still a plausible body; pose and shape sliders
 are drawn from their whole range. Reset returns a section to the chosen figure's
 values.
 
-The Model page's sliders and the figure choice are saved in the browser's
-local storage and restored on the next visit. A link that names a figure
-(`&form=`) or a review still (`?still`) starts from its own values instead. The
-garment's fit sliders are not saved.
+The Model and Pose sliders, the figure choice, the shoes and the garment are
+saved in the browser's local storage and restored on the next visit. A link that names a figure,
+shoe or garment (`&form=`, `&shoe=`, `&g=`) uses that for that item, and a
+review still (`?still`) ignores storage. The garment's fit sliders and fabric
+are not saved.
 
 ## Figure presets
 
@@ -434,7 +437,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..6` (1 Model, 2 Pose, 3 Shoes, 4 Cut, 5 Sew, 6 Finished), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..7` (1 Model, 2 Pose, 3 Shoes, 4 Cloth, 5 Cut, 6 Sew, 7 Finished), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|shirt|dress|swimsuit|bikini`,
 `&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
