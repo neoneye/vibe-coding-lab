@@ -410,7 +410,19 @@ real pattern. On very short, close-cut legs the back inside-leg edge is up to
 jean shorts is a separate band (on real cut-offs it is the leg rolled up). Near
 the crotch the worn cloth lies closer to the body than the drafted pattern
 allows for. Fabric changes the look, not the construction: an unsuitable cloth
-gets a note. The page lists the rest under "What is simplified".
+gets a note.
+
+More that is simplified or left out (this list used to be a panel on the
+Finished page):
+
+- Machine timing is schematic and slowed down; real machines make 4,000–8,000 stitches a minute. Thread is drawn much thicker than life.
+- There is no cloth physics. Garments are smooth surfaces fitted round the form, so there are no folds or drape.
+- Pattern pieces are unrolled from the form, not graded industry blocks. There are no darts, facings, linings or interfacing, and the sleeve head has more ease than a real pattern.
+- Left out: pocket bags, fly facings, rivets, labels, pressing and inspection. Buttons and zips are sewn but simplified.
+- Assembly is shown on the form. In a factory each operation is done flat at its machine and bundles move between operators.
+- Fabric changes the look only. The construction is fixed per garment, so an unsuitable cloth gets a note, not a different set of machines.
+- The weave of each cloth is drawn enlarged. Zebra and leopard prints come from the zebra-pattern and leopard-pattern pages of this lab.
+- A real marker nests many garments and sizes to reach 80–90 % cloth use; this one lays out a single garment.
 
 ## Tests and review hooks
 
