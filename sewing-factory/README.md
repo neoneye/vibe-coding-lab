@@ -4,26 +4,27 @@ How flat pieces of cloth become a garment, and what each industrial sewing
 machine on the line actually does with its threads. Open `index.html` in a
 browser (three.js is loaded from a CDN).
 
-## Four stages
+## Five stages
 
-1. **Measure.** A mannequin with sliders for height, chest, waist, hip,
+1. **Model.** A mannequin with sliders for height, chest, waist, hip,
    shoulder width, inside leg and arm length. The torso sections are solved so
    the tape girths equal the slider values. A Hips and legs card sets the buttocks,
    the gap between the thighs (as a share of the hip width) and the thigh, knee,
    calf and ankle girths. Seven more sliders shape the bust
    (projection, spacing, height, width, fullness above and below, and the rib cage
-   under the bust as a share of the bust girth), a heel-lift slider poses the feet for heeled shoes, and a Pose card moves
-   the arms, elbows, feet and head (the cut pieces never change with the pose). Two modes: a full figure with head,
+   under the bust as a share of the bust girth), a heel-lift slider poses the feet for heeled shoes. The chosen garment is shown on the figure. Two modes: a full figure with head,
    arms and legs, or a tailor's dress form on a stand (it hangs from a rail for
    trousers and swimwear, which need the crotch free).
-2. **Cut.** The pattern pieces of the chosen garment lie on a cutting table as a
+2. **Pose.** Moves the arms, elbows, feet and head. The cut pieces never
+   change with the pose.
+3. **Cut.** The pattern pieces of the chosen garment lie on a cutting table as a
    marker: grain arrows, cutting line, stitch line. Click a piece to give it its
    own cloth, print or colour.
-3. **Sew.** The operation list in factory order. Each operation goes to the
+4. **Sew.** The operation list in factory order. Each operation goes to the
    machine a factory would use, and a close-up shows that machine forming its
    stitch, thread by thread. The pieces join on the form so you can see where
    each seam ends up.
-4. **Finished.** The garment on the mannequin, with a clean PNG export.
+5. **Finished.** The garment on the mannequin, with a clean PNG export.
 
 An **X-ray** switch makes the body see-through and shows either a skeleton or
 a robot mannequin inside it. The robot is an articulated shop mannequin: matt
@@ -62,15 +63,15 @@ The looser jeans and chino shorts span across instead.
 
 ## Five pages
 
-The page has five steps: **1 Measure**, **2 Pose**, **3 Cut**, **4 Sew** and
+The page has five steps: **1 Model**, **2 Pose**, **3 Cut**, **4 Sew** and
 **5 Finished**. Pose has its own page: the pose buttons, the arm, elbow, stance
 and head sliders, and their Randomize and Reset. The garment is always shown on
 the figure there. Posing never changes a cut piece, which is why it sits apart
 from the measurements.
 
-## The garment on the Measure page
+## The garment on the Model page
 
-The Measure page shows the chosen garment on the figure, not a bare mannequin.
+The Model page shows the chosen garment on the figure, not a bare mannequin.
 Moving any slider there (a measurement, the pose, the bust or leg shape)
 redrafts the garment for the new body and redraws it at once, so the effect of
 a measurement on the cut can be seen without leaving the page. A checkbox,
@@ -79,7 +80,7 @@ and the measuring tapes alone (`&dress=0` in a link).
 
 ## Randomize, Reset and saved settings
 
-Each section of the Measure page (the mannequin's measurements, pose, hips
+Each section of the Model page (the mannequin's measurements, pose, hips
 legs and head, bust) has a **Randomize** and a **Reset** button. The
 mannequin's Randomize starts at Heel lift and leaves the choices above it
 (full figure or dress form, x-ray, Woman/Man, Medium/Large) alone. Body
@@ -88,7 +89,7 @@ chosen figure, so the result is still a plausible body; pose and shape sliders
 are drawn from their whole range. Reset returns a section to the chosen figure's
 values.
 
-The Measure page's sliders and the figure choice are saved in the browser's
+The Model page's sliders and the figure choice are saved in the browser's
 local storage and restored on the next visit. A link that names a figure
 (`&form=`) or a review still (`?still`) starts from its own values instead. The
 garment's fit sliders are not saved.
@@ -418,7 +419,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4` (or `&stage=pose` for the Pose page, which is 1.5 internally so the older numbers keep their meaning), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..5` (1 Model, 2 Pose, 3 Cut, 4 Sew, 5 Finished), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|shirt|dress|swimsuit|bikini`,
 `&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
