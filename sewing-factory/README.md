@@ -25,9 +25,13 @@ browser (three.js is loaded from a CDN).
    each seam ends up.
 4. **Finished.** The garment on the mannequin, with a clean PNG export.
 
-An **X-ray** switch makes the body see-through and shows a skeleton inside it
-(spine, rib cage, pelvis, limbs, hands, feet, skull), built from the same
-measurements and pose, with the clothing still on.
+An **X-ray** switch makes the body see-through and shows either a skeleton or
+a robot mannequin inside it. The robot is an articulated shop mannequin: matt
+black shells for chest, pelvis and each limb segment, with a ball at every
+joint and a steel pin through hips, elbows, knees and ankles (`&xray=robot`).
+The skeleton is the default (spine, rib cage, pelvis, limbs, hands, feet,
+skull). Both are built from the same measurements and pose, with the clothing
+still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
 rainbow shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,

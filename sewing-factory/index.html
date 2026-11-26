@@ -105,7 +105,8 @@
       <div class="card"><h2>The mannequin</h2>
         <p>Every pattern piece is drafted from these measurements. Change one and the cut pieces change with it.</p>
         <div class="seg" id="modes"></div>
-        <label class="ck" id="xrayRow"><input type="checkbox" id="xray">X-ray: show the skeleton, body see-through</label>
+        <label class="ck" id="xrayRow"><input type="checkbox" id="xray">X-ray: body see-through, showing</label>
+        <div class="row" style="margin-top:2px"><button id="xkBones">Human skeleton</button><button id="xkRobot">Robot mannequin</button></div>
         <p id="modeNote" style="margin:6px 0 0"></p>
         <div class="seg" id="forms" style="margin-top:6px"></div>
         <p id="formNote" style="margin:6px 0 0"></p>
@@ -152,7 +153,7 @@
       <div class="card"><h2>Finished garment</h2>
         <p id="summary"></p>
         <label class="ck"><input type="checkbox" id="turn">Turntable</label>
-        <label class="ck"><input type="checkbox" id="xray2">X-ray: show the skeleton, body see-through</label>
+        <label class="ck"><input type="checkbox" id="xray2">X-ray: body see-through (skeleton or robot, chosen under Measure)</label>
         <label class="ck"><input type="checkbox" id="showStitch" checked>Show stitching</label>
         <div class="row"><span>Thread</span><input type="color" id="thread2"><button id="save">Save image</button></div>
       </div>
@@ -2782,7 +2783,7 @@ const STAGES = { 1: ['The mannequin', 'A measured form. The tapes show chest, wa
 
 // -------- state
 const S = {
-  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), xray: Q.has('xray'), shoe: Q.get('shoe') || 'none', headTurn: +(Q.get('headTurn') || 0), headNod: +(Q.get('headNod') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
+  stage: +(Q.get('stage') || 1), form: Q.get('form') || 'w', mode: Q.get('mode') === 'stand' ? 'stand' : 'figure', heel: +(Q.get('heel') || 0), xray: Q.has('xray'), xrayKind: Q.get('xray') === 'robot' ? 'robot' : 'bones', shoe: Q.get('shoe') || 'none', headTurn: +(Q.get('headTurn') || 0), headNod: +(Q.get('headNod') || 0), M: null, garment: Q.get('g') || 'jeans', fit: {}, fabric: null, over: {}, thread: '#c98a2b',
   sel: null, op: +(Q.get('op') || 0), opT: +(Q.get('t') || 0), playing: false, lineSpeed: 1, turn: false, showStitch: true, wait: 0,
 };
 S.M = { ...SF.FORMS[S.form] };
@@ -3054,6 +3055,38 @@ function buildStand(b, y0) {
 const lerp3 = SF.vec.lerp3;
 const boneMat = new THREE.MeshStandardMaterial({ color: '#ece4cf', roughness: 0.55, side: THREE.DoubleSide }); boneMat.userData.shared = true;
 const holeMat = new THREE.MeshBasicMaterial({ color: '#17181c' }); holeMat.userData.shared = true;
+// The other thing an x-ray can show: an articulated shop mannequin, the kind posed by hand. Matt black shells
+// for chest, pelvis and each limb segment, with a ball at every joint and a steel pin through elbows and knees.
+// Built from the same measurements and pose as the figure, a little smaller, so it sits inside the body.
+const robotMat = new THREE.MeshStandardMaterial({ color: '#1b1c20', roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide }); robotMat.userData.shared = true;
+const pinMat = new THREE.MeshStandardMaterial({ color: '#b9bdc4', roughness: 0.3, metalness: 0.9 }); pinMat.userData.shared = true;
+function buildRobot(b, head, hr, hy, footAt = {}) {
+  const G = new THREE.Group(), y = b.y, H = b.M.height, yc = y.crotch, K = 0.8, add = g => G.add(new THREE.Mesh(g, robotMat));
+  const knob = (p, rx, ry, rz) => G.add(ball(robotMat, rx, ry ?? rx, rz ?? rx, p[0], p[1], p[2]));
+  const pin = (p, len, r = 0.45) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 12), pinMat); m.rotation.z = PI / 2; m.position.set(p[0], p[1], p[2]); G.add(m); };
+  // a closed shell from the torso's own sections, scaled in, rounded off at both ends
+  const shell = (y0, y1, k) => add(gridGeo(40, 26, (u, v) => { const yy = lerp(y0, y1, v), e = Math.sqrt(Math.max(0, 1 - Math.pow(2 * v - 1, 6))), p = b.torso(-PI + TAU * u, yy, true, true); return [p[0] * k * e, yy, p[2] * k * e]; }, true));
+  shell(y.waist + 1.5, y.shoulder + 1.5, K); shell(yc + 2, y.waist - 1.5, K);
+  knob([0, y.waist, -1], 4.2);                                   // waist joint
+  knob([0, y.neck - 0.5, -0.5], b.neckR * 0.8); add(new THREE.CylinderGeometry(b.neckR * 0.55, b.neckR * 0.62, y.chin - y.neck + 2, 16).translate(0, (y.chin + y.neck) / 2, 0));
+  const egg = ball(robotMat, hr * 0.74, hr * 0.92, hr * 0.8, 0, hy, 0.4); egg.userData.bone = true; head.add(egg);   // the head, in the head's own group so it turns and nods
+  for (const sgn of [1, -1]) {
+    // arm: shoulder ball, upper arm, elbow ball with its pin, forearm, wrist ball, hand
+    const A = b.M.arm, tE = 0.5 * A, c = t => b.armFrame(sgn, t).c, seg = (t0, t1, k) => add(gridGeo(14, 14, (u, v) => { const t = lerp(t0, t1, v), e = Math.sqrt(Math.max(0, 1 - Math.pow(2 * v - 1, 8))); return b.armPoint(sgn, (sgn > 0 ? u : 1 - u) * TAU, t, b.armR(clamp(t, 0, A)) * k * e); }, true));
+    knob(c(0.5), b.armR(0) * 0.86); seg(3, tE - 2.6, 0.74); knob(c(tE), b.armR(tE) * 0.8); pin(c(tE), b.armR(tE) * 1.75, 0.38);
+    seg(tE + 2.6, A - 2.2, 0.72); knob(c(A), b.armR(A) * 0.78);
+    const hc = c(A + 5.5), hb = ball(robotMat, 1.5, 4.8, 3.1, hc[0], hc[1], hc[2]), F = b.armFrame(sgn, A + 5.5); hb.lookAt(hc[0] + F.w[0], hc[1] + F.w[1], hc[2] + F.w[2]); hb.rotateX(PI / 2 - Math.acos(clamp(F.d[1], -1, 1)) * 0); G.add(hb);
+    // leg: hip ball, thigh, knee ball with its pin, shin, ankle ball, foot
+    const P = p => b.poseLeg(sgn, p), cen = yy => { const S = b.legSect(yy); return P([sgn * S.cx, yy, S.cz]); };
+    const leg = (y0, y1) => add(gridGeo(16, 20, (u, v) => { const yy = lerp(y0, y1, v), e = Math.sqrt(Math.max(0, 1 - Math.pow(2 * v - 1, 8))), p = b.leg(sgn, sgn > 0 ? u : 1 - u, yy), C = cen(yy); return [C[0] + (p[0] - C[0]) * K * e, p[1], C[2] + (p[2] - C[2]) * K * e]; }, true));
+    const hip = P([sgn * b.pivX, yc + 3, b.legSect(yc).cz]); knob(hip, 5.2); pin(hip, 12.5, 0.5);
+    leg(y.knee + 4.5, yc - 3.5); const kn = cen(y.knee + 0.5), kr = b.legSect(y.knee).rx; knob(kn, kr * 0.82); pin(kn, kr * 1.9);
+    leg(y.ankle + 3.2, y.knee - 4); const an = cen(y.ankle + 0.6), ar = b.legSect(y.ankle).rx; knob(an, ar * 0.85); pin(an, ar * 1.9, 0.36);
+    const ft = footAt[sgn], L = 0.152 * H;
+    if (ft) { const k = L / 25.5; knob(ft(-0.12 * L, 0, 2.4 * k), 2.6 * k, 2.2 * k, 3 * k); for (let i = 0; i < 6; i++) { const d = lerp(0.02, 0.56, i / 5) * L, p = ft(d, 0.3 * k, lerp(3.6, 1.5, i / 5) * k); knob(p, lerp(3, 4.2, Math.sin(PI * i / 5)) * k, lerp(3.4, 1.3, i / 5) * k, 2.3 * k); } }
+  }
+  return G;
+}
 function buildSkeleton(b, head, hr, hy, footAt = {}) {
   const G = new THREE.Group(), y = b.y, H = b.M.height, yc = y.crotch, V = p => new THREE.Vector3(p[0], p[1], p[2]);
   const tube = (pts, r, n) => G.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(V)), n || Math.max(8, pts.length * 6), r, 8, false), boneMat));
@@ -3175,7 +3208,7 @@ function buildFigure() {
     head.add(ball(skin, hr * 0.76, hr * 1.04, hr * 0.9, 0, hy, 0.5));
     // a hint of a face, as on shop mannequins: brow ridge and nose
     head.add(ball(skin, hr * 0.085, hr * 0.24, hr * 0.16, 0, hy - hr * 0.1, 0.5 + hr * 0.8)); head.add(ball(skin, hr * 0.44, hr * 0.1, hr * 0.2, 0, hy + hr * 0.15, 0.5 + hr * 0.66));
-    const skel = buildSkeleton(b, head, hr, hy, footAt); skel.userData.bone = true; figure.add(skel);
+    const skel = (S.xrayKind === 'robot' ? buildRobot : buildSkeleton)(b, head, hr, hy, footAt); skel.userData.bone = true; figure.add(skel);
     head.rotation.set(-S.headNod * PI / 180, S.headTurn * PI / 180, 0, 'YXZ'); head.scale.setScalar((b.M.head ?? 100) / 100); figure.add(head);
   } else buildStand(b, y0);
   if (S.mode !== 'stand') { const pr = Math.max(30, footX + 20), plate = new THREE.Mesh(new THREE.CylinderGeometry(pr, pr + 1, 1.2, 64), dark); plate.position.y = 0.6 - lift; plate.userData.floor = true; figure.add(plate); }
@@ -3595,6 +3628,9 @@ function initUI() {
   for (const id of ['mspeed', 'cutaway', 'see', 'below']) $(id).oninput = machineOpts;
   $('teach').oninput = () => { machineOpts(); syncMachine(); };
   $('phPrev').onclick = () => mv && mv.stepPhase(-1); $('phNext').onclick = () => mv && mv.stepPhase(1); $('phRun').onclick = () => mv && mv.setOptions({ paused: false });
+  const paintXk = () => { $('xkBones').className = S.xrayKind === 'bones' ? 'on' : ''; $('xkRobot').className = S.xrayKind === 'robot' ? 'on' : ''; };
+  for (const [id, kind] of [['xkBones', 'bones'], ['xkRobot', 'robot']]) $(id).onclick = () => { S.xrayKind = kind; S.xray = true; $('xray').checked = $('xray2').checked = true; needBody = true; paintXk(); };
+  paintXk();
   for (const id of ['xray', 'xray2']) { $(id).checked = S.xray; $(id).oninput = e => { S.xray = e.target.checked; $('xray').checked = $('xray2').checked = S.xray; }; }
   $('turn').oninput = e => (S.turn = e.target.checked); $('showStitch').oninput = e => (S.showStitch = e.target.checked);
   $('save').onclick = saveImage;
