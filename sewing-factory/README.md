@@ -76,7 +76,9 @@ at the top of their panel:
 - **Finished**: **Finished**, the garment on the figure, and **Sew**, the
   sewing line with its machine close-ups.
 
-Type has a **Randomize** button that picks another garment. Customize's fit
+Type has a **Randomize** button that picks another garment, and on Type the
+left and right arrow keys step to the previous and the next garment in the
+list, wrapping round at the ends. Customize's fit
 card has **Randomize** and **Reset** for the garment's fit sliders and options
 (zip position and the like). Its fabric card has two more:
 **Randomize** picks one cloth, print and colour for the whole garment, and
