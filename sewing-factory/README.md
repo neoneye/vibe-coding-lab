@@ -153,7 +153,8 @@ The **long dress** is a close sleeveless sheath from neck to calf in four
 lengthwise panels: beige centre front and centre back, a black panel down each
 side, and a black band at the neck. The centre panels narrow in a curve from
 the underarm to the neck, and a black band along that edge carries on over the
-shoulder as the strap, so each armhole is a rounded opening. The **racer-back
+shoulder as the strap, so each armhole is a rounded opening. Each side panel has
+a tall narrow slit up from the hem (a slider sets its height; 0 closes it). The **racer-back
 swimsuit** has a high-necked black front, a short silver back panel with a
 tongue rising up the spine, and two blue straps from the shoulders to the top
 of the tongue; between them the back is open.
