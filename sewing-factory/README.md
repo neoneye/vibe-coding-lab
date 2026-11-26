@@ -35,10 +35,10 @@ still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
 rainbow shorts, faux-leather shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
-flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, long-sleeve swimsuit,
+flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, long-sleeve swimsuit,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
-stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, wet-look vinyl, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, mélange, open mesh,
+stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, wet-look vinyl, coated barrier cloth, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, mélange, open mesh,
 polka dots,
 stripes, gingham, floral, camouflage.
 
@@ -139,6 +139,18 @@ at the back on the red one and at the front on the beige one. It is a through
 zip: from the collar down the centre, through the crotch and up the other side
 to the waist, so the whole suit opens.
 
+The **gold-shoulder suit** is the catsuit in black with pieces of gold foil
+cloth stitched on top (bust panels, an under-bust band, a belt, cuffs) and a
+giant ribbed gold shell bartacked over each shoulder.
+
+### Hazmat suit
+
+A loose one-piece coverall in yellow coated cloth: bodice and legs joined at an
+elasticated waist, a front zip, and a hood worn up that is open only round the
+face. A ready-made respirator (face piece, visor, two filters) is worn with it;
+like the shoes, it is not cut or sewn. The notes explain that the stitched
+seams of a real suit are then sealed with welded tape.
+
 ## Shoes
 
 A Shoes row in the header puts ready-made shoes on the full figure: flip-flops,
@@ -219,7 +231,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|shirt|dress|swimsuit|bikini`,
 `&form=w|m|w3|m3|ag|ab`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
