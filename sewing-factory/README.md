@@ -433,6 +433,14 @@ narrower than the body (negative ease).
 
 ## What is simplified
 
+A set-in sleeve's pattern piece ends at the armhole seam. At rest that seam lies
+round the root of the arm, and the arm above it is buried in the shoulder. When
+the arm swings forward or up, that buried part comes out ahead of the seam; a
+real sleeve head and the stretched bodice cover it. Here a close tube of the
+sleeve's cloth is kept on the top of the arm, with a ball over the shoulder
+joint, so no skin shows there. It is not a pattern piece and does not appear on
+the cutting table.
+
 Machine timing is schematic and slowed; thread is drawn thick. There is no cloth
 physics, no darts, facings or linings, and the sleeve head has more ease than a
 real pattern. On very short, close-cut legs the back inside-leg edge is up to
