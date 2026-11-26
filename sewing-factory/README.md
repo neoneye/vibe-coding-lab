@@ -76,10 +76,16 @@ at the top of their panel:
 - **Finished**: **Finished**, the garment on the figure, and **Sew**, the
   sewing line with its machine close-ups.
 
-Type has a **Randomize** button that picks another garment. Customize has a
-**Randomize** button that picks another cloth, print and colour for the whole
-garment (about half the time the print is plain, so the cloth itself shows; a
+Type has a **Randomize** button that picks another garment. Customize has two:
+**Randomize** picks one cloth, print and colour for the whole garment, and
+**Randomize each piece** picks a different one for every piece (about half the time the print is plain, so the cloth itself shows; a
 print that has its own ground colour, such as zebra, keeps it).
+
+Switching tabs keeps the camera. The tabs that show the figure (Model, Pose,
+Shoes, Type, Finished) share one view, so an orbit or zoom set on one carries
+over to the others. The cutting table (Customize) has its own view and comes
+back to where it was left, unless the garment changed. The sewing line (Sew)
+turns to face each seam as before.
 
 Pose has the pose buttons, the arm, elbow, stance and head sliders and their
 Randomize and Reset. Shoes has the shoe picker. On Pose, Shoes and Type the

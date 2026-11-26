@@ -130,7 +130,7 @@
       <div class="card"><h2 id="fitTitle">Fit</h2><div id="fit"></div></div>
       <div class="card"><h2>Fabric</h2>
         <p id="target">Applies to the whole garment. Click a piece on the table to change only that piece.</p>
-        <div class="row" style="margin-top:0"><button id="rndFab" title="Random cloth, print and colour for the whole garment">Randomize</button><button id="allBtn" disabled>Whole garment</button></div>
+        <div class="row" style="margin-top:0"><button id="rndFab" title="One random cloth, print and colour for the whole garment">Randomize</button><button id="rndEach" title="A different random cloth, print and colour for every piece">Randomize each piece</button><button id="allBtn" disabled>Whole garment</button></div>
         <label class="sl" style="margin-top:8px"><span>Cloth</span><span></span><select id="cloth"></select></label>
         <p id="clothNote" style="margin-top:6px"></p>
         <div class="sw" id="prints"></div>
@@ -4584,7 +4584,14 @@ function select(id) {
   [...$('pieceList').children].forEach(li => (li.className = id && li.firstChild.textContent === garment.byId[id].name ? 'on' : ''));
   uiFabric();
 }
+// The camera is kept when switching tabs. Tabs fall into three views: the figure (Model, Pose, Shoes, Type, Finished),
+// the cutting table (Customize) and the sewing line (Sew). Within a view the camera is left alone; each view
+// remembers where it was left and comes back to it. The table view is forgotten when the garment changes, since its
+// pieces are then laid out differently, and the sewing line always turns to face the seam being sewn.
+const camMem = {}, viewOf = s => s === 5 ? 'table' : s === 6 ? 'sew' : 'figure';
 function setStage(s, now) {
+  const prev = S.stage;
+  if (!now && garment && !tween) camMem[viewOf(prev)] = { pos: camera.position.toArray(), target: controls.target.toArray(), g: S.garment };
   S.stage = s; document.body.dataset.stage = s;
   for (const b of $('steps').children) b.className = +b.dataset.s === s || (s === 6 && +b.dataset.s === 7) || (s === 5 && +b.dataset.s === 4) ? 'on' : '';   // Sew is a subtab of Finished, Customize of Cloth
   for (const b of [...$('subt').children, ...$('subtC').children]) b.className = +b.dataset.s === s ? 'on' : '';
@@ -4593,7 +4600,12 @@ function setStage(s, now) {
   if (s === 6) { S.playing = !STILL && !Q.has('op'); uiPlay(); }
   tapes.visible = s === 1; tableG.visible = s === 5; cloth.visible = s > 1 || S.dress; figure.visible = blob.visible = s !== 5;
   for (const o of objs) if (o.decor) o.decor.visible = s === 5 || (s === 1 && !S.dress);
-  resize(); targets(); if (garment) { flyTo(s === 6 ? camForOp(S.op) : camFor(s), now); syncMachine(); uiOps(); }
+  resize(); targets();
+  if (garment) {
+    const v = viewOf(s), m = camMem[v];
+    if (now || v !== viewOf(prev)) flyTo(v === 'sew' ? camForOp(S.op) : m && (v !== 'table' || m.g === S.garment) ? m : camFor(s), now);
+    syncMachine(); uiOps();
+  }
   if (s !== 7 && s >= 5) turnG.rotation.y = 0;
 }
 function setOp(i, t) { S.op = clamp(i, 0, garment.ops.length - 1); S.opT = t; S.wait = 0; targets(); syncMachine(); uiOps(); if (S.stage === 6) flyTo(camForOp(S.op)); }
@@ -4608,12 +4620,13 @@ function initUI() {
   const anyOf = a => a[Math.floor(Math.random() * a.length)];
   // Type: another garment, never the one already chosen
   $('rndType').onclick = () => setGarment(anyOf(Object.keys(SF.GARMENTS).filter(id => id !== S.garment)));
-  // Customize: another cloth, print and colour for the whole garment. About half the time the print is plain, so the cloth itself shows.
-  $('rndFab').onclick = () => {
-    if (S.sel) select(null);
-    const print = Math.random() < 0.45 ? 'solid' : anyOf(Object.keys(SF.PRINTS).filter(p => p !== 'solid')), c = new THREE.Color().setHSL(Math.random(), 0.35 + 0.5 * Math.random(), 0.3 + 0.4 * Math.random(), THREE.SRGBColorSpace);
-    setFab({ cloth: anyOf(Object.keys(SF.CLOTHS).filter(id => id !== S.fabric.cloth)), print, colour: SF.PRINTS[print].ground || '#' + c.getHexString(THREE.SRGBColorSpace) });
-  };
+  // Customize: a random cloth, print and colour. About half the time the print is plain, so the cloth itself shows.
+  const anyFab = not => { const print = Math.random() < 0.45 ? 'solid' : anyOf(Object.keys(SF.PRINTS).filter(p => p !== 'solid')), c = new THREE.Color().setHSL(Math.random(), 0.35 + 0.5 * Math.random(), 0.3 + 0.4 * Math.random(), THREE.SRGBColorSpace);
+    return { cloth: anyOf(Object.keys(SF.CLOTHS).filter(id => id !== not)), print, colour: SF.PRINTS[print].ground || '#' + c.getHexString(THREE.SRGBColorSpace) }; };
+  // one fabric for the whole garment
+  $('rndFab').onclick = () => { if (S.sel) select(null); setFab(anyFab(S.fabric.cloth)); };
+  // a different fabric for every piece (zips keep their own look)
+  $('rndEach').onclick = () => { if (S.sel) select(null); S.over = {}; for (const p of garment.pieces) if (p.spec.kind !== 'zip') S.over[p.id] = anyFab(); retexture(); };
   $('cloth').onchange = e => setFab({ cloth: e.target.value });
   $('colour').oninput = e => setFab({ colour: e.target.value });
   const th = e => { S.thread = e.target.value; retexture(); }; $('thread').oninput = th;
