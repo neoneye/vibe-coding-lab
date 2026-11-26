@@ -35,7 +35,7 @@ still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
 rainbow shorts, faux-leather shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
-flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, holographic leggings, zip bodysuit, side-strap dress, glossy midi dress, gold slip dress, iridescent pink dress, long-sleeve swimsuit,
+flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, holographic leggings, zip bodysuit, side-strap dress, glossy midi dress, gold slip dress, iridescent pink dress, harlequin mesh dress, six skirts (gold mesh, pleated leather, iridescent flared, tiered polka-dot, silver flared, tennis), long-sleeve swimsuit,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
 stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, wet-look vinyl, coated barrier cloth, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, red dragon brocade, mélange, open mesh,
@@ -196,6 +196,32 @@ highlights take on colours that shift with the viewing angle (three.js
 thin-film iridescence; on the vinyl the film thickness varies gently across the
 cloth so one highlight splits into several colours).
 
+### Skirts
+
+One block makes six skirts: a fitted yoke band from the waist, and below it a
+skirt that flares away from the body. The flare is extra cloth, which cannot
+hang flat, so each skirt deals with it differently:
+
+- **Iridescent flared skirt** and **silver flared skirt**: the hem falls into
+  soft waves. Both yokes dip to a V at the centre front.
+- **Pleated leather skirt** and **tennis skirt**: the skirt is pressed into knife
+  pleats that open towards the hem (30 wide pleats in faux leather, 56 narrow
+  ones in white tricot).
+- **Tiered polka-dot skirt**: two gathered ruffles, the upper overlapping the
+  lower, under a shirred waistband.
+- **Gold mesh skirt**: no yoke. A straight panel of metal mesh hangs low on the
+  hips from a chain, and the back top edge falls in a deep curve.
+
+The pleats and gathers are drawn as folds in the surface. The flat pattern is
+unrolled from that surface, so it shows roughly how much wider the skirt piece
+is than the yoke, but not the true depth of a pressed pleat (a real knife-pleated
+strip is about three times the finished width).
+
+The **harlequin mesh dress** is the slip dress in gold metal mesh with a new
+black-diamond print, crossed chain straps, a ring at the neckline and a hem cut
+in points. The fringe that hangs below the points on the real dress is not
+modelled.
+
 ### Hazmat suit
 
 A loose one-piece coverall in yellow coated cloth: bodice and legs joined at an
@@ -284,7 +310,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|shirt|dress|swimsuit|bikini`,
 `&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
