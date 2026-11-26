@@ -60,6 +60,22 @@ the inside leg. Worn, these six lie skin-tight: the body's own surface pushed
 out by the ease, so the cloth goes into the cleft and tucks under each buttock.
 The looser jeans and chino shorts span across instead.
 
+## Randomize, Reset and saved settings
+
+Each section of the Measure page (the mannequin's measurements, pose, hips
+legs and head, bust) has a **Randomize** and a **Reset** button. The
+mannequin's Randomize starts at Heel lift and leaves the choices above it
+(full figure or dress form, x-ray, Woman/Man, Medium/Large) alone. Body
+measurements are drawn within about a fifth of each slider's range of the
+chosen figure, so the result is still a plausible body; pose and shape sliders
+are drawn from their whole range. Reset returns a section to the chosen figure's
+values.
+
+The Measure page's sliders and the figure choice are saved in the browser's
+local storage and restored on the next visit. A link that names a figure
+(`&form=`) or a review still (`?still`) starts from its own values instead. The
+garment's fit sliders are not saved.
+
 ## Figure presets
 
 Two choices pick the starting figure: Woman or Man, and Medium or Large

@@ -3723,6 +3723,25 @@ const S = {
 };
 S.M = { ...SF.FORMS[S.form] };
 const STILL = Q.has('still');
+// The Measure page's sliders and the figure choice are kept in local storage, so a reload comes back to the same
+// figure. A link that names a figure, or a review still, starts from its own values instead. Storage can be missing
+// or blocked (private windows, some file:// setups); then nothing is saved and nothing breaks.
+const LS_KEY = 'sewing-factory:measure:v1', M_DEFS = () => [...SF.MEASURES, ...SF.BUST, ...SF.LEGS, ...SF.HEAD, ...SF.POSE];
+function saveSettings() {
+  if (STILL) return;
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ form: S.form, heel: S.heel, headTurn: S.headTurn, headNod: S.headNod, M: Object.fromEntries(M_DEFS().filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])) })); } catch (e) { /* no storage */ }
+}
+if (!STILL && !Q.has('form')) try {
+  const o = JSON.parse(localStorage.getItem(LS_KEY) || 'null'), ok = (v, lo, hi) => typeof v === 'number' && isFinite(v) && v >= lo && v <= hi;
+  if (o && SF.FORMS[o.form]) {
+    S.form = o.form; S.M = { ...SF.FORMS[o.form] };
+    for (const d of M_DEFS()) if (o.M && ok(o.M[d.key], d.min, d.max)) S.M[d.key] = o.M[d.key];
+    if (!Q.has('heel') && ok(o.heel, 0, 11)) S.heel = o.heel;
+    if (!Q.has('headTurn') && ok(o.headTurn, -70, 70)) S.headTurn = o.headTurn;
+    if (!Q.has('headNod') && ok(o.headNod, -25, 25)) S.headNod = o.headNod;
+  }
+} catch (e) { /* no storage, or an unreadable entry: start from the defaults */ }
+addEventListener('pagehide', saveSettings);   // and once more on the way out, in case the last change was not drawn yet
 if (Q.has('bare')) document.body.classList.add('bare');
 let body, garment, marker, objs = [], trimObjs = [], opLines = [], mv = null;
 
@@ -4433,7 +4452,7 @@ function machineOpts() { if (mv) mv.setOptions({ speed: +$('mspeed').value, cuta
 let needBody = true, needGarment = true;
 function rebuild() {
   const fresh = needBody;
-  if (needBody) { body = SF.makeBody(S.mode === 'stand' ? { ...S.M, ...Object.fromEntries(SF.POSE.map(d => [d.key, d.def])) } : S.M);   // a dress form has no limbs to pose
+  if (needBody) { saveSettings(); body = SF.makeBody(S.mode === 'stand' ? { ...S.M, ...Object.fromEntries(SF.POSE.map(d => [d.key, d.def])) } : S.M);   // a dress form has no limbs to pose
     buildFigure(); needBody = false; needGarment = true; }
   if (fresh && $('legsOut')) $('legsOut').textContent = `Girths now: thigh ${Math.round(body.legGirth(body.yMidThigh))} cm, knee ${Math.round(body.legGirth(body.y.knee))} cm, calf ${Math.round(body.legGirth(body.y.calf))} cm, ankle ${Math.round(body.legGirth(body.y.ankle))} cm.`;
   if (needGarment) {
@@ -4473,16 +4492,26 @@ function uiMeasures() {
   for (const [k, name] of [['figure', 'Full figure'], ['stand', 'Dress form on a stand']]) { const b = document.createElement('button'); b.textContent = name; b.className = S.mode === k ? 'on' : ''; b.onclick = () => { S.mode = k; needBody = true; uiMeasures(); }; md.appendChild(b); }
   $('modeNote').textContent = S.mode === 'stand' ? 'A tailor\u2019s dress form: torso only. Trousers and swimwear need the crotch free, so for those the form hangs from a rail instead of standing on its pole. Sleeves and trouser legs hang empty.' : '';
   const m = $('measures'); m.innerHTML = '';
+  // Randomize and Reset for one section. Random values are rounded to the slider's step. `around` and `spread` keep a
+  // value near a starting point (a share of the slider's range); without them it is drawn from the whole range.
+  const F0 = SF.FORMS[S.form], rnd = (d, around, spread) => { const span = d.max - d.min, v = around === undefined ? d.min + Math.random() * span : around + (Math.random() * 2 - 1) * spread * span; return +(Math.round(Math.min(d.max, Math.max(d.min, v)) / d.step) * d.step).toFixed(3); };
+  const rr = (el, onRandom, onReset) => { const r = document.createElement('div'); r.className = 'row'; r.style.marginTop = '4px'; for (const [name, fn, tip] of [['Randomize', onRandom, 'Random values for the sliders in this section'], ['Reset', onReset, 'Back to the starting values of this section']]) { const b = document.createElement('button'); b.textContent = name; b.title = tip; b.onclick = () => { fn(); needBody = true; saveSettings(); uiMeasures(); }; r.appendChild(b); } el.appendChild(r); };
+  const heelShown = S.mode !== 'stand' && !(SHOES[S.shoe] && SHOES[S.shoe].kind), HEEL = { min: 0, max: 11, step: 0.5 };
+  // the body measurements stay within about a fifth of their range of the chosen figure, so the result is still a plausible body
+  rr(m, () => { if (heelShown) S.heel = rnd(HEEL); for (const d of SF.MEASURES) S.M[d.key] = rnd(d, F0[d.key], 0.2); }, () => { S.heel = 0; for (const d of SF.MEASURES) S.M[d.key] = F0[d.key]; });
   $('formNote').textContent = SF.FORMS[S.form] ? `${SF.FORMS[S.form].name}: ${SF.FORMS[S.form].std} cm, from the European size standard. Every slider below starts from it.` : '';
   $('poseCard').style.display = S.mode === 'stand' ? 'none' : '';
   const pp = $('poseP'), pz = $('poses'); pp.innerHTML = ''; pz.innerHTML = '';
+  rr(pp, () => { for (const d of SF.POSE) S.M[d.key] = rnd(d); S.headTurn = rnd({ min: -70, max: 70, step: 1 }); S.headNod = rnd({ min: -25, max: 25, step: 1 }); }, () => { for (const d of SF.POSE) S.M[d.key] = d.def; S.headTurn = 0; S.headNod = 0; });
   for (const [name, P] of Object.entries(SF.POSES)) { const b = document.createElement('button'); b.textContent = name; b.onclick = () => { Object.assign(S.M, P); needBody = true; uiMeasures(); }; pz.appendChild(b); }
   for (const d of SF.POSE) slider(pp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
   slider(pp, { label: 'Head turn', min: -70, max: 70, step: 1, unit: '°' }, () => S.headTurn, v => { S.headTurn = v; needBody = true; });
   slider(pp, { label: 'Head nod', min: -25, max: 25, step: 1, unit: '°' }, () => S.headNod, v => { S.headNod = v; needBody = true; });
   const lp = $('legsP'); lp.innerHTML = '';
+  rr(lp, () => { for (const d of [...SF.LEGS, ...SF.HEAD]) S.M[d.key] = rnd(d); }, () => { for (const d of [...SF.LEGS, ...SF.HEAD]) S.M[d.key] = F0[d.key] ?? d.def; });
   for (const d of [...SF.LEGS, ...SF.HEAD]) slider(lp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
   const bp = $('bustP'); bp.innerHTML = '';
+  rr(bp, () => { for (const d of SF.BUST) S.M[d.key] = rnd(d); }, () => { for (const d of SF.BUST) S.M[d.key] = F0[d.key] ?? d.def; });
   for (const d of SF.BUST) slider(bp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
   if (S.mode !== 'stand' && !(SHOES[S.shoe] && SHOES[S.shoe].kind)) slider(m, { label: 'Heel lift (foot posed for heeled shoes)', min: 0, max: 11, step: 0.5 }, () => S.heel, v => { S.heel = v; needBody = true; });
   for (const d of SF.MEASURES) slider(m, d, () => S.M[d.key], v => { S.M[d.key] = v; needBody = true; });
