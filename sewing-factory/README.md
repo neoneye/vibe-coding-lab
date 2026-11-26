@@ -436,10 +436,12 @@ narrower than the body (negative ease).
 A set-in sleeve's pattern piece ends at the armhole seam. At rest that seam lies
 round the root of the arm, and the arm above it is buried in the shoulder. When
 the arm swings forward or up, that buried part comes out ahead of the seam; a
-real sleeve head and the stretched bodice cover it. Here a close tube of the
-sleeve's cloth is kept on the top of the arm, with a ball over the shoulder
-joint, so no skin shows there. It is not a pattern piece and does not appear on
-the cutting table.
+real sleeve head and the stretched bodice cover it. Here a close layer of the
+sleeve's cloth is kept over the shoulder and the top of the arm, following the
+skin's own shape there (the figure's shoulder swells past the arm's plain
+radius over the deltoid), and a patch of the same cloth closes the armhole
+under the bodice. So no skin shows there. None of this is a pattern piece or
+appears on the cutting table.
 
 Machine timing is schematic and slowed; thread is drawn thick. There is no cloth
 physics, no darts, facings or linings, and the sleeve head has more ease than a
