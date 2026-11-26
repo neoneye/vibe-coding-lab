@@ -35,7 +35,7 @@ still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
 rainbow shorts, faux-leather shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
-flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, holographic leggings, zip bodysuit, side-strap dress, glossy midi dress, gold slip dress, iridescent pink dress, harlequin mesh dress, six skirts (gold mesh, pleated leather, iridescent flared, tiered polka-dot, silver flared, tennis), four tops (zip tube top, leather zip vest, red snap shirt, glossy crop top), striped bikini, glossy blue shorts, long-sleeve swimsuit,
+flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, holographic leggings, zip bodysuit, side-strap dress, glossy midi dress, gold slip dress, iridescent pink dress, harlequin mesh dress, six skirts (gold mesh, pleated leather, iridescent flared, tiered polka-dot, silver flared, tennis), four tops (zip tube top, leather zip vest, red snap shirt, glossy crop top), striped bikini, glossy blue shorts, white halter dress, pearl racer swimsuit, long-sleeve swimsuit,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
 stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, wet-look vinyl, coated barrier cloth, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, red dragon brocade, mélange, open mesh,
@@ -246,6 +246,20 @@ The **striped bikini** is the bikini in a new pastel rainbow stripe print with
 string-thin sides, and the **glossy blue shorts** are the knit hot shorts in
 glossy tricot.
 
+### White halter dress and pearl racer swimsuit
+
+The **white halter dress** (linen) has a square bib front that narrows from the
+waist to the chest. A band of eyelet trim runs up each slanting edge of the bib
+and on round the neck, and that band is what holds the bodice up; the back is
+bare to the waist and edged with the same trim. Below is a long A-line skirt
+with two bands of eyelet. A new **eyelet** print draws the punched holes; the
+skirt bands are laid on top, not let in, so they are not see-through.
+
+The **pearl racer swimsuit** is the racer-back swimsuit with a pearl-finish
+front (a new iridescent cloth), zebra-print straps and back, a gold yoke where
+the straps meet, and two gold appliqués on the chest. The appliqués are plain
+curved leaves, not the embroidered scrollwork of the real suit.
+
 ### Hazmat suit
 
 A loose one-piece coverall in yellow coated cloth: bodice and legs joined at an
@@ -334,7 +348,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|shirt|dress|swimsuit|bikini`,
 `&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
