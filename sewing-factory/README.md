@@ -39,7 +39,7 @@ still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
 rainbow shorts, faux-leather shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
-flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, holographic leggings, zip bodysuit, side-strap dress, glossy midi dress, gold slip dress, iridescent pink dress, harlequin mesh dress, six skirts (gold mesh, pleated leather, iridescent flared, tiered polka-dot, silver flared, tennis), four tops (zip tube top, leather zip vest, red snap shirt, glossy crop top), striped bikini, glossy blue shorts, white halter dress, pearl racer swimsuit, ruched blue bikini, white bikini bottom, iridescent high-neck swimsuit, white chain monokini, red keyhole monokini, pink vinyl dress, The Dress, long-sleeve swimsuit,
+flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, holographic leggings, zip bodysuit, side-strap dress, glossy midi dress, gold slip dress, iridescent pink dress, harlequin mesh dress, six skirts (gold mesh, pleated leather, iridescent flared, tiered polka-dot, silver flared, tennis), four tops (zip tube top, leather zip vest, red snap shirt, glossy crop top), striped bikini, glossy blue shorts, white halter dress, pearl racer swimsuit, ruched blue bikini, white bikini bottom, iridescent high-neck swimsuit, white chain monokini, red keyhole monokini, pink vinyl dress, The Dress, fishnet tights, lace stockings, one-sleeve snake swimsuit, laser-cut swimsuit, two-cats swimsuit, long-sleeve swimsuit,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
 stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, wet-look vinyl, coated barrier cloth, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, red dragon brocade, mélange, open mesh,
@@ -383,6 +383,40 @@ came from the camera and from how the eye discounts the light, not from the
 cloth. Simplified: the narrow overlapping tiers between the bands are a print
 on plain panels, and the sheer yoke over the shoulders is left out.
 
+### Three more swimsuits
+
+- **One-sleeve snake swimsuit**: the long-sleeve swimsuit with a scoop neck and
+  only the right sleeve; the left armhole is elasticated like the other edges.
+  Its print, *snake skin*, is pale blotches in a dark network over a lattice of
+  small scales, in pink. Simplified: the bare side keeps a full shoulder, where
+  the original has a thin strap, and the back is not scooped low.
+- **Laser-cut swimsuit**: the strap swimsuit in black, with a front panel in a
+  *laser-cut leaves* print: pairs of leaf-shaped holes along the lines of a
+  diamond lattice, drawn in the mannequin's colour. Simplified: the holes are a
+  regular lattice rather than the original's vines, and the notch at the centre
+  of the neckline is left out.
+- **Two-cats swimsuit**: a sleeveless scoop-neck swimsuit whose front carries a
+  *placement print*: one picture across the whole piece, a dark cat and a white
+  cat, each the other turned half round. The back is plain. A placement print is
+  the only print here that is not designed to repeat; chosen for any other piece
+  on Customize it is tiled like the rest, and the picture is cut at the tile edges.
+
+### Hosiery
+
+**Fishnet tights** and **lace stockings** are one tube of **hosiery net** per
+leg, worn skin-tight. The net is mostly holes, so the cloth is drawn as dark
+strands on the mannequin's own colour. The tights go up to a narrow waist
+elastic and come in four mesh sizes (a *Mesh size* choice: large, medium,
+small, micro); the two legs are joined front and back through the crotch. The
+stockings are hold-ups in a floral lace net, ending on the thigh under a wide
+band of lace (sliders for where the top sits and how wide the band is).
+Simplified: the foot of the stocking is not a pattern piece. Each leg piece
+ends at the ankle and the figure's foot is shown in the same cloth, so shoes go
+on over it. Real sheer tights are knitted as seamless tubes; net and lace are
+made flat and seamed, which is what the operations show, with the seam down
+the inside of the leg (often it is at the back). The lace top's scalloped edge
+and its silicone grip are only described in the step's note.
+
 ### Hazmat suit
 
 A loose one-piece coverall in yellow coated cloth: bodice and legs joined at an
@@ -500,7 +534,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..5` (1 Model, 2 Pose, 3 Shoes, 4 Cloth, 5 Finished; `&tab=customize` opens Cloth's Customize subtab and `&tab=sew` Finished's Sew subtab), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|thedress|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..5` (1 Model, 2 Pose, 3 Shoes, 4 Cloth, 5 Finished; `&tab=customize` opens Cloth's Customize subtab and `&tab=sew` Finished's Sew subtab), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|thedress|fishnets|lacestockings|snakesuit|lasersuit|catswim|shirt|dress|swimsuit|bikini`,
 `&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
