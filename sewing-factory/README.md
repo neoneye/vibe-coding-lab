@@ -30,10 +30,11 @@ An **X-ray** switch makes the body see-through and shows a skeleton inside it
 measurements and pose, with the clothing still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
-rainbow shorts, bike shorts, leggings, scrunch leggings, mesh leggings, leather jacket, snake-skin jacket,
+rainbow shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
+flared pants, leather jacket, snake-skin jacket, long-sleeve swimsuit,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
-stretch, leather, scale-embossed leather, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, mélange, open mesh,
+stretch, leather, scale-embossed leather, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, mélange, open mesh,
 polka dots,
 stripes, gingham, floral, camouflage.
 
@@ -67,7 +68,7 @@ inside leg and shape slider, are this page's own proportions. The ASTM tables
 (D5585, D6240, D6960) are paywalled and were not used. The anime figures are
 stylised (long legs, narrow waist, larger head) and follow no standard.
 
-### Three leggings
+### Leggings and flared pants
 
 Full-length, skin-tight knits on the same block as the hot shorts (overlock
 seams, elastic waistband, coverstitched hems).
@@ -77,6 +78,17 @@ seams, elastic waistband, coverstitched hems).
 | Leggings | cotton jersey, blue mélange | waistband dipping to a V at the centre front |
 | Scrunch leggings | cotton jersey, olive | the V waistband, and elastic zigzagged along the back seam to gather it |
 | Mesh leggings | swim tricot, grey | an open-mesh strip coverstitched down the outside of each thigh |
+| Shiny leggings | glossy tricot, coral | the V waistband, seams in a pale contrast thread |
+| Zebra leggings | swim tricot, grey zebra | plain waistband |
+
+**Flared pants** are the same knit block worn lower on the hips: tight to the
+knee, then flaring to the hem (a Flare slider), in a paisley-stripe jersey with
+a plain white elastic waistband and a drawstring.
+
+The **long-sleeve swimsuit** is the swimsuit's lower half with a high neck,
+shoulder seams and set-in sleeves cut from a second colour. Its sleeve stays a
+tube round the arm until just before the armhole seam, because a skin-tight
+sleeve pulled in earlier sinks into the shoulder.
 
 ### Two jackets
 
@@ -160,7 +172,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|leatherjacket|snakejacket|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|rashsuit|shirt|dress|swimsuit|bikini`,
 `&form=w|m|w3|m3|ag|ab`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
