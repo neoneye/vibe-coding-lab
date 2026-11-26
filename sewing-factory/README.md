@@ -60,6 +60,15 @@ the inside leg. Worn, these six lie skin-tight: the body's own surface pushed
 out by the ease, so the cloth goes into the cleft and tucks under each buttock.
 The looser jeans and chino shorts span across instead.
 
+## The garment on the Measure page
+
+The Measure page shows the chosen garment on the figure, not a bare mannequin.
+Moving any slider there (a measurement, the pose, the bust or leg shape)
+redrafts the garment for the new body and redraws it at once, so the effect of
+a measurement on the cut can be seen without leaving the page. A checkbox,
+"Show the chosen garment on the figure", takes it off again to see the body
+and the measuring tapes alone (`&dress=0` in a link).
+
 ## Randomize, Reset and saved settings
 
 Each section of the Measure page (the mannequin's measurements, pose, hips
