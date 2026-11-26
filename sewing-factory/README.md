@@ -35,10 +35,10 @@ still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
 rainbow shorts, faux-leather shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
-flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, long-sleeve swimsuit,
+flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long-sleeve swimsuit,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
-stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, wet-look vinyl, coated barrier cloth, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, mélange, open mesh,
+stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, wet-look vinyl, coated barrier cloth, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, red dragon brocade, mélange, open mesh,
 polka dots,
 stripes, gingham, floral, camouflage.
 
@@ -143,6 +143,12 @@ The **gold-shoulder suit** is the catsuit in black with pieces of gold foil
 cloth stitched on top (bust panels, an under-bust band, a belt, cuffs) and a
 giant ribbed gold shell bartacked over each shoulder.
 
+The **blue dress** is the dress block cut close in wet-look vinyl, with thin
+red straps, a red panel on the outer half of each cup and a red binding round
+the hem. The **gold dress** is a qipao: one front and one back from hem to
+neck, short set-in sleeves, a mandarin collar with a knot button, and a side
+zip, in gold satin with a red brocade print.
+
 ### Hazmat suit
 
 A loose one-piece coverall in yellow coated cloth: bodice and legs joined at an
@@ -154,12 +160,12 @@ seams of a real suit are then sealed with welded tape.
 ## Shoes
 
 A Shoes row in the header puts ready-made shoes on the full figure: flip-flops,
-platform heels, knee boots, leopard over-the-knee boots or chunky platform
-boots (or barefoot). They are not
+platform heels, knee boots, leopard over-the-knee boots, green hazmat boots
+or chunky platform boots (or barefoot). They are not
 part of the factory line: nothing is cut or sewn, and they stay on at every
 stage, so garments can be tried with them. Each shoe sets the heel height the
 foot is posed at and the thickness under it, and the figure stands that much
-taller. The dress form has no feet and wears none. `&shoe=flipflops|heels|boots|otk|chunky`.
+taller. The dress form has no feet and wears none. `&shoe=flipflops|heels|boots|otk|hazmat|chunky`.
 
 ## The shoulders
 
@@ -231,7 +237,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|shirt|dress|swimsuit|bikini`,
 `&form=w|m|w3|m3|ag|ab`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
