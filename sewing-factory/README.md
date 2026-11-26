@@ -35,7 +35,7 @@ still on.
 
 Garments: jeans, shorts, jean shorts, hot shorts, silver shorts, gold shorts,
 rainbow shorts, faux-leather shorts, bike shorts, leggings, scrunch leggings, mesh leggings, shiny leggings, zebra leggings,
-flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, long-sleeve swimsuit,
+flared pants, leather jacket, snake-skin jacket, puffer jacket, puffer coat, chainmail dress, cut-out swimsuit, red catsuit, beige catsuit, gold-shoulder suit, hazmat suit, blue dress, gold dress, long dress, racer-back swimsuit, halter bodysuit, tailored jumpsuit, sequin jumpsuit, holographic leggings, zip bodysuit, side-strap dress, glossy midi dress, gold slip dress, iridescent pink dress, long-sleeve swimsuit,
 shirt, dress, swimsuit, bikini. Cloths: denim, stretch denim, chino twill,
 poplin, oxford, linen, flannel, satin, viscose crepe, cotton jersey, foil-coated
 stretch, leather, scale-embossed leather, quilted nylon, faux leather, metal mesh, wet-look vinyl, coated barrier cloth, glossy tricot, swim tricot. Prints: solid, zebra, leopard, pink leopard, rainbow tie-dye, grey zebra, paisley stripes, red dragon brocade, mélange, open mesh,
@@ -177,6 +177,25 @@ keyhole between them; a neck band closes at the nape and the back is bare. It
 comes with a new cloth, **sequin mesh**: discs in offset rows, each tilted its
 own way so they glint separately.
 
+### Slip dresses, a glossy sheath and two iridescent cloths
+
+The **slip dress** block is two pieces, front and back, on thin rouleau straps,
+with a low straight back. The **gold slip dress** (foil) and the **iridescent
+pink dress** cross their straps over the back. The **side-strap dress**
+(burgundy jersey) is seamed on one side only: the other stays open from underarm
+to hem and is bridged by three short straps.
+
+The **glossy midi dress** is the qipao block as a plain black vinyl sheath: a V
+neck, long close sleeves, no collar, a side zip. The **zip bodysuit** is the
+long-sleeved swimsuit in red vinyl with a stand collar and a front zip. The
+**holographic leggings** are the high-waisted leggings in holographic vinyl.
+
+Two cloths are new. **Holographic vinyl** and **iridescent foil** carry a thin
+clear film, and light reflected from its top and bottom interferes, so the
+highlights take on colours that shift with the viewing angle (three.js
+thin-film iridescence; on the vinyl the film thickness varies gently across the
+cloth so one highlight splits into several colours).
+
 ### Hazmat suit
 
 A loose one-piece coverall in yellow coated cloth: bodice and legs joined at an
@@ -265,7 +284,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..4`, `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|shirt|dress|swimsuit|bikini`,
 `&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
