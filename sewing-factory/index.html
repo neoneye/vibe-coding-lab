@@ -261,6 +261,10 @@ const SF = {};
     { key: 'elbow', label: 'Elbow bend', min: 0, max: 110, step: 1, def: 0, unit: '°' },
     { key: 'stance', label: 'Feet apart, as a share of the inside leg', min: 0, max: 120, step: 1, def: 0, unit: '%' },
   ];
+  // The right side can be posed on its own: the same four settings with an R on the key. A right-side value that is
+  // not set follows the left one, which is how a symmetric pose is stored.
+  SF.POSE_SIDE = { armOut: ['Left arm out from the body', 'Right arm out from the body'], armFwd: ['Left arm forwards', 'Right arm forwards'], elbow: ['Left elbow bend', 'Right elbow bend'], stance: ['Left foot out, as a share of the inside leg', 'Right foot out, as a share of the inside leg'] };
+  SF.POSE_R = SF.POSE.map(d => ({ ...d, key: d.key + 'R', label: SF.POSE_SIDE[d.key][1] }));
   SF.POSES = { Relaxed: { armOut: 17, armFwd: 3, elbow: 0, stance: 0 }, 'Arms down': { armOut: 5, armFwd: 3, elbow: 0, stance: 0 }, 'T-pose': { armOut: 86, armFwd: 0, elbow: 0, stance: 25 }, 'Arms forward': { armOut: 12, armFwd: 55, elbow: 25, stance: 12 }, 'Elbows bent': { armOut: 22, armFwd: 0, elbow: 85, stance: 20 } };
   // Presets. Bust/chest, waist and hip girths of the four figures are rows of the EN 13402-3
   // body-dimension tables (women: drop −16 cm; men: drop −12 cm, which has no hip column, so the men's hip is ours),
@@ -393,9 +397,9 @@ const SF = {};
     // Stance: each leg swings out from the hip as a rigid limb, so it keeps its length and the hips come down.
     // `stance` is the extra distance between the feet as a share of the inside-leg length.
     const yPiv = y.crotch + 8, legLen = yPiv - y.ankle;
-    const stA = Math.asin(clamp((M.stance ?? 0) / 100 * M.inseam / 2 / legLen, 0, 0.8));
+    const stOf = v => Math.asin(clamp((v ?? 0) / 100 * M.inseam / 2 / legLen, 0, 0.8)), stL = stOf(M.stance), stR = stOf(M.stanceR ?? M.stance);   // each leg has its own swing
     const poseLeg = (sgn, P) => {
-      if (!stA) return P;
+      const stA = sgn < 0 ? stR : stL; if (!stA) return P;
       // Near the crotch point the swing fades out, so the two legs stay joined there and the inner thigh (and the
       // cloth over it) spans from the crotch out to the leg, instead of the legs tearing apart at the top.
       // The fade is short and starts steeply: a long, gentle one left the inner thighs hanging as a pouch between the legs.
@@ -406,7 +410,7 @@ const SF = {};
       const lift = sgn * dx > 0 ? smooth(y.crotch - 14, y.crotch + 2, P[1]) : 0;
       return [sgn * pivX + dx * c - dy * sn, yPiv + dy * c + dx * sn * (1 - lift), P[2]];
     };
-    const hipDrop = legLen * (1 - Math.cos(stA));   // how far the whole figure comes down
+    const hipDrop = legLen * (1 - Math.cos(Math.min(stL, stR)));   // how far the whole figure comes down: it stands on the leg that is swung out least
     // psi: 0 = inside of the leg, 0.25 = front, 0.5 = outside, 0.75 = back
     // At the back, towards the crotch line, the thigh fills out to the hip's own outline (with its cheeks), so
     // buttock and thigh are one surface instead of the torso ending in a ledge above the legs. Back only: the
@@ -482,19 +486,20 @@ const SF = {};
     const armR = SF.pchip([0, 0.5 * M.arm, M.arm], [M.chest * 0.052, M.chest * 0.043, M.chest * 0.031]);
     const P0 = Object.fromEntries(SF.POSE.map(d => [d.key, d.def]));
     const makeArms = pose => {
-      const a = pose.armOut * PI / 180, f = pose.armFwd * PI / 180, be = pose.elbow * PI / 180, tE = 0.5 * M.arm;
+      const tE = 0.5 * M.arm;
       const arm = sgn => {
+        const pv = k => (sgn < 0 && pose[k + 'R'] !== undefined ? pose[k + 'R'] : pose[k]) * PI / 180, a = pv('armOut'), f = pv('armFwd'), be = pv('elbow');   // the right arm may have its own values
         const r0 = M.chest * 0.052, S = [sgn * (M.shoulder / 2 - r0 - 0.1), y.shoulder - r0 - 0.5, -0.2];   // the joint stays inside the shoulder whatever the arm's girth
         const d = [sgn * Math.sin(a), -Math.cos(a) * Math.cos(f), Math.cos(a) * Math.sin(f)];
         const u = [sgn * Math.cos(a), Math.sin(a) * Math.cos(f), -Math.sin(a) * Math.sin(f)];
         const w = [-sgn * (u[1] * d[2] - u[2] * d[1]), -sgn * (u[2] * d[0] - u[0] * d[2]), -sgn * (u[0] * d[1] - u[1] * d[0])];
         const d2 = d.map((v, i) => v * Math.cos(be) + w[i] * Math.sin(be));
-        return { S, d, u, w, d2, tE };
+        return { S, d, u, w, d2, tE, be };
       };
       const arms = { 1: arm(1), '-1': arm(-1) };
       // frame of the arm at distance t from the shoulder: centre, direction, and the forward axis
       const frame = (sgn, t) => {
-        const A = arms[sgn], b = be * smooth(tE - 4, tE + 4, t), cb = Math.cos(b), sb = Math.sin(b), t1 = Math.min(t, tE), t2 = Math.max(0, t - tE);
+        const A = arms[sgn], b = A.be * smooth(tE - 4, tE + 4, t), cb = Math.cos(b), sb = Math.sin(b), t1 = Math.min(t, tE), t2 = Math.max(0, t - tE);
         return { A, c: [0, 1, 2].map(i => A.S[i] + A.d[i] * t1 + A.d2[i] * t2), d: A.d.map((v, i) => v * cb + A.w[i] * sb), w: A.w.map((v, i) => v * cb - A.d[i] * sb) };
       };
       const point = (sgn, th, t, r) => {
@@ -503,7 +508,7 @@ const SF = {};
       };
       return { arms, frame, point };
     };
-    const posed = makeArms({ ...P0, ...Object.fromEntries(SF.POSE.map(d => [d.key, M[d.key] ?? d.def])) });
+    const posed = makeArms({ ...P0, ...Object.fromEntries(SF.POSE.map(d => [d.key, M[d.key] ?? d.def])), ...Object.fromEntries(SF.POSE_R.filter(d => M[d.key] !== undefined).map(d => [d.key, M[d.key]])) });
     const arms = posed.arms, armPoint = posed.point, armFrame = posed.frame;
     const rest = makeArms(P0);   // patterns are drafted from the resting pose, so a pose never changes a cut piece
     return { M, y, neckR, bustTh, CAP, CAPH, gapH, pivX, shiftIn, ringX, thOf, blendB, pEff, lower, sect, torso, girth, bump, legSect, leg, legSurf, hipBack, backOutline, frontOutline, legGirth, seat, legBack, seatY, yPiv, yMidThigh: ymid, poseLeg, hipDrop, arms, armR, armPoint, armFrame, rest };
@@ -3726,7 +3731,7 @@ const STILL = Q.has('still');
 // comes back to the same figure in the same clothes. A link that names a figure, shoe or garment uses that instead
 // for that item, and a review still ignores storage altogether. Storage can be missing
 // or blocked (private windows, some file:// setups); then nothing is saved and nothing breaks.
-const LS_KEY = 'sewing-factory:measure:v1', M_DEFS = () => [...SF.MEASURES, ...SF.BUST, ...SF.LEGS, ...SF.HEAD, ...SF.POSE];
+const LS_KEY = 'sewing-factory:measure:v1', M_DEFS = () => [...SF.MEASURES, ...SF.BUST, ...SF.LEGS, ...SF.HEAD, ...SF.POSE, ...SF.POSE_R];
 function saveSettings() {
   if (STILL) return;
   try { localStorage.setItem(LS_KEY, JSON.stringify({ form: S.form, shoe: S.shoe, garment: S.garment, animPose: S.animPose, heel: S.heel, headTurn: S.headTurn, headNod: S.headNod, M: Object.fromEntries(M_DEFS().filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])) })); } catch (e) { /* no storage */ }
@@ -4160,7 +4165,7 @@ function buildFigure() {
       for (let j = 0; j < NLV; j++) if (yv(j / NLV) > y.crotch) for (const i of [0, W - 1]) { const k = j * W + i, a = j * W + (i ? W - 2 : 1), ny = ln.getY(a), nz = ln.getZ(a), l = Math.hypot(ny, nz) || 1; ln.setXYZ(k, 0, ny / l, nz / l); }
       figure.add(new THREE.Mesh(lg, skin));
       const shoe = SHOES[S.shoe] && SHOES[S.shoe].kind ? SHOES[S.shoe] : null;
-      const ft = footParts(b, sgn, shoe ? shoe.heel : S.heel, shoe, garment && garment.legs && garment.legs.loose ? garment.legs.hem + 0.6 : Infinity); lift = ft.lift; footX = ft.footX; footAt[sgn] = ft.at; for (const g of ft.parts) figure.add(new THREE.Mesh(g, skin)); for (const m of ft.balls) figure.add(m);
+      const ft = footParts(b, sgn, shoe ? shoe.heel : S.heel, shoe, garment && garment.legs && garment.legs.loose ? garment.legs.hem + 0.6 : Infinity); lift = sgn > 0 ? ft.lift : Math.max(lift, ft.lift) /* with the legs posed differently, the figure stands on the lower foot */; footX = Math.max(footX, ft.footX); footAt[sgn] = ft.at; for (const g of ft.parts) figure.add(new THREE.Mesh(g, skin)); for (const m of ft.balls) figure.add(m);
       for (const w of ft.worn) figure.add(new THREE.Mesh(w.geo, w.mat));
       // Shoulder: the arm grows out of the torso like modelled clay. The first rows of this surface lie on the
       // torso itself (a loop round the shoulder that shrinks), so it starts flush and with the torso's own shading;
@@ -4480,7 +4485,7 @@ function machineOpts() { if (mv) mv.setOptions({ speed: +$('mspeed').value, cuta
 let needBody = true, needGarment = true;
 function rebuild() {
   const fresh = needBody;
-  if (needBody) { saveSettings(); body = SF.makeBody(S.mode === 'stand' ? { ...S.M, ...Object.fromEntries(SF.POSE.map(d => [d.key, d.def])) } : S.M);   // a dress form has no limbs to pose
+  if (needBody) { saveSettings(); body = SF.makeBody(S.mode === 'stand' ? { ...S.M, ...Object.fromEntries(SF.POSE.map(d => [d.key, d.def])), ...Object.fromEntries(SF.POSE_R.map(d => [d.key, undefined])) } : S.M);   // a dress form has no limbs to pose
     needBody = false; needGarment = true; }   // the figure is built after the garment: its boots depend on the trouser legs
   if (fresh && $('legsOut')) $('legsOut').textContent = `Girths now: thigh ${Math.round(body.legGirth(body.yMidThigh))} cm, knee ${Math.round(body.legGirth(body.y.knee))} cm, calf ${Math.round(body.legGirth(body.y.calf))} cm, ankle ${Math.round(body.legGirth(body.y.ankle))} cm.`;
   if (needGarment) {
@@ -4515,7 +4520,7 @@ function slider(parent, d, get, set) {
 function uiMeasures() {
   const f = $('forms'); f.innerHTML = '';
   const cur = SF.FORMS[S.form], sz = $('sizes'); sz.innerHTML = '';
-  const pick = (el, key, names) => { for (const name of names) { const b = document.createElement('button'), k = Object.keys(SF.FORMS).find(i => SF.FORMS[i][key] === name && Object.entries({ sex: cur.sex, size: cur.size, [key]: name }).every(([a, v]) => SF.FORMS[i][a] === v)), F = SF.FORMS[k]; b.textContent = name; b.title = F.std; b.className = cur[key] === name ? 'on' : ''; b.onclick = () => { const pose = Object.fromEntries(SF.POSE.filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])); S.form = k; S.M = { ...F, ...pose }; needBody = true; uiMeasures(); }; el.appendChild(b); } };
+  const pick = (el, key, names) => { for (const name of names) { const b = document.createElement('button'), k = Object.keys(SF.FORMS).find(i => SF.FORMS[i][key] === name && Object.entries({ sex: cur.sex, size: cur.size, [key]: name }).every(([a, v]) => SF.FORMS[i][a] === v)), F = SF.FORMS[k]; b.textContent = name; b.title = F.std; b.className = cur[key] === name ? 'on' : ''; b.onclick = () => { const pose = Object.fromEntries([...SF.POSE, ...SF.POSE_R].filter(d => S.M[d.key] !== undefined).map(d => [d.key, S.M[d.key]])); S.form = k; S.M = { ...F, ...pose }; needBody = true; uiMeasures(); }; el.appendChild(b); } };
   pick(f, 'sex', ['Woman', 'Man']); pick(sz, 'size', ['Medium', 'Large']);
   const md = $('modes'); md.innerHTML = '';
   for (const [k, name] of [['figure', 'Full figure'], ['stand', 'Dress form on a stand']]) { const b = document.createElement('button'); b.textContent = name; b.className = S.mode === k ? 'on' : ''; b.onclick = () => { S.mode = k; needBody = true; uiMeasures(); }; md.appendChild(b); }
@@ -4535,12 +4540,26 @@ function uiMeasures() {
   // Animated on, moves to it over a second or so.
   { const r = document.createElement('div'); r.className = 'row'; r.style.marginTop = '4px';
     const btn = (name, tip, fn) => { const b = document.createElement('button'); b.textContent = name; b.title = tip; b.onclick = fn; r.appendChild(b); return b; };
-    btn('Randomize', 'A random pose', () => poseTo({ ...Object.fromEntries(SF.POSE.map(d => [d.key, rnd(d)])), headTurn: rnd({ min: -70, max: 70, step: 1 }), headNod: rnd({ min: -25, max: 25, step: 1 }) }));
-    btn('Reset', 'Back to the relaxed pose', () => poseTo({ ...Object.fromEntries(SF.POSE.map(d => [d.key, d.def])), headTurn: 0, headNod: 0 }));
+    // With "Left and right separately" on, the right side has its own four settings (the keys with an R); off, they
+    // are cleared and the right side follows the left.
+    const asym = poseAsym(), both = f => ({ ...Object.fromEntries(SF.POSE.map(d => [d.key, f(d)])), ...(asym ? Object.fromEntries(SF.POSE.map(d => [d.key + 'R', f(d)])) : {}) });
+    btn('Randomize', asym ? 'A random pose, each side on its own' : 'A random pose', () => poseTo({ ...both(d => rnd(d)), headTurn: rnd({ min: -70, max: 70, step: 1 }), headNod: rnd({ min: -25, max: 25, step: 1 }) }));
+    btn('Reset', 'Back to the relaxed pose', () => poseTo({ ...both(d => d.def), headTurn: 0, headNod: 0 }));
     const an = btn('Animated', 'Move to a new pose gradually instead of jumping to it', () => { S.animPose = !S.animPose; an.className = S.animPose ? 'on' : ''; saveSettings(); }); an.className = S.animPose ? 'on' : '';
-    pp.appendChild(r); }
-  for (const [name, P] of Object.entries(SF.POSES)) { const b = document.createElement('button'); b.textContent = name; b.onclick = () => poseTo({ ...P, headTurn: S.headTurn, headNod: S.headNod }); pz.appendChild(b); }
-  for (const d of SF.POSE) slider(pp, d, () => S.M[d.key] ?? d.def, v => { poseAnim = null; S.M[d.key] = v; needBody = true; });   // touching a slider stops a transition in progress
+    const sp = btn('Left and right separately', 'Pose each arm and each leg on its own. Off: the right side mirrors the left.', () => {
+      poseAnim = null;
+      if (poseAsym()) for (const d of SF.POSE_R) delete S.M[d.key]; else for (const d of SF.POSE) S.M[d.key + 'R'] = S.M[d.key] ?? d.def;
+      needBody = true; saveSettings(); uiMeasures();
+    }); sp.className = asym ? 'on' : '';
+    pp.appendChild(r);
+    for (const [name, P] of Object.entries(SF.POSES)) { const b = document.createElement('button'); b.textContent = name; b.onclick = () => poseTo({ ...P, ...(asym ? Object.fromEntries(Object.entries(P).map(([k, v]) => [k + 'R', v])) : {}), headTurn: S.headTurn, headNod: S.headNod }); pz.appendChild(b); }
+    // touching a slider stops a transition in progress
+    for (const d of SF.POSE) {
+      if (!asym) { slider(pp, d, () => S.M[d.key] ?? d.def, v => { poseAnim = null; S.M[d.key] = v; needBody = true; }); continue; }
+      slider(pp, { ...d, label: SF.POSE_SIDE[d.key][0] }, () => S.M[d.key] ?? d.def, v => { poseAnim = null; S.M[d.key] = v; needBody = true; });
+      slider(pp, { ...d, label: SF.POSE_SIDE[d.key][1] }, () => S.M[d.key + 'R'] ?? S.M[d.key] ?? d.def, v => { poseAnim = null; S.M[d.key + 'R'] = v; needBody = true; });
+    }
+  }
   slider(pp, { label: 'Head turn', min: -70, max: 70, step: 1, unit: '°' }, () => S.headTurn, v => { poseAnim = null; S.headTurn = v; needBody = true; });
   slider(pp, { label: 'Head nod', min: -25, max: 25, step: 1, unit: '°' }, () => S.headNod, v => { poseAnim = null; S.headNod = v; needBody = true; });
   const lp = $('legsP'); lp.innerHTML = '';
@@ -4708,8 +4727,9 @@ function resize() {
 // Moving to a pose. The whole figure and the garment on it are rebuilt for every in-between pose, which is slow, so
 // the transition is timed by the clock: it always takes the same time and simply shows fewer steps on a slow machine.
 let poseAnim = null;
-const poseNow = () => ({ ...Object.fromEntries(SF.POSE.map(d => [d.key, S.M[d.key] ?? d.def])), headTurn: S.headTurn, headNod: S.headNod });
-function setPose(P) { for (const d of SF.POSE) if (d.key in P) S.M[d.key] = P[d.key]; if ('headTurn' in P) S.headTurn = P.headTurn; if ('headNod' in P) S.headNod = P.headNod; needBody = true; }
+const poseAsym = () => SF.POSE_R.some(d => S.M[d.key] !== undefined);   // is the right side posed on its own?
+const poseNow = () => ({ ...Object.fromEntries(SF.POSE.map(d => [d.key, S.M[d.key] ?? d.def])), ...(poseAsym() ? Object.fromEntries(SF.POSE.map(d => [d.key + 'R', S.M[d.key + 'R'] ?? S.M[d.key] ?? d.def])) : {}), headTurn: S.headTurn, headNod: S.headNod });
+function setPose(P) { for (const d of [...SF.POSE, ...SF.POSE_R]) if (d.key in P) S.M[d.key] = P[d.key]; if ('headTurn' in P) S.headTurn = P.headTurn; if ('headNod' in P) S.headNod = P.headNod; needBody = true; }
 function poseTo(P) {
   if (!S.animPose || STILL) { poseAnim = null; setPose(P); saveSettings(); uiMeasures(); return; }
   poseAnim = { from: poseNow(), to: { ...poseNow(), ...P }, t0: performance.now(), dur: 1300 };
@@ -4772,7 +4792,7 @@ try {
   setGarment(S.garment); S.op = +(Q.get('op') || 0); S.opT = +(Q.get('t') || 0);
   if (Q.get('cloth') || Q.get('print') || Q.get('colour')) S.fabric = { cloth: Q.get('cloth') || S.fabric.cloth, print: Q.get('print') || S.fabric.print, colour: Q.get('colour') ? '#' + Q.get('colour') : S.fabric.colour };
   for (const d of SF.GARMENTS[S.garment].fit) if (Q.has(d.key)) S.fit[d.key] = +Q.get(d.key);
-  for (const d of [...SF.MEASURES, ...SF.BUST, ...SF.LEGS, ...SF.HEAD, ...SF.POSE]) if (Q.has(d.key)) { S.M[d.key] = +Q.get(d.key); needBody = true; }
+  for (const d of [...SF.MEASURES, ...SF.BUST, ...SF.LEGS, ...SF.HEAD, ...SF.POSE, ...SF.POSE_R]) if (Q.has(d.key)) { S.M[d.key] = +Q.get(d.key); needBody = true; }
   if (needBody) uiMeasures();
   if (STILL) $('mview').dataset.preserve = '1';
   try { mv = createMachineView($('mview')); } catch (e) { showErr(e); }

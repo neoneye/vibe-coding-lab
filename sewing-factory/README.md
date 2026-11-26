@@ -89,6 +89,15 @@ over to the others. The cutting table (Customize) has its own view and comes
 back to where it was left, unless the garment changed. The sewing line (Sew)
 turns to face each seam as before.
 
+Poses are symmetric by default. **Left and right separately**, on the Pose
+page, gives each side its own sliders: left and right arm out, arm forwards,
+elbow bend and foot out. Left and right are the figure's own. With the legs
+swung out by different amounts the figure stands on the lower foot and the
+other is lifted. Randomize then draws each side on its own; Reset and the pose
+presets set both sides alike. Turning it off makes the right side mirror the
+left again. In a link the right side's values are the same keys with an R
+(`&armOutR=`, `&armFwdR=`, `&elbowR=`, `&stanceR=`).
+
 Pose has the pose buttons, the arm, elbow, stance and head sliders and their
 Randomize and Reset. An **Animated** toggle beside them makes Randomize, Reset
 and the pose presets move the figure to the new pose over about 1.3 seconds
