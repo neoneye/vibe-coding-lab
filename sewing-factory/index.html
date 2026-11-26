@@ -511,7 +511,7 @@ const SF = {};
     const posed = makeArms({ ...P0, ...Object.fromEntries(SF.POSE.map(d => [d.key, M[d.key] ?? d.def])), ...Object.fromEntries(SF.POSE_R.filter(d => M[d.key] !== undefined).map(d => [d.key, M[d.key]])) });
     const arms = posed.arms, armPoint = posed.point, armFrame = posed.frame;
     const rest = makeArms(P0);   // patterns are drafted from the resting pose, so a pose never changes a cut piece
-    return { M, y, neckR, bustTh, CAP, CAPH, gapH, pivX, shiftIn, ringX, thOf, blendB, pEff, lower, sect, torso, girth, bump, legSect, leg, legSurf, hipBack, backOutline, frontOutline, legGirth, seat, legBack, seatY, yPiv, yMidThigh: ymid, poseLeg, hipDrop, arms, armR, armPoint, armFrame, rest };
+    return { M, y, neckR, bustTh, CAP, CAPH, gapH, pivX, shiftIn, ringX, thOf, blendB, pEff, lower, sect, torso, girth, bump, legSect, leg, legSurf, hipBack, backOutline, frontOutline, legGirth, seat, legBack, seatY, yPiv, yMidThigh: ymid, poseLeg, legSwing: sgn => (sgn < 0 ? stR : stL), hipDrop, arms, armR, armPoint, armFrame, rest };
   };
 })();
 // ============================================================ part 2: garment surfaces, pattern pieces, operations
@@ -597,6 +597,72 @@ const SF = {};
     const wornF = tight ? hugF : surf(true);
     return { orient: sgn, yq: true, f0: surf(false), f: (p, q) => body.poseLeg(sgn, wornF(p, q)) };
   }
+  // Keeps a skirt outside the legs. A skirt, dress or coat is drawn on the torso's hanging surface, which does not
+  // know about the stance: with the feet apart the thighs swung straight out through the cloth. At each height the
+  // cloth has to go round both legs, so it is pushed out (from the middle of the figure) to the band stretched round
+  // the two posed legs: over the thighs, and straight across between them. Nothing moves when the feet are together.
+  const legPush = (body, m = 0.7) => {
+    if (!body.legSwing(1) && !body.legSwing(-1)) return null;
+    const y = body.y, NB = 72, NA = 120, top = y.crotch + body.CAPH, rings = new Map(), levels = new Map();
+    // The resting leg's outline at one height, as a radius for each direction from the middle of the thigh. Taken
+    // from the body's own surface, so the seat and the top of the thigh (which are fuller than a plain ring) count.
+    const ring = (sgn, j) => {
+      const key = sgn * (j + 1000); let T = rings.get(key); if (T) return T;
+      const q = j * 0.5, S = body.legSect(Math.min(q, y.crotch)); T = new Float32Array(NB);
+      for (let i = 0; i < 4 * NB; i++) {
+        const L = body.lower(sgn, i / (4 * NB), q), dx = sgn * L[0] - S.cx, dz = L[2] - S.cz, r = Math.hypot(dx, dz);
+        const f = (Math.atan2(dz, dx) / TAU + 1) % 1 * NB, i0 = Math.floor(f) % NB, i1 = (i0 + 1) % NB;
+        if (r > T[i0]) T[i0] = r; if (r > T[i1]) T[i1] = r;
+      }
+      rings.set(key, T); return T;
+    };
+    // the posed leg's outline where it crosses the level Y: the ring at the height of the leg that ends up there,
+    // widened sideways because a leaning leg is cut at a slant
+    const cut = (sgn, Y, out) => {
+      const cy = q => { const S = body.legSect(Math.min(q, y.crotch)); return body.poseLeg(sgn, [sgn * S.cx, q, S.cz]); };
+      let lo = y.ankle - 2, hi = top; if (cy(lo)[1] > Y || cy(hi)[1] < Y) return;
+      for (let i = 0; i < 26; i++) { const mid = (lo + hi) / 2; if (cy(mid)[1] < Y) lo = mid; else hi = mid; }
+      const q = (lo + hi) / 2, S = body.legSect(Math.min(q, y.crotch)), C = cy(q), T = ring(sgn, Math.round(q * 2));
+      const wide = 1 / Math.cos(body.legSwing(sgn) * (1 - smooth(y.crotch, top, q))), mm = m * (1 - smooth(y.crotch, top, q));   /* the push dies out towards the hip, where the legs do not swing */
+      for (let i = 0; i < NB; i++) {
+        const an = i / NB * TAU, r = T[i] + mm, F = body.poseLeg(sgn, [sgn * (S.cx + r * Math.cos(an)), q, S.cz + r * Math.sin(an)]);
+        out.push([C[0] + (F[0] - C[0]) * wide, F[2]]);
+      }
+    };
+    const level = j => {
+      if (levels.has(j)) return levels.get(j);
+      const pts = []; cut(1, j * 0.5, pts); cut(-1, j * 0.5, pts); let L = null;
+      if (pts.length) {
+        pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+        const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), H = [];
+        for (const p of pts) { while (H.length >= 2 && cr(H[H.length - 2], H[H.length - 1], p) <= 0) H.pop(); H.push(p); }
+        const n0 = H.length + 1;
+        for (let i = pts.length - 2; i >= 0; i--) { const p = pts[i]; while (H.length >= n0 && cr(H[H.length - 2], H[H.length - 1], p) <= 0) H.pop(); H.push(p); }
+        H.pop();
+        let cz = 0; for (const p of H) cz += p[1]; cz /= H.length;
+        const R = new Float32Array(NA);
+        for (let k = 0; k < NA; k++) {   // how far out the band lies in each direction from the middle
+          const an = k / NA * TAU, ux = Math.cos(an), uz = Math.sin(an);
+          for (let i = 0; i < H.length; i++) {
+            const A = H[i], B = H[(i + 1) % H.length], ex = B[0] - A[0], ez = B[1] - A[1], den = ux * ez - uz * ex; if (Math.abs(den) < 1e-9) continue;
+            const t = (A[0] * ez - (A[1] - cz) * ex) / den, w = (A[0] * uz - (A[1] - cz) * ux) / den;
+            if (t > 0 && w >= -1e-6 && w <= 1 + 1e-6 && t > R[k]) R[k] = t;
+          }
+        }
+        L = { cz, R };
+      }
+      levels.set(j, L); return L;
+    };
+    const rad = (L, f) => { const i0 = Math.floor(f) % NA, i1 = (i0 + 1) % NA, u = f - Math.floor(f); return lerp(L.R[i0], L.R[i1], u); };
+    return P => {
+      if (P[1] > top + 4) return P;
+      const j = Math.floor(P[1] * 2), t = P[1] * 2 - j, A = level(j), B = level(j + 1); if (!A && !B) return P;
+      const La = A || B, Lb = B || A, cz = lerp(La.cz, Lb.cz, t), dx = P[0], dz = P[2] - cz, d = Math.hypot(dx, dz); if (d < 1e-6) return P;
+      const f = (Math.atan2(dz, dx) / TAU + 1) % 1 * NA, need = lerp(rad(La, f), rad(Lb, f), t) * (A && B ? 1 : (A ? 1 - t : t));
+      if (d >= need) return P;
+      const k = need / d; return [dx * k, P[1], cz + dz * k];
+    };
+  };
   const armChart = (body, rg, sgn) => ({ orient: sgn, flipY: true, yq: true, f: (p, q) => body.armPoint(sgn, p, q, rg(q)) });
 
   // -------- boundary helpers. A boundary is fn(s ∈ [0,1]) → [p, q].
@@ -648,6 +714,7 @@ const SF = {};
         }
       }
     }
+    if (spec.push) for (let k = 0; k < pos.length; k += 3) { const Q = spec.push([pos[k], pos[k + 1], pos[k + 2]]); pos[k] = Q[0]; pos[k + 1] = Q[1]; pos[k + 2] = Q[2]; }   // worn shape only: the flat pattern is already drawn
     return finishPiece(spec, nu, nv, pos, flat, ch.orient);
   };
 
@@ -666,6 +733,7 @@ const SF = {};
         if (spec.rot) { flat[2 * k] = d; flat[2 * k + 1] = -a; } else { flat[2 * k] = a; flat[2 * k + 1] = d; }
       }
     }
+    if (spec.push) for (let k = 0; k < pos.length; k += 3) { const Q = spec.push([pos[k], pos[k + 1], pos[k + 2]]); pos[k] = Q[0]; pos[k + 1] = Q[1]; pos[k + 2] = Q[2]; }   // worn shape only: its cut length is already measured
     return finishPiece(spec, nu, nv, pos, flat, 1, true);
   }
 
@@ -2211,6 +2279,9 @@ const SF = {};
   // Build a whole garment: pieces (worn + flat), trims, and operations resolved against the pieces.
   SF.buildGarment = function (id, body, fit) {
     const G = SF.GARMENTS[id], raw = G.build(body, { ...SF.defaultFit(id), ...fit });
+    // Every piece that does not follow the legs by itself (skirts, dress and coat bodies, their zips and straps) is kept
+    // outside the posed legs. Trouser legs and swimwear follow the stance in their own charts; sleeves are on the arms.
+    { const push = legPush(body); if (push) for (const sp of raw.pieces) if (!sp.push && !sp.weld && !(sp.chart && (sp.chart.f0 || sp.chart.flipY))) sp.push = push; }
     const pieces = raw.pieces.map(sp => SF.buildPiece(sp, sp.ribbon ? [1, 1] : G.stretch)), byId = Object.fromEntries(pieces.map(p => [p.id, p]));
     const trimIds = new Set(raw.trims.map(t => t.id));
     const get = pid => { const p = byId[pid]; if (!p) throw new Error(`${id}: unknown piece "${pid}"`); return p; };

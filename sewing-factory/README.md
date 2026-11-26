@@ -415,6 +415,13 @@ thighs part and then under, meet in the crotch seam. Above the crotch line the
 strip where the two sides lie together starts from the front and back ends of
 the crotch, so the lower belly and the cleft stay smooth, as on a shop mannequin.
 
+Skirts, dresses and coats hang from the torso and know nothing about the
+stance, so with the feet apart they are pushed out, level by level, to a band
+stretched round both posed legs: over the thighs and straight across between
+them. This is a geometric stand-in for cloth being pulled taut, not a cloth
+simulation: a narrow skirt simply widens (in life it would stop the stride),
+the flat pattern is unchanged, and feet can show under a floor-length hem.
+
 ## How the pieces are made
 
 Nothing is drawn by hand. Each garment is a set of surfaces round the body (the
