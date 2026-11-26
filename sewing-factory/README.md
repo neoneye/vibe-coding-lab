@@ -154,7 +154,7 @@ seams, elastic waistband, coverstitched hems).
 |---|---|---|
 | Leggings | cotton jersey, blue mélange | waistband dipping to a V at the centre front |
 | Scrunch leggings | cotton jersey, olive | the V waistband, and elastic zigzagged along the back seam to gather it |
-| Mesh leggings | swim tricot, grey | an open-mesh strip coverstitched down the outside of each thigh |
+| Mesh leggings | swim tricot, grey | an open-mesh strip coverstitched down the outside of each leg, from the waistband to the ankle |
 | Shiny leggings | glossy tricot, coral | the V waistband, seams in a pale contrast thread |
 | Zebra leggings | swim tricot, grey zebra | plain waistband |
 
