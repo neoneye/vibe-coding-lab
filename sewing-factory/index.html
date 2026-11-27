@@ -163,7 +163,7 @@
     <div class="stage s8">
       <div class="card"><h2>Instructions</h2>
         <p>A document for making this garment: what to buy, the pieces to cut, the machines needed and every sewing step in order. It follows the figure, garment, fit and fabrics chosen on the other pages.</p>
-        <div class="row"><button id="exPrint">Print</button><button id="exHtml">Save as HTML</button><button id="exMd">Save as Markdown</button></div>
+        <div class="row"><button id="exPrint">Print</button><button id="exHtml">Save as HTML</button><button id="exMd">Save as Markdown</button><button id="exJson">Save as JSON</button></div>
       </div>
     </div>
     <div class="stage s7">
@@ -846,6 +846,29 @@ const SF = {};
   const scoop = (W, yU, yS) => q => q <= yU || q >= yS ? 0 : W * Math.pow(Math.sin(PI * (q - yU) / (yS - yU)), 0.75);
   // Armhole of a sleeveless garment: an oval. A superellipse profile stays nearly full width round the arm and closes
   // quickly at the top and bottom; the sine scoop narrowed steadily and came to a point on the shoulder (a teardrop).
+  // A set-in sleeve has to go into its armhole. The sleeve head is the top edge of a tube round the arm, and how long
+  // that edge is on the flat pattern depends on how wide the tube is there; the armhole's length is fixed by the body
+  // pieces. So the sleeve is narrowed over the upper arm until its head is as long as the armhole plus a little ease
+  // (2 %), and widens back to the garment's own sleeve width a hand's length below the underarm. Without this the head
+  // came out about a fifth too long, which no seam can take up.
+  const holeLen = (shell, sc, yU, yS, sgn) => { const H = PI / 2, arcAt = (q, th0, th1) => { let L = 0, pr = shell(sgn * th0, q); for (let i = 1; i <= 10; i++) { const P = shell(sgn * lerp(th0, th1, i / 10), q); L += Math.hypot(P[0] - pr[0], P[2] - pr[2]); pr = P; } return L; };
+    let hole = 0; for (const back of [false, true]) { let pr = null; for (let i = 0; i <= 20; i++) { const q = lerp(yU, yS, i / 20), X = back ? arcAt(q, PI, H + sc(q)) : arcAt(q, 0, H - sc(q)); if (pr) hole += Math.hypot(X - pr[0], q - pr[1]); pr = [X, q]; } } return hole; };
+  const headLen = (r, tTop, tU) => { let L = 0, pr = null; for (let i = 0; i <= 64; i++) { const a = lerp(-PI, PI, i / 64), t = lerp(tTop, tU, (1 - Math.cos(a)) / 2), X = r(t) * a; if (pr) L += Math.hypot(X - pr[0], t - pr[1]); pr = [X, t]; } return L; };
+  const fitSleeve = (body, shell, sc, yU, yS, sgn, rg, tTop, tU, ease = 0.985) => {   /* these quick lengths read the head a few per cent short of the drafted pattern, so aiming just under gives about 2 % of ease */
+    const hole = holeLen(shell, sc, yU, yS, sgn), fitted = d => t => Math.max(body.armR(clamp(t, 0, body.M.arm)) + 0.3, rg(t) - d * (1 - smooth(tU + 2, tU + 14, t)));
+    if (headLen(rg, tTop, tU) <= hole * ease) return rg;
+    let lo = 0, hi = 6; for (let i = 0; i < 22; i++) { const m = (lo + hi) / 2; if (headLen(fitted(m), tTop, tU) > hole * ease) lo = m; else hi = m; }
+    return fitted((lo + hi) / 2);
+  };
+  // The armhole of a garment with set-in sleeves: at least W wide, and wider if it has to be to take a sleeve that still
+  // has room for the arm (0.8 cm all round). A fuller arm needs a bigger armhole; a fixed one left nothing for the sleeve to fit.
+  const sleeveScoop = (body, shell, W, yU, yS, most = 0.27) => {   /* most: how much wider than W it may become */
+    const H = PI / 2, A0 = body.rest.arms[1], tOf = P => SF.vec.dot(SF.vec.sub(P, A0.S), A0.d), tU = tOf(shell(H, yU)) + 1.5, tTop = Math.min(-0.5, tOf(shell(H, yS)));
+    const need = headLen(t => body.armR(clamp(t, 0, body.M.arm)) + 0.8, tTop, tU) / 0.985, len = w => holeLen(shell, scoop(w, yU, yS), yU, yS, 1);
+    if (len(W) >= need) return scoop(W, yU, yS);
+    let lo = W, hi = W + most; for (let i = 0; i < 16; i++) { const m = (lo + hi) / 2; if (len(m) < need) lo = m; else hi = m; }
+    return scoop(hi, yU, yS);
+  };
   const roundScoop = (W, yU, yS) => q => q <= yU || q >= yS ? 0 : W * Math.pow(1 - Math.pow(Math.abs(2 * (q - yU) / (yS - yU) - 1), 3.5), 1 / 3.5);
   const neckFn = (yT, drop, k = 1.6) => th => yT - drop * Math.pow(Math.abs(Math.cos(th)), k);
 
@@ -1097,7 +1120,7 @@ const SF = {};
     const y = body.y, shell = SF.makeShell(body, { ease: fit.ease, loose: 0.9, hangTop: y.armpit, ...(pf && fit.flare ? { flare: fit.flare * 0.004, flareTop: y.waist } : {}) });
     const tc = torsoChart(shell), H = PI / 2;
     const yHem = y.crotch + 2 - fit.length, big = Math.max(0, body.M.chest * 0.052 - 4.8), yU = y.armpit - 4 - 1.6 * big, yS = y.shoulder + 0.6, yT = y.neck + 0.2, W = 0.4 + 0.04 * big;   // a fuller arm needs a deeper, wider armhole
-    const sc = scoop(W, yU, yS), ynF = neckFn(yT, 5.5, 1.5), ynB = neckFn(yT, 1.6, 2), yY = yU + 0.62 * (yS - yU), ov = jk ? 0.012 : 0.085;   // a zip front meets edge to edge; a buttoned one laps over
+    const sc = sleeveScoop(body, shell, W, yU, yS, 0.2), ynF = neckFn(yT, 5.5, 1.5), ynB = neckFn(yT, 1.6, 2), yY = yU + 0.62 * (yS - yU), ov = jk ? 0.012 : 0.085;   // a zip front meets edge to edge; a buttoned one laps over
     const pieces = [], trims = [];
     const sideF = fnq(q => H - sc(q), yHem, yT), fr = (a, b) => [frac(a, yHem, yT), frac(b, yHem, yT)];
     const segsR = { side: ['R', ...fr(yHem, yU)], armhole: ['R', ...fr(yU, yS)], shoulder: ['R', ...fr(yS, yT)], placket: ['L', 0, 1], hem: ['B', 0, 1], neck: ['T', 0, 1] };
@@ -1120,7 +1143,7 @@ const SF = {};
       const A0 = body.rest.arms[sgn], tOf = P => SF.vec.dot(SF.vec.sub(P, A0.S), A0.d);
       const tU = tOf(shell(sgn * H, yU)) + 1.5, tTop = Math.min(-0.5, tOf(shell(sgn * H, yS)));
       const tEnd = long ? body.M.arm - cuffH + 1 : Math.max(tU + 4, fit.sleeve);
-      const rg = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(1.7, long ? 1.5 : 1.9, clamp(t / tEnd, 0, 1));
+      const rg0 = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(1.7, long ? 1.5 : 1.9, clamp(t / tEnd, 0, 1)), rg = fitSleeve(body, shell, sc, yU, yS, sgn, rg0, tTop, tU);
       const ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
       const hole = u => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); const P = shell(sgn * (H - 1.22 * sc(q) * Math.sign(Math.sin(a))), q), o = outOf(P); return [P[0] - o[0] * 0.12, P[1], P[2] - o[2] * 0.12]; };
       pieces.push({
@@ -1171,7 +1194,7 @@ const SF = {};
       const ops = [
         { name: 'Set the pocket zips', machine: 'lock', seam: 'zip', bring: ['frontL', 'frontR', 'pzipL', 'pzipR'], note: 'A slot is cut in each front, the zip is laid behind it and stitched round with a zipper foot. Leather cannot be pinned (every hole is permanent), so the zip is held with double-sided tape while it is sewn.' },
         { name: 'Join the yoke to the back', machine: 'lock', seam: 'superimposed', joins: [J('yoke.bottom', 'back.top')], note: 'Leather is sewn on a lockstitch machine with a wedge-point needle, which cuts a slit instead of pushing fibres aside, and a roller or walking foot, because an ordinary presser foot sticks to the grain side. Stitches are long: short ones would perforate the skin like a stamp.' },
-        { name: 'Shoulder seams', machine: 'lock', seam: 'superimposed', joins: [J('frontL.shoulder', 'yoke.shoulderL'), J('frontR.shoulder', 'yoke.shoulderR')], note: 'The seam allowances are not pressed with an iron: they are glued open and hammered flat.' },
+        { name: 'Shoulder seams', machine: 'lock', seam: 'superimposed', joins: [J('frontL.shoulder', 'yoke.shoulderL', 0.16), J('frontR.shoulder', 'yoke.shoulderR', 0.16)], note: 'The seam allowances are not pressed with an iron: they are glued open and hammered flat.' },
         { name: 'Attach the collar', machine: 'lock', seam: 'superimposed', stitch: [{ e: 'collar.b', in: 0.3 }, { e: 'collar.t', in: 0.5 }, { e: 'collar.l', in: 0.5 }, { e: 'collar.r', in: 0.5 }], note: 'The collar is made up first, turned and topstitched, then sewn round the neckline.' },
         { name: 'Set in the sleeves', machine: 'lock', seam: 'superimposed', joins: [J('sleeveL.cap', 'frontL.armhole+yoke.armholeL+back.armholeL', 0.25), J('sleeveR.cap', 'frontR.armhole+yoke.armholeR+back.armholeR', 0.25)], note: 'Leather has almost no ease to work in, so the sleeve head is cut very close to the armhole length.' },
         { name: 'Close side and underarm seams', machine: 'lock', seam: 'superimposed', joins: [J('frontL.side', 'back.sideL'), J('frontR.side', 'back.sideR'), J('sleeveL.underA', 'sleeveL.underB'), J('sleeveR.underA', 'sleeveR.underB')], note: 'One run from the hem, up the side, through the armpit and down to the wrist. No overlock: leather does not fray.' },
@@ -1201,7 +1224,7 @@ const SF = {};
       { name: 'Stitch the front plackets', machine: 'lock', seam: 'topstitch', stitch: [{ e: 'frontL.placket', in: 0.4 }, { e: 'frontL.placket', in: 3 }, { e: 'frontR.placket', in: 0.4 }, { e: 'frontR.placket', in: 3 }], note: 'The front edges are folded into a strip a few centimetres wide that will carry the buttons and buttonholes.' },
       { name: 'Sew on the chest pocket', machine: 'lock', seam: 'topstitch', stitch: ['pocket.l', 'pocket.b', 'pocket.r'].map(e => ({ e, in: 0.25 })), note: 'Done while the front is flat, edge-stitched a couple of millimetres from the fold.' },
       { name: 'Join the yoke to the back', machine: 'lock', seam: 'superimposed', joins: [J('yoke.bottom', 'back.top')], note: 'A shirt yoke is a double layer across the shoulders; the back is sandwiched between the two.' },
-      { name: 'Shoulder seams', machine: 'lock', seam: 'superimposed', joins: [J('frontL.shoulder', 'yoke.shoulderL'), J('frontR.shoulder', 'yoke.shoulderR')], note: 'The fronts join the yoke. The body is still open at the sides and can lie flat.' },
+      { name: 'Shoulder seams', machine: 'lock', seam: 'superimposed', joins: [J('frontL.shoulder', 'yoke.shoulderL', 0.16), J('frontR.shoulder', 'yoke.shoulderR', 0.16)], note: 'The fronts join the yoke. The body is still open at the sides and can lie flat.' },
       { name: 'Attach the collar', machine: 'lock', seam: 'superimposed', stitch: [{ e: 'collar.b', in: 0.3 }, { e: 'collar.t', in: 0.5 }, { e: 'collar.l', in: 0.5 }, { e: 'collar.r', in: 0.5 }], note: 'The collar is made up first (stitched, turned, topstitched), then its stand is sewn round the neckline.' },
       { name: 'Set in the sleeves', machine: 'safety5', seam: 'superimposed', joins: [J('sleeveL.cap', 'frontL.armhole+yoke.armholeL+back.armholeL', 0.25), J('sleeveR.cap', 'frontR.armhole+yoke.armholeR+back.armholeR', 0.25)], note: 'Sleeves go in flat, before the side seams are closed. The sleeve head is slightly longer than the armhole and is eased in.' },
       { name: 'Close side and underarm seams', machine: 'safety5', seam: 'superimposed', joins: [J('frontL.side', 'back.sideL'), J('frontR.side', 'back.sideR'), J('sleeveL.underA', 'sleeveL.underB'), J('sleeveR.underA', 'sleeveR.underB')], note: 'One continuous run from the hem, up the side, through the armpit and down to the wrist.' },
@@ -1843,7 +1866,7 @@ const SF = {};
   // Long-sleeved swimsuit: the swimsuit's lower half, a high neck with shoulder seams, and set-in sleeves.
   function rashsuit(body, fit, o = {}) {   // o.plain: sleeves in the body colour; o.collar: a stand collar
     const y = body.y, H = PI / 2, { shell, chart: tc } = swimChart(body, !!o.sleeveless || !!o.one);   // with sleeves: the fuller shoulder envelope, so the sleeve head clears the arm (o.one: the close one, or the single sleeve's shoulder stands up in a hump beside the bare neck)
-    const yK = y.crotch - SWIM_U, yLeg = y.hip + fit.leg, yU = y.armpit - 3.5, yS = y.shoulder + (o.sleeveless ? 0.1 : 0.6), yT = y.neck + 0.2, sc = o.sleeveless ? roundScoop(0.44, yU, yS) : scoop(0.4, yU, yS);   /* sleeveless: the opening ends at the shoulder tip; higher up the body narrows and pinches it to a point */
+    const yK = y.crotch - SWIM_U, yLeg = y.hip + fit.leg, yU = y.armpit - 3.5, yS = y.shoulder + (o.sleeveless ? 0.1 : 0.6), yT = y.neck + 0.2, sc = o.sleeveless ? roundScoop(0.44, yU, yS) : sleeveScoop(body, shell, 0.4, yU, yS);   /* sleeveless: the opening ends at the shoulder tip; higher up the body narrows and pinches it to a point */
     const lcF = legCurve(body, shell, y.crotch, yLeg, 2.3), lcB = legCurve(body, shell, y.crotch, yLeg, 0.85), nF1 = neckFn(yT, fit.neck, 1.5), nB1 = neckFn(yT, 1.6, 2);
     // o.one: on the sleeve's side the shoulder seam is short. It ends at yTR, part of the way from the shoulder tip
     // to the neck, and both the front and the back neck edge run to that point.
@@ -1875,7 +1898,7 @@ const SF = {};
     if (!o.sleeveless) for (const sgn of [1, -1]) {
       const s = sgn > 0 ? 'L' : 'R', A0 = body.rest.arms[sgn], tOf = P => SF.vec.dot(SF.vec.sub(P, A0.S), A0.d);
       const tU = tOf(shell(sgn * H, yU)) + 1.5, tTop = Math.min(-0.5, tOf(shell(sgn * H, yS))), tEnd = clamp(fit.sleeve, tU + 4, body.M.arm - 1);
-      const rg = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(2.7, 0.45, smooth(1, 17, t)) /* room over the top of the arm, skin-tight from the elbow down */, ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
+      const rg0 = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(2.7, 0.45, smooth(1, 17, t)) /* room over the top of the arm, skin-tight from the elbow down */, rg = fitSleeve(body, shell, sc, yU, yS, sgn, rg0, tTop, tU), ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
       const hole = u => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); const P = shell(sgn * (H - 1.22 * sc(q) * Math.sign(Math.sin(a))), q), o = outOf(P); return [P[0] + o[0] * 0.9, P[1], P[2] + o[2] * 0.9]; };   // the seam sits just proud of the body, over the top of the arm
       pieces.push({ id: 'sleeve' + s, name: `Sleeve, ${sgn > 0 ? 'left' : 'right'}`, chart: ac, grain: 0, nu: 22, nv: 26, ...(o.plain ? {} : { fab: { colour: '#d3222b' } }), B: lin([-PI, tEnd], [PI, tEnd]), T: fnp(-PI, PI, cap), L: lin([-PI, tEnd], [-PI, tU]), R: lin([PI, tEnd], [PI, tU]),
         segs: { cap: ['T', 0, 1], underA: ['L', 0, 1], underB: ['R', 0, 1], wrist: ['B', 0, 1] }, weld: { fn: hole, fill: (u, k) => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); return shell(sgn * (H - k * sc(q) * Math.sign(Math.sin(a))), q); } /* the garment's surface inside the armhole: k = 1 is the armhole edge, 0 its middle line */, depth: 0.16 } });   // the sleeve stays a tube round the arm until just before the seam, so the shoulder never shows through it
@@ -1994,7 +2017,7 @@ const SF = {};
     const y = body.y, H = PI / 2, yW = y.waist, { shell, chart: tc } = swimChart(body, !!o.sleeveless);
     const low = trousers(body, { length: fit.length, rise: 2.5, ease: 0.4 }, { knit: true, high: true, close: true, long: true });   // rise 2.5 puts the top edge exactly on the waist
     const pieces = low.pieces.filter(p => p.id !== 'band'), lowOps = low.ops.filter(q => !/waistband/.test(q.name));
-    const yU = y.armpit - 3.5, yS = y.shoulder + (o.sleeveless ? 0.1 : 0.6), yT = y.neck + 0.2, sc = o.sleeveless ? roundScoop(0.44, yU, yS) : scoop(0.4, yU, yS), ynF = neckFn(yT, o.neckF ?? 1.4, o.neckK ?? 1.5), ynB = neckFn(yT, o.neckB ?? 1.0, 2);
+    const yU = y.armpit - 3.5, yS = y.shoulder + (o.sleeveless ? 0.1 : 0.6), yT = y.neck + 0.2, sc = o.sleeveless ? roundScoop(0.44, yU, yS) : sleeveScoop(body, shell, 0.4, yU, yS), ynF = neckFn(yT, o.neckF ?? 1.4, o.neckK ?? 1.5), ynB = neckFn(yT, o.neckB ?? 1.0, 2);
     const fr = (a, b) => [frac(a, yW, yT), frac(b, yW, yT)], sg = (a, b) => ({ ['side' + a]: ['L', ...fr(yW, yU)], ['arm' + a]: ['L', ...fr(yU, yS)], ['sh' + a]: ['L', ...fr(yS, yT)], ['side' + b]: ['R', ...fr(yW, yU)], ['arm' + b]: ['R', ...fr(yU, yS)], ['sh' + b]: ['R', ...fr(yS, yT)], waist: ['B', 0, 1], neck: ['T', 0, 1] });
     const sideF = fnq(q => H - sc(q), yW, yT), sideB = fnq(q => H + sc(q), yW, yT);
     pieces.push({ id: 'front', name: 'Bodice front', chart: tc, grain: 0, nu: 22, nv: 26, ...(o.front ? { fab: o.front, place: true } : {}), B: lin([-H, yW], [H, yW]), T: fnp(-H, H, ynF), L: mir(sideF), R: sideF, segs: sg('R', 'L') });
@@ -2002,7 +2025,7 @@ const SF = {};
     if (!o.sleeveless) for (const sgn of [1, -1]) {
       const s = sgn > 0 ? 'L' : 'R', A0 = body.rest.arms[sgn], tOf = P => SF.vec.dot(SF.vec.sub(P, A0.S), A0.d);
       const tU = tOf(shell(sgn * H, yU)) + 1.5, tTop = Math.min(-0.5, tOf(shell(sgn * H, yS))), tEnd = clamp(fit.sleeve, tU + 4, body.M.arm - 1);
-      const rg = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(2.7, 0.45, smooth(1, 17, t)), ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
+      const rg0 = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(2.7, 0.45, smooth(1, 17, t)), rg = fitSleeve(body, shell, sc, yU, yS, sgn, rg0, tTop, tU), ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
       const hole = u => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); const P = shell(sgn * (H - 1.22 * sc(q) * Math.sign(Math.sin(a))), q), o = outOf(P); return [P[0] + o[0] * 0.9, P[1], P[2] + o[2] * 0.9]; };
       pieces.push({ id: 'sleeve' + s, name: `Sleeve, ${sgn > 0 ? 'left' : 'right'}`, chart: ac, grain: 0, nu: 22, nv: 26, B: lin([-PI, tEnd], [PI, tEnd]), T: fnp(-PI, PI, cap), L: lin([-PI, tEnd], [-PI, tU]), R: lin([PI, tEnd], [PI, tU]),
         segs: { cap: ['T', 0, 1], underA: ['L', 0, 1], underB: ['R', 0, 1], wrist: ['B', 0, 1] }, weld: { fn: hole, fill: (u, k) => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); return shell(sgn * (H - k * sc(q) * Math.sign(Math.sin(a))), q); } /* the garment's surface inside the armhole: k = 1 is the armhole edge, 0 its middle line */, depth: 0.16 } });
@@ -2130,7 +2153,7 @@ const SF = {};
     const y = body.y, H = PI / 2, yW = y.waist, e = fit.ease, shell = SF.makeShell(body, { ease: e, loose: 0.55, hangTop: y.armpit }), tc = torsoChart(shell);
     const low = trousers(body, { length: 100, rise: 2.5, ease: e, hem: fit.hem }, { knit: true, high: true, long: true });
     const pieces = low.pieces.filter(p => p.id !== 'band'), lowOps = low.ops.filter(q => !/waistband/.test(q.name));
-    const yU = y.armpit - 4.5, yS = y.shoulder + 0.6, yT = y.neck + 0.2, sc = scoop(0.42, yU, yS), ynF = neckFn(yT, 3, 1.5), ynB = neckFn(yT, 1.2, 2);
+    const yU = y.armpit - 4.5, yS = y.shoulder + 0.6, yT = y.neck + 0.2, sc = sleeveScoop(body, shell, 0.42, yU, yS), ynF = neckFn(yT, 3, 1.5), ynB = neckFn(yT, 1.2, 2);
     const fr = (a, b) => [frac(a, yW, yT), frac(b, yW, yT)], sg = (a, b) => ({ ['side' + a]: ['L', ...fr(yW, yU)], ['arm' + a]: ['L', ...fr(yU, yS)], ['sh' + a]: ['L', ...fr(yS, yT)], ['side' + b]: ['R', ...fr(yW, yU)], ['arm' + b]: ['R', ...fr(yU, yS)], ['sh' + b]: ['R', ...fr(yS, yT)], waist: ['B', 0, 1], neck: ['T', 0, 1] });
     const sideF = fnq(q => H - sc(q), yW, yT), sideB = fnq(q => H + sc(q), yW, yT);
     pieces.push({ id: 'front', name: 'Bodice front', chart: tc, grain: 0, nu: 22, nv: 26, B: lin([-H, yW], [H, yW]), T: fnp(-H, H, ynF), L: mir(sideF), R: sideF, segs: sg('R', 'L') });
@@ -2138,7 +2161,7 @@ const SF = {};
     for (const sgn of [1, -1]) {
       const s = sgn > 0 ? 'L' : 'R', A0 = body.rest.arms[sgn], tOf = P => SF.vec.dot(SF.vec.sub(P, A0.S), A0.d);
       const tU = tOf(shell(sgn * H, yU)) + 1.5, tTop = Math.min(-0.5, tOf(shell(sgn * H, yS))), tEnd = body.M.arm - 1.5;
-      const rg = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(3, 2.2, clamp(t / tEnd, 0, 1)) * (1 - 0.45 * smooth(tEnd - 5, tEnd, t)), ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);   // gathered in at the wrist
+      const rg0 = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(3, 2.2, clamp(t / tEnd, 0, 1)) * (1 - 0.45 * smooth(tEnd - 5, tEnd, t)), rg = fitSleeve(body, shell, sc, yU, yS, sgn, rg0, tTop, tU), ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);   // gathered in at the wrist
       const hole = u => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); const P = shell(sgn * (H - 1.22 * sc(q) * Math.sign(Math.sin(a))), q), n = outOf(P); return [P[0] - n[0] * 0.12, P[1], P[2] - n[2] * 0.12]; };
       pieces.push({ id: 'sleeve' + s, name: `Sleeve, ${sgn > 0 ? 'left' : 'right'}`, chart: ac, grain: 0, nu: 22, nv: 26, B: lin([-PI, tEnd], [PI, tEnd]), T: fnp(-PI, PI, cap), L: lin([-PI, tEnd], [-PI, tU]), R: lin([PI, tEnd], [PI, tU]),
         segs: { cap: ['T', 0, 1], underA: ['L', 0, 1], underB: ['R', 0, 1], wrist: ['B', 0, 1] }, weld: { fn: hole, fill: (u, k) => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); return shell(sgn * (H - k * sc(q) * Math.sign(Math.sin(a))), q); } /* the garment's surface inside the armhole: k = 1 is the armhole edge, 0 its middle line */, depth: 0.4 } });
@@ -2243,7 +2266,7 @@ const SF = {};
     // beside the neck, so the shoulder line runs nearly level and ends in a square corner, and they carry it a little wider.
     const pad = P => { const t = smooth(xs * 0.3, xs * 0.92, Math.abs(P[0])) * smooth(y.shoulder - 8, y.shoulder - 1, P[1]); return t <= 0 ? P : [P[0] * (1 + 0.035 * t), P[1] + U.pads * t, P[2]]; };
     const shell = U && U.flare ? (th, q) => { const P = base(th, q), k = 1 + U.flare * clamp((y.waist - 2 - q) / (y.waist - 2 - yHem), 0, 1); return [P[0] * k, P[1], P[2] * k]; } : U && U.pads ? (th, q) => pad(base(th, q)) : base, tc = torsoChart(shell);
-    const big = Math.max(0, body.M.chest * 0.052 - 4.8), yU = y.armpit - 3.5 - 1.6 * big, yS = y.shoulder + 0.6, yT = y.neck + 0.2, sc = scoop(0.4 + 0.04 * big, yU, yS),   // a fuller arm needs a deeper, wider armhole
+    const big = Math.max(0, body.M.chest * 0.052 - 4.8), yU = y.armpit - 3.5 - 1.6 * big, yS = y.shoulder + 0.6, yT = y.neck + 0.2, sc = sleeveScoop(body, shell, 0.4 + 0.04 * big, yU, yS),   // a fuller arm needs a deeper, wider armhole
       ynF = o.v && !o.boat ? neckFn(yT, fit.neck, 10) : neckFn(yT, U || o.mock ? 0.5 : 2.2, 1.5),   /* a uniform's neckline sits right up under the collar, so no skin shows between them */
       ynB = neckFn(yT, o.backDrop ?? 1.0, o.backDrop ? 1.1 : 2);
     const fr = (a, b) => [frac(a, yHem, yT), frac(b, yHem, yT)], sg = (a, b) => ({ ['side' + a]: ['L', ...fr(yHem, yU)], ['arm' + a]: ['L', ...fr(yU, yS)], ['sh' + a]: ['L', ...fr(yS, yT)], ['side' + b]: ['R', ...fr(yHem, yU)], ['arm' + b]: ['R', ...fr(yU, yS)], ['sh' + b]: ['R', ...fr(yS, yT)], hem: ['B', 0, 1], neck: ['T', 0, 1] });
@@ -2255,7 +2278,7 @@ const SF = {};
     for (const sgn of [1, -1]) {
       const s = sgn > 0 ? 'L' : 'R', A0 = body.rest.arms[sgn], tOf = P => SF.vec.dot(SF.vec.sub(P, A0.S), A0.d);
       const tU = tOf(shell(sgn * H, yU)) + 1.5, tTop = Math.min(-0.5, tOf(shell(sgn * H, yS))), tEnd = Math.min(tU + fit.sleeve, body.M.arm - 1.5);
-      const rg = t => body.armR(clamp(t, 0, body.M.arm)) + (o.v ? lerp(1.9, 0.7, smooth(1, 20, t)) : U ? lerp(1.7, 0.9, smooth(1, 22, t)) : 1.6) + (o.bell || 0) * Math.pow(smooth(o.bellLast ? tEnd - o.bellLast : 16, tEnd, t), 1.5) /* o.bellLast: the flare is only in the last so many cm, at the cuff */, ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
+      const rg0 = t => body.armR(clamp(t, 0, body.M.arm)) + (o.v ? lerp(1.9, 0.7, smooth(1, 20, t)) : U ? lerp(1.7, 0.9, smooth(1, 22, t)) : 1.6) + (o.bell || 0) * Math.pow(smooth(o.bellLast ? tEnd - o.bellLast : 16, tEnd, t), 1.5) /* o.bellLast: the flare is only in the last so many cm, at the cuff */, rg = fitSleeve(body, shell, sc, yU, yS, sgn, rg0, tTop, tU), ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
       const hole = u => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); const P = shell(sgn * (H - 1.22 * sc(q) * Math.sign(Math.sin(a))), q), n = outOf(P); return [P[0] + n[0] * 0.5, P[1], P[2] + n[2] * 0.5]; };
       pieces.push({ id: 'sleeve' + s, name: `Sleeve, ${sgn > 0 ? 'left' : 'right'}`, chart: ac, grain: 0, nu: 22, nv: long ? 26 : 12, B: lin([-PI, tEnd], [PI, tEnd]), T: fnp(-PI, PI, cap), L: lin([-PI, tEnd], [-PI, tU]), R: lin([PI, tEnd], [PI, tU]),
         segs: { cap: ['T', 0, 1], underA: ['L', 0, 1], underB: ['R', 0, 1], wrist: ['B', 0, 1] }, weld: { fn: hole, fill: (u, k) => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); return shell(sgn * (H - k * sc(q) * Math.sign(Math.sin(a))), q); } /* the garment's surface inside the armhole: k = 1 is the armhole edge, 0 its middle line */, depth: long ? 0.16 : 0.5 } });   /* depth is a share of the sleeve's length */
@@ -2503,7 +2526,7 @@ const SF = {};
     const y = body.y, H = PI / 2, yW = y.waist, e = fit.ease, shell = SF.makeShell(body, { ease: e, loose: 0.25 }), tc = torsoChart(shell);
     const eL = e + 1.4, low = trousers(body, { length: fit.length, rise: 2.5, ease: eL, hem: fit.hem }, { knit: true, high: true, long: true });   /* the legs are cut fuller than the bodice */
     const pieces = low.pieces.filter(p => p.id !== 'band'), lowOps = low.ops.filter(q => !/waistband/.test(q.name)), trims = [];
-    const big = Math.max(0, body.M.chest * 0.052 - 4.8), yU = y.armpit - 3.8 - 1.6 * big, yS = y.shoulder + 0.6, yT = y.neck + 0.2, sc = scoop(0.4 + 0.04 * big, yU, yS), ynF = neckFn(yT, fit.neck, 5), ynB = neckFn(yT, 1.2, 2);   /* a fuller arm needs a deeper, wider armhole */
+    const big = Math.max(0, body.M.chest * 0.052 - 4.8), yU = y.armpit - 3.8 - 1.6 * big, yS = y.shoulder + 0.6, yT = y.neck + 0.2, sc = sleeveScoop(body, shell, 0.4 + 0.04 * big, yU, yS), ynF = neckFn(yT, fit.neck, 5), ynB = neckFn(yT, 1.2, 2);   /* a fuller arm needs a deeper, wider armhole */
     const fr = (a, b) => [frac(a, yW, yT), frac(b, yW, yT)], sg = (a, b) => ({ ['side' + a]: ['L', ...fr(yW, yU)], ['arm' + a]: ['L', ...fr(yU, yS)], ['sh' + a]: ['L', ...fr(yS, yT)], ['side' + b]: ['R', ...fr(yW, yU)], ['arm' + b]: ['R', ...fr(yU, yS)], ['sh' + b]: ['R', ...fr(yS, yT)], waist: ['B', 0, 1], neck: ['T', 0, 1] });
     const sideF = fnq(q => H - sc(q), yW, yT), sideB = fnq(q => H + sc(q), yW, yT);
     pieces.push({ id: 'front', name: 'Bodice front', chart: tc, grain: 0, nu: 26, nv: 26, B: lin([-H, yW], [H, yW]), T: fnp(-H, H, ynF), L: mir(sideF), R: sideF, segs: sg('R', 'L') });
@@ -2511,7 +2534,7 @@ const SF = {};
     for (const sgn of [1, -1]) {
       const s = sgn > 0 ? 'L' : 'R', A0 = body.rest.arms[sgn], tOf = P => SF.vec.dot(SF.vec.sub(P, A0.S), A0.d);
       const tU = tOf(shell(sgn * H, yU)) + 1.5, tTop = Math.min(-0.5, tOf(shell(sgn * H, yS))), tEnd = body.M.arm - 1.5;
-      const rg = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(2.6, 1.1, smooth(1, 20, t)), ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
+      const rg0 = t => body.armR(clamp(t, 0, body.M.arm)) + lerp(2.6, 1.1, smooth(1, 20, t)), rg = fitSleeve(body, shell, sc, yU, yS, sgn, rg0, tTop, tU), ac = armChart(body, rg, sgn), cap = th => lerp(tTop, tU, (1 - Math.cos(th)) / 2);
       const hole = a => { const w = lerp(-PI, PI, a), q = lerp(yU, yS, (1 + Math.cos(w)) / 2); const P = shell(sgn * (H - 1.22 * sc(q) * Math.sign(Math.sin(w))), q), n = outOf(P); return [P[0] + n[0] * 0.3, P[1], P[2] + n[2] * 0.3]; };
       pieces.push({ id: 'sleeve' + s, name: `Sleeve, ${sgn > 0 ? 'left' : 'right'}`, chart: ac, grain: 0, nu: 22, nv: 26, B: lin([-PI, tEnd], [PI, tEnd]), T: fnp(-PI, PI, cap), L: lin([-PI, tEnd], [-PI, tU]), R: lin([PI, tEnd], [PI, tU]),
         segs: { cap: ['T', 0, 1], underA: ['L', 0, 1], underB: ['R', 0, 1], wrist: ['B', 0, 1] }, weld: { fn: hole, fill: (u, k) => { const a = lerp(-PI, PI, u), q = lerp(yU, yS, (1 + Math.cos(a)) / 2); return shell(sgn * (H - k * sc(q) * Math.sign(Math.sin(a))), q); } /* the garment's surface inside the armhole: k = 1 is the armhole edge, 0 its middle line */, depth: 0.25 } });
@@ -2549,7 +2572,7 @@ const SF = {};
       { name: 'Make and thread the belt', machine: 'lock', seam: 'topstitch', bring: ['belt', 'buckle'], stitch: [{ e: 'belt.t', in: 0.25 }, { e: 'belt.b', in: 0.25 }], note: 'The belt is a strip of the same cloth over a stiff interlining, turned and topstitched along both edges, with a buckle covered to match.' },
     ];
     if (o.plain) { ops.splice(ops.findIndex(q => /thread the belt/.test(q.name)), 1); ops.find(q => q.name === 'Waist seam').note = 'The bodice and the legs are joined round the waist, with a length of elastic caught in the seam at the back so the coverall sits close without a belt.'; }
-    return { pieces, trims, ops, legs: low.legs };
+    return { pieces, trims, ops, legs: low.legs, notions: o.plain ? ['Elastic 2.5 cm wide for the back waist: three quarters of the length of the back waist edge (given under The pieces)'] : [] };
   }
 
   // Racer-back swimsuit: a high-necked front, a low back panel with a tongue rising up the spine, and two straps
@@ -3077,7 +3100,7 @@ const SF = {};
     });
     // each trim belongs with its host piece
     for (const t of raw.trims) for (const o of ops) if (o.used.includes(t.id) && !o.used.includes(t.host)) o.used.push(t.host);
-    return { id, G, pieces, byId, trims: raw.trims, ops, legs: raw.legs };
+    return { id, G, pieces, byId, trims: raw.trims, ops, legs: raw.legs, notions: raw.notions || [] };
   };
 
   // Seam walk: flat length of both sides of a join, for the tests and the operation list.
@@ -5674,6 +5697,7 @@ function initUI() {
   for (const b of [...$('steps').children, ...$('subt').children, ...$('subtC').children]) b.onclick = () => setStage(+b.dataset.s);
   $('exHtml').onclick = () => saveText(`sewing-factory-${S.garment}.html`, docFile(false), 'text/html');
   $('exMd').onclick = () => saveText(`sewing-factory-${S.garment}.md`, docMD(docModel()), 'text/markdown');
+  $('exJson').onclick = () => saveText(`sewing-factory-${S.garment}.json`, docJSON(docModel()), 'application/json');
   $('exPrint').onclick = () => { const w = window.open(URL.createObjectURL(new Blob([docFile(true)], { type: 'text/html' })), '_blank'); if (!w) saveText(`sewing-factory-${S.garment}.html`, docFile(false), 'text/html'); };
   const anyOf = a => a[Math.floor(Math.random() * a.length)];
   // On Cloth → Type the left and right arrow keys step to the previous and the next garment in the list, wrapping round at the ends.
@@ -5831,6 +5855,7 @@ const DOC_CSS = `
 .sheet table.kv { font-size: 13px; margin: 6px 0; } .sheet table.kv td { padding: 2px 10px 2px 0; text-align: left; white-space: normal; border-top: 1px solid #eee9dd; } .sheet table.kv td:first-child { color: #5c5c62; white-space: nowrap; width: 1%; } .sheet .to { color: #8a5a12; font-weight: 600; }
 .sheet .dia { overflow-x: auto; margin: 8px 0 4px; } .sheet .dia svg { display: block; max-width: 100%; height: auto; } .sheet .cloth { fill: #f4f0e4; stroke: #8a8472; stroke-width: 1; } .sheet .num { font: 600 11px system-ui, sans-serif; fill: #1d1d1f; } .sheet .pl { fill: #efe9db; stroke: #8a8472; stroke-width: 1; } .sheet .hl { fill: none; stroke: #c0392b; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
 .sheet .hh { font-weight: 600; margin: 8px 0 2px; } .sheet ol.how { list-style: decimal; padding-left: 22px; margin: 0 0 6px; } .sheet ol.steps ol.how li { display: list-item; border: 0; padding: 1px 0; } .sheet .chk { background: #f1ede2; border-left: 3px solid #8a5a12; padding: 5px 9px; margin: 6px 0 0; font-size: 13px; }
+.sheet .v-fault { color: #b3261e; font-weight: 600; font-style: normal; } .sheet .v-ease { color: #8a5a12; } .sheet .v-ok { color: #2f6b3a; } .sheet tr.a-fault td { background: #fbe9e7; } .sheet tr.a-warn td, .sheet tr.a-note td { background: #fbf3df; } .sheet table.aud td { vertical-align: top; } .sheet details { margin: 6px 0; } .sheet summary { cursor: pointer; color: #8a5a12; font-size: 13px; }
 .sheet dl.glos { margin: 0; } .sheet dl.glos dt { font-weight: 600; margin-top: 6px; } .sheet dl.glos dd { margin: 0 0 0 0; color: #3c3c40; } .sheet .pc { max-width: 100%; }
 @media (max-width: 640px) { .sheet .two { grid-template-columns: minmax(0, 1fr); } .sheet table.grid { display: block; overflow-x: auto; } }
 @media print { .sheet { box-shadow: none; max-width: none; padding: 0; } .sheet nav.toc { display: none; } }`;
@@ -5868,61 +5893,116 @@ const GLOSSARY = [['Seam allowance', 'The strip of cloth between the stitching a
   ['Ease in', 'To fit a longer edge to a shorter one without gathers or pleats, by spreading the extra length evenly along the seam.'], ['Notch', 'A small mark on the edge of a piece that matches a mark on its neighbour. These pieces have none: match the two ends of each seam and its middle.']];
 const flatLen = pts => { let L = 0; for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return L; };
 const cm = v => `${Math.abs(v) >= 10 ? Math.round(v) : +(+v).toFixed(1)} cm`;
+const OVERLOCKS = ['overlock3', 'overlock4', 'safety5'], SLICK = ['vinyl', 'pu', 'leather', 'snakeskin', 'coated', 'holo', 'clearpvc', 'foil', 'holofoil'], FINE = ['net', 'tulle', 'chainmail'];
+// How one step is worked, written from what the step actually joins: which pieces, how long, how much to ease, how
+// deep the hem, how long the elastic. What a machine cannot do (an overlocker cannot sew backwards) is not asked of it.
+function howFor(seam, mid, t) {
+  const ovl = OVERLOCKS.includes(mid), cover = mid === 'cover', hold = t.slick ? 'clips' : 'pins', uneven = t.joins.filter(j => j.verdict !== 'ok'), list = (a, n = 6) => a.slice(0, n).join('; ') + (a.length > n ? `; and ${a.length - n} more` : '');
+  const stop = t.joins.some(j => j.verdict === 'fault' && !j.inferred) ? ['Stop: the self-audit lists a fault in this step. The edges differ by more than the seam can take up. Put that right first, as the audit describes, then go on.'] : [];
+  if (seam === 'superimposed' && t.joins.length) return [...stop,
+    `Lay each pair of edges listed under Join right sides together, raw edges level${t.joins.length > 1 ? ` (${t.joins.length} seams in this step)` : ''}.`,
+    uneven.length ? `Match the two ends of each seam, then halve and quarter both edges and hold them together with ${hold} at those points. The edges are not the same length: ${list(uneven.map(j => `${j.ease.longer} is ${cm(j.ease.by)} longer`))}. Spread that extra evenly between the ${hold}; do not let it collect at one end.`
+      : `Match the two ends of each seam, then the middle, and hold with ${hold}${ovl ? ' placed clear of the knife' : ' across the stitching line about every 8 cm'}. The edges are the same length, so neither is stretched.`,
+    ovl ? `Feed each seam through the overlocker with the cut edges against the knife guide, ${cm(t.len)} in all. It trims, sews and wraps the edge in one pass. Take each ${t.slick ? 'clip' : 'pin'} out before it reaches the knife. An overlocker cannot sew backwards: run off the end and leave a 5 cm chain of thread.`
+      : `Sew along the stitching line, 1 cm in from the cut edge, ${cm(t.len)} in all. Start and finish each seam with three or four stitches back and forth so it cannot run open.`,
+    ovl ? 'Thread each chain back under the stitches with a blunt needle, or knot it close to the cloth. Press the seam to one side: an overlocked seam cannot be pressed open.' : t.slick ? 'Do not iron. Finger-press the allowances open, or roll them flat with a seam roller.' : 'Press each seam flat as it was sewn, then press the allowances open.'];
+  if (seam === 'hem' && t.stitched.length) { const d = Math.max(...t.stitched.map(e => e.from));
+    return [`Mark the hem ${cm(d + 0.5)} up from the cut edge on the wrong side of ${list([...new Set(t.stitched.map(e => e.piece))], 4)}.`, `Fold the edge up along the mark and ${t.slick ? 'hold it with clips' : 'press'}. ${ovl || cover ? 'The raw edge stays single: the stitch covers it.' : 'Turn the raw edge under once more and pin at right angles to the fold.'}`,
+      cover ? `Stitch from the right side with the coverstitch (or a stretch twin needle), ${cm(d)} from the fold, ${cm(t.len)} in all. The looper thread underneath covers the raw edge. Overlap the start by 2 cm and pull the threads to the wrong side.` : `Stitch ${cm(d)} from the fold with the wrong side up, so the inner fold can be seen, ${cm(t.len)} in all. Overlap the start by a few stitches.`,
+      t.slick ? 'Do not iron.' : 'Press the finished hem from the wrong side.']; }
+  if (seam === 'elastic' && t.stitched.length) return [`Cut a length of narrow elastic for each edge, nine tenths as long as the edge: ${list(t.stitched.map(e => `${e.piece}, ${e.edge}: ${cm(e.len * 0.9)}`))}.`,
+    'Mark each elastic and its edge in quarters. Pin them together at the marks on the wrong side, elastic level with the raw edge.', 'Sew with a zigzag (or the left needle of the overlocker with the knife disengaged), pulling the elastic gently so it lies flat against the cloth between the pins. Stretch the elastic only, never the cloth.', 'Let each edge relax. It should draw in slightly and lie against the body without ripples.'];
+  if (seam === 'zip' && t.zipLen) return [`Take the ${cm(t.zipLen)} zip. Check it against the opening: the zip stop should sit just above the end of the opening.`, ...SEAM_HOW.zip.slice(1)];
+  if (seam === 'button' && t.btns) return [`There are ${t.btns} button${t.btns > 1 ? 's' : ''} to sew. Close the garment and push a pin through each buttonhole to mark where its button goes on the layer beneath.`, ...SEAM_HOW.button.slice(1)];
+  if (seam === 'bartack' && t.tacks) return [`There are ${t.tacks} bar tacks in this step: one at each end of every strap, tie or loop it attaches.`, ...SEAM_HOW.bartack];
+  return SEAM_HOW[seam] || [];
+}
 function docModel() {
   const G = SF.GARMENTS[S.garment], F = SF.FORMS[S.form], cut = garment.pieces.filter(p => p.spec.kind !== 'zip');
   const fabText = f => { const C = SF.CLOTHS[f.cloth], P = SF.PRINTS[f.print]; return `${C ? C.name : f.cloth}, ${P ? P.name.toLowerCase() : f.print}`; };
-  const C = SF.CLOTHS[S.fabric.cloth] || {}, cid = S.fabric.cloth, pid = S.fabric.print;
+  const clothOf = id => SF.CLOTHS[fabOf(id).cloth] || {}, mainKey = fabKey(S.fabric);
   const measures = SF.MEASURES.filter(d => typeof S.M[d.key] === 'number').map(d => [d.label, `${+(+S.M[d.key]).toFixed(1)} ${d.unit || 'cm'}`]);
   const yy = body.y, heights = [['Top of the head', yy.top], ['Chin', yy.chin], ['Base of the neck', yy.neck], ['Shoulder point', yy.shoulder], ['Underarm', yy.armpit], ['Fullest part of the bust or chest', yy.bust], ['Under the bust', yy.under], ['Waist', yy.waist], ['Hip', yy.hip], ['Crotch', yy.crotch], ['Knee', yy.knee], ['Ankle', yy.ankle]].filter(r => typeof r[1] === 'number').map(r => [r[0], cm(r[1])]);
   const fit = (G.fit || []).map(d => { const v = S.fit[d.key] ?? d.def, show = x => d.choices ? d.choices[x] : `${+(+x).toFixed(1)} ${d.unit || 'cm'}`; return { label: d.label, value: show(v), def: show(d.def), range: d.choices ? d.choices.join(' / ') : `${show(d.min)} to ${show(d.max)}`, changed: v !== d.def }; });
-  const own = cut.filter(p => fabKey(fabOf(p.id)) !== fabKey(S.fabric)).map(p => ({ name: p.name, text: fabText(fabOf(p.id)), colour: fabOf(p.id).colour }));
   const nameOf = id => garment.byId[id] ? garment.byId[id].name : (garment.trims.find(t => t.id === id) ? ({ sewn: 'Button', dark: 'Button', steel: 'Button', tack: 'Metal button', ring: 'Ring', wings: 'Badge' }[garment.trims.find(t => t.id === id).style] || 'Trim') : id);
   const edgeLen = (p, seg) => { try { return p.edgeLen(seg); } catch (e) { return 0; } };
+  // the cloths: every different cloth in the garment gets its own cutting plan, so its own length to buy
+  const groups = new Map(); for (const p of cut) { const f = fabOf(p.id), k = fabKey(f); if (!groups.has(k)) groups.set(k, { fab: f, ps: [] }); groups.get(k).ps.push(p); }
+  const cloths = [...groups.entries()].sort((a, b) => (b[0] === mainKey) - (a[0] === mainKey) || b[1].ps.length - a[1].ps.length).map(([key, gr], ix) => { const m = SF.makeMarker(gr.ps), Cc = SF.CLOTHS[gr.fab.cloth] || {}, area = gr.ps.reduce((a, p) => a + (p.area || p.w * p.h), 0);
+    return { ix, key, main: key === mainKey, text: fabText(gr.fab), colour: gr.fab.colour, cid: gr.fab.cloth, kind: Cc.kind || '', weight: Cc.weight || 200, stretch: Cc.stretch || 0, facts: Cc.kind ? `${Cc.kind}, about ${Cc.weight} g/m², stretches ${Cc.stretch} %` : '', note: Cc.note || '',
+      length: m.length, width: m.width, eff: Math.round(m.efficiency * 100), buy: Math.max(20, Math.ceil((m.length + 10) / 10) * 10), place: m.place, ids: gr.ps.map(p => p.id), area, grams: area / 10000 * (Cc.weight || 200) }; });
+  const clothIx = id => cloths.findIndex(c => c.ids.includes(id));
   // the pieces, each with its edges and their lengths along the stitching line
-  const pieces = cut.map((p, i) => { let out = null; try { out = p.outline(); } catch (e) { out = null; }
+  const pieces = cut.map((p, i) => { let out = null; try { out = p.outline(); } catch (e) { out = null; } const ci = clothIx(p.id);
     const segs = p.spec.ribbon ? [] : Object.keys(p.spec.segs || {}).map(sg => ({ name: edgeWord(sg), len: edgeLen(p, sg) })).filter(e => e.len > 0.4);
-    return { n: i + 1, id: p.id, name: p.name, w: p.w, h: p.h, area: p.area || p.w * p.h, out, colour: fabOf(p.id).colour, cloth: fabKey(fabOf(p.id)) !== fabKey(S.fabric) ? fabText(fabOf(p.id)) : '', ribbon: !!p.spec.ribbon, small: !!p.spec.small, edges: segs, at: marker.place[p.id] || null }; });
-  // the steps
-  let seamTotal = 0, threadTotal = 0, minutes = 0;
+    return { n: i + 1, id: p.id, name: p.name, w: p.w, h: p.h, area: p.area || p.w * p.h, out, colour: fabOf(p.id).colour, cloth: ci, ribbon: !!p.spec.ribbon, small: !!p.spec.small, edges: segs, at: cloths[ci] ? cloths[ci].place[p.id] || null : null, tooWide: p.w + 2 > 150 }; });
+  // Is a pair of edges that are sewn together really sewable? The same length, or near enough: fine. A little longer: ease.
+  // More than a seam of that kind can take up: a fault in the pattern, and the report says so instead of asking for it to be eased.
+  const judge = (A, B, ids) => { const d = A.len - B.len, ad = Math.abs(d), base = Math.min(A.len, B.len) || 1, pct = ad / base * 100, head = [...A.items, ...B.items].some(x => /sleeve head/.test(x.edge)), knit = ids.some(id => clothOf(id).kind === 'knit'), limit = head ? (knit ? 4 : 8) : knit ? 4 : 2.5;
+    return { d, pct, limit, head, verdict: ad <= Math.max(0.3, base * 0.01) ? 'ok' : pct <= limit || ad <= (knit ? 1.5 : 1) ? 'ease' : 'fault' }; };   /* on a short seam a centimetre is always easable, whatever share of the seam it is */
+  const audit = [], simple = []; let seamTotal = 0, threadTotal = 0, minutes = 0;
   const steps = garment.ops.map(o => { const M = o.machine && SF.MACHINES[o.machine], Sm = SF.SEAMS[o.seam], home = MACH_HOME[o.machine] || ['', 0, 0];
-    const side = arr => { const items = arr.map(([id, sg]) => ({ piece: nameOf(id), edge: edgeWord(sg), len: garment.byId[id] ? edgeLen(garment.byId[id], sg) : 0 })); return { items, len: items.reduce((a, b) => a + b.len, 0) }; };
-    const joins = (o.joins || []).map(jn => { const A = side(jn.a), B = side(jn.b), d = A.len - B.len; return { a: A, b: B, ease: Math.abs(d) > 0.3 ? { longer: d > 0 ? A.items.map(x => x.piece).join(' + ') : B.items.map(x => x.piece).join(' + '), by: Math.abs(d) } : null }; });
-    const stitched = (o.stitch || []).filter(st => st.e).map(st => { const [id, sg] = st.e.split('.'); return { piece: nameOf(id), edge: edgeWord(sg), from: st.in || 0.25, rows: st.rows || 1, zig: !!st.zig, len: garment.byId[id] ? edgeLen(garment.byId[id], sg) : 0 }; });
+    const side = arr => { const items = arr.map(([id, sg]) => ({ id, seg: sg, piece: nameOf(id), edge: edgeWord(sg), len: garment.byId[id] ? edgeLen(garment.byId[id], sg) : 0 })); return { items, len: items.reduce((a, b) => a + b.len, 0) }; };
+    const mkJoin = (A, B, inferred) => { const ids = [...A.items, ...B.items].map(x => x.id), J2 = judge(A, B, ids), kinds2 = [...new Set(ids.map(id => clothOf(id).kind).filter(Boolean))];
+      const jn = { a: A, b: B, inferred: !!inferred, verdict: J2.verdict, pct: J2.pct, limit: J2.limit, head: J2.head, mixed: kinds2.length > 1, ease: J2.verdict !== 'ok' ? { longer: (J2.d > 0 ? A : B).items.map(x => x.piece).join(' + '), by: Math.abs(J2.d) } : null };
+      audit.push({ step: o.n, name: o.name, a: A.items.map(x => `${x.piece}, ${x.edge}`).join(' + '), b: B.items.map(x => `${x.piece}, ${x.edge}`).join(' + '), la: A.len, lb: B.len, verdict: jn.verdict, pct: J2.pct, limit: J2.limit, head: J2.head, inferred: !!inferred, mixed: jn.mixed, longer: jn.ease ? jn.ease.longer : '' }); return jn; };
+    const joins = (o.joins || []).map(jn => mkJoin(side(jn.a), side(jn.b)));
+    const stitched = (o.stitch || []).filter(st => st.e).map(st => { const [id, sg] = st.e.split('.'); return { id, seg: sg, piece: nameOf(id), edge: edgeWord(sg), from: st.in || 0.25, rows: st.rows || 1, zig: !!st.zig, len: garment.byId[id] ? edgeLen(garment.byId[id], sg) : 0 }; });
+    // a collar or hood is stitched round the neckline; the model stores no join for it, so the two are compared here
+    if (!joins.length) for (const e of stitched) if (/collar|hood/i.test(e.id) && e.seg === 'b') { const necks = cut.filter(p => p.spec.segs && p.spec.segs.neck && !/collar|hood/i.test(p.id)); if (necks.length) joins.push(mkJoin(side([[e.id, 'b']]), side(necks.map(p => [p.id, 'neck'])), true)); }
     let len = 0; const marks = [];
     for (const ln of o.lines || []) { const p = garment.byId[ln.piece]; if (!p) continue; try { const pts = ln.uv.map(c => p.flatAt(c[0], c[1])); len += flatLen(pts); marks.push({ id: ln.piece, pts }); } catch (e) { /* a line that cannot be laid flat is left out of the totals */ } }
-    for (const jn of o.joins || []) for (const [id, sg] of jn.b) { const p = garment.byId[id]; if (p) try { marks.push({ id, pts: p.edgeFlat(sg) }); } catch (e) { /* drawn without this edge */ } }   /* the other side of each join is drawn heavy too */
-    const tacks = (o.tacks || []).length, holes = (o.holes || []).length, btns = o.seam === 'button' ? (o.bring || []).length : 0;
-    const thread = len / 100 * home[1] + tacks * 0.35 + holes * 1.2 + btns * 0.3, mins = 2 + (home[2] ? len / home[2] : 0) + tacks * 0.4 + holes * 1.5 + btns * 2;
+    for (const jn of joins) for (const x of [...jn.a.items, ...jn.b.items]) { const p = garment.byId[x.id]; if (p) try { marks.push({ id: x.id, pts: p.edgeFlat(x.seg) }); } catch (e) { /* drawn without this edge */ } }   /* both sides of every join are drawn heavy */
+    const tacks = (o.tacks || []).length, holes = (o.holes || []).length, btns = o.seam === 'button' ? (o.bring || []).length : 0, zipP = o.used.map(id => garment.byId[id]).find(p => p && p.spec.kind === 'zip');
+    const joinLen = joins.reduce((a, j) => a + Math.max(j.a.len, j.b.len), 0), pressed = ['superimposed', 'felled', 'hem', 'zip', 'topstitch'].includes(o.seam);
+    // time: fetch and position the work, pin or clip the joins, sew, press
+    const thread = len / 100 * home[1] + tacks * 0.35 + holes * 1.2 + btns * 0.3, mins = 1.5 + joinLen / 50 + (home[2] ? len / home[2] : 0) + (pressed ? 1 + len / 150 : 0) + tacks * 0.5 + holes * 2 + btns * 2;
     seamTotal += len; threadTotal += thread; minutes += mins;
-    return { n: o.n, name: o.name, machine: M ? `${M.name} (stitch ${M.stitch}, ${M.needles} needle${M.needles > 1 ? 's' : ''}, ${M.threads} thread${M.threads > 1 ? 's' : ''})` : 'Button press', home: home[0], seam: Sm ? Sm.name : '', seamDesc: Sm ? Sm.desc : '', how: SEAM_HOW[o.seam] || [], check: SEAM_CHECK[o.seam] || '',
-      pieces: [...new Set(o.used.map(nameOf))], ids: o.used.filter(id => garment.byId[id]), joins, stitched, len, tacks, holes, btns, thread, mins, note: o.note, marks }; });
+    for (const m of (o.note || '').match(/Here [^.]*\./g) || []) simple.push({ step: o.n, text: m });
+    const t = { n: o.n, name: o.name, mid: o.machine || '', machine: M ? `${M.name} (stitch ${M.stitch}, ${M.needles} needle${M.needles > 1 ? 's' : ''}, ${M.threads} thread${M.threads > 1 ? 's' : ''})` : 'Button press', home: home[0], seam: Sm ? Sm.name : '', seamId: o.seam, seamDesc: Sm ? Sm.desc : '', check: SEAM_CHECK[o.seam] || '',
+      pieces: [...new Set(o.used.map(nameOf))], ids: o.used.filter(id => garment.byId[id]), joins, stitched, len, tacks, holes, btns, thread, mins, note: o.note, marks, zipLen: zipP ? Math.max(zipP.w, zipP.h) : 0, slick: o.used.some(id => SLICK.includes(fabOf(id).cloth)) };
+    t.how = howFor(o.seam, o.machine, t); return t; });
+  // the self-audit: everything in the garment that the numbers say is wrong or doubtful
+  const findings = [];
+  for (const a of audit) if (a.verdict === 'fault' && !a.inferred) findings.push({ level: 'fault', step: a.step, text: `${a.a} (${cm(a.la)}) is sewn to ${a.b} (${cm(a.lb)}), but ${a.longer} is ${cm(Math.abs(a.la - a.lb))} longer, ${a.pct.toFixed(0)} % of the seam. A seam of this kind takes up about ${a.limit} %.`,
+    fix: a.head ? `Take ${cm(Math.abs(a.la - a.lb) - Math.min(a.la, a.lb) * a.limit / 200)} out of the sleeve before sewing: narrow it by half that amount at each underarm edge, tapering to nothing at the elbow; or gather the surplus over the top third of the sleeve head for a puffed sleeve; or lower the armhole on both body pieces until the lengths agree.` : `Either gather the longer edge to fit (two rows of long stitches, drawn up evenly), or shorten it by trimming both of its ends, half the difference each, and redraw the seam lines.` });
+  for (const p of pieces) if (p.tooWide) findings.push({ level: 'fault', step: 0, text: `${p.name} is ${cm(p.w)} wide, wider than the 150 cm cloth.`, fix: 'Cut it in two with a seam down its length, or use wider cloth.' });
+  for (const a of audit) if (a.inferred) findings.push({ level: 'note', step: a.step, text: `${a.a} is stitched round the neckline, but the model records no join for it and draws it on the neck, not on the neckline. Compared here: ${cm(a.la)} against ${cm(a.lb)} of neckline${a.verdict === 'ok' ? ', which agree.' : `, a difference of ${cm(Math.abs(a.la - a.lb))}.`}`, fix: a.verdict === 'ok' ? '' : 'Do not cut it to the drawn length. Measure the finished neckline along its stitching line and cut this piece to that length plus 2 cm.' });
+  { const mixed = audit.filter(a => a.mixed); if (mixed.length) findings.push({ level: 'warn', step: mixed[0].step, text: `${mixed.length} seam${mixed.length > 1 ? 's join' : ' joins'} a stretch cloth to one that does not stretch (first in step ${mixed[0].step}).`, fix: 'Sew with the stretch cloth underneath, against the feed dogs, and stay the seam with a narrow tape so it cannot grow.' }); }
+  for (const a of audit) if (a.verdict === 'ease' && !a.inferred) findings.push({ level: 'ease', step: a.step, text: `${a.longer} is ${cm(Math.abs(a.la - a.lb))} longer (${a.pct.toFixed(1)} %) where ${a.a} meets ${a.b}. Within what the seam can ease.`, fix: '' });
+  for (const sm of simple) findings.push({ level: 'model', step: sm.step, text: sm.text, fix: '' });
   // what to buy
-  const notions = [];
+  const notions = [...(garment.notions || [])];
   for (const p of garment.pieces) if (p.spec.kind === 'zip') notions.push(`${p.name}: one zip about ${Math.round(Math.max(p.w, p.h))} cm long`);
   const kinds = { sewn: 'button', dark: 'dark button', steel: 'metal shank button', tack: 'metal button or ornament', ring: 'metal ring', wings: 'metal badge' }, count = {};
   for (const t of garment.trims) { const k = `${kinds[t.style] || 'trim'}, ${+(2 * t.r).toFixed(1)} cm across`; count[k] = (count[k] || 0) + 1; }
   for (const k in count) notions.push(`${count[k]} × ${k}`);
-  const elastic = steps.filter((t, i) => garment.ops[i].seam === 'elastic').reduce((a, t) => a + t.stitched.reduce((x, e) => x + e.len, 0), 0);
+  const elastic = steps.filter(t => t.seamId === 'elastic').reduce((a, t) => a + t.stitched.reduce((x, e) => x + e.len, 0), 0);
   if (elastic > 1) notions.push(`Narrow elastic, 6 to 10 mm wide: about ${Math.round(elastic * 0.9)} cm (nine tenths of the ${Math.round(elastic)} cm of edge it goes on), plus 10 cm to spare`);
-  const stiff = cut.filter(p => /collar|placket|belt|cuff|band|epaulette/i.test(p.id) && !p.spec.ribbon); if (stiff.length && C.kind === 'woven') notions.push(`Iron-on interfacing for ${stiff.map(p => p.name.toLowerCase()).join(', ')}: about ${Math.round(stiff.reduce((a, p) => a + (p.area || p.w * p.h), 0) / 100) * 100 || 100} cm²`);
+  else { const st = steps.filter(t => /elastic/i.test(t.note) && t.seamId !== 'elastic'); if (st.length && !notions.some(n => /elastic/i.test(n))) notions.push(`Elastic: step${st.length > 1 ? 's' : ''} ${st.map(t => t.n).join(', ')} call${st.length > 1 ? '' : 's'} for it, but the model does not give its length. Measure it on the wearer.`); }
+  const stiff = cut.filter(p => /collar|placket|belt|cuff|band|epaulette/i.test(p.id) && !p.spec.ribbon && clothOf(p.id).kind === 'woven' && !SLICK.includes(fabOf(p.id).cloth)); if (stiff.length) notions.push(`Iron-on interfacing for ${stiff.map(p => p.name.toLowerCase()).join(', ')}: about ${Math.round(stiff.reduce((a, p) => a + (p.area || p.w * p.h), 0) / 100) * 100 || 100} cm²`);
   notions.push(`Sewing thread: about ${Math.max(10, Math.ceil(threadTotal / 10) * 10)} m in all, so ${threadTotal > 180 ? 'two 200 m reels, or cones for the overlocker' : 'one 200 m reel'}`);
-  const slick = ['vinyl', 'pu', 'leather', 'snakeskin', 'coated', 'holo', 'clearpvc', 'foil', 'holofoil'].includes(cid), fine = ['net', 'tulle', 'chainmail'].includes(cid), stripes = ['bandstripe', 'tickstripe', 'stripes', 'windowplaid', 'tiers', 'boho'].includes(pid);
-  const tools = ['Fabric shears, or a rotary cutter and a cutting mat', slick ? 'Clips, not pins: every hole made in this cloth stays' : 'Glass-headed pins', 'A tape measure and a long ruler', 'Tailor’s chalk or a washable marker', 'An iron, an ironing board and a pressing cloth', 'A seam ripper', 'Small sharp scissors for thread ends', 'A hand needle',
-    slick ? 'Machine needles for leather or a fine sharp (microtex) needle, size 80 to 90, and a roller or non-stick presser foot so the surface does not drag' : fine ? 'Fine machine needles, size 60 to 70, and tissue paper to lay under the seam so the feed dogs do not swallow the cloth' : C.kind === 'knit' ? 'Ballpoint or stretch machine needles, size 75 to 90: a sharp needle cuts the loops of a knit and starts a ladder' : 'Universal machine needles, size 70 to 90 to suit the weight of the cloth'];
-  const prep = [C.kind === 'woven' && !slick ? 'Wash and dry the cloth the way the finished garment will be washed, then press it. Cotton and linen shrink; better now than after sewing.' : slick ? 'Do not wash or iron the cloth. Unroll it and leave it flat for a day so the creases from the roll relax.' : 'Let the cloth relax flat for a few hours before cutting; a knit stretched on the roll shrinks back.',
-    'Straighten one cut end so it is square to the selvedge.', 'Fold or lay the cloth as the cutting plan shows, right side up, on a table long enough to hold it without hanging over the edge.',
-    stripes ? 'This cloth is striped. Lay the pieces so the same stripe crosses matching points, at least at the side seams, the centre front and across the sleeves at the underarm. That usually takes more cloth than the plan below allows: buy 10 to 15 % extra.' : '',
-    C.kind === 'knit' ? `The greatest stretch of the cloth (${C.stretch} %) runs across the roll and must go round the body. Do not turn a piece a quarter turn to save cloth.` : ''].filter(Boolean);
-  const finish = ['Pull every thread end to the wrong side, knot it and trim it. Thread ends of overlocked seams are threaded back through the stitches with a blunt needle.', slick ? 'Do not iron. Wipe off any chalk with a damp cloth.' : C.kind === 'knit' ? 'Press seams lightly with a cool iron and steam, without stretching them. Never press elastic.' : 'Give the whole garment a final press: seams first, then hems, then the body of the garment, from the wrong side.',
+  // tools, preparation, finishing and care follow every cloth in the garment, not just the main one
+  const cids = [...new Set(cloths.map(c => c.cid))], anySlick = cids.some(c => SLICK.includes(c)), anyFine = cids.some(c => FINE.includes(c)), anyKnit = cloths.some(c => c.kind === 'knit' && !SLICK.includes(c.cid) && !FINE.includes(c.cid)), anyWoven = cloths.some(c => c.kind === 'woven' && !SLICK.includes(c.cid)), pids = [...new Set(cut.map(p => fabOf(p.id).print))], stripes = pids.some(pr => ['bandstripe', 'tickstripe', 'stripes', 'windowplaid', 'tiers', 'boho'].includes(pr)), named = f => cloths.filter(f).map(c => c.text).join('; ');
+  const tools = ['Fabric shears, or a rotary cutter and a cutting mat', anySlick ? `Clips for ${named(c => SLICK.includes(c.cid))}: every hole made in it stays${anyWoven || anyKnit ? '. Glass-headed pins for the rest' : ''}` : 'Glass-headed pins', 'A tape measure and a long ruler', 'Tailor’s chalk or a washable marker', 'An iron, an ironing board and a pressing cloth', 'A seam ripper', 'Small sharp scissors for thread ends', 'A hand needle',
+    anyWoven ? `Universal machine needles, size 70 to 90 to suit the weight, for ${named(c => c.kind === 'woven' && !SLICK.includes(c.cid))}` : '', anyKnit ? `Ballpoint or stretch machine needles, size 75 to 90, for ${named(c => c.kind === 'knit' && !SLICK.includes(c.cid) && !FINE.includes(c.cid))}: a sharp needle cuts the loops of a knit and starts a ladder` : '',
+    anySlick ? `Leather or fine sharp (microtex) needles, size 80 to 90, and a roller or non-stick presser foot for ${named(c => SLICK.includes(c.cid))}` : '', anyFine ? `Fine needles, size 60 to 70, and tissue paper to lay under the seam for ${named(c => FINE.includes(c.cid))}` : ''].filter(Boolean);
+  const prep = [anyWoven ? `Wash and dry ${named(c => c.kind === 'woven' && !SLICK.includes(c.cid))} the way the finished garment will be washed, then press it. Cotton and linen shrink; better now than after sewing.` : '', anySlick ? `Do not wash or iron ${named(c => SLICK.includes(c.cid))}. Unroll it and leave it flat for a day so the creases from the roll relax.` : '',
+    anyKnit || anyFine ? `Let ${named(c => c.kind === 'knit' && !SLICK.includes(c.cid))} relax flat for a few hours before cutting; a knit stretched on the roll shrinks back.` : '', 'Straighten one cut end of each cloth so it is square to the selvedge.', 'Lay each cloth as its cutting plan shows, right side up, on a table long enough to hold it without hanging over the edge.',
+    stripes ? 'Some of the cloth is striped. Lay the pieces so the same stripe crosses matching points, at least at the side seams, the centre front and across the sleeves at the underarm. That usually takes more cloth than the plan allows: buy 10 to 15 % extra.' : '',
+    anyKnit ? 'On a knit, the greatest stretch runs across the roll and must go round the body. Do not turn a piece a quarter turn to save cloth.' : ''].filter(Boolean);
+  const finish = ['Pull every thread end to the wrong side, knot it and trim it. Thread ends of overlocked seams are threaded back through the stitches with a blunt needle.', anySlick && !anyWoven && !anyKnit ? 'Do not iron. Wipe off any chalk with a damp cloth.' : `Give the garment a final press from the wrong side: seams first, then hems${anySlick ? `. Keep the iron off ${named(c => SLICK.includes(c.cid))}` : ''}${anyKnit ? '. Use a cool iron and steam on the knit parts, without stretching them, and never press elastic' : ''}.`,
     'Try the garment on and check: the shoulder seams sit on top of the shoulders; the side seams hang straight down; the hem is level all round; nothing pulls across the bust, the hip or the upper arm; every closure does up without strain.', 'If something pulls, look for where the creases point: they point at the place that is too tight.'];
-  const care = slick ? 'Wipe clean with a damp cloth and mild soap. Do not machine wash, tumble dry or iron; hang it to dry away from heat, and store it hanging so it does not crease or stick to itself.' : cid === 'sequin' ? 'Hand wash cold, inside out. Do not wring, tumble dry or iron; dry flat.' : C.kind === 'knit' ? 'Machine wash cool (30 °C) or rinse in cold water after swimming. No fabric softener, no tumble dryer, no iron: heat destroys the elastane. Dry flat in the shade.' : 'Machine wash at 40 °C, with like colours. Iron while slightly damp. The first washes may shrink it a little if the cloth was not washed before cutting.';
+  const careOf = { slick: 'Wipe clean with a damp cloth and mild soap. Do not machine wash, tumble dry or iron; hang it to dry away from heat, and store it hanging so it does not crease or stick to itself.', sequin: 'Hand wash cold, inside out. Do not wring, tumble dry or iron; dry flat.', fine: 'Hand wash cold in a net bag. Do not wring or tumble dry; dry flat.',
+    knit: 'Machine wash cool (30 °C) or rinse in cold water after swimming. No fabric softener, no tumble dryer, no hot iron: heat destroys the elastane. Dry flat in the shade.', woven: 'Machine wash at 40 °C, with like colours. Iron while slightly damp.' };
+  const careKinds = [anySlick && 'slick', cids.includes('sequin') && 'sequin', anyFine && 'fine', anyKnit && 'knit', anyWoven && 'woven'].filter(Boolean);
+  const care = careKinds.length > 1 ? `This garment mixes ${cloths.length} cloths that are cared for differently, so it has to be treated as its most delicate one. ${careOf[careKinds[0]]}` : careOf[careKinds[0] || 'woven'];
   const mids = [...new Set(garment.ops.map(o => o.machine || ''))];
   const machines = mids.map(id => id && SF.MACHINES[id] ? { name: SF.MACHINES[id].name, stitch: SF.MACHINES[id].stitch, blurb: SF.MACHINES[id].blurb, home: (MACH_HOME[id] || [''])[0] } : { name: 'Button press', stitch: '', blurb: 'A hand press that rivets a tack button or a snap through the cloth. Nothing is sewn.', home: 'A hand press or a setting tool and a hammer.' });
-  const cutMin = cut.length * 4 + 20, score = garment.ops.length + (garment.pieces.some(p => p.spec.kind === 'zip') ? 2 : 0) + (cut.some(p => /sleeve/.test(p.id)) ? 2 : 0) + (cut.some(p => /collar|hood/.test(p.id)) ? 2 : 0) + (slick || fine ? 3 : 0);
-  const usedSeams = [...new Set(garment.ops.map(o => o.seam))].filter(k => SF.SEAMS[k]).map(k => [SF.SEAMS[k].name, SF.SEAMS[k].desc]);
-  return { title: G.name, figure: F ? F.name : 'Custom figure', measures, heights, fit, cloth: { text: fabText(S.fabric), colour: S.fabric.colour, facts: C.kind ? `${C.kind}, about ${C.weight} g/m², stretches ${C.stretch} %` : '', note: C.note || '' }, own, thread: S.thread,
-    marker: { length: marker.length, width: marker.width, eff: Math.round(marker.efficiency * 100), buy: Math.ceil((marker.length + 10) / 10) * 10 }, notions, tools, prep, finish, care, machines, steps, pieces, glossary: [...GLOSSARY, ...usedSeams],
-    glance: { pieces: cut.length, steps: steps.length, machines: machines.length, seam: seamTotal, thread: threadTotal, sewMin: minutes, cutMin, level: score < 9 ? 'Beginner' : score < 15 ? 'Intermediate' : 'Advanced', weight: Math.round((cut.reduce((a, p) => a + (p.area || 0), 0) / 10000) * (C.weight || 200)) } };
+  const cutMin = cut.length * 4 + 15 * cloths.length + 5, score = garment.ops.length + (garment.pieces.some(p => p.spec.kind === 'zip') ? 2 : 0) + (cut.some(p => /sleeve/.test(p.id)) ? 2 : 0) + (cut.some(p => /collar|hood/.test(p.id)) ? 2 : 0) + (anySlick || anyFine ? 3 : 0) + (cloths.length > 2 ? 2 : 0);
+  const usedSeams = [...new Set(garment.ops.map(o => o.seam))].filter(k => SF.SEAMS[k]).map(k => [SF.SEAMS[k].name, SF.SEAMS[k].desc]), nF = findings.filter(f => f.level === 'fault').length, checked = audit.filter(a => !a.inferred), nW = findings.filter(f => f.level === 'warn' || f.level === 'note').length, nE = findings.filter(f => f.level === 'ease').length;
+  return { title: G.name, id: S.garment, figure: F ? F.name : 'Custom figure', measures, heights, fit, cloths, thread: S.thread, notions, tools, prep, finish, care, machines, steps, pieces, audit, findings, glossary: [...GLOSSARY, ...usedSeams],
+    glance: { pieces: cut.length, steps: steps.length, machines: machines.length, cloths: cloths.length, seam: seamTotal, thread: threadTotal, sewMin: minutes, cutMin, level: score < 9 ? 'Beginner' : score < 15 ? 'Intermediate' : 'Advanced', weight: Math.round(cloths.reduce((a, c) => a + c.grams, 0)), seams: checked.length, faults: nF, warns: nW, eases: checked.filter(a => a.verdict === 'ease').length, ok: checked.filter(a => a.verdict === 'ok').length, misfit: checked.filter(a => a.verdict === 'fault').length } };
 }
 function pieceSVG(pc, k, label) {
   if (!pc.out || pc.out.length < 3) return '';
@@ -5931,12 +6011,12 @@ function pieceSVG(pc, k, label) {
   const gx = ((0 - x0) * k + 2).toFixed(1), g0 = ((y1 - Math.min(y1 - 3, (y1 - y0) * 0.3)) * k + 2), g1 = ((y1 - Math.max(y0 + 3, -(y1 - y0) * 0.3)) * k + 2), grain = !pc.ribbon && H > 46 ? `<path class="gr" d="M${gx},${Math.min(g0, g1).toFixed(1)}V${Math.max(g0, g1).toFixed(1)}M${gx},${Math.min(g0, g1).toFixed(1)}l-3,6m3,-6l3,6M${gx},${Math.max(g0, g1).toFixed(1)}l-3,-6m3,6l3,-6"/>` : '';
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W.toFixed(0)}" height="${H.toFixed(0)}" viewBox="0 0 ${W.toFixed(0)} ${H.toFixed(0)}" role="img" aria-label="${escH(label || pc.name)}"><path class="cut" d="${path(cutL)}"/><path class="st" d="${path(pc.out)}"/>${grain}</svg>`;
 }
-// The cutting plan: the cloth with every piece where the marker put it. The cloth's length runs across the page.
-function layoutSVG(D) {
-  const L = D.marker.length, Wd = D.marker.width, k = Math.min(4, 720 / (L + 4)), W = L * k + 4, H = Wd * k + 4;
-  const body2 = D.pieces.filter(p => p.at && p.out).map(p => { const X = c => ((p.at.along + c[1]) * k + 2).toFixed(1), Y = c => ((p.at.across + c[0]) * k + 2).toFixed(1), o = SF.offsetOutline(p.out, 1);
+// The cutting plan of one cloth: the cloth with every piece cut from it where the marker put it. The cloth's length runs across the page.
+function layoutSVG(cl, D) {
+  const L = Math.max(10, cl.length), Wd = cl.width, k = Math.min(3, 720 / (L + 4)), W = L * k + 4, H = Wd * k + 4;
+  const body2 = D.pieces.filter(p => p.cloth === cl.ix && p.at && p.out).map(p => { const X = c => ((p.at.along + c[1]) * k + 2).toFixed(1), Y = c => ((p.at.across + c[0]) * k + 2).toFixed(1), o = SF.offsetOutline(p.out, 1);
     return `<path class="cut" d="M${o.map(c => X(c) + ',' + Y(c)).join('L')}Z"/><text x="${(p.at.along * k + 2).toFixed(1)}" y="${(p.at.across * k + 6).toFixed(1)}" text-anchor="middle" class="num">${p.n}</text>`; }).join('');
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W.toFixed(0)}" height="${(H + 18).toFixed(0)}" viewBox="0 0 ${W.toFixed(0)} ${(H + 18).toFixed(0)}" role="img" aria-label="Cutting plan"><rect class="cloth" x="2" y="2" width="${(L * k).toFixed(1)}" height="${(Wd * k).toFixed(1)}"/>${body2}<path class="gr" d="M14,${(H + 9).toFixed(1)}H${(W - 14).toFixed(1)}m-7,-4l7,4l-7,4M21,${(H + 5).toFixed(1)}l-7,4l7,4"/></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W.toFixed(0)}" height="${(H + 18).toFixed(0)}" viewBox="0 0 ${W.toFixed(0)} ${(H + 18).toFixed(0)}" role="img" aria-label="Cutting plan for ${escH(cl.text)}"><rect class="cloth" x="2" y="2" width="${(L * k).toFixed(1)}" height="${(Wd * k).toFixed(1)}"/>${body2}<path class="gr" d="M14,${(H + 9).toFixed(1)}H${(W - 14).toFixed(1)}m-7,-4l7,4l-7,4M21,${(H + 5).toFixed(1)}l-7,4l7,4"/></svg>`;
 }
 // One step: the pieces it joins, side by side, with the edges to be sewn drawn heavy.
 function stepSVG(st, D) {
@@ -5949,28 +6029,33 @@ function stepSVG(st, D) {
     parts.push(`<text x="${(x + w / 2).toFixed(1)}" y="${(tall * k + 16).toFixed(1)}" text-anchor="middle" class="num">${b.p.n}</text>`); x += w + 6 * k; }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${x.toFixed(0)}" height="${(tall * k + 22).toFixed(0)}" viewBox="0 0 ${x.toFixed(0)} ${(tall * k + 22).toFixed(0)}" role="img" aria-label="Where step ${st.n} is sewn">${parts.join('')}</svg>`;
 }
-const hm = m => m >= 90 ? `${Math.floor(m / 60)} h ${Math.round(m % 60 / 5) * 5} min` : `${Math.round(m / 5) * 5 || 5} min`;
+const hm = m => m >= 90 ? `${Math.floor(m / 60)} h ${Math.round(m % 60 / 5) * 5} min` : m >= 20 ? `${Math.round(m / 5) * 5} min` : `${Math.max(1, Math.round(m))} min`;
+const LEVEL_WORD = { fault: 'Fault', warn: 'Warning', note: 'Note', ease: 'To ease', model: 'Simplified' };
+const joinVerdict = j => j.verdict === 'ok' ? 'same length' : j.verdict === 'ease' ? `${j.ease.longer} is ${cm(j.ease.by)} longer: ease it in` : `FAULT: ${j.ease.longer} is ${cm(j.ease.by)} longer (${j.pct.toFixed(0)} %), more than this seam can ease. See the self-audit`;
 function docHTML(D, img, gal) {
-  const big = Math.max(1, ...D.pieces.filter(p => p.out).map(p => Math.max(p.w, p.h))), k = Math.min(3, 560 / (big + 2)), rows = a => `<table>${a.map(r => `<tr><td>${escH(r[0])}</td><td>${escH(r[1])}</td></tr>`).join('')}</table>`, sw = c => `<span class="sw" style="background:${escH(c)}"></span>`, li = a => a.map(t => `<li>${escH(t)}</li>`).join(''), g = D.glance;
-  const joinText = j => `${j.a.items.map(x => `<b>${escH(x.piece)}</b>, ${escH(x.edge)} (${cm(x.len)})`).join(' + ')} <span class="to">to</span> ${j.b.items.map(x => `<b>${escH(x.piece)}</b>, ${escH(x.edge)} (${cm(x.len)})`).join(' + ')}${j.ease ? `. <i>${escH(j.ease.longer)} is ${cm(j.ease.by)} longer: ease it in.</i>` : ''}`;
+  const big = Math.max(1, ...D.pieces.filter(p => p.out).map(p => Math.max(p.w, p.h))), k = Math.min(3, 560 / (big + 2)), rows = a => `<table>${a.map(r => `<tr><td>${escH(r[0])}</td><td>${escH(r[1])}</td></tr>`).join('')}</table>`, sw = c => `<span class="sw" style="background:${escH(c)}"></span>`, li = a => a.map(t => `<li>${escH(t)}</li>`).join(''), g = D.glance, one = D.cloths.length === 1;
+  const joinText = j => `${j.a.items.map(x => `<b>${escH(x.piece)}</b>, ${escH(x.edge)} (${cm(x.len)})`).join(' + ')} <span class="to">to</span> ${j.b.items.map(x => `<b>${escH(x.piece)}</b>, ${escH(x.edge)} (${cm(x.len)})`).join(' + ')}. <i class="v-${j.verdict}">${escH(joinVerdict(j))}.</i>${j.inferred ? ' <span class="note">(compared by the report; the model stores no join here)</span>' : ''}`;
+  const auditLine = g.faults ? `${g.faults} fault${g.faults > 1 ? 's' : ''} that must be put right before sewing` : 'no faults found';
   return `<div class="sheet"><h1>${escH(D.title)}</h1><p class="sub">Sewing instructions, drafted for the figure ${escH(D.figure)}</p>
 <div class="top"><div>${img ? `<img alt="The finished ${escH(D.title)} on the figure" src="${img}">` : '<img alt="" id="docImg">'}</div><div>
-<h2 style="margin-top:0">At a glance</h2>${rows([['Level', `${g.level} (from the number and kind of steps)`], ['Pieces to cut', String(g.pieces)], ['Sewing steps', String(g.steps)], ['Kinds of machine', String(g.machines)], ['Cloth to buy', `${D.marker.buy} cm of ${D.marker.width} cm wide cloth`], ['Stitching in all', `${(g.seam / 100).toFixed(1)} m`], ['Thread', `about ${Math.round(g.thread)} m`], ['Time, cutting', `about ${hm(g.cutMin)}`], ['Time, sewing', `about ${hm(g.sewMin)}`], ['Weight of the cloth in it', `about ${g.weight} g`]])}
-<p class="note">Times are for careful work on home machines and are estimates from the length of stitching and the number of steps.</p></div></div>
-<nav class="toc"><b>Contents</b> <a href="#d-fig">Figure</a> · <a href="#d-fit">Options</a> · <a href="#d-gal">Gallery</a> · <a href="#d-buy">What you need</a> · <a href="#d-prep">Before cutting</a> · <a href="#d-cut">Cutting</a> · <a href="#d-pcs">The pieces</a> · <a href="#d-mach">Machines</a> · <a href="#d-steps">Sewing steps</a> · <a href="#d-fin">Finishing</a> · <a href="#d-care">Care</a> · <a href="#d-glos">Glossary</a></nav>
+<h2 style="margin-top:0">At a glance</h2>${rows([['Level', `${g.level} (from the number and kind of steps)`], ['Self-audit', `${auditLine}; ${g.seams} seams checked`], ['Pieces to cut', String(g.pieces)], ['Sewing steps', String(g.steps)], ['Kinds of machine', String(g.machines)], ['Cloth to buy', one ? `${D.cloths[0].buy} cm of ${D.cloths[0].width} cm wide cloth` : `${g.cloths} different cloths, ${D.cloths.reduce((a, c) => a + c.buy, 0)} cm in all`], ['Stitching in all', `${(g.seam / 100).toFixed(1)} m`], ['Thread', `about ${Math.round(g.thread)} m`], ['Time, cutting', `about ${hm(g.cutMin)}`], ['Time, sewing', `about ${hm(g.sewMin)}`], ['Weight of the cloth in it', `about ${g.weight} g`]])}
+<p class="note">Times are for careful work on home machines. They and the thread amounts are worked out from the length of each seam and are estimates; the sewing time is the sum of the times given at each step.</p></div></div>
+<nav class="toc"><b>Contents</b> <a href="#d-aud">Self-audit</a> · <a href="#d-fig">Figure</a> · <a href="#d-fit">Options</a> · <a href="#d-gal">Gallery</a> · <a href="#d-buy">What you need</a> · <a href="#d-prep">Before cutting</a> · <a href="#d-cut">Cutting</a> · <a href="#d-pcs">The pieces</a> · <a href="#d-mach">Machines</a> · <a href="#d-steps">Sewing steps</a> · <a href="#d-fin">Finishing</a> · <a href="#d-care">Care</a> · <a href="#d-glos">Glossary</a></nav>
+<h2 id="d-aud">Self-audit</h2><p>The report checked itself before giving instructions. Of the ${g.seams} pairs of edges that are sewn together, <b>${g.ok}</b> are the same length, <b>${g.eases}</b> differ by an amount the seam can ease, and <b class="${g.misfit ? 'v-fault' : ''}">${g.misfit}</b> differ by more than that. ${g.faults ? 'A fault means the pieces as drafted cannot simply be sewn together: put it right first, as described.' : 'Nothing was found that stops the garment being sewn as drafted.'}</p>
+${D.findings.length ? `<table class="grid aud"><tr><th>Finding</th><th>Step</th><th>What</th><th>What to do</th></tr>${D.findings.map(f => `<tr class="a-${f.level}"><td><b>${LEVEL_WORD[f.level]}</b></td><td>${f.step || ''}</td><td>${escH(f.text)}</td><td>${escH(f.fix || (f.level === 'model' ? 'Nothing: a limit of the drawing, not of the garment.' : f.level === 'ease' ? 'Ease it in as the step says.' : ''))}</td></tr>`).join('')}</table>` : ''}
+<details><summary>All ${g.seams} seams checked</summary><table class="grid"><tr><th>Step</th><th>Edge</th><th>Length</th><th>Meets</th><th>Length</th><th>Difference</th><th>Verdict</th></tr>${D.audit.map(a => `<tr><td>${a.step}</td><td>${escH(a.a)}</td><td>${cm(a.la)}</td><td>${escH(a.b)}</td><td>${cm(a.lb)}</td><td>${cm(Math.abs(a.la - a.lb))} (${a.pct.toFixed(1)} %)</td><td class="v-${a.verdict}">${a.verdict === 'ok' ? 'same' : a.verdict}${a.inferred ? ' (not a recorded join)' : ''}</td></tr>`).join('')}</table></details>
+<p class="note">What is not checked: whether the garment fits a real body, whether the cloth drapes as drawn, and anything about darts, facings or linings, which the model does not have.</p>
 <h2 id="d-fig">The figure it is drafted for</h2><div class="two"><div><h3>Measurements</h3>${rows(D.measures)}</div><div><h3>Heights from the floor</h3>${rows(D.heights)}</div></div><p class="note">Every piece is drafted from these numbers. On a different body the pieces are different: set the figure on the Model page and export again.</p>
 ${D.fit.length ? `<h2 id="d-fit">Options chosen</h2><table class="grid"><tr><th>Option</th><th>Set to</th><th>Default</th><th>Can be</th></tr>${D.fit.map(f => `<tr><td>${escH(f.label)}</td><td><b>${escH(f.value)}</b>${f.changed ? ' *' : ''}</td><td>${escH(f.def)}</td><td>${escH(f.range)}</td></tr>`).join('')}</table>${D.fit.some(f => f.changed) ? '<p class="note">* changed from the default.</p>' : ''}` : '<span id="d-fit"></span>'}
 <h2 id="d-gal">In different poses</h2><div class="gal">${GALLERY.map((gg, i) => `<figure><img alt="${escH(D.title)}, ${escH(gg[0].toLowerCase())}" ${gal && gal[i] ? `src="${gal[i]}"` : `id="docG${i}"`}><figcaption>${escH(gg[0])}</figcaption></figure>`).join('')}</div>
-<h2 id="d-buy">What you need</h2><h3>Cloth</h3><ul>
-<li>${sw(D.cloth.colour)}<b>${escH(D.cloth.text)}</b>${D.cloth.facts ? ` (${escH(D.cloth.facts)})` : ''}. ${escH(D.cloth.note)}</li>
-<li><b>How much:</b> the cutting plan below is ${cm(D.marker.length)} long on cloth ${D.marker.width} cm wide. Buy <b>${D.marker.buy} cm</b>, which leaves a little to straighten the ends. The pieces cover ${D.marker.eff} % of that cloth.</li>
-${D.own.map(o => `<li>${sw(o.colour)}<b>${escH(o.name)}</b> is cut from its own cloth: ${escH(o.text)}.</li>`).join('')}</ul>
+<h2 id="d-buy">What you need</h2><h3>Cloth</h3><table class="grid"><tr><th></th><th>Cloth</th><th>For pieces</th><th>Plan length</th><th>Buy</th><th>Weight in the garment</th></tr>${D.cloths.map(c => `<tr><td>${c.ix + 1}</td><td>${sw(c.colour)}<b>${escH(c.text)}</b>${c.facts ? `<br>${escH(c.facts)}` : ''}</td><td>${D.pieces.filter(p => p.cloth === c.ix).map(p => p.n).join(', ')}</td><td>${cm(c.length)}</td><td><b>${c.buy} cm</b> of ${c.width} cm wide</td><td>${Math.round(c.grams)} g</td></tr>`).join('')}</table>
+<p class="note">Each cloth has its own cutting plan below; "buy" is the plan's length rounded up, with a little to straighten the ends. ${escH(D.cloths[0].note)}</p>
 <h3>Thread and notions</h3><ul><li>${sw(D.thread)}Thread in this colour.</li>${li(D.notions)}</ul>
 <h3>Tools</h3><ul>${li(D.tools)}</ul>
 <h2 id="d-prep">Before cutting</h2><ol>${li(D.prep)}</ol>
-<h2 id="d-cut">Cutting</h2><p>Seam allowance: <b>1 cm, already included</b> in every piece. Cut on the solid line. The number on each piece in the plan is its number in the table.</p>
-<div class="dia">${layoutSVG(D)}</div><p class="note">The cutting plan. The cloth lies with its length across the page (${cm(D.marker.length)}) and its width up the page (${D.marker.width} cm); the long edges are the selvedges and the arrow shows the grain.</p>
-<table class="grid"><tr><th>No.</th><th>Piece</th><th>Cut</th><th>Size, width × length</th><th>Area</th><th>From</th></tr>${D.pieces.map(p => `<tr><td>${p.n}</td><td>${escH(p.name)}</td><td>1</td><td>${cm(p.w)} × ${cm(p.h)}</td><td>${Math.round(p.area)} cm²</td><td>${p.cloth ? sw(p.colour) + escH(p.cloth) : 'main cloth'}</td></tr>`).join('')}</table>
+<h2 id="d-cut">Cutting</h2><p>Seam allowance: <b>1 cm, already included</b> in every piece. Cut on the solid line. The number on each piece in a plan is its number in the table.</p>
+${D.cloths.map(c => `<div class="dia">${layoutSVG(c, D)}</div><p class="note">Cutting plan ${c.ix + 1}: ${escH(c.text)}. The cloth lies with its length across the page (${cm(c.length)}) and its width up the page (${c.width} cm); the long edges are the selvedges and the arrow shows the grain. The pieces cover ${c.eff} % of it.</p>`).join('')}
+<table class="grid"><tr><th>No.</th><th>Piece</th><th>Cut</th><th>Size, width × length</th><th>Area</th><th>From cloth</th></tr>${D.pieces.map(p => `<tr><td>${p.n}</td><td>${escH(p.name)}</td><td>1</td><td>${cm(p.w)} × ${cm(p.h)}</td><td>${Math.round(p.area)} cm²</td><td>${sw(p.colour)}${p.cloth + 1}</td></tr>`).join('')}</table>
 <p class="note">Sizes are of the piece as sewn; add 2 cm each way for the cut piece. Lay each piece with its arrow parallel to the selvedge. Straps, ties and bands are straight strips: cut them twice the finished width plus 2 cm, fold lengthwise, and sew.</p>
 <h2 id="d-pcs">The pieces</h2><p class="note">All drawn to one scale. Solid line: cut here. Dashed line: sew here. Arrow: grain line. Under each piece are its edges with their lengths along the stitching line; the lengths are how you check that two edges that are sewn together really match.</p>
 <div class="pieces">${D.pieces.map(p => `<div class="pc">${pieceSVG(p, k)}<b>${p.n}. ${escH(p.name)}</b>${cm(p.w)} × ${cm(p.h)}${p.edges.length ? `<table class="ed">${p.edges.map(e => `<tr><td>${escH(e.name)}</td><td>${cm(e.len)}</td></tr>`).join('')}</table>` : ''}</div>`).join('')}</div>
@@ -5984,33 +6069,38 @@ ${stepSVG(t, D) ? `<div class="dia">${stepSVG(t, D)}</div>` : ''}
 ${t.joins.length ? `<tr><td>Join</td><td>${t.joins.map(joinText).join('<br>')}</td></tr>` : ''}
 ${t.stitched.length ? `<tr><td>Stitch</td><td>${t.stitched.map(e => `<b>${escH(e.piece)}</b>, ${escH(e.edge)} (${cm(e.len)}): ${e.rows > 1 ? e.rows + ' rows, the first ' : ''}${cm(e.from)} from the edge${e.zig ? ', zigzag' : ''}`).join('<br>')}</td></tr>` : ''}
 ${t.tacks ? `<tr><td>Bar tacks</td><td>${t.tacks}</td></tr>` : ''}${t.holes ? `<tr><td>Buttonholes</td><td>${t.holes}</td></tr>` : ''}${t.btns ? `<tr><td>Buttons</td><td>${t.btns}</td></tr>` : ''}
-<tr><td>Amount</td><td>${t.len > 1 ? `${cm(t.len)} of stitching, ` : ''}about ${t.thread >= 1 ? Math.round(t.thread) + ' m' : Math.max(10, Math.round(t.thread * 100 / 10) * 10) + ' cm'} of thread, about ${hm(t.mins)}</td></tr></table>
+<tr><td>Amount</td><td>${t.len > 1 ? `${cm(t.len)} of stitching, ` : ''}about ${t.thread >= 1 ? Math.round(t.thread) + ' m' : Math.max(10, Math.round(t.thread * 10) * 10) + ' cm'} of thread, about ${hm(t.mins)}</td></tr></table>
 ${t.how.length ? `<p class="hh">How to do it</p><ol class="how">${li(t.how)}</ol>` : ''}${t.check ? `<p class="chk"><b>Check:</b> ${escH(t.check)}</p>` : ''}</div></li>`).join('')}</ol>
 <h2 id="d-fin">Finishing and fitting</h2><ol>${li(D.finish)}</ol>
 <h2 id="d-care">Care</h2><p>${escH(D.care)}</p>
 <h2 id="d-glos">Glossary</h2><dl class="glos">${D.glossary.map(e => `<dt>${escH(e[0])}</dt><dd>${escH(e[1])}</dd>`).join('')}</dl>
-<h2>About this document</h2><p class="note">Generated by Sewing Factory from a simplified model. The pieces are drafted for the measurements above and fit together in the simulation: every pair of edges that is sewn together has been checked to be the same length, or close enough to ease. But the pieces have no darts, facings, linings or notches, the how-to texts are general to each kind of seam and not written for this garment in particular, and no one has sewn it. Treat this as a detailed study of how the garment is put together, and make a test version in cheap cloth before cutting good cloth.</p></div>`;
+<h2>About this document</h2><p class="note">Generated by Sewing Factory from a simplified model. The pieces are drafted for the measurements above, and the self-audit at the top says where two edges that are sewn together do not agree. The pieces have no darts, facings, linings or notches, and no one has sewn this garment. Treat it as a detailed study of how the garment is put together, put right any fault the audit lists, and make a test version in cheap cloth before cutting good cloth.</p></div>`;
 }
 function docMD(D) {
-  const g = D.glance, L = [`# ${D.title}`, '', `Sewing instructions, drafted for the figure ${D.figure}.`, '', '## At a glance', '', `- Level: ${g.level} (from the number and kind of steps)`, `- Pieces to cut: ${g.pieces}`, `- Sewing steps: ${g.steps}`, `- Kinds of machine: ${g.machines}`, `- Cloth to buy: ${D.marker.buy} cm of ${D.marker.width} cm wide cloth`, `- Stitching in all: ${(g.seam / 100).toFixed(1)} m`, `- Thread: about ${Math.round(g.thread)} m`, `- Time, cutting: about ${hm(g.cutMin)}`, `- Time, sewing: about ${hm(g.sewMin)}`, '', 'Times are for careful work on home machines and are estimates.'];
+  const g = D.glance, L = [`# ${D.title}`, '', `Sewing instructions, drafted for the figure ${D.figure}.`, '', '## At a glance', '', `- Level: ${g.level} (from the number and kind of steps)`, `- Self-audit: ${g.faults ? `${g.faults} fault(s) that must be put right before sewing` : 'no faults found'}; ${g.seams} seams checked`, `- Pieces to cut: ${g.pieces}`, `- Sewing steps: ${g.steps}`, `- Kinds of machine: ${g.machines}`, `- Cloth to buy: ${D.cloths.map(c => `${c.buy} cm of ${c.text}`).join('; ')}`, `- Stitching in all: ${(g.seam / 100).toFixed(1)} m`, `- Thread: about ${Math.round(g.thread)} m`, `- Time, cutting: about ${hm(g.cutMin)}`, `- Time, sewing: about ${hm(g.sewMin)}`, `- Weight of the cloth in it: about ${g.weight} g`, '', 'Times are for careful work on home machines and are estimates; the sewing time is the sum of the times given at each step.'];
+  L.push('', '## Self-audit', '', `Of the ${g.seams} pairs of edges that are sewn together, ${g.ok} are the same length, ${g.eases} differ by an amount the seam can ease, and ${g.misfit} differ by more than that.`, '');
+  if (D.findings.length) L.push('| Finding | Step | What | What to do |', '|---|---|---|---|', ...D.findings.map(f => `| ${LEVEL_WORD[f.level]} | ${f.step || ''} | ${f.text} | ${f.fix || ''} |`), '');
+  L.push('| Step | Edge | Length | Meets | Length | Difference | Verdict |', '|---|---|---|---|---|---|---|', ...D.audit.map(a => `| ${a.step} | ${a.a} | ${cm(a.la)} | ${a.b} | ${cm(a.lb)} | ${cm(Math.abs(a.la - a.lb))} (${a.pct.toFixed(1)} %) | ${a.verdict === 'ok' ? 'same' : a.verdict} |`));
   L.push('', '## The figure it is drafted for', '', '### Measurements', '', ...D.measures.map(r => `- ${r[0]}: ${r[1]}`), '', '### Heights from the floor', '', ...D.heights.map(r => `- ${r[0]}: ${r[1]}`));
   if (D.fit.length) L.push('', '## Options chosen', '', '| Option | Set to | Default | Can be |', '|---|---|---|---|', ...D.fit.map(f => `| ${f.label} | ${f.value}${f.changed ? ' *' : ''} | ${f.def} | ${f.range} |`));
-  L.push('', '## What you need', '', '### Cloth', '', `- ${D.cloth.text}, colour ${D.cloth.colour}${D.cloth.facts ? ` (${D.cloth.facts})` : ''}. ${D.cloth.note}`, `- How much: the cutting plan is ${cm(D.marker.length)} long on cloth ${D.marker.width} cm wide. Buy ${D.marker.buy} cm. The pieces cover ${D.marker.eff} % of that cloth.`, ...D.own.map(o => `- ${o.name} is cut from its own cloth: ${o.text}, colour ${o.colour}.`), '', '### Thread and notions', '', `- Thread, colour ${D.thread}.`, ...D.notions.map(n => `- ${n}`), '', '### Tools', '', ...D.tools.map(n => `- ${n}`));
+  L.push('', '## What you need', '', '### Cloth', '', '| No. | Cloth | For pieces | Plan length | Buy | Weight in the garment |', '|---|---|---|---|---|---|', ...D.cloths.map(c => `| ${c.ix + 1} | ${c.text}, colour ${c.colour}${c.facts ? ` (${c.facts})` : ''} | ${D.pieces.filter(p => p.cloth === c.ix).map(p => p.n).join(', ')} | ${cm(c.length)} | ${c.buy} cm of ${c.width} cm wide | ${Math.round(c.grams)} g |`), '', '### Thread and notions', '', `- Thread, colour ${D.thread}.`, ...D.notions.map(n => `- ${n}`), '', '### Tools', '', ...D.tools.map(n => `- ${n}`));
   L.push('', '## Before cutting', '', ...D.prep.map((t, i) => `${i + 1}. ${t}`));
-  L.push('', '## Cutting', '', 'Seam allowance: 1 cm, already included in every piece.', '', '| No. | Piece | Cut | Size, width × length | Area | From |', '|---|---|---|---|---|---|', ...D.pieces.map(p => `| ${p.n} | ${p.name} | 1 | ${cm(p.w)} × ${cm(p.h)} | ${Math.round(p.area)} cm² | ${p.cloth || 'main cloth'} |`));
+  L.push('', '## Cutting', '', 'Seam allowance: 1 cm, already included in every piece.', '', '| No. | Piece | Cut | Size, width × length | Area | From cloth |', '|---|---|---|---|---|---|', ...D.pieces.map(p => `| ${p.n} | ${p.name} | 1 | ${cm(p.w)} × ${cm(p.h)} | ${Math.round(p.area)} cm² | ${p.cloth + 1} |`));
   L.push('', '## The pieces', '', 'Each piece with its edges and their lengths along the stitching line.', ''); for (const p of D.pieces) L.push(`- **${p.n}. ${p.name}** (${cm(p.w)} × ${cm(p.h)})${p.edges.length ? ': ' + p.edges.map(e => `${e.name} ${cm(e.len)}`).join('; ') : ''}`);
   L.push('', '## Machines', '', '| Factory machine | What it does | At home |', '|---|---|---|', ...D.machines.map(m => `| ${m.name}${m.stitch ? ` (stitch ${m.stitch})` : ''} | ${m.blurb} | ${m.home} |`));
   L.push('', `## Sewing steps (${D.steps.length})`, '');
   for (const t of D.steps) { L.push(`### ${t.n}. ${t.name}`, '', `${t.seam}${t.seamDesc ? `: ${t.seamDesc}` : ''}`, '', t.note, '', `- Pieces: ${t.pieces.join(', ')}`, `- Factory machine: ${t.machine}`); if (t.home) L.push(`- At home: ${t.home}`);
-    for (const j of t.joins) L.push(`- Join: ${j.a.items.map(x => `${x.piece}, ${x.edge} (${cm(x.len)})`).join(' + ')} to ${j.b.items.map(x => `${x.piece}, ${x.edge} (${cm(x.len)})`).join(' + ')}${j.ease ? `. ${j.ease.longer} is ${cm(j.ease.by)} longer: ease it in.` : ''}`);
+    for (const j of t.joins) L.push(`- Join: ${j.a.items.map(x => `${x.piece}, ${x.edge} (${cm(x.len)})`).join(' + ')} to ${j.b.items.map(x => `${x.piece}, ${x.edge} (${cm(x.len)})`).join(' + ')}. ${joinVerdict(j)}.`);
     for (const e of t.stitched) L.push(`- Stitch: ${e.piece}, ${e.edge} (${cm(e.len)}): ${e.rows > 1 ? e.rows + ' rows, the first ' : ''}${cm(e.from)} from the edge${e.zig ? ', zigzag' : ''}`);
     if (t.tacks) L.push(`- Bar tacks: ${t.tacks}`); if (t.holes) L.push(`- Buttonholes: ${t.holes}`); if (t.btns) L.push(`- Buttons: ${t.btns}`);
     L.push(`- Amount: ${t.len > 1 ? `${cm(t.len)} of stitching, ` : ''}about ${t.thread >= 1 ? Math.round(t.thread) + ' m' : Math.max(10, Math.round(t.thread * 10) * 10) + ' cm'} of thread, about ${hm(t.mins)}`);
     if (t.how.length) L.push('', 'How to do it:', '', ...t.how.map((h, i) => `${i + 1}. ${h}`)); if (t.check) L.push('', `Check: ${t.check}`); L.push(''); }
   L.push('## Finishing and fitting', '', ...D.finish.map((t, i) => `${i + 1}. ${t}`), '', '## Care', '', D.care, '', '## Glossary', '', ...D.glossary.map(e => `- **${e[0]}**: ${e[1]}`));
-  L.push('', '## About this document', '', 'Generated by Sewing Factory from a simplified model. The pieces are drafted for the measurements above and fit together in the simulation: every pair of edges that is sewn together has been checked to be the same length, or close enough to ease. But the pieces have no darts, facings, linings or notches, the how-to texts are general to each kind of seam and not written for this garment in particular, and no one has sewn it. Treat this as a detailed study of how the garment is put together, and make a test version in cheap cloth before cutting good cloth.', '');
+  L.push('', '## About this document', '', 'Generated by Sewing Factory from a simplified model. The self-audit at the top says where two edges that are sewn together do not agree. The pieces have no darts, facings, linings or notches, and no one has sewn this garment. Put right any fault the audit lists and make a test version in cheap cloth before cutting good cloth.', '');
   return L.join('\n');
 }
+// The same report as data: everything the document says, for another program to read. Outlines are in centimetres.
+function docJSON(D) { return JSON.stringify({ generator: 'Sewing Factory', version: 1, units: 'cm', ...D, steps: D.steps.map(({ marks, ...t }) => t) }, (k, v) => typeof v === 'number' ? +v.toFixed(2) : v, 1); }
 // The gallery: the finished garment in a handful of poses, each seen from the side that shows it best.
 const GALLERY = [['Relaxed', 'Relaxed', -0.45], ['Arms down, from behind', 'Arms down', Math.PI - 0.35], ['T-pose', 'T-pose', 0], ['T-pose, from behind', 'T-pose', Math.PI], ['Arms forward, from the side', 'Arms forward', -1.3], ['Elbows bent', 'Elbows bent', 0.55]];
 const POSE_KEYS = ['armOut', 'armFwd', 'elbow', 'stance', 'armOutR', 'armFwdR', 'elbowR', 'stanceR'];
@@ -6076,7 +6166,7 @@ try {
   resize(); rebuild(); setStage(S.stage, true); machineOpts();
   if (Q.has('sel')) select(Q.get('sel'));
   if (Q.has('rot')) turnG.rotation.y = +Q.get('rot');
-  window.__sf = { S, setStage, setOp, tick, render, rebuild, select, setFab, setGarment, saveImage, exportURL, viewURL, docModel, docMD, docFile, get mv() { return mv; }, get garment() { return garment; }, camera, controls, turnG, resize };
+  window.__sf = { S, setStage, setOp, tick, render, rebuild, select, setFab, setGarment, saveImage, exportURL, viewURL, docModel, docMD, docJSON, docFile, get mv() { return mv; }, get garment() { return garment; }, camera, controls, turnG, resize };
   if (STILL) {
     for (let i = 0; i < 80; i++) tick(0.05);
     if (Q.has('cyc') && mv) mv.setCycle(+Q.get('cyc'));

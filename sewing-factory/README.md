@@ -31,31 +31,43 @@ browser (three.js is loaded from a CDN).
 
 The Finished page has an **Export** subtab: a document with the instructions
 for making the chosen garment, written to be more detailed than a typical
-pattern's. It can be printed, saved as a stand-alone HTML file or saved as
-Markdown. It holds:
+pattern's. It can be printed, saved as a stand-alone HTML file, saved as
+Markdown, or saved as JSON for another program to read. It holds:
 
 - an overview: level, number of pieces, steps and machines, cloth to buy,
   total length of stitching, thread, and estimated cutting and sewing time;
+- a self-audit: every pair of edges that is sewn together is compared and
+  judged the same length, easable, or a fault, with what to do about each
+  fault; collars and hoods are compared with the neckline; a stretch cloth
+  sewn to one that does not stretch is warned about; and the places where the
+  model draws something simplified are listed. The audit is what showed that
+  set-in sleeves were drafted about a fifth too long round the head; the
+  drafting now fits each sleeve to its armhole (the sleeve is narrowed over
+  the upper arm, and the armhole widens when the arm needs it), so sleeve
+  heads come out within a few per cent. What it still reports on the
+  coveralls is the waist seam, where the legs are cut fuller than the bodice;
 - the figure it is drafted for (measurements and heights from the floor) and
   every option with its value, default and range;
 - a gallery of the garment in six poses;
-- what to buy (cloth, thread, zips, buttons, elastic by length, interfacing),
-  the tools, and what to do before cutting, all chosen for the cloth: needles,
+- what to buy: each different cloth in the garment with its own cutting plan,
+  length to buy and weight; thread, zips, buttons, elastic, interfacing; the
+  tools, and what to do before cutting, chosen for every cloth used: needles,
   pins or clips, washing, and matching stripes;
-- the cutting plan drawn on the cloth, a cutting table, and every piece to one
+- a cutting plan for each cloth, a cutting table, and every piece to one
   scale with cutting line, stitching line and grain line, and the length of
   each of its edges;
 - each factory machine with what does the same job at home;
 - every sewing step: a drawing of the pieces with the edges to sew drawn
   heavy, which edge joins which with both lengths (and how much to ease when
   they differ), where to stitch and how far from the edge, how much stitching,
-  thread and time it takes, how to do it in four numbered moves, and what to
-  check before going on;
+  thread and time it takes, how to do it, and what to check before going on.
+  The how-to is written from the step's own numbers and for its machine: an
+  overlocked seam is not backtacked or pressed open, a hem names its depth,
+  elastic is given cut lengths;
 - finishing and fitting, care, and a glossary.
 
-The how-to texts are general to each kind of seam, not written for each
-garment, and the times and thread amounts are estimates from the length of
-stitching. The document says of itself that it comes from a simplified model
+The times and thread amounts are estimates from the length of stitching; the
+total sewing time is the sum of the times given at the steps. The document says of itself that it comes from a simplified model
 that nobody has sewn.
 
 An **X-ray** switch on the Finished page makes the body see-through and shows either a skeleton or
