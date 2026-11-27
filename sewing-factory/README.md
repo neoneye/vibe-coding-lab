@@ -487,10 +487,14 @@ Three are cut-away shapes:
   lycra* (dark, with scales that flash blue and violet), one opening under the
   bust, hip ties and a band across the back. The ruffles on the straps and
   under the bust are left out.
-- **Blue cross-wrap swimsuit**: the panel builder's crossing panels in one
-  colour with no band under them, a thin tie round the back, and on one side
-  only a strip down to the bottom with a buckle. The neck ties are knotted at
-  the nape instead of crossing down the back.
+- **Blue cross-wrap swimsuit** (its own builder, rebuilt from the references):
+  two wide halves that start at the sides of the bust, cross over the upper
+  chest and narrow into straps. Each strap goes over the far shoulder and
+  straight back across the bare back to its own half's outer corner, so the
+  straps cross on the back as well. A narrow strip down each side joins the
+  top to the bottom, leaving the belly bare, and a metal ring sits on the
+  bottom at one hip. The bottom is the plain bikini bottom, fuller than the
+  reference's narrow high-cut one, and has no cut-out under the clasp.
 
 ### Twelve more, mostly variations
 
