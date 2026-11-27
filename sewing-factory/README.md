@@ -388,7 +388,8 @@ on plain panels, and the sheer yoke over the shoulders is left out.
 ### Three more swimsuits
 
 - **One-sleeve snake swimsuit**: the long-sleeve swimsuit with only the right
-  sleeve. On the sleeve side the neck hole ends beside the neck; on the bare
+  sleeve. On the sleeve side the neck hole ends half way out along the
+  shoulder, so the top of the shoulder beside the neck is bare; on the bare
   side there is no shoulder at all: the top edge slants from the neckline down
   to the underarm, front and back, and a thin strap runs over the shoulder.
   Its print, *snake skin*, is pale blotches in a dark network over a lattice of
