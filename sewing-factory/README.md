@@ -597,10 +597,10 @@ From four reference folders of uniforms. The sheath builder (the qipao) got
 a uniform form: long sleeves, a closure down the centre front (a zip, a
 hidden placket or a buttoned placket) and trims.
 
-- **Navy crew suit**: the catsuit in matte navy jersey with a stand collar,
-  a small metal wing on the left chest and a woven badge on the left sleeve.
+- **Navy crew suit**: the catsuit in matte navy jersey with a stand collar.
   Its zip is on the back only, from the collar to a hand's width below the
-  waist, and the crotch is closed with a small diamond gusset.
+  waist, and the crotch is closed with a small diamond gusset. The reference's
+  chest wing and sleeve badge are left out.
 - **Grey crew jacket and trousers**: the first two-piece outfit. A
   hip-length jacket with a stand collar, a dark collar lining that shows as a
   rim, a hidden placket, two stitched chest panels and shoulder pads (a slider sets
