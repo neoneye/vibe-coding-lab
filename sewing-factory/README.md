@@ -520,7 +520,7 @@ The rest are options on existing builders:
 - **Red vinyl unitard** and **navy and yellow swim unitard** (catsuit without
   sleeves or collar, legs to mid-thigh): the second has a yellow yoke as a
   placement print; its white side stripes barely show.
-- **Gold ring keyhole monokini** (monokini whose tall cups stay apart: their inner edges run side by side down into the opening, and a lace through a ring bridges the gap, then runs round the body to a bow at the back).
+- **Gold ring keyhole monokini** (monokini whose tall cups stay apart: their inner edges run side by side down into the opening, and a lace through a ring bridges the gap, then runs round the body to a bow at the back; each front half is cut in two at the ring, so the two cups and the two lower fronts can each take their own fabric).
 - **Black zip sports romper** (catsuit with short legs and short sleeves, a
   front zip and a stand collar): the contrast seam lines are left out.
 - **Waistcoat swimsuit** (sleeveless high-neck swimsuit): the waistcoat, shirt
