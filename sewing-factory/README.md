@@ -537,7 +537,8 @@ hidden placket or a buttoned placket) and trims.
 
 - **Navy crew suit**: the catsuit in matte navy jersey with a stand collar,
   a small metal wing on the left chest and a woven badge on the left sleeve.
-  The back zip is the catsuit's through zip, so it shows on the lower front.
+  Its zip is on the back only, from the collar to a hand's width below the
+  waist, and the crotch is closed with a small diamond gusset.
 - **Grey crew jacket and trousers**: the first two-piece outfit. A
   hip-length jacket with a stand collar, a dark collar lining that shows as a
   rim, a hidden placket, two stitched chest panels and shoulder pads (a slider sets
