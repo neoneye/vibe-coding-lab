@@ -387,11 +387,12 @@ on plain panels, and the sheer yoke over the shoulders is left out.
 
 ### Three more swimsuits
 
-- **One-sleeve snake swimsuit**: the long-sleeve swimsuit with a scoop neck and
-  only the right sleeve; the left armhole is elasticated like the other edges.
+- **One-sleeve snake swimsuit**: the long-sleeve swimsuit with only the right
+  sleeve. On the sleeve side the neck hole ends beside the neck; on the bare
+  side there is no shoulder at all: the top edge slants from the neckline down
+  to the underarm, front and back, and a thin strap runs over the shoulder.
   Its print, *snake skin*, is pale blotches in a dark network over a lattice of
-  small scales, in pink. Simplified: the bare side keeps a full shoulder, where
-  the original has a thin strap, and the back is not scooped low.
+  small scales, in pink. Simplified: the back is not scooped low.
 - **Laser-cut swimsuit**: the strap swimsuit in black, with a front panel in a
   *laser-cut leaves* print: pairs of leaf-shaped holes along the lines of a
   diamond lattice, drawn in the mannequin's colour. Simplified: the holes are a
