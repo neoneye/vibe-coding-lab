@@ -31,7 +31,8 @@ browser (three.js is loaded from a CDN).
 
 The Finished page has an **Export** subtab: a document with the instructions
 for making the chosen garment. It lists the figure's measurements and the fit
-chosen, the cloth, thread and notions to buy, every piece to cut (drawn to one
+chosen, a gallery of the garment in six poses (relaxed, arms down from behind,
+T-pose front and back, arms forward from the side, elbows bent), the cloth, thread and notions to buy, every piece to cut (drawn to one
 scale, with cutting line and stitching line), the machines needed and every
 sewing step in order with its machine, seam type, pieces and note. It can be
 printed, saved as a stand-alone HTML file or saved as Markdown. The document
