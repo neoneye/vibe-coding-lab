@@ -491,10 +491,10 @@ Three are cut-away shapes:
   two wide halves that start at the sides of the bust, cross over the upper
   chest and narrow into straps. Each strap goes over the far shoulder and
   straight back across the bare back to its own half's outer corner, so the
-  straps cross on the back as well. A narrow strip down each side joins the
-  top to the bottom, leaving the belly bare, and a metal ring sits on the
-  bottom at one hip. The bottom is the plain bikini bottom, fuller than the
-  reference's narrow high-cut one, and has no cut-out under the clasp.
+  straps cross on the back as well. The bottom is cut high, and its sides
+  rise in two narrow points that join the top's outer corners, with no strap
+  between them, so the belly and the small of the back are bare. A metal ring
+  sits on the bottom at one hip; there is no cut-out under it.
 
 ### Twelve more, mostly variations
 
