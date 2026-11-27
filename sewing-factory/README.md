@@ -126,8 +126,8 @@ and the measuring tapes alone (`&dress=0` in a link).
 
 ## Randomize, Reset and saved settings
 
-Each section of the Model page (the mannequin's measurements, pose, hips
-legs and head, bust) has a **Randomize** and a **Reset** button. The
+Each section of the Model page (the mannequin's measurements with the
+head size, hips and legs, bust) has a **Randomize** and a **Reset** button. The
 mannequin's Randomize starts at Heel lift and leaves the choices above it
 (full figure or dress form, x-ray, Woman/Man, Medium/Large) alone. Body
 measurements are drawn within about a fifth of each slider's range of the
