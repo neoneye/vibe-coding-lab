@@ -540,7 +540,8 @@ hidden placket or a buttoned placket) and trims.
   The back zip is the catsuit's through zip, so it shows on the lower front.
 - **Grey crew jacket and trousers**: the first two-piece outfit. A
   hip-length jacket with a stand collar, a dark collar lining that shows as a
-  rim, a hidden placket and two stitched chest panels, over slim pull-on
+  rim, a hidden placket, two stitched chest panels and shoulder pads (a slider sets
+  their thickness), over slim pull-on
   trousers (the leggings pattern with more ease, not tailored trousers).
 - **White belted uniform dress**: a short sheath with a front zip, dark
   shoulder yokes, two name tapes and a separate belt with a buckle.
@@ -549,8 +550,7 @@ hidden placket or a buttoned placket) and trims.
   red sleeve badge.
 
 Not made: boots, gloves, holsters and the knee guards (shoes and props are
-not garments here), raglan seams on the navy suit, padded shoulders on the
-grey jacket, and the lettering on tapes and badges.
+not garments here), raglan seams on the navy suit, and the lettering on tapes and badges.
 
 ### Two wide trousers
 
