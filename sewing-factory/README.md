@@ -561,9 +561,9 @@ From the `top/green` reference: the **Green exposed-seam crop tee**, a short
 cap-sleeved top in sage rib jersey whose front hem dips to a point. Its panel
 seams are sewn wrong sides together, so the overlocked edges show on the
 outside in a tan contrast thread: one down the centre and one curving from
-each shoulder to the hem, front and back. The front is cut as four panels
-along those seams, so each can take its own cloth; the back is drawn as one
-piece with its seams stitched on. The rippled lettuce edges are drawn plain. The cloth is plain jersey; the rib
+each shoulder to the hem, front and back. Front and back are each cut as four
+panels along those seams, so all eight can take their own cloth. The rippled
+lettuce edges are drawn plain. The cloth is plain jersey; the rib
 texture is not drawn.
 
 ### Five coats
