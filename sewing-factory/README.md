@@ -29,6 +29,14 @@ browser (three.js is loaded from a CDN).
    stitch, thread by thread. The pieces join on the form so you can see where
    each seam ends up.
 
+The Finished page has an **Export** subtab: a document with the instructions
+for making the chosen garment. It lists the figure's measurements and the fit
+chosen, the cloth, thread and notions to buy, every piece to cut (drawn to one
+scale, with cutting line and stitching line), the machines needed and every
+sewing step in order with its machine, seam type, pieces and note. It can be
+printed, saved as a stand-alone HTML file or saved as Markdown. The document
+says of itself that it comes from a simplified model that nobody has sewn.
+
 An **X-ray** switch on the Finished page makes the body see-through and shows either a skeleton or
 a robot mannequin inside it. The robot is an articulated shop mannequin: matt
 black shells for chest, pelvis and each limb segment, with a ball at every
@@ -738,7 +746,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..5` (1 Model, 2 Pose, 3 Shoes, 4 Cloth, 5 Finished; `&tab=customize` opens Cloth's Customize subtab and `&tab=sew` Finished's Sew subtab), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|thedress|fishnets|lacestockings|snakesuit|lasersuit|catswim|goldlace|olivering|blackcutouts|leopardblock|tricolor|blackshoulder|crosshalter|ladderhalter|brownhalter|sheervbody|crossdress|pinkgloss|bronzebody|flowerromper|redunitard|yokeunitard|goldkeyhole|sportromper|vestswim|crewnavy|crewgrey|uniformbelt|uniformcoat|cargopants|widesweats|plungedress|sequindress|zipkeyhole|sequinbody|redfoilbody|lacehalter|pinkromper|colorbands|hourglass|sequinchains|plaidromper|neonholo|cherrysuit|ringduo|nightsnake|bluewrap|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..5` (1 Model, 2 Pose, 3 Shoes, 4 Cloth, 5 Finished; `&tab=customize` opens Cloth's Customize subtab and `&tab=sew` Finished's Sew subtab, `&tab=export` its Export subtab), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|thedress|fishnets|lacestockings|snakesuit|lasersuit|catswim|goldlace|olivering|blackcutouts|leopardblock|tricolor|blackshoulder|crosshalter|ladderhalter|brownhalter|sheervbody|crossdress|pinkgloss|bronzebody|flowerromper|redunitard|yokeunitard|goldkeyhole|sportromper|vestswim|crewnavy|crewgrey|uniformbelt|uniformcoat|cargopants|widesweats|plungedress|sequindress|zipkeyhole|sequinbody|redfoilbody|lacehalter|pinkromper|colorbands|hourglass|sequinchains|plaidromper|neonholo|cherrysuit|ringduo|nightsnake|bluewrap|shirt|dress|swimsuit|bikini`,
 `&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
