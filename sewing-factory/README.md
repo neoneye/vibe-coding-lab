@@ -392,8 +392,9 @@ on plain panels, and the sheer yoke over the shoulders is left out.
   shoulder, so the top of the shoulder beside the neck is bare; on the bare
   side there is no shoulder at all: the top edge slants from the neckline down
   to the underarm, front and back, and a thin strap runs over the shoulder.
-  Its print, *snake skin*, is pale blotches in a dark network over a lattice of
-  small scales, in pink. Simplified: the back is not scooped low.
+  Its print, *snake skin*, is a lattice of small scales, each one flat colour,
+  carrying a large dark pattern of saddles and blotches that is the same on
+  both sides of a centre line; the pattern's edges are stepped along the scales.
 - **Laser-cut swimsuit**: the strap swimsuit in black, with a front panel in a
   *laser-cut leaves* print: pairs of leaf-shaped holes along the lines of a
   diamond lattice, drawn in the mannequin's colour. Simplified: the holes are a
