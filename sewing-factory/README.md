@@ -543,8 +543,8 @@ hidden placket or a buttoned placket) and trims.
   rim, a hidden placket, two stitched chest panels and shoulder pads (a slider sets
   their thickness), over slim pull-on
   trousers (the leggings pattern with more ease, not tailored trousers).
-- **White belted uniform dress**: a short sheath with a front zip, dark
-  shoulder yokes, two name tapes and a separate belt with a buckle.
+- **White belted uniform dress**: a short sheath with a front zip, wide dark
+  shoulder straps, two name tapes and a separate belt with a buckle.
 - **White officer coat dress**: a flared skirt (a slider sets the flare), a
   buttoned placket with four dark buttons, epaulettes, one name tape and a
   red sleeve badge.
