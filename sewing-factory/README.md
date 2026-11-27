@@ -524,9 +524,8 @@ The rest are options on existing builders:
 - **Gold ring keyhole monokini** (monokini whose tall cups stay apart: their inner edges run side by side down into the opening, an open metal ring sits in the gap, and a lace knotted to each side of it runs round the body to a bow at the back; each front half is cut in two at the ring, so the two cups and the two lower fronts can each take their own fabric; front and back narrow to the hip and meet there in a side seam a couple of centimetres long).
 - **Black zip sports romper** (catsuit with short legs and short sleeves, a
   front zip that stops above the crotch, and a stand collar): each front leg
-  is cut as a centre panel and an outer panel along a curve that leaves the
-  side seam under the waist, runs down the front of the thigh and turns in
-  round the inside leg below the crotch, so the four panels can each take their own fabric.
+  is cut as a centre panel and an outer panel along one bowed curve from the
+  side seam, a hand's width under the waist, in and down to the crotch, so the four panels can each take their own fabric.
 - **Waistcoat swimsuit** (sleeveless high-neck swimsuit): the waistcoat, shirt
   front, tie and buttons are one placement print on the front, under a white
   stand collar.
