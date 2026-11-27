@@ -30,13 +30,33 @@ browser (three.js is loaded from a CDN).
    each seam ends up.
 
 The Finished page has an **Export** subtab: a document with the instructions
-for making the chosen garment. It lists the figure's measurements and the fit
-chosen, a gallery of the garment in six poses (relaxed, arms down from behind,
-T-pose front and back, arms forward from the side, elbows bent), the cloth, thread and notions to buy, every piece to cut (drawn to one
-scale, with cutting line and stitching line), the machines needed and every
-sewing step in order with its machine, seam type, pieces and note. It can be
-printed, saved as a stand-alone HTML file or saved as Markdown. The document
-says of itself that it comes from a simplified model that nobody has sewn.
+for making the chosen garment, written to be more detailed than a typical
+pattern's. It can be printed, saved as a stand-alone HTML file or saved as
+Markdown. It holds:
+
+- an overview: level, number of pieces, steps and machines, cloth to buy,
+  total length of stitching, thread, and estimated cutting and sewing time;
+- the figure it is drafted for (measurements and heights from the floor) and
+  every option with its value, default and range;
+- a gallery of the garment in six poses;
+- what to buy (cloth, thread, zips, buttons, elastic by length, interfacing),
+  the tools, and what to do before cutting, all chosen for the cloth: needles,
+  pins or clips, washing, and matching stripes;
+- the cutting plan drawn on the cloth, a cutting table, and every piece to one
+  scale with cutting line, stitching line and grain line, and the length of
+  each of its edges;
+- each factory machine with what does the same job at home;
+- every sewing step: a drawing of the pieces with the edges to sew drawn
+  heavy, which edge joins which with both lengths (and how much to ease when
+  they differ), where to stitch and how far from the edge, how much stitching,
+  thread and time it takes, how to do it in four numbered moves, and what to
+  check before going on;
+- finishing and fitting, care, and a glossary.
+
+The how-to texts are general to each kind of seam, not written for each
+garment, and the times and thread amounts are estimates from the length of
+stitching. The document says of itself that it comes from a simplified model
+that nobody has sewn.
 
 An **X-ray** switch on the Finished page makes the body see-through and shows either a skeleton or
 a robot mannequin inside it. The robot is an articulated shop mannequin: matt
