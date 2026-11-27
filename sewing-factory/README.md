@@ -29,7 +29,7 @@ browser (three.js is loaded from a CDN).
    stitch, thread by thread. The pieces join on the form so you can see where
    each seam ends up.
 
-An **X-ray** switch makes the body see-through and shows either a skeleton or
+An **X-ray** switch on the Finished page makes the body see-through and shows either a skeleton or
 a robot mannequin inside it. The robot is an articulated shop mannequin: matt
 black shells for chest, pelvis and each limb segment, with a ball at every
 joint and a steel pin through hips, elbows, knees and ankles (`&xray=robot`).
