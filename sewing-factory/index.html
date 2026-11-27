@@ -2331,7 +2331,27 @@ const SF = {};
       if (o.outSeams) {   // o.outSeams: the panel seams are sewn wrong sides together, so their overlocked edges stand on the outside as wavy ridges
         const line = pts => { const out = []; for (let i = 1; i < pts.length; i++) for (let k = i === 1 ? 0 : 1; k <= 10; k++) out.push([lerp(pts[i - 1][0], pts[i][0], k / 10), lerp(pts[i - 1][1], pts[i][1], k / 10)]); return out; };
         const side = m => line([[0.31, 0.01], [0.3, 0.42], [0.22, 0.72], [0.06, 0.93]].map(c => [m ? 1 - c[0] : c[0], c[1]])), mid = line([[0.5, 0.01], [0.5, 0.985]]);
-        keep.splice(1, 0, { name: 'Join the panels, seams outside', machine: 'overlock3', seam: 'edge', bring: ['front', 'back'], stitch: ['front', 'back'].flatMap(p => [mid, side(false), side(true)].map(uv => ({ p, uv, zig: true }))), note: 'The front and the back are each cut as four lengthwise panels. They are joined wrong sides together on the overlock, so the seam allowances, wrapped in contrast thread, stand on the outside. The cloth is stretched as it is fed, which makes each ridge ripple. Here each half is drawn as one piece with the seams stitched on it.' });
+        // The front really is four panels: a centre and a side panel each side, cut along the same lines the seams follow.
+        // Each is a part of the one-piece front, so the four fit together exactly and can each take their own cloth.
+        const fp = pieces.find(p => p.id === 'front'), c00 = fp.B(0), c10 = fp.B(1), c01 = fp.T(0), c11 = fp.T(1);
+        const F = (u, v) => { const b = fp.B(u), t = fp.T(u), l = fp.L(v), r = fp.R(v); return [0, 1].map(k => (1 - v) * b[k] + v * t[k] + (1 - u) * l[k] + u * r[k] - ((1 - u) * (1 - v) * c00[k] + u * (1 - v) * c10[k] + (1 - u) * v * c01[k] + u * v * c11[k])); };
+        const vU = frac(yU, yHem, yT), vSh = frac(yS, yHem, yT), vS = lerp(vSh, 1, 0.5), K = [[0.31, 0], [0.3, 0.45 * vS], [0.22, 0.77 * vS], [0, vS]];
+        const cu = v => { let n = 1; while (n < K.length - 1 && K[n][1] < v) n++; const A = K[n - 1], B = K[n]; return lerp(A[0], B[0], clamp((v - A[1]) / (B[1] - A[1]), 0, 1)); }, kk = 0.8;
+        const mk = sg => { const U = u => sg > 0 ? u : 1 - u, s = sg > 0 ? 'R' : 'L', side2 = sg > 0 ? 'right' : 'left', a = sg > 0 ? 'L' : 'R', bq = sg > 0 ? 'R' : 'L';   // sg > 0: the wearer's right, which is the low-u side of the front
+          const oB = t => F(U(lerp(0, cu(0), t)), 0), oE = v => F(U(0), v * vS), oC = v => F(U(cu(v * vS)), v * vS), oT = () => F(U(0), vS);
+          const iB = t => F(U(lerp(cu(0), 0.5, t)), 0), iT = t => F(U(lerp(0, 0.5, t)), 1), iC = t => t < kk ? F(U(cu(t / kk * vS)), t / kk * vS) : F(U(0), lerp(vS, 1, (t - kk) / (1 - kk))), iM = v => F(0.5, v), rev = f => t => f(1 - t);
+          const out = { id: 'front' + s + 'o', name: `Front side panel, ${side2}`, chart: tc, grain: 0, nu: 8, nv: 40, B: sg > 0 ? oB : rev(oB), T: oT, [a]: oE, [bq]: oC, segs: { ['side' + s]: [a, 0, vU / vS], ['arm' + s]: [a, vU / vS, vSh / vS], ['sh' + s]: [a, vSh / vS, 1], in: [bq, 0, 1], hem: ['B', 0, 1] } };
+          const inn = { id: 'front' + s + 'i', name: `Front centre panel, ${side2}`, chart: tc, grain: 0, nu: 10, nv: 44, B: sg > 0 ? iB : rev(iB), T: sg > 0 ? iT : rev(iT), [a]: iC, [bq]: iM, segs: { in: [a, 0, kk], ['sh' + s]: [a, kk, 1], cf: [bq, 0, 1], hem: ['B', 0, 1], neck: ['T', 0, 1] } };
+          return [out, inn]; };
+        pieces.splice(pieces.indexOf(fp), 1, ...mk(1), ...mk(-1));
+        const MAP = { sideR: ['Ro'], armR: ['Ro'], shR: ['Ro', 'Ri'], sideL: ['Lo'], armL: ['Lo'], shL: ['Lo', 'Li'], hem: ['Ro', 'Ri', 'Li', 'Lo'], neck: ['Ri', 'Li'] }, all4 = ['frontRo', 'frontRi', 'frontLi', 'frontLo'];
+        const mv = e => e[0] === 'front' && MAP[e[1]] ? MAP[e[1]].map(x => ['front' + x, e[1]]) : [e];
+        for (const q of keep) {
+          if (q.joins) for (const jn of q.joins) { jn.a = jn.a.flatMap(mv); jn.b = jn.b.flatMap(mv); }
+          if (q.stitch) q.stitch = q.stitch.flatMap(st => st.e && st.e.startsWith('front.') ? mv(st.e.split('.')).map(e => ({ ...st, e: e.join('.') })) : [st]);
+          if (q.bring && q.bring.includes('front')) q.bring = q.bring.flatMap(x => x === 'front' ? all4 : [x]);
+        }
+        keep.splice(1, 0, { name: 'Join the panels, seams outside', machine: 'overlock3', seam: 'edge', bring: [...all4, 'back'], joins: [J('frontRo.in', 'frontRi.in', 0.2), J('frontLo.in', 'frontLi.in', 0.2), J('frontRi.cf', 'frontLi.cf', 0.2)], stitch: [...['frontRo.in', 'frontLo.in', 'frontRi.cf'].map(e => ({ e, in: 0.15, zig: true })), ...[mid, side(false), side(true)].map(uv => ({ p: 'back', uv, zig: true }))], note: 'The front is cut as four lengthwise panels, a centre and a side panel each side, and the back the same way. They are joined wrong sides together on the overlock, so the seam allowances, wrapped in contrast thread, stand on the outside. The cloth is stretched as it is fed, which makes each ridge ripple. Here the back is drawn as one piece with its seams stitched on it.' });
       }
       if (o.under) keep.push({ name: 'Make the bandeau', machine: 'overlock4', seam: 'superimposed', bring: ['bandeau'], stitch: [{ e: 'bandeau.t', in: 0.4 }, { e: 'bandeau.b', in: 0.4 }], note: 'A separate tube of opaque stretch cloth, closed with one seam and turned at both edges over narrow elastic. It is worn under the mesh top and is not sewn to it; it shows through the sheer cloth.' });
       return { pieces, trims, ops: keep };
