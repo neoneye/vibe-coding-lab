@@ -615,6 +615,27 @@ the rippled lettuce edge at hem and cuffs (drawn plain), and the neck chain.
 Where the sleeve heads overlap the body of the top, the double layer of
 sheer cloth shows as a darker patch at each shoulder.
 
+### A lamé shirt, a mesh T-shirt, harem trousers and denim micro shorts
+
+Four garments from the `shirt/goldleopard`, `shirt/meshtshirt`,
+`pants/haremblackshiny` and `shorts/jeanshortsspandex` references, each on a
+builder the page already had:
+
+- the **Gold leopard satin shirt** is the shirt in a new cloth, metallic satin
+  (lamé), with the leopard print on a gold ground;
+- the **Iridescent mesh T-shirt with bandeau** is a loose, hip-length tee in a
+  new sheer cloth whose colour slides from violet to blue, with elbow-length
+  sleeves and a flat black rib round the neck. A black bandeau is worn under
+  it (the photo shows a triangle top; the page has no triangle top that goes
+  under another garment);
+- the **Black wet-look harem trousers** are the balloon trousers without their
+  pockets and drawstring, in black vinyl, with an elastic waistband on the
+  natural waist and the legs drawn in at the ankle;
+- the **Blue stretch-denim micro shorts with a heart** are low-rise jean
+  shorts with two tack buttons, leg hems bound in light blue rib, and an
+  iron-on rhinestone heart on the right back pocket. The brand lettering and
+  the silver tab on the photo's waistband are left out.
+
 ### An exposed-seam crop tee
 
 From the `top/green` reference: the **Green exposed-seam crop tee**, a short
