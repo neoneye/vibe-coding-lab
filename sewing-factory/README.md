@@ -790,12 +790,16 @@ seams of a real suit are then sealed with welded tape.
 ## Shoes
 
 A Shoes row in the header puts ready-made shoes on the full figure: flip-flops,
-platform heels, knee boots, leopard over-the-knee boots, green hazmat boots
-or chunky platform boots (or barefoot). They are not
+platform heels, knee boots, leopard over-the-knee boots, green hazmat boots,
+yellow platform knee boots (block heel, square toe, a white zip up the inside
+of the leg), black Chelsea rain boots (ankle height, elastic gores at both
+sides, a pull tab at the back), black split-toe ankle boots (a round heel and
+a notched toe with a groove between the big toe and the rest) or chunky
+platform boots (or barefoot). They are not
 part of the factory line: nothing is cut or sewn, and they stay on at every
 stage, so garments can be tried with them. Each shoe sets the heel height the
 foot is posed at and the thickness under it, and the figure stands that much
-taller. The dress form has no feet and wears none. `&shoe=flipflops|heels|boots|otk|hazmat|chunky`.
+taller. The dress form has no feet and wears none. `&shoe=flipflops|heels|boots|otk|hazmat|yellowboots|rainboots|tabi|chunky`.
 
 ## The shoulders
 
