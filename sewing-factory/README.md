@@ -12,7 +12,7 @@ browser (three.js is loaded from a CDN).
    the gap between the thighs (as a share of the hip width) and the thigh, knee,
    calf and ankle girths. Seven more sliders shape the bust
    (projection, spacing, height, width, fullness above and below, and the rib cage
-   under the bust as a share of the bust girth), a heel-lift slider poses the feet for heeled shoes. The chosen garment is shown on the figure. Two modes: a full figure with head,
+   under the bust as a share of the bust girth). The feet are posed for the heel of whichever shoe is worn, and stand flat when barefoot. The chosen garment is shown on the figure. Two modes: a full figure with head,
    arms and legs, or a tailor's dress form on a stand (it hangs from a rail for
    trousers and swimwear, which need the crotch free).
 2. **Pose.** Moves the arms, elbows, feet and head. The cut pieces never
@@ -198,8 +198,8 @@ and the measuring tapes alone (`&dress=0` in a link).
 
 Each section of the Model page (the mannequin's measurements with the
 head size, hips and legs, bust) has a **Randomize** and a **Reset** button. The
-mannequin's Randomize starts at Heel lift and leaves the choices above it
-(full figure or dress form, x-ray, Woman/Man, Medium/Large) alone. Body
+mannequin's Randomize changes the measurements and leaves the choices above
+them (Woman/Man, Medium/Large) alone. Body
 measurements are drawn within about a fifth of each slider's range of the
 chosen figure, so the result is still a plausible body; pose and shape sliders
 are drawn from their whole range. Reset returns a section to the chosen figure's
