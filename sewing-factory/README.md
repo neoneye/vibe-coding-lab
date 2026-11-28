@@ -13,7 +13,12 @@ browser (three.js is loaded from a CDN).
    two plain ears. A Head card shapes it with 21 sliders: size, skull width,
    depth, crown and base, jaw and chin, brow, eye sockets and their spacing,
    cheekbones, nose length, projection and width, mouth position, width and lip
-   fullness, ear size and angle, and how far the head blends into the neck. A Legs card sets the buttocks,
+   fullness, ear size and angle, and how far the head blends into the neck. A Hair card gives the figure hair
+   or leaves it hairless: three styles after wig-block references (two-tone long,
+   black curls, brown waves), two colours used as one colour, split at the parting,
+   on the tips or as streaks, and sliders for length, curl and volume. The hair is
+   worn, like the shoes, not cut or sewn; it hangs under gravity and lies on the
+   head, neck and shoulders, and is tucked away under a hood. A Legs card sets the buttocks,
    the gap between the thighs (as a share of the hip width) and the thigh, knee,
    calf and ankle girths. Seven more sliders shape the bust
    (projection, spacing, height, width, fullness above and below, and the rib cage

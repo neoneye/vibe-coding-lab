@@ -115,6 +115,7 @@
         <div id="measures"></div>
       </div>
       <div class="card"><h2>Head</h2><div id="headP"></div></div>
+      <div class="card"><h2>Hair</h2><div class="seg" id="hairStyles"></div><div id="hairP"></div></div>
       <div class="card"><h2>Bust</h2><div id="bustP"></div></div>
       <div class="card"><h2>Legs</h2><div id="legsP"></div><p id="legsOut" style="margin-top:8px"></p></div>
     </div>
@@ -277,6 +278,19 @@ const SF = {};
     hd('hEar', 'Ear size', 50, 160), { key: 'hEarA', label: 'Ear angle from the head', min: 0, max: 60, step: 1, def: 29, unit: '°' },
     hd('hNeck', 'Blend into the neck', 0, 150),
   ];
+  // Hair, worn like the shoes: it is not cut or sewn here. A style is a starting point; its sliders and colours can be changed.
+  SF.HAIR_STYLES = {
+    none: { name: 'Hairless' },
+    twotone: { name: 'Two-tone long', len: 38, curl: 3, vol: 25, c1: '#8a6746', c2: '#ead6a8', mix: 'split' },
+    curls: { name: 'Black curls', len: 24, curl: 82, vol: 75, c1: '#1a1512', c2: '#40342c', mix: 'one' },
+    waves: { name: 'Brown waves', len: 46, curl: 36, vol: 40, c1: '#4b2a17', c2: '#6f4124', mix: 'streaks' },
+  };
+  SF.HAIR = [
+    { key: 'len', label: 'Length', min: 3, max: 75, step: 1, def: 38 },
+    { key: 'curl', label: 'Curl', min: 0, max: 100, step: 1, def: 0, unit: '%' },
+    { key: 'vol', label: 'Volume', min: 0, max: 100, step: 1, def: 30, unit: '%' },
+  ];
+  SF.HAIR_MIX = { one: 'One colour', split: 'Split at the parting', tips: 'Tips', streaks: 'Streaks' };
   // Pose of the full figure. It moves the worn garment but never the cut pieces.
   SF.POSE = [
     { key: 'armOut', label: 'Arms out from the body', min: 3, max: 88, step: 1, def: 17, unit: '°' },
@@ -4987,6 +5001,8 @@ const S = {
   dress: Q.get('dress') !== '0', animPose: false, temp: 0.5, sel: null, op: +(Q.get('op') || 0), opT: +(Q.get('t') || 0), playing: false, lineSpeed: 1, turn: false, wait: 0,
 };
 S.M = { ...SF.FORMS[S.form] };
+const hairOf = id => ({ style: id, len: 38, curl: 0, vol: 30, c1: '#4b2a17', c2: '#ead6a8', mix: 'one', ...SF.HAIR_STYLES[id] });
+S.hair = hairOf(SF.HAIR_STYLES[Q.get('hair')] ? Q.get('hair') : 'none');
 const STILL = Q.has('still');
 // The Model and Pose sliders, the figure choice, the shoes and the garment are kept in local storage, so a reload
 // comes back to the same figure in the same clothes. A link that names a figure, shoe or garment uses that instead
@@ -4995,13 +5011,19 @@ const STILL = Q.has('still');
 const LS_KEY = 'sewing-factory:measure:v1', M_DEFS = () => [...SF.MEASURES, ...SF.BUST, ...SF.LEGS, ...SF.HEAD, ...SF.POSE, ...SF.POSE_R];
 function saveSettings() {
   if (STILL) return;
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ form: S.form, shoe: S.shoe, garment: S.garment, animPose: S.animPose, temp: S.temp, headTurn: S.headTurn, headNod: S.headNod, M: Object.fromEntries(M_DEFS().filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])) })); } catch (e) { /* no storage */ }
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ form: S.form, shoe: S.shoe, garment: S.garment, animPose: S.animPose, temp: S.temp, headTurn: S.headTurn, headNod: S.headNod, hair: (({ name, ...h }) => h)(S.hair), M: Object.fromEntries(M_DEFS().filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])) })); } catch (e) { /* no storage */ }
 }
 if (!STILL) try {
   const o = JSON.parse(localStorage.getItem(LS_KEY) || 'null'), ok = (v, lo, hi) => typeof v === 'number' && isFinite(v) && v >= lo && v <= hi;
   // the shoe and the garment: each unless the link names its own (the shoe is checked against the shoe table further down)
   if (o && !Q.has('shoe') && typeof o.shoe === 'string') S.shoe = o.shoe;
   if (o && o.animPose === true) S.animPose = true;
+  if (o && !Q.has('hair') && o.hair && SF.HAIR_STYLES[o.hair.style]) {
+    const h = hairOf(o.hair.style), hex = v => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
+    for (const d of SF.HAIR) if (ok(o.hair[d.key], d.min, d.max)) h[d.key] = o.hair[d.key];
+    if (hex(o.hair.c1)) h.c1 = o.hair.c1; if (hex(o.hair.c2)) h.c2 = o.hair.c2; if (SF.HAIR_MIX[o.hair.mix]) h.mix = o.hair.mix;
+    S.hair = h;
+  }
   if (o && typeof o.temp === 'number' && o.temp >= 0 && o.temp <= 1) S.temp = o.temp;
   if (o && !Q.has('g') && SF.GARMENTS[o.garment]) S.garment = o.garment;
   if (o && !Q.has('form') && SF.FORMS[o.form]) {
@@ -5109,6 +5131,76 @@ function headMesh(hr, hy, neck, q) {
   // each ear leans back at the top and stands off the head at its rear edge, so its dished face looks forward and out; the far one is the same shape turned half round, so its tilt is turned too
   for (const sx of [1, -1]) { const e = new THREE.Mesh(EAR_GEO, skin); e.userData.keepGeo = true; e.scale.setScalar(q.hEar); e.position.set(sx * (0.75 * q.hW - 0.03 * (1 - q.hEar)), -0.06, -0.08 * q.hD); e.rotation.set(sx * -0.2, (sx > 0 ? 0 : PI) - sx * q.hEarA * PI / 180, -0.06, 'YXZ'); m.add(e); }
   return m;
+}
+// Hair. Each lock is a ribbon that starts on the scalp, is combed away from a centre parting and then hangs: at every
+// step it turns a little further down, and where it would enter the head, the neck or the body it is laid on the
+// surface instead. Curl bends the hanging lock into waves and, further up the slider, ringlets, which also take up
+// length and stand the hair off the head. Under the locks a cap in the hair's colour covers the scalp.
+let HAIR_MAT = null;
+function hairMat() {
+  if (HAIR_MAT) return HAIR_MAT;
+  const c = document.createElement('canvas'); c.width = 128; c.height = 256; const g = c.getContext('2d'); let sd = 11; const rnd = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+  for (let x = 0; x < 128; x++) { const v = Math.round(255 * (0.62 + 0.38 * rnd())), end = 256 * (0.74 + 0.26 * rnd()); g.fillStyle = `rgb(${v},${v},${v})`; g.fillRect(x, 0, 1, end); }   // strands of uneven shade that end at uneven lengths
+  const t = new THREE.CanvasTexture(c); t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  HAIR_MAT = new THREE.MeshStandardMaterial({ map: t, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.62, metalness: 0 }); HAIR_MAT.userData.shared = true;
+  return HAIR_MAT;
+}
+function buildHair(H, o) {   // H: the hair settings; o: { hr, hy, hs, pos, quat, hq, bodyAt(th, y), yTop, yLow }
+  const sm = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  let sd = 20261128; const rnd = () => { sd = (sd + 0x6D2B79F5) | 0; let t = Math.imul(sd ^ (sd >>> 15), 1 | sd); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const { hr, hy, hs, hq } = o, NU = 200, NV = 240, W = NU + 1, base = HEAD_BASE, curl = H.curl / 100, vol = H.vol / 100;
+  const c1 = new THREE.Color(H.c1), c2 = new THREE.Color(H.c2), tmp = new THREE.Color();
+  // where hair grows: above a hairline that runs from the forehead down in front of the ear and round to the nape
+  const above = P => { const a = Math.atan2(Math.abs(P[0]), P[2]); return P[1] - lerp(lerp(0.6, -0.02, sm(0.75, 1.45, a)), -0.42, sm(1.5, 2.5, a)); }, grows = P => above(P) > 0;
+  // the scalp cap
+  const cap = new THREE.BufferGeometry(), cp = new Float32Array(base.length * 3), cc = new Float32Array(base.length * 4), ci = [], inR = new Uint8Array(base.length);
+  for (let k = 0; k < base.length; k++) { const P = base[k]; const ab = above(P); cp[3 * k] = P[0] * 1.02; cp[3 * k + 1] = P[1] * 1.02; cp[3 * k + 2] = P[2] * 1.02; inR[k] = ab > -0.06 ? 1 : 0; tmp.copy(H.mix === 'split' && P[0] > 0 ? c2 : c1).multiplyScalar(0.8); cc[4 * k] = tmp.r; cc[4 * k + 1] = tmp.g; cc[4 * k + 2] = tmp.b; cc[4 * k + 3] = clamp(0.5 + ab * 14, 0, 1); }   // the fourth value fades the cap out at the hairline, so its edge is a smooth line and not the steps of the mesh
+  for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) { const a = j * W + i, b = a + 1, c = a + W, d = c + 1; if (inR[a] && inR[b] && inR[c] && inR[d]) ci.push(a, b, d, a, d, c); }
+  cap.setAttribute('position', new THREE.BufferAttribute(cp, 3)); cap.setAttribute('color', new THREE.BufferAttribute(cc, 4)); cap.setIndex(ci); cap.computeVertexNormals();
+  const capMesh = new THREE.Mesh(cap, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, alphaTest: 0.5 })); capMesh.scale.setScalar(hr); capMesh.position.set(0, hy, 0.5);
+  // head space <-> the figure's space
+  const qi = o.quat.clone().invert(), V = new THREE.Vector3(), ctr = new THREE.Vector3(0, hy, 0.5);
+  const out = P => V.set(P[0] * hr, P[1] * hr + hy, P[2] * hr + 0.5).multiplyScalar(hs).applyQuaternion(o.quat).add(o.pos);
+  const A = 0.76 * hq.hW + 0.05, B = 1.04, C = 0.9 * hq.hD;
+  const pos = [], col = [], uv = [], idx = [];
+  const amp = 3.2 * curl * (1 - 0.7 * curl), lam = lerp(17, 2.4, Math.pow(curl, 0.7)), ramp = lerp(10, 1.2, curl), shrink = 1 / Math.sqrt(1 + Math.pow(TAU * amp * 0.7 / lam, 2));
+  const kg = 0.5 - 0.24 * vol, ds = Math.max(H.len / 110, Math.min(Math.max(1, H.len / 46), lam / 7)), wide = 1.5 + 0.5 * vol;
+  const N = 1700, t = new THREE.Vector3(), n = new THREE.Vector3(), bn = new THREE.Vector3(), p = new THREE.Vector3(), v = new THREE.Vector3(), prev = new THREE.Vector3(), q = new THREE.Vector3(), w = new THREE.Vector3(), hc = out([0, 0, 0]).clone();
+  for (let k = 0; k < N; k++) {
+    const dy = 1 - 2 * (k + 0.5) / N, rr = Math.sqrt(1 - dy * dy), al = k * 2.399963, dx = rr * Math.cos(al), dz = rr * Math.sin(al);
+    const j = Math.round(Math.acos(dy) / PI * NV), i = Math.round((((-Math.atan2(dx, dz) / TAU) % 1) + 1) % 1 * NU), P = base[j * W + i];
+    const r1 = rnd(), r2 = rnd(), r3 = rnd(), r4 = rnd(), r5 = rnd();
+    if (!P || !grows(P)) continue;
+    const side = Math.abs(P[0]) < 0.05 ? (r1 < 0.5 ? -1 : 1) : Math.sign(P[0]), off = 0.3 + (3.2 * vol + 1.2 * curl) * Math.pow(r2, 1.4);
+    const two = H.mix === 'split' ? side > 0 : H.mix === 'streaks' ? r3 < 0.28 : false, shade = 0.94 + 0.12 * r4;
+    p.copy(out(P)); n.set(P[0] / (A * A), P[1] / (B * B), P[2] / (C * C)).normalize().applyQuaternion(o.quat);
+    const fr = sm(-0.45, 0.15, P[2]); v.set(side * (0.15 + 0.75 * fr), -0.35, -0.25 - 0.8 * (1 - fr)).applyQuaternion(o.quat);   // combed sideways from the parting in front, straight back and down behind the crown v.addScaledVector(n, -v.dot(n)).normalize(); p.addScaledVector(n, 0.15);
+    const L = H.len * (0.82 + 0.18 * r5) * shrink, steps = Math.max(2, Math.ceil(L / ds)), path = [p.clone()];
+    for (let m = 0; m < steps; m++) {
+      prev.copy(p); v.y -= kg * ds; v.normalize(); p.addScaledVector(v, ds);
+      q.copy(p).sub(o.pos).divideScalar(hs).applyQuaternion(qi).sub(ctr).divideScalar(hr);   // against the head, a little off it
+      { const keep = 0.66 * A * sm(0, 0.3, q.z) * sm(0.7, 0.45, q.y); if (Math.abs(q.x) < keep) q.x = side * keep; }   // the face stays clear: hair that would fall across it is held to the side, as a curtain beside the cheek
+      const a2 = A + off / hr, b2 = B + off / hr, c2e = C + off / hr, e = Math.sqrt(q.x * q.x / (a2 * a2) + q.y * q.y / (b2 * b2) + q.z * q.z / (c2e * c2e));
+      const moved = e < 1 || q.z > 0; if (e < 1) q.multiplyScalar(1 / e); if (moved) { p.copy(q).multiplyScalar(hr).add(ctr).applyQuaternion(o.quat).multiplyScalar(hs).add(o.pos); }
+      if (p.y < o.yTop) { const r = Math.hypot(p.x, p.z), R = o.bodyAt(Math.atan2(p.x, p.z), p.y) + 0.7 + off; if (r < R) { if (r < 1e-3) p.z = -R; else { p.x *= R / r; p.z *= R / r; } } }   // against the neck, shoulders and body
+      v.copy(p).sub(prev); const l = v.length(); if (l < 1e-4) v.set(0, -1, 0); else v.multiplyScalar(1 / l);
+      path.push(p.clone());
+    }
+    const ph = TAU * (r1 * curl * curl + 0.15 * r3), i0 = pos.length / 3, u0 = Math.floor(r4 * 4) / 4;
+    for (let m = 0; m < path.length; m++) {
+      const a = path[Math.max(0, m - 1)], b = path[Math.min(path.length - 1, m + 1)], c = path[m], sLen = m * ds, f = m / (path.length - 1);
+      t.copy(b).sub(a).normalize(); n.set(c.x, c.y - Math.min(c.y, hc.y), c.z - hc.z * sm(hc.y - 2 * hr, hc.y - hr, c.y)).normalize(); bn.crossVectors(t, n).normalize(); n.crossVectors(bn, t).normalize();
+      const psi = TAU * sLen / lam + ph, am = amp * sm(0, ramp, sLen), tw = 0;
+      q.copy(c).addScaledVector(bn, am * 0.9 * Math.cos(psi)).addScaledVector(n, am * lerp(0.2, 0.6, sm(0.4, 0.8, curl)) * (1 + Math.sin(psi)));   // waves swing mostly sideways; ringlets also come out and in
+      w.copy(bn).multiplyScalar(Math.cos(tw)).addScaledVector(n, Math.sin(tw)).multiplyScalar(0.5 * wide * (1 - 0.6 * sm(0.8, 1, f)));
+      pos.push(q.x - w.x, q.y - w.y, q.z - w.z, q.x + w.x, q.y + w.y, q.z + w.z);
+      tmp.copy(two ? c2 : c1); if (H.mix === 'tips') tmp.lerp(c2, sm(0.35, 0.8, f)); tmp.multiplyScalar(shade);
+      col.push(tmp.r, tmp.g, tmp.b, tmp.r, tmp.g, tmp.b); uv.push(u0, f, u0 + 0.25, f);
+      if (m) { const e0 = i0 + 2 * (m - 1); idx.push(e0, e0 + 1, e0 + 3, e0, e0 + 3, e0 + 2); }
+    }
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
+  return { cap: capMesh, locks: new THREE.Mesh(g, hairMat()) };
 }
 function ball(mat, sx, sy, sz, x, y, z) { const m = new THREE.Mesh(SPHERE, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.userData.keepGeo = true; return m; }
 
@@ -5553,6 +5645,15 @@ function buildFigure() {
     }
     const skel = (S.xrayKind === 'robot' ? buildRobot : buildSkeleton)(b, head, hr, hy, footAt); skel.userData.bone = true; figure.add(skel);
     head.rotation.set(-S.headNod * PI / 180, S.headTurn * PI / 180, 0, 'YXZ'); head.scale.setScalar((b.M.head ?? 100) / 100); figure.add(head);
+    if (S.hair.style !== 'none' && HEAD_BASE) {
+      // how far the neck, shoulders and body reach at each height and bearing, for the hair to lie on
+      const yLow = Math.max(y.crotch, yTopN - 95), NY = Math.ceil((yTopN - yLow) / 1.5) + 1, NB = 64, tab = new Float32Array(NY * NB);
+      for (let j = 0; j < NY; j++) { const yy = Math.min(yTopN, yLow + j * 1.5); for (let i = 0; i < 160; i++) { const P = vt(-PI + TAU * i / 160, yy), r = Math.hypot(P[0], P[2]), k = j * NB + Math.min(NB - 1, Math.floor((Math.atan2(P[0], P[2]) + PI) / TAU * NB)); if (r > tab[k]) tab[k] = r; } for (let i = 0; i < NB; i++) if (!tab[j * NB + i]) tab[j * NB + i] = tab[j * NB + (i + 1) % NB] || tab[j * NB + (i + NB - 1) % NB]; }
+      const bodyAt = (th, yy) => { const fj = clamp((yy - yLow) / 1.5, 0, NY - 1), j0 = Math.floor(fj), j1 = Math.min(NY - 1, j0 + 1), i = Math.min(NB - 1, Math.floor((th + PI) / TAU * NB)); return lerp(tab[j0 * NB + i], tab[j1 * NB + i], fj - j0); };
+      const hh = buildHair(S.hair, { hr, hy, hs: hq.head, hq, pos: head.position.clone(), quat: head.quaternion.clone(), bodyAt, yTop: yTopN, yLow });
+      const hooded = S.dress && garment && Object.keys(garment.byId || {}).some(id => /^hood/i.test(id));   // under a hood worn up the hair is tucked away: only the hairline shows
+      head.add(hh.cap); if (hooded) hh.locks.geometry.dispose(); else figure.add(hh.locks);
+    }
   } else buildStand(b, y0);
   if (S.mode !== 'stand') { const pr = Math.max(30, footX + 20), plate = new THREE.Mesh(new THREE.CylinderGeometry(pr, pr + 1, 1.2, 64), dark); plate.position.y = 0.6 - lift; plate.userData.floor = true; figure.add(plate); }
   turnG.position.y = lift;   // heels raise the whole figure
@@ -5959,6 +6060,18 @@ function uiMeasures() {
   rr(bp, () => { for (const d of SF.BUST) S.M[d.key] = rnd(d); }, () => { for (const d of SF.BUST) S.M[d.key] = F0[d.key] ?? d.def; });
   for (const d of SF.BUST) slider(bp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
   for (const d of SF.MEASURES) slider(m, d, () => S.M[d.key], v => { S.M[d.key] = v; needBody = true; });
+  // Hair: a row of styles, then the colours, how the two are used, and the sliders. Hairless shows none of them.
+  const hs0 = $('hairStyles'), hrP = $('hairP'); hs0.innerHTML = ''; hrP.innerHTML = '';
+  for (const [id, st] of Object.entries(SF.HAIR_STYLES)) { const bt = document.createElement('button'); bt.textContent = st.name; bt.className = S.hair.style === id ? 'on' : ''; bt.onclick = () => { S.hair = hairOf(id); needBody = true; saveSettings(); uiMeasures(); }; hs0.appendChild(bt); }
+  if (S.hair.style !== 'none') {
+    const row = document.createElement('div'); row.className = 'row'; row.style.marginTop = '8px';
+    for (const [k, label] of [['c1', 'Colour'], ['c2', 'Second colour']]) { const sp = document.createElement('span'); sp.textContent = label; if (k === 'c2') sp.style.marginLeft = '10px'; const inp = document.createElement('input'); inp.type = 'color'; inp.value = S.hair[k]; inp.oninput = () => { S.hair[k] = inp.value; needBody = true; saveSettings(); }; row.append(sp, inp); }
+    hrP.appendChild(row);
+    const mx = document.createElement('div'); mx.className = 'seg'; mx.style.marginTop = '8px';
+    for (const [id, label] of Object.entries(SF.HAIR_MIX)) { const bt = document.createElement('button'); bt.textContent = label; bt.className = S.hair.mix === id ? 'on' : ''; bt.onclick = () => { S.hair.mix = id; needBody = true; saveSettings(); uiMeasures(); }; mx.appendChild(bt); }
+    hrP.appendChild(mx);
+    for (const d of SF.HAIR) slider(hrP, d, () => S.hair[d.key], v => { S.hair[d.key] = v; needBody = true; saveSettings(); });
+  }
   const hp = $('headP'); hp.innerHTML = '';   // random heads stay near the sculpt: a draw from the whole of every range is a caricature
   rr(hp, () => { for (const d of SF.HEAD) S.M[d.key] = rnd(d, F0[d.key] ?? d.def, 0.22); }, () => { for (const d of SF.HEAD) S.M[d.key] = F0[d.key] ?? d.def; });
   for (const d of SF.HEAD) slider(hp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
@@ -6630,6 +6743,8 @@ try {
   if (Q.get('cloth') || Q.get('print') || Q.get('colour')) S.fabric = { cloth: Q.get('cloth') || S.fabric.cloth, print: Q.get('print') || S.fabric.print, colour: Q.get('colour') ? '#' + Q.get('colour') : S.fabric.colour };
   for (const d of SF.GARMENTS[S.garment].fit) if (Q.has(d.key)) S.fit[d.key] = +Q.get(d.key);
   for (const d of [...SF.MEASURES, ...SF.BUST, ...SF.LEGS, ...SF.HEAD, ...SF.POSE, ...SF.POSE_R]) if (Q.has(d.key)) { S.M[d.key] = +Q.get(d.key); needBody = true; }
+  for (const d of SF.HAIR) if (Q.has('hair' + d.key)) { S.hair[d.key] = +Q.get('hair' + d.key); needBody = true; }
+  if (SF.HAIR_MIX[Q.get('hairmix')]) S.hair.mix = Q.get('hairmix');
   if (needBody) uiMeasures();
   if (STILL) $('mview').dataset.preserve = '1';
   try { mv = createMachineView($('mview')); } catch (e) { showErr(e); }
