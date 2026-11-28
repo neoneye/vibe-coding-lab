@@ -114,6 +114,7 @@
       <div class="card"><h2>Measurements</h2>
         <div id="measures"></div>
       </div>
+      <div class="card"><h2>Head</h2><div id="headP"></div></div>
       <div class="card"><h2>Bust</h2><div id="bustP"></div></div>
       <div class="card"><h2>Legs</h2><div id="legsP"></div><p id="legsOut" style="margin-top:8px"></p></div>
     </div>
@@ -264,7 +265,18 @@ const SF = {};
     { key: 'calf', label: 'Calf', min: 70, max: 150, step: 1, def: 100, unit: '%' },
     { key: 'ankle', label: 'Ankle', min: 70, max: 150, step: 1, def: 100, unit: '%' },
   ];
-  SF.HEAD = [{ key: 'head', label: 'Head size', min: 85, max: 150, step: 1, def: 100, unit: '%' }];
+  // The head. All but the ear angle are shares of the mannequin's own sculpt: 100 % is the head as drawn.
+  const hd = (key, label, min, max) => ({ key, label, min, max, step: 1, def: 100, unit: '%' });
+  SF.HEAD = [
+    hd('head', 'Head size', 85, 150),
+    hd('hW', 'Skull width', 85, 120), hd('hD', 'Skull depth', 85, 120), hd('hCrown', 'Crown fullness', 0, 200), hd('hNape', 'Skull base height', 0, 150),
+    hd('hJaw', 'Jaw narrowing', 0, 200), hd('hChinF', 'Chin forward', 0, 200), hd('hChin', 'Chin size', 0, 250),
+    hd('hBrow', 'Brow ridge', 0, 300), hd('hSock', 'Eye socket depth', 0, 160), hd('hEyeD', 'Eye spacing', 75, 130), hd('hCheek', 'Cheekbones', 0, 400),
+    hd('hNoseL', 'Nose length', 60, 130), hd('hNoseP', 'Nose projection', 30, 170), hd('hNoseW', 'Nose width', 60, 180),
+    hd('hMouthY', 'Mouth, lower on the face', 85, 115), hd('hMouthW', 'Mouth width', 60, 160), hd('hLips', 'Lip fullness', 0, 250),
+    hd('hEar', 'Ear size', 50, 160), { key: 'hEarA', label: 'Ear angle from the head', min: 0, max: 60, step: 1, def: 29, unit: '°' },
+    hd('hNeck', 'Blend into the neck', 0, 150),
+  ];
   // Pose of the full figure. It moves the worn garment but never the cut pieces.
   SF.POSE = [
     { key: 'armOut', label: 'Arms out from the body', min: 3, max: 88, step: 1, def: 17, unit: '°' },
@@ -5044,12 +5056,15 @@ const SPHERE = new THREE.SphereGeometry(1, 28, 18);
 // The head, sculpted as one smooth surface like a shop mannequin's: hollow eye sockets with no eyes in them, a brow, a
 // nose with a sharp tip, closed lips, a chin and a jaw that narrows from the skull, and two plain ears. It is shaped once
 // for a head of half-height 1 and scaled to the figure, so the sliders do not rebuild it.
-let HEAD_GEO = null, EAR_GEO = null, HEAD_KEY = '', HEAD_BASE = null;
-function headMesh(hr, hy, neck) {
+let HEAD_GEO = null, EAR_GEO = null, HEAD_KEY = '', HEAD_QKEY = '', HEAD_BASE = null;
+function headMesh(hr, hy, neck, q) {
   const g = (v, c, w) => Math.exp(-Math.pow((v - c) / w, 2)), sm = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
   // Under the skull and jaw the surface is drawn down along the neck, the more the nearer it lies to the neck, so the
   // head runs into the neck through a hollow curve and not a crease. The neck stands still while the head nods, so the
   // neck's line is taken as the head sees it: neck = { r: its radius, p: a point on its axis, nod } in half-heights.
+  // q: the Head sliders as shares of the sculpt (1 = as drawn). A change there redoes the sculpt itself.
+  const qKey = SF.HEAD.map(d => q[d.key]).join();
+  if (qKey !== HEAD_QKEY) { HEAD_QKEY = qKey; HEAD_BASE = null; if (HEAD_GEO) { pendingDispose.push(HEAD_GEO); HEAD_GEO = null; } }
   const key = [neck.r.toFixed(3), neck.p.map(v => v.toFixed(3)), neck.nod.toFixed(1)].join();
   if (HEAD_GEO && key !== HEAD_KEY) { pendingDispose.push(HEAD_GEO); HEAD_GEO = null; }
   HEAD_KEY = key;
@@ -5057,7 +5072,7 @@ function headMesh(hr, hy, neck) {
   const skirt = P => {
     const k = sm(-0.2, -0.55, P[1]); if (!k) return P;
     const qx = P[0] - neck.p[0], qy = P[1] - neck.p[1], qz = P[2] - neck.p[2], h = qy * na[1] + qz * na[2], rho = Math.hypot(qx, qy - h * na[1], qz - h * na[2]);
-    const d = 0.34 * k * Math.pow(1 - clamp((rho - neck.r) / 0.34, 0, 1), 2.5);
+    const d = 0.34 * q.hNeck * k * Math.pow(1 - clamp((rho - neck.r) / 0.34, 0, 1), 2.5);
     return [P[0], P[1] - d * na[1], P[2] - d * na[2]];
   };
   // The sculpted points are kept, so a nod only has to redo the cheap part: drawing the underside down the neck.
@@ -5065,22 +5080,22 @@ function headMesh(hr, hy, neck) {
   if (!HEAD_GEO) HEAD_GEO = gridGeo(200, 240, (u, v) => {
     if (kept) return skirt(kept[n++]);
     const th = -TAU * u, ph = PI * v, dx = Math.sin(ph) * Math.sin(th), dy = Math.cos(ph), dz = Math.sin(ph) * Math.cos(th);
-    const sq = dy > 0 ? Math.pow(1 - Math.pow(dy, 2.6), 1 / 2.6) / Math.max(1e-6, Math.sin(ph)) : 1;   // a fuller, squarer cranium than an egg
-    let x = 0.76 * dx * sq, y = 1.04 * dy, z = 0.9 * dz * sq;
-    x *= 1 - 0.17 * sm(0.25, -1, y);                                  // the face narrows from the skull to the chin
+    const ce = 2 + 0.6 * q.hCrown, sq = dy > 0 ? Math.pow(1 - Math.pow(dy, ce), 1 / ce) / Math.max(1e-6, Math.sin(ph)) : 1;   // a fuller, squarer cranium than an egg
+    let x = 0.76 * q.hW * dx * sq, y = 1.04 * dy, z = 0.9 * q.hD * dz * sq;
+    x *= 1 - 0.17 * q.hJaw * sm(0.25, -1, y);                                  // the face narrows from the skull to the chin
     if (dz < 0) z *= 1 - 0.2 * sm(0.1, -0.9, y) * sm(0, -0.6, dz);       // the back of the skull curves in to the nape
-    z += 0.15 * sm(-0.15, -0.9, y);                                     // the jaw sits forward of the skull's own curve
-    y += 0.28 * sm(0.2, -0.9, dz) * sm(-0.2, -1.04, y);                // and the skull ends well above the chin at the back, where the neck goes in
-    const F = sm(-0.15, 0.45, dz), ax = Math.abs(x);
-    const brow = 0.2 - 0.45 * Math.pow(ax - 0.24, 2);                    // the brow line, arched
-    let d = -0.13 * sm(0.03, 0.2, ax) * (1 - sm(0.26, 0.7, ax)) * Math.pow(Math.sin(PI * Math.pow(clamp((brow - y) / 0.66, 0, 1), 0.62)), 2);   // eye sockets: a sharp brow above, easing out into the cheek below
-    d += 0.03 * g(y, 0.24, 0.1) * g(ax, 0.26, 0.32);                    // brow
-    d += 0.02 * g(ax, 0.5, 0.15) * g(y, -0.12, 0.15);                   // cheekbones
-    const t = clamp((0.2 - y) / 0.5, 0, 1.3), nh = y > 0.2 ? 0.025 * g(y, 0.2, 0.12) : (0.025 + 0.185 * Math.pow(t, 1.2)) * sm(-0.43, -0.26, y);   // the ridge grows to the tip and is then eased away under it, so the tip is round, not a point
-    d += nh * g(x, 0, 0.045 + 0.05 * t + Math.max(0, y - 0.2) * 0.8) + 0.06 * g(ax, 0.09, 0.05) * g(y, -0.3, 0.05);   // the nose: a ridge that grows to the tip and is cut under, and the wings beside it
-    const lip = g(x, 0, 0.13), ml = -0.545 - 0.25 * x * x;                 // the line of the mouth, its corners a touch lower
-    d += 0.04 * g(y, -0.56, 0.2) * g(x, 0, 0.28) + 0.03 * g(y, ml + 0.052, 0.045) * lip * (1 - 0.25 * g(x, 0, 0.035)) + 0.036 * g(y, ml - 0.066, 0.056) * lip - 0.02 * g(y, ml, 0.024) * Math.exp(-Math.pow(x / 0.15, 2));   // the mouth: two lips and the line between them
-    d += 0.05 * g(y, -0.88, 0.12) * g(x, 0, 0.2) - 0.02 * g(y, -0.71, 0.05) * g(x, 0, 0.15);   // chin, and the hollow under the lower lip
+    z += 0.15 * q.hChinF * sm(-0.15, -0.9, y);                                     // the jaw sits forward of the skull's own curve
+    y += 0.28 * q.hNape * sm(0.2, -0.9, dz) * sm(-0.2, -1.04, y);                // and the skull ends well above the chin at the back, where the neck goes in
+    const F = sm(-0.15, 0.45, dz), ax = Math.abs(x), ae = ax / q.hEyeD;   // ae: the same, as the eyes are set
+    const brow = 0.2 - 0.45 * Math.pow(ae - 0.24, 2);                    // the brow line, arched
+    let d = -0.13 * q.hSock * sm(0.03, 0.2, ae) * (1 - sm(0.26, 0.7, ae)) * Math.pow(Math.sin(PI * Math.pow(clamp((brow - y) / 0.66, 0, 1), 0.62)), 2);   // eye sockets: a sharp brow above, easing out into the cheek below
+    d += 0.03 * q.hBrow * g(y, 0.24, 0.1) * g(ae, 0.26, 0.32);                    // brow
+    d += 0.02 * q.hCheek * g(ax, 0.5, 0.15) * g(y, -0.12, 0.15);                   // cheekbones
+    const nl = 0.5 * q.hNoseL, tip = 0.2 - nl, t = clamp((0.2 - y) / nl, 0, 1.3), nh = q.hNoseP * (y > 0.2 ? 0.025 * g(y, 0.2, 0.12) : (0.025 + 0.185 * Math.pow(t, 1.2)) * sm(tip - 0.13, tip + 0.04, y));   // the ridge grows to the tip and is then eased away under it, so the tip is round, not a point
+    d += nh * g(x, 0, (0.045 + 0.05 * t) * q.hNoseW + Math.max(0, y - 0.2) * 0.8) + 0.06 * Math.min(1.3, q.hNoseP) * g(ax, 0.09 * q.hNoseW, 0.05 * q.hNoseW) * g(y, tip, 0.05);   // the nose: a ridge that grows to the tip and is cut under, and the wings beside it
+    const lip = g(x, 0, 0.13 * q.hMouthW), ml = -0.545 * q.hMouthY - 0.25 * x * x;                 // the line of the mouth, its corners a touch lower
+    d += 0.04 * g(y, ml - 0.015, 0.2) * g(x, 0, 0.28) + q.hLips * (0.03 * g(y, ml + 0.052, 0.045) * lip * (1 - 0.25 * g(x, 0, 0.035)) + 0.036 * g(y, ml - 0.066, 0.056) * lip) - 0.02 * g(y, ml, 0.024) * Math.exp(-Math.pow(x / (0.15 * q.hMouthW), 2));   // the mouth: two lips and the line between them
+    d += 0.05 * q.hChin * g(y, -0.88, 0.12) * g(x, 0, 0.2) - 0.02 * g(y, -0.71, 0.05) * g(x, 0, 0.15);   // chin, and the hollow under the lower lip
     const P = [x, y, z + F * d]; base.push(P); return skirt(P);
   }, true);
   if (!kept && base.length) HEAD_BASE = base;
@@ -5092,7 +5107,7 @@ function headMesh(hr, hy, neck) {
   }, true);
   const m = new THREE.Mesh(HEAD_GEO, skin); m.userData.keepGeo = true; m.scale.setScalar(hr); m.position.set(0, hy, 0.5);
   // each ear leans back at the top and stands off the head at its rear edge, so its dished face looks forward and out; the far one is the same shape turned half round, so its tilt is turned too
-  for (const sx of [1, -1]) { const e = new THREE.Mesh(EAR_GEO, skin); e.userData.keepGeo = true; e.position.set(sx * 0.75, -0.06, -0.08); e.rotation.set(sx * -0.2, (sx > 0 ? 0 : PI) - sx * 0.5, -0.06, 'YXZ'); m.add(e); }
+  for (const sx of [1, -1]) { const e = new THREE.Mesh(EAR_GEO, skin); e.userData.keepGeo = true; e.scale.setScalar(q.hEar); e.position.set(sx * (0.75 * q.hW - 0.03 * (1 - q.hEar)), -0.06, -0.08 * q.hD); e.rotation.set(sx * -0.2, (sx > 0 ? 0 : PI) - sx * q.hEarA * PI / 180, -0.06, 'YXZ'); m.add(e); }
   return m;
 }
 function ball(mat, sx, sy, sz, x, y, z) { const m = new THREE.Mesh(SPHERE, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.userData.keepGeo = true; return m; }
@@ -5528,9 +5543,10 @@ function buildFigure() {
       const hx = new THREE.Vector3(...hf.A.u), hy2 = new THREE.Vector3(...hf.d).negate(); hand.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(hx, hy2, new THREE.Vector3().crossVectors(hx, hy2))); figure.add(hand);
     }
     const hr = (H - y.chin) / 2, hy = hr * 0.98 + 1.5, head = new THREE.Group(); head.position.set(0, y.chin - 1.5, 0.3);   // pivots at the top of the neck
-    { const hs = (b.M.head ?? 100) / 100; head.add(headMesh(hr, hy, { r: b.neckR * 0.84 * 0.95 / (hr * hs), p: [0, -hy / hr, (-0.3 / hs - 0.5) / hr], nod: S.headNod })); }
+    const hq = Object.fromEntries(SF.HEAD.map(d => [d.key, (b.M[d.key] ?? d.def) / (d.unit === '%' ? 100 : 1)]));
+    { const hs = hq.head; head.add(headMesh(hr, hy, { r: b.neckR * 0.84 * 0.95 / (hr * hs), p: [0, -hy / hr, (-0.3 / hs - 0.5) / hr], nod: S.headNod }, hq)); }
     if (SF.GARMENTS[S.garment].props === 'mask') {   // a respirator worn with the garment: face piece, visor and two filters. Ready-made, like the shoes.
-      const glass = new THREE.MeshStandardMaterial({ color: '#9fb4c2', roughness: 0.08, metalness: 0.3, envMap: metalEnv(), transparent: true, opacity: 0.75 }), zf = 0.5 + hr * 0.82;
+      const glass = new THREE.MeshStandardMaterial({ color: '#9fb4c2', roughness: 0.08, metalness: 0.3, envMap: metalEnv(), transparent: true, opacity: 0.75 }), zf = 0.5 + hr * (0.82 + 0.2 * Math.max(0, hq.hNoseP - 1));
       head.add(ball(dark, hr * 0.56, hr * 0.5, hr * 0.34, 0, hy - hr * 0.28, zf)); head.add(ball(glass, hr * 0.52, hr * 0.24, hr * 0.22, 0, hy + hr * 0.16, zf + hr * 0.08));
       for (const sx of [1, -1]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(hr * 0.2, hr * 0.2, hr * 0.2, 18), dark); c.rotation.set(PI / 2, 0, -sx * 0.7); c.position.set(sx * hr * 0.46, hy - hr * 0.5, zf + hr * 0.12); head.add(c); }
       head.add(ball(dark, hr * 0.14, hr * 0.14, hr * 0.16, 0, hy - hr * 0.42, zf + hr * 0.3));
@@ -5907,7 +5923,7 @@ function uiMeasures() {
   const F0 = SF.FORMS[S.form], rnd = (d, around, spread) => { const span = d.max - d.min, v = around === undefined ? d.min + Math.random() * span : around + (Math.random() * 2 - 1) * spread * span; return +(Math.round(Math.min(d.max, Math.max(d.min, v)) / d.step) * d.step).toFixed(3); };
   const rr = (el, onRandom, onReset) => { const r = document.createElement('div'); r.className = 'row'; r.style.marginTop = '4px'; for (const [name, fn, tip] of [['Randomize', onRandom, 'Random values for the sliders in this section'], ['Reset', onReset, 'Back to the starting values of this section']]) { const b = document.createElement('button'); b.textContent = name; b.title = tip; b.onclick = () => { fn(); needBody = true; saveSettings(); uiMeasures(); }; r.appendChild(b); } el.appendChild(r); };
   // the body measurements stay within about a fifth of their range of the chosen figure, so the result is still a plausible body
-  rr(m, () => { for (const d of SF.MEASURES) S.M[d.key] = rnd(d, F0[d.key], 0.2); for (const d of SF.HEAD) S.M[d.key] = rnd(d); }, () => { for (const d of SF.MEASURES) S.M[d.key] = F0[d.key]; for (const d of SF.HEAD) S.M[d.key] = F0[d.key] ?? d.def; });
+  rr(m, () => { for (const d of SF.MEASURES) S.M[d.key] = rnd(d, F0[d.key], 0.2); }, () => { for (const d of SF.MEASURES) S.M[d.key] = F0[d.key]; });
   $('poseCard').style.display = S.mode === 'stand' ? 'none' : ''; $('poseNone').style.display = S.mode === 'stand' ? '' : 'none';
   const pp = $('poseP'), pz = $('poses'); pp.innerHTML = ''; pz.innerHTML = '';
   // Pose buttons: Randomize, Reset and the presets all go through poseTo, which either jumps to the new pose or, with
@@ -5943,7 +5959,9 @@ function uiMeasures() {
   rr(bp, () => { for (const d of SF.BUST) S.M[d.key] = rnd(d); }, () => { for (const d of SF.BUST) S.M[d.key] = F0[d.key] ?? d.def; });
   for (const d of SF.BUST) slider(bp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
   for (const d of SF.MEASURES) slider(m, d, () => S.M[d.key], v => { S.M[d.key] = v; needBody = true; });
-  for (const d of SF.HEAD) slider(m, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
+  const hp = $('headP'); hp.innerHTML = '';   // random heads stay near the sculpt: a draw from the whole of every range is a caricature
+  rr(hp, () => { for (const d of SF.HEAD) S.M[d.key] = rnd(d, F0[d.key] ?? d.def, 0.22); }, () => { for (const d of SF.HEAD) S.M[d.key] = F0[d.key] ?? d.def; });
+  for (const d of SF.HEAD) slider(hp, d, () => S.M[d.key] ?? d.def, v => { S.M[d.key] = v; needBody = true; });
 }
 function setGarment(id) {
   S.garment = id; const G = SF.GARMENTS[id]; S.fit = SF.defaultFit(id); S.over = {}; S.sel = null; S.op = 0; S.opT = 0; S.playing = false;

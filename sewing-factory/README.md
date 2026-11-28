@@ -10,7 +10,10 @@ browser (three.js is loaded from a CDN).
    shoulder width, inside leg and arm length. The torso sections are solved so
    the tape girths equal the slider values. The head is sculpted like a shop
    mannequin's: hollow eye sockets without eyes, a nose, closed lips, a jaw and
-   two plain ears. A Legs card sets the buttocks,
+   two plain ears. A Head card shapes it with 21 sliders: size, skull width,
+   depth, crown and base, jaw and chin, brow, eye sockets and their spacing,
+   cheekbones, nose length, projection and width, mouth position, width and lip
+   fullness, ear size and angle, and how far the head blends into the neck. A Legs card sets the buttocks,
    the gap between the thighs (as a share of the hip width) and the thigh, knee,
    calf and ankle girths. Seven more sliders shape the bust
    (projection, spacing, height, width, fullness above and below, and the rib cage
@@ -199,7 +202,7 @@ and the measuring tapes alone (`&dress=0` in a link).
 ## Randomize, Reset and saved settings
 
 Each section of the Model page (the mannequin's measurements with the
-head size, hips and legs, bust) has a **Randomize** and a **Reset** button. The
+head, bust, legs) has a **Randomize** and a **Reset** button. The
 mannequin's Randomize changes the measurements and leaves the choices above
 them (Woman/Man, Medium/Large) alone. Body
 measurements are drawn within about a fifth of each slider's range of the
