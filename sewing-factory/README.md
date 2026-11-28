@@ -4,9 +4,11 @@ How flat pieces of cloth become a garment, and what each industrial sewing
 machine on the line actually does with its threads. Open `index.html` in a
 browser (three.js is loaded from a CDN).
 
-## Five stages
+## Six stages
 
-1. **Model.** A mannequin with sliders for height, chest, waist, hip,
+1. **Studio.** Picks the backdrop the figure stands in front of: the plain
+   studio, or a painted cloth sweep generated on the spot.
+2. **Model.** A mannequin with sliders for height, chest, waist, hip,
    shoulder width, inside leg and arm length. The torso sections are solved so
    the tape girths equal the slider values. The head is sculpted like a shop
    mannequin's: hollow eye sockets without eyes, a nose, closed lips, a jaw and
@@ -25,15 +27,15 @@ browser (three.js is loaded from a CDN).
    under the bust as a share of the bust girth). The feet are posed for the heel of whichever shoe is worn, and stand flat when barefoot. The chosen garment is shown on the figure. Two modes: a full figure with head,
    arms and legs, or a tailor's dress form on a stand (it hangs from a rail for
    trousers and swimwear, which need the crotch free).
-2. **Pose.** Moves the arms, elbows, feet and head. The cut pieces never
+3. **Pose.** Moves the arms, elbows, feet and head. The cut pieces never
    change with the pose.
-3. **Shoes.** Pick what the figure wears on its feet. Shoes are only worn,
+4. **Shoes.** Pick what the figure wears on its feet. Shoes are only worn,
    not cut or sewn, and stay on while the clothes are tried.
-4. **Cloth.** Two subtabs. **Type** picks the garment to make; it is drafted
+5. **Cloth.** Two subtabs. **Type** picks the garment to make; it is drafted
    for the figure and shown on it. **Customize** is the cutting table: the pattern pieces of the chosen garment lie on a cutting table as a
    marker: grain arrows, cutting line, stitch line. Click a piece to give it its
    own cloth, print or colour.
-5. **Finished.** The garment on the mannequin, with a clean PNG export. A
+6. **Finished.** The garment on the mannequin, with a clean PNG export. A
    **Sew** subtab on this page holds the sewing line: the operation list in factory order. Each operation goes to the
    machine a factory would use, and a close-up shows that machine forming its
    stitch, thread by thread. The pieces join on the form so you can see where
@@ -106,15 +108,17 @@ The times and thread amounts are estimates from the length of stitching; the
 total sewing time is the sum of the times given at the steps. The document says of itself that it comes from a simplified model
 that nobody has sewn.
 
-A **Studio backdrop** card on the Finished page hangs a painted muslin sweep
+The **Studio** page, the first, hangs a painted muslin sweep
 behind the figure, wall curving into floor: Plain studio (none), Mottled
 charcoal, Grey-brown, Grey cloud, Slate blue-grey, Old-master teal, Midnight
 blue and Blush on blue. It is drawn by a shader, not from pictures: three
 colours (cloth, mottle, light) and sliders for mottling, blotch size, the pool
 of light and its size and height, dark corners, creases and the floor's shade,
 plus **New pattern** for another mottling of the same kind. The pool of light
-stays behind the figure as the view goes round, and the backdrop is in the
-saved image (`&backdrop=teal` in a link).
+stays behind the figure as the view goes round. The backdrop stands on every
+page that shows the figure in the studio (not at the cutting table or on the
+sewing line) and is in the saved image (`&backdrop=teal` in a link). On a
+backdrop the figure stands on the cloth, without the black disc.
 
 An **X-ray** switch on the Finished page makes the body see-through and shows either a skeleton or
 a robot mannequin inside it. The robot is an articulated shop mannequin: matt
@@ -151,10 +155,10 @@ the inside leg. Worn, these six lie skin-tight: the body's own surface pushed
 out by the ease, so the cloth goes into the cleft and tucks under each buttock.
 The looser jeans and chino shorts span across instead.
 
-## Five pages
+## Six pages
 
-The page has five steps: **1 Model**, **2 Pose**, **3 Shoes**, **4 Cloth** and
-**5 Finished**. The header holds only the step buttons. Two pages have subtabs
+The page has six steps: **1 Studio**, **2 Model**, **3 Pose**, **4 Shoes**,
+**5 Cloth** and **6 Finished**; it opens on Studio. The header holds only the step buttons. Two pages have subtabs
 at the top of their panel:
 
 - **Cloth**: **Type**, the garment picker (all the garments, as one list of
@@ -934,7 +938,7 @@ sliders, every garment at default and extreme sizes, the seam walk (joined edges
 must match in flat length), the marker, stitch thread paths and tile wrap.
 
 URL parameters for screenshots: `?still` renders one settled frame, `&bare`
-hides the panel, `&stage=1..5` (1 Model, 2 Pose, 3 Shoes, 4 Cloth, 5 Finished; `&tab=customize` opens Cloth's Customize subtab and `&tab=sew` Finished's Sew subtab, `&tab=export` its Export subtab), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|thedress|fishnets|lacestockings|snakesuit|lasersuit|catswim|goldlace|olivering|blackcutouts|leopardblock|tricolor|blackshoulder|crosshalter|ladderhalter|brownhalter|sheervbody|crossdress|pinkgloss|bronzebody|flowerromper|redunitard|yokeunitard|goldkeyhole|sportromper|vestswim|seamtee|meshtop|coatvinyl|coatbutton|coatgoth|coatdouble|raincoat|prisonorange|convictstripe|tickstripesuit|stripedress|crewnavy|crewgrey|uniformbelt|uniformcoat|cargopants|widesweats|plungedress|sequindress|zipkeyhole|sequinbody|redfoilbody|lacehalter|pinkromper|colorbands|hourglass|sequinchains|plaidromper|neonholo|cherrysuit|ringduo|nightsnake|bluewrap|shirt|dress|swimsuit|bikini`,
+hides the panel, `&stage=1..6` (1 Studio, 2 Model, 3 Pose, 4 Shoes, 5 Cloth, 6 Finished; `&tab=customize` opens Cloth's Customize subtab and `&tab=sew` Finished's Sew subtab, `&tab=export` its Export subtab), `&g=jeans|shorts|jeanshorts|hotshorts|metalshorts|goldshorts|rainbowshorts|bikeshorts|leggings|scrunchleggings|meshleggings|shinyleggings|zebraleggings|flarepants|leatherjacket|snakejacket|pufferjacket|puffercoat|chaindress|leathershorts|rashsuit|cutoutsuit|catsuitred|catsuitbeige|goldsuit|hazmat|bluedress|golddress|longdress|racersuit|halterbody|tailoredsuit|sequinsuit|hololeggings|zipbody|sidedress|glossdress|goldslip|pinkslip|harlequindress|chainskirt|leatherskirt|pinkskirt|dotskirt|silverskirt|tennisskirt|tubetop|vesttop|snapshirt|croptop|stripebikini|blueshorts|halterdress|metalsuit|bluebikini|whitebottom|holosuit|chainsuit|redmonokini|pinkvinyl|thedress|fishnets|lacestockings|snakesuit|lasersuit|catswim|goldlace|olivering|blackcutouts|leopardblock|tricolor|blackshoulder|crosshalter|ladderhalter|brownhalter|sheervbody|crossdress|pinkgloss|bronzebody|flowerromper|redunitard|yokeunitard|goldkeyhole|sportromper|vestswim|seamtee|meshtop|coatvinyl|coatbutton|coatgoth|coatdouble|raincoat|prisonorange|convictstripe|tickstripesuit|stripedress|crewnavy|crewgrey|uniformbelt|uniformcoat|cargopants|widesweats|plungedress|sequindress|zipkeyhole|sequinbody|redfoilbody|lacehalter|pinkromper|colorbands|hourglass|sequinchains|plaidromper|neonholo|cherrysuit|ringduo|nightsnake|bluewrap|shirt|dress|swimsuit|bikini`,
 `&form=w|m|wl|ml`, `&xray`, `&mode=stand`, `&op=N&t=0..1` (operation and progress), `&cyc=6.55` (machine
 cycle), `&az=&el=&zoom=&ty=` (camera), `&cloth=&print=&colour=RRGGBB`, `&sel=`
 (selected piece). `window.__sf` exposes the state and a `tick/render` pair.
