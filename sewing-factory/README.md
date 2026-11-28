@@ -542,11 +542,12 @@ Six are existing shapes with a new print or trim:
   openings. The binding is drawn as separate strips lying on the suit along
   each edge, not as a strip folded over the edge.
 - **Cherry swimsuit**: a *cherries* print on pale blue, wide straps and a red
-  drawstring bow at the neckline. The ruffles round the legs and the gathered
-  bust are left out.
+  drawstring bow at the neckline. A ruffle runs round each leg opening: a
+  strip of the suit cloth cut 1.8 times as long as the edge, roll-hemmed and
+  gathered on, drawn standing off the suit in small waves. The gathered bust
+  is left out.
 
 Three are cut-away shapes:
-
 - **Two-tone ring monokini**: a cream halter top, open to the waist, meeting a
   brown bottom at a ring; a band ties across the back. The lower fronts are a
   second layer in the other colour, as on the black and leopard one.
