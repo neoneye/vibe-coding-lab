@@ -5044,10 +5044,26 @@ const SPHERE = new THREE.SphereGeometry(1, 28, 18);
 // The head, sculpted as one smooth surface like a shop mannequin's: hollow eye sockets with no eyes in them, a brow, a
 // nose with a sharp tip, closed lips, a chin and a jaw that narrows from the skull, and two plain ears. It is shaped once
 // for a head of half-height 1 and scaled to the figure, so the sliders do not rebuild it.
-let HEAD_GEO = null, EAR_GEO = null;
-function headMesh(hr, hy) {
+let HEAD_GEO = null, EAR_GEO = null, HEAD_KEY = '', HEAD_BASE = null;
+function headMesh(hr, hy, neck) {
   const g = (v, c, w) => Math.exp(-Math.pow((v - c) / w, 2)), sm = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-  if (!HEAD_GEO) HEAD_GEO = gridGeo(220, 260, (u, v) => {
+  // Under the skull and jaw the surface is drawn down along the neck, the more the nearer it lies to the neck, so the
+  // head runs into the neck through a hollow curve and not a crease. The neck stands still while the head nods, so the
+  // neck's line is taken as the head sees it: neck = { r: its radius, p: a point on its axis, nod } in half-heights.
+  const key = [neck.r.toFixed(3), neck.p.map(v => v.toFixed(3)), neck.nod.toFixed(1)].join();
+  if (HEAD_GEO && key !== HEAD_KEY) { pendingDispose.push(HEAD_GEO); HEAD_GEO = null; }
+  HEAD_KEY = key;
+  const na = [0, Math.cos(neck.nod * PI / 180), Math.sin(neck.nod * PI / 180)];
+  const skirt = P => {
+    const k = sm(-0.2, -0.55, P[1]); if (!k) return P;
+    const qx = P[0] - neck.p[0], qy = P[1] - neck.p[1], qz = P[2] - neck.p[2], h = qy * na[1] + qz * na[2], rho = Math.hypot(qx, qy - h * na[1], qz - h * na[2]);
+    const d = 0.34 * k * Math.pow(1 - clamp((rho - neck.r) / 0.34, 0, 1), 2.5);
+    return [P[0], P[1] - d * na[1], P[2] - d * na[2]];
+  };
+  // The sculpted points are kept, so a nod only has to redo the cheap part: drawing the underside down the neck.
+  let n = 0; const kept = HEAD_BASE, base = kept || [];
+  if (!HEAD_GEO) HEAD_GEO = gridGeo(200, 240, (u, v) => {
+    if (kept) return skirt(kept[n++]);
     const th = -TAU * u, ph = PI * v, dx = Math.sin(ph) * Math.sin(th), dy = Math.cos(ph), dz = Math.sin(ph) * Math.cos(th);
     const sq = dy > 0 ? Math.pow(1 - Math.pow(dy, 2.6), 1 / 2.6) / Math.max(1e-6, Math.sin(ph)) : 1;   // a fuller, squarer cranium than an egg
     let x = 0.76 * dx * sq, y = 1.04 * dy, z = 0.9 * dz * sq;
@@ -5065,8 +5081,9 @@ function headMesh(hr, hy) {
     const lip = g(x, 0, 0.13), ml = -0.545 - 0.25 * x * x;                 // the line of the mouth, its corners a touch lower
     d += 0.04 * g(y, -0.56, 0.2) * g(x, 0, 0.28) + 0.03 * g(y, ml + 0.052, 0.045) * lip * (1 - 0.25 * g(x, 0, 0.035)) + 0.036 * g(y, ml - 0.066, 0.056) * lip - 0.02 * g(y, ml, 0.024) * Math.exp(-Math.pow(x / 0.15, 2));   // the mouth: two lips and the line between them
     d += 0.05 * g(y, -0.88, 0.12) * g(x, 0, 0.2) - 0.02 * g(y, -0.71, 0.05) * g(x, 0, 0.15);   // chin, and the hollow under the lower lip
-    return [x, y, z + F * d];
+    const P = [x, y, z + F * d]; base.push(P); return skirt(P);
   }, true);
+  if (!kept && base.length) HEAD_BASE = base;
   if (!EAR_GEO) EAR_GEO = gridGeo(28, 24, (u, v) => {
     const th = -TAU * u, ph = PI * v, dx = Math.sin(ph) * Math.sin(th), dy = Math.cos(ph), dz = Math.sin(ph) * Math.cos(th);
     const x = 0.032 * dx * (dx > 0 ? 1 - 0.75 * g(dy, 0.1, 0.55) * g(dz, 0, 0.5) : 1);   // the outer face is dished, which leaves a rim round it
@@ -5511,7 +5528,7 @@ function buildFigure() {
       const hx = new THREE.Vector3(...hf.A.u), hy2 = new THREE.Vector3(...hf.d).negate(); hand.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(hx, hy2, new THREE.Vector3().crossVectors(hx, hy2))); figure.add(hand);
     }
     const hr = (H - y.chin) / 2, hy = hr * 0.98 + 1.5, head = new THREE.Group(); head.position.set(0, y.chin - 1.5, 0.3);   // pivots at the top of the neck
-    head.add(headMesh(hr, hy));
+    { const hs = (b.M.head ?? 100) / 100; head.add(headMesh(hr, hy, { r: b.neckR * 0.84 * 0.95 / (hr * hs), p: [0, -hy / hr, (-0.3 / hs - 0.5) / hr], nod: S.headNod })); }
     if (SF.GARMENTS[S.garment].props === 'mask') {   // a respirator worn with the garment: face piece, visor and two filters. Ready-made, like the shoes.
       const glass = new THREE.MeshStandardMaterial({ color: '#9fb4c2', roughness: 0.08, metalness: 0.3, envMap: metalEnv(), transparent: true, opacity: 0.75 }), zf = 0.5 + hr * 0.82;
       head.add(ball(dark, hr * 0.56, hr * 0.5, hr * 0.34, 0, hy - hr * 0.28, zf)); head.add(ball(glass, hr * 0.52, hr * 0.24, hr * 0.22, 0, hy + hr * 0.16, zf + hr * 0.08));
