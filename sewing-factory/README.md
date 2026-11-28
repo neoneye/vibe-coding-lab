@@ -158,6 +158,9 @@ card has **Randomize** and **Reset** for the garment's fit sliders and options
 **Randomize each piece** picks a different one for every piece (about half the time the print is plain, so the cloth itself shows; a
 print that has its own ground colour, such as zebra, keeps it).
 
+**F** fills the screen with the 3D view alone, without the header and the
+panel; **Esc** (or F again) brings them back.
+
 Switching tabs keeps the camera. The tabs that show the figure (Model, Pose,
 Shoes, Type, Finished) share one view, so an orbit or zoom set on one carries
 over to the others. The cutting table (Customize) has its own view and comes
