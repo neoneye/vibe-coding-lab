@@ -640,6 +640,20 @@ builder the page already had:
   iron-on rhinestone heart on the right back pocket. The brand lettering and
   the silver tab on the photo's waistband are left out.
 
+### A holographic skirt, top and shorts
+
+From the `skirt/holographic`, `top/metallic` and `shorts/metallic`
+references:
+
+- the **Clear holographic circle skirt** is the flared skirt on a narrow
+  waistband, in a new cloth: a see-through film with a holographic sheen;
+- the **Holographic mock-neck crop top** is the sleeveless vest made to pull
+  on: a one-piece front, a closed mock neck and no zip, sewn on the overlock
+  and coverstitch, in silver holographic lycra;
+- the **Holographic drawstring shorts** are loose shorts in the same lycra,
+  with an elastic waistband, a drawstring and a hem that rises at the side.
+  The notch in the photo's side hem is not cut.
+
 ### An exposed-seam crop tee
 
 From the `top/green` reference: the **Green exposed-seam crop tee**, a short
