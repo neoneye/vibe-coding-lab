@@ -5231,10 +5231,13 @@ function headMesh(hr, hy, neck, q) {
   if (HEAD_GEO && key !== HEAD_KEY) { pendingDispose.push(HEAD_GEO); HEAD_GEO = null; }
   HEAD_KEY = key;
   const na = [0, Math.cos(neck.nod * PI / 180), Math.sin(neck.nod * PI / 180)];
+  const pulled = [];   // for each point in turn: how far it was drawn down (0 to 1) and which way the neck's surface faces there
   const skirt = P => {
-    const k = sm(-0.2, -0.55, P[1]); if (!k) return P;
+    const k = sm(-0.2, -0.55, P[1]); if (!k) { pulled.push(null); return P; }
     const qx = P[0] - neck.p[0], qy = P[1] - neck.p[1], qz = P[2] - neck.p[2], h = qy * na[1] + qz * na[2], rho = Math.hypot(qx, qy - h * na[1], qz - h * na[2]);
-    const d = 0.34 * q.hNeck * k * Math.pow(1 - clamp((rho - neck.r) / 0.34, 0, 1), 2.5);
+    const w = k * Math.pow(1 - clamp((rho - neck.r) / 0.4, 0, 1), 2.2), d = 0.34 * q.hNeck * w, rx = qx, ry = qy - h * na[1], rz = qz - h * na[2];
+    const zc = -ry * na[2] + rz * na[1], bb = zc > 0 ? 0.95 : 1.05, nz = zc / (bb * bb), nl = Math.hypot(rx, nz) || 1;   // the neck is a little deeper behind than in front, and faces accordingly
+    pulled.push(rho > 1e-4 ? [w * Math.min(1, q.hNeck), rx / nl, -na[2] * nz / nl, na[1] * nz / nl] : null);
     return [P[0], P[1] - d * na[1], P[2] - d * na[2]];
   };
   // The sculpted points are kept, so a nod only has to redo the cheap part: drawing the underside down the neck.
@@ -5261,6 +5264,10 @@ function headMesh(hr, hy, neck, q) {
     const P = [x, y, z + F * d]; base.push(P); return skirt(P);
   }, true);
   if (!kept && base.length) HEAD_BASE = base;
+  // Where the head has been drawn down onto the neck it is shaded as the neck is, facing straight out from the neck's
+  // line, and the more so the further down it was drawn. The two surfaces still meet at an angle, but the light no
+  // longer breaks there, which is what shows as a hard line on a polished finish.
+  if (pulled.length) { const N = HEAD_GEO.attributes.normal; for (let k = 0; k < pulled.length && k < N.count; k++) { const u = pulled[k]; if (!u) continue; const t = sm(0.1, 0.5, u[0]), x = lerp(N.getX(k), u[1], t), y = lerp(N.getY(k), u[2], t), z = lerp(N.getZ(k), u[3], t), l = Math.hypot(x, y, z) || 1; N.setXYZ(k, x / l, y / l, z / l); } N.needsUpdate = true; }
   if (!EAR_GEO) EAR_GEO = gridGeo(28, 24, (u, v) => {
     const th = -TAU * u, ph = PI * v, dx = Math.sin(ph) * Math.sin(th), dy = Math.cos(ph), dz = Math.sin(ph) * Math.cos(th);
     const x = 0.032 * dx * (dx > 0 ? 1 - 0.75 * g(dy, 0.1, 0.55) * g(dz, 0, 0.5) : 1);   // the outer face is dished, which leaves a rim round it
@@ -5745,6 +5752,9 @@ function buildFigure() {
     const jn = th => { const h = 0.02, a = b.torso(th - h, yJ, true), c = b.torso(th + h, yJ, true), d = b.torso(th, yJ - 0.2, true), e = b.torso(th, yJ + 0.2, true), n = new THREE.Vector3(c[0] - a[0], 0, c[2] - a[2]).cross(new THREE.Vector3(e[0] - d[0], 0.4, e[2] - d[2])); if (n.x * d[0] + n.z * d[2] < 0) n.negate(); return n.normalize(); };
     const tg = gridGeo(NTH, 140, (u, v) => vt(-PI + TAU * u, lerp(yJ, yTopN, v)), true);
     for (let i = 0; i <= NTH; i++) { const n = jn(-PI + TAU * i / NTH); tg.attributes.normal.setXYZ(i, n.x, n.y, n.z); }
+    // The upper neck is shaded by the same rule as the part of the head drawn down onto it (see headMesh), so the light
+    // does not break where the two meet.
+    { const P = tg.attributes.position, N = tg.attributes.normal; for (let k = 0; k < P.count; k++) { const t = smooth(y.neck - 4, y.neck + 1.3, P.getY(k)); if (!t) continue; const px = P.getX(k), pz = P.getZ(k), bb = pz > 0 ? 0.95 : 1.05, nz = pz / (bb * bb), nl = Math.hypot(px, nz) || 1, x = lerp(N.getX(k), px / nl, t), yy = lerp(N.getY(k), 0, t), z = lerp(N.getZ(k), nz / nl, t), l = Math.hypot(x, yy, z) || 1; N.setXYZ(k, x / l, yy / l, z / l); } }
     figure.add(new THREE.Mesh(tg, skin));
     for (const sgn of [1, -1]) {
       const yv = v => v < 0.42 ? lerp(y.ankle - 2.5, y.crotch - 9, v / 0.42) : lerp(y.crotch - 9, yJ, (v - 0.42) / 0.58);   // most of the rows go where the shape turns quickly, round the crotch
@@ -6936,7 +6946,7 @@ try {
   resize(); rebuild(); setStage(S.stage, true); machineOpts();
   if (Q.has('sel')) select(Q.get('sel'));
   if (Q.has('rot')) turnG.rotation.y = +Q.get('rot');
-  window.__sf = { get drawn() { return drawn; }, wake, S, setStage, setOp, tick, render, rebuild, select, setFab, setGarment, saveImage, exportURL, viewURL, docModel, docMD, docJSON, docFile, get mv() { return mv; }, get garment() { return garment; }, camera, controls, turnG, resize };
+  window.__sf = { get drawn() { return drawn; }, get headGeo() { return HEAD_GEO; }, wake, S, setStage, setOp, tick, render, rebuild, select, setFab, setGarment, saveImage, exportURL, viewURL, docModel, docMD, docJSON, docFile, get mv() { return mv; }, get garment() { return garment; }, camera, controls, turnG, resize };
   if (STILL) {
     for (let i = 0; i < 80; i++) tick(0.05);
     if (Q.has('cyc') && mv) mv.setCycle(+Q.get('cyc'));
