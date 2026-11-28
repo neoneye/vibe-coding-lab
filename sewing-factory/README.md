@@ -106,6 +106,16 @@ The times and thread amounts are estimates from the length of stitching; the
 total sewing time is the sum of the times given at the steps. The document says of itself that it comes from a simplified model
 that nobody has sewn.
 
+A **Studio backdrop** card on the Finished page hangs a painted muslin sweep
+behind the figure, wall curving into floor: Plain studio (none), Mottled
+charcoal, Grey-brown, Grey cloud, Slate blue-grey, Old-master teal, Midnight
+blue and Blush on blue. It is drawn by a shader, not from pictures: three
+colours (cloth, mottle, light) and sliders for mottling, blotch size, the pool
+of light and its size and height, dark corners, creases and the floor's shade,
+plus **New pattern** for another mottling of the same kind. The pool of light
+stays behind the figure as the view goes round, and the backdrop is in the
+saved image (`&backdrop=teal` in a link).
+
 An **X-ray** switch on the Finished page makes the body see-through and shows either a skeleton or
 a robot mannequin inside it. The robot is an articulated shop mannequin: matt
 black shells for chest, pelvis and each limb segment, with a ball at every

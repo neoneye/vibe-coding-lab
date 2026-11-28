@@ -178,6 +178,7 @@
         <div class="row" style="margin:2px 0 8px"><button id="xkBones">Human skeleton</button><button id="xkRobot">Robot mannequin</button></div>
         <div class="row"><button id="save">Save image</button></div>
       </div>
+      <div class="card"><h2>Studio backdrop</h2><div class="seg" id="bdStyles"></div><div id="bdP"></div></div>
     </div>
   </div>
   <div id="main">
@@ -5011,7 +5012,7 @@ const STILL = Q.has('still');
 const LS_KEY = 'sewing-factory:measure:v1', M_DEFS = () => [...SF.MEASURES, ...SF.BUST, ...SF.LEGS, ...SF.HEAD, ...SF.POSE, ...SF.POSE_R];
 function saveSettings() {
   if (STILL) return;
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ form: S.form, shoe: S.shoe, garment: S.garment, animPose: S.animPose, temp: S.temp, headTurn: S.headTurn, headNod: S.headNod, hair: (({ name, ...h }) => h)(S.hair), M: Object.fromEntries(M_DEFS().filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])) })); } catch (e) { /* no storage */ }
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ form: S.form, shoe: S.shoe, garment: S.garment, animPose: S.animPose, temp: S.temp, headTurn: S.headTurn, headNod: S.headNod, backdrop: S.backdrop, hair: (({ name, ...h }) => h)(S.hair), M: Object.fromEntries(M_DEFS().filter(d => d.key in S.M).map(d => [d.key, S.M[d.key]])) })); } catch (e) { /* no storage */ }
 }
 if (!STILL) try {
   const o = JSON.parse(localStorage.getItem(LS_KEY) || 'null'), ok = (v, lo, hi) => typeof v === 'number' && isFinite(v) && v >= lo && v <= hi;
@@ -5055,6 +5056,69 @@ const floor = new THREE.Mesh(new THREE.CircleGeometry(1500, 64), new THREE.MeshS
 floor.rotation.x = -PI / 2; scene.add(floor);
 const blob = new THREE.Mesh(new THREE.CircleGeometry(34, 40), new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.28 }));
 blob.rotation.x = -PI / 2; blob.position.y = 0.2; scene.add(blob);
+// The studio backdrop of the Finished view: a painted muslin sweep, wall curving into floor, drawn by a shader so
+// every slider acts at once. The cloth is a ring all round the figure and only its far side is drawn, so there is
+// a backdrop behind the figure from every direction. The mottling is fixed in the room; the pool of light on the
+// wall stays behind the figure as the camera goes round, and the darkened corners belong to the picture.
+const BACKDROPS = {
+  none: { name: 'Plain studio' },
+  charcoal: { name: 'Mottled charcoal', a: '#2c2c2b', b: '#474745', g: '#55534f', mottle: 45, size: 150, glow: 20, gsize: 240, gy: 150, vig: 55, crease: 0, floor: 0 },
+  greybrown: { name: 'Grey-brown', a: '#5f5753', b: '#776d67', g: '#857a73', mottle: 28, size: 170, glow: 30, gsize: 280, gy: 140, vig: 40, crease: 0, floor: 12 },
+  cloud: { name: 'Grey cloud', a: '#6a6a6a', b: '#aeaeae', g: '#c4c4c4', mottle: 70, size: 150, glow: 25, gsize: 230, gy: 170, vig: 35, crease: 10, floor: 0 },
+  slate: { name: 'Slate blue-grey', a: '#5f6d79', b: '#8b98a2', g: '#9aa7b0', mottle: 70, size: 130, glow: 30, gsize: 240, gy: 190, vig: 40, crease: 55, floor: 5 },
+  teal: { name: 'Old-master teal', a: '#3d5a52', b: '#2f7f86', g: '#7f9cc8', mottle: 85, size: 100, glow: 60, gsize: 190, gy: 190, vig: 45, crease: 60, floor: -5 },
+  midnight: { name: 'Midnight blue', a: '#101d33', b: '#27405f', g: '#5f9fdc', mottle: 70, size: 120, glow: 65, gsize: 120, gy: 130, vig: 60, crease: 0, floor: -10 },
+  blush: { name: 'Blush on blue', a: '#3f69a8', b: '#7a7fc0', g: '#f4a9a6', mottle: 60, size: 140, glow: 95, gsize: 210, gy: 160, vig: 30, crease: 0, floor: 0 },
+};
+const BD_SLIDERS = [
+  { key: 'mottle', label: 'Mottling', min: 0, max: 100, step: 1, unit: '%' }, { key: 'size', label: 'Blotch size', min: 40, max: 320, step: 5 },
+  { key: 'glow', label: 'Light pool', min: 0, max: 100, step: 1, unit: '%' }, { key: 'gsize', label: 'Light pool size', min: 60, max: 450, step: 5 }, { key: 'gy', label: 'Light pool height', min: 0, max: 320, step: 5 },
+  { key: 'vig', label: 'Dark corners', min: 0, max: 100, step: 1, unit: '%' }, { key: 'crease', label: 'Creases', min: 0, max: 100, step: 1, unit: '%' }, { key: 'floor', label: 'Floor, darker to lighter', min: -40, max: 40, step: 1, unit: '%' },
+];
+const backdropOf = id => ({ style: id, a: '#5c5c5c', b: '#c2c2c2', g: '#d0d0d0', mottle: 50, size: 130, glow: 30, gsize: 230, gy: 160, vig: 40, crease: 0, floor: 0, seed: 1, ...BACKDROPS[id], name: undefined });
+S.backdrop = backdropOf(BACKDROPS[Q.get('backdrop')] ? Q.get('backdrop') : 'none');
+if (!STILL) try { const o = JSON.parse(localStorage.getItem(LS_KEY) || 'null'), bd = o && o.backdrop; if (bd && !Q.has('backdrop') && BACKDROPS[bd.style]) { const h = backdropOf(bd.style); for (const d of BD_SLIDERS) if (typeof bd[d.key] === 'number' && bd[d.key] >= d.min && bd[d.key] <= d.max) h[d.key] = bd[d.key]; for (const k of ['a', 'b', 'g']) if (/^#[0-9a-f]{6}$/i.test(bd[k] || '')) h[k] = bd[k]; if (typeof bd.seed === 'number') h.seed = bd.seed; S.backdrop = h; } } catch (e) { /* no storage */ }
+const BD_R = 460, backdrop = (() => {
+  const cr = 120, pts = [new THREE.Vector2(0, 0), new THREE.Vector2(BD_R - cr, 0)];
+  for (let i = 1; i <= 16; i++) { const a = PI / 2 * i / 16; pts.push(new THREE.Vector2(BD_R - cr + cr * Math.sin(a), cr - cr * Math.cos(a))); }
+  pts.push(new THREE.Vector2(BD_R, 1000));
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.BackSide, toneMapped: false,
+    uniforms: { uA: { value: new THREE.Color() }, uB: { value: new THREE.Color() }, uG: { value: new THREE.Color() }, uMot: { value: 0.5 }, uScale: { value: 130 }, uGlow: { value: 0.3 }, uGsize: { value: 230 }, uGy: { value: 160 }, uVig: { value: 0.4 }, uCrease: { value: 0 }, uFloor: { value: 0 }, uSeed: { value: 1 }, uC: { value: new THREE.Vector3() }, uRes: { value: new THREE.Vector2(1, 1) } },
+    vertexShader: 'varying vec3 vP; void main() { vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `
+      varying vec3 vP; uniform vec3 uA, uB, uG, uC; uniform float uMot, uScale, uGlow, uGsize, uGy, uVig, uCrease, uFloor, uSeed; uniform vec2 uRes;
+      float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+      float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+                   mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y), f.z); }
+      float fbm(vec3 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * noise(p); p = p * 2.03 + 11.7; a *= 0.5; } return s / 0.96875; }
+      void main() {
+        vec3 p = vP / uScale + uSeed * 13.37;
+        vec3 w = vec3(fbm(p + 3.1), fbm(p + 7.7), fbm(p + 1.3)) - 0.5;          // the blotches are pulled about, like paint sponged on
+        float n = fbm(p + 2.2 * w), m = smoothstep(0.3, 0.7, n);
+        vec3 col = mix(uA, uB, m * uMot);
+        col *= 1.0 + 0.5 * uMot * (fbm(p * 2.7 + 9.0 + w) - 0.5);                // finer light and dark in the paint
+        float ln = noise(p * 2.6 + 5.0 * w), ridge = pow(1.0 - abs(2.0 * ln - 1.0), 26.0);   // creases: thin wandering lines where the cloth was folded
+        col *= 1.0 - 0.3 * uCrease * ridge * (0.4 + 0.6 * noise(p * 1.3 + 40.0));
+        float gd = length(vP - uC) / uGsize, g = exp(-gd * gd) * (0.55 + 0.45 * smoothstep(0.2, 0.8, fbm(p * 0.9 + 21.0 + w)));   // the pool of light, broken up by the mottling
+        col = mix(col, uG, clamp(g * uGlow, 0.0, 1.0));
+        col *= 1.0 + uFloor * (1.0 - smoothstep(0.0, 110.0, vP.y));
+        vec2 sc = gl_FragCoord.xy / uRes - 0.5; col *= 1.0 - uVig * 0.85 * smoothstep(0.22, 0.78, length(sc));
+        gl_FragColor = vec4(col, 1.0);
+        #include <colorspace_fragment>
+      }`,
+  });
+  const m = new THREE.Mesh(new THREE.LatheGeometry(pts, 96), mat); m.visible = false; m.frustumCulled = false;
+  const sz = new THREE.Vector2();
+  m.onBeforeRender = r => { const u = mat.uniforms; r.getDrawingBufferSize(sz); u.uRes.value.copy(sz); const az = Math.atan2(camera.position.x, camera.position.z) + PI; u.uC.value.set(BD_R * Math.sin(az), u.uGy.value, BD_R * Math.cos(az)); };   // the light pool sits on the wall straight behind the figure
+  scene.add(m); return m;
+})();
+function applyBackdrop() {
+  const B = S.backdrop, u = backdrop.material.uniforms;
+  u.uA.value.set(B.a); u.uB.value.set(B.b); u.uG.value.set(B.g);
+  u.uMot.value = B.mottle / 100; u.uScale.value = B.size; u.uGlow.value = B.glow / 100; u.uGsize.value = B.gsize; u.uGy.value = B.gy; u.uVig.value = B.vig / 100; u.uCrease.value = B.crease / 100; u.uFloor.value = B.floor / 100; u.uSeed.value = B.seed;
+}
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
 const figure = new THREE.Group(), cloth = new THREE.Group(), tableG = new THREE.Group(), tapes = new THREE.Group(), turnG = new THREE.Group();
 turnG.add(figure, cloth, tapes); scene.add(turnG, tableG);
@@ -6247,6 +6311,18 @@ function initUI() {
   $('xray').checked = S.xray; $('xray').oninput = e => { S.xray = e.target.checked; };
   $('turn').oninput = e => (S.turn = e.target.checked);
   $('save').onclick = saveImage;
+  // Studio backdrop: a row of backdrops, then three colours, the sliders and a button for another pattern of the same kind.
+  const uiBackdrop = () => {
+    const st = $('bdStyles'), P = $('bdP'); st.innerHTML = ''; P.innerHTML = ''; applyBackdrop();
+    for (const [id, b] of Object.entries(BACKDROPS)) { const bt = document.createElement('button'); bt.textContent = b.name; bt.className = S.backdrop.style === id ? 'on' : ''; bt.onclick = () => { S.backdrop = backdropOf(id); saveSettings(); uiBackdrop(); }; st.appendChild(bt); }
+    if (S.backdrop.style === 'none') return;
+    const row = document.createElement('div'); row.className = 'row'; row.style.marginTop = '8px'; row.style.flexWrap = 'wrap';
+    for (const [k, label] of [['a', 'Cloth'], ['b', 'Mottle'], ['g', 'Light']]) { const pair = document.createElement('label'); pair.style.cssText = 'display:inline-flex;align-items:center;gap:6px;white-space:nowrap;margin-right:10px'; pair.textContent = label; const inp = document.createElement('input'); inp.type = 'color'; inp.value = S.backdrop[k]; inp.oninput = () => { S.backdrop[k] = inp.value; applyBackdrop(); saveSettings(); }; pair.appendChild(inp); row.appendChild(pair); }   // each name stays with its swatch when the row wraps
+    P.appendChild(row);
+    for (const d of BD_SLIDERS) slider(P, d, () => S.backdrop[d.key], v => { S.backdrop[d.key] = v; applyBackdrop(); saveSettings(); });
+    const r2 = document.createElement('div'); r2.className = 'row'; r2.style.marginTop = '6px'; const nb = document.createElement('button'); nb.textContent = 'New pattern'; nb.title = 'Another mottling of the same kind'; nb.onclick = () => { S.backdrop.seed = 1 + Math.floor(Math.random() * 9999); applyBackdrop(); saveSettings(); }; r2.appendChild(nb); P.appendChild(r2);
+  };
+  uiBackdrop();
   // click a piece on the table
   let down = null;
   canvas.addEventListener('pointerdown', e => (down = [e.clientX, e.clientY]));
@@ -6306,7 +6382,7 @@ function applyXray() {
 function render() {
   applyXray();
   // seen from below, the floor and everything standing in for it get out of the way
-  const under = camera.position.y < 1; floor.visible = !under; blob.visible = !under && S.stage !== 5;
+  const under = camera.position.y < 1; backdrop.visible = S.stage === 7 && S.backdrop.style !== 'none'; floor.visible = !under && !backdrop.visible; blob.visible = !under && S.stage !== 5;   // the backdrop belongs to the Finished view; its own floor replaces the plain one
   for (const o of figure.children) if (o.userData.floor) o.visible = !under;
   turnG.updateMatrixWorld();
   renderer.render(scene, camera); flushDispose(); drawLabels();
