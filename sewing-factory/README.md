@@ -47,6 +47,15 @@ Markdown, or saved as JSON for another program to read. It holds:
   what to correct before its instructions apply. How much a seam may ease
   follows the cloth: 2.5 % where nothing stretches, 8 % round a sleeve head,
   and up to 10 % in stretch cloth;
+- edge coverage (`SF.coverage`): passing seams are not enough, so every edge
+  of every piece must also have something done to it: sewn to another edge,
+  hemmed, elasticated, closed, stitched down, caught in a seam, the fold or
+  the ends of a doubled band, a pocket mouth, or declared free (metal mesh).
+  An edge with none of these is "not assigned" and keeps the garment from
+  being ready. The report writes what becomes of each edge beside it. A
+  waistband, collar, cuff or welt is stitched on by one edge; the edge it is
+  sewn to is worked out (`SF.bandJoins`) and checked like any other seam, and
+  the step says how the band is closed, folded and attached;
 - corrections the generator makes itself, each listed in the audit as
   "Corrected". Seams are trued (`SF.trueSeams`): two edges that are sewn
   together are one line on the body, but each is unrolled flat with its own
@@ -56,9 +65,12 @@ Markdown, or saved as JSON for another program to read. It holds:
   hood is redrafted to the length of the neckline it is sewn to. Only the
   flat pieces change; the picture shows the garment as first drawn;
 - an audit sweep (`SF.auditSweep`, run by the tests): every garment on the
-  four standard figures, 488 builds. Before truing, 30 were on hold; now none
-  is, 369 are ready and 119 are to review (mostly a zip whose opening the
-  model does not draft). The test fails if any garment is held;
+  four standard figures, 488 builds. None is held and no edge is left
+  unassigned (before truing, 30 were held; when coverage was first run, 611
+  edges on 102 garments had no construction). About a quarter are "review",
+  mostly for a zip whose opening the model does not draft. A second test
+  breaks garments on purpose (a seam 10 % too long, a collar 30 % too long,
+  the hem step removed, the waistband step removed) and checks each is caught;
 - the figure it is drafted for (measurements and heights from the floor) and
   every option with its value, default and range;
 - a gallery of the garment in six poses;
