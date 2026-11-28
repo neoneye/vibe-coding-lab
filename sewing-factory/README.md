@@ -26,7 +26,11 @@ browser (three.js is loaded from a CDN).
    (projection, spacing, height, width, fullness above and below, and the rib cage
    under the bust as a share of the bust girth). The feet are posed for the heel of whichever shoe is worn, and stand flat when barefoot. The chosen garment is shown on the figure. Two modes: a full figure with head,
    arms and legs, or a tailor's dress form on a stand (it hangs from a rail for
-   trousers and swimwear, which need the crotch free).
+   trousers and swimwear, which need the crotch free). A Skin card at the bottom sets the
+   mannequin's finish, as shop mannequins come and not as real skin: matt ivory,
+   four flesh tones, white, grey, gloss black, chrome, gold, rose gold, brushed
+   bronze and gunmetal, with a colour and sliders for gloss, metal, reflections
+   of the studio and clear lacquer (`&skin=chrome` in a link).
 3. **Pose.** Moves the arms, elbows, feet and head. The cut pieces never
    change with the pose.
 4. **Shoes.** Pick what the figure wears on its feet. Shoes are only worn,
