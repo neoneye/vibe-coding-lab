@@ -5080,30 +5080,59 @@ const BD_SLIDERS = [
 const backdropOf = id => ({ style: id, a: '#5c5c5c', b: '#c2c2c2', g: '#d0d0d0', mottle: 50, size: 130, glow: 30, gsize: 230, gy: 160, vig: 40, crease: 0, floor: 0, seed: 1, ...BACKDROPS[id], name: undefined });
 S.backdrop = backdropOf(BACKDROPS[Q.get('backdrop')] ? Q.get('backdrop') : 'none');
 if (!STILL) try { const o = JSON.parse(localStorage.getItem(LS_KEY) || 'null'), bd = o && o.backdrop; if (bd && !Q.has('backdrop') && BACKDROPS[bd.style]) { const h = backdropOf(bd.style); for (const d of BD_SLIDERS) if (typeof bd[d.key] === 'number' && bd[d.key] >= d.min && bd[d.key] <= d.max) h[d.key] = bd[d.key]; for (const k of ['a', 'b', 'g']) if (/^#[0-9a-f]{6}$/i.test(bd[k] || '')) h[k] = bd[k]; if (typeof bd.seed === 'number') h.seed = bd.seed; S.backdrop = h; } } catch (e) { /* no storage */ }
-const BD_R = 460, backdrop = (() => {
-  const cr = 120, pts = [new THREE.Vector2(0, 0), new THREE.Vector2(BD_R - cr, 0)];
-  for (let i = 1; i <= 16; i++) { const a = PI / 2 * i / 16; pts.push(new THREE.Vector2(BD_R - cr + cr * Math.sin(a), cr - cr * Math.cos(a))); }
-  pts.push(new THREE.Vector2(BD_R, 1000));
+// The mottling is the costly part (some two hundred noise samples a point), so it is painted once into a picture of the
+// unrolled cloth whenever a setting changes, and the view only looks that picture up. The pool of light and the dark
+// corners depend on where the camera is, and are cheap, so they are added on screen.
+const BD_R = 460, BD_CR = 120, BD_H = 1000, BD_LEN = BD_R - BD_CR + BD_CR * PI / 2 + BD_H - BD_CR;   // the cloth's length from the middle of the floor to the top of the wall
+const BD_POS = `
+  vec3 clothAt(vec2 uv) {   // where on the cloth a point of the unrolled picture lies: floor, then the curve, then the wall
+    float s = uv.y * ${BD_LEN.toFixed(3)}, a = uv.x * 6.283185307, f = ${(BD_R - BD_CR).toFixed(1)}, cr = ${BD_CR.toFixed(1)}, r, y;
+    if (s < f) { r = s; y = 0.0; } else if (s < f + cr * 1.570796327) { float t = (s - f) / cr; r = f + cr * sin(t); y = cr - cr * cos(t); } else { r = f + cr; y = cr + s - f - cr * 1.570796327; }
+    return vec3(r * sin(a), y, r * cos(a));
+  }`;
+const bdBake = (() => {
+  const rt = new THREE.WebGLRenderTarget(2048, 1024, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, wrapS: THREE.RepeatWrapping, wrapT: THREE.ClampToEdgeWrapping });
   const mat = new THREE.ShaderMaterial({
-    side: THREE.BackSide, toneMapped: false,
-    uniforms: { uA: { value: new THREE.Color() }, uB: { value: new THREE.Color() }, uG: { value: new THREE.Color() }, uMot: { value: 0.5 }, uScale: { value: 130 }, uGlow: { value: 0.3 }, uGsize: { value: 230 }, uGy: { value: 160 }, uVig: { value: 0.4 }, uCrease: { value: 0 }, uFloor: { value: 0 }, uSeed: { value: 1 }, uC: { value: new THREE.Vector3() }, uRes: { value: new THREE.Vector2(1, 1) } },
-    vertexShader: 'varying vec3 vP; void main() { vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    depthTest: false, depthWrite: false, toneMapped: false,
+    uniforms: { uA: { value: new THREE.Color() }, uB: { value: new THREE.Color() }, uMot: { value: 0.5 }, uScale: { value: 130 }, uCrease: { value: 0 }, uSeed: { value: 1 } },
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
     fragmentShader: `
-      varying vec3 vP; uniform vec3 uA, uB, uG, uC; uniform float uMot, uScale, uGlow, uGsize, uGy, uVig, uCrease, uFloor, uSeed; uniform vec2 uRes;
+      varying vec2 vUv; uniform vec3 uA, uB; uniform float uMot, uScale, uCrease, uSeed;
+      ${BD_POS}
       float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
         return mix(mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
                    mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y), f.z); }
       float fbm(vec3 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * noise(p); p = p * 2.03 + 11.7; a *= 0.5; } return s / 0.96875; }
       void main() {
-        vec3 p = vP / uScale + uSeed * 13.37;
+        vec3 p = clothAt(vUv) / uScale + uSeed * 13.37;
         vec3 w = vec3(fbm(p + 3.1), fbm(p + 7.7), fbm(p + 1.3)) - 0.5;          // the blotches are pulled about, like paint sponged on
         float n = fbm(p + 2.2 * w), m = smoothstep(0.3, 0.7, n);
         vec3 col = mix(uA, uB, m * uMot);
         col *= 1.0 + 0.5 * uMot * (fbm(p * 2.7 + 9.0 + w) - 0.5);                // finer light and dark in the paint
         float ln = noise(p * 2.6 + 5.0 * w), ridge = pow(1.0 - abs(2.0 * ln - 1.0), 26.0);   // creases: thin wandering lines where the cloth was folded
         col *= 1.0 - 0.3 * uCrease * ridge * (0.4 + 0.6 * noise(p * 1.3 + 40.0));
-        float gd = length(vP - uC) / uGsize, g = exp(-gd * gd) * (0.55 + 0.45 * smoothstep(0.2, 0.8, fbm(p * 0.9 + 21.0 + w)));   // the pool of light, broken up by the mottling
+        gl_FragColor = vec4(col, 0.55 + 0.45 * smoothstep(0.2, 0.8, fbm(p * 0.9 + 21.0 + w)));   // the fourth value: how unevenly the pool of light takes
+      }`,
+  });
+  const sc = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1); sc.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
+  return { rt, mat, dirty: true, run() { const old = renderer.getRenderTarget(); renderer.setRenderTarget(rt); renderer.render(sc, cam); renderer.setRenderTarget(old); this.dirty = false; } };
+})();
+const backdrop = (() => {
+  const f = BD_R - BD_CR, pts = [0, 3, 8, 16, 30, 50, 80, 120, 170, 230, 290, f].map(r => new THREE.Vector2(r, 0));   // rings close together near the middle: the picture is wound round that point, and wide triangles there show as facets
+  for (let i = 1; i <= 16; i++) { const a = PI / 2 * i / 16; pts.push(new THREE.Vector2(f + BD_CR * Math.sin(a), BD_CR - BD_CR * Math.cos(a))); }
+  for (const y of [300, 520, 760, BD_H]) pts.push(new THREE.Vector2(BD_R, y));
+  const geo = new THREE.LatheGeometry(pts, 96), P = geo.attributes.position, U = geo.attributes.uv;
+  for (let k = 0; k < P.count; k++) { const r = Math.hypot(P.getX(k), P.getZ(k)), y = P.getY(k), sLen = y <= 0 ? r : y < BD_CR - 1e-6 ? f + BD_CR * Math.atan2(r - f, BD_CR - y) : f + BD_CR * PI / 2 + y - BD_CR; U.setY(k, sLen / BD_LEN); }   // the picture runs along the cloth by length, as it was painted
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.BackSide, toneMapped: false,
+    uniforms: { uTex: { value: bdBake.rt.texture }, uG: { value: new THREE.Color() }, uGlow: { value: 0.3 }, uGsize: { value: 230 }, uGy: { value: 160 }, uVig: { value: 0.4 }, uFloor: { value: 0 }, uC: { value: new THREE.Vector3() }, uRes: { value: new THREE.Vector2(1, 1) } },
+    vertexShader: 'varying vec3 vP; varying vec2 vUv; void main() { vP = position; vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `
+      varying vec3 vP; varying vec2 vUv; uniform sampler2D uTex; uniform vec3 uG, uC; uniform float uGlow, uGsize, uGy, uVig, uFloor; uniform vec2 uRes;
+      void main() {
+        vec4 t = texture2D(uTex, vUv); vec3 col = t.rgb;
+        float gd = length(vP - uC) / uGsize, g = exp(-gd * gd) * t.a;   // the pool of light, broken up by the mottling
         col = mix(col, uG, clamp(g * uGlow, 0.0, 1.0));
         col *= 1.0 + uFloor * (1.0 - smoothstep(0.0, 110.0, vP.y));
         vec2 sc = gl_FragCoord.xy / uRes - 0.5; col *= 1.0 - uVig * 0.85 * smoothstep(0.22, 0.78, length(sc));
@@ -5111,15 +5140,15 @@ const BD_R = 460, backdrop = (() => {
         #include <colorspace_fragment>
       }`,
   });
-  const m = new THREE.Mesh(new THREE.LatheGeometry(pts, 96), mat); m.visible = false; m.frustumCulled = false;
+  const m = new THREE.Mesh(geo, mat); m.visible = false; m.frustumCulled = false;
   const sz = new THREE.Vector2();
   m.onBeforeRender = r => { const u = mat.uniforms; r.getDrawingBufferSize(sz); u.uRes.value.copy(sz); const az = Math.atan2(camera.position.x, camera.position.z) + PI; u.uC.value.set(BD_R * Math.sin(az), u.uGy.value, BD_R * Math.cos(az)); };   // the light pool sits on the wall straight behind the figure
   scene.add(m); return m;
 })();
 function applyBackdrop() {
-  const B = S.backdrop, u = backdrop.material.uniforms;
-  u.uA.value.set(B.a); u.uB.value.set(B.b); u.uG.value.set(B.g);
-  u.uMot.value = B.mottle / 100; u.uScale.value = B.size; u.uGlow.value = B.glow / 100; u.uGsize.value = B.gsize; u.uGy.value = B.gy; u.uVig.value = B.vig / 100; u.uCrease.value = B.crease / 100; u.uFloor.value = B.floor / 100; u.uSeed.value = B.seed;
+  const B = S.backdrop, u = backdrop.material.uniforms, k = bdBake.mat.uniforms;
+  k.uA.value.set(B.a); k.uB.value.set(B.b); k.uMot.value = B.mottle / 100; k.uScale.value = B.size; k.uCrease.value = B.crease / 100; k.uSeed.value = B.seed; bdBake.dirty = true;
+  u.uG.value.set(B.g); u.uGlow.value = B.glow / 100; u.uGsize.value = B.gsize; u.uGy.value = B.gy; u.uVig.value = B.vig / 100; u.uFloor.value = B.floor / 100;
 }
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
 const figure = new THREE.Group(), cloth = new THREE.Group(), tableG = new THREE.Group(), tapes = new THREE.Group(), turnG = new THREE.Group();
@@ -6394,12 +6423,29 @@ function render() {
   // seen from below, the floor and everything standing in for it get out of the way
   const under = camera.position.y < 1; backdrop.visible = (S.stage === 9 || S.stage === 7 || S.stage < 5) && S.backdrop.style !== 'none'; floor.visible = !under && !backdrop.visible; blob.visible = !under && S.stage !== 5 && !backdrop.visible;   // the backdrop stands wherever the figure is shown in the studio (not at the cutting table or the sewing line); its own floor replaces the plain one
   for (const o of figure.children) if (o.userData.floor) o.visible = !under && !backdrop.visible;   // on a backdrop the figure stands on the cloth itself, with no disc under it
+  if (backdrop.visible && bdBake.dirty) bdBake.run();   // repaint the cloth only when a setting changed
   turnG.updateMatrixWorld();
   renderer.render(scene, camera); flushDispose(); drawLabels();
   if (mv && S.stage === 6 && garment.ops[S.op].machine) mv.render();
 }
 const clock = new THREE.Clock();
-function frame() { requestAnimationFrame(frame); resize(); tick(Math.min(clock.getDelta(), 0.05)); render(); }
+// The picture is only drawn while it can be changing: for a few seconds after anything is touched, and for as long as
+// something moves by itself (a rebuild, a pose or camera move, the turntable, the sewing line and its machine). At rest
+// nothing is drawn at all, so an open page that nobody is using leaves the graphics card alone.
+let awakeUntil = 0, drawn = 0;
+const wake = (ms = 2500) => { awakeUntil = Math.max(awakeUntil, performance.now() + ms); };
+for (const ev of ['pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup', 'input', 'change', 'click', 'touchstart', 'touchmove', 'touchend']) addEventListener(ev, () => wake(), { capture: true, passive: true });
+addEventListener('pointermove', e => wake(e.buttons ? 2500 : 300), { capture: true, passive: true });   // a mouse merely passing over the page is not a reason to draw for long
+for (const ev of ['resize', 'focus', 'pageshow', 'fullscreenchange']) addEventListener(ev, () => wake());
+document.addEventListener('visibilitychange', () => wake());
+function frame() {
+  requestAnimationFrame(frame);
+  if (STILL || needBody || needGarment || poseAnim || tween || S.stage === 6 || (S.turn && (S.stage === 7 || S.stage === 9 || S.stage < 5))) wake(1500);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (performance.now() > awakeUntil) return;
+  resize(); tick(dt); render(); drawn++;
+}
+wake(5000);
 
 // Export from a clean canvas: fixed size, figure centred, no panel offsets.
 function exportURL(W = 1400, H = 1800, type = 'image/png', rot0 = -0.45) {
@@ -6837,7 +6883,7 @@ try {
   resize(); rebuild(); setStage(S.stage, true); machineOpts();
   if (Q.has('sel')) select(Q.get('sel'));
   if (Q.has('rot')) turnG.rotation.y = +Q.get('rot');
-  window.__sf = { S, setStage, setOp, tick, render, rebuild, select, setFab, setGarment, saveImage, exportURL, viewURL, docModel, docMD, docJSON, docFile, get mv() { return mv; }, get garment() { return garment; }, camera, controls, turnG, resize };
+  window.__sf = { get drawn() { return drawn; }, wake, S, setStage, setOp, tick, render, rebuild, select, setFab, setGarment, saveImage, exportURL, viewURL, docModel, docMD, docJSON, docFile, get mv() { return mv; }, get garment() { return garment; }, camera, controls, turnG, resize };
   if (STILL) {
     for (let i = 0; i < 80; i++) tick(0.05);
     if (Q.has('cyc') && mv) mv.setCycle(+Q.get('cyc'));
