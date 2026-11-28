@@ -36,21 +36,35 @@ Markdown, or saved as JSON for another program to read. It holds:
 
 - an overview: level, number of pieces, steps and machines, cloth to buy,
   total length of stitching, thread, and estimated cutting and sewing time;
-- a self-audit: every pair of edges that is sewn together is compared and
-  judged the same length, easable, or a fault, with what to do about each
-  fault; collars and hoods are compared with the neckline; a stretch cloth
-  sewn to one that does not stretch is warned about; and the places where the
-  model draws something simplified are listed. The audit is what showed that
-  set-in sleeves were drafted about a fifth too long round the head; the
-  drafting now fits each sleeve to its armhole (the sleeve is narrowed over
-  the upper arm, and the armhole widens when the arm needs it), so sleeve
-  heads come out within a few per cent. What it still reports on the
-  coveralls is the waist seam, where the legs are cut fuller than the bodice;
+- a self-audit that everything else in the document follows from. One
+  validation engine (`SF.audit`, in the shared code) checks every pair of
+  edges that is sewn together, every collar and hood against its neckline,
+  and every zip against the stitching that holds it. Each check gets one of
+  five verdicts: pass, ease, warning (a stretch cloth sewn to one that does
+  not stretch), unverified (the model has nothing to compare, which is never
+  counted as a pass) or fault. The document opens with the result: ready to
+  cut, review first, or hold. A step with a fault is marked blocked and says
+  what to correct before its instructions apply. How much a seam may ease
+  follows the cloth: 2.5 % where nothing stretches, 8 % round a sleeve head,
+  and up to 10 % in stretch cloth;
+- corrections the generator makes itself, each listed in the audit as
+  "Corrected". Seams are trued (`SF.trueSeams`): two edges that are sewn
+  together are one line on the body, but each is unrolled flat with its own
+  piece, and where they came out more than 2.5 % and 1 cm apart both are
+  brought to their mean length. Where a sleeve head is more than 6 % longer
+  than its armhole, the armhole is re-cut to leave 3 % of ease. A collar or
+  hood is redrafted to the length of the neckline it is sewn to. Only the
+  flat pieces change; the picture shows the garment as first drawn;
+- an audit sweep (`SF.auditSweep`, run by the tests): every garment on the
+  four standard figures, 488 builds. Before truing, 30 were on hold; now none
+  is, 369 are ready and 119 are to review (mostly a zip whose opening the
+  model does not draft). The test fails if any garment is held;
 - the figure it is drafted for (measurements and heights from the floor) and
   every option with its value, default and range;
 - a gallery of the garment in six poses;
 - what to buy: each different cloth in the garment with its own cutting plan,
-  length to buy and weight; thread, zips, buttons, elastic, interfacing; the
+  length to buy and weight (leather by area of skin, a piece the size of a
+  hand as a remnant); thread, zips, buttons, elastic, interfacing; the
   tools, and what to do before cutting, chosen for every cloth used: needles,
   pins or clips, washing, and matching stripes;
 - a cutting plan for each cloth, a cutting table, and every piece to one
