@@ -5041,6 +5041,42 @@ function gridGeo(nu, nv, fn, closeU) {
 const skin = new THREE.MeshStandardMaterial({ color: '#d8d0c3', roughness: 0.82, metalness: 0 }); skin.userData.shared = true;
 const dark = new THREE.MeshStandardMaterial({ color: '#2b2d33', roughness: 0.6, metalness: 0.3 }); dark.userData.shared = true;
 const SPHERE = new THREE.SphereGeometry(1, 28, 18);
+// The head, sculpted as one smooth surface like a shop mannequin's: hollow eye sockets with no eyes in them, a brow, a
+// nose with a sharp tip, closed lips, a chin and a jaw that narrows from the skull, and two plain ears. It is shaped once
+// for a head of half-height 1 and scaled to the figure, so the sliders do not rebuild it.
+let HEAD_GEO = null, EAR_GEO = null;
+function headMesh(hr, hy) {
+  const g = (v, c, w) => Math.exp(-Math.pow((v - c) / w, 2)), sm = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  if (!HEAD_GEO) HEAD_GEO = gridGeo(220, 260, (u, v) => {
+    const th = -TAU * u, ph = PI * v, dx = Math.sin(ph) * Math.sin(th), dy = Math.cos(ph), dz = Math.sin(ph) * Math.cos(th);
+    const sq = dy > 0 ? Math.pow(1 - Math.pow(dy, 2.6), 1 / 2.6) / Math.max(1e-6, Math.sin(ph)) : 1;   // a fuller, squarer cranium than an egg
+    let x = 0.76 * dx * sq, y = 1.04 * dy, z = 0.9 * dz * sq;
+    x *= 1 - 0.17 * sm(0.25, -1, y);                                  // the face narrows from the skull to the chin
+    if (dz < 0) z *= 1 - 0.2 * sm(0.1, -0.9, y) * sm(0, -0.6, dz);       // the back of the skull curves in to the nape
+    z += 0.15 * sm(-0.15, -0.9, y);                                     // the jaw sits forward of the skull's own curve
+    y += 0.28 * sm(0.2, -0.9, dz) * sm(-0.2, -1.04, y);                // and the skull ends well above the chin at the back, where the neck goes in
+    const F = sm(-0.15, 0.45, dz), ax = Math.abs(x);
+    const brow = 0.2 - 0.45 * Math.pow(ax - 0.24, 2);                    // the brow line, arched
+    let d = -0.13 * sm(0.03, 0.2, ax) * (1 - sm(0.26, 0.7, ax)) * Math.pow(Math.sin(PI * Math.pow(clamp((brow - y) / 0.66, 0, 1), 0.62)), 2);   // eye sockets: a sharp brow above, easing out into the cheek below
+    d += 0.03 * g(y, 0.24, 0.1) * g(ax, 0.26, 0.32);                    // brow
+    d += 0.02 * g(ax, 0.5, 0.15) * g(y, -0.12, 0.15);                   // cheekbones
+    const t = clamp((0.2 - y) / 0.5, 0, 1), nh = y > 0.2 ? 0.025 * g(y, 0.2, 0.12) : y < -0.3 ? 0.2 * g(y, -0.3, 0.04) : 0.025 + 0.175 * Math.pow(t, 1.2);
+    d += nh * g(x, 0, 0.045 + 0.05 * t + Math.max(0, y - 0.2) * 0.8) + 0.06 * g(ax, 0.09, 0.05) * g(y, -0.3, 0.05);   // the nose: a ridge that grows to the tip and is cut under, and the wings beside it
+    const lip = g(x, 0, 0.13), ml = -0.545 - 0.25 * x * x;                 // the line of the mouth, its corners a touch lower
+    d += 0.04 * g(y, -0.56, 0.2) * g(x, 0, 0.28) + 0.04 * g(y, ml + 0.042, 0.03) * lip * (1 - 0.3 * g(x, 0, 0.03)) + 0.05 * g(y, ml - 0.055, 0.042) * lip - 0.032 * g(y, ml, 0.016) * Math.exp(-Math.pow(x / 0.15, 2));   // the mouth: two lips and the line between them
+    d += 0.05 * g(y, -0.88, 0.12) * g(x, 0, 0.2) - 0.02 * g(y, -0.71, 0.05) * g(x, 0, 0.15);   // chin, and the hollow under the lower lip
+    return [x, y, z + F * d];
+  }, true);
+  if (!EAR_GEO) EAR_GEO = gridGeo(28, 24, (u, v) => {
+    const th = -TAU * u, ph = PI * v, dx = Math.sin(ph) * Math.sin(th), dy = Math.cos(ph), dz = Math.sin(ph) * Math.cos(th);
+    const x = 0.032 * dx * (dx > 0 ? 1 - 0.75 * g(dy, 0.1, 0.55) * g(dz, 0.15, 0.5) : 1);   // the outer face is dished, which leaves a rim round it
+    const r = Math.pow(1 - Math.pow(Math.abs(dy), 2.8), 1 / 2.8) / Math.max(1e-6, Math.sin(ph));                 // a rounded top, not a point
+    return [x * 1.2 * r, 0.22 * dy, 0.125 * dz * r * (0.55 + 0.45 * sm(-1, 0.1, dy))];                      // narrower at the lobe
+  }, true);
+  const m = new THREE.Mesh(HEAD_GEO, skin); m.userData.keepGeo = true; m.scale.setScalar(hr); m.position.set(0, hy, 0.5);
+  for (const sx of [1, -1]) { const e = new THREE.Mesh(EAR_GEO, skin); e.userData.keepGeo = true; e.position.set(sx * 0.75, -0.06, -0.08); e.rotation.set(-0.16, (sx > 0 ? 0 : PI) + sx * 0.5, sx * -0.06, 'YXZ'); m.add(e); }
+  return m;
+}
 function ball(mat, sx, sy, sz, x, y, z) { const m = new THREE.Mesh(SPHERE, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.userData.keepGeo = true; return m; }
 
 // A mannequin foot: heel, arch, instep and five toes, swept from sections along its length.
@@ -5434,7 +5470,7 @@ function buildFigure() {
     // the angle runs so that the triangles face outwards (the reverse shows the far inside wall through the front)
     // Torso and neck are one surface. Near the neck the section is read slightly lower than its own height
     // (a soft minimum), which turns the corner at the base of the neck into a fillet; above it the neck tapers.
-    const yTopN = y.chin + 2.5, vt = (th, yy) => {
+    const yTopN = y.chin - 1.5 + ((H - y.chin) / 2 * 0.98 + 1.5) * (b.M.head ?? 100) / 100, vt = (th, yy) => {
       const k = 0.4, ye = y.neck - k * Math.log(1 + Math.exp((y.neck - yy) / k)), p = b.torso(th, ye, false, true), f = lerp(1, 0.84, smooth(y.neck - 1, y.neck + 5, yy));
       return [p[0] * f, yy, p[2] * f];
     };
@@ -5474,15 +5510,13 @@ function buildFigure() {
       const hx = new THREE.Vector3(...hf.A.u), hy2 = new THREE.Vector3(...hf.d).negate(); hand.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(hx, hy2, new THREE.Vector3().crossVectors(hx, hy2))); figure.add(hand);
     }
     const hr = (H - y.chin) / 2, hy = hr * 0.98 + 1.5, head = new THREE.Group(); head.position.set(0, y.chin - 1.5, 0.3);   // pivots at the top of the neck
-    head.add(ball(skin, hr * 0.76, hr * 1.04, hr * 0.9, 0, hy, 0.5));
-    // a hint of a face, as on shop mannequins: brow ridge and nose
+    head.add(headMesh(hr, hy));
     if (SF.GARMENTS[S.garment].props === 'mask') {   // a respirator worn with the garment: face piece, visor and two filters. Ready-made, like the shoes.
-      const glass = new THREE.MeshStandardMaterial({ color: '#9fb4c2', roughness: 0.08, metalness: 0.3, envMap: metalEnv(), transparent: true, opacity: 0.75 }), zf = 0.5 + hr * 0.72;
+      const glass = new THREE.MeshStandardMaterial({ color: '#9fb4c2', roughness: 0.08, metalness: 0.3, envMap: metalEnv(), transparent: true, opacity: 0.75 }), zf = 0.5 + hr * 0.82;
       head.add(ball(dark, hr * 0.56, hr * 0.5, hr * 0.34, 0, hy - hr * 0.28, zf)); head.add(ball(glass, hr * 0.52, hr * 0.24, hr * 0.22, 0, hy + hr * 0.16, zf + hr * 0.08));
       for (const sx of [1, -1]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(hr * 0.2, hr * 0.2, hr * 0.2, 18), dark); c.rotation.set(PI / 2, 0, -sx * 0.7); c.position.set(sx * hr * 0.46, hy - hr * 0.5, zf + hr * 0.12); head.add(c); }
       head.add(ball(dark, hr * 0.14, hr * 0.14, hr * 0.16, 0, hy - hr * 0.42, zf + hr * 0.3));
     }
-    head.add(ball(skin, hr * 0.085, hr * 0.24, hr * 0.16, 0, hy - hr * 0.1, 0.5 + hr * 0.8)); head.add(ball(skin, hr * 0.44, hr * 0.1, hr * 0.2, 0, hy + hr * 0.15, 0.5 + hr * 0.66));
     const skel = (S.xrayKind === 'robot' ? buildRobot : buildSkeleton)(b, head, hr, hy, footAt); skel.userData.bone = true; figure.add(skel);
     head.rotation.set(-S.headNod * PI / 180, S.headTurn * PI / 180, 0, 'YXZ'); head.scale.setScalar((b.M.head ?? 100) / 100); figure.add(head);
   } else buildStand(b, y0);

@@ -8,7 +8,9 @@ browser (three.js is loaded from a CDN).
 
 1. **Model.** A mannequin with sliders for height, chest, waist, hip,
    shoulder width, inside leg and arm length. The torso sections are solved so
-   the tape girths equal the slider values. A Legs card sets the buttocks,
+   the tape girths equal the slider values. The head is sculpted like a shop
+   mannequin's: hollow eye sockets without eyes, a nose, closed lips, a jaw and
+   two plain ears. A Legs card sets the buttocks,
    the gap between the thighs (as a share of the hip width) and the thigh, knee,
    calf and ankle girths. Seven more sliders shape the bust
    (projection, spacing, height, width, fullness above and below, and the rib cage
